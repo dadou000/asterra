@@ -2136,6 +2136,824 @@ void TestAllDebugFieldsAreInspectable()
         "M31 debug: page-level cache/invalidation/LOD provenance is incomplete.");
 }
 
+
+void TestSaveLoadRegeneratesEquivalentTerrain()
+{
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("orbit-v004-m31-save-load-" +
+         documents::ProjectId::Random().
+             ToString());
+
+    std::filesystem::remove_all(
+        root);
+
+    scene::ObjectId bodyObject{};
+    scene::ObjectId terrainObject{};
+    scene::ObjectId biomeObject{};
+    scene::ObjectId maskObject{};
+    scene::ObjectId surfaceLayerObject{};
+    scene::ObjectId scatterObject{};
+
+    documents::ProjectId projectId{};
+    documents::WorldId worldId{};
+    universe::BodyId bodyIdBefore{};
+
+    terrain::AnalyticTerrainDesc
+        recipeBefore{};
+
+    std::array<
+        terrain::TerrainSample,
+        3U>
+        samplesBefore{};
+
+    terrain_biome::BiomeId
+        biomeIdBefore{};
+
+    terrain_biome::BiomePlacementEvaluation
+        placementBefore{};
+
+    std::vector<
+        terrain_biome::ResolvedBiomeWeight>
+        resolvedBefore;
+
+    const std::array<
+        math::Double3,
+        3U>
+        sampleDirections{{
+            {1.0, 0.0, 0.0},
+            {0.0, 1.0, 0.0},
+            math::Normalize(
+                math::Double3{
+                    0.37,
+                    -0.21,
+                    0.90})
+        }};
+
+    terrain_biome::BiomePlacementContext
+        placementContext{};
+
+    placementContext.unitDirection =
+        {1.0, 0.0, 0.0};
+    placementContext.planetRadiusMeters =
+        6'000'000.0;
+    placementContext.temperatureC =
+        31.0;
+    placementContext.moisture =
+        0.18;
+    placementContext.rainfall =
+        0.12;
+    placementContext.elevationMeters =
+        850.0;
+    placementContext.slopeDegrees =
+        9.0;
+    placementContext.aspectRadians =
+        0.35;
+    placementContext.latitudeRadians =
+        0.0;
+    placementContext.continentality =
+        0.70;
+    placementContext.
+        distanceToCoastWaterMeters =
+        35'000.0;
+    placementContext.drainage =
+        0.20;
+    placementContext.soilDepthMeters =
+        0.35;
+    placementContext.sandDepthMeters =
+        0.10;
+    placementContext.substrateRock =
+        terrain_geology::
+            reference_rock::Basalt;
+    placementContext.solarExposure =
+        0.80;
+    placementContext.windExposure =
+        0.55;
+    placementContext.snowPersistence =
+        0.0;
+
+    Require(
+        placementContext.IsValid(),
+        "M31 save/load: biome placement probe is invalid.");
+
+    auto project =
+        documents::ProjectDocument::Create(
+            root,
+            "M31 Save Load Integration");
+
+    projectId =
+        project.Manifest().projectId;
+
+    const auto manifestPath =
+        project.ManifestPath();
+
+    const auto worldPath =
+        project.StartupWorldPath();
+
+    try
+    {
+        {
+            documents::WorldDatabase world(
+                worldPath);
+
+            worldId =
+                world.Id();
+
+            schema::SchemaRegistry schemas;
+            world_model::RegisterSchemas(
+                schemas);
+
+            scene::ObjectStore objects(
+                world);
+
+            commands::CommandService commands(
+                objects,
+                schemas);
+
+            selection::SelectionService
+                selection;
+
+            const auto worldObject =
+                commands.CreateObject(
+                    world_model::kWorldType,
+                    "World");
+
+            const auto systemObject =
+                commands.CreateObject(
+                    world_model::
+                        kCelestialSystemType,
+                    "Helion",
+                    worldObject);
+
+            bodyObject =
+                commands.CreateObject(
+                    world_model::
+                        kCelestialBodyType,
+                    "Asterra",
+                    systemObject);
+
+            terrainObject =
+                commands.CreateObject(
+                    world_model::
+                        kTerrainSurfaceType,
+                    "Asterra Terrain",
+                    bodyObject);
+
+            commands.SetProperty(
+                bodyObject,
+                world_model::kBodyRadius,
+                6'000'000.0);
+
+            commands.SetProperty(
+                terrainObject,
+                world_model::kTerrainSeed,
+                i64{9'876'543});
+
+            const scene::ObjectId selected[] = {
+                bodyObject
+            };
+
+            selection.Set(
+                selected);
+
+            editor_model::
+                SurfaceAuthoringModel
+                authoring(
+                    objects,
+                    commands,
+                    selection);
+
+            editor_model::
+                SurfaceReliefSettings
+                relief{};
+
+            relief.macroAmplitudeMeters =
+                2'750.0;
+            relief.macroWavelengthMeters =
+                540'000.0;
+            relief.detailAmplitudeMeters =
+                390.0;
+            relief.detailWavelengthMeters =
+                19'000.0;
+            relief.detailOctaves = 11;
+            relief.maximumElevationMeters =
+                9'500.0;
+
+            authoring.SetRelief(
+                terrainObject,
+                relief);
+
+            biomeObject =
+                authoring.AddBiome(
+                    terrainObject,
+                    "M31 Dry Highlands");
+
+            editor_model::
+                SurfaceBiomePreferences
+                preferences{};
+
+            preferences.temperature = {
+                20.0,
+                42.0,
+                6.0,
+                8.0
+            };
+
+            preferences.moisture = {
+                0.0,
+                0.30,
+                0.05,
+                0.15
+            };
+
+            preferences.elevation = {
+                250.0,
+                2'600.0,
+                400.0,
+                650.0
+            };
+
+            authoring.SetCommonPreferences(
+                biomeObject,
+                preferences);
+
+            maskObject =
+                authoring.PaintLocalOverride(
+                    biomeObject,
+                    {1.0, 0.0, 0.0},
+                    5'000.0,
+                    25'000.0,
+                    0.82,
+                    0.65);
+
+            surfaceLayerObject =
+                authoring.AddSurfaceLayer(
+                    biomeObject,
+                    terrain_biome::
+                        BiomeSurfaceLayerKind::
+                            Dust);
+
+            scatterObject =
+                authoring.AddScatterRule(
+                    biomeObject,
+                    terrain_biome::
+                        BiomeScatterKind::
+                            Stone);
+
+            auto settings =
+                authoring.BiomeSettings(
+                    biomeObject);
+
+            settings.materialInfluence =
+                0.72;
+            settings.scatterDensityMultiplier =
+                1.35;
+            settings.hydraulicErosion =
+                0.70;
+            settings.aeolianTransport =
+                1.40;
+
+            authoring.SetBiomeSettings(
+                biomeObject,
+                settings);
+
+            world_model::UniverseComposition
+                universe;
+
+            Require(
+                universe.Rebuild(
+                    objects).bodies ==
+                    1U,
+                "M31 save/load: pre-save universe did not compose one rocky body.");
+
+            bodyIdBefore =
+                *universe.BodyForObject(
+                    bodyObject);
+
+            surface_model::SurfaceComposition
+                surfaces;
+
+            const auto stats =
+                surfaces.Rebuild(
+                    objects,
+                    universe);
+
+            Require(
+                stats.terrainSurfaces ==
+                        1U &&
+                stats.biomeServices ==
+                        1U &&
+                stats.biomeDefinitions ==
+                        2U,
+                "M31 save/load: pre-save surface composition is incomplete.");
+
+            const auto* capability =
+                surfaces.Registry().
+                    FindTerrainSurface(
+                        bodyIdBefore);
+
+            const auto* analytic =
+                capability != nullptr
+                    ? dynamic_cast<
+                          const terrain::
+                              AnalyticTerrainSource*>(
+                          capability->
+                              terrain.get())
+                    : nullptr;
+
+            Require(
+                analytic != nullptr,
+                "M31 save/load: pre-save terrain source is missing.");
+
+            recipeBefore =
+                analytic->Description();
+
+            for (std::size_t index = 0U;
+                 index <
+                     sampleDirections.size();
+                 ++index)
+            {
+                samplesBefore[index] =
+                    capability->
+                        terrain->Sample({
+                            .unitDirection =
+                                sampleDirections[
+                                    index],
+                            .footprintMeters =
+                                24.0,
+                            .planet =
+                                surfaces.
+                                    Registry().
+                                    SphericalPlanetDefinition(
+                                        bodyIdBefore)->
+                                    id,
+                            .radialOffsetMeters =
+                                0.0
+                        });
+            }
+
+            const auto* biomes =
+                surfaces.BiomesForBody(
+                    bodyIdBefore);
+
+            Require(
+                biomes != nullptr &&
+                biomes->Definitions().
+                        size() ==
+                    2U,
+                "M31 save/load: optional biome did not reach the pre-save runtime service.");
+
+            const auto foundBiome =
+                std::find_if(
+                    biomes->Definitions().
+                        begin(),
+                    biomes->Definitions().
+                        end(),
+                    [&](const auto& biome)
+                    {
+                        return
+                            biome.id !=
+                            biomes->
+                                BaseBiome().id;
+                    });
+
+            Require(
+                foundBiome !=
+                    biomes->Definitions().
+                        end(),
+                "M31 save/load: optional runtime biome is missing.");
+
+            biomeIdBefore =
+                foundBiome->id;
+
+            placementBefore =
+                biomes->EvaluatePlacement(
+                    *foundBiome,
+                    placementContext);
+
+            resolvedBefore =
+                biomes->ResolvePlacement(
+                    placementContext);
+
+            auto* services =
+                surfaces.ServicesForBody(
+                    bodyIdBefore);
+
+            Require(
+                services != nullptr &&
+                services->IsValid(),
+                "M31 save/load: pre-save terrain service bundle is invalid.");
+
+            const auto planet =
+                surfaces.Registry().
+                    SphericalPlanetDefinition(
+                        bodyIdBefore);
+
+            const terrain_gpu::
+                PersistentGpuTerrainCacheKey
+                cacheKey{
+                    .address = {
+                        .planet =
+                            planet->id,
+                        .tile =
+                            world::
+                                TileForDirection(
+                                    sampleDirections[
+                                        0U],
+                                    8U)
+                    },
+                    .physicalLod = 2U,
+                    .revisions = {
+                        .geology = 1U,
+                        .climate = 1U,
+                        .authoring = 1U,
+                        .biome = 1U,
+                        .water = 1U,
+                        .processes = 1U
+                    }
+                };
+
+            services->Cache().Insert(
+                cacheKey,
+                MakeIntegrationCachedPage(
+                    4096U,
+                    terrain_gpu::
+                        ProductBit(
+                            terrain_gpu::
+                                CachedTerrainProduct::
+                                    MaterialColumn)));
+
+            Require(
+                services->Cache().
+                        Stats().
+                        residentPages ==
+                    1U,
+                "M31 save/load: pre-close derived cache fixture did not become resident.");
+
+            world.Checkpoint();
+        }
+
+        auto reopenedProject =
+            documents::
+                ProjectDocument::Open(
+                    manifestPath);
+
+        Require(
+            reopenedProject.
+                    Manifest().
+                    projectId ==
+                projectId &&
+            reopenedProject.
+                    StartupWorldPath() ==
+                worldPath,
+            "M31 save/load: project identity/startup world changed after reopen.");
+
+        {
+            documents::WorldDatabase world(
+                reopenedProject.
+                    StartupWorldPath());
+
+            Require(
+                world.Id() ==
+                    worldId,
+                "M31 save/load: WorldId changed after reopen.");
+
+            schema::SchemaRegistry schemas;
+            world_model::RegisterSchemas(
+                schemas);
+
+            scene::ObjectStore objects(
+                world);
+
+            const std::array<
+                scene::ObjectId,
+                6U>
+                persistedObjects{{
+                    bodyObject,
+                    terrainObject,
+                    biomeObject,
+                    maskObject,
+                    surfaceLayerObject,
+                    scatterObject
+                }};
+
+            for (const auto object :
+                 persistedObjects)
+            {
+                Require(
+                    objects.Find(object).
+                        has_value(),
+                    "M31 save/load: authored semantic ObjectId did not survive reopen.");
+            }
+
+            commands::CommandService commands(
+                objects,
+                schemas);
+
+            selection::SelectionService
+                selection;
+
+            editor_model::
+                SurfaceAuthoringModel
+                authoring(
+                    objects,
+                    commands,
+                    selection);
+
+            const auto relief =
+                authoring.Relief(
+                    terrainObject);
+
+            Require(
+                relief.macroAmplitudeMeters ==
+                        2'750.0 &&
+                relief.macroWavelengthMeters ==
+                        540'000.0 &&
+                relief.detailAmplitudeMeters ==
+                        390.0 &&
+                relief.detailWavelengthMeters ==
+                        19'000.0 &&
+                relief.detailOctaves ==
+                        11 &&
+                relief.maximumElevationMeters ==
+                        9'500.0,
+                "M31 save/load: authored terrain relief did not survive reopen.");
+
+            const auto masks =
+                authoring.Masks(
+                    biomeObject);
+
+            Require(
+                masks.size() ==
+                        1U &&
+                masks.front().id ==
+                        maskObject &&
+                masks.front().value ==
+                        0.82 &&
+                masks.front().opacity ==
+                        0.65,
+                "M31 save/load: authored biome override did not survive reopen.");
+
+            world_model::UniverseComposition
+                universe;
+
+            static_cast<void>(
+                universe.Rebuild(
+                    objects));
+
+            const auto bodyIdAfter =
+                universe.BodyForObject(
+                    bodyObject);
+
+            Require(
+                bodyIdAfter.has_value() &&
+                *bodyIdAfter ==
+                    bodyIdBefore,
+                "M31 save/load: stable semantic body did not regenerate the same runtime BodyId.");
+
+            surface_model::SurfaceComposition
+                surfaces;
+
+            static_cast<void>(
+                surfaces.Rebuild(
+                    objects,
+                    universe));
+
+            const auto* capability =
+                surfaces.Registry().
+                    FindTerrainSurface(
+                        *bodyIdAfter);
+
+            const auto* analytic =
+                capability != nullptr
+                    ? dynamic_cast<
+                          const terrain::
+                              AnalyticTerrainSource*>(
+                          capability->
+                              terrain.get())
+                    : nullptr;
+
+            Require(
+                analytic != nullptr,
+                "M31 save/load: reopened terrain source failed to regenerate.");
+
+            const auto& recipeAfter =
+                analytic->Description();
+
+            Require(
+                recipeAfter.seed ==
+                        recipeBefore.seed &&
+                recipeAfter.
+                        macroAmplitudeMeters ==
+                    recipeBefore.
+                        macroAmplitudeMeters &&
+                recipeAfter.
+                        macroWavelengthMeters ==
+                    recipeBefore.
+                        macroWavelengthMeters &&
+                recipeAfter.
+                        detailAmplitudeMeters ==
+                    recipeBefore.
+                        detailAmplitudeMeters &&
+                recipeAfter.
+                        detailWavelengthMeters ==
+                    recipeBefore.
+                        detailWavelengthMeters &&
+                recipeAfter.
+                        detailOctaves ==
+                    recipeBefore.
+                        detailOctaves &&
+                recipeAfter.
+                        maximumElevationAboveSeaLevelMeters ==
+                    recipeBefore.
+                        maximumElevationAboveSeaLevelMeters,
+                "M31 save/load: authored terrain recipe regenerated differently.");
+
+            const auto planet =
+                surfaces.Registry().
+                    SphericalPlanetDefinition(
+                        *bodyIdAfter);
+
+            for (std::size_t index = 0U;
+                 index <
+                     sampleDirections.size();
+                 ++index)
+            {
+                const auto after =
+                    capability->
+                        terrain->Sample({
+                            .unitDirection =
+                                sampleDirections[
+                                    index],
+                            .footprintMeters =
+                                24.0,
+                            .planet =
+                                planet->id,
+                            .radialOffsetMeters =
+                                0.0
+                        });
+
+                const auto& before =
+                    samplesBefore[index];
+
+                Require(
+                    after.elevationMeters ==
+                            before.
+                                elevationMeters &&
+                    after.
+                        coarseElevationMeters ==
+                            before.
+                                coarseElevationMeters &&
+                    after.climate.
+                            temperatureC ==
+                        before.climate.
+                            temperatureC &&
+                    after.climate.
+                            humidity ==
+                        before.climate.
+                            humidity &&
+                    after.climate.
+                            precipitation ==
+                        before.climate.
+                            precipitation &&
+                    after.climate.
+                            continentality ==
+                        before.climate.
+                            continentality &&
+                    after.biomes.ocean ==
+                        before.biomes.ocean &&
+                    after.biomes.desert ==
+                        before.biomes.desert &&
+                    after.biomes.grassland ==
+                        before.biomes.grassland &&
+                    after.biomes.
+                            temperateForest ==
+                        before.biomes.
+                            temperateForest &&
+                    after.biomes.
+                            borealForest ==
+                        before.biomes.
+                            borealForest &&
+                    after.biomes.tundra ==
+                        before.biomes.tundra &&
+                    after.biomes.alpine ==
+                        before.biomes.alpine &&
+                    after.biomes.wetland ==
+                        before.biomes.wetland &&
+                    after.
+                        standingWaterDepthMeters ==
+                            before.
+                                standingWaterDepthMeters,
+                    "M31 save/load: regenerated derived terrain sample is not bit-identical.");
+            }
+
+            const auto* biomes =
+                surfaces.BiomesForBody(
+                    *bodyIdAfter);
+
+            Require(
+                biomes != nullptr,
+                "M31 save/load: reopened biome service is missing.");
+
+            const auto foundBiome =
+                std::find_if(
+                    biomes->Definitions().
+                        begin(),
+                    biomes->Definitions().
+                        end(),
+                    [&](const auto& biome)
+                    {
+                        return
+                            biome.id ==
+                            biomeIdBefore;
+                    });
+
+            Require(
+                foundBiome !=
+                    biomes->Definitions().
+                        end(),
+                "M31 save/load: runtime biome stable identity changed.");
+
+            const auto placementAfter =
+                biomes->EvaluatePlacement(
+                    *foundBiome,
+                    placementContext);
+
+            Require(
+                placementAfter.
+                        automaticWeight ==
+                    placementBefore.
+                        automaticWeight &&
+                placementAfter.
+                        authoredWeight ==
+                    placementBefore.
+                        authoredWeight &&
+                placementAfter.
+                        finalWeight ==
+                    placementBefore.
+                        finalWeight,
+                "M31 save/load: regenerated biome placement changed after reopen.");
+
+            const auto resolvedAfter =
+                biomes->ResolvePlacement(
+                    placementContext);
+
+            Require(
+                resolvedAfter.size() ==
+                    resolvedBefore.size(),
+                "M31 save/load: resolved biome vector changed size.");
+
+            for (std::size_t index = 0U;
+                 index <
+                     resolvedBefore.size();
+                 ++index)
+            {
+                Require(
+                    resolvedAfter[index].id ==
+                            resolvedBefore[
+                                index].id &&
+                    resolvedAfter[index].
+                            weight ==
+                        resolvedBefore[
+                            index].weight &&
+                    resolvedAfter[index].
+                            base ==
+                        resolvedBefore[
+                            index].base,
+                    "M31 save/load: regenerated biome weights/IDs differ after reopen.");
+            }
+
+            const auto* services =
+                surfaces.ServicesForBody(
+                    *bodyIdAfter);
+
+            Require(
+                services != nullptr &&
+                services->IsValid() &&
+                services->Cache().
+                        Stats().
+                        residentPages ==
+                    0U &&
+                services->Cache().
+                        Stats().
+                        residentBytes ==
+                    0U,
+                "M31 save/load: derived cache persisted across application reopen instead of regenerating from authority.");
+
+            world.Checkpoint();
+        }
+    }
+    catch (...)
+    {
+        std::filesystem::remove_all(
+            root);
+        throw;
+    }
+
+    std::filesystem::remove_all(
+        root);
+}
+
 } // namespace
 
 int main()
@@ -2149,10 +2967,11 @@ int main()
         TestPersistentGpuCacheReusesAcrossFrames();
         TestDependencyChangesRegenerateOnlyDependents();
         TestAllDebugFieldsAreInspectable();
+        TestSaveLoadRegeneratesEquivalentTerrain();
 
         std::cout
             << "Orbit V0.0.4 M31 integration entry: "
-            << "7 integration slices passed.\n";
+            << "8 integration slices passed.\n";
 
         return EXIT_SUCCESS;
     }
