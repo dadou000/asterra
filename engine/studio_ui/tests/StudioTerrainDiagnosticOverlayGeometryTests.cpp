@@ -100,6 +100,13 @@ MakeRuntime()
         .centerOffsetMeters = {}
     });
 
+    runtime.residency.levels.push_back({
+        .levelIndex = 0U,
+        .originX = 7U,
+        .originY = 11U,
+        .fullRefresh = false
+    });
+
     return runtime;
 }
 
@@ -282,7 +289,45 @@ int main()
                     pages,
                     camera);
 
-        Check(lines.size() >= 64U);
+        Check(lines.size() >= 66U);
+    }
+
+    {
+        orbit::studio_ui::
+            StudioTerrainDiagnosticOverlayOptions
+            options{};
+
+        options.buildStates = true;
+
+        const auto lines =
+            orbit::studio_ui::
+                BuildTerrainDiagnosticOverlayLines(
+                    options,
+                    runtime,
+                    terrain,
+                    pages,
+                    camera);
+
+        Check(lines.size() >= 48U);
+    }
+
+    {
+        orbit::studio_ui::
+            StudioTerrainDiagnosticOverlayOptions
+            options{};
+
+        options.cacheStatus = true;
+
+        const auto lines =
+            orbit::studio_ui::
+                BuildTerrainDiagnosticOverlayLines(
+                    options,
+                    runtime,
+                    terrain,
+                    pages,
+                    camera);
+
+        Check(lines.size() >= 48U);
     }
 
     {
