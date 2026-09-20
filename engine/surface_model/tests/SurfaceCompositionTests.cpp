@@ -65,6 +65,40 @@ int main()
             orbit::world_model::kTerrainDetailOctaves,
             orbit::i64{6});
 
+        const auto processObject =
+            commands.CreateObject(
+                orbit::world_model::
+                    kTerrainProcessAssetType,
+                "Terrain Process Settings",
+                terrainObject,
+                50);
+
+        commands.SetProperty(
+            processObject,
+            orbit::world_model::
+                kProcessStreamPowerEnabled,
+            false);
+        commands.SetProperty(
+            processObject,
+            orbit::world_model::
+                kProcessHydraulicRainfall,
+            0.00042);
+        commands.SetProperty(
+            processObject,
+            orbit::world_model::
+                kProcessAeolianCapacity,
+            0.075);
+        commands.SetProperty(
+            processObject,
+            orbit::world_model::
+                kProcessRiverMeandersEnabled,
+            false);
+        commands.SetProperty(
+            processObject,
+            orbit::world_model::
+                kProcessCoastalEnabled,
+            false);
+
         orbit::world_model::UniverseComposition universe;
         const auto universeStats = universe.Rebuild(objects);
 
@@ -107,6 +141,23 @@ int main()
             analytic->Description().detailOctaves != 6U)
         {
             return 4;
+        }
+
+        const auto* processes =
+            surfaces.ProcessesForBody(
+                *bodyId);
+
+        if (processes == nullptr ||
+            processes->streamPowerEnabled ||
+            processes->hydraulic.rainfallMetersPerSecond !=
+                0.00042 ||
+            processes->aeolian.capacityCoefficient !=
+                0.075 ||
+            processes->rivers.enableMeanders ||
+            processes->coastal.enabled ||
+            !processes->IsValid())
+        {
+            return 26;
         }
 
         const auto canyon=commands.CreateObject(
