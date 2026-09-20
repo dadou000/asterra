@@ -402,7 +402,18 @@ BuildPhysicalRenderPages(
             cache.Find(
                 key);
 
-        if (cached == nullptr)
+        const auto physicalProduct =
+            terrain_gpu::
+                ProductBit(
+                    terrain_gpu::
+                        CachedTerrainProduct::
+                            PhysicalSurface);
+
+        if (cached == nullptr ||
+            (cached->products &
+             physicalProduct) == 0U ||
+            cached->physicalSurface ==
+                nullptr)
         {
             const auto uploadRevision =
                 session.
@@ -521,26 +532,30 @@ BuildPhysicalRenderPages(
 
                 buffer->Unmap();
 
-                cached =
-                    std::make_shared<
-                        terrain_gpu::
-                            CachedGpuTerrainPage>();
+                auto augmented =
+                    cached != nullptr
+                        ? std::make_shared<
+                              terrain_gpu::
+                                  CachedGpuTerrainPage>(
+                                      *cached)
+                        : std::make_shared<
+                              terrain_gpu::
+                                  CachedGpuTerrainPage>();
 
-                cached->products =
-                    terrain_gpu::
-                        ProductBit(
-                            terrain_gpu::
-                                CachedTerrainProduct::
-                                    PhysicalSurface);
+                augmented->products |=
+                    physicalProduct;
 
-                cached->buffers.
-                    push_back(
-                        std::move(
-                            buffer));
+                augmented->physicalSurface =
+                    std::move(
+                        buffer);
 
                 cache.Insert(
                     key,
-                    cached);
+                    augmented);
+
+                cached =
+                    std::move(
+                        augmented);
 
                 if (!session.
                         TerrainPhysicalPages().
@@ -571,13 +586,8 @@ BuildPhysicalRenderPages(
         }
 
         if ((cached->products &
-             terrain_gpu::
-                 ProductBit(
-                     terrain_gpu::
-                         CachedTerrainProduct::
-                             PhysicalSurface)) == 0U ||
-            cached->buffers.empty() ||
-            cached->buffers.front() ==
+             physicalProduct) == 0U ||
+            cached->physicalSurface ==
                 nullptr)
         {
             continue;
@@ -592,7 +602,7 @@ BuildPhysicalRenderPages(
                     Resolution(),
             .samples =
                 cached->
-                    buffers.front()
+                    physicalSurface
         });
 
         result.generation =

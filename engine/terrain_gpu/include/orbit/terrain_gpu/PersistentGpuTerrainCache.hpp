@@ -61,6 +61,11 @@ public:
 
     CachedTerrainProductMask products{0};
 
+    // Explicit resource slot for the final M12 physical surface consumed by
+    // Perspective. Generic buffers remain available to other cache products;
+    // callers must never infer product identity from vector ordering.
+    std::shared_ptr<rhi::Buffer> physicalSurface;
+
     std::vector<std::shared_ptr<rhi::Buffer>> buffers;
     std::vector<std::shared_ptr<rhi::Texture>> textures;
 

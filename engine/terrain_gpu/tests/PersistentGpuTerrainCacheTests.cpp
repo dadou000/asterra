@@ -154,6 +154,36 @@ void TestResourceAccountingCountsGpuResources()
         "Solved resource page must be cacheable.");
 }
 
+void TestPhysicalSurfaceHasExplicitCacheResourceIdentity()
+{
+    auto page =
+        std::make_shared<
+            terrain_gpu::CachedGpuTerrainPage>();
+
+    page->products =
+        terrain_gpu::ProductBit(
+            terrain_gpu::
+                CachedTerrainProduct::
+                    PhysicalSurface);
+
+    page->physicalSurface =
+        std::make_shared<
+            FakeBuffer>(
+                96);
+
+    // Duplicate ownership through a generic slot must not double-count bytes.
+    page->buffers.push_back(
+        page->physicalSurface);
+
+    Require(
+        page->IsCacheable(),
+        "A physical-surface-only M26 entry must be cacheable.");
+
+    Require(
+        page->ResidentBytes() == 96ULL,
+        "M26 must account explicit physical-surface bytes exactly once.");
+}
+
 void TestStationaryWarmupGeneratesOnce()
 {
     terrain_gpu::PersistentGpuTerrainCache cache({
@@ -353,6 +383,7 @@ void TestStableFingerprintDependsOnlyOnPhysicalIdentity()
 int main()
 {
     TestResourceAccountingCountsGpuResources();
+    TestPhysicalSurfaceHasExplicitCacheResourceIdentity();
     TestStationaryWarmupGeneratesOnce();
     TestRevisitResidentTerrainDoesNotRegenerate();
     TestRevisionAndPhysicalLodArePartOfIdentity();

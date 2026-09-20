@@ -74,6 +74,14 @@ u64 CachedGpuTerrainPage::ResidentBytes() const noexcept
     u64 total = 0;
     std::unordered_set<const void*> seen;
 
+    if (physicalSurface &&
+        seen.insert(
+            physicalSurface.get()).second)
+    {
+        total =
+            physicalSurface->SizeBytes();
+    }
+
     for (const auto& buffer : buffers)
     {
         if (!buffer ||
