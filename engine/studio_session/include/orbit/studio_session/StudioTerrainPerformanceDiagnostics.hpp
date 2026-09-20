@@ -118,6 +118,11 @@ public:
         f64 seconds,
         bool regenerationActive);
 
+    void RecordFrameCpuSeconds(
+        f64 seconds,
+        StudioSession& session,
+        std::string_view viewportId);
+
     void RecordViewportStreaming(
         std::string_view viewportId,
         const world::WorldPosition& observer,
