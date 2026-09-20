@@ -5,6 +5,7 @@
 #include <orbit/studio_session/StudioTerrainAuthoringInvalidation.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
 #include <array>
@@ -47,6 +48,7 @@ namespace
     case StudioTerrainAuthoringTool::Canyon: return "Canyon";
     case StudioTerrainAuthoringTool::Ridge: return "Ridge";
     case StudioTerrainAuthoringTool::Material: return "Geology";
+    case StudioTerrainAuthoringTool::BiomePaint: return "Biome Paint";
     }
     return "Select";
 }
@@ -97,6 +99,68 @@ namespace
     }
 
     return "?";
+}
+
+[[nodiscard]] std::optional<scene::ObjectId>
+SelectedBiomeObject(
+    studio_session::StudioSession& session)
+{
+    if (!session.World().HasWorld() ||
+        session.World().Selection().Ordered().size() != 1U)
+    {
+        return std::nullopt;
+    }
+
+    auto cursor =
+        session.World().Selection().Ordered().front();
+
+    for (u32 depth = 0U; depth < 32U; ++depth)
+    {
+        const auto record =
+            session.World().Objects().Find(cursor);
+
+        if (!record.has_value())
+        {
+            return std::nullopt;
+        }
+
+        if (record->type ==
+            world_model::kBiomeAssetType)
+        {
+            return record->id;
+        }
+
+        if (!record->parent.has_value())
+        {
+            return std::nullopt;
+        }
+
+        cursor = *record->parent;
+    }
+
+    return std::nullopt;
+}
+
+[[nodiscard]] const char* BiomeOperationName(
+    const terrain_biome::BiomeAuthoredWeightOperation operation) noexcept
+{
+    switch (operation)
+    {
+    case terrain_biome::BiomeAuthoredWeightOperation::Add:
+        return "Add";
+    case terrain_biome::BiomeAuthoredWeightOperation::Subtract:
+        return "Subtract";
+    case terrain_biome::BiomeAuthoredWeightOperation::Replace:
+        return "Replace";
+    case terrain_biome::BiomeAuthoredWeightOperation::Multiply:
+        return "Multiply";
+    case terrain_biome::BiomeAuthoredWeightOperation::Min:
+        return "Min";
+    case terrain_biome::BiomeAuthoredWeightOperation::Max:
+        return "Max";
+    }
+
+    return "Replace";
 }
 
 [[nodiscard]] std::optional<paths::PathEdgeRecord>
@@ -226,7 +290,9 @@ void StudioViewportPanels::DrawView(
             const universe::BodyId body,
             const std::span<const math::Double3> points,
             const f64 influenceRadiusMeters,
-            const u32 downstreamRadiusTiles = 2U)
+            const u32 downstreamRadiusTiles = 2U,
+            const terrain_dependency::TerrainChangeKind kind =
+                terrain_dependency::TerrainChangeKind::TerrainAuthoring)
         {
             const auto planet =
                 session_->World().
@@ -253,7 +319,8 @@ void StudioViewportPanels::DrawView(
                         points,
                         influenceRadiusMeters,
                         runtime->physicalPageLevel,
-                        downstreamRadiusTiles);
+                        downstreamRadiusTiles,
+                        kind);
 
             session_->QueueTerrainInvalidations(requests);
         };
@@ -340,6 +407,9 @@ void StudioViewportPanels::DrawView(
         const std::string materialTool =
             "Geology##terrain-tool-material:" +
             std::string(id);
+        const std::string biomePaintTool =
+            "Biome Paint##terrain-tool-biome:" +
+            std::string(id);
 
         if (context.Button(selectTool))
             setTool(StudioTerrainAuthoringTool::Select);
@@ -365,8 +435,14 @@ void StudioViewportPanels::DrawView(
         if (context.Button(materialTool))
             setTool(StudioTerrainAuthoringTool::Material);
 
+        context.SameLine();
+        if (context.Button(biomePaintTool))
+            setTool(StudioTerrainAuthoringTool::BiomePaint);
+
         if (terrainTool_ !=
-            StudioTerrainAuthoringTool::Select)
+                StudioTerrainAuthoringTool::Select &&
+            terrainTool_ !=
+                StudioTerrainAuthoringTool::BiomePaint)
         {
             static_cast<void>(
                 context.InputDouble(
@@ -405,6 +481,115 @@ void StudioViewportPanels::DrawView(
                 context.InputDouble(
                     "Drainage Guidance##terrain-drainage",
                     terrainDrainageGuidance_));
+        }
+
+        if (terrainTool_ ==
+            StudioTerrainAuthoringTool::BiomePaint)
+        {
+            const auto selectedBiome =
+                SelectedBiomeObject(*session_);
+
+            if (selectedBiome.has_value())
+            {
+                const auto record =
+                    session_->World().Objects().Find(
+                        *selectedBiome);
+
+                context.Text(
+                    std::format(
+                        "Biome: {}",
+                        record.has_value()
+                            ? record->name
+                            : std::string("<missing>")));
+            }
+            else
+            {
+                context.Text(
+                    "Biome: <select a Biome or one of its authored children>");
+            }
+
+            context.Text(
+                std::format(
+                    "Operation: {}",
+                    BiomeOperationName(
+                        biomePaintOperation_)));
+
+            const std::string add =
+                "Add##biome-paint-add:" +
+                std::string(id);
+            const std::string subtract =
+                "Subtract##biome-paint-subtract:" +
+                std::string(id);
+            const std::string replace =
+                "Replace##biome-paint-replace:" +
+                std::string(id);
+
+            if (context.Button(add))
+            {
+                biomePaintOperation_ =
+                    terrain_biome::
+                        BiomeAuthoredWeightOperation::Add;
+            }
+            context.SameLine();
+            if (context.Button(subtract))
+            {
+                biomePaintOperation_ =
+                    terrain_biome::
+                        BiomeAuthoredWeightOperation::Subtract;
+            }
+            context.SameLine();
+            if (context.Button(replace))
+            {
+                biomePaintOperation_ =
+                    terrain_biome::
+                        BiomeAuthoredWeightOperation::Replace;
+            }
+
+            static_cast<void>(
+                context.InputDouble(
+                    "Inner Radius (m)##biome-brush-inner",
+                    biomeBrushInnerRadiusMeters_));
+            static_cast<void>(
+                context.InputDouble(
+                    "Outer Radius (m)##biome-brush-outer",
+                    biomeBrushOuterRadiusMeters_));
+            static_cast<void>(
+                context.InputDouble(
+                    "Strength##biome-brush-value",
+                    biomeBrushValue_));
+            static_cast<void>(
+                context.InputDouble(
+                    "Opacity##biome-brush-opacity",
+                    biomeBrushOpacity_));
+
+            static_cast<void>(
+                context.Checkbox(
+                    "Automatic Placement Inspection##biome-auto-overlay",
+                    biomeAutomaticOverlay_));
+
+            if (hoveredBiomeAuthoredWeight_.has_value())
+            {
+                context.Text(
+                    std::format(
+                        "Authored weight under cursor: {:.4f}",
+                        *hoveredBiomeAuthoredWeight_));
+            }
+
+            if (biomeAutomaticOverlay_)
+            {
+                if (hoveredBiomeAutomaticWeight_.has_value())
+                {
+                    context.Text(
+                        std::format(
+                            "Automatic weight under cursor: {:.4f}",
+                            *hoveredBiomeAutomaticWeight_));
+                }
+                else
+                {
+                    context.Text(
+                        "Automatic weight: unavailable when enabled selectors require unpublished physical fields.");
+                }
+            }
         }
 
         if (IsSplineTool(terrainTool_))
