@@ -48,6 +48,7 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
+#include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
@@ -1823,6 +1824,11 @@ int main(
                 project,
                 studioSession);
         projectSettingsUi.Register(ui);
+
+        orbit::studio_ui::SurfaceAuthoringUi
+            surfaceAuthoringUi(
+                studioSession);
+        surfaceAuthoringUi.Register(ui);
 
         constexpr orbit::editor_ui::PanelId
             kViewportPanel{
