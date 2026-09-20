@@ -280,6 +280,33 @@ bool TerrainDependencyGraph::ContainsPage(
     return pages_.contains(address);
 }
 
+void TerrainDependencyGraph::RequestBuild(
+    const terrain::PhysicalTerrainPageAddress& address,
+    const TerrainDependencyProduct product)
+{
+    const auto found = pages_.find(address);
+    if (found == pages_.end())
+    {
+        throw std::invalid_argument(
+            "M27 cannot request a build for an unregistered terrain page.");
+    }
+
+    graph_.RequestBuild(
+        ProductNode(found->second, product));
+}
+
+void TerrainDependencyGraph::Poll()
+{
+    graph_.Poll();
+}
+
+procedural_graph::ExecutionBackend
+TerrainDependencyGraph::Backend(
+    const TerrainDependencyProduct product) noexcept
+{
+    return BackendFor(product);
+}
+
 TerrainDependencyGraph::SourceKind
 TerrainDependencyGraph::SourceFor(
     const TerrainChangeKind kind) noexcept
