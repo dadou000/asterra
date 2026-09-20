@@ -304,10 +304,13 @@ int main()
                 has_value());
 
         // Existing systems are reused and therefore survive undo.
+        const orbit::scene::ObjectId
+            selectedSystem[] = {
+                system
+            };
+
         selection.Set(
-            std::span(
-                &system,
-                1U));
+            selectedSystem);
 
         registry.Invoke(
             orbit::editor_model::
