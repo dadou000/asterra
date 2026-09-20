@@ -48,6 +48,7 @@ jobs:
           OrbitStudioTerrainRebuildSchedulerTests
           OrbitStudioTerrainPhysicalPageServiceTests
           OrbitBezierHandleEditorTests
+          OrbitStudioTerrainDiagnosticOverlayGeometryTests
           OrbitStudioViewportCameraTests
           OrbitStudioViewportNavigationTests
           OrbitStudioViewportPresentationTests
@@ -64,6 +65,7 @@ jobs:
             "build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainRebuildSchedulerTests.exe",
             "build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainPhysicalPageServiceTests.exe",
             "build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
+            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioTerrainDiagnosticOverlayGeometryTests.exe",
             "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe",
             "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportNavigationTests.exe",
             "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
