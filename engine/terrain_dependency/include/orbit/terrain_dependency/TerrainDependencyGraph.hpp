@@ -132,6 +132,9 @@ public:
     [[nodiscard]] static procedural_graph::ExecutionBackend Backend(
         TerrainDependencyProduct product) noexcept;
 
+    [[nodiscard]] static TerrainDependencyProductMask ProductsForChange(
+        TerrainChangeKind kind) noexcept;
+
     [[nodiscard]] TerrainInvalidationResult ApplyChange(
         const TerrainInvalidationRequest& request);
 
