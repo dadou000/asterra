@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace orbit::studio_session
@@ -82,6 +83,15 @@ public:
         const StudioTerrainPhysicalPageSnapshot>
     Find(
         const terrain::PhysicalTerrainPageAddress& address) const;
+
+    [[nodiscard]] std::optional<u64> BeginUpload(
+        const terrain::PhysicalTerrainPageAddress& address);
+
+    [[nodiscard]] bool CompleteUpload(
+        const terrain::PhysicalTerrainPageAddress& address,
+        u64 revisionFingerprint,
+        bool success,
+        std::string_view error = {});
 
     [[nodiscard]] std::optional<StudioTerrainPageRebuildStatus>
     PageStatus(
