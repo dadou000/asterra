@@ -28,7 +28,7 @@ namespace
 }
 
 [[nodiscard]] std::optional<StudioTerrainAuthoringOverlay>
-SelectedTerrainConstraintOverlay(
+SelectedTerrainAuthoringOverlay(
     studio_session::StudioSession& session,
     const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime)
 {
@@ -51,6 +51,59 @@ SelectedTerrainConstraintOverlay(
     if (!selectedRecord.has_value())
     {
         return std::nullopt;
+    }
+
+    if (selectedRecord->type ==
+        world_model::kBiomeAuthoredMaskType)
+    {
+        if (!selectedRecord->parent.has_value())
+        {
+            return std::nullopt;
+        }
+
+        editor_model::SurfaceAuthoringModel model(
+            world.Objects(),
+            world.Commands(),
+            world.Selection());
+
+        const auto body =
+            model.SelectedRockyBody();
+
+        if (!body.has_value() ||
+            body->terrain != runtime.terrainObject)
+        {
+            return std::nullopt;
+        }
+
+        const auto masks =
+            model.Masks(
+                *selectedRecord->parent);
+
+        const auto found =
+            std::find_if(
+                masks.begin(),
+                masks.end(),
+                [&](const editor_model::SurfaceBiomeMaskDetail& item)
+                {
+                    return item.id ==
+                        selectedRecord->id;
+                });
+
+        if (found == masks.end())
+        {
+            return std::nullopt;
+        }
+
+        return StudioTerrainAuthoringOverlay{
+            .body = runtime.body,
+            .kind =
+                StudioTerrainOverlayKind::Brush,
+            .controlUnitDirections = {
+                found->centerUnitDirection
+            },
+            .influenceRadiusMeters =
+                found->outerRadiusMeters
+        };
     }
 
     if (selectedRecord->type ==
@@ -790,7 +843,7 @@ StudioViewportRenderer::Compose(
             if (!overlay.has_value())
             {
                 overlay =
-                    SelectedTerrainConstraintOverlay(
+                    SelectedTerrainAuthoringOverlay(
                         session,
                         *terrainRuntime);
             }
