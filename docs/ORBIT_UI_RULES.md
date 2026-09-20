@@ -340,6 +340,24 @@ Rules:
 
 The rule is **one product surface, multiple views**, not multiple launchers.
 
+## 30. The primary runnable executable lives at the repository root
+
+A successful local Orbit build must leave the primary user-facing executable directly in the repository root as `Orbit.exe`.
+
+`Orbit.exe` is the unified Orbit Studio application defined by Rule 29. It must not be a launcher that then starts another editor executable.
+
+Rules:
+
+- after a successful normal build, `<repo-root>/Orbit.exe` must exist and represent the just-built configuration;
+- `Orbit.exe` must enter the unified Studio/project-browser UI directly;
+- developers must not need to navigate through `build/`, configuration-specific directories, package folders, or generated CMake paths to start Orbit;
+- internal build outputs may remain in normal build directories, but the build pipeline must publish/copy the primary executable and its required adjacent runtime dependencies to the repository root;
+- `build_orbit.bat run` must run the root `Orbit.exe` produced by that build;
+- the root executable must not silently remain stale when the build succeeds; failure to publish the new root executable is a build failure;
+- command-line/helper binaries may exist separately where architecturally justified, but the ordinary interactive entry point is always root `Orbit.exe`.
+
+The root executable is a developer convenience contract and does not change the internal CMake build layout.
+
 ---
 
 # UI review checklist
@@ -362,6 +380,7 @@ A new or changed editor surface should be reviewed against these questions:
 - Does the UI remain responsive while expensive work runs?
 - Does the design preserve user freedom while enforcing genuine engine invariants?
 - Is the feature integrated into the unified Orbit Studio surface rather than creating or depending on a separate launcher/application shell?
+- Does a successful local build still publish the unified `Orbit.exe` at the repository root?
 
 A feature that fails the common-case test should be simplified.
 
