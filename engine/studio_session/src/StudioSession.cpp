@@ -3,6 +3,7 @@
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/ViewportTargetRpc.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -151,6 +152,65 @@ StudioSession::TerrainRuntime() const noexcept
     return terrainRuntime_;
 }
 
+void StudioSession::QueueTerrainInvalidation(
+    const terrain_dependency::TerrainInvalidationRequest& request)
+{
+    if (!request.scope.IsValid())
+    {
+        throw std::invalid_argument(
+            "Studio terrain invalidation scope is invalid.");
+    }
+
+    const auto sameRequest =
+        [&](const terrain_dependency::TerrainInvalidationRequest& queued)
+        {
+            return
+                queued.kind == request.kind &&
+                queued.scope.planet == request.scope.planet &&
+                queued.scope.global == request.scope.global &&
+                queued.scope.center == request.scope.center &&
+                queued.scope.radiusTiles == request.scope.radiusTiles &&
+                queued.scope.downstreamRadiusTiles ==
+                    request.scope.downstreamRadiusTiles;
+        };
+
+    if (std::find_if(
+            pendingTerrainInvalidations_.begin(),
+            pendingTerrainInvalidations_.end(),
+            sameRequest) ==
+        pendingTerrainInvalidations_.end())
+    {
+        pendingTerrainInvalidations_.push_back(request);
+    }
+}
+
+void StudioSession::QueueTerrainInvalidations(
+    const std::span<
+        const terrain_dependency::TerrainInvalidationRequest>
+        requests)
+{
+    for (const auto& request : requests)
+    {
+        QueueTerrainInvalidation(request);
+    }
+}
+
+std::span<
+    const terrain_dependency::TerrainInvalidationRequest>
+StudioSession::PendingTerrainInvalidations() const noexcept
+{
+    return pendingTerrainInvalidations_;
+}
+
+std::vector<
+    terrain_dependency::TerrainInvalidationRequest>
+StudioSession::TakeTerrainInvalidations()
+{
+    return std::exchange(
+        pendingTerrainInvalidations_,
+        {});
+}
+
 std::vector<editor_session::WorldDocumentItem>
 StudioSession::Worlds() const
 {
@@ -197,6 +257,7 @@ void StudioSession::OpenWorld(
     DispatchWorldLifecycle(
         "world.open",
         relativePath);
+    pendingTerrainInvalidations_.clear();
 }
 
 void StudioSession::CloseWorld()
@@ -204,6 +265,7 @@ void StudioSession::CloseWorld()
     DispatchWorldLifecycle(
         "world.close",
         std::nullopt);
+    pendingTerrainInvalidations_.clear();
 }
 
 std::optional<std::string>
