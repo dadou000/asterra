@@ -117,6 +117,58 @@ int main()
             return 6;
         }
 
+        const auto addedMask =
+            model.PaintBiomeMask(
+                desert,
+                terrain_biome::
+                    BiomeAuthoredWeightOperation::Add,
+                {0.0, 1.0, 0.0},
+                100.0,
+                500.0,
+                0.25,
+                0.5);
+
+        const auto subtractedMask =
+            model.PaintBiomeMask(
+                desert,
+                terrain_biome::
+                    BiomeAuthoredWeightOperation::Subtract,
+                {0.0, 0.0, 1.0},
+                75.0,
+                400.0,
+                0.10,
+                1.0);
+
+        const auto operationMasks =
+            model.Masks(desert);
+
+        if (operationMasks.size() != 3U ||
+            operationMasks[1].id != addedMask ||
+            operationMasks[1].operation !=
+                terrain_biome::
+                    BiomeAuthoredWeightOperation::Add ||
+            operationMasks[2].id != subtractedMask ||
+            operationMasks[2].operation !=
+                terrain_biome::
+                    BiomeAuthoredWeightOperation::Subtract)
+        {
+            return 15;
+        }
+
+        commands.Undo();
+
+        if (model.Masks(desert).size() != 2U)
+        {
+            return 16;
+        }
+
+        commands.Redo();
+
+        if (model.Masks(desert).size() != 3U)
+        {
+            return 17;
+        }
+
         const auto moss = model.AddSurfaceLayer(
             desert,
             terrain_biome::BiomeSurfaceLayerKind::Moss);
