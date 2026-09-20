@@ -66,6 +66,123 @@ int main()
             return 2;
         }
 
+        if (model.ProcessSettingsObject(
+                terrainObject).
+            has_value())
+        {
+            return 19;
+        }
+
+        const auto processObject =
+            model.EnsureProcessSettings(
+                terrainObject);
+
+        if (!processObject.IsValid() ||
+            model.Counts(
+                terrainObject).
+                processAssets != 1U)
+        {
+            return 20;
+        }
+
+        const auto defaultProcesses =
+            model.ProcessSettings(
+                terrainObject);
+
+        if (!defaultProcesses.IsValid() ||
+            !defaultProcesses.aeolianEnabled ||
+            defaultProcesses.aeolian.capacityCoefficient !=
+                0.030)
+        {
+            return 21;
+        }
+
+        auto editedProcesses =
+            defaultProcesses;
+
+        editedProcesses.aeolianEnabled =
+            false;
+        editedProcesses.aeolian.capacityCoefficient =
+            0.045;
+        editedProcesses.hydraulic.rainfallMetersPerSecond =
+            0.00035;
+        editedProcesses.rivers.enableMeanders =
+            false;
+        editedProcesses.coastal.enabled =
+            false;
+
+        model.SetProcessSettings(
+            terrainObject,
+            editedProcesses);
+
+        const auto storedProcesses =
+            model.ProcessSettings(
+                terrainObject);
+
+        if (storedProcesses.aeolianEnabled ||
+            storedProcesses.aeolian.capacityCoefficient !=
+                0.045 ||
+            storedProcesses.hydraulic.rainfallMetersPerSecond !=
+                0.00035 ||
+            storedProcesses.rivers.enableMeanders ||
+            storedProcesses.coastal.enabled)
+        {
+            return 22;
+        }
+
+        auto invalidProcesses =
+            storedProcesses;
+
+        invalidProcesses.hydraulic.timeStepSeconds =
+            0.0;
+
+        bool rejectedInvalidProcess = false;
+
+        try
+        {
+            model.SetProcessSettings(
+                terrainObject,
+                invalidProcesses);
+        }
+        catch (const std::invalid_argument&)
+        {
+            rejectedInvalidProcess = true;
+        }
+
+        if (!rejectedInvalidProcess ||
+            model.ProcessSettings(
+                terrainObject).
+                hydraulic.timeStepSeconds !=
+            storedProcesses.hydraulic.timeStepSeconds)
+        {
+            return 23;
+        }
+
+        commands.Undo();
+
+        const auto undoneProcesses =
+            model.ProcessSettings(
+                terrainObject);
+
+        if (!undoneProcesses.aeolianEnabled ||
+            undoneProcesses.aeolian.capacityCoefficient !=
+                defaultProcesses.aeolian.capacityCoefficient ||
+            !undoneProcesses.rivers.enableMeanders ||
+            !undoneProcesses.coastal.enabled)
+        {
+            return 24;
+        }
+
+        commands.Redo();
+
+        if (model.ProcessSettings(
+                terrainObject).
+                aeolian.capacityCoefficient !=
+            0.045)
+        {
+            return 25;
+        }
+
         const auto desert = model.AddBiome(terrainObject, "Desert");
         auto biomes = model.Biomes(terrainObject);
 
@@ -260,6 +377,21 @@ int main()
                 reopenedObjects,
                 reopenedCommands,
                 reopenedSelection);
+
+        const auto reopenedProcesses =
+            reopenedModel.ProcessSettings(
+                terrainObject);
+
+        if (reopenedProcesses.aeolianEnabled ||
+            reopenedProcesses.aeolian.capacityCoefficient !=
+                0.045 ||
+            reopenedProcesses.hydraulic.rainfallMetersPerSecond !=
+                0.00035 ||
+            reopenedProcesses.rivers.enableMeanders ||
+            reopenedProcesses.coastal.enabled)
+        {
+            return 26;
+        }
 
         const auto reopenedMasks =
             reopenedModel.Masks(
