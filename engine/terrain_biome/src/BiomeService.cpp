@@ -1347,6 +1347,61 @@ BiomeService::EvaluatePlacement(
     };
 }
 
+f64 BiomeService::EvaluateAuthoredWeight(
+    const BiomeDefinition& biome,
+    math::Double3 unitDirection,
+    const f64 planetRadiusMeters) const
+{
+    const f64 directionLength =
+        math::Length(unitDirection);
+
+    if (!biome.IsValid() ||
+        !std::isfinite(directionLength) ||
+        directionLength <= 1.0e-12 ||
+        !std::isfinite(planetRadiusMeters) ||
+        planetRadiusMeters <= 0.0)
+    {
+        throw std::invalid_argument(
+            "Orbit M20 authored biome weight input is invalid.");
+    }
+
+    unitDirection =
+        unitDirection /
+        directionLength;
+
+    const BiomePlacementContext context{
+        .unitDirection =
+            unitDirection,
+        .planetRadiusMeters =
+            planetRadiusMeters
+    };
+
+    f64 authored = 0.0;
+
+    for (const auto& mask :
+         biome.placement.authoredMasks)
+    {
+        if (!mask.enabled)
+        {
+            continue;
+        }
+
+        authored =
+            ApplyAuthoredOperation(
+                authored,
+                mask,
+                MaskInfluence(
+                    mask,
+                    context));
+    }
+
+    return
+        std::clamp(
+            authored,
+            0.0,
+            1.0);
+}
+
 std::vector<ResolvedBiomeWeight>
 BiomeService::ResolvePlacement(
     const BiomePlacementContext& context) const
