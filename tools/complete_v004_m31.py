@@ -143,7 +143,7 @@ M01–M31 acceptance is closed. Begin the next version only from the frozen V0.0
         "",
         f"Completed UTC: **{completed_iso}**",
         "",
-        f"Source commit: \`\${source_commit}\`",
+        f"Source commit: `{source_commit}`",
         "",
         f"Build configuration: **{build_config}**",
         "",
