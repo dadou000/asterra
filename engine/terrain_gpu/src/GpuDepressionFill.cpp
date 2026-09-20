@@ -65,6 +65,12 @@ GpuDepressionFill::GpuDepressionFill(
 
 GpuDepressionFill::~GpuDepressionFill() = default;
 
+u64 GpuDepressionFill::TransientWorkingSetBytes() const noexcept
+{
+    return scratchA_->SizeBytes() +
+        scratchB_->SizeBytes();
+}
+
 void GpuDepressionFill::Dispatch(
     rhi::CommandList& commandList,
     const u32 resolution,
