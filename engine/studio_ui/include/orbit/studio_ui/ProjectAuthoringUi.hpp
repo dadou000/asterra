@@ -3,6 +3,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/ProjectBrowserModel.hpp>
 #include <orbit/studio_session/ProjectSettingsModel.hpp>
+#include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 
 #include <filesystem>
@@ -72,6 +73,9 @@ private:
     std::string createWorldName_{"New World"};
     std::optional<std::filesystem::path> selectedWorld_;
     std::string selectedWorldName_;
+    std::optional<
+        studio_session::StudioTerrainRoundTripReport>
+        terrainRoundTripReport_;
     std::string status_;
     bool allowCloseWorld_{true};
 };
