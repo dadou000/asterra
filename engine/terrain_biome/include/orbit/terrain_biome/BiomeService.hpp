@@ -379,6 +379,13 @@ public:
         const BiomeDefinition& biome,
         const BiomePlacementContext& context) const;
 
+    // Exact M20 authored-mask contribution at one canonical body-space point.
+    // Automatic selector fields are intentionally excluded.
+    [[nodiscard]] f64 EvaluateAuthoredWeight(
+        const BiomeDefinition& biome,
+        math::Double3 unitDirection,
+        f64 planetRadiusMeters) const;
+
     [[nodiscard]] std::vector<ResolvedBiomeWeight> ResolvePlacement(
         const BiomePlacementContext& context) const;
 
