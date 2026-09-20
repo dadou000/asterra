@@ -981,6 +981,7 @@ target_link_libraries(OrbitV004ValidationTests
         Orbit::SurfaceModel
         Orbit::TerrainBiome
         Orbit::TerrainCache
+        Orbit::TerrainDependency
         Orbit::TerrainErosion
         Orbit::TerrainGeology
         Orbit::TerrainHydrology
