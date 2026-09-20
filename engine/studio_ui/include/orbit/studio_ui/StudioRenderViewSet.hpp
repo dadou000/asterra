@@ -43,7 +43,7 @@ struct StudioTerrainDiagnosticOverlayOptions
     bool cacheStatus{false};
     bool authoredConstraints{false};
     bool biomeWeights{false};
-    bool processEffects{false};
+    bool processMasks{false};
     bool drainageVectors{false};
 
     [[nodiscard]] constexpr bool Any() const noexcept
@@ -56,7 +56,7 @@ struct StudioTerrainDiagnosticOverlayOptions
             cacheStatus ||
             authoredConstraints ||
             biomeWeights ||
-            processEffects ||
+            processMasks ||
             drainageVectors;
     }
 
