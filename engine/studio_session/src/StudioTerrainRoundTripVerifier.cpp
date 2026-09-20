@@ -666,6 +666,10 @@ VerifyStudioTerrainRoundTrip(
             runtime->
                 observerPhysicalPage;
 
+        report.terrainSourceRevisionBefore =
+            runtime->
+                terrainSourceRevision;
+
         report.semanticFingerprintBefore =
             SemanticSubtreeFingerprint(
                 beforeSession.World(),
@@ -899,6 +903,32 @@ VerifyStudioTerrainRoundTrip(
                 report,
                 "regenerate",
                 "Verification viewport did not bind production terrain after reopen.");
+            return report;
+        }
+
+        report.terrainSourceRevisionAfter =
+            afterRuntime->
+                terrainSourceRevision;
+
+        report.terrainSourceRevisionPreserved =
+            report.
+                terrainSourceRevisionAfter ==
+            report.
+                terrainSourceRevisionBefore;
+
+        if (!report.
+                terrainSourceRevisionPreserved)
+        {
+            static_cast<void>(
+                afterSession.
+                    Viewports().
+                    Unregister(
+                        kVerificationViewport));
+
+            Fail(
+                report,
+                "verify-authority",
+                "Composed TerrainSource revision changed after reopen.");
             return report;
         }
 
