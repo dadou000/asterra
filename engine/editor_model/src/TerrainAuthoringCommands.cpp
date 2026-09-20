@@ -1,4 +1,5 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -128,12 +129,31 @@ TerrainSurfaceObject(
         };
     }
 
-    if (!objects.Children(*terrain).empty())
+    u32 processSettings = 0U;
+
+    for (const auto& child :
+         objects.Children(*terrain))
+    {
+        if (child.type ==
+            world_model::kTerrainProcessAssetType)
+        {
+            ++processSettings;
+            continue;
+        }
+
+        return {
+            .enabled = false,
+            .reason =
+                "The Terrain Surface has authored semantic children and cannot be removed."
+        };
+    }
+
+    if (processSettings > 1U)
     {
         return {
             .enabled = false,
             .reason =
-                "The Terrain Surface has semantic children and cannot be removed as a leaf capability."
+                "The Terrain Surface contains duplicate process settings and must be repaired before removal."
         };
     }
 
@@ -224,6 +244,15 @@ void RegisterTerrainCommands(
                         world_model::kTerrainMaximumElevationMeters,
                         8'000.0);
 
+                    SurfaceAuthoringModel surfaceModel(
+                        objects,
+                        commandService,
+                        selection);
+
+                    static_cast<void>(
+                        surfaceModel.EnsureProcessSettings(
+                            terrain));
+
                     if (ownsTransaction)
                     {
                         commandService.CommitTransaction();
@@ -293,6 +322,17 @@ void RegisterTerrainCommands(
 
                 try
                 {
+                    for (const auto& child :
+                         objects.Children(*terrain))
+                    {
+                        if (child.type ==
+                            world_model::kTerrainProcessAssetType)
+                        {
+                            commandService.DeleteObject(
+                                child.id);
+                        }
+                    }
+
                     commandService.DeleteObject(*terrain);
 
                     if (ownsTransaction)
