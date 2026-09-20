@@ -134,6 +134,11 @@ public:
     [[nodiscard]] bool ContainsPage(
         const terrain::PhysicalTerrainPageAddress& address) const noexcept;
 
+    // Drops a page's private procedural subgraph without blocking. Returns
+    // false while any node for that page still has in-flight work.
+    [[nodiscard]] bool UnregisterPage(
+        const terrain::PhysicalTerrainPageAddress& address);
+
     // Non-blocking build seam used by editor/runtime schedulers. The
     // underlying ProceduralGraph still owns dependency ordering and stale
     // generation rejection.
