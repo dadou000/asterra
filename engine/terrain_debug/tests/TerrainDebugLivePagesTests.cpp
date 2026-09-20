@@ -154,6 +154,41 @@ void TestCaptureUsesActualProducts()
         "An absent live producer must remain explicitly unavailable.");
 }
 
+void TestAggregateScatterDensity()
+{
+    const std::vector<f32> density{
+        0.0F, 0.25F, 0.5F, 1.0F};
+
+    const terrain_debug::TerrainDebugLivePageInputs inputs{
+        .address = Address(),
+        .physicalLod = 2,
+        .revisions = {
+            .geology = 1,
+            .climate = 2,
+            .authoring = 3,
+            .biome = 4,
+            .water = 5,
+            .processes = 6
+        },
+        .width = 2,
+        .height = 2,
+        .scatterDensityPerSquareMeter = density
+    };
+
+    const auto page =
+        terrain_debug::CaptureLiveTerrainDebugPage(
+            inputs);
+
+    const auto view =
+        page->View(
+            terrain_debug::TerrainDebugField::ScatterDensity);
+
+    Require(
+        view.scalar.size() == 4U &&
+        view.scalar[2] == 0.5F,
+        "M12 aggregate scatter density must preserve the combined M22 page field.");
+}
+
 void TestAddressLookupReplacesCurrentSnapshot()
 {
     terrain_debug::TerrainDebugLivePages pages;
@@ -202,6 +237,7 @@ void TestAddressLookupReplacesCurrentSnapshot()
 int main()
 {
     TestCaptureUsesActualProducts();
+    TestAggregateScatterDensity();
     TestAddressLookupReplacesCurrentSnapshot();
 
     std::cout << "Orbit M29 live-page registry tests passed.\n";
