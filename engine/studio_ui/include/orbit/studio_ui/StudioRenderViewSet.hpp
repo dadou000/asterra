@@ -3,8 +3,9 @@
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
-#include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/studio_ui/StudioViewportCamera.hpp>
+#include <orbit/studio_ui/StudioViewportNavigation.hpp>
+#include <orbit/terrain_debug/TerrainDebugField.hpp>
 
 #include <map>
 #include <memory>
@@ -62,6 +63,30 @@ public:
         u32 width,
         u32 height);
 
+    void SetNavigationSpeedScale(
+        std::string_view id,
+        f64 scale);
+
+    [[nodiscard]] f64 NavigationSpeedScale(
+        std::string_view id) const;
+
+    // M05 production-terrain navigation. These mutate only the M03 observer
+    // and transient camera state; terrain authority/revisions stay untouched.
+    [[nodiscard]] bool NavigateTerrain(
+        std::string_view id,
+        const StudioTerrainNavigationInput& input);
+
+    [[nodiscard]] bool FocusTerrainBody(
+        std::string_view id);
+
+    [[nodiscard]] bool FocusTerrainSurfacePoint(
+        std::string_view id,
+        f32 u,
+        f32 v);
+
+    [[nodiscard]] bool ResetTerrainView(
+        std::string_view id);
+
     // Debug-field choice is transient RenderView presentation state. It is
     // deliberately excluded from StudioSession/project terrain authority.
     void SetDebugField(
@@ -107,6 +132,14 @@ private:
     void RequireCurrentSnapshot(
         const studio_session::StudioRuntimeSnapshot& snapshot) const;
 
+    [[nodiscard]] StudioTerrainNavigationState&
+    RequireNavigationState(
+        std::string_view id);
+
+    [[nodiscard]] const StudioTerrainNavigationState&
+    RequireNavigationState(
+        std::string_view id) const;
+
     rhi::Device* device_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     std::map<
@@ -114,6 +147,12 @@ private:
         std::unique_ptr<render_view::RenderView>,
         std::less<>>
         views_;
+
+    std::map<
+        std::string,
+        StudioTerrainNavigationState,
+        std::less<>>
+        navigationStates_;
 
     std::map<
         std::string,

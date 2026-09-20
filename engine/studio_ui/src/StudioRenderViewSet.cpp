@@ -3,6 +3,7 @@
 #include <orbit/studio_ui/StudioViewportCamera.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -81,6 +82,9 @@ void StudioRenderViewSet::Create(
 
     try
     {
+        navigationStates_.emplace(
+            targetId,
+            StudioTerrainNavigationState{});
         debugFields_.emplace(
             targetId,
             terrain_debug::TerrainDebugField::Uplift);
@@ -98,6 +102,7 @@ void StudioRenderViewSet::Create(
     }
     catch (...)
     {
+        navigationStates_.erase(targetId);
         debugFields_.erase(targetId);
         debugPhysicalPageLevels_.erase(targetId);
         debugPhysicalPages_.erase(targetId);
@@ -121,6 +126,7 @@ bool StudioRenderViewSet::Destroy(
 
     const std::string ownedId = found->first;
     views_.erase(found);
+    navigationStates_.erase(ownedId);
     debugFields_.erase(ownedId);
     debugPhysicalPageLevels_.erase(ownedId);
     debugPhysicalPages_.erase(ownedId);
@@ -151,6 +157,234 @@ void StudioRenderViewSet::Resize(
     view->Resize(
         std::max(width, 1U),
         std::max(height, 1U));
+}
+
+void StudioRenderViewSet::SetNavigationSpeedScale(
+    const std::string_view id,
+    const f64 scale)
+{
+    if (!std::isfinite(scale) ||
+        scale <= 0.0)
+    {
+        throw std::invalid_argument(
+            "Studio viewport navigation speed scale must be finite and positive.");
+    }
+
+    auto& state =
+        RequireNavigationState(id);
+
+    state.config.movementSpeedScale =
+        std::clamp(
+            scale,
+            0.01,
+            1'000.0);
+}
+
+f64 StudioRenderViewSet::NavigationSpeedScale(
+    const std::string_view id) const
+{
+    return
+        RequireNavigationState(id).
+            config.
+            movementSpeedScale;
+}
+
+bool StudioRenderViewSet::NavigateTerrain(
+    const std::string_view id,
+    const StudioTerrainNavigationInput& input)
+{
+    if (session_ == nullptr)
+    {
+        return false;
+    }
+
+    auto terrain =
+        session_->TerrainRuntime().
+            Capture(id);
+
+    if (!terrain.has_value() ||
+        !session_->TerrainRuntime().
+            IsCurrent(*terrain))
+    {
+        return false;
+    }
+
+    auto& state =
+        RequireNavigationState(id);
+
+    const auto& source =
+        session_->TerrainRuntime().
+            TerrainSource(*terrain);
+
+    const StudioTerrainNavigationUpdate update =
+        AdvanceTerrainNavigation(
+            state,
+            *terrain,
+            source,
+            input);
+
+    if (update.moved)
+    {
+        static_cast<void>(
+            session_->TerrainRuntime().
+                SetObserver(
+                    id,
+                    update.observer));
+    }
+
+    return
+        update.moved ||
+        input.mouseDeltaX != 0.0 ||
+        input.mouseDeltaY != 0.0;
+}
+
+bool StudioRenderViewSet::FocusTerrainBody(
+    const std::string_view id)
+{
+    if (session_ == nullptr)
+    {
+        return false;
+    }
+
+    auto terrain =
+        session_->TerrainRuntime().
+            Capture(id);
+
+    if (!terrain.has_value() ||
+        !session_->TerrainRuntime().
+            IsCurrent(*terrain))
+    {
+        return false;
+    }
+
+    auto& state =
+        RequireNavigationState(id);
+
+    const auto& source =
+        session_->TerrainRuntime().
+            TerrainSource(*terrain);
+
+    const StudioTerrainNavigationUpdate update =
+        studio_ui::FocusTerrainBody(
+            state,
+            *terrain,
+            source);
+
+    static_cast<void>(
+        session_->TerrainRuntime().
+            SetObserver(
+                id,
+                update.observer));
+
+    return true;
+}
+
+bool StudioRenderViewSet::FocusTerrainSurfacePoint(
+    const std::string_view id,
+    const f32 u,
+    const f32 v)
+{
+    if (session_ == nullptr)
+    {
+        return false;
+    }
+
+    auto* view = Find(id);
+
+    if (view == nullptr)
+    {
+        return false;
+    }
+
+    const auto* target =
+        session_->Viewports().
+            Find(id);
+
+    auto terrain =
+        session_->TerrainRuntime().
+            Capture(id);
+
+    if (target == nullptr ||
+        !terrain.has_value() ||
+        !session_->TerrainRuntime().
+            IsCurrent(*terrain))
+    {
+        return false;
+    }
+
+    const auto selection =
+        PhysicalPageAtViewportPoint(
+            *target,
+            view->Camera(),
+            view->Width(),
+            view->Height(),
+            u,
+            v,
+            terrain->
+                physicalPageLevel);
+
+    if (!selection.has_value())
+    {
+        return false;
+    }
+
+    auto& state =
+        RequireNavigationState(id);
+
+    const auto& source =
+        session_->TerrainRuntime().
+            TerrainSource(*terrain);
+
+    const StudioTerrainNavigationUpdate update =
+        FocusTerrainSurface(
+            state,
+            *terrain,
+            source,
+            selection->
+                surfaceDirection);
+
+    static_cast<void>(
+        session_->TerrainRuntime().
+            SetObserver(
+                id,
+                update.observer));
+
+    return true;
+}
+
+bool StudioRenderViewSet::ResetTerrainView(
+    const std::string_view id)
+{
+    if (session_ == nullptr)
+    {
+        return false;
+    }
+
+    auto terrain =
+        session_->TerrainRuntime().
+            Capture(id);
+
+    if (!terrain.has_value() ||
+        !session_->TerrainRuntime().
+            IsCurrent(*terrain))
+    {
+        return false;
+    }
+
+    auto& state =
+        RequireNavigationState(id);
+
+    const auto& source =
+        session_->TerrainRuntime().
+            TerrainSource(*terrain);
+
+    static_cast<void>(
+        ResetTerrainNavigationOrientation(
+            state,
+            *terrain,
+            source));
+
+    return true;
 }
 
 void StudioRenderViewSet::SetDebugField(
@@ -343,10 +577,30 @@ u32 StudioRenderViewSet::Refresh(
                         "Studio RenderView received a stale terrain runtime snapshot.");
                 }
 
+                auto& navigationState =
+                    RequireNavigationState(id);
+
+                const auto& source =
+                    session_->TerrainRuntime().
+                        TerrainSource(*terrain);
+
+                const StudioTerrainNavigationUpdate navigation =
+                    CurrentTerrainNavigation(
+                        navigationState,
+                        *terrain,
+                        source);
+
                 camera =
                     ComposeTerrainViewportCamera(
                         *target,
-                        *terrain);
+                        *terrain,
+                        &navigation);
+            }
+            else
+            {
+                RequireNavigationState(id).
+                    initialized =
+                    false;
             }
         }
 
@@ -507,5 +761,49 @@ void StudioRenderViewSet::RequireCurrentSnapshot(
         throw std::logic_error(
             "Studio RenderView refresh received a stale runtime snapshot.");
     }
+}
+
+StudioTerrainNavigationState&
+StudioRenderViewSet::RequireNavigationState(
+    const std::string_view id)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        navigationStates_.find(id);
+
+    if (found == navigationStates_.end())
+    {
+        throw std::logic_error(
+            "Studio render-view lost its navigation state.");
+    }
+
+    return found->second;
+}
+
+const StudioTerrainNavigationState&
+StudioRenderViewSet::RequireNavigationState(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    const auto found =
+        navigationStates_.find(id);
+
+    if (found == navigationStates_.end())
+    {
+        throw std::logic_error(
+            "Studio render-view lost its navigation state.");
+    }
+
+    return found->second;
 }
 } // namespace orbit::studio_ui

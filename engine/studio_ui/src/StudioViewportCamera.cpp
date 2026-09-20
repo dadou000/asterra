@@ -113,7 +113,8 @@ ComposeViewportCamera(
 render_view::CameraState
 ComposeTerrainViewportCamera(
     const studio_session::ViewportTargetState& view,
-    const studio_session::StudioTerrainViewportRuntimeSnapshot& terrain)
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& terrain,
+    const StudioTerrainNavigationUpdate* navigation)
 {
     if (!view.target.has_value())
     {
@@ -144,8 +145,15 @@ ComposeTerrainViewportCamera(
             "Terrain viewport observer has no valid body-space direction.");
     }
 
-    const world::SurfaceFrame frame =
-        world::MakeSurfaceFrame(
+    world::SurfaceFrame frame =
+        navigation != nullptr
+            ? navigation->surfaceFrame
+            : world::MakeSurfaceFrame(
+                direction);
+
+    frame =
+        world::TransportSurfaceFrameToDirection(
+            frame,
             direction);
 
     math::Float3 localForward{
@@ -153,9 +161,63 @@ ComposeTerrainViewportCamera(
         -0.28F,
         1.0F
     };
+
+    math::Float3 localUp{
+        0.0F,
+        1.0F,
+        0.0F
+    };
+
+    f64 altitude =
+        std::max(
+            math::Length(
+                terrain.observer.meters) -
+                terrain.planet.radiusMeters,
+            0.0);
+
+    if (navigation != nullptr)
+    {
+        localForward =
+            navigation->
+                localCamera.
+                forward;
+        localUp =
+            navigation->
+                localCamera.
+                up;
+        altitude =
+            std::max(
+                navigation->
+                    altitudeAboveTerrainMeters,
+                0.0);
+    }
+
+    if (math::LengthSquared(localForward) <=
+        1.0e-8F)
+    {
+        localForward = {
+            0.0F,
+            -0.28F,
+            1.0F
+        };
+    }
+
+    if (math::LengthSquared(localUp) <=
+        1.0e-8F)
+    {
+        localUp = {
+            0.0F,
+            1.0F,
+            0.0F
+        };
+    }
+
     localForward =
         math::Normalize(
             localForward);
+    localUp =
+        math::Normalize(
+            localUp);
 
     const math::Double3 bodyForward =
         frame.east *
@@ -168,15 +230,21 @@ ComposeTerrainViewportCamera(
             static_cast<f64>(
                 localForward.z);
 
-    const f64 observerRadius =
-        math::Length(
-            terrain.observer.meters);
+    const math::Double3 bodyUp =
+        frame.east *
+            static_cast<f64>(
+                localUp.x) +
+        frame.up *
+            static_cast<f64>(
+                localUp.y) +
+        frame.north *
+            static_cast<f64>(
+                localUp.z);
 
-    const f64 altitude =
-        std::max(
-            observerRadius -
-                terrain.planet.radiusMeters,
-            0.0);
+    const StudioTerrainClipPlanes clip =
+        SurfaceSafeTerrainClipPlanes(
+            terrain.planet,
+            altitude);
 
     render_view::CameraState camera{};
     camera.frame =
@@ -196,28 +264,21 @@ ComposeTerrainViewportCamera(
             camera.forward);
     camera.up = {
         static_cast<f32>(
-            frame.up.x),
+            bodyUp.x),
         static_cast<f32>(
-            frame.up.y),
+            bodyUp.y),
         static_cast<f32>(
-            frame.up.z)
+            bodyUp.z)
     };
+    camera.up =
+        math::Normalize(
+            camera.up);
     camera.verticalFovRadians =
         1.22173048F;
     camera.nearPlaneMeters =
-        static_cast<f32>(
-            std::clamp(
-                altitude * 0.001,
-                0.05,
-                10.0));
+        clip.nearPlaneMeters;
     camera.farPlaneMeters =
-        static_cast<f32>(
-            std::max(
-                terrain.planet.radiusMeters *
-                    2.0,
-                static_cast<f64>(
-                    camera.nearPlaneMeters) *
-                    100.0));
+        clip.farPlaneMeters;
 
     return camera;
 }
@@ -297,7 +358,8 @@ PhysicalPageAtViewportPoint(
     const math::Double3 direction =
         math::Normalize(hit);
 
-    if (math::LengthSquared(direction) <= 1.0e-20)
+    if (math::LengthSquared(direction) <=
+        1.0e-20)
     {
         return std::nullopt;
     }

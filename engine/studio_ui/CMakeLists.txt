@@ -5,6 +5,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioUiBundle.cpp
     src/SurfaceAuthoringUi.cpp
     src/StudioViewportCamera.cpp
+    src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
     src/StudioViewportRenderer.cpp
     src/WorldDocumentsUi.cpp
@@ -19,6 +20,7 @@ target_include_directories(OrbitStudioUi
 
 target_link_libraries(OrbitStudioUi
     PUBLIC
+        Orbit::Camera
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::RenderGraph
@@ -49,6 +51,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioViewportCamera
         COMMAND OrbitStudioViewportCameraTests
+    )
+
+    add_executable(OrbitStudioViewportNavigationTests
+        tests/StudioViewportNavigationTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioViewportNavigationTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStudioViewportNavigationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioViewportNavigationTests)
+
+    add_test(
+        NAME Orbit.StudioViewportNavigation
+        COMMAND OrbitStudioViewportNavigationTests
     )
 
     add_executable(OrbitStudioViewportPresentationTests

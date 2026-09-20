@@ -3,6 +3,7 @@
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
+#include <orbit/studio_ui/StudioViewportNavigation.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <optional>
@@ -19,13 +20,13 @@ ComposeViewportCamera(
     u64 universeGeneration);
 
 // Perspective terrain camera aligned with the production renderer's
-// observer-local basis (east, up, north). The returned CameraState is expressed
-// in the body's frame so existing editor ray/picking code shares the same
-// physical observer as the rendered terrain.
+// observer-local basis. Navigation orientation is presentation-only and may
+// be omitted for the deterministic default camera used by tests/fallbacks.
 [[nodiscard]] render_view::CameraState
 ComposeTerrainViewportCamera(
     const studio_session::ViewportTargetState& view,
-    const studio_session::StudioTerrainViewportRuntimeSnapshot& terrain);
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& terrain,
+    const StudioTerrainNavigationUpdate* navigation = nullptr);
 
 struct StudioPhysicalPageSelection
 {
