@@ -14,6 +14,8 @@
 #include <orbit/terrain_material_column/SurfaceResolver.hpp>
 #include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
 #include <orbit/terrain_render/SurfaceMaterial.hpp>
+#include <orbit/terrain_scatter/DeterministicScatter.hpp>
+#include <orbit/terrain_scatter/PhysicalSurface.hpp>
 
 #include <algorithm>
 #include <array>
@@ -4817,6 +4819,368 @@ void Test14ExposedRockMaterialResolution()
         "M30-14 M21 and renderer must follow the newly exposed physical sand instead of caching the previously visible basalt/moss material.");
 }
 
+
+void Test15DeterministicScatter()
+{
+    using namespace terrain_biome;
+    using namespace terrain_material_column;
+    using namespace terrain_scatter;
+
+    StratigraphyFixture fixture;
+
+    constexpr u32 resolution = 16U;
+    constexpr f32 spacingMeters = 4.0F;
+
+    const BiomeScatterLayerRule treeRule{
+        .id = {
+            .high = 0x4D33305343415454ULL,
+            .low = 0x4552000000001501ULL
+        },
+        .kind =
+            BiomeScatterKind::Tree,
+        .densityPerSquareMeter =
+            1.0F,
+        .minimumSpacingMeters =
+            spacingMeters,
+        .seedSalt = 0x1501U,
+        .compatibleExposed =
+            BiomeExposedMaterialMask::Soil,
+        .requiresSoil = true,
+        .minimumSoilDepthMeters =
+            0.20F,
+        .minimumSlopeDegrees =
+            0.0F,
+        .maximumSlopeDegrees =
+            35.0F,
+        .slopeFalloffDegrees =
+            10.0F,
+        .minimumMoisture =
+            0.20F,
+        .maximumMoisture =
+            0.90F,
+        .moistureFalloff =
+            0.10F,
+        .minimumScale =
+            0.80F,
+        .maximumScale =
+            1.20F,
+        .enabled = true
+    };
+
+    ScatterPageRequest request{
+        .identity = {
+            .planet = {
+                .high =
+                    0x4D33305343415454ULL,
+                .low =
+                    0x4552504C414E1501ULL
+            },
+            .tile = {
+                .face =
+                    world::CubeFace::
+                        PositiveX,
+                .level = 12U,
+                .x = 812U,
+                .y = 437U
+            },
+            .sourceRevision = 41U,
+            .scatterRevision = 9U,
+            .generationSeed =
+                0xA57E22A60022ULL
+        },
+        .gridResolution =
+            resolution,
+        .cellSizeMeters =
+            spacingMeters,
+        .rule =
+            treeRule,
+        .biomeDensityMultiplier =
+            1.0F
+    };
+
+    Require(
+        request.IsValid(),
+        "M30-15 scatter request must be a valid production M22 page identity/rule.");
+
+    std::vector<ScatterCellInput> cells;
+    cells.reserve(
+        static_cast<std::size_t>(
+            resolution) *
+        resolution);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const bool soilSide =
+                x <
+                resolution / 2U;
+
+            MaterialColumnCell column{
+                .bedrockHeightMeters =
+                    100.0F,
+                .referenceBedrockHeightMeters =
+                    100.0F,
+                .bedrockMaterial =
+                    terrain_geology::
+                        reference_rock::
+                            Basalt,
+                .regolithMeters =
+                    0.0F,
+                .soilMeters =
+                    soilSide
+                        ? 0.80F
+                        : 0.0F,
+                .sandMeters =
+                    0.0F,
+                .debrisMeters =
+                    0.0F,
+                .moisture =
+                    0.60F,
+                .temporaryScalar =
+                    0.0F
+            };
+
+            const auto physical =
+                ResolveSurface(
+                    column,
+                    SampleColumnGeology(
+                        column,
+                        fixture.materials));
+
+            const auto scatterPhysical =
+                MakePhysicalSurfaceScatterInput(
+                    physical);
+
+            Require(
+                scatterPhysical.material ==
+                    (soilSide
+                         ? ExposedSurfaceKind::
+                               Soil
+                         : ExposedSurfaceKind::
+                               Bedrock),
+                "M30-15 M18→M22 fixture did not preserve actual physical exposure class.");
+
+            cells.push_back({
+                .biomeWeight = 1.0F,
+                .exposedMaterial =
+                    scatterPhysical.material,
+                .slopeDegrees =
+                    10.0F,
+                .soilDepthMeters =
+                    column.soilMeters,
+                .moisture =
+                    scatterPhysical.moisture,
+                .exclusionMask =
+                    0.0F,
+                .authoredDensity =
+                    1.0F
+            });
+        }
+    }
+
+    const auto first =
+        GenerateDeterministicScatter(
+            request,
+            cells);
+
+    Require(
+        !first.empty(),
+        "M30-15 deterministic soil fixture must generate a non-empty tree population.");
+
+    for (const auto& instance :
+         first)
+    {
+        Require(
+            instance.IsValid() &&
+            instance.kind ==
+                BiomeScatterKind::Tree &&
+            instance.cellX <
+                resolution / 2U,
+            "M30-15 soil-dependent tree scatter must never cross onto the physically exposed bare-rock half of the page.");
+    }
+
+    const f64 minimumSpacingSquared =
+        static_cast<f64>(
+            treeRule.
+                minimumSpacingMeters) *
+        treeRule.
+            minimumSpacingMeters;
+
+    for (std::size_t a = 0U;
+         a < first.size();
+         ++a)
+    {
+        for (std::size_t b = a + 1U;
+             b < first.size();
+             ++b)
+        {
+            const f64 dx =
+                first[a].
+                    localOffsetMeters.x -
+                first[b].
+                    localOffsetMeters.x;
+
+            const f64 dy =
+                first[a].
+                    localOffsetMeters.y -
+                first[b].
+                    localOffsetMeters.y;
+
+            const f64 distanceSquared =
+                dx * dx +
+                dy * dy;
+
+            Require(
+                distanceSquared >=
+                    minimumSpacingSquared -
+                        1.0e-8,
+                "M30-15 production M22 scatter violated the rule's deterministic minimum spacing.");
+        }
+    }
+
+    const auto firstPageHash =
+        ScatterPageHash(
+            request.identity);
+
+    const auto firstRuleHash =
+        ScatterRuleHash(
+            request.rule);
+
+    // Simulate stream-out by discarding all derived instances. Streaming back
+    // in reconstructs the page only from authoritative identity/rules/fields.
+    std::vector<DerivedScatterInstance>
+        streamedOut = first;
+
+    streamedOut.clear();
+
+    Require(
+        streamedOut.empty(),
+        "M30-15 stream-out fixture failed to discard derived scatter state.");
+
+    const auto streamedIn =
+        GenerateDeterministicScatter(
+            request,
+            cells);
+
+    Require(
+        streamedIn.size() ==
+            first.size(),
+        "M30-15 stream-in regeneration changed deterministic scatter population size.");
+
+    for (std::size_t index = 0U;
+         index < first.size();
+         ++index)
+    {
+        const auto& a =
+            first[index];
+
+        const auto& b =
+            streamedIn[index];
+
+        Require(
+            a.id == b.id &&
+            a.kind == b.kind &&
+            a.localOffsetMeters.x ==
+                b.localOffsetMeters.x &&
+            a.localOffsetMeters.y ==
+                b.localOffsetMeters.y &&
+            a.yawRadians ==
+                b.yawRadians &&
+            a.uniformScale ==
+                b.uniformScale &&
+            a.cellX ==
+                b.cellX &&
+            a.cellY ==
+                b.cellY,
+            "M30-15 identical seed/page/revisions/physical fields must reproduce every scatter instance bit-for-bit after stream-out/stream-in.");
+    }
+
+    Require(
+        ScatterPageHash(
+            request.identity) ==
+                firstPageHash &&
+        ScatterRuleHash(
+            request.rule) ==
+                firstRuleHash,
+        "M30-15 fixed scatter authority must retain stable page/rule hashes across regeneration.");
+
+    auto revisedRequest =
+        request;
+
+    ++revisedRequest.
+        identity.
+        scatterRevision;
+
+    const auto revised =
+        GenerateDeterministicScatter(
+            revisedRequest,
+            cells);
+
+    bool revisionChangedPopulation =
+        revised.size() !=
+        first.size();
+
+    if (!revisionChangedPopulation)
+    {
+        for (std::size_t index = 0U;
+             index < first.size();
+             ++index)
+        {
+            if (revised[index].id !=
+                    first[index].id ||
+                revised[index].
+                        localOffsetMeters.x !=
+                    first[index].
+                        localOffsetMeters.x ||
+                revised[index].
+                        localOffsetMeters.y !=
+                    first[index].
+                        localOffsetMeters.y)
+            {
+                revisionChangedPopulation =
+                    true;
+                break;
+            }
+        }
+    }
+
+    Require(
+        revisionChangedPopulation &&
+        ScatterPageHash(
+            revisedRequest.identity) !=
+            firstPageHash,
+        "M30-15 changing scatter revision must intentionally produce a new derived page identity/population.");
+
+    std::vector<ScatterCellInput>
+        staleRockCells = cells;
+
+    for (auto& cell :
+         staleRockCells)
+    {
+        cell.exposedMaterial =
+            ExposedSurfaceKind::
+                Bedrock;
+
+        // Deliberately stale depth data. M22 must trust physical exposure.
+        cell.soilDepthMeters =
+            2.0F;
+    }
+
+    const auto staleRock =
+        GenerateDeterministicScatter(
+            request,
+            staleRockCells);
+
+    Require(
+        staleRock.empty(),
+        "M30-15 bare rock must reject soil-dependent vegetation even when a stale soil-depth channel is nonzero.");
+}
+
 } // namespace
 
 int main()
@@ -4835,8 +5199,9 @@ int main()
     Test12BiomeFallback();
     Test13AutomaticAuthoredBiomeBlend();
     Test14ExposedRockMaterialResolution();
+    Test15DeterministicScatter();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 14/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 15/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
