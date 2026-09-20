@@ -1025,6 +1025,7 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     registry_.reset();
     bodyByTerrainObject_.clear();
     terrainObjectByBody_.clear();
+    biomeByObject_.clear();
     servicesByBody_.clear();
     constraintsByBody_.clear();
     sourceRevision_ = ~u64{0};
@@ -1036,6 +1037,10 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
         candidateBodyByObject;
     std::unordered_map<universe::BodyId, scene::ObjectId>
         candidateObjectByBody;
+    std::unordered_map<
+        scene::ObjectId,
+        terrain_biome::BiomeId>
+        candidateBiomeByObject;
     std::unordered_map<
         universe::BodyId,
         std::unique_ptr<TerrainBodyServices>>
@@ -1125,10 +1130,17 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
                 continue;
             }
 
-            services->Biomes().UpsertBiome(
+            auto biome =
                 BiomeDescription(
                     objects,
-                    child));
+                    child);
+
+            candidateBiomeByObject.emplace(
+                child.id,
+                biome.id);
+
+            services->Biomes().UpsertBiome(
+                std::move(biome));
 
             ++biomeDefinitionCount;
         }
@@ -1161,6 +1173,7 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     registry_ = std::move(candidate);
     bodyByTerrainObject_ = std::move(candidateBodyByObject);
     terrainObjectByBody_ = std::move(candidateObjectByBody);
+    biomeByObject_ = std::move(candidateBiomeByObject);
     servicesByBody_ = std::move(candidateServices);
     constraintsByBody_ =
         std::move(candidateConstraints);
@@ -1218,6 +1231,19 @@ SurfaceComposition::TerrainObjectForBody(
     const auto found = terrainObjectByBody_.find(body);
     return found != terrainObjectByBody_.end()
         ? std::optional<scene::ObjectId>(found->second)
+        : std::nullopt;
+}
+
+std::optional<terrain_biome::BiomeId>
+SurfaceComposition::BiomeForObject(
+    const scene::ObjectId object) const noexcept
+{
+    const auto found =
+        biomeByObject_.find(object);
+
+    return found != biomeByObject_.end()
+        ? std::optional<terrain_biome::BiomeId>(
+              found->second)
         : std::nullopt;
 }
 
