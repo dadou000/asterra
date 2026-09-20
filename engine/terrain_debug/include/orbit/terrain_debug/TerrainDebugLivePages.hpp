@@ -56,7 +56,9 @@ CaptureLiveTerrainDebugPage(
 class TerrainDebugLivePages
 {
 public:
-    void Publish(
+    // Returns false when the snapshot is older than the currently published
+    // authority/invalidation provenance for the same stable physical address.
+    [[nodiscard]] bool Publish(
         std::shared_ptr<const TerrainDebugPageData> page);
 
     [[nodiscard]] std::shared_ptr<const TerrainDebugPageData>
