@@ -20,12 +20,24 @@ namespace orbit::surface_model
 // physical products; these configs are service-level solver policy only.
 struct TerrainProcessService
 {
+    bool streamPowerEnabled{true};
     terrain_erosion::StreamPowerErosionConfig streamPower{};
+
+    bool hydraulicEnabled{true};
     terrain_erosion::HydraulicErosionConfig hydraulic{};
+
+    bool thermalEnabled{true};
     terrain_erosion::ThermalErosionConfig thermal{};
+
+    bool aeolianEnabled{true};
     terrain_erosion::AeolianErosionConfig aeolian{};
+
+    bool glacialEnabled{true};
     terrain_erosion::GlacialErosionConfig glacial{};
+
+    bool riversEnabled{true};
     terrain_erosion::RiverNetworkConfig rivers{};
+
     terrain_water::CoastalProcessConfig coastal{};
 
     [[nodiscard]] bool IsValid() const noexcept;
