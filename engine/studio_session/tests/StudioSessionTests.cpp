@@ -1,4 +1,5 @@
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -176,12 +177,52 @@ int main()
 
         const auto secondaryEmptyGeneration =
             studio.World().UniverseGeneration();
+
+        const auto secondaryWorldObject =
+            studio.World().Commands().
+                CreateObject(
+                    orbit::world_model::kWorldType,
+                    "World");
+
+        const orbit::scene::ObjectId
+            selectedWorld[] = {
+                secondaryWorldObject
+            };
+
+        studio.World().Selection().Set(
+            selectedWorld);
+
+        studio.World().CommandRegistry().
+            Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kCreateRockyPlanet,
+                {
+                    {
+                        "name",
+                        std::string("Veyra")
+                    },
+                    {
+                        "radiusMeters",
+                        4'200'000.0
+                    }
+                });
+
+        Check(
+            studio.World().Selection().
+                Ordered().size() ==
+            1U);
+
         const auto veyra =
-            AddBody(
-                studio,
-                "Veyra",
-                4'200'000.0);
-        const auto secondaryComposedTick = studio.Tick();
+            studio.World().Selection().
+                Ordered().front();
+
+        const auto secondaryComposedTick =
+            studio.Tick();
+
+        Check(
+            secondaryComposedTick.
+                compositionChanged);
         Check(
             secondaryComposedTick.universeGeneration >
             secondaryEmptyGeneration);
@@ -189,6 +230,22 @@ int main()
         Check(
             studio.ActiveBody().Active()->semanticObject ==
             veyra);
+        Check(
+            studio.World().SurfaceStats().
+                terrainSurfaces ==
+            1U);
+
+        const auto veyraChildren =
+            studio.World().Objects().
+                Children(
+                    veyra);
+
+        Check(
+            veyraChildren.size() ==
+                1U &&
+            veyraChildren.front().type ==
+                orbit::world_model::
+                    kTerrainSurfaceType);
 
         const auto roots =
             RpcCall(
