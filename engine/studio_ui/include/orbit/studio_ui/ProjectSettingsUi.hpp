@@ -22,6 +22,12 @@ public:
 
     void Register(editor_ui::EditorUi& ui);
 
+    [[nodiscard]] studio_session::StudioTerrainRoundTripReport
+    RunTerrainRoundTripValidation();
+
+    [[nodiscard]] studio_session::StudioTerrainValidationScenarioReport
+    RunTerrainValidationScenario();
+
     inline static constexpr editor_ui::PanelId kPanelId{
         .high = 0x4f52424954535455ULL,
         .low = 0x50524f4a53455454ULL
