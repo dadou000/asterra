@@ -41,7 +41,7 @@ jobs:
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
       - name: Build V0.0.3 regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitStudioViewportCameraTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
+        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitRockyPlanetAuthoringTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitStudioViewportCameraTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
 
       - name: Test - Terrain view
         shell: pwsh
@@ -105,6 +105,10 @@ jobs:
           & "build/engine/editor_model/Release/OrbitTerrainAuthoringCommandTests.exe"
           if ($LASTEXITCODE -ne 0) {
             throw "OrbitTerrainAuthoringCommandTests failed with exit code $LASTEXITCODE"
+          }
+          & "build/engine/editor_model/Release/OrbitRockyPlanetAuthoringTests.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "OrbitRockyPlanetAuthoringTests failed with exit code $LASTEXITCODE"
           }
 
       - name: Test - Core editor RPC
