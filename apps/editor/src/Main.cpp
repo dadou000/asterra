@@ -6437,11 +6437,8 @@ int main(
                             });
 
                     const auto m15Report =
-                        orbit::studio_session::
-                            RunStudioTerrainValidationScenario(
-                                terrainUiSmokeRoot /
-                                    "M15",
-                                "studio.primary");
+                        projectSettingsUi.
+                            RunTerrainValidationScenario();
 
                     if (!m15Report.success)
                     {
@@ -6458,11 +6455,8 @@ int main(
                     }
 
                     const auto roundTripReport =
-                        orbit::studio_session::
-                            VerifyStudioTerrainRoundTrip(
-                                project,
-                                studioSession,
-                                "studio.primary");
+                        projectSettingsUi.
+                            RunTerrainRoundTripValidation();
 
                     if (!roundTripReport.success)
                     {
