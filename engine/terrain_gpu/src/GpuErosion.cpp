@@ -80,6 +80,12 @@ GpuErosion::GpuErosion(
 
 GpuErosion::~GpuErosion() = default;
 
+u64 GpuErosion::TransientWorkingSetBytes() const noexcept
+{
+    return outgoingA_->SizeBytes() +
+        outgoingB_->SizeBytes();
+}
+
 void GpuErosion::Dispatch(
     rhi::CommandList& commandList,
     const u32 resolution,
