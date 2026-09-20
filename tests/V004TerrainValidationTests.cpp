@@ -7,10 +7,12 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/terrain_hydrology/DrainagePage.hpp>
+#include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
 #include <orbit/terrain_erosion/AeolianErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
+#include <orbit/terrain_erosion/MultiScaleTerrain.hpp>
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 #include <orbit/terrain_material_column/SurfaceResolver.hpp>
@@ -18,6 +20,8 @@
 #include <orbit/terrain_render/SurfaceMaterial.hpp>
 #include <orbit/terrain_scatter/DeterministicScatter.hpp>
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
+#include <orbit/terrain_stream/ToroidalResidency.hpp>
+#include <orbit/terrain_view/ClipmapTracker.hpp>
 
 #include <algorithm>
 #include <any>
@@ -5999,6 +6003,349 @@ void Test17RevisionInvalidation()
         "M30-17 out-of-scope terrain must remain clean, keep its committed product revision, and retain identical generation revisions.");
 }
 
+
+void Test18ClipmapPhysicalPageIndependence()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_stream;
+    using namespace terrain_view;
+
+    const world::PlanetDefinition planet{
+        .radiusMeters = 6'000'000.0,
+        .id = {
+            .high =
+                0x4D3330434C49504DULL,
+            .low =
+                0x4150000000000018ULL
+        },
+        .generationSeed =
+            0x4D33303138434C49ULL
+    };
+
+    const math::Double3 anchorDirection{
+        1.0,
+        0.0,
+        0.0
+    };
+
+    const auto anchorFrame =
+        world::MakeSurfaceFrame(
+            anchorDirection);
+
+    const math::Double3 physicalDirection =
+        world::DirectionAtSurfaceOffset(
+            planet,
+            anchorFrame,
+            {1'250.0, -750.0});
+
+    const terrain::TerrainGenerationRevisions
+        revisions{
+            .geology = 101U,
+            .climate = 102U,
+            .authoring = 103U,
+            .biome = 104U,
+            .water = 105U,
+            .processes = 106U
+        };
+
+    const terrain::PhysicalTerrainPageKey
+        physicalKey{
+            .address = {
+                .planet = planet.id,
+                .tile =
+                    world::TileForDirection(
+                        physicalDirection,
+                        10U)
+            },
+            .resolution = 65U,
+            .revisions = revisions
+        };
+
+    const u64 physicalFingerprintBefore =
+        terrain::PhysicalPageFingerprint(
+            physicalKey);
+
+    const u64 hydraulicSeedBefore =
+        terrain::DeriveTerrainSeed(
+            planet.generationSeed,
+            terrain::TerrainSeedDomain::
+                HydraulicErosion,
+            physicalKey.address);
+
+    const MultiScaleTerrainPlanner planner;
+
+    const terrain::TerrainSampleFootprint
+        physicalFootprint{
+            .diameterMeters = 4.0
+        };
+
+    const auto physicalSelectionBefore =
+        planner.Select(
+            physicalFootprint);
+
+    const u64 macroScaleKeyBefore =
+        planner.StableScaleKey(
+            PhysicalTerrainScale::Macro,
+            planet.generationSeed,
+            revisions.processes);
+
+    const u64 localScaleKeyBefore =
+        planner.StableScaleKey(
+            PhysicalTerrainScale::Local,
+            planet.generationSeed,
+            revisions.processes);
+
+    const terrain_gpu::
+        PersistentGpuTerrainCacheKey
+        gpuKeyBefore{
+            .address =
+                physicalKey.address,
+            .physicalLod =
+                static_cast<u8>(
+                    physicalSelectionBefore.
+                        finestScale),
+            .revisions = revisions
+        };
+
+    const u64 gpuFingerprintBefore =
+        terrain_gpu::
+            PersistentGpuTerrainCacheFingerprint(
+                gpuKeyBefore);
+
+    const ClipmapConfig renderConfig{
+        .levelCount = 4U,
+        .gridResolution = 17U,
+        .baseSpacingMeters = 2.0,
+        .levelScale = 2.0,
+        .overlapCells = 2U
+    };
+
+    ClipmapTracker tracker(
+        planet,
+        renderConfig);
+
+    ToroidalResidency residency(
+        renderConfig);
+
+    const world::WorldPosition observerA{
+        .meters =
+            anchorDirection *
+            (planet.radiusMeters +
+             100.0)
+    };
+
+    const auto firstMotion =
+        tracker.Update(
+            observerA);
+
+    const auto firstResidency =
+        residency.Apply(
+            firstMotion);
+
+    Require(
+        firstMotion.levels.size() ==
+                renderConfig.levelCount &&
+        firstResidency.levels.size() ==
+                renderConfig.levelCount,
+        "M30-18 initial render clipmap state must initialize every configured view level.");
+
+    for (u32 index = 0U;
+         index < renderConfig.levelCount;
+         ++index)
+    {
+        Require(
+            firstMotion.levels[index].
+                fullRefresh &&
+            firstResidency.levels[index].
+                fullRefresh,
+            "M30-18 first clipmap observation must populate view residency without participating in physical page identity.");
+    }
+
+    const math::Double3 movedDirection =
+        world::DirectionAtSurfaceOffset(
+            planet,
+            anchorFrame,
+            {24.0, 8.0});
+
+    const world::WorldPosition observerB{
+        .meters =
+            movedDirection *
+            (planet.radiusMeters +
+             100.0)
+    };
+
+    const auto secondMotion =
+        tracker.Update(
+            observerB);
+
+    const auto secondResidency =
+        residency.Apply(
+            secondMotion);
+
+    bool anyViewMotion = false;
+    bool anyPartialRefresh = false;
+    u64 refreshedCells = 0U;
+
+    for (u32 index = 0U;
+         index < renderConfig.levelCount;
+         ++index)
+    {
+        const auto& movement =
+            secondMotion.levels[index];
+
+        const auto& levelResidency =
+            secondResidency.levels[index];
+
+        if (movement.cellShiftX != 0 ||
+            movement.cellShiftY != 0)
+        {
+            anyViewMotion = true;
+        }
+
+        if (!levelResidency.fullRefresh &&
+            !levelResidency.
+                refreshRegions.empty())
+        {
+            anyPartialRefresh = true;
+        }
+
+        for (const auto& region :
+             levelResidency.
+                 refreshRegions)
+        {
+            refreshedCells +=
+                static_cast<u64>(
+                    region.width) *
+                region.height;
+        }
+    }
+
+    Require(
+        anyViewMotion &&
+        anyPartialRefresh &&
+        refreshedCells > 0U,
+        "M30-18 moving the observer must alter toroidal view residency and refresh strips.");
+
+    const auto physicalSelectionAfter =
+        planner.Select(
+            physicalFootprint);
+
+    const terrain::PhysicalTerrainPageKey
+        physicalKeyAfter =
+            physicalKey;
+
+    const terrain_gpu::
+        PersistentGpuTerrainCacheKey
+        gpuKeyAfter{
+            .address =
+                physicalKeyAfter.address,
+            .physicalLod =
+                static_cast<u8>(
+                    physicalSelectionAfter.
+                        finestScale),
+            .revisions =
+                physicalKeyAfter.revisions
+        };
+
+    Require(
+        physicalSelectionAfter.
+                requestedSampleSpacingMeters ==
+            physicalSelectionBefore.
+                requestedSampleSpacingMeters &&
+        physicalSelectionAfter.
+                activeLevelCount ==
+            physicalSelectionBefore.
+                activeLevelCount &&
+        physicalSelectionAfter.
+                finestScale ==
+            physicalSelectionBefore.
+                finestScale &&
+        physicalSelectionAfter.
+                activeProcessMask ==
+            physicalSelectionBefore.
+                activeProcessMask,
+        "M30-18 render clipmap motion must not select a different M23 physical process hierarchy.");
+
+    Require(
+        physicalKeyAfter ==
+                physicalKey &&
+        terrain::PhysicalPageFingerprint(
+            physicalKeyAfter) ==
+                physicalFingerprintBefore &&
+        terrain::DeriveTerrainSeed(
+            planet.generationSeed,
+            terrain::TerrainSeedDomain::
+                HydraulicErosion,
+            physicalKeyAfter.address) ==
+                hydraulicSeedBefore,
+        "M30-18 camera/clipmap motion must not alter physical page address, authority revisions, fingerprint or process seed.");
+
+    Require(
+        planner.StableScaleKey(
+            PhysicalTerrainScale::Macro,
+            planet.generationSeed,
+            revisions.processes) ==
+                macroScaleKeyBefore &&
+        planner.StableScaleKey(
+            PhysicalTerrainScale::Local,
+            planet.generationSeed,
+            revisions.processes) ==
+                localScaleKeyBefore,
+        "M30-18 clipmap movement must not re-seed or re-phase stable M23 physical tiers.");
+
+    Require(
+        gpuKeyAfter ==
+                gpuKeyBefore &&
+        terrain_gpu::
+            PersistentGpuTerrainCacheFingerprint(
+                gpuKeyAfter) ==
+                gpuFingerprintBefore,
+        "M30-18 render view movement must not create a new M26 solved-GPU cache identity for unchanged physical page/LOD/revisions.");
+
+    const ClipmapConfig coarserRenderConfig =
+        ClipmapConfigForTier(
+            renderConfig,
+            1U);
+
+    auto reconfiguredTracker =
+        tracker.Reconfigured(
+            coarserRenderConfig);
+
+    ToroidalResidency
+        coarserResidency(
+            coarserRenderConfig);
+
+    const auto reconfiguredMotion =
+        reconfiguredTracker.Update(
+            observerB);
+
+    const auto reconfiguredView =
+        coarserResidency.Apply(
+            reconfiguredMotion);
+
+    Require(
+        reconfiguredMotion.levels.size() ==
+                renderConfig.levelCount &&
+        reconfiguredView.levels.size() ==
+                renderConfig.levelCount,
+        "M30-18 render coverage-tier reconfiguration must remain a view/residency operation.");
+
+    Require(
+        terrain::PhysicalPageFingerprint(
+            physicalKey) ==
+                physicalFingerprintBefore &&
+        terrain_gpu::
+            PersistentGpuTerrainCacheFingerprint(
+                gpuKeyBefore) ==
+                gpuFingerprintBefore &&
+        planner.StableScaleKey(
+            PhysicalTerrainScale::Macro,
+            planet.generationSeed,
+            revisions.processes) ==
+                macroScaleKeyBefore,
+        "M30-18 changing render clipmap spacing/tier must leave physical page, M26 cache and M23 macro identities unchanged.");
+}
+
 } // namespace
 
 int main()
@@ -6020,8 +6367,9 @@ int main()
     Test15DeterministicScatter();
     Test16CacheHitStability();
     Test17RevisionInvalidation();
+    Test18ClipmapPhysicalPageIndependence();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 17/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 18/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
