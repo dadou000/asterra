@@ -31,8 +31,8 @@ def replace_single_line(
 
     if len(matches) != 1:
         fail(
-            f"\${description}: expected exactly one line starting with "
-            f"\${prefix!r}, found \${len(matches)}"
+            f"{description}: expected exactly one line starting with "
+            f"{prefix!r}, found {len(matches)}"
         )
 
     lines[matches[0]] = replacement
@@ -62,7 +62,7 @@ def main() -> int:
     build_config = sys.argv[2].strip() if len(sys.argv) == 3 else "unknown"
 
     if not executable.is_file():
-        print(f"M31 completion refused: executable is missing: \${executable}", file=sys.stderr)
+        print(f"M31 completion refused: executable is missing: {executable}", file=sys.stderr)
         return 1
 
     gate = subprocess.run(
@@ -95,7 +95,7 @@ def main() -> int:
     if EXPECTED_SUCCESS not in integration.stdout:
         print(
             "M31 completion refused: integration executable did not report "
-            f"\${EXPECTED_SUCCESS!r}",
+            f"{EXPECTED_SUCCESS!r}",
             file=sys.stderr,
         )
         return 1
@@ -118,8 +118,8 @@ def main() -> int:
         progress,
         "| M31 — Final integration gate |",
         "| M31 — Final integration gate | **Complete** | "
-        f"All V0.0.4 integration acceptance slices passed on \${completed_iso} "
-        f"from source commit \${source_commit}. M30 deterministic/performance "
+        f"All V0.0.4 integration acceptance slices passed on {completed_iso} "
+        f"from source commit {source_commit}. M30 deterministic/performance "
         "gates were already validated before execution. |",
         "M31 progress row",
     )
@@ -141,11 +141,11 @@ M01–M31 acceptance is closed. Begin the next version only from the frozen V0.0
         "",
         "Status: **PASS**",
         "",
-        f"Completed UTC: **\${completed_iso}**",
+        f"Completed UTC: **{completed_iso}**",
         "",
         f"Source commit: \`\${source_commit}\`",
         "",
-        f"Build configuration: **\${build_config}**",
+        f"Build configuration: **{build_config}**",
         "",
         "The M31 entry checker first confirmed the validated M30 named-GPU "
         "performance record, provenance, 20/20 deterministic registration, "
@@ -175,9 +175,9 @@ M01–M31 acceptance is closed. Begin the next version only from the frozen V0.0
     )
 
     print("M31 final integration gate: PASS")
-    print(f"completed: \${completed_iso}")
-    print(f"source commit: \${source_commit}")
-    print(f"build config: \${build_config}")
+    print(f"completed: {completed_iso}")
+    print(f"source commit: {source_commit}")
+    print(f"build config: {build_config}")
     print("V0.0.4 ledger: COMPLETE")
     return 0
 
