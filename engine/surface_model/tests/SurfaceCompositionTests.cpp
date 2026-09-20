@@ -196,8 +196,19 @@ int main()
         const auto bodyWithConstraint=universe.BodyForObject(bodyObject);
         if(!bodyWithConstraint.has_value()) return 6;
 
+        auto* cacheBeforeRebuild =
+            surfaces.CacheForBody(
+                *bodyId);
+
         const auto constrainedStats=surfaces.Rebuild(objects,universe);
         const auto* authored=surfaces.ConstraintsForBody(*bodyWithConstraint);
+
+        if (surfaces.CacheForBody(
+                *bodyWithConstraint) !=
+            cacheBeforeRebuild)
+        {
+            return 28;
+        }
         if(authored==nullptr||authored->height.constraints.size()!=1U||
            constrainedStats.terrainConstraints!=1U) return 7;
 
