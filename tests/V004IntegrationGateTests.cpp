@@ -999,11 +999,12 @@ void TestExposureBurialDrivesRenderedMaterial()
         page.At(0U, 0U).
             bedrockMaterial;
 
-    page.Deposit(
-        0U,
-        0U,
-        LooseMaterialKind::Sand,
-        0.75);
+    static_cast<void>(
+        page.Deposit(
+            0U,
+            0U,
+            LooseMaterialKind::Sand,
+            0.75));
 
     const auto [
         buried,
