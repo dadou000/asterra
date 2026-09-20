@@ -15,6 +15,7 @@
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_model/OutputLog.hpp>
 #include <orbit/editor_model/ShortcutRegistry.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/editor_rpc/EditorRpcService.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
@@ -43,6 +44,8 @@
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
+#include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
+#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
