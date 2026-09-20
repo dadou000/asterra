@@ -1047,14 +1047,18 @@ target_link_libraries(OrbitV004IntegrationGateTests
     PRIVATE
         Orbit::Commands
         Orbit::Documents
+        Orbit::Jobs
         Orbit::Scene
         Orbit::Schema
         Orbit::SurfaceAuthoring
         Orbit::SurfaceModel
         Orbit::Terrain
         Orbit::TerrainBiome
+        Orbit::TerrainDebug
+        Orbit::TerrainDependency
         Orbit::TerrainErosion
         Orbit::TerrainGeology
+        Orbit::TerrainGpu
         Orbit::TerrainHydrology
         Orbit::TerrainMacroGeology
         Orbit::TerrainMaterialColumn
