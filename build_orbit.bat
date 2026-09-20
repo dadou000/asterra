@@ -125,13 +125,6 @@ set "BUILDCLI=build\apps\build\%CONFIG%\OrbitBuild.exe"
 set "PLAYER=build\apps\player\%CONFIG%\OrbitPlayer.exe"
 set "DXC=build\apps\build\%CONFIG%\dxcompiler.dll"
 
-if not exist "%SANDBOX%" (
-    echo.
-    echo [Orbit] ERROR: Sandbox was not produced:
-    echo   %SANDBOX%
-    goto fail
-)
-
 if not exist "%STUDIO%" (
     echo.
     echo [Orbit] ERROR: Studio was not produced:
@@ -173,9 +166,6 @@ if exist "%PACKAGE%" (
 mkdir "%PACKAGE%" >nul 2>nul
 mkdir "%SYMBOLS%" >nul 2>nul
 
-copy /y "%SANDBOX%" "%PACKAGE%\OrbitSandbox.exe" >nul
-if errorlevel 1 goto package_fail
-
 copy /y "%STUDIO%" "%PACKAGE%\OrbitStudio.exe" >nul
 if errorlevel 1 goto package_fail
 
@@ -191,8 +181,6 @@ if errorlevel 1 goto package_fail
 echo [Orbit] Updating root executables...
 copy /y "%STUDIO%" "Orbit.exe" >nul
 if errorlevel 1 goto root_copy_fail
-copy /y "%SANDBOX%" "OrbitSandbox.exe" >nul
-if errorlevel 1 goto root_copy_fail
 copy /y "%STUDIO%" "OrbitStudio.exe" >nul
 if errorlevel 1 goto root_copy_fail
 copy /y "%BUILDCLI%" "OrbitBuild.exe" >nul
@@ -201,10 +189,6 @@ copy /y "%PLAYER%" "OrbitPlayer.exe" >nul
 if errorlevel 1 goto root_copy_fail
 copy /y "%DXC%" "dxcompiler.dll" >nul
 if errorlevel 1 goto root_copy_fail
-
-if exist "build\apps\sandbox\%CONFIG%\OrbitSandbox.pdb" (
-    copy /y "build\apps\sandbox\%CONFIG%\OrbitSandbox.pdb" "%SYMBOLS%\OrbitSandbox.pdb" >nul
-)
 
 if exist "build\apps\editor\%CONFIG%\OrbitStudio.pdb" (
     copy /y "build\apps\editor\%CONFIG%\OrbitStudio.pdb" "%SYMBOLS%\OrbitStudio.pdb" >nul
@@ -224,6 +208,9 @@ if exist "build\apps\player\%CONFIG%\OrbitPlayer.pdb" (
     echo.
     echo Start Orbit Studio with:
     echo     OrbitStudio.exe [project-directory-or-Project.orbit.toml]
+    echo.
+    echo The local one-click build also publishes the same Studio executable as:
+    echo     ^<repo-root^>\Orbit.exe
     echo.
     echo Validate or cook a project headlessly with:
     echo     OrbitBuild.exe ^<project-directory-or-Project.orbit.toml^> --validate
@@ -247,9 +234,6 @@ echo [Orbit] BUILD SUCCESS  %GIT_SHA%
 echo.
 echo Root executable:
 echo   %CD%\Orbit.exe
-echo.
-echo Root runtime:
-echo   %CD%\OrbitSandbox.exe
 echo.
 echo Root Studio:
 echo   %CD%\OrbitStudio.exe
@@ -275,7 +259,7 @@ goto success
 :root_copy_fail
 echo.
 echo [Orbit] ERROR: Failed to update the root executables.
-echo Close any running Orbit.exe / OrbitSandbox.exe / OrbitStudio.exe / OrbitBuild.exe / OrbitPlayer.exe and retry.
+echo Close any running Orbit.exe / OrbitStudio.exe / OrbitBuild.exe / OrbitPlayer.exe and retry.
 goto fail
 
 :package_fail
