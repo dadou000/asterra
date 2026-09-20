@@ -123,6 +123,9 @@ public:
     void UpsertPanel(PanelDefinition panel);
 
     [[nodiscard]] bool UnregisterPanel(PanelId id);
+    [[nodiscard]] bool HasPanel(PanelId id) const noexcept;
+    [[nodiscard]] bool SetPanelOpen(PanelId id, bool open) noexcept;
+    [[nodiscard]] bool PanelOpen(PanelId id) const noexcept;
 
     void RegisterMenuAction(MenuAction action);
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
