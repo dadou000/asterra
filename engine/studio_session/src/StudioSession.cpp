@@ -269,11 +269,12 @@ StudioSession::SetStartupWorld(
 void StudioSession::OpenWorld(
     const std::filesystem::path& relativePath)
 {
+    pendingTerrainInvalidations_.clear();
+    terrainPhysicalPages_.Clear();
+
     DispatchWorldLifecycle(
         "world.open",
         relativePath);
-    pendingTerrainInvalidations_.clear();
-    terrainPhysicalPages_.Clear();
 }
 
 void StudioSession::CloseWorld()
