@@ -1,5 +1,6 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 
 #include <orbit/paths/PathNetwork.hpp>
 
@@ -808,6 +809,15 @@ void Register(
                         world_model::
                             kTerrainMaximumElevationMeters,
                         8'000.0);
+
+                    SurfaceAuthoringModel surfaceModel(
+                        objects,
+                        commandService,
+                        selection);
+
+                    static_cast<void>(
+                        surfaceModel.EnsureProcessSettings(
+                            terrain));
 
                     if (ownsTransaction)
                     {
