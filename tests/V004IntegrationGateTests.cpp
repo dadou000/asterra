@@ -1,9 +1,11 @@
 #include <orbit/commands/CommandService.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
+#include <orbit/selection/SelectionService.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/procedural_graph/ProceduralGraph.hpp>
 #include <orbit/rhi/Resource.hpp>
@@ -306,13 +308,40 @@ void TestDefaultRockyPlanetComposition()
                 defaults.maximumElevationAboveSeaLevelMeters,
             "M31 entry: no-input terrain surface did not resolve the production default recipe.");
 
+        const auto* services =
+            surfaces.ServicesForBody(
+                *bodyId);
+
+        const auto* geologyService =
+            surfaces.GeologyForBody(
+                *bodyId);
+
+        const auto* processService =
+            surfaces.ProcessesForBody(
+                *bodyId);
+
         const auto* biomeService =
             surfaces.BiomesForBody(
                 *bodyId);
 
+        const auto* cacheService =
+            surfaces.CacheForBody(
+                *bodyId);
+
         Require(
-            biomeService != nullptr,
-            "M31 entry: default rocky terrain has no BaseBiome service.");
+            services != nullptr &&
+            services->IsValid() &&
+            geologyService != nullptr &&
+            processService != nullptr &&
+            processService->IsValid() &&
+            biomeService != nullptr &&
+            cacheService != nullptr &&
+            cacheService->Stats().residentPages ==
+                0U &&
+            services->DefaultBedrock() ==
+                terrain_geology::
+                    reference_rock::Basalt,
+            "M31 entry: rocky body did not automatically own valid geology/process/biome/cache services.");
 
         const auto definitions =
             biomeService->Definitions();
