@@ -13,25 +13,6 @@ namespace
 {
 constexpr u32 kMaximumBoundedRadiusTiles = 64U;
 
-[[nodiscard]] constexpr auto AllProductsMask() noexcept
-{
-    terrain_dependency::TerrainDependencyProductMask mask = 0U;
-
-    for (u32 index = 0U;
-         index < static_cast<u32>(
-             terrain_dependency::TerrainDependencyProduct::Count);
-         ++index)
-    {
-        mask |=
-            terrain_dependency::ProductBit(
-                static_cast<
-                    terrain_dependency::TerrainDependencyProduct>(
-                        index));
-    }
-
-    return mask;
-}
-
 [[nodiscard]] u32 ProductCount(
     const terrain_dependency::TerrainDependencyProductMask mask) noexcept
 {
