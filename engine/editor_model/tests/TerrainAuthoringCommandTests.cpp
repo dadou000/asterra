@@ -82,6 +82,34 @@ int main()
             return 3;
         }
 
+        const auto terrainChildren =
+            objects.Children(
+                terrainObject);
+
+        if (terrainChildren.size() != 1U ||
+            terrainChildren.front().type !=
+                orbit::world_model::
+                    kTerrainProcessAssetType)
+        {
+            return 13;
+        }
+
+        const auto processObject =
+            terrainChildren.front().id;
+
+        const auto aeolianEnabled =
+            objects.GetProperty(
+                processObject,
+                orbit::world_model::
+                    kProcessAeolianEnabled);
+
+        if (!aeolianEnabled.has_value() ||
+            !std::get<bool>(
+                *aeolianEnabled))
+        {
+            return 14;
+        }
+
         const auto seed = objects.GetProperty(
             terrainObject,
             orbit::world_model::kTerrainSeed);
@@ -116,6 +144,7 @@ int main()
             orbit::editor_model::authoring_commands::kRemoveTerrainSurface);
 
         if (objects.Find(terrainObject).has_value() ||
+            objects.Find(processObject).has_value() ||
             selection.Ordered().size() != 1U ||
             selection.Ordered().front() != bodyObject)
         {
@@ -137,7 +166,8 @@ int main()
         if (!restored.has_value() ||
             restored->type != orbit::world_model::kTerrainSurfaceType ||
             !restoredSeed.has_value() ||
-            std::get<orbit::i64>(*restoredSeed) != 0x41535445525241LL)
+            std::get<orbit::i64>(*restoredSeed) != 0x41535445525241LL ||
+            !objects.Find(processObject).has_value())
         {
             return 9;
         }
@@ -149,7 +179,8 @@ int main()
 
         commands.Redo();
 
-        if (objects.Find(terrainObject).has_value())
+        if (objects.Find(terrainObject).has_value() ||
+            objects.Find(processObject).has_value())
         {
             return 11;
         }
