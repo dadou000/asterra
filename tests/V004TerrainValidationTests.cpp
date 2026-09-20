@@ -2678,8 +2678,6 @@ void Test10FastFlowDrainageReference()
     constexpr u32 pitX = 2U;
     constexpr u32 pitY = 3U;
 
-    StratigraphyFixture fixture;
-
     MaterialColumnPage material(
         resolution,
         spacingMeters);
