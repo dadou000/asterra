@@ -6364,6 +6364,136 @@ int main(
 
             synchronizeActiveBodyPreview();
 
+            if (terrainUiSmoke &&
+                !terrainUiSmokeValidated)
+            {
+                ++terrainUiSmokeAttempts;
+
+                const auto smokeRuntime =
+                    studioSession.
+                        TerrainRuntime().
+                        Capture(
+                            "studio.primary");
+
+                if (smokeRuntime.has_value())
+                {
+                    orbit::editor_model::
+                        SurfaceAuthoringModel
+                            surface(
+                                objects(),
+                                commandService(),
+                                selection());
+
+                    const auto selectedSurface =
+                        surface.SelectedRockyBody();
+
+                    if (!selectedSurface.has_value())
+                    {
+                        throw std::runtime_error(
+                            "Terrain UI smoke failed: the authored rocky planet is not selected.");
+                    }
+
+                    auto relief =
+                        surface.Relief(
+                            selectedSurface->
+                                terrain);
+
+                    relief.detailAmplitudeMeters +=
+                        1.0;
+
+                    surface.SetRelief(
+                        selectedSurface->terrain,
+                        relief);
+
+                    static_cast<void>(
+                        studioSession.Tick(false));
+
+                    studioSession.
+                        Viewports().
+                        SetMode(
+                            "studio.map",
+                            orbit::studio_session::
+                                ViewportMode::Debug);
+
+                    studioViews.SetDebugField(
+                        "studio.map",
+                        orbit::terrain_debug::
+                            TerrainDebugField::
+                                PhysicalLod);
+
+                    studioViews.
+                        SetTerrainDiagnosticOverlays(
+                            "studio.primary",
+                            {
+                                .dirtyPageBounds = true,
+                                .buildStates = true,
+                                .physicalLod = true,
+                                .clipmapRings = true,
+                                .cacheStatus = true,
+                                .authoredConstraints = true,
+                                .biomeWeights = true,
+                                .processMasks = true,
+                                .drainageVectors = true
+                            });
+
+                    const auto m15Report =
+                        orbit::studio_session::
+                            RunStudioTerrainValidationScenario(
+                                terrainUiSmokeRoot /
+                                    "M15",
+                                "studio.primary");
+
+                    if (!m15Report.success)
+                    {
+                        throw std::runtime_error(
+                            std::format(
+                                "Terrain UI smoke M15 failed at {}: {}",
+                                m15Report.failureStage.
+                                        empty()
+                                    ? std::string(
+                                          "unknown")
+                                    : m15Report.
+                                          failureStage,
+                                m15Report.diagnostic));
+                    }
+
+                    const auto roundTripReport =
+                        orbit::studio_session::
+                            VerifyStudioTerrainRoundTrip(
+                                project,
+                                studioSession,
+                                "studio.primary");
+
+                    if (!roundTripReport.success)
+                    {
+                        throw std::runtime_error(
+                            std::format(
+                                "Terrain UI smoke round trip failed at {}: {}",
+                                roundTripReport.
+                                        failureStage.
+                                        empty()
+                                    ? std::string(
+                                          "unknown")
+                                    : roundTripReport.
+                                          failureStage,
+                                roundTripReport.
+                                    diagnostic));
+                    }
+
+                    terrainUiSmokeValidated =
+                        true;
+
+                    orbit::log::Info(
+                        "Terrain UI smoke: authoring, M15, and reopen verification passed.");
+                }
+                else if (terrainUiSmokeAttempts >
+                         240U)
+                {
+                    throw std::runtime_error(
+                        "Terrain UI smoke failed: production terrain runtime never became available.");
+                }
+            }
+
             if (studioTick.pathRoutingRebound)
             {
                 routedObjectRevision =
