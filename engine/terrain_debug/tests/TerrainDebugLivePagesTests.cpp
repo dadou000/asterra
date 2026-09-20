@@ -159,7 +159,9 @@ void TestAddressLookupReplacesCurrentSnapshot()
     terrain_debug::TerrainDebugLivePages pages;
 
     const auto first = Build(1);
-    pages.Publish(first);
+    Require(
+        pages.Publish(first),
+        "First live page publication must be accepted.");
 
     Require(
         pages.Size() == 1U &&
@@ -167,7 +169,14 @@ void TestAddressLookupReplacesCurrentSnapshot()
         "Published live physical page must resolve by stable address.");
 
     const auto replacement = Build(7);
-    pages.Publish(replacement);
+    Require(
+        pages.Publish(replacement),
+        "Newer live page publication must replace the current snapshot.");
+
+    const auto stale = Build(2);
+    Require(
+        !pages.Publish(stale),
+        "Older authority revisions must be rejected instead of replacing a current live page.");
 
     const auto found = pages.Find(Address());
     Require(
