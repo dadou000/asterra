@@ -83,6 +83,13 @@ GpuFlowAccumulation::GpuFlowAccumulation(
 
 GpuFlowAccumulation::~GpuFlowAccumulation() = default;
 
+u64 GpuFlowAccumulation::TransientWorkingSetBytes() const noexcept
+{
+    return downstream_->SizeBytes() +
+        accumA_->SizeBytes() +
+        accumB_->SizeBytes();
+}
+
 void GpuFlowAccumulation::Dispatch(
     rhi::CommandList& commandList,
     const u32 resolution,
