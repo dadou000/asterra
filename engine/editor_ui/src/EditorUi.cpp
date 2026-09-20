@@ -803,6 +803,46 @@ void PanelContext::Text(
         text.data() + text.size());
 }
 
+void PanelContext::MutedText(
+    const std::string_view text)
+{
+    ImGui::PushStyleColor(
+        ImGuiCol_Text,
+        ImGui::GetStyleColorVec4(
+            ImGuiCol_TextDisabled));
+    ImGui::TextWrapped(
+        "%.*s",
+        static_cast<int>(text.size()),
+        text.data());
+    ImGui::PopStyleColor();
+}
+
+void PanelContext::Heading(
+    const std::string_view text)
+{
+    ImGui::Dummy(ImVec2(0.0F, 3.0F));
+    ImGui::PushStyleColor(
+        ImGuiCol_Text,
+        ImVec4(0.74F, 0.87F, 0.96F, 1.0F));
+    ImGui::TextUnformatted(
+        text.data(),
+        text.data() + text.size());
+    ImGui::PopStyleColor();
+
+    const ImVec2 minimum =
+        ImGui::GetCursorScreenPos();
+    const f32 width =
+        ImGui::GetContentRegionAvail().x;
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        ImVec2(minimum.x, minimum.y),
+        ImVec2(
+            minimum.x + width,
+            minimum.y + 1.0F),
+        ImGui::GetColorU32(
+            ImVec4(0.20F, 0.58F, 0.82F, 0.55F)));
+    ImGui::Dummy(ImVec2(0.0F, 5.0F));
+}
+
 void PanelContext::Separator()
 {
     ImGui::Separator();
@@ -815,6 +855,33 @@ bool PanelContext::Button(
     const std::string owned(label);
     return ImGui::Button(
         owned.c_str());
+}
+
+bool PanelContext::PrimaryButton(
+    const std::string_view label)
+{
+    TraceWidget(label);
+    const std::string owned(label);
+
+    ImGui::PushStyleColor(
+        ImGuiCol_Button,
+        ImVec4(0.105F, 0.390F, 0.560F, 1.00F));
+    ImGui::PushStyleColor(
+        ImGuiCol_ButtonHovered,
+        ImVec4(0.135F, 0.505F, 0.710F, 1.00F));
+    ImGui::PushStyleColor(
+        ImGuiCol_ButtonActive,
+        ImVec4(0.095F, 0.330F, 0.475F, 1.00F));
+
+    const bool pressed =
+        ImGui::Button(
+            owned.c_str(),
+            ImVec2(
+                ImGui::GetContentRegionAvail().x,
+                0.0F));
+
+    ImGui::PopStyleColor(3);
+    return pressed;
 }
 
 bool PanelContext::InputText(
