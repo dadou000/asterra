@@ -50,3 +50,13 @@ add_custom_command(TARGET OrbitStudio POST_BUILD
         "${ORBIT_DXCOMPILER_DLL}"
         "$<TARGET_FILE_DIR:OrbitStudio>"
 )
+
+# Real-device Studio smoke gate. This is intentionally an explicit target
+# rather than an unconditional CTest because it creates a native window and
+# requires a working Vulkan graphics device.
+add_custom_target(OrbitStudioTerrainUiSmoke
+    COMMAND $<TARGET_FILE:OrbitStudio> --terrain-ui-smoke
+    DEPENDS OrbitStudio
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+)
