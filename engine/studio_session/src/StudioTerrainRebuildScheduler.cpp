@@ -260,6 +260,42 @@ bool StudioTerrainRebuildScheduler::ContainsPage(
     return FindPage(address) != nullptr;
 }
 
+bool StudioTerrainRebuildScheduler::UnregisterPage(
+    const terrain::PhysicalTerrainPageAddress& address)
+{
+    auto found =
+        std::find_if(
+            pages_.begin(),
+            pages_.end(),
+            [&address](const PageEntry& page)
+            {
+                return page.address ==
+                    address;
+            });
+
+    if (found == pages_.end())
+    {
+        return true;
+    }
+
+    if (found->uploading)
+    {
+        return false;
+    }
+
+    graph_->Poll();
+    RefreshPage(*found);
+
+    if (!graph_->UnregisterPage(
+            address))
+    {
+        return false;
+    }
+
+    pages_.erase(found);
+    return true;
+}
+
 bool StudioTerrainRebuildScheduler::AddressMatches(
     const terrain::PhysicalTerrainPageAddress& address,
     const terrain_dependency::TerrainSpatialInvalidationScope& scope)
