@@ -514,6 +514,108 @@ void AppendClipmapRings(
                 source,
                 camera);
         }
+
+        // The ring is spatial clipmap coverage; this marker visualizes the
+        // toroidal storage origin owned by ToroidalResidency for the same LOD.
+        if (index <
+                runtime.residency.levels.size() &&
+            level.gridResolution > 1U)
+        {
+            const auto& residency =
+                runtime.residency.levels[index];
+
+            const f64 resolution =
+                static_cast<f64>(
+                    level.gridResolution);
+
+            const f64 normalizedX =
+                static_cast<f64>(
+                    residency.originX) /
+                    resolution -
+                0.5;
+
+            const f64 normalizedY =
+                static_cast<f64>(
+                    residency.originY) /
+                    resolution -
+                0.5;
+
+            const f64 markerScale =
+                level.outerHalfExtentMeters *
+                0.55;
+
+            const math::Double2 markerOffset{
+                motion.centerOffsetMeters.x +
+                    normalizedX * markerScale,
+                motion.centerOffsetMeters.y +
+                    normalizedY * markerScale
+            };
+
+            const auto centerDirection =
+                world::DirectionAtSurfaceOffset(
+                    runtime.planet,
+                    motion.surfaceFrame,
+                    motion.centerOffsetMeters);
+
+            const auto markerDirection =
+                world::DirectionAtSurfaceOffset(
+                    runtime.planet,
+                    motion.surfaceFrame,
+                    markerOffset);
+
+            AppendDirectionLine(
+                result,
+                centerDirection,
+                markerDirection,
+                {
+                    1.00F,
+                    0.82F,
+                    0.18F,
+                    0.90F
+                },
+                runtime,
+                source,
+                camera);
+
+            const f64 tick =
+                std::max(
+                    level.sampleSpacingMeters *
+                        2.0,
+                    level.outerHalfExtentMeters *
+                        0.008);
+
+            const auto markerA =
+                world::DirectionAtSurfaceOffset(
+                    runtime.planet,
+                    motion.surfaceFrame,
+                    {
+                        markerOffset.x - tick,
+                        markerOffset.y
+                    });
+
+            const auto markerB =
+                world::DirectionAtSurfaceOffset(
+                    runtime.planet,
+                    motion.surfaceFrame,
+                    {
+                        markerOffset.x + tick,
+                        markerOffset.y
+                    });
+
+            AppendDirectionLine(
+                result,
+                markerA,
+                markerB,
+                {
+                    1.00F,
+                    0.82F,
+                    0.18F,
+                    1.00F
+                },
+                runtime,
+                source,
+                camera);
+        }
     }
 }
 
@@ -1352,7 +1454,7 @@ BuildTerrainDiagnosticOverlayLines(
                 camera);
         }
 
-        if (options.processEffects)
+        if (options.processMasks)
         {
             AppendProcessEffects(
                 result,
