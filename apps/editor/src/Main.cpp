@@ -1928,6 +1928,34 @@ int main(
                 studioSession);
         surfaceAuthoringUi.Register(ui);
 
+        if (terrainUiSmoke)
+        {
+            if (!ui.HasPanel(
+                    orbit::studio_ui::
+                        SurfaceAuthoringUi::kPanel) ||
+                !ui.HasPanel(
+                    orbit::studio_ui::
+                        ProjectSettingsUi::
+                            kPanelId))
+            {
+                throw std::runtime_error(
+                    "Terrain UI smoke preflight failed: active authoring/validation panels are not registered.");
+            }
+
+            static_cast<void>(
+                ui.SetPanelOpen(
+                    orbit::studio_ui::
+                        SurfaceAuthoringUi::kPanel,
+                    true));
+
+            static_cast<void>(
+                ui.SetPanelOpen(
+                    orbit::studio_ui::
+                        ProjectSettingsUi::
+                            kPanelId,
+                    true));
+        }
+
         constexpr orbit::editor_ui::PanelId
             kViewportPanel{
                 .high =
