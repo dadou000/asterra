@@ -422,6 +422,7 @@ void StudioTerrainRebuildScheduler::QueueChange(
     {
         found->remainingSeconds =
             config_.editDebounceSeconds;
+        UpdatePeakOutstandingPages();
         return;
     }
 
