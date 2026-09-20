@@ -905,6 +905,70 @@ void TestAllAuthoredOperationsCompose()
         "M20 authored Add/Subtract/Multiply/Min/Max/Replace composition is incorrect.");
 }
 
+void TestAuthoredWeightInspection()
+{
+    BiomeService service(
+        Body());
+
+    BiomeDefinition biome =
+        Forest();
+
+    biome.placement.mode =
+        BiomePlacementMode::
+            AutomaticAndAuthored;
+
+    biome.placement.authoredMasks = {
+        {
+            .id = {
+                .high =
+                    0x4d31304155544800ULL,
+                .low = 1U
+            },
+            .operation =
+                BiomeAuthoredWeightOperation::
+                    Replace,
+            .centerUnitDirection = {
+                1.0, 0.0, 0.0
+            },
+            .innerRadiusMeters = 100.0,
+            .outerRadiusMeters = 200.0,
+            .global = false,
+            .value = 0.8,
+            .opacity = 1.0,
+            .enabled = true
+        }
+    };
+
+    service.UpsertBiome(
+        biome);
+
+    const auto* stored =
+        service.Find(
+            ForestId());
+
+    Require(
+        stored != nullptr,
+        "M10 authored inspection fixture did not register.");
+
+    RequireNear(
+        service.EvaluateAuthoredWeight(
+            *stored,
+            {1.0, 0.0, 0.0},
+            6'000'000.0),
+        0.8,
+        1.0e-9,
+        "M10 authored weight inspection disagrees at brush center.");
+
+    RequireNear(
+        service.EvaluateAuthoredWeight(
+            *stored,
+            {0.0, 1.0, 0.0},
+            6'000'000.0),
+        0.0,
+        0.0,
+        "M10 authored weight inspection leaked outside the brush.");
+}
+
 int main()
 {
     TestBaseOnlyPlanetIsValid();
@@ -916,6 +980,7 @@ int main()
     TestSameFieldSelectorsFormSmoothUnion();
     TestAuthoredReplaceOverridesClimate();
     TestAllAuthoredOperationsCompose();
+    TestAuthoredWeightInspection();
 
     std::cout
         << "Orbit M19/M20 biome service tests passed.\n";
