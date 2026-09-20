@@ -388,8 +388,6 @@ void StudioTerrainRebuildScheduler::FlushChanges(
                 continue;
             }
 
-            page.pendingProducts &=
-                ~result.dirtyProducts;
             page.dirtyProducts |=
                 result.dirtyProducts;
             page.requestedProducts &=
@@ -411,6 +409,37 @@ void StudioTerrainRebuildScheduler::FlushChanges(
         iterator =
             pendingChanges_.erase(
                 iterator);
+    }
+
+    RecomputePendingProducts();
+}
+
+void StudioTerrainRebuildScheduler::RecomputePendingProducts()
+{
+    for (auto& page : pages_)
+    {
+        page.pendingProducts = 0U;
+    }
+
+    for (const auto& pending :
+         pendingChanges_)
+    {
+        const auto products =
+            terrain_dependency::
+                TerrainDependencyGraph::
+                    ProductsForChange(
+                        pending.request.kind);
+
+        for (auto& page : pages_)
+        {
+            if (AddressMatches(
+                    page.address,
+                    pending.request.scope))
+            {
+                page.pendingProducts |=
+                    products;
+            }
+        }
     }
 }
 
@@ -537,6 +566,7 @@ void StudioTerrainRebuildScheduler::ScheduleBudget()
 
         if (page.uploading ||
             page.uploadFailed ||
+            page.pendingProducts != 0U ||
             page.dirtyProducts == 0U)
         {
             continue;

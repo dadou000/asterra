@@ -316,6 +316,76 @@ void TestSliderChangesDebounceAndCoalesce()
         address);
 }
 
+void TestOverlappingDebounceWindowsDoNotSubmitIntermediateWork()
+{
+    Fixture fixture({
+        .editDebounceSeconds = 0.20,
+        .maxBuildRequestsPerTick = 4U
+    });
+
+    const auto address =
+        MakeAddress(20U, 21U);
+
+    fixture.scheduler.RegisterPage(
+        address,
+        InitialRevisions());
+
+    DriveReady(
+        fixture,
+        address);
+
+    std::array<u64, terrain_dependency::kTerrainDependencyProductCount>
+        before{};
+
+    for (u32 index = 0U;
+         index < static_cast<u32>(
+             terrain_dependency::TerrainDependencyProduct::Count);
+         ++index)
+    {
+        before[index] =
+            fixture.Count(
+                static_cast<
+                    terrain_dependency::TerrainDependencyProduct>(
+                        index));
+    }
+
+    fixture.scheduler.QueueChange(
+        GlobalChange(
+            terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            address.planet));
+
+    fixture.scheduler.Tick(0.10);
+
+    fixture.scheduler.QueueChange(
+        GlobalChange(
+            terrain_dependency::TerrainChangeKind::BiomeScatter,
+            address.planet));
+
+    // The authoring window expires here, but the scatter edit is still
+    // debouncing. No intermediate generation should start for this page.
+    fixture.scheduler.Tick(0.10);
+    fixture.jobs.WaitIdle();
+
+    for (u32 index = 0U;
+         index < static_cast<u32>(
+             terrain_dependency::TerrainDependencyProduct::Count);
+         ++index)
+    {
+        Require(
+            fixture.Count(
+                static_cast<
+                    terrain_dependency::TerrainDependencyProduct>(
+                        index)) ==
+                before[index],
+            "A page with another active debounce edit must not submit an intermediate terrain build.");
+    }
+
+    fixture.scheduler.Tick(0.10);
+    DriveReady(
+        fixture,
+        address);
+}
+
 void TestPauseAndManualRebuildDirty()
 {
     Fixture fixture({
@@ -704,6 +774,7 @@ int main()
 {
     TestInitialDirtyBuildConvergesAndReportsProgress();
     TestSliderChangesDebounceAndCoalesce();
+    TestOverlappingDebounceWindowsDoNotSubmitIntermediateWork();
     TestPauseAndManualRebuildDirty();
     TestM27DescendantsOnly();
     TestCpuAndGpuBuildStates();

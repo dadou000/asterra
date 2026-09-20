@@ -165,6 +165,7 @@ private:
         const terrain_dependency::TerrainSpatialInvalidationScope& scope);
 
     void FlushChanges(bool all);
+    void RecomputePendingProducts();
     void RefreshPage(PageEntry& page);
     void RefreshAll();
     void ScheduleBudget();
