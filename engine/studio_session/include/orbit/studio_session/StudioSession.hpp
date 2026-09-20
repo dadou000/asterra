@@ -6,6 +6,7 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
+#include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/studio_session/UniverseBoundRoutePlanner.hpp>
 #include <orbit/studio_session/ViewportTargetRegistry.hpp>
@@ -14,6 +15,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -86,6 +88,22 @@ public:
     [[nodiscard]] const StudioTerrainRuntimeBridge&
     TerrainRuntime() const noexcept;
 
+    // Semantic terrain tools enqueue only bounded M27 scopes here. M12
+    // drains them into the production rebuild scheduler.
+    void QueueTerrainInvalidation(
+        const terrain_dependency::TerrainInvalidationRequest& request);
+
+    void QueueTerrainInvalidations(
+        std::span<const terrain_dependency::TerrainInvalidationRequest> requests);
+
+    [[nodiscard]] std::span<
+        const terrain_dependency::TerrainInvalidationRequest>
+    PendingTerrainInvalidations() const noexcept;
+
+    [[nodiscard]] std::vector<
+        terrain_dependency::TerrainInvalidationRequest>
+    TakeTerrainInvalidations();
+
     [[nodiscard]] std::vector<editor_session::WorldDocumentItem>
     Worlds() const;
     [[nodiscard]] std::optional<editor_session::WorldDocumentItem>
@@ -130,6 +148,9 @@ private:
     UniverseBoundPathCache pathProducts_;
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
     StudioTerrainRuntimeBridge terrainRuntime_;
+    std::vector<
+        terrain_dependency::TerrainInvalidationRequest>
+        pendingTerrainInvalidations_;
     u64 terrainDebugUniverseGeneration_{~u64{0}};
     editor_rpc::EditorSessionRpcHost rpc_;
 };
