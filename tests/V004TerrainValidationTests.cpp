@@ -1,5 +1,6 @@
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
+#include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/terrain_hydrology/DrainagePage.hpp>
@@ -3794,6 +3795,284 @@ void Test11AuthoredCanyonPersistence()
     }
 }
 
+
+void Test12BiomeFallback()
+{
+    using namespace terrain_biome;
+
+    const universe::BodyId body{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000000012ULL
+    };
+
+    BiomeService service(
+        body);
+
+    const BiomeId automaticId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001201ULL
+    };
+
+    const BiomeId authoredId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x0000000000001202ULL
+    };
+
+    BiomeDefinition automatic{
+        .id = automaticId,
+        .name = "M30 hot biome",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    Automatic,
+            .selectors = {
+                BiomeAutomaticSelector{
+                    .field =
+                        BiomeSelectorField::
+                            Temperature,
+                    .minimum = 35.0,
+                    .maximum = 45.0,
+                    .lowerFalloff = 0.0,
+                    .upperFalloff = 0.0,
+                    .invert = false,
+                    .enabled = true
+                }
+            }
+        }
+    };
+
+    BiomeDefinition authored{
+        .id = authoredId,
+        .name = "M30 authored biome",
+        .placement = {
+            .minimumResolvedWeight = 0.05F,
+            .enabled = true,
+            .mode =
+                BiomePlacementMode::
+                    Authored,
+            .authoredMasks = {
+                BiomeAuthoredMask{
+                    .id = {
+                        .high =
+                            0x4D333042494F4D45ULL,
+                        .low =
+                            0x00000000000012A1ULL
+                    },
+                    .operation =
+                        BiomeAuthoredWeightOperation::
+                            Replace,
+                    .centerUnitDirection =
+                        {0.0, -1.0, 0.0},
+                    .innerRadiusMeters =
+                        1'000.0,
+                    .outerRadiusMeters =
+                        2'000.0,
+                    .global = false,
+                    .value = 1.0,
+                    .opacity = 1.0,
+                    .enabled = true
+                }
+            }
+        }
+    };
+
+    service.UpsertBiome(
+        automatic);
+
+    service.UpsertBiome(
+        authored);
+
+    Require(
+        service.Definitions().size() ==
+            3U,
+        "M30-12 fixture must contain exactly one BaseBiome and two optional biome definitions.");
+
+    const auto baseId =
+        service.BaseBiome().id;
+
+    Require(
+        baseId ==
+            BiomeService::
+                BaseBiomeId(body),
+        "M30-12 BaseBiome identity must be the stable body-derived M19 fallback ID.");
+
+    BiomePlacementContext basaltContext{};
+    basaltContext.unitDirection =
+        {0.0, 1.0, 0.0};
+    basaltContext.planetRadiusMeters =
+        6'000'000.0;
+    basaltContext.temperatureC =
+        15.0;
+    basaltContext.moisture =
+        0.5;
+    basaltContext.rainfall =
+        0.5;
+    basaltContext.elevationMeters =
+        250.0;
+    basaltContext.slopeDegrees =
+        5.0;
+    basaltContext.aspectRadians =
+        0.0;
+    basaltContext.latitudeRadians =
+        0.0;
+    basaltContext.continentality =
+        0.5;
+    basaltContext.distanceToCoastWaterMeters =
+        50'000.0;
+    basaltContext.drainage =
+        0.25;
+    basaltContext.soilDepthMeters =
+        0.5;
+    basaltContext.sandDepthMeters =
+        0.0;
+    basaltContext.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Basalt;
+    basaltContext.solarExposure =
+        0.5;
+    basaltContext.windExposure =
+        0.5;
+    basaltContext.snowPersistence =
+        0.0;
+
+    Require(
+        basaltContext.IsValid(),
+        "M30-12 fallback placement context must be valid.");
+
+    const auto automaticEvaluation =
+        service.EvaluatePlacement(
+            automatic,
+            basaltContext);
+
+    const auto authoredEvaluation =
+        service.EvaluatePlacement(
+            authored,
+            basaltContext);
+
+    Require(
+        NearlyEqual(
+            automaticEvaluation.
+                finalWeight,
+            0.0,
+            0.0) &&
+        NearlyEqual(
+            authoredEvaluation.
+                finalWeight,
+            0.0,
+            0.0),
+        "M30-12 optional automatic/authored selectors must contribute no coverage in the fallback fixture.");
+
+    const auto basaltResolved =
+        service.ResolvePlacement(
+            basaltContext);
+
+    Require(
+        basaltResolved.size() ==
+                1U &&
+        basaltResolved.front().id ==
+                baseId &&
+        basaltResolved.front().base &&
+        NearlyEqual(
+            basaltResolved.front().
+                weight,
+            1.0,
+            0.0),
+        "M30-12 zero optional coverage must resolve to exactly one full-weight BaseBiome.");
+
+    BiomePlacementContext graniteContext =
+        basaltContext;
+
+    graniteContext.substrateRock =
+        terrain_geology::
+            reference_rock::
+                Granite;
+
+    const auto graniteResolved =
+        service.ResolvePlacement(
+            graniteContext);
+
+    Require(
+        graniteResolved.size() ==
+                1U &&
+        graniteResolved.front().id ==
+                baseId &&
+        graniteResolved.front().base &&
+        graniteResolved.front().weight ==
+                basaltResolved.front().
+                    weight,
+        "M30-12 BaseBiome fallback must be independent of M02 substrate-rock identity when placement selectors contribute nothing.");
+
+    const auto replay =
+        service.ResolvePlacement(
+            basaltContext);
+
+    Require(
+        replay.size() ==
+                basaltResolved.size() &&
+        replay.front().id ==
+                basaltResolved.front().id &&
+        replay.front().weight ==
+                basaltResolved.front().weight &&
+        replay.front().base ==
+                basaltResolved.front().base,
+        "M30-12 biome fallback must be bit-deterministic for fixed physical placement context.");
+
+    const u64 revisionBeforeRemoval =
+        service.Revision();
+
+    Require(
+        !service.RemoveBiome(
+            baseId) &&
+        service.Revision() ==
+            revisionBeforeRemoval &&
+        service.Find(baseId) !=
+            nullptr,
+        "M30-12 BaseBiome must be non-removable and a failed removal attempt must not mutate biome authority revision.");
+
+    const BiomeId staleId{
+        .high = 0x4D333042494F4D45ULL,
+        .low = 0x00000000DEADBEEFULL
+    };
+
+    const std::array<
+        BiomeWeightContribution,
+        3>
+        staleAndWeak{{
+            {
+                .id = staleId,
+                .weight = 1.0F
+            },
+            {
+                .id = automaticId,
+                .weight = 0.01F
+            },
+            {
+                .id = baseId,
+                .weight = 1.0F
+            }
+        }};
+
+    const auto staleResolved =
+        service.Resolve(
+            staleAndWeak);
+
+    Require(
+        staleResolved.size() ==
+                1U &&
+        staleResolved.front().id ==
+                baseId &&
+        staleResolved.front().base &&
+        NearlyEqual(
+            staleResolved.front().
+                weight,
+            1.0,
+            0.0),
+        "M30-12 stale IDs, below-threshold optional coverage and explicit BaseBiome contributions must all collapse safely to full fallback coverage.");
+}
+
 } // namespace
 
 int main()
@@ -3809,8 +4088,9 @@ int main()
     Test09CrossPageDuneMigration();
     Test10FastFlowDrainageReference();
     Test11AuthoredCanyonPersistence();
+    Test12BiomeFallback();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 11/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 12/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
