@@ -108,3 +108,12 @@ Avoid umbrella headers that include most of the engine. Public headers expose th
 ## 15. Architectural violations are bugs
 
 If implementing a feature requires a circular dependency or broad global access, redesign the boundary rather than patching around it.
+
+
+## 16. UI simplicity must not reduce capability
+
+All Orbit Studio, runtime-authoring, developer-tool, plugin, and agent-facing UI work must follow [ORBIT_UI_RULES.md](ORBIT_UI_RULES.md).
+
+The UI uses progressive disclosure: common actions stay simple and contextual, while legitimate advanced controls remain accessible through inspectors, advanced sections, command/search surfaces, shortcuts, plugins, scripting, or MCP tooling.
+
+UI convenience must never create a second authority path or impose arbitrary authoring limits that do not exist in the engine.
