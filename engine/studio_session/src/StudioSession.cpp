@@ -40,6 +40,9 @@ StudioSession::StudioSession(
       pathNetwork_(world_),
       pathRouting_(world_),
       pathProducts_(world_),
+      terrainPhysicalPages_(
+          world_,
+          terrainDebugPages_),
       terrainRuntime_(
           world_,
           viewports_,
@@ -138,6 +141,18 @@ const terrain_debug::TerrainDebugLivePages&
 StudioSession::TerrainDebugPages() const noexcept
 {
     return terrainDebugPages_;
+}
+
+StudioTerrainPhysicalPageService&
+StudioSession::TerrainPhysicalPages() noexcept
+{
+    return terrainPhysicalPages_;
+}
+
+const StudioTerrainPhysicalPageService&
+StudioSession::TerrainPhysicalPages() const noexcept
+{
+    return terrainPhysicalPages_;
 }
 
 StudioTerrainRuntimeBridge&
@@ -258,6 +273,7 @@ void StudioSession::OpenWorld(
         "world.open",
         relativePath);
     pendingTerrainInvalidations_.clear();
+    terrainPhysicalPages_.Clear();
 }
 
 void StudioSession::CloseWorld()
@@ -266,6 +282,7 @@ void StudioSession::CloseWorld()
         "world.close",
         std::nullopt);
     pendingTerrainInvalidations_.clear();
+    terrainPhysicalPages_.Clear();
 }
 
 std::optional<std::string>
@@ -296,6 +313,13 @@ StudioSession::DispatchRpc(
     RefreshTerrainDebugGeneration();
     static_cast<void>(
         terrainRuntime_.Refresh());
+
+    terrainPhysicalPages_.Sync(
+        terrainRuntime_.Catalog());
+    terrainPhysicalPages_.QueueChanges(
+        TakeTerrainInvalidations());
+    terrainPhysicalPages_.Tick();
+
     return response;
 }
 
@@ -336,6 +360,8 @@ StudioTickResult StudioSession::Tick(
         RefreshTerrainDebugGeneration();
         result.terrainRuntimeChanged =
             terrainRuntime_.Refresh();
+        terrainPhysicalPages_.Clear();
+        pendingTerrainInvalidations_.clear();
         result.worldGeneration =
             world_.Generation();
         result.universeGeneration =
@@ -371,6 +397,12 @@ StudioTickResult StudioSession::Tick(
 
     result.terrainRuntimeChanged =
         terrainRuntime_.Refresh();
+
+    terrainPhysicalPages_.Sync(
+        terrainRuntime_.Catalog());
+    terrainPhysicalPages_.QueueChanges(
+        TakeTerrainInvalidations());
+    terrainPhysicalPages_.Tick();
 
     result.worldGeneration =
         world_.Generation();
