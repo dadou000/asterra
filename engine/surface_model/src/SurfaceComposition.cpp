@@ -891,7 +891,7 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     registry_.reset();
     bodyByTerrainObject_.clear();
     terrainObjectByBody_.clear();
-    biomesByBody_.clear();
+    servicesByBody_.clear();
     sourceRevision_ = ~u64{0};
 
     auto candidate =
@@ -903,8 +903,8 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
         candidateObjectByBody;
     std::unordered_map<
         universe::BodyId,
-        std::unique_ptr<terrain_biome::BiomeService>>
-        candidateBiomes;
+        std::unique_ptr<TerrainBodyServices>>
+        candidateServices;
 
     std::vector<scene::ObjectRecord> pending = objects.Roots();
     u32 terrainCount = 0;
@@ -972,8 +972,8 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
         candidateBodyByObject.emplace(object.id, *bodyId);
         candidateObjectByBody.emplace(*bodyId, object.id);
 
-        auto biomeService =
-            std::make_unique<terrain_biome::BiomeService>(
+        auto services =
+            std::make_unique<TerrainBodyServices>(
                 *bodyId);
 
         ++biomeDefinitionCount; // implicit, non-removable BaseBiome
@@ -985,7 +985,7 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
                 continue;
             }
 
-            biomeService->UpsertBiome(
+            services->Biomes().UpsertBiome(
                 BiomeDescription(
                     objects,
                     child));
@@ -993,10 +993,16 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
             ++biomeDefinitionCount;
         }
 
-        candidateBiomes.emplace(
+        if (!services->IsValid())
+        {
+            throw std::runtime_error(
+                "Rocky terrain body services failed default validation.");
+        }
+
+        candidateServices.emplace(
             *bodyId,
             std::move(
-                biomeService));
+                services));
 
         ++terrainCount;
     }
@@ -1004,14 +1010,14 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     registry_ = std::move(candidate);
     bodyByTerrainObject_ = std::move(candidateBodyByObject);
     terrainObjectByBody_ = std::move(candidateObjectByBody);
-    biomesByBody_ = std::move(candidateBiomes);
+    servicesByBody_ = std::move(candidateServices);
     sourceRevision_ = objects.Revision();
 
     return {
         .terrainSurfaces = terrainCount,
         .biomeServices =
             static_cast<u32>(
-                biomesByBody_.size()),
+                servicesByBody_.size()),
         .biomeDefinitions =
             biomeDefinitionCount,
         .sourceRevision = sourceRevision_
@@ -1060,17 +1066,96 @@ SurfaceComposition::TerrainObjectForBody(
         : std::nullopt;
 }
 
+TerrainBodyServices*
+SurfaceComposition::ServicesForBody(
+    const universe::BodyId body) noexcept
+{
+    const auto found =
+        servicesByBody_.find(
+            body);
+
+    return
+        found != servicesByBody_.end()
+            ? found->second.get()
+            : nullptr;
+}
+
+const TerrainBodyServices*
+SurfaceComposition::ServicesForBody(
+    const universe::BodyId body) const noexcept
+{
+    const auto found =
+        servicesByBody_.find(
+            body);
+
+    return
+        found != servicesByBody_.end()
+            ? found->second.get()
+            : nullptr;
+}
+
+terrain_geology::GeologicalMaterialLibrary*
+SurfaceComposition::GeologyForBody(
+    const universe::BodyId body) noexcept
+{
+    auto* services =
+        ServicesForBody(body);
+
+    return
+        services != nullptr
+            ? &services->Geology()
+            : nullptr;
+}
+
+const terrain_geology::GeologicalMaterialLibrary*
+SurfaceComposition::GeologyForBody(
+    const universe::BodyId body) const noexcept
+{
+    const auto* services =
+        ServicesForBody(body);
+
+    return
+        services != nullptr
+            ? &services->Geology()
+            : nullptr;
+}
+
+TerrainProcessService*
+SurfaceComposition::ProcessesForBody(
+    const universe::BodyId body) noexcept
+{
+    auto* services =
+        ServicesForBody(body);
+
+    return
+        services != nullptr
+            ? &services->Processes()
+            : nullptr;
+}
+
+const TerrainProcessService*
+SurfaceComposition::ProcessesForBody(
+    const universe::BodyId body) const noexcept
+{
+    const auto* services =
+        ServicesForBody(body);
+
+    return
+        services != nullptr
+            ? &services->Processes()
+            : nullptr;
+}
+
 terrain_biome::BiomeService*
 SurfaceComposition::BiomesForBody(
     const universe::BodyId body) noexcept
 {
-    const auto found =
-        biomesByBody_.find(
-            body);
+    auto* services =
+        ServicesForBody(body);
 
     return
-        found != biomesByBody_.end()
-            ? found->second.get()
+        services != nullptr
+            ? &services->Biomes()
             : nullptr;
 }
 
@@ -1078,13 +1163,38 @@ const terrain_biome::BiomeService*
 SurfaceComposition::BiomesForBody(
     const universe::BodyId body) const noexcept
 {
-    const auto found =
-        biomesByBody_.find(
-            body);
+    const auto* services =
+        ServicesForBody(body);
 
     return
-        found != biomesByBody_.end()
-            ? found->second.get()
+        services != nullptr
+            ? &services->Biomes()
+            : nullptr;
+}
+
+terrain_gpu::PersistentGpuTerrainCache*
+SurfaceComposition::CacheForBody(
+    const universe::BodyId body) noexcept
+{
+    auto* services =
+        ServicesForBody(body);
+
+    return
+        services != nullptr
+            ? &services->Cache()
+            : nullptr;
+}
+
+const terrain_gpu::PersistentGpuTerrainCache*
+SurfaceComposition::CacheForBody(
+    const universe::BodyId body) const noexcept
+{
+    const auto* services =
+        ServicesForBody(body);
+
+    return
+        services != nullptr
+            ? &services->Cache()
             : nullptr;
 }
 
