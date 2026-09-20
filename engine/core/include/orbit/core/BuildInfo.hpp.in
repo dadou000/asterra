@@ -10,6 +10,13 @@ inline constexpr std::string_view Version =
 inline constexpr std::string_view GitCommit =
     "@ORBIT_GIT_SHA@";
 
+#ifndef ORBIT_BUILD_CONFIGURATION
+#define ORBIT_BUILD_CONFIGURATION "Unknown"
+#endif
+
+inline constexpr std::string_view BuildConfiguration =
+    ORBIT_BUILD_CONFIGURATION;
+
 inline constexpr std::string_view DisplayVersion =
     "ORBIT @PROJECT_VERSION@ @ORBIT_GIT_SHA@";
 } // namespace orbit::build
