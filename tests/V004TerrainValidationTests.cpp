@@ -1,13 +1,16 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
+#include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #ifndef ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR
 #error ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR must be defined for M30 validation.
@@ -587,6 +590,238 @@ void Test03SedimentDepositionBurial()
         "M30-03 burial and re-exposure must leave the virtual stratigraphic substrate unchanged.");
 }
 
+
+void Test04HydraulicMassConservation()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 7U;
+    constexpr f64 spacingMeters = 10.0;
+
+    StratigraphyFixture fixture;
+
+    MaterialColumnPage page(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            page.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        30.0F -
+                        static_cast<f32>(x) *
+                            0.8F,
+                    .referenceBedrockHeightMeters =
+                        0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                VolcanicAsh,
+                    .regolithMeters = 0.20F,
+                    .soilMeters = 0.20F,
+                    .sandMeters = 0.0F,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto initialMass =
+        page.QueryMass(
+            fixture.materials);
+
+    std::vector<f32> rainfallSources(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        0.0F);
+
+    for (u32 y = 1U;
+         y + 1U < resolution;
+         ++y)
+    {
+        rainfallSources[
+            static_cast<std::size_t>(y) *
+                resolution] =
+            0.006F;
+    }
+
+    HydraulicErosionConfig config{};
+    config.iterations = 80U;
+    config.timeStepSeconds = 0.15;
+    config.rainfallMetersPerSecond = 0.0025;
+    config.gravityMetersPerSecondSquared = 9.81;
+    config.pipeCrossSectionSquareMeters = 0.20;
+    config.sedimentCapacityCoefficient = 1'200.0;
+    config.maximumSedimentConcentrationKgPerCubicMeter =
+        1'500.0;
+    config.erosionRatePerSecond = 1.0;
+    config.depositionRatePerSecond = 1.4;
+    config.maximumErosionDepthPerStepMeters = 0.04;
+    config.maximumDepositionDepthPerStepMeters = 0.04;
+    config.infiltrationMetersPerSecond = 0.00008;
+    config.moistureCapacityDepthMeters = 0.12;
+    config.evaporationRatePerSecond = 0.08;
+
+    const auto result =
+        SimulateHydraulicErosion(
+            std::move(page),
+            fixture.materials,
+            rainfallSources,
+            config);
+
+    Require(
+        result.sedimentExchange.has_value(),
+        "M30-04 hydraulic erosion must publish its mobile sediment through the canonical M14 exchange page.");
+
+    const auto& balance =
+        result.massBalance;
+    const auto& sediment =
+        *result.sedimentExchange;
+
+    Require(
+        balance.totalErodedKg > 1.0 &&
+        balance.totalDepositedKg > 0.0 &&
+        balance.finalSuspendedKg > 0.0,
+        "M30-04 scenario must exercise erosion, redeposition and remaining suspended load in one closed hydraulic solve.");
+
+    Require(
+        NearlyEqual(
+            balance.sedimentBoundaryLossKg,
+            0.0) &&
+        sediment.Accounting().
+            imported.Empty(1.0e-9) &&
+        sediment.Accounting().
+            exported.Empty(1.0e-9),
+        "M30-04 closed physical page must not hide hydraulic sediment mass in boundary import/export accounting.");
+
+    const f64 processTolerance =
+        std::max(
+            balance.totalErodedKg *
+                1.0e-9,
+            1.0e-6);
+
+    Require(
+        NearlyEqual(
+            balance.totalErodedKg,
+            balance.totalDepositedKg +
+                balance.finalSuspendedKg,
+            processTolerance) &&
+        std::abs(
+            balance.materialBalanceErrorKg) <=
+            processTolerance &&
+        balance.materialBalanceRelativeError <
+            1.0e-9,
+        "M30-04 hydraulic process ledger must close as eroded = deposited + final mobile sediment.");
+
+    const auto& accounting =
+        sediment.Accounting();
+
+    Require(
+        NearlyEqual(
+            accounting.physicalToMobile.TotalKg(),
+            balance.totalErodedKg,
+            processTolerance) &&
+        NearlyEqual(
+            accounting.mobileToPhysical.TotalKg(),
+            balance.totalDepositedKg,
+            processTolerance) &&
+        NearlyEqual(
+            sediment.TotalMobileMass().TotalKg(),
+            balance.finalSuspendedKg,
+            processTolerance),
+        "M30-04 M14 physical/mobile accounting must match the M11 hydraulic process ledger exactly.");
+
+    f64 typedSuspendedKg = 0.0;
+    f64 scalarSuspendedKg = 0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& hydraulic =
+                result.At(x, y);
+            const auto& shared =
+                sediment.At(x, y).
+                    waterborne;
+
+            typedSuspendedKg +=
+                shared.TotalKg();
+            scalarSuspendedKg +=
+                hydraulic.
+                    suspendedSedimentKg;
+
+            Require(
+                NearlyEqual(
+                    hydraulic.
+                        suspendedSediment.
+                        TotalKg(),
+                    shared.TotalKg(),
+                    1.0e-7) &&
+                NearlyEqual(
+                    hydraulic.
+                        suspendedSedimentKg,
+                    shared.TotalKg(),
+                    1.0e-7),
+                "M30-04 M11 typed/scalar diagnostics must remain synchronized to M14 waterborne authority per cell.");
+        }
+    }
+
+    Require(
+        NearlyEqual(
+            typedSuspendedKg,
+            balance.finalSuspendedKg,
+            processTolerance) &&
+        NearlyEqual(
+            scalarSuspendedKg,
+            balance.finalSuspendedKg,
+            processTolerance),
+        "M30-04 final suspended mass must have one value across the M11 ledger, M14 typed authority and scalar compatibility channel.");
+
+    const auto finalMass =
+        result.material.QueryMass(
+            fixture.materials);
+
+    const f64 physicalError =
+        initialMass.LooseMassKg() +
+        finalMass.excavatedBedrockKg -
+        finalMass.LooseMassKg() -
+        balance.finalSuspendedKg;
+
+    const f64 physicalReference =
+        std::max(
+            initialMass.LooseMassKg() +
+                finalMass.excavatedBedrockKg,
+            1.0);
+
+    Require(
+        NearlyEqual(
+            physicalError,
+            balance.physicalColumnBalanceErrorKg,
+            std::max(
+                physicalReference *
+                    1.0e-9,
+                1.0e-4)) &&
+        balance.physicalColumnBalanceRelativeError <
+            2.0e-5,
+        "M30-04 independent M08 physical-column accounting must close against final M14 suspended mass within the documented f32 layer tolerance.");
+}
+
 } // namespace
 
 int main()
@@ -594,8 +829,9 @@ int main()
     Test01StratigraphyExposure();
     Test02BedrockStripping();
     Test03SedimentDepositionBurial();
+    Test04HydraulicMassConservation();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 3/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 4/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
