@@ -5,6 +5,7 @@
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
+#include <orbit/surface_model/TerrainBodyServices.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 
@@ -157,6 +158,21 @@ public:
     void SetRelief(
         scene::ObjectId terrain,
         const SurfaceReliefSettings& settings);
+
+    [[nodiscard]] std::optional<scene::ObjectId>
+    ProcessSettingsObject(
+        scene::ObjectId terrain) const;
+
+    [[nodiscard]] scene::ObjectId EnsureProcessSettings(
+        scene::ObjectId terrain);
+
+    [[nodiscard]] surface_model::TerrainProcessService
+    ProcessSettings(
+        scene::ObjectId terrain) const;
+
+    void SetProcessSettings(
+        scene::ObjectId terrain,
+        const surface_model::TerrainProcessService& settings);
 
     [[nodiscard]] std::vector<SurfaceTerrainConstraintDetail>
     TerrainConstraints(scene::ObjectId terrain) const;
