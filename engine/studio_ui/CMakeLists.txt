@@ -3,6 +3,7 @@ add_library(OrbitStudioUi STATIC
     src/ProjectSettingsUi.cpp
     src/StudioRenderViewSet.cpp
     src/StudioSurfacePicking.cpp
+    src/StudioTerrainOverlayGeometry.cpp
     src/StudioUiBundle.cpp
     src/SurfaceAuthoringUi.cpp
     src/StudioViewportCamera.cpp
@@ -37,6 +38,24 @@ target_compile_features(OrbitStudioUi PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitStudioUi)
 
 if(BUILD_TESTING)
+    add_executable(OrbitStudioTerrainOverlayGeometryTests
+        tests/StudioTerrainOverlayGeometryTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainOverlayGeometryTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainOverlayGeometryTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainOverlayGeometryTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainOverlayGeometry
+        COMMAND OrbitStudioTerrainOverlayGeometryTests
+    )
+
     add_executable(OrbitStudioSurfacePickingTests
         tests/StudioSurfacePickingTests.cpp
     )
