@@ -1,5 +1,6 @@
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
 #include <orbit/terrain_geology/Stratigraphy.hpp>
+#include <orbit/terrain_erosion/AeolianErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
@@ -823,6 +824,292 @@ void Test04HydraulicMassConservation()
         "M30-04 independent M08 physical-column accounting must close against final M14 suspended mass within the documented f32 layer tolerance.");
 }
 
+
+void Test05AeolianMassConservation()
+{
+    using namespace terrain_erosion;
+    using namespace terrain_material_column;
+
+    constexpr u32 resolution = 9U;
+    constexpr f64 spacingMeters = 5.0;
+    constexpr f32 initialSandMeters = 0.25F;
+
+    StratigraphyFixture fixture;
+
+    MaterialColumnPage page(
+        resolution,
+        spacingMeters);
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const f32 obstacleHeight =
+                x == 4U &&
+                y >= 2U &&
+                y <= 6U
+                    ? 2.5F
+                    : 0.0F;
+
+            page.SetCell(
+                x,
+                y,
+                {
+                    .bedrockHeightMeters =
+                        obstacleHeight,
+                    .referenceBedrockHeightMeters =
+                        0.0F,
+                    .bedrockMaterial =
+                        terrain_geology::
+                            reference_rock::
+                                Basalt,
+                    .regolithMeters = 0.0F,
+                    .soilMeters = 0.0F,
+                    .sandMeters =
+                        initialSandMeters,
+                    .debrisMeters = 0.0F,
+                    .moisture = 0.0F,
+                    .temporaryScalar = 0.0F
+                });
+        }
+    }
+
+    const auto initialPhysical =
+        page.QueryMass(
+            fixture.materials);
+
+    std::vector<AeolianCellForcing> wind(
+        static_cast<std::size_t>(
+            resolution) *
+            resolution,
+        AeolianCellForcing{
+            .windEastMetersPerSecond = 14.0F,
+            .windNorthMetersPerSecond = 0.0F,
+            .surfaceResistance = 0.0F
+        });
+
+    AeolianErosionConfig config{};
+    config.iterations = 120U;
+    config.timeStepSeconds = 0.20;
+    config.capacityCoefficient = 0.045;
+    config.windSpeedExponent = 2.0;
+    config.shadowRayCells = 4U;
+    config.shadowStrength = 12.0;
+    config.windwardExposureGain = 0.75;
+    config.minimumExposure = 0.02;
+    config.maximumExposure = 2.0;
+    config.pickupRatePerSecond = 2.0;
+    config.depositionRatePerSecond = 2.5;
+    config.reptationFraction = 0.25;
+    config.saltationRatePerSecond = 3.0;
+    config.referenceSaltationWindMetersPerSecond = 12.0;
+    config.maximumSandPickupDepthPerStepMeters = 0.03;
+    config.maximumSoilPickupDepthPerStepMeters = 0.015;
+    config.maximumDepositionDepthPerStepMeters = 0.05;
+    config.moistureSuppressionExponent = 2.5;
+    config.bedrockAbrasionMetersPerSecondAtReferenceWind =
+        1.0e-6;
+    config.maximumBedrockAbrasionDepthPerStepMeters =
+        5.0e-5;
+
+    const auto result =
+        SimulateAeolianErosion(
+            std::move(page),
+            fixture.materials,
+            wind,
+            config);
+
+    Require(
+        result.sedimentExchange.has_value(),
+        "M30-05 aeolian erosion must publish all mobile sediment through the canonical M14 exchange page.");
+
+    const auto& sediment =
+        *result.sedimentExchange;
+    const auto& accounting =
+        sediment.Accounting();
+    const auto& balance =
+        result.massBalance;
+
+    f64 pickedSandKg = 0.0;
+    f64 pickedSoilKg = 0.0;
+    f64 depositedKg = 0.0;
+    f64 diagnosticAirborneKg = 0.0;
+    f64 eastwardTransportKg = 0.0;
+    f64 surfaceTransportKg = 0.0;
+
+    for (u32 y = 0U;
+         y < resolution;
+         ++y)
+    {
+        for (u32 x = 0U;
+             x < resolution;
+             ++x)
+        {
+            const auto& state =
+                result.At(x, y);
+            const auto& mobile =
+                sediment.At(x, y);
+
+            pickedSandKg +=
+                state.cumulativeSandPickedKg;
+            pickedSoilKg +=
+                state.cumulativeSoilPickedKg;
+            depositedKg +=
+                state.cumulativeDepositedKg;
+            diagnosticAirborneKg +=
+                state.airborneSandKg +
+                state.airborneFinesKg;
+
+            const auto& transport =
+                sediment.TransportAt(x, y);
+
+            eastwardTransportKg +=
+                std::max(
+                    transport.airborne.eastKg,
+                    0.0);
+            surfaceTransportKg +=
+                std::hypot(
+                    transport.surfaceMobile.eastKg,
+                    transport.surfaceMobile.northKg);
+
+            Require(
+                mobile.waterborne.Empty(1.0e-9),
+                "M30-05 aeolian-only solve must not create waterborne M14 sediment.");
+        }
+    }
+
+    Require(
+        pickedSandKg > 0.0 &&
+        depositedKg > 0.0 &&
+        eastwardTransportKg > 0.0 &&
+        accounting.exported.TotalKg() > 0.0,
+        "M30-05 scenario must exercise sand pickup, physical deposition, directional wind transport and explicit page-boundary export.");
+
+    Require(
+        surfaceTransportKg > 0.0,
+        "M30-05 reptation must pass through the M14 surface-mobile transport lane rather than an aeolian-private store.");
+
+    const f64 referenceMass =
+        std::max(
+            balance.initialLooseMassKg +
+                balance.abradedBedrockMassKg,
+            1.0);
+
+    const f64 physicalTolerance =
+        std::max(
+            referenceMass *
+                3.0e-5,
+            1.0e-4);
+
+    const f64 recomputedPhysicalError =
+        initialPhysical.LooseMassKg() +
+        balance.abradedBedrockMassKg -
+        balance.finalLooseMassKg -
+        balance.finalAirborneMassKg -
+        balance.boundaryLossKg;
+
+    Require(
+        NearlyEqual(
+            balance.initialLooseMassKg,
+            initialPhysical.LooseMassKg(),
+            1.0e-6) &&
+        NearlyEqual(
+            recomputedPhysicalError,
+            balance.materialBalanceErrorKg,
+            physicalTolerance) &&
+        balance.materialBalanceRelativeError <
+            3.0e-5,
+        "M30-05 M13 physical mass ledger must close as initial loose + abraded bedrock = final loose + mobile + exported mass.");
+
+    const f64 mobileKg =
+        sediment.TotalMobileMass().
+            TotalKg();
+
+    Require(
+        NearlyEqual(
+            mobileKg,
+            balance.finalAirborneMassKg,
+            physicalTolerance) &&
+        NearlyEqual(
+            accounting.exported.TotalKg(),
+            balance.boundaryLossKg,
+            physicalTolerance),
+        "M30-05 M13 mass-balance outputs must be derived from the same M14 mobile inventory and boundary export ledger.");
+
+    const f64 exchangeReference =
+        std::max(
+            accounting.physicalToMobile.
+                TotalKg(),
+            1.0);
+
+    const f64 exchangeTolerance =
+        std::max(
+            exchangeReference *
+                1.0e-9,
+            1.0e-6);
+
+    Require(
+        accounting.imported.Empty(1.0e-9) &&
+        NearlyEqual(
+            accounting.physicalToMobile.
+                TotalKg(),
+            accounting.mobileToPhysical.
+                    TotalKg() +
+                accounting.exported.
+                    TotalKg() +
+                mobileKg,
+            exchangeTolerance),
+        "M30-05 M14 aeolian exchange must conserve physical pickup as redeposition + boundary export + remaining mobile sediment.");
+
+    Require(
+        NearlyEqual(
+            diagnosticAirborneKg,
+            mobileKg,
+            physicalTolerance),
+        "M30-05 M13 airborne diagnostic cells must mirror the final M14 mobile inventory instead of owning independent mass.");
+
+    const auto finalPhysical =
+        result.material.QueryMass(
+            fixture.materials);
+
+    Require(
+        NearlyEqual(
+            finalPhysical.LooseMassKg(),
+            balance.finalLooseMassKg,
+            physicalTolerance) &&
+        NearlyEqual(
+            std::max(
+                finalPhysical.excavatedBedrockKg -
+                    initialPhysical.excavatedBedrockKg,
+                0.0),
+            balance.abradedBedrockMassKg,
+            physicalTolerance),
+        "M30-05 independent M08 mass accounting must agree with M13 loose-material and bedrock-abrasion totals.");
+
+    const auto& leeState =
+        result.At(
+            5U,
+            resolution / 2U);
+    const auto& windwardState =
+        result.At(
+            3U,
+            resolution / 2U);
+
+    Require(
+        leeState.exposure <
+            windwardState.exposure * 0.5F &&
+        result.material.At(
+            5U,
+            resolution / 2U).
+            sandMeters >
+            initialSandMeters + 0.01F,
+        "M30-05 conservation fixture must retain its intended lee-side deposition so mass closure is tested across real pickup/transport/deposition behavior.");
+}
+
 } // namespace
 
 int main()
@@ -831,8 +1118,9 @@ int main()
     Test02BedrockStripping();
     Test03SedimentDepositionBurial();
     Test04HydraulicMassConservation();
+    Test05AeolianMassConservation();
 
     std::cout
-        << "Orbit V0.0.4 M30 validation: 4/20 deterministic cases passed.\n";
+        << "Orbit V0.0.4 M30 validation: 5/20 deterministic cases passed.\n";
     return EXIT_SUCCESS;
 }
