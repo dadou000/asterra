@@ -596,6 +596,11 @@ ImageInteraction PanelContext::Image(
         ImGui::IsItemClicked(
             ImGuiMouseButton_Left);
 
+    const bool doubleClicked =
+        hovered &&
+        ImGui::IsMouseDoubleClicked(
+            ImGuiMouseButton_Left);
+
     const bool rightClicked =
         ImGui::IsItemClicked(
             ImGuiMouseButton_Right);
@@ -629,6 +634,7 @@ ImageInteraction PanelContext::Image(
     return {
         .hovered = hovered,
         .clicked = clicked,
+        .doubleClicked = doubleClicked,
         .rightClicked = rightClicked,
         .u = u,
         .v = v

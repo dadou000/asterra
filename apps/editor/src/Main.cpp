@@ -3765,6 +3765,15 @@ int main(
                 }
             };
 
+        orbit::f64 viewportNavigationSpeedScale = 1.0;
+        orbit::f64 viewportFrameDeltaSeconds = 0.0;
+        orbit::platform::MouseDelta viewportFrameMouseDelta{};
+        bool viewportRightGestureActive = false;
+        bool viewportRightGestureDragged = false;
+        orbit::i32 viewportRightGestureDistance = 0;
+        bool viewportHomeWasDown = false;
+        bool viewportEndWasDown = false;
+
         ui.RegisterPanel({
             .id = kViewportPanel,
             .title = "Viewport",
@@ -3785,7 +3794,16 @@ int main(
                  &bodies,
                  &bodyId,
                  &studioSession,
-                 &worldSession](
+                 &worldSession,
+                 &window,
+                 &viewportNavigationSpeedScale,
+                 &viewportFrameDeltaSeconds,
+                 &viewportFrameMouseDelta,
+                 &viewportRightGestureActive,
+                 &viewportRightGestureDragged,
+                 &viewportRightGestureDistance,
+                 &viewportHomeWasDown,
+                 &viewportEndWasDown](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -3837,6 +3855,50 @@ int main(
                             "Path Debug",
                             pathDebugVisualization));
 
+                    context.SameLine();
+                    if (context.Button(
+                            "Focus Body"))
+                    {
+                        static_cast<void>(
+                            studioViews.
+                                FocusTerrainBody(
+                                    "studio.primary"));
+                    }
+
+                    context.SameLine();
+                    if (context.Button(
+                            "Reset View"))
+                    {
+                        static_cast<void>(
+                            studioViews.
+                                ResetTerrainView(
+                                    "studio.primary"));
+                    }
+
+                    context.SameLine();
+                    if (context.InputDouble(
+                            "Nav Speed x",
+                            viewportNavigationSpeedScale))
+                    {
+                        if (!(viewportNavigationSpeedScale >
+                              0.0))
+                        {
+                            viewportNavigationSpeedScale =
+                                1.0;
+                        }
+
+                        viewportNavigationSpeedScale =
+                            std::clamp(
+                                viewportNavigationSpeedScale,
+                                0.01,
+                                1'000.0);
+
+                        studioViews.
+                            SetNavigationSpeedScale(
+                                "studio.primary",
+                                viewportNavigationSpeedScale);
+                    }
+
                     const auto available =
                         context.ContentAvailable();
 
@@ -3879,6 +3941,179 @@ int main(
                                                 Height())
                             });
 
+                    bool viewportRadialOpen = false;
+
+                    const bool rightMouseDown =
+                        window.MouseButtonDown(
+                            orbit::platform::
+                                MouseButton::Right);
+
+                    if (!viewportRightGestureActive &&
+                        interaction.hovered &&
+                        rightMouseDown)
+                    {
+                        viewportRightGestureActive =
+                            true;
+                        viewportRightGestureDragged =
+                            false;
+                        viewportRightGestureDistance =
+                            0;
+
+                        window.SetRelativeMouseMode(
+                            true);
+                    }
+
+                    if (viewportRightGestureActive &&
+                        rightMouseDown)
+                    {
+                        const orbit::i32 deltaX =
+                            viewportFrameMouseDelta.x;
+                        const orbit::i32 deltaY =
+                            viewportFrameMouseDelta.y;
+
+                        viewportRightGestureDistance +=
+                            (deltaX < 0
+                                 ? -deltaX
+                                 : deltaX) +
+                            (deltaY < 0
+                                 ? -deltaY
+                                 : deltaY);
+
+                        const orbit::f64 moveRight =
+                            (window.KeyDown(
+                                 orbit::platform::
+                                     Key::D)
+                                 ? 1.0
+                                 : 0.0) -
+                            (window.KeyDown(
+                                 orbit::platform::
+                                     Key::A)
+                                 ? 1.0
+                                 : 0.0);
+
+                        const orbit::f64 moveForward =
+                            (window.KeyDown(
+                                 orbit::platform::
+                                     Key::W)
+                                 ? 1.0
+                                 : 0.0) -
+                            (window.KeyDown(
+                                 orbit::platform::
+                                     Key::S)
+                                 ? 1.0
+                                 : 0.0);
+
+                        const orbit::f64 moveUp =
+                            (window.KeyDown(
+                                 orbit::platform::
+                                     Key::E)
+                                 ? 1.0
+                                 : 0.0) -
+                            (window.KeyDown(
+                                 orbit::platform::
+                                     Key::Q)
+                                 ? 1.0
+                                 : 0.0);
+
+                        if (viewportRightGestureDistance >
+                                3 ||
+                            moveRight != 0.0 ||
+                            moveForward != 0.0 ||
+                            moveUp != 0.0)
+                        {
+                            viewportRightGestureDragged =
+                                true;
+                        }
+
+                        static_cast<void>(
+                            studioViews.
+                                NavigateTerrain(
+                                    "studio.primary",
+                                    {
+                                        .deltaSeconds =
+                                            viewportFrameDeltaSeconds,
+                                        .mouseDeltaX =
+                                            viewportRightGestureDragged
+                                                ? static_cast<
+                                                      orbit::f64>(
+                                                      deltaX)
+                                                : 0.0,
+                                        .mouseDeltaY =
+                                            viewportRightGestureDragged
+                                                ? static_cast<
+                                                      orbit::f64>(
+                                                      deltaY)
+                                                : 0.0,
+                                        .moveRight =
+                                            moveRight,
+                                        .moveForward =
+                                            moveForward,
+                                        .moveUp =
+                                            moveUp,
+                                        .boost =
+                                            window.KeyDown(
+                                                orbit::platform::
+                                                    Key::
+                                                        LeftShift)
+                                    }));
+                    }
+
+                    if (viewportRightGestureActive &&
+                        !rightMouseDown)
+                    {
+                        if (window.RelativeMouseMode())
+                        {
+                            window.SetRelativeMouseMode(
+                                false);
+                        }
+
+                        viewportRadialOpen =
+                            !viewportRightGestureDragged;
+
+                        viewportRightGestureActive =
+                            false;
+                        viewportRightGestureDragged =
+                            false;
+                        viewportRightGestureDistance =
+                            0;
+                    }
+
+                    const bool homeDown =
+                        window.KeyDown(
+                            orbit::platform::
+                                Key::Home);
+
+                    if (interaction.hovered &&
+                        homeDown &&
+                        !viewportHomeWasDown)
+                    {
+                        static_cast<void>(
+                            studioViews.
+                                FocusTerrainBody(
+                                    "studio.primary"));
+                    }
+
+                    viewportHomeWasDown =
+                        homeDown;
+
+                    const bool endDown =
+                        window.KeyDown(
+                            orbit::platform::
+                                Key::End);
+
+                    if (interaction.hovered &&
+                        endDown &&
+                        !viewportEndWasDown)
+                    {
+                        static_cast<void>(
+                            studioViews.
+                                ResetTerrainView(
+                                    "studio.primary"));
+                    }
+
+                    viewportEndWasDown =
+                        endDown;
+
                     const bool hasAuthoredBody =
                         bodyObject.IsValid() &&
                         bodyId.IsValid() &&
@@ -3894,6 +4129,17 @@ int main(
                         context.Text(
                             "Create a celestial system/body from Explorer or automation.");
                         return;
+                    }
+
+                    if (interaction.doubleClicked &&
+                        !pathPlacementMode)
+                    {
+                        static_cast<void>(
+                            studioViews.
+                                FocusTerrainSurfacePoint(
+                                    "studio.primary",
+                                    interaction.u,
+                                    interaction.v));
                     }
 
                     if (const auto payload =
@@ -4289,7 +4535,7 @@ int main(
                     }
                     else if (
                         interaction.clicked ||
-                        interaction.rightClicked)
+                        viewportRadialOpen)
                     {
                         const std::array selected{
                             bodyObject
@@ -4310,7 +4556,7 @@ int main(
                     context.RadialMenu(
                         "ViewportRadial",
                         radial,
-                        interaction.rightClicked);
+                        viewportRadialOpen);
 
                     const auto body =
                         objects().Find(
@@ -6063,11 +6309,35 @@ int main(
 
             publishAutomationChanges();
 
+            viewportFrameDeltaSeconds =
+                deltaSeconds;
+            viewportFrameMouseDelta =
+                window.ConsumeMouseDelta();
+
             ui.BeginFrame(
                 window,
                 deltaSeconds);
 
             ui.DrawStudioShell();
+
+            if (viewportRightGestureActive &&
+                !window.MouseButtonDown(
+                    orbit::platform::
+                        MouseButton::Right))
+            {
+                if (window.RelativeMouseMode())
+                {
+                    window.SetRelativeMouseMode(
+                        false);
+                }
+
+                viewportRightGestureActive =
+                    false;
+                viewportRightGestureDragged =
+                    false;
+                viewportRightGestureDistance =
+                    0;
+            }
 
             synchronizeActiveBodyPreview();
 
