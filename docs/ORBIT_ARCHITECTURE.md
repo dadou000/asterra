@@ -117,3 +117,14 @@ All Orbit Studio, runtime-authoring, developer-tool, plugin, and agent-facing UI
 The UI uses progressive disclosure: common actions stay simple and contextual, while legitimate advanced controls remain accessible through inspectors, advanced sections, command/search surfaces, shortcuts, plugins, scripting, or MCP tooling.
 
 UI convenience must never create a second authority path or impose arbitrary authoring limits that do not exist in the engine.
+
+
+## 17. One unified Studio surface; no separate launchers
+
+Orbit has one primary user-facing Studio application. Project browsing/creation, editing, play/test, build/export, settings, plugins, diagnostics, platform integration, and developer tools are views/workspaces inside that same application.
+
+Do not introduce a separate launcher, project-manager app, configuration shell, or alternate editor front end for normal Orbit workflows. A project-browser/start screen is a Studio view, not a separate executable.
+
+Background/helper processes remain allowed when technically useful, but they must stay implementation details rather than become competing user-facing applications.
+
+This rule is defined in detail by [ORBIT_UI_RULES.md](ORBIT_UI_RULES.md).
