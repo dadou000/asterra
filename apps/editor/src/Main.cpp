@@ -3639,9 +3639,9 @@ int main(
         orbit::u64 publishedContentRevision =
             content.Revision();
         orbit::u32 publishedViewportWidth =
-            bodyView.Width();
+            primaryStudioView->Width();
         orbit::u32 publishedViewportHeight =
-            bodyView.Height();
+            primaryStudioView->Height();
 
         const auto publishAutomationChanges =
             [&]
@@ -3729,15 +3729,15 @@ int main(
                             }));
                 }
 
-                if (bodyView.Width() !=
+                if (primaryStudioView->Width() !=
                         publishedViewportWidth ||
-                    bodyView.Height() !=
+                    primaryStudioView->Height() !=
                         publishedViewportHeight)
                 {
                     publishedViewportWidth =
-                        bodyView.Width();
+                        primaryStudioView->Width();
                     publishedViewportHeight =
-                        bodyView.Height();
+                        primaryStudioView->Height();
 
                     rpcHost.PublishEvent(
                         "viewport.resized",
