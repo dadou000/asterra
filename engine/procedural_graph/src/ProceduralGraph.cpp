@@ -1,5 +1,6 @@
 #include <orbit/procedural_graph/ProceduralGraph.hpp>
 
+#include <algorithm>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
