@@ -377,4 +377,113 @@ VisibilityResult VisibilityRegistry::Trace(
     last.terminal = false;
     return last;
 }
+
+VisibilityResult VisibilityRegistry::TraceNearest(
+    const VisibilityQuery& query,
+    VisibilityTraceDiagnostics* diagnostics) const
+{
+    if (!ValidateVisibilityQuery(query))
+    {
+        throw std::invalid_argument(
+            "Visibility query is invalid.");
+    }
+
+    if (diagnostics != nullptr)
+    {
+        diagnostics->attempts.clear();
+    }
+
+    VisibilityResult closest{};
+    bool hasClosest = false;
+    bool sawUnresolved = false;
+    bool allTerminalMiss = true;
+    VisibilityResult last{};
+
+    for (auto* provider : providers_)
+    {
+        if (provider == nullptr ||
+            !provider->SupportsPurpose(query.purpose) ||
+            !Qualifies(provider->Description(), query))
+        {
+            continue;
+        }
+
+        auto result = provider->Trace(query);
+        const auto& desc = provider->Description();
+
+        result.backend = desc.kind;
+        result.providerId = desc.providerId;
+        result.providerName = desc.name;
+        result.confidence =
+            ClampConfidence(result.confidence);
+
+        if (diagnostics != nullptr)
+        {
+            diagnostics->attempts.push_back({
+                .providerId = result.providerId,
+                .providerName = result.providerName,
+                .backend = result.backend,
+                .resolution = result.resolution,
+                .confidence = result.confidence,
+                .terminal = result.terminal
+            });
+        }
+
+        last = result;
+
+        if (result.resolution ==
+                VisibilityResolution::Hit &&
+            result.confidence >=
+                query.requirements.minimumConfidence &&
+            (!hasClosest ||
+             result.hit.distanceMeters <
+                 closest.hit.distanceMeters))
+        {
+            closest = result;
+            hasClosest = true;
+        }
+
+        if (result.resolution ==
+                VisibilityResolution::Unresolved ||
+            !result.terminal)
+        {
+            sawUnresolved = true;
+        }
+
+        if (result.resolution !=
+                VisibilityResolution::Miss ||
+            !result.terminal ||
+            result.confidence <
+                query.requirements.minimumConfidence)
+        {
+            allTerminalMiss = false;
+        }
+    }
+
+    if (hasClosest)
+    {
+        closest.terminal = true;
+        return closest;
+    }
+
+    if (allTerminalMiss &&
+        !providers_.empty())
+    {
+        last.resolution =
+            VisibilityResolution::Miss;
+        last.terminal = true;
+        return last;
+    }
+
+    last.resolution =
+        VisibilityResolution::Unresolved;
+    last.terminal = false;
+    if (sawUnresolved)
+    {
+        return last;
+    }
+
+    return last;
+}
+
 } // namespace orbit::lighting
