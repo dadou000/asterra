@@ -1284,7 +1284,7 @@ float4 main(VSOutput input) : SV_Target0
     const float ndl =
         saturate(dot(n, l));
     const float giant =
-        g.material.z > 1.5
+        abs(g.material.z - 2.0) < 0.25
             ? 1.0
             : 0.0;
     const float roughness =
