@@ -721,6 +721,36 @@ StudioViewportRenderer::StudioViewportRenderer(
     }
 }
 
+std::optional<StudioMacroGlobeDiagnostics>
+StudioViewportRenderer::MacroGlobeDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        macroGlobePresentations_.find(
+            viewportId);
+
+    if (found ==
+        macroGlobePresentations_.end())
+    {
+        return std::nullopt;
+    }
+
+    const auto& presentation =
+        found->second;
+
+    return StudioMacroGlobeDiagnostics{
+        .body = presentation.body,
+        .terrainRevision =
+            presentation.sourceRevision,
+        .geometryFingerprint =
+            presentation.fingerprint,
+        .appearanceFingerprint =
+            presentation.appearanceFingerprint,
+        .appearanceTexels =
+            presentation.appearanceTexels
+    };
+}
+
 std::vector<StudioRenderedView>
 StudioViewportRenderer::Compose(
     render_graph::RenderGraph& graph,
@@ -1303,14 +1333,48 @@ StudioViewportRenderer::Compose(
                     terrain->
                     Revision();
 
+            const auto sphericalPlanet =
+                session.World().
+                    Surfaces().
+                    Registry().
+                    SphericalPlanetDefinition(
+                        logicalTarget->target->body);
+
+            if (!sphericalPlanet.has_value())
+            {
+                throw std::logic_error(
+                    "Studio planetary appearance currently requires the spherical terrain body contract.");
+            }
+
+            const celestial_appearance::
+                AppearanceConfig
+                appearanceConfig{
+                    .faceResolution =
+                        globeConfig.faceResolution,
+                    .footprintScale =
+                        globeConfig.footprintScale
+                };
+
+            const u64 appearanceFingerprint =
+                celestial_appearance::
+                    PlanetaryAppearanceFingerprint(
+                        *macroGlobeSurface->terrain,
+                        sphericalPlanet->
+                            radiusMeters,
+                        appearanceConfig);
+
             const bool recreate =
                 presentation.product == nullptr ||
+                presentation.appearanceProduct ==
+                    nullptr ||
                 presentation.body !=
                     logicalTarget->target->body ||
                 presentation.sourceRevision !=
                     sourceRevision ||
                 presentation.fingerprint !=
-                    fingerprint;
+                    fingerprint ||
+                presentation.appearanceFingerprint !=
+                    appearanceFingerprint;
 
             if (recreate)
             {
@@ -1321,18 +1385,40 @@ StudioViewportRenderer::Compose(
                             *shape,
                             globeConfig);
 
+                const auto appearance =
+                    celestial_appearance::
+                        BuildPlanetaryAppearance(
+                            *macroGlobeSurface->terrain,
+                            sphericalPlanet->
+                                radiusMeters,
+                            appearanceConfig);
+
+                presentation.appearanceProduct =
+                    std::make_unique<
+                        celestial_appearance::
+                            GpuPlanetaryAppearanceProduct>(
+                                *device_,
+                                appearance);
+
                 presentation.product =
                     std::make_unique<
                         celestial_globe::
                             GpuMacroGlobeProduct>(
                                 *device_,
-                                mesh);
+                                mesh,
+                                &appearance);
+
                 presentation.body =
                     logicalTarget->target->body;
                 presentation.sourceRevision =
                     sourceRevision;
                 presentation.fingerprint =
                     fingerprint;
+                presentation.appearanceFingerprint =
+                    appearanceFingerprint;
+                presentation.appearanceTexels =
+                    static_cast<u32>(
+                        appearance.texels.size());
             }
 
             auto* globe =
