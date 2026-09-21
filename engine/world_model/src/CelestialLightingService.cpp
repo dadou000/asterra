@@ -116,6 +116,17 @@ CelestialLightingService::DirectLightingAtBody(
         return std::nullopt;
     }
 
+    const auto receiverBodyFixedToEmitter =
+        CenterOfBodyInFrame(
+            emitter,
+            receiverBody->frame,
+            atTime);
+
+    if (!receiverBodyFixedToEmitter.has_value())
+    {
+        return std::nullopt;
+    }
+
     const celestial_lighting::ApparentDisc
         sourceDisc{
             .centerFromObserverMeters =
@@ -218,6 +229,8 @@ CelestialLightingService::DirectLightingAtBody(
         .emitter = emitter,
         .receiverToEmitterMeters =
             *receiverToEmitter,
+        .receiverBodyFixedToEmitterMeters =
+            *receiverBodyFixedToEmitter,
         .sourceDistanceMeters =
             sourceDistance,
         .visibleFraction =
