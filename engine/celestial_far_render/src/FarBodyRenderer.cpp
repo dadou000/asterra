@@ -362,11 +362,12 @@ float4 main(VSOutput input) : SV_Target0
 )";
 
 constexpr const char* kCachedPs = R"(
+[[vk::binding(0, 0)]]
 [[vk::combinedImageSampler]]
-[[vk::binding(0)]]
-Texture2D<float4> g_disc;
+Texture2D g_disc;
+
+[[vk::binding(0, 0)]]
 [[vk::combinedImageSampler]]
-[[vk::binding(0)]]
 SamplerState g_sampler;
 
 struct Constants
