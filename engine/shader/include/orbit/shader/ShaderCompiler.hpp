@@ -19,6 +19,8 @@ struct CompileRequest
     std::string_view source;
     std::string_view entryPoint{"main"};
     Stage stage{Stage::Vertex};
+    u32 shaderModelMajor{6U};
+    u32 shaderModelMinor{0U};
     bool debug{false};
 };
 
