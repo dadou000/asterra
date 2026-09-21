@@ -6,6 +6,7 @@ add_library(OrbitEditorModel STATIC
     src/TerrainAuthoringCommands.cpp
     src/BuiltinSchemas.cpp
     src/CelestialAuthoringModel.cpp
+    src/CelestialRecipeService.cpp
     src/ExplorerModel.cpp
     src/InspectorModel.cpp
     src/OutputLog.cpp
