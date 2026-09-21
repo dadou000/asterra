@@ -42,7 +42,8 @@ int main()
             config,
             view,
             stellar,
-            {});
+            {},
+            nullptr);
 
     if (noLocal.l0.x <= 0.0F ||
         noLocal.l1y.x <= 0.0F)
@@ -68,7 +69,8 @@ int main()
             stellar,
             std::span<const ResolvedLocalLight>(
                 &lamp,
-                1U));
+                1U),
+            nullptr);
 
     if (withLocal.l0.x <=
             noLocal.l0.x ||
