@@ -456,3 +456,29 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialRingBindingTests
     )
 endif()
+
+
+if(BUILD_TESTING)
+    add_executable(
+        OrbitCelestialStellarBindingTests
+        tests/CelestialStellarBindingTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitCelestialStellarBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitCelestialStellarBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialStellarBindingTests)
+
+    add_test(
+        NAME Orbit.CelestialStellarBinding
+        COMMAND OrbitCelestialStellarBindingTests
+    )
+endif()
