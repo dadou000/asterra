@@ -332,6 +332,78 @@ float OceanSpecular(
         max(4.0 * ndl * ndv, 1e-5);
 }
 
+uint StellarHash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float StellarNoise(float3 p, float scale, uint seed)
+{
+    int3 q = (int3)floor(p * max(scale, 1.0) * 4096.0);
+    uint h = StellarHash(seed ^ asuint(q.x));
+    h = StellarHash(h ^ asuint(q.y));
+    h = StellarHash(h ^ asuint(q.z));
+    return (float)(h & 0x00ffffffu) / 16777215.0;
+}
+
+float StellarFractal(float3 p, float scale, uint seed)
+{
+    float sum = 0.0;
+    float weight = 0.0;
+    float amplitude = 1.0;
+    float frequency = scale;
+    [unroll]
+    for (uint octave = 0u; octave < 4u; ++octave)
+    {
+        sum += StellarNoise(p, frequency, seed + octave * 0x9e3779b9u) * amplitude;
+        weight += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.07;
+    }
+    return sum / max(weight, 1e-6);
+}
+
+float StellarSurfaceModulation(float3 n)
+{
+    const float granulationStrength = saturate(g.material.x);
+    const float activityLevel = saturate(g.material.y);
+    const uint seed = asuint(g.material.w);
+    const float granulationScale = max(g.emissionAndOpacity.x, 1.0);
+
+    const float granular =
+        1.0 +
+        (StellarFractal(n, granulationScale, seed ^ 0x4752414eu) - 0.5) *
+        2.0 * granulationStrength;
+
+    const float activity =
+        StellarFractal(n, 3.7, seed ^ 0x41435449u);
+    const float threshold =
+        1.0 - 0.10 * activityLevel;
+
+    float activityModulation = 1.0;
+    if (activity > threshold)
+    {
+        const float spot =
+            saturate((activity - threshold) / max(1.0 - threshold, 1e-6));
+        activityModulation =
+            1.0 - 0.55 * spot;
+    }
+    else
+    {
+        const float facula =
+            max(0.0, activity - (threshold - 0.08));
+        activityModulation =
+            1.0 + facula * 0.35 * activityLevel;
+    }
+
+    return max(granular * activityModulation, 0.0);
+}
+
 float4 main(VSOutput input) : SV_Target0
 {
     const uint mode = (uint)round(g.proxy.x);
@@ -346,6 +418,99 @@ float4 main(VSOutput input) : SV_Target0
             p / radiusNdc;
         const float r2 =
             dot(q, q);
+        const float r =
+            sqrt(max(r2, 0.0));
+        const float stellar =
+            saturate(g.material.z);
+        const float radiometricIntensity =
+            max(g.proxy.w, 0.0);
+
+        if (stellar > 0.5)
+        {
+            const float chromosphereStrength =
+                max(g.emissionAndOpacity.y, 0.0);
+            const float chromosphereExtent =
+                max(g.emissionAndOpacity.z, 0.0);
+            const float coronaStrength =
+                max(g.lighting.x, 0.0);
+            const float coronaExtent =
+                max(g.lighting.y, 0.0);
+            const float outer =
+                1.0 +
+                max(chromosphereExtent, coronaExtent);
+
+            if (r > outer)
+                discard;
+
+            if (r <= 1.0)
+            {
+                const float z =
+                    sqrt(max(1.0 - r2, 0.0));
+                const float3 n =
+                    normalize(float3(q.x, -q.y, z));
+                const float limbCoefficient =
+                    saturate(g.albedoAndRoughness.w);
+                const float limb =
+                    1.0 -
+                    limbCoefficient *
+                    (1.0 - z);
+                const float modulation =
+                    StellarSurfaceModulation(n);
+
+                return float4(
+                    g.albedoAndRoughness.xyz *
+                        radiometricIntensity *
+                        limb *
+                        modulation,
+                    opacity);
+            }
+
+            float chromosphere = 0.0;
+            if (chromosphereExtent > 0.0)
+            {
+                const float x =
+                    (r - 1.0) /
+                    max(chromosphereExtent, 1e-6);
+                if (x <= 1.0)
+                    chromosphere =
+                        chromosphereStrength *
+                        exp(-4.0 * x);
+            }
+
+            float corona = 0.0;
+            if (coronaExtent > 0.0)
+            {
+                const float x =
+                    (r - 1.0) /
+                    max(coronaExtent, 1e-6);
+                if (x <= 1.0)
+                    corona =
+                        coronaStrength /
+                        pow(1.0 + 7.0 * x, 2.25);
+            }
+
+            const float3 chromaColor =
+                float3(1.0, 0.20, 0.08);
+            const float3 coronaColor =
+                lerp(
+                    g.albedoAndRoughness.xyz,
+                    float3(0.82, 0.90, 1.0),
+                    0.72);
+
+            const float3 color =
+                radiometricIntensity *
+                (chromaColor * chromosphere +
+                 coronaColor * corona);
+
+            const float haloAlpha =
+                saturate(
+                    chromosphere * 5.0 +
+                    corona * 10.0);
+
+            return float4(
+                color,
+                opacity * haloAlpha);
+        }
 
         if (r2 > 1.0)
             discard;
@@ -379,15 +544,6 @@ float4 main(VSOutput input) : SV_Target0
         const float ice =
             saturate(
                 g.material.y);
-        const float limb =
-            pow(
-                1.0 - saturate(z),
-                3.0);
-
-        const float stellar =
-            saturate(g.material.z);
-        const float radiometricIntensity =
-            max(g.proxy.w, 0.0);
 
         const float cloudTransmission =
             saturate(g.material.w);
@@ -405,7 +561,7 @@ float4 main(VSOutput input) : SV_Target0
                 g.ocean.x,
                 g.ocean.z);
 
-        float3 color =
+        const float3 color =
             g.albedoAndRoughness.xyz *
                 (0.05 +
                  0.95 * ndl *
@@ -417,16 +573,6 @@ float4 main(VSOutput input) : SV_Target0
                 float3(1.0, 0.98, 0.94) +
             ice * 0.025 +
             g.emissionAndOpacity.xyz;
-
-        if (stellar > 0.5)
-        {
-            const float limbDarkening =
-                0.58 + 0.42 * z;
-            color =
-                g.albedoAndRoughness.xyz *
-                radiometricIntensity *
-                limbDarkening;
-        }
 
         return float4(
             color,
@@ -444,27 +590,73 @@ float4 main(VSOutput input) : SV_Target0
         if (r2 > 1.0)
             discard;
 
-        const float edge =
-            saturate((1.0 - r2) * 4.0);
-
         const float fluxScale =
-            saturate(g.proxy.z);
+            max(g.proxy.z, 0.0);
         const float radiometricIntensity =
             max(g.proxy.w, 0.0);
 
-        float3 color =
+        if (mode == 3u)
+        {
+            const float r =
+                sqrt(max(r2, 0.0));
+            const float coreRatio =
+                clamp(g.ocean.x, 0.02, 1.0);
+            const float coreSigma =
+                max(coreRatio * 0.45, 0.01);
+            const float core =
+                exp(
+                    -0.5 *
+                    r2 /
+                    (coreSigma * coreSigma));
+
+            const float halo =
+                1.0 /
+                pow(
+                    1.0 + 8.0 * r,
+                    2.1);
+
+            const float spikeX =
+                exp(-abs(q.x) * 48.0) *
+                exp(-r * 3.0);
+            const float spikeY =
+                exp(-abs(q.y) * 48.0) *
+                exp(-r * 3.0);
+            const float spikes =
+                (spikeX + spikeY) * 0.5;
+
+            const float glareStrength =
+                max(g.lighting.z, 0.0);
+
+            const float profile =
+                core +
+                glareStrength *
+                    (0.42 * halo +
+                     0.08 * spikes);
+
+            const float3 color =
+                g.albedoAndRoughness.xyz *
+                radiometricIntensity *
+                fluxScale *
+                profile;
+
+            const float alpha =
+                opacity *
+                saturate(
+                    core +
+                    glareStrength *
+                        (halo + spikes));
+
+            return float4(color, alpha);
+        }
+
+        const float edge =
+            saturate((1.0 - r2) * 4.0);
+
+        const float3 color =
             (g.albedoAndRoughness.xyz +
              g.emissionAndOpacity.xyz) *
             fluxScale *
             radiometricIntensity;
-
-        if (mode == 3u)
-        {
-            color +=
-                float3(1.0, 0.88, 0.62) *
-                (0.4 + 0.6 * edge) *
-                fluxScale;
-        }
 
         return float4(
             color,
