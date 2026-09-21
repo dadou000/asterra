@@ -145,26 +145,33 @@ GravityService::AccelerationFrom(
         return std::nullopt;
     }
 
-    const auto sourceOriginInPointFrame =
+    const auto pointInSourceFrame =
         frames_.TransformPoint(
-            frames::FramePoint{
-                .frame = found->second.frame,
-                .localMeters = {}
-            },
+            point,
+            found->second.frame,
+            atTime);
+
+    const auto pointFromSource =
+        frames_.ResolveTransform(
+            found->second.frame,
             point.frame,
             atTime);
 
-    if (!sourceOriginInPointFrame.has_value())
+    if (!pointInSourceFrame.has_value() ||
+        !pointFromSource.has_value())
     {
         return std::nullopt;
     }
 
-    const math::Double3 sourceToPoint =
-        point.localMeters -
-        sourceOriginInPointFrame->localMeters;
+    const math::Double3 accelerationSourceFrame =
+        found->second.model->
+            AccelerationLocal(
+                pointInSourceFrame->
+                    localMeters);
 
-    return found->second.model->
-        AccelerationLocal(sourceToPoint);
+    return math::TransformVector(
+        pointFromSource->rotation,
+        accelerationSourceFrame);
 }
 
 std::optional<math::Double3>
