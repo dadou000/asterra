@@ -132,6 +132,41 @@ int main()
         return 2;
     }
 
+    const EmissiveVolumeSource volume{
+        .centerInFrameMeters =
+            {5.0, 0.0, 0.0},
+        .radiusMeters = 2.0F,
+        .emissionLinear =
+            {0.1F, 3.0F, 0.4F},
+        .intensityScale = 1.0F,
+        .influenceRangeMeters = 30.0F,
+        .stableId = 77U
+    };
+
+    const auto withVolume =
+        EstimateRadianceCell(
+            key,
+            config,
+            view,
+            DirectionalLight{},
+            {},
+            nullptr,
+            {
+                .diffuseTransportScale = 1.0F,
+                .ambientIrradianceScale = 0.0F
+            },
+            std::span<const EmissiveVolumeSource>(
+                &volume,
+                1U));
+
+    if (withVolume.l0.y <= 0.0F ||
+        withVolume.l1x.y <= 0.0F ||
+        withVolume.l0.y <=
+            withVolume.l0.x)
+    {
+        return 3;
+    }
+
     AlwaysHitProvider blocker;
 
     const auto blocked =
