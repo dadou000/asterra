@@ -674,6 +674,123 @@ RadianceClipmapResidency::Lookup(
     return slot;
 }
 
+RadianceGpuSnapshot
+RadianceClipmapResidency::BuildGpuSnapshot(
+    const LightingView& view) const
+{
+    if (view.frame != frame_ ||
+        view.body != body_)
+    {
+        throw std::invalid_argument(
+            "Radiance GPU snapshot view does not match residency authority.");
+    }
+
+    RadianceGpuSnapshot snapshot;
+    snapshot.sourceRevision =
+        sourceRevision_;
+    snapshot.levels.reserve(
+        levels_.size());
+
+    u32 cellOffset = 0U;
+
+    for (const auto& level :
+         levels_)
+    {
+        const RadianceCellKey centerKey{
+            .frame = frame_,
+            .body = body_,
+            .level = level.level,
+            .x = level.centerX,
+            .y = level.centerY,
+            .z = level.centerZ
+        };
+
+        const auto centerGpu =
+            RadianceCellGpuCenter(
+                centerKey,
+                config_,
+                view);
+
+        const u32 levelCellCount =
+            static_cast<u32>(
+                level.slots.size());
+
+        snapshot.levels.push_back({
+            .centerCellSize = {
+                centerGpu.x,
+                centerGpu.y,
+                centerGpu.z,
+                static_cast<f32>(
+                    RadianceCellSizeMeters(
+                        config_,
+                        level.level))
+            },
+            .centerModuloX =
+                PositiveModulo(
+                    level.centerX,
+                    config_.cellsPerAxis),
+            .centerModuloY =
+                PositiveModulo(
+                    level.centerY,
+                    config_.cellsPerAxis),
+            .centerModuloZ =
+                PositiveModulo(
+                    level.centerZ,
+                    config_.cellsPerAxis),
+            .cellsPerAxis =
+                config_.cellsPerAxis,
+            .cellOffset =
+                cellOffset,
+            .cellCount =
+                levelCellCount,
+            .level =
+                level.level
+        });
+
+        snapshot.cells.reserve(
+            snapshot.cells.size() +
+            level.slots.size());
+
+        for (const auto& slot :
+             level.slots)
+        {
+            RadianceCell exportCell =
+                slot.cell;
+
+            const bool current =
+                slot.occupied &&
+                BelongsToCurrentWindow(
+                    slot.key) &&
+                !slot.dirty &&
+                slot.cell.valid &&
+                slot.sourceRevision ==
+                    sourceRevision_ &&
+                slot.cell.revision ==
+                    sourceRevision_;
+
+            exportCell.valid =
+                current;
+
+            snapshot.cells.push_back(
+                EncodeGpuRadianceCell(
+                    exportCell));
+        }
+
+        if (cellOffset >
+            std::numeric_limits<u32>::max() -
+                levelCellCount)
+        {
+            throw std::overflow_error(
+                "Radiance GPU snapshot exceeds 32-bit cell indexing.");
+        }
+
+        cellOffset +=
+            levelCellCount;
+    }
+
+    return snapshot;
+}
+
 RadianceResidencyStats
 RadianceClipmapResidency::Stats() const noexcept
 {
