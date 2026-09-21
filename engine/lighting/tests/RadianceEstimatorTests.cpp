@@ -1,5 +1,57 @@
 #include <orbit/lighting/RadianceEstimator.hpp>
 
+namespace
+{
+class AlwaysHitProvider final
+    : public orbit::lighting::VisibilityProvider
+{
+public:
+    AlwaysHitProvider()
+        : desc_({
+            .providerId = 99U,
+            .name = "Always Hit",
+            .kind =
+                orbit::lighting::
+                    VisibilityBackendKind::SoftwareProxy,
+            .capabilities =
+                orbit::lighting::
+                    VisibilityCapability::Offscreen,
+            .nominalErrorMeters = 0.0F,
+            .priority = 1
+        })
+    {
+    }
+
+    [[nodiscard]] const orbit::lighting::
+        VisibilityProviderDesc&
+    Description() const noexcept override
+    {
+        return desc_;
+    }
+
+    [[nodiscard]] bool SupportsPurpose(
+        orbit::lighting::VisibilityPurpose) const noexcept override
+    {
+        return true;
+    }
+
+    [[nodiscard]] orbit::lighting::VisibilityResult Trace(
+        const orbit::lighting::VisibilityQuery&) override
+    {
+        return {
+            .resolution =
+                orbit::lighting::
+                    VisibilityResolution::Hit,
+            .confidence = 1.0F,
+            .terminal = true
+        };
+    }
+
+private:
+    orbit::lighting::VisibilityProviderDesc desc_;
+};
+} // namespace
+
 int main()
 {
     using namespace orbit;
@@ -78,6 +130,28 @@ int main()
             noLocal.l1x.x)
     {
         return 2;
+    }
+
+    AlwaysHitProvider blocker;
+
+    const auto blocked =
+        EstimateRadianceCell(
+            key,
+            config,
+            view,
+            stellar,
+            std::span<const ResolvedLocalLight>(
+                &lamp,
+                1U),
+            &blocker);
+
+    // Ambient remains, but stellar/local directional energy is suppressed.
+    if (blocked.l1x.x != 0.0F ||
+        blocked.l1y.x != 0.0F ||
+        blocked.l1z.x != 0.0F ||
+        blocked.l0.x >= noLocal.l0.x)
+    {
+        return 3;
     }
 
     return 0;
