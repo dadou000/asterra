@@ -28,7 +28,7 @@ enum class LightingViewChange : u32
         static_cast<u32>(b));
 }
 
-[[nodiscard]] constexpr LightingViewChange& operator|=(
+constexpr LightingViewChange& operator|=(
     LightingViewChange& a,
     const LightingViewChange b) noexcept
 {
