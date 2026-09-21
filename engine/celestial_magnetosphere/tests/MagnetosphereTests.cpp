@@ -1,5 +1,6 @@
 #include <orbit/celestial_magnetosphere/Magnetosphere.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 int main()
@@ -70,13 +71,48 @@ int main()
     if(!(oval>equator))
         return 4;
 
+    const auto curtain=
+        BuildAuroraCurtainMesh(
+            p,
+            radius,
+            64U);
+
+    if(curtain.fingerprint==0U ||
+       curtain.vertices.size()!=
+           4U*65U ||
+       curtain.indices.size()!=
+           12U*64U)
+        return 5;
+
+    f32 maximumEmission=0.0F;
+    for(const auto& vertex:curtain.vertices)
+    {
+        maximumEmission=
+            std::max(
+                maximumEmission,
+                vertex.emissionLinear.y);
+    }
+
+    if(!(maximumEmission>1.0F))
+        return 6;
+
     auto changed=p;
     changed.activity=0.9;
 
+    const auto activeProduct=
+        BuildMagnetosphereProduct(
+            changed,
+            radius,
+            {.ovalSamples=64U});
+
     if(MagnetosphereFingerprint(
            changed,radius,{.ovalSamples=64U})==
-       product.fingerprint)
-        return 5;
+           product.fingerprint ||
+       !(activeProduct.
+             auroralCenterLatitudeDegrees<
+         product.
+             auroralCenterLatitudeDegrees))
+        return 7;
 
     return 0;
 }
