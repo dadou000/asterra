@@ -57,7 +57,10 @@ struct Builder
         math::Double3 center{};
         math::Float3 sum{};
         math::Float3 peak{};
+        math::Float3 integrated{};
         f64 importance = 0.0;
+        f64 peakLuminance = 0.0;
+        math::Double2 weightedUv{};
 
         const u64 texelCount =
             static_cast<u64>(
@@ -98,9 +101,39 @@ struct Builder
                             radiance.z,
                             0.0F));
 
-                importance +=
-                    Luminance(radiance) *
+                const f64 luminance =
+                    Luminance(radiance);
+
+                const f64 weight =
+                    luminance *
                     texelArea;
+
+                importance +=
+                    weight;
+
+                peakLuminance =
+                    std::max(
+                        peakLuminance,
+                        luminance);
+
+                integrated.x +=
+                    std::max(radiance.x, 0.0F) *
+                    static_cast<f32>(texelArea);
+                integrated.y +=
+                    std::max(radiance.y, 0.0F) *
+                    static_cast<f32>(texelArea);
+                integrated.z +=
+                    std::max(radiance.z, 0.0F) *
+                    static_cast<f32>(texelArea);
+
+                weightedUv.x +=
+                    ((static_cast<f64>(x) + 0.5) /
+                     static_cast<f64>(surface->width)) *
+                    weight;
+                weightedUv.y +=
+                    ((static_cast<f64>(y) + 0.5) /
+                     static_cast<f64>(surface->height)) *
+                    weight;
             }
         }
 
@@ -147,6 +180,18 @@ struct Builder
         };
         result.nodes[index].peakRadiance =
             peak;
+        result.nodes[index].integratedRadianceArea =
+            integrated;
+        result.nodes[index].peakLuminance =
+            peakLuminance;
+        result.nodes[index].energyWeightedUv =
+            importance > 1.0e-20
+                ? math::Double2{
+                      weightedUv.x / importance,
+                      weightedUv.y / importance}
+                : math::Double2{
+                      centerU,
+                      centerV};
         result.nodes[index].areaMetersSquared =
             texelArea *
             static_cast<f64>(
