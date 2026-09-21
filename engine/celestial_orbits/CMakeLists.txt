@@ -1,6 +1,7 @@
 add_library(OrbitCelestialOrbits STATIC
     src/OrbitState.cpp
     src/ImportedEphemeris.cpp
+    src/NBodyDomain.cpp
 )
 
 add_library(Orbit::CelestialOrbits ALIAS OrbitCelestialOrbits)
@@ -55,5 +56,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.ImportedEphemeris
         COMMAND OrbitImportedEphemerisTests
+    )
+
+    add_executable(OrbitNBodyDomainTests
+        tests/NBodyDomainTests.cpp
+    )
+
+    target_link_libraries(OrbitNBodyDomainTests
+        PRIVATE
+            Orbit::CelestialOrbits
+    )
+
+    target_compile_features(
+        OrbitNBodyDomainTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitNBodyDomainTests)
+
+    add_test(
+        NAME Orbit.NBodyDomain
+        COMMAND OrbitNBodyDomainTests
     )
 endif()
