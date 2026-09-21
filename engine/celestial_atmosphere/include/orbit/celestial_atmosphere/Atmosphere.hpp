@@ -108,6 +108,12 @@ struct AtmosphereSkyView
     const AtmosphereParameters& parameters,
     const AtmosphereLutConfig& config = {});
 
+[[nodiscard]] u64 AtmosphereSkyFingerprint(
+    const AtmosphereParameters& parameters,
+    u64 staticFingerprint,
+    const SkyViewInput& input,
+    const AtmosphereLutConfig& config = {});
+
 [[nodiscard]] AtmosphereSkyView BuildSkyView(
     const AtmosphereParameters& parameters,
     const AtmosphereStaticLuts& staticLuts,
