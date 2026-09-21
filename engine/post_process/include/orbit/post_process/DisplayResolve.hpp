@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/post_process/ToneMapping.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -14,7 +15,7 @@ struct DisplayResolveSettings
     // View/presentation exposure. Physical/radiometric scene encoding happens
     // before this stage and must not depend on camera adaptation.
     f32 exposureScale{1.0F};
-    bool toneMapEnabled{true};
+    ToneMappingConfig toneMapping{};
 };
 
 class DisplayResolveRenderer
