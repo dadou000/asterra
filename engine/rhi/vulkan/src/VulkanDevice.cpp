@@ -249,6 +249,24 @@ struct Candidate
     const auto extensions =
         EnumerateDeviceExtensions(physicalDevice);
 
+    const bool hasAccelerationExtensions =
+        SupportsExtension(
+            extensions,
+            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        SupportsExtension(
+            extensions,
+            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    const bool hasRayQueryExtension =
+        SupportsExtension(
+            extensions,
+            VK_KHR_RAY_QUERY_EXTENSION_NAME);
+
+    const bool hasRayPipelineExtension =
+        SupportsExtension(
+            extensions,
+            VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+
     VkPhysicalDeviceVulkan12Features features12{};
     features12.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -268,12 +286,28 @@ struct Candidate
     rayPipelineFeatures.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
 
-    features12.pNext =
-        &accelerationFeatures;
-    accelerationFeatures.pNext =
-        &rayQueryFeatures;
-    rayQueryFeatures.pNext =
-        &rayPipelineFeatures;
+    if (hasAccelerationExtensions)
+    {
+        features12.pNext =
+            &accelerationFeatures;
+
+        if (hasRayQueryExtension)
+        {
+            accelerationFeatures.pNext =
+                &rayQueryFeatures;
+
+            if (hasRayPipelineExtension)
+            {
+                rayQueryFeatures.pNext =
+                    &rayPipelineFeatures;
+            }
+        }
+        else if (hasRayPipelineExtension)
+        {
+            accelerationFeatures.pNext =
+                &rayPipelineFeatures;
+        }
+    }
 
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType =
@@ -285,14 +319,6 @@ struct Candidate
         physicalDevice,
         &features2);
 
-    const bool hasAccelerationExtensions =
-        SupportsExtension(
-            extensions,
-            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
-        SupportsExtension(
-            extensions,
-            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
-
     capabilities.accelerationStructures =
         hasAccelerationExtensions &&
         features12.bufferDeviceAddress == VK_TRUE &&
@@ -300,16 +326,12 @@ struct Candidate
 
     capabilities.rayQuery =
         capabilities.accelerationStructures &&
-        SupportsExtension(
-            extensions,
-            VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+        hasRayQueryExtension &&
         rayQueryFeatures.rayQuery == VK_TRUE;
 
     capabilities.rayTracingPipeline =
         capabilities.accelerationStructures &&
-        SupportsExtension(
-            extensions,
-            VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
+        hasRayPipelineExtension &&
         rayPipelineFeatures.rayTracingPipeline == VK_TRUE;
 
     capabilities.rayTracing =
