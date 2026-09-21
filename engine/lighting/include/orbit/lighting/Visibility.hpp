@@ -165,6 +165,38 @@ struct VisibilityTraceDiagnostics
     std::vector<VisibilityAttempt> attempts;
 };
 
+struct GpuVisibilityQuery
+{
+    // Camera-relative origin and normalized direction. Batch GPU providers
+    // operate in the active LightingView frame; arbitrary-frame/double
+    // transforms happen before encoding.
+    math::Float4 originMinimumDistance{};
+    math::Float4 directionMaximumDistance{};
+};
+
+struct GpuVisibilityResult
+{
+    // x = VisibilityResolution enum as uint bits
+    // y = VisibilityBackendKind enum as uint bits
+    // z = confidence bits
+    // w = hit distance bits
+    math::UInt4 state{};
+
+    // xyz = camera-relative hit position, w = reserved
+    math::Float4 position{};
+
+    // xyz = geometric normal, w = reserved/material seam
+    math::Float4 normal{};
+};
+
+static_assert(sizeof(GpuVisibilityQuery) == 32U);
+static_assert(sizeof(GpuVisibilityResult) == 48U);
+
+[[nodiscard]] GpuVisibilityQuery EncodeGpuVisibilityQuery(
+    const VisibilityQuery& query,
+    const LightingView& view) noexcept;
+
+
 class VisibilityProvider
 {
 public:
