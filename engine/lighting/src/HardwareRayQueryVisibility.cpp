@@ -509,6 +509,9 @@ void HardwareRayQueryVisibilityBatch::RebuildScene(
     accelerationStructure_.reset();
     primitiveBuffer_.reset();
     primitiveCount_ = 0U;
+    sceneFrame_ = scene.Frame();
+    gpuOriginInFrameMeters_ =
+        gpuOriginInFrameMeters;
 
     if (!supported_ ||
         device_ == nullptr ||
@@ -586,6 +589,42 @@ bool HardwareRayQueryVisibilityBatch::Ready() const noexcept
 u32 HardwareRayQueryVisibilityBatch::PrimitiveCount() const noexcept
 {
     return primitiveCount_;
+}
+
+frames::FrameId
+HardwareRayQueryVisibilityBatch::SceneFrame() const noexcept
+{
+    return sceneFrame_;
+}
+
+math::Double3
+HardwareRayQueryVisibilityBatch::GpuOriginInFrameMeters() const noexcept
+{
+    return gpuOriginInFrameMeters_;
+}
+
+GpuVisibilityQuery
+HardwareRayQueryVisibilityBatch::EncodeQuery(
+    const VisibilityQuery& query) const
+{
+    if (!sceneFrame_ ||
+        query.frame != sceneFrame_)
+    {
+        throw std::invalid_argument(
+            "Orbit hardware visibility query frame does not match the "
+            "acceleration-structure scene frame.");
+    }
+
+    LightingView encodingView;
+    encodingView.frame =
+        sceneFrame_;
+    encodingView.gpuOriginInFrameMeters =
+        gpuOriginInFrameMeters_;
+
+    return
+        EncodeGpuVisibilityQuery(
+            query,
+            encodingView);
 }
 
 void HardwareRayQueryVisibilityBatch::Dispatch(
