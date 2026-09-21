@@ -122,7 +122,6 @@ void TestPresentationPolicy()
             true,
             false,
             false,
-            false,
             false) ==
         StudioViewportPresentation::ProductionTerrain);
 
@@ -130,6 +129,7 @@ void TestPresentationPolicy()
         SelectStudioViewportPresentation(
             ViewportMode::Perspective,
             true,
+            false,
             false,
             false,
             false) ==
@@ -171,7 +171,6 @@ void TestPresentationPolicy()
             true,
             false,
             false,
-            false,
             true,
             true) ==
         StudioViewportPresentation::TerrainDebug);
@@ -199,6 +198,7 @@ void TestPresentationPolicy()
     Check(
         SelectStudioViewportPresentation(
             ViewportMode::Debug,
+            false,
             false,
             false,
             true,
