@@ -7737,6 +7737,185 @@ StudioViewportRenderer::Compose(
 
             if (radianceLevelCount > 0U)
             {
+                lighting::HardwareRayQueryVisibilityBatch*
+                    exactReflectionHardware = nullptr;
+
+                if (const auto proxyFound =
+                        visibilityProxyPresentations_.find(
+                            info.id);
+                    proxyFound !=
+                            visibilityProxyPresentations_.end() &&
+                        proxyFound->second.hardware != nullptr &&
+                        proxyFound->second.hardware->Ready())
+                {
+                    exactReflectionHardware =
+                        proxyFound->second.hardware.get();
+                }
+
+                const u32 maximumExactReflectionQueries =
+                    std::min(
+                        lightingPlan.exactVisibilityQueries,
+                        lightingPlan.reflectionQueries);
+
+                render_graph::BufferHandle
+                    exactReflectionQueriesHandle{};
+                render_graph::BufferHandle
+                    exactReflectionResultsHandle{};
+                render_graph::BufferHandle
+                    exactReflectionPixelMapHandle{};
+                render_graph::BufferHandle
+                    exactReflectionCounterHandle{};
+
+                if (exactReflectionHardware != nullptr &&
+                    maximumExactReflectionQueries > 0U)
+                {
+                    exactReflectionQueriesHandle =
+                        graph.CreateBuffer(
+                            prefix +
+                                ".ExactReflectionQueries",
+                            {
+                                .sizeBytes =
+                                    static_cast<u64>(
+                                        maximumExactReflectionQueries) *
+                                    sizeof(
+                                        lighting::
+                                            GpuVisibilityQuery),
+                                .usage =
+                                    rhi::BufferUsage::
+                                        Structured,
+                                .memory =
+                                    rhi::MemoryUsage::
+                                        HostVisible,
+                                .initialState =
+                                    rhi::ResourceState::
+                                        ShaderResource
+                            });
+
+                    exactReflectionResultsHandle =
+                        graph.CreateBuffer(
+                            prefix +
+                                ".ExactReflectionResults",
+                            {
+                                .sizeBytes =
+                                    static_cast<u64>(
+                                        maximumExactReflectionQueries) *
+                                    sizeof(
+                                        lighting::
+                                            GpuVisibilityResult),
+                                .usage =
+                                    rhi::BufferUsage::
+                                        Structured,
+                                .memory =
+                                    rhi::MemoryUsage::
+                                        HostVisible,
+                                .initialState =
+                                    rhi::ResourceState::
+                                        ShaderResource
+                            });
+
+                    exactReflectionPixelMapHandle =
+                        graph.CreateBuffer(
+                            prefix +
+                                ".ExactReflectionPixelMap",
+                            {
+                                .sizeBytes =
+                                    static_cast<u64>(
+                                        maximumExactReflectionQueries) *
+                                    sizeof(u32),
+                                .usage =
+                                    rhi::BufferUsage::
+                                        Structured,
+                                .memory =
+                                    rhi::MemoryUsage::
+                                        HostVisible,
+                                .initialState =
+                                    rhi::ResourceState::
+                                        ShaderResource
+                            });
+
+                    exactReflectionCounterHandle =
+                        graph.CreateBuffer(
+                            prefix +
+                                ".ExactReflectionCounter",
+                            {
+                                .sizeBytes = sizeof(u32),
+                                .usage =
+                                    rhi::BufferUsage::
+                                        Structured,
+                                .memory =
+                                    rhi::MemoryUsage::
+                                        HostVisible,
+                                .initialState =
+                                    rhi::ResourceState::
+                                        ShaderResource
+                            });
+
+                    std::vector<
+                        lighting::GpuVisibilityQuery>
+                        safeQueries(
+                            maximumExactReflectionQueries);
+
+                    for (auto& safeQuery : safeQueries)
+                    {
+                        safeQuery.originMinimumDistance.w =
+                            0.03F;
+                        safeQuery.directionMaximumDistance =
+                            {0.0F, 0.0F, 1.0F, 0.03F};
+                        safeQuery.requirements = {
+                            std::numeric_limits<f32>::
+                                infinity(),
+                            0.0F,
+                            0.0F,
+                            std::bit_cast<f32>(3U)
+                        };
+                    }
+
+                    uploadBuffer(
+                        graph.Buffer(
+                            exactReflectionQueriesHandle),
+                        safeQueries.data(),
+                        static_cast<u64>(
+                            safeQueries.size()) *
+                            sizeof(
+                                lighting::
+                                    GpuVisibilityQuery));
+
+                    std::vector<u32>
+                        emptyPixelMap(
+                            maximumExactReflectionQueries,
+                            0xFFFF'FFFFU);
+
+                    uploadBuffer(
+                        graph.Buffer(
+                            exactReflectionPixelMapHandle),
+                        emptyPixelMap.data(),
+                        static_cast<u64>(
+                            emptyPixelMap.size()) *
+                            sizeof(u32));
+
+                    const u32 zero = 0U;
+                    uploadBuffer(
+                        graph.Buffer(
+                            exactReflectionCounterHandle),
+                        &zero,
+                        sizeof(zero));
+
+                    std::vector<
+                        lighting::GpuVisibilityResult>
+                        emptyResults(
+                            maximumExactReflectionQueries);
+
+                    uploadBuffer(
+                        graph.Buffer(
+                            exactReflectionResultsHandle),
+                        emptyResults.data(),
+                        static_cast<u64>(
+                            emptyResults.size()) *
+                            sizeof(
+                                lighting::
+                                    GpuVisibilityResult));
+                }
+
                 graph.AddPass(
                     prefix + ".HybridReflections",
                     {
@@ -7862,6 +8041,287 @@ StudioViewportRenderer::Compose(
                                 lightingPlan.
                                     reflectionScale);
                     });
+
+                if (exactReflectionHardware != nullptr &&
+                    maximumExactReflectionQueries > 0U)
+                {
+                    graph.AddPass(
+                        prefix +
+                            ".ExactReflectionCompact",
+                        {
+                            {
+                                .texture =
+                                    targets.
+                                        surfaceBaseRoughness,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture =
+                                    targets.
+                                        surfaceNormalMetallic,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture =
+                                    targets.depth,
+                                .state =
+                                    rhi::ResourceState::
+                                        DepthRead,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            }
+                        },
+                        {
+                            {
+                                .buffer =
+                                    exactReflectionQueriesHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        UnorderedAccess,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            },
+                            {
+                                .buffer =
+                                    exactReflectionPixelMapHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        UnorderedAccess,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            },
+                            {
+                                .buffer =
+                                    exactReflectionCounterHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        UnorderedAccess,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            }
+                        },
+                        [this,
+                         lightingBaseRoughness,
+                         lightingNormalMetallic,
+                         lightingDepth,
+                         exactReflectionQueriesHandle,
+                         exactReflectionPixelMapHandle,
+                         exactReflectionCounterHandle,
+                         maximumExactReflectionQueries,
+                         width,
+                         height,
+                         lightingView,
+                         lightingPlan](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&
+                                resources)
+                        {
+                            const u32 screenSteps =
+                                std::clamp(
+                                    static_cast<u32>(
+                                        std::lround(
+                                            4.0F +
+                                            12.0F *
+                                                lightingPlan.
+                                                    reflectionScale)),
+                                    4U,
+                                    16U);
+
+                            exactReflectionQueryRenderer_.
+                                BuildQueries(
+                                    commands,
+                                    *lightingBaseRoughness,
+                                    *lightingNormalMetallic,
+                                    *lightingDepth,
+                                    resources.Buffer(
+                                        exactReflectionQueriesHandle),
+                                    resources.Buffer(
+                                        exactReflectionPixelMapHandle),
+                                    resources.Buffer(
+                                        exactReflectionCounterHandle),
+                                    maximumExactReflectionQueries,
+                                    width,
+                                    height,
+                                    lightingView,
+                                    0.08F,
+                                    40.0F,
+                                    0.12F,
+                                    screenSteps);
+                        });
+
+                    graph.AddPass(
+                        prefix +
+                            ".ExactReflectionTrace",
+                        {},
+                        {
+                            {
+                                .buffer =
+                                    exactReflectionQueriesHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .buffer =
+                                    exactReflectionResultsHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        UnorderedAccess,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            }
+                        },
+                        [exactReflectionHardware,
+                         exactReflectionQueriesHandle,
+                         exactReflectionResultsHandle,
+                         maximumExactReflectionQueries](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&
+                                resources)
+                        {
+                            exactReflectionHardware->
+                                Dispatch(
+                                    commands,
+                                    resources.Buffer(
+                                        exactReflectionQueriesHandle),
+                                    resources.Buffer(
+                                        exactReflectionResultsHandle),
+                                    maximumExactReflectionQueries);
+                        });
+
+                    graph.AddPass(
+                        prefix +
+                            ".ExactReflectionResolve",
+                        {
+                            {
+                                .texture =
+                                    gatherScratchHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        UnorderedAccess,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            },
+                            {
+                                .texture =
+                                    targets.
+                                        surfaceBaseRoughness,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture =
+                                    targets.
+                                        surfaceNormalMetallic,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            }
+                        },
+                        {
+                            {
+                                .buffer =
+                                    exactReflectionResultsHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .buffer =
+                                    exactReflectionPixelMapHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .buffer =
+                                    radianceCellsHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .buffer =
+                                    radianceLevelsHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            }
+                        },
+                        [this,
+                         gatherScratch,
+                         lightingBaseRoughness,
+                         lightingNormalMetallic,
+                         exactReflectionResultsHandle,
+                         exactReflectionPixelMapHandle,
+                         radianceCellsHandle,
+                         radianceLevelsHandle,
+                         radianceLevelCount,
+                         maximumExactReflectionQueries,
+                         width,
+                         height](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&
+                                resources)
+                        {
+                            exactReflectionQueryRenderer_.
+                                ResolveResults(
+                                    commands,
+                                    *gatherScratch,
+                                    *lightingBaseRoughness,
+                                    *lightingNormalMetallic,
+                                    resources.Buffer(
+                                        exactReflectionResultsHandle),
+                                    resources.Buffer(
+                                        exactReflectionPixelMapHandle),
+                                    resources.Buffer(
+                                        radianceCellsHandle),
+                                    resources.Buffer(
+                                        radianceLevelsHandle),
+                                    radianceLevelCount,
+                                    maximumExactReflectionQueries,
+                                    width,
+                                    height);
+                        });
+                }
 
                 graph.AddPass(
                     prefix + ".HybridReflectionsCopyBack",
