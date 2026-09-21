@@ -16,6 +16,7 @@ add_library(OrbitWorldModel STATIC
     src/PropertyProvenance.cpp
     src/PhysicalPropertySolver.cpp
     src/WorldSchemas.cpp
+    src/VolumeSchemas.cpp
     src/LocalLightBinding.cpp
     src/VisibilityProxyBinding.cpp
     src/MaterialAssignmentBinding.cpp
