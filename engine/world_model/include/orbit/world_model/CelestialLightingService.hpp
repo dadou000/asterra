@@ -75,6 +75,15 @@ public:
         universe::BodyId emitter,
         const std::vector<universe::BodyId>& occluders,
         time::SimulationTime atTime,
+        const celestial_rings::RingSystem& rings,
+        math::Double3 surfaceUnitDirection) const;
+
+    [[nodiscard]] std::optional<DirectSurfaceLighting>
+    DirectLightingAtSurface(
+        universe::BodyId receiver,
+        universe::BodyId emitter,
+        const std::vector<universe::BodyId>& occluders,
+        time::SimulationTime atTime,
         const celestial_clouds::CloudFieldProduct& clouds,
         const celestial_rings::RingSystem& rings,
         math::Double3 surfaceUnitDirection) const;
