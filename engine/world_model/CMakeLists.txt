@@ -32,6 +32,7 @@ target_link_libraries(OrbitWorldModel
         Orbit::CelestialClouds
         Orbit::CelestialOcean
         Orbit::CelestialRings
+        Orbit::CelestialStellar
         Orbit::CelestialOrbits
         Orbit::CelestialRadiometry
         Orbit::CelestialRotation
