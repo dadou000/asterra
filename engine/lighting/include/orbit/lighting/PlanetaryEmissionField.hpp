@@ -57,4 +57,11 @@ SamplePlanetaryEmission(
 [[nodiscard]] math::Float3
 TotalPlanetaryIntegratedRadianceArea(
     const PlanetaryEmissionLevel& level) noexcept;
+
+[[nodiscard]] math::Float3
+EvaluatePlanetaryEmissionRadiance(
+    const PlanetaryEmissionField& field,
+    u32 level,
+    const math::Double3& directionFromBodyCenter,
+    f64 referenceRadiusMeters) noexcept;
 } // namespace orbit::lighting
