@@ -176,6 +176,18 @@ ResolveMagnetosphere(
                     found->id,
                     kAuroraIntensity,
                     1.0),
+            .auroralColorLinear=
+                PropertyOr<math::Double3>(
+                    objects,
+                    found->id,
+                    kAuroraColorLinear,
+                    {0.12,1.8,0.42}),
+            .auroralStructure=
+                PropertyOr<f64>(
+                    objects,
+                    found->id,
+                    kAuroraStructure,
+                    0.65),
             .auroralSeed=
                 static_cast<u64>(
                     std::max<i64>(
