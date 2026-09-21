@@ -32,6 +32,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialRepresentation
         Orbit::EditorModel
         Orbit::EditorUi
+        Orbit::PostProcess
         Orbit::RenderGraph
         Orbit::RenderView
         Orbit::StudioSession
