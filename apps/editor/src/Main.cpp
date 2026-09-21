@@ -46,6 +46,7 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
+#include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
@@ -1932,6 +1933,11 @@ int main(
                 studioSession);
         projectSettingsUi.Register(ui);
 
+        orbit::studio_ui::CelestialAuthoringUi
+            celestialAuthoringUi(
+                studioSession);
+        celestialAuthoringUi.Register(ui);
+
         orbit::studio_ui::SurfaceAuthoringUi
             surfaceAuthoringUi(
                 studioSession);
@@ -2044,6 +2050,7 @@ int main(
         orbit::editor_ui::PreviewMaterial
             materialPreviewMaterial{};
         std::string renameBuffer;
+        bool showAdvancedProperties = false;
         orbit::build::BuildService
             buildService;
         std::string selectedBuildProfile =
@@ -5016,6 +5023,7 @@ int main(
                 [&inspector,
                  &presentActions,
                  &content,
+                 &showAdvancedProperties,
                  &worldSession](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -5059,9 +5067,27 @@ int main(
 
                     context.Separator();
 
+                    static_cast<void>(
+                        context.Checkbox(
+                            "Advanced Properties##properties-advanced",
+                            showAdvancedProperties));
+
+                    if (!showAdvancedProperties)
+                    {
+                        context.MutedText(
+                            "Advanced schema fields are hidden. Enable Advanced Properties to expose the full authoring contract.");
+                    }
+
+                    context.Separator();
+
                     for (auto property :
                          inspector().CommonProperties())
                     {
+                        if (property.schema.advanced &&
+                            !showAdvancedProperties)
+                        {
+                            continue;
+                        }
                         context.Text(
                             std::format(
                                 "{}{}{}",
