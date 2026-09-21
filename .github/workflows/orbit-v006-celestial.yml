@@ -53,6 +53,7 @@ jobs:
           cmake --build build-v006 --config Release --parallel --target
           OrbitV006CelestialValidationTests
           OrbitCelestialRepresentationTests
+          OrbitCelestialRotationTests
           OrbitCelestialAtmosphereTests
           OrbitCelestialCloudTests
           OrbitCelestialOceanTests
@@ -86,6 +87,8 @@ jobs:
           OrbitCelestialMagnetosphereBindingTests
           OrbitCelestialCompactObjectBindingTests
           OrbitCelestialCompactCompositionTests
+          OrbitCelestialAuthoringModelTests
+          OrbitCelestialRecipeServiceTests
           OrbitStudioCelestialRoundTripVerifierTests
           OrbitStudioCelestialValidationScenarioTests
 
