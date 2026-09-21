@@ -4,6 +4,7 @@
 
 int main()
 {
+    using orbit::f64;
     using namespace orbit::celestial_small_bodies;
 
     SmallBodyParameters p{};
