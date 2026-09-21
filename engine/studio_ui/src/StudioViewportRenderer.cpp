@@ -1509,6 +1509,32 @@ StudioViewportRenderer::Compose(
                 info.id);
         }
 
+        if (const auto atmosphereFound =
+                atmospherePresentations_.find(
+                    info.id);
+            atmosphereFound !=
+                    atmospherePresentations_.end() &&
+                atmosphereFound->second.gpu !=
+                    nullptr)
+        {
+            auto* atmosphereGpu =
+                atmosphereFound->
+                    second.gpu.get();
+
+            graph.AddPass(
+                prefix +
+                    ".AtmosphereLutUpload",
+                {},
+                [atmosphereGpu](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    atmosphereGpu->
+                        EnsureUploaded(
+                            commands);
+                });
+        }
+
         const auto liveDebugPage =
             views.LiveDebugPage(info.id);
         const bool hasDebugField =
