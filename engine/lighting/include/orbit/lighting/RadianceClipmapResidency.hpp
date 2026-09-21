@@ -13,6 +13,7 @@ struct RadianceResidentCell
     RadianceCellKey key{};
     RadianceCell cell{};
     u64 sourceRevision{0U};
+    f32 invalidationPriorityBoost{0.0F};
     bool occupied{false};
     bool dirty{true};
 };
@@ -80,7 +81,9 @@ public:
     void InvalidateSphere(
         const math::Double3& centerInFrameMeters,
         f64 radiusMeters,
-        u64 sourceRevision);
+        u64 sourceRevision,
+        f32 priorityBoost = 0.0F,
+        bool preservePreviousValue = false);
 
 
     // Marks resident cells for budgeted relighting while preserving their
