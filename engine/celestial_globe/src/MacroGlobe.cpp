@@ -3,6 +3,7 @@
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -100,7 +101,7 @@ namespace
     return math::Normalize(p);
 }
 
-[[nodiscard]] u64 Fingerprint(
+[[nodiscard]] u64 BuildFingerprint(
     const terrain::TerrainSource& source,
     const universe::BodyShape& shape,
     const MacroGlobeConfig& config)
@@ -160,6 +161,25 @@ namespace
 }
 } // namespace
 
+u64 MacroGlobeFingerprint(
+    const terrain::TerrainSource& source,
+    const universe::BodyShape& shape,
+    const MacroGlobeConfig& config)
+{
+    if (config.faceResolution < 3U ||
+        !std::isfinite(config.footprintScale) ||
+        config.footprintScale <= 0.0)
+    {
+        throw std::invalid_argument(
+            "Macro globe config is invalid.");
+    }
+
+    return BuildFingerprint(
+        source,
+        shape,
+        config);
+}
+
 MacroGlobeMesh BuildMacroGlobe(
     const terrain::TerrainSource& source,
     const universe::BodyShape& shape,
@@ -189,7 +209,7 @@ MacroGlobeMesh BuildMacroGlobe(
     result.sourceRevision =
         source.Revision();
     result.fingerprint =
-        Fingerprint(
+        BuildFingerprint(
             source,
             shape,
             config);
@@ -304,70 +324,88 @@ MacroGlobeMesh BuildMacroGlobe(
         }
     }
 
-    for (std::size_t index = 0;
-         index + 2U < result.indices.size();
-         index += 3U)
-    {
-        const u32 ia =
-            result.indices[index];
-        const u32 ib =
-            result.indices[index + 1U];
-        const u32 ic =
-            result.indices[index + 2U];
+    const f64 epsilon =
+        std::max(
+            angularCell * 0.35,
+            1.0e-6);
 
-        const math::Double3 a =
-            result.vertices[ia].
-                positionMeters;
-        const math::Double3 b =
-            result.vertices[ib].
-                positionMeters;
-        const math::Double3 c =
-            result.vertices[ic].
-                positionMeters;
+    const auto displacedPosition =
+        [&](const math::Double3 direction)
+        {
+            const math::Double3 unit =
+                math::Normalize(direction);
+
+            const auto sample =
+                source.Sample({
+                    .unitDirection = unit,
+                    .footprintMeters =
+                        result.sampleFootprintMeters
+                });
+
+            return unit *
+                (RadiusAlong(
+                     shape,
+                     unit) +
+                 sample.elevationMeters);
+        };
+
+    for (auto& vertex : result.vertices)
+    {
+        const math::Double3 direction =
+            math::Normalize(
+                vertex.positionMeters);
+
+        const math::Double3 reference =
+            std::abs(direction.y) < 0.9
+                ? math::Double3{0.0, 1.0, 0.0}
+                : math::Double3{1.0, 0.0, 0.0};
+
+        const math::Double3 tangentA =
+            math::Normalize(
+                math::Cross(
+                    reference,
+                    direction));
+        const math::Double3 tangentB =
+            math::Normalize(
+                math::Cross(
+                    direction,
+                    tangentA));
+
+        const math::Double3 aMinus =
+            displacedPosition(
+                direction -
+                tangentA * epsilon);
+        const math::Double3 aPlus =
+            displacedPosition(
+                direction +
+                tangentA * epsilon);
+        const math::Double3 bMinus =
+            displacedPosition(
+                direction -
+                tangentB * epsilon);
+        const math::Double3 bPlus =
+            displacedPosition(
+                direction +
+                tangentB * epsilon);
 
         math::Double3 normal =
             math::Cross(
-                b - a,
-                c - a);
-
-        const math::Double3 centroid =
-            a + b + c;
+                aPlus - aMinus,
+                bPlus - bMinus);
 
         if (math::Dot(
                 normal,
-                centroid) < 0.0)
+                direction) < 0.0)
         {
             normal =
                 normal * -1.0;
         }
 
-        result.vertices[ia].normal =
-            result.vertices[ia].normal +
-            normal;
-        result.vertices[ib].normal =
-            result.vertices[ib].normal +
-            normal;
-        result.vertices[ic].normal =
-            result.vertices[ic].normal +
-            normal;
-    }
-
-    for (auto& vertex : result.vertices)
-    {
-        if (math::LengthSquared(
-                vertex.normal) <=
-            1.0e-24)
-        {
-            vertex.normal =
-                math::Normalize(
-                    vertex.positionMeters);
-        }
-        else
-        {
-            vertex.normal =
-                math::Normalize(
-                    vertex.normal);
-        }
+        vertex.normal =
+            math::LengthSquared(normal) >
+                    1.0e-24
+                ? math::Normalize(normal)
+                : direction;
     }
 
     return result;
