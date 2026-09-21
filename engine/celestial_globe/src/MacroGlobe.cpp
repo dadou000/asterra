@@ -638,6 +638,7 @@ struct Constants
     float4 forwardAndTanHalfFov;
     float4 upAndScale;
     float4 transition;
+    float4 lighting;
 };
 
 [[vk::push_constant]] Constants g_pc;
@@ -650,6 +651,8 @@ struct VSOutput
     float4 material : TEXCOORD0;
     float3 emission : COLOR1;
     float opacity : TEXCOORD1;
+    float3 lightDirection : TEXCOORD2;
+    float lightScale : TEXCOORD3;
 };
 
 VSOutput main(VSInput input)
@@ -681,6 +684,10 @@ VSOutput main(VSInput input)
     output.material = input.material;
     output.emission = input.emission;
     output.opacity = saturate(g_pc.transition.x);
+    output.lightDirection =
+        normalize(g_pc.lighting.xyz);
+    output.lightScale =
+        max(g_pc.lighting.w, 0.0);
     return output;
 }
 )";
@@ -694,12 +701,15 @@ struct VSOutput
     float4 material : TEXCOORD0;
     float3 emission : COLOR1;
     float opacity : TEXCOORD1;
+    float3 lightDirection : TEXCOORD2;
+    float lightScale : TEXCOORD3;
 };
 
 float4 main(VSOutput input) : SV_Target0
 {
     const float3 n = normalize(input.normal);
-    const float3 l = normalize(float3(0.55, 0.72, -0.48));
+    const float3 l =
+        normalize(input.lightDirection);
     const float ndl = saturate(dot(n, l));
 
     const float roughness = saturate(input.material.x);
@@ -707,7 +717,8 @@ float4 main(VSOutput input) : SV_Target0
     const float ice = saturate(input.material.z);
 
     const float diffuse =
-        0.045 + 0.955 * ndl;
+        (0.045 + 0.955 * ndl) *
+        input.lightScale;
 
     const float grazing =
         pow(1.0 - saturate(ndl), 5.0);
@@ -810,7 +821,7 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         },
         .vertexAttributes = attributes,
         .vertexStrideBytes = sizeof(GpuMacroGlobeVertex),
-        .pushConstantDwords = 16,
+        .pushConstantDwords = 20,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::Back,
@@ -827,7 +838,8 @@ void MacroGlobeRenderer::Draw(
     const u32 height,
     GpuMacroGlobeProduct& globe,
     const render_view::CameraState& camera,
-    const f32 opacity)
+    const f32 opacity,
+    const MacroGlobeLighting& lighting)
 {
     if (width == 0U || height == 0U)
     {
@@ -845,7 +857,7 @@ void MacroGlobeRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 16> constants{
+    const std::array<u32, 20> constants{
         bits(static_cast<f32>(camera.localPositionMeters.x / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.y / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.z / radius)),
@@ -864,7 +876,14 @@ void MacroGlobeRenderer::Draw(
         bits(std::clamp(opacity, 0.0F, 1.0F)),
         0U,
         0U,
-        0U
+        0U,
+
+        bits(lighting.directionBody.x),
+        bits(lighting.directionBody.y),
+        bits(lighting.directionBody.z),
+        bits(std::max(
+            lighting.irradianceScale,
+            0.0F))
     };
 
     commands.SetRenderTarget(target);
