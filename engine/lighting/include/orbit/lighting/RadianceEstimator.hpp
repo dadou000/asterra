@@ -50,7 +50,7 @@ EstimateRadianceCell(
     const LightingView& view,
     const DirectionalLight& stellar,
     std::span<const ResolvedLocalLight> localLights,
-    VisibilityProvider* visibility = nullptr,
+    const VisibilityRegistry* visibility = nullptr,
     const RadianceEstimateSettings& settings = {},
     std::span<const EmissiveVolumeSource> emissiveVolumes = {});
 } // namespace orbit::lighting
