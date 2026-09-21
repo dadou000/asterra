@@ -2165,6 +2165,11 @@ int main(
             materialPreviewAsset;
         orbit::editor_ui::PreviewMaterial
             materialPreviewMaterial{};
+        std::optional<orbit::content::AssetId>
+            materialEmissionEditAsset;
+        orbit::content::MaterialEmission
+            materialEmissionEdit{};
+        std::string materialEmissionStatus;
         std::string renameBuffer;
         bool showAdvancedProperties = false;
         orbit::build::BuildService
@@ -5497,6 +5502,9 @@ int main(
                  &materialView,
                  &materialPreviewAsset,
                  &materialPreviewMaterial,
+                 &materialEmissionEditAsset,
+                 &materialEmissionEdit,
+                 &materialEmissionStatus,
                  &window](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -5613,6 +5621,247 @@ int main(
                                 .width = previewWidth,
                                 .height = previewHeight
                             }));
+
+                    if (materialPreviewAsset.has_value())
+                    {
+                        const auto* selectedAsset =
+                            content.Find(
+                                *materialPreviewAsset);
+
+                        if (selectedAsset != nullptr &&
+                            (selectedAsset->kind ==
+                                 orbit::content::AssetKind::Material ||
+                             selectedAsset->kind ==
+                                 orbit::content::AssetKind::MaterialInstance))
+                        {
+                            if (!materialEmissionEditAsset.has_value() ||
+                                *materialEmissionEditAsset !=
+                                    selectedAsset->id)
+                            {
+                                try
+                                {
+                                    materialEmissionEdit =
+                                        content.ResolveMaterialEmission(
+                                            selectedAsset->id);
+                                    materialEmissionEditAsset =
+                                        selectedAsset->id;
+                                    materialEmissionStatus.clear();
+                                }
+                                catch (const std::exception& exception)
+                                {
+                                    materialEmissionStatus =
+                                        exception.what();
+                                }
+                            }
+
+                            context.Separator();
+                            context.Text(
+                                std::format(
+                                    "Physical Emission — {}",
+                                    selectedAsset->name));
+
+                            const orbit::content::AssetRecord*
+                                baseMaterial =
+                                    selectedAsset;
+
+                            for (orbit::u32 depth = 0U;
+                                 depth < 8U &&
+                                 baseMaterial != nullptr &&
+                                 baseMaterial->kind ==
+                                     orbit::content::AssetKind::
+                                         MaterialInstance;
+                                 ++depth)
+                            {
+                                if (!baseMaterial->
+                                        materialInstance.
+                                        has_value())
+                                {
+                                    baseMaterial = nullptr;
+                                    break;
+                                }
+
+                                const auto parentPath =
+                                    baseMaterial->
+                                        sourcePath.
+                                        parent_path() /
+                                    baseMaterial->
+                                        materialInstance->
+                                        parent;
+
+                                baseMaterial =
+                                    content.FindByPath(
+                                        parentPath);
+                            }
+
+                            if (baseMaterial != nullptr &&
+                                baseMaterial->material.
+                                    has_value() &&
+                                !baseMaterial->material->
+                                    emissive.empty())
+                            {
+                                context.Text(
+                                    "Emission Texture: " +
+                                    baseMaterial->sourcePath.
+                                        parent_path().
+                                        append(
+                                            baseMaterial->material->
+                                                emissive).
+                                        generic_string());
+                            }
+                            else
+                            {
+                                context.MutedText(
+                                    "Emission Texture: none");
+                            }
+
+                            if (selectedAsset->kind ==
+                                orbit::content::AssetKind::
+                                    MaterialInstance)
+                            {
+                                context.MutedText(
+                                    "Instance values start from inherited emission; Save writes explicit overrides.");
+                            }
+
+                            bool changed = false;
+
+                            changed |= context.InputDouble(
+                                "Emission R##m15-emission-r",
+                                materialEmissionEdit.
+                                    colorLinear[0]);
+                            changed |= context.InputDouble(
+                                "Emission G##m15-emission-g",
+                                materialEmissionEdit.
+                                    colorLinear[1]);
+                            changed |= context.InputDouble(
+                                "Emission B##m15-emission-b",
+                                materialEmissionEdit.
+                                    colorLinear[2]);
+                            changed |= context.InputDouble(
+                                "Luminance (nits)##m15-emission-nits",
+                                materialEmissionEdit.
+                                    luminanceNits);
+                            changed |= context.Checkbox(
+                                "Contributes to GI##m15-emission-gi-enabled",
+                                materialEmissionEdit.
+                                    contributesToGi);
+                            changed |= context.InputDouble(
+                                "GI Scale##m15-emission-gi-scale",
+                                materialEmissionEdit.
+                                    giScale);
+
+                            materialEmissionEdit.colorLinear[0] =
+                                std::max(
+                                    materialEmissionEdit.
+                                        colorLinear[0],
+                                    0.0);
+                            materialEmissionEdit.colorLinear[1] =
+                                std::max(
+                                    materialEmissionEdit.
+                                        colorLinear[1],
+                                    0.0);
+                            materialEmissionEdit.colorLinear[2] =
+                                std::max(
+                                    materialEmissionEdit.
+                                        colorLinear[2],
+                                    0.0);
+                            materialEmissionEdit.luminanceNits =
+                                std::max(
+                                    materialEmissionEdit.
+                                        luminanceNits,
+                                    0.0);
+                            materialEmissionEdit.giScale =
+                                std::max(
+                                    materialEmissionEdit.
+                                        giScale,
+                                    0.0);
+
+                            const auto evaluated =
+                                orbit::lighting::
+                                    EvaluateMaterialEmission({
+                                        .colorLinear = {
+                                            static_cast<orbit::f32>(
+                                                materialEmissionEdit.
+                                                    colorLinear[0]),
+                                            static_cast<orbit::f32>(
+                                                materialEmissionEdit.
+                                                    colorLinear[1]),
+                                            static_cast<orbit::f32>(
+                                                materialEmissionEdit.
+                                                    colorLinear[2])
+                                        },
+                                        .luminanceNits =
+                                            static_cast<orbit::f32>(
+                                                materialEmissionEdit.
+                                                    luminanceNits),
+                                        .contributesToGi =
+                                            materialEmissionEdit.
+                                                contributesToGi,
+                                        .giScale =
+                                            static_cast<orbit::f32>(
+                                                materialEmissionEdit.
+                                                    giScale)
+                                    });
+
+                            context.Text(
+                                std::format(
+                                    "Visible radiance: [{:.4g}, {:.4g}, {:.4g}] W/(sr m^2)",
+                                    evaluated.visibleRadiance.x,
+                                    evaluated.visibleRadiance.y,
+                                    evaluated.visibleRadiance.z));
+
+                            context.Text(
+                                std::format(
+                                    "GI radiance: [{:.4g}, {:.4g}, {:.4g}] W/(sr m^2)",
+                                    evaluated.giRadiance.x,
+                                    evaluated.giRadiance.y,
+                                    evaluated.giRadiance.z));
+
+                            context.MutedText(
+                                "Bloom/glare are display effects and are not required for this material to emit scene radiance.");
+
+                            if (changed)
+                            {
+                                materialPreviewMaterial.
+                                    emissionRadiance =
+                                        evaluated.visibleRadiance;
+                            }
+
+                            if (context.PrimaryButton(
+                                    "Save Emission##m15-save-emission"))
+                            {
+                                try
+                                {
+                                    content.SetMaterialEmission(
+                                        selectedAsset->id,
+                                        materialEmissionEdit);
+
+                                    const auto* refreshed =
+                                        content.Find(
+                                            selectedAsset->id);
+
+                                    materialPreviewMaterial =
+                                        PreviewMaterialForAsset(
+                                            content,
+                                            refreshed);
+
+                                    materialEmissionStatus =
+                                        "Physical emission saved.";
+                                }
+                                catch (const std::exception& exception)
+                                {
+                                    materialEmissionStatus =
+                                        exception.what();
+                                }
+                            }
+
+                            if (!materialEmissionStatus.empty())
+                            {
+                                context.Text(
+                                    materialEmissionStatus);
+                            }
+                        }
+                    }
+
                     context.Separator();
 
                     const auto assets =
@@ -5659,6 +5908,8 @@ int main(
                                     PreviewMaterialForAsset(
                                         content,
                                         &asset);
+                                materialEmissionEditAsset.reset();
+                                materialEmissionStatus.clear();
                             }
                         }
 
