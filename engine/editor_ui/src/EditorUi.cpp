@@ -1132,6 +1132,11 @@ CanvasInteraction PanelContext::Canvas(
         .rightClicked =
             ImGui::IsItemClicked(
                 ImGuiMouseButton_Right),
+        .dragging =
+            hovered &&
+            ImGui::IsMouseDragging(
+                ImGuiMouseButton_Left,
+                1.0F),
         .u = u,
         .v = v
     };
