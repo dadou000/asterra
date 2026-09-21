@@ -18,6 +18,7 @@
 #include <orbit/lighting/DirectLighting.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
+#include <orbit/lighting/MaterialEmissionSurfaceOverride.hpp>
 #include <orbit/lighting/RadianceCacheSampler.hpp>
 #include <orbit/lighting/RadianceEstimator.hpp>
 #include <orbit/lighting/RadianceClipmapResidency.hpp>
@@ -584,6 +585,8 @@ private:
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
+    lighting::MaterialEmissionSurfaceOverrideRenderer
+        materialEmissionSurfaceOverride_;
     lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;
     lighting::RadianceCacheSampler radianceCacheSampler_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
