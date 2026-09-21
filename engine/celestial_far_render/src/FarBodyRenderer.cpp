@@ -281,6 +281,7 @@ struct Constants
     float4 emissionAndOpacity;
     float4 proxy;
     float4 lighting;
+    float4 ocean;
 };
 [[vk::push_constant]] Constants g;
 
@@ -289,6 +290,47 @@ struct VSOutput
     float4 position : SV_Position;
     float2 uv : TEXCOORD0;
 };
+
+float OceanSpecular(
+    float3 n,
+    float3 l,
+    float3 v,
+    float roughness,
+    float eta,
+    float strength)
+{
+    const float ndl = saturate(dot(n, l));
+    const float ndv = saturate(dot(n, v));
+    if (ndl <= 0.0 || ndv <= 0.0)
+        return 0.0;
+
+    const float3 h = normalize(l + v);
+    const float ndh = saturate(dot(n, h));
+    const float vdh = saturate(dot(v, h));
+    const float f0 =
+        pow((max(eta, 1.0) - 1.0) /
+            (max(eta, 1.0) + 1.0), 2.0);
+
+    const float r = clamp(roughness, 0.01, 1.0);
+    const float alpha = max(r * r, 0.0001);
+    const float a2 = alpha * alpha;
+    const float denom = ndh * ndh * (a2 - 1.0) + 1.0;
+    const float D =
+        a2 / max(3.14159265 * denom * denom, 1e-6);
+    const float k =
+        (r + 1.0) * (r + 1.0) / 8.0;
+    const float Gl =
+        ndl / max(ndl * (1.0 - k) + k, 1e-5);
+    const float Gv =
+        ndv / max(ndv * (1.0 - k) + k, 1e-5);
+    const float F =
+        f0 + (1.0 - f0) * pow(1.0 - vdh, 5.0);
+
+    return
+        max(strength, 0.0) *
+        D * Gl * Gv * F /
+        max(4.0 * ndl * ndv, 1e-5);
+}
 
 float4 main(VSOutput input) : SV_Target0
 {
@@ -347,17 +389,32 @@ float4 main(VSOutput input) : SV_Target0
         const float radiometricIntensity =
             max(g.proxy.w, 0.0);
 
+        const float cloudTransmission =
+            saturate(g.material.w);
+        const float3 v =
+            normalize(float3(-q.x, q.y, z));
+        const float glint =
+            ocean *
+            (1.0 - ice) *
+            saturate(g.ocean.w) *
+            OceanSpecular(
+                n,
+                l,
+                v,
+                g.ocean.y,
+                g.ocean.x,
+                g.ocean.z);
+
         float3 color =
             g.albedoAndRoughness.xyz *
-                (0.05 + 0.95 * ndl) *
+                (0.05 +
+                 0.95 * ndl *
+                 cloudTransmission) *
                 max(g.lighting.w, 0.0) +
-            ocean *
-                limb *
-                (1.0 - roughness) *
-                float3(
-                    0.20,
-                    0.32,
-                    0.45) +
+            glint *
+                max(g.lighting.w, 0.0) *
+                cloudTransmission *
+                float3(1.0, 0.98, 0.94) +
             ice * 0.025 +
             g.emissionAndOpacity.xyz;
 
@@ -485,13 +542,32 @@ float4 main(VSOutput input) : SV_Target0
     const float rim =
         pow(1.0 - saturate(abs(dot(n, -ray))), 4.0);
 
+    const float cloudTransmission =
+        saturate(g.material.w);
+    const float3 viewDirection =
+        normalize(-ray);
+    const float glint =
+        ocean *
+        (1.0 - ice) *
+        saturate(g.ocean.w) *
+        OceanSpecular(
+            n,
+            l,
+            viewDirection,
+            g.ocean.y,
+            g.ocean.x,
+            g.ocean.z);
+
     float3 color =
         g.albedoAndRoughness.xyz *
-            diffuse *
+            (0.045 +
+             0.955 * ndl *
+             cloudTransmission) *
             max(g.lighting.w, 0.0) +
-        ocean * rim *
-            (1.0 - roughness) *
-            float3(0.20, 0.32, 0.45) +
+        glint *
+            max(g.lighting.w, 0.0) *
+            cloudTransmission *
+            float3(1.0, 0.98, 0.94) +
         ice * 0.025 +
         g.emissionAndOpacity.xyz;
 
@@ -1021,7 +1097,7 @@ FarBodyRenderer::FarBodyRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0,
-            .pushConstantDwords = 36,
+            .pushConstantDwords = 40,
             .topology =
                 rhi::PrimitiveTopology::
                     TriangleList,
@@ -1078,7 +1154,7 @@ FarBodyRenderer::FarBodyRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0,
-            .pushConstantDwords = 36,
+            .pushConstantDwords = 40,
             .topology =
                 rhi::PrimitiveTopology::
                     TriangleList,
@@ -1175,7 +1251,10 @@ void FarBodyRenderer::Draw(
             celestial_representation::
                 Representation::
                     CachedDiscImpostor &&
-        cachedDisc != nullptr)
+        cachedDisc != nullptr &&
+        !(draw.oceanEnabled &&
+          draw.appearance.oceanFraction > 0.0F &&
+          draw.incidentLightScale > 0.0F))
     {
         cachedDisc->EnsureUploaded(
             commands);
@@ -1283,7 +1362,7 @@ void FarBodyRenderer::Draw(
         }
     }
 
-    const std::array<u32, 36>
+    const std::array<u32, 40>
         constants{
             bits(static_cast<f32>(
                 ellipsoid.radiiMeters.x /
@@ -1326,7 +1405,10 @@ void FarBodyRenderer::Draw(
             bits(draw.appearance.oceanFraction),
             bits(draw.appearance.iceFraction),
             bits(draw.stellar ? 1.0F : 0.0F),
-            0U,
+            bits(std::clamp(
+                draw.appearance.directLightTransmittance,
+                0.0F,
+                1.0F)),
 
             bits(draw.appearance.emissionLinear.x),
             bits(draw.appearance.emissionLinear.y),
@@ -1346,7 +1428,21 @@ void FarBodyRenderer::Draw(
             bits(draw.lightDirectionBody.z),
             bits(std::max(
                 draw.incidentLightScale,
-                0.0F))
+                0.0F)),
+
+            bits(std::max(
+                draw.oceanRefractiveIndex,
+                1.0F)),
+            bits(std::clamp(
+                draw.oceanRoughness,
+                0.01F,
+                1.0F)),
+            bits(std::max(
+                draw.oceanGlintStrength,
+                0.0F)),
+            bits(draw.oceanEnabled
+                ? 1.0F
+                : 0.0F)
         };
 
     commands.SetGraphicsPipeline(
@@ -1426,7 +1522,7 @@ void FarBodyRenderer::DrawSurfaceData(
             draw.camera.verticalFovRadians *
             0.5F);
 
-    const std::array<u32, 36> constants{
+    const std::array<u32, 40> constants{
         bits(static_cast<f32>(
             ellipsoid.radiiMeters.x / scale)),
         bits(static_cast<f32>(
