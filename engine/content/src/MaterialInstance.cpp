@@ -375,4 +375,86 @@ void ContentService::SetMaterialEmission(
     Scan();
 }
 
+
+MaterialEmission ContentService::ResolveMaterialEmission(
+    const AssetId materialAsset) const
+{
+    const AssetRecord* asset =
+        Find(materialAsset);
+
+    if (asset == nullptr)
+    {
+        throw std::invalid_argument(
+            "Cannot resolve emission for an unknown asset.");
+    }
+
+    if (asset->kind == AssetKind::Material)
+    {
+        if (!asset->material.has_value())
+        {
+            throw std::runtime_error(
+                "Material asset has no parsed material authority.");
+        }
+
+        return asset->material->emission;
+    }
+
+    if (asset->kind != AssetKind::MaterialInstance ||
+        !asset->materialInstance.has_value())
+    {
+        throw std::invalid_argument(
+            "Emission resolution requires a Material or Material Instance asset.");
+    }
+
+    const auto& instance =
+        *asset->materialInstance;
+
+    const auto parentAbsolute =
+        (projectRoot_ /
+         asset->sourcePath.parent_path() /
+         instance.parent).
+            lexically_normal();
+
+    const AssetRecord* parent =
+        FindByPath(parentAbsolute);
+
+    if (parent == nullptr ||
+        (parent->kind != AssetKind::Material &&
+         parent->kind != AssetKind::MaterialInstance))
+    {
+        throw std::runtime_error(
+            "Material instance parent cannot be resolved for emission inheritance.");
+    }
+
+    MaterialEmission result =
+        ResolveMaterialEmission(
+            parent->id);
+
+    if (instance.emissionColorLinear.has_value())
+    {
+        result.colorLinear =
+            *instance.emissionColorLinear;
+    }
+
+    if (instance.emissionLuminanceNits.has_value())
+    {
+        result.luminanceNits =
+            *instance.emissionLuminanceNits;
+    }
+
+    if (instance.emissionContributesToGi.has_value())
+    {
+        result.contributesToGi =
+            *instance.emissionContributesToGi;
+    }
+
+    if (instance.emissionGiScale.has_value())
+    {
+        result.giScale =
+            *instance.emissionGiScale;
+    }
+
+    return result;
+}
+
 } // namespace orbit::content
