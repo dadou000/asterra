@@ -7,6 +7,7 @@
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialCloudBinding.hpp>
+#include <orbit/world_model/CelestialGiantBinding.hpp>
 #include <orbit/world_model/CelestialOceanBinding.hpp>
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialRingBinding.hpp>
@@ -1594,6 +1595,21 @@ StudioViewportRenderer::StellarDiagnostics(
 
     return found ==
             stellarDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
+    StudioGiantDiagnostics>
+StudioViewportRenderer::GiantDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        giantDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            giantDiagnostics_.end()
         ? std::nullopt
         : std::optional(found->second);
 }
@@ -3673,11 +3689,22 @@ StudioViewportRenderer::Compose(
                             logicalTarget->
                                 target->body);
 
+                std::optional<
+                    world_model::ResolvedGiantAppearance>
+                    resolvedGiantForView;
+
                 if (bodyObject.has_value())
                 {
                     resolvedRadiativeForView =
                         world_model::
                             ResolveRadiativeBody(
+                                session.World().
+                                    Objects(),
+                                *bodyObject);
+
+                    resolvedGiantForView =
+                        world_model::
+                            ResolveGiantAppearance(
                                 session.World().
                                     Objects(),
                                 *bodyObject);
@@ -3839,19 +3866,82 @@ StudioViewportRenderer::Compose(
                         : math::Float3{
                               1.0F, 1.0F, 1.0F};
 
+                std::optional<
+                    celestial_far_render::AppearanceSummary>
+                    giantAppearanceSummary;
+
+                if (resolvedGiantForView.has_value())
+                {
+                    auto& giantPresentation =
+                        giantPresentations_[info.id];
+
+                    if (giantPresentation.appearance ==
+                            nullptr ||
+                        giantPresentation.body !=
+                            logicalTarget->
+                                target->body ||
+                        giantPresentation.fingerprint !=
+                            resolvedGiantForView->
+                                fingerprint)
+                    {
+                        auto giantAppearance =
+                            celestial_giants::
+                                BuildGiantAppearance(
+                                    resolvedGiantForView->
+                                        parameters,
+                                    {
+                                        .faceResolution =
+                                            65U
+                                    });
+
+                        giantPresentation.summary =
+                            celestial_far_render::
+                                SummarizeAppearance(
+                                    giantAppearance);
+                        giantPresentation.appearance =
+                            std::make_unique<
+                                celestial_appearance::
+                                    PlanetaryAppearanceProduct>(
+                                        std::move(
+                                            giantAppearance));
+                        giantPresentation.body =
+                            logicalTarget->
+                                target->body;
+                        giantPresentation.fingerprint =
+                            resolvedGiantForView->
+                                fingerprint;
+                    }
+
+                    giantAppearanceSummary =
+                        giantPresentation.summary;
+                }
+                else
+                {
+                    giantPresentations_.erase(
+                        info.id);
+                    giantDiagnostics_.erase(
+                        info.id);
+                }
+
                 celestial_far_render::
                     AppearanceSummary appearance{
                         .albedoLinear =
                             radiativeEmitter
                                 ? stellarColor
-                                : math::Float3{
-                                      0.18F,
-                                      0.21F,
-                                      0.23F},
+                                : giantAppearanceSummary.has_value()
+                                    ? giantAppearanceSummary->
+                                          albedoLinear
+                                    : math::Float3{
+                                          0.18F,
+                                          0.21F,
+                                          0.23F},
                         .roughness =
                             radiativeEmitter
                                 ? 0.0F
-                                : 0.82F,
+                                : giantAppearanceSummary.has_value()
+                                    ? giantAppearanceSummary->
+                                          roughness
+                                    : 0.82F,
                         .oceanFraction = 0.0F,
                         .iceFraction = 0.0F,
                         .emissionLinear = {}
@@ -3904,6 +3994,38 @@ StudioViewportRenderer::Compose(
                         info.id);
                 }
 
+                if (resolvedGiantForView.has_value())
+                {
+                    giantDiagnostics_.insert_or_assign(
+                        info.id,
+                        StudioGiantDiagnostics{
+                            .body =
+                                logicalTarget->
+                                    target->body,
+                            .appearanceFingerprint =
+                                resolvedGiantForView->
+                                    fingerprint,
+                            .iceGiant =
+                                resolvedGiantForView->
+                                    parameters.giantClass ==
+                                celestial_giants::
+                                    GiantClass::IceGiant,
+                            .bandFrequency =
+                                resolvedGiantForView->
+                                    parameters.bandFrequency,
+                            .bandStrength =
+                                resolvedGiantForView->
+                                    parameters.bandStrength,
+                            .stormStrength =
+                                resolvedGiantForView->
+                                    parameters.stormStrength,
+                            .projectedRadiusPixels =
+                                projectedRadius,
+                            .representation =
+                                decision.representation
+                        });
+                }
+
                 graph.AddPass(
                     prefix +
                         ".FarBody",
@@ -3951,6 +4073,7 @@ StudioViewportRenderer::Compose(
                      resolvedRadiometricIntensity,
                      pointRadiometricIntensity,
                      resolvedRadiativeForView,
+                     resolvedGiantForView,
                      studioDirectLight,
                      resolvedOceanForView](
                         rhi::CommandList& commands,
@@ -4031,6 +4154,47 @@ StudioViewportRenderer::Compose(
                                                     : 1.0),
                                         .oceanEnabled =
                                             resolvedOceanForView.has_value(),
+                                        .giantEnabled =
+                                            resolvedGiantForView.has_value(),
+                                        .giantBaseColorLinear =
+                                            resolvedGiantForView.has_value()
+                                                ? math::Float3{
+                                                      static_cast<f32>(resolvedGiantForView->parameters.baseColorLinear.x),
+                                                      static_cast<f32>(resolvedGiantForView->parameters.baseColorLinear.y),
+                                                      static_cast<f32>(resolvedGiantForView->parameters.baseColorLinear.z)}
+                                                : math::Float3{0.62F,0.48F,0.31F},
+                                        .giantBandColorLinear =
+                                            resolvedGiantForView.has_value()
+                                                ? math::Float3{
+                                                      static_cast<f32>(resolvedGiantForView->parameters.bandColorLinear.x),
+                                                      static_cast<f32>(resolvedGiantForView->parameters.bandColorLinear.y),
+                                                      static_cast<f32>(resolvedGiantForView->parameters.bandColorLinear.z)}
+                                                : math::Float3{0.90F,0.78F,0.58F},
+                                        .giantPolarColorLinear =
+                                            resolvedGiantForView.has_value()
+                                                ? math::Float3{
+                                                      static_cast<f32>(resolvedGiantForView->parameters.polarColorLinear.x),
+                                                      static_cast<f32>(resolvedGiantForView->parameters.polarColorLinear.y),
+                                                      static_cast<f32>(resolvedGiantForView->parameters.polarColorLinear.z)}
+                                                : math::Float3{0.48F,0.42F,0.36F},
+                                        .giantBandFrequency =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.bandFrequency:11.0),
+                                        .giantBandStrength =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.bandStrength:0.72),
+                                        .giantZonalShear =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.zonalShear:0.18),
+                                        .giantStormStrength =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.stormStrength:0.35),
+                                        .giantStormScale =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.stormScale:5.0),
+                                        .giantPolarStrength =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.polarStrength:0.22),
+                                        .giantDepthContrast =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.depthContrast:0.25),
+                                        .giantTurbulenceStrength =
+                                            static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.turbulenceStrength:0.18),
+                                        .giantSeed =
+                                            static_cast<u32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.seed&0xffffffffULL:1ULL),
                                         .stellar =
                                             radiativeEmitter,
                                         .stellarColorLinear =
