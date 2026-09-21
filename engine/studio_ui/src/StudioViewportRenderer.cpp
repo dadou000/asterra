@@ -1860,6 +1860,12 @@ StudioViewportRenderer::Compose(
 
             auto* terrainRenderer =
                 terrain.renderer.get();
+            auto* surfaceBaseRoughness =
+                &view->SurfaceBaseRoughness();
+            auto* surfaceNormalMetallic =
+                &view->SurfaceNormalMetallic();
+            auto* surfaceEmissionClass =
+                &view->SurfaceEmissionClass();
             auto* depth =
                 &view->Depth();
 
@@ -1894,12 +1900,30 @@ StudioViewportRenderer::Compose(
                             .access = render_graph::Access::Write
                         },
                         {
+                            .texture = targets.surfaceBaseRoughness,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceNormalMetallic,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceEmissionClass,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
                             .texture = targets.depth,
                             .state = rhi::ResourceState::DepthWrite,
                             .access = render_graph::Access::Write
                         }
                     },
                     [color,
+                     surfaceBaseRoughness,
+                     surfaceNormalMetallic,
+                     surfaceEmissionClass,
                      depth,
                      width,
                      height,
@@ -1925,13 +1949,28 @@ StudioViewportRenderer::Compose(
                                 .alpha = 1.0F
                             });
     
+                        commands.ClearColorTarget(
+                            *surfaceBaseRoughness,
+                            {0.0F, 0.0F, 0.0F, 1.0F});
+                        commands.ClearColorTarget(
+                            *surfaceNormalMetallic,
+                            {0.0F, 1.0F, 0.0F, 0.0F});
+                        commands.ClearColorTarget(
+                            *surfaceEmissionClass,
+                            {0.0F, 0.0F, 0.0F, 0.0F});
                         commands.ClearDepthTarget(
                             *depth,
                             0.0F);
-    
+
+                        const std::array<rhi::Texture*, 4> surfaceTargets{
+                            color,
+                            surfaceBaseRoughness,
+                            surfaceNormalMetallic,
+                            surfaceEmissionClass
+                        };
                         commands.SetRenderTargets(
-                            *color,
-                            *depth);
+                            surfaceTargets,
+                            depth);
     
                         terrainRenderer->Draw(
                             commands,
