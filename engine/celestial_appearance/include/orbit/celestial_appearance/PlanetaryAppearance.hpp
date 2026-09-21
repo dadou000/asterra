@@ -24,6 +24,7 @@ struct AppearanceTexel
     f32 roughness{0.8F};
     f32 oceanMask{0.0F};
     f32 iceMask{0.0F};
+    f32 directLightTransmittance{1.0F};
     math::Float3 emissionLinear{};
 };
 
@@ -60,6 +61,7 @@ struct GpuAppearanceTexel
     f32 oceanMask{0.0F};
     math::Float3 emissionLinear{};
     f32 iceMask{0.0F};
+    f32 directLightTransmittance{1.0F};
 };
 
 class GpuPlanetaryAppearanceProduct
