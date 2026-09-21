@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_atmosphere/Atmosphere.hpp>
+#include <orbit/celestial_clouds/CloudField.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
@@ -62,6 +63,18 @@ struct StudioAtmosphereDiagnostics
     u32 multiScatteringHeight{0};
     u32 skyViewWidth{0};
     u32 skyViewHeight{0};
+};
+
+struct StudioCloudDiagnostics
+{
+    universe::BodyId body{};
+    u64 fingerprint{0};
+    u64 climateRevision{0};
+    i64 timeBucket{0};
+    u32 layerCount{0};
+    f64 meanCoverage{0.0};
+    f64 meanOpticalDepth{0.0};
+    bool gpuResident{false};
 };
 
 struct StudioCelestialLightingDiagnostics
@@ -167,6 +180,11 @@ public:
     AtmosphereDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioCloudDiagnostics>
+    CloudDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -202,6 +220,18 @@ private:
         terrain_debug::TerrainDebugField field{
             terrain_debug::TerrainDebugField::Uplift};
         u64 seamFingerprint{0};
+    };
+
+    struct CloudPresentation
+    {
+        universe::BodyId body{};
+        u64 fingerprint{0};
+        std::unique_ptr<
+            celestial_clouds::CloudFieldProduct>
+            field;
+        std::unique_ptr<
+            celestial_clouds::GpuCloudFieldProduct>
+            gpu;
     };
 
     struct AtmospherePresentation
@@ -280,6 +310,18 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioCloudDiagnostics,
+        std::less<>>
+        cloudDiagnostics_;
+
+    std::map<
+        std::string,
+        CloudPresentation,
+        std::less<>>
+        cloudPresentations_;
 
     std::map<
         std::string,
