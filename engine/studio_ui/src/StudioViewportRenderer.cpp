@@ -791,6 +791,8 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
         presentation.product == nullptr ||
         presentation.appearanceProduct ==
             nullptr ||
+        presentation.cachedDisc ==
+            nullptr ||
         presentation.body != body ||
         presentation.sourceRevision !=
             sourceRevision ||
@@ -1142,6 +1144,53 @@ StudioViewportRenderer::Compose(
                         representationInput,
                         representationDecision);
 
+            const auto representationBlend =
+                celestial_representation::
+                    ResolveRepresentationBlend(
+                        representationInput,
+                        representationDecision);
+
+            const auto weightFor =
+                [&](const celestial_representation::
+                        Representation representation)
+                {
+                    f64 weight = 0.0;
+
+                    if (representationBlend.richer ==
+                        representation)
+                    {
+                        weight +=
+                            representationBlend.
+                                richerWeight;
+                    }
+
+                    if (representationBlend.lower ==
+                            representation &&
+                        representationBlend.lower !=
+                            representationBlend.richer)
+                    {
+                        weight +=
+                            representationBlend.
+                                lowerWeight;
+                    }
+
+                    return std::clamp(
+                        weight,
+                        0.0,
+                        1.0);
+                };
+
+            const f64 productionWeight =
+                weightFor(
+                    celestial_representation::
+                        Representation::
+                            ProductionSurface);
+            const f64 macroWeight =
+                weightFor(
+                    celestial_representation::
+                        Representation::
+                            MacroDisplacedGlobe);
+
             transitionDiagnostics_.insert_or_assign(
                 info.id,
                 StudioSurfaceGlobeTransitionDiagnostics{
@@ -1154,11 +1203,9 @@ StudioViewportRenderer::Compose(
                         representationDecision.
                             lowerFidelityNeighbor,
                     .productionSurfaceWeight =
-                        surfaceGlobeTransition.
-                            productionSurfaceWeight,
+                        productionWeight,
                     .macroGlobeWeight =
-                        surfaceGlobeTransition.
-                            macroGlobeWeight,
+                        macroWeight,
                     .projectedRadiusPixels =
                         representationDecision.
                             projectedRadiusPixels,
@@ -1172,7 +1219,7 @@ StudioViewportRenderer::Compose(
                         representationDecision.
                             hysteresisHeld,
                     .overlapping =
-                        surfaceGlobeTransition.
+                        representationBlend.
                             overlapping
                 });
 
@@ -1320,9 +1367,7 @@ StudioViewportRenderer::Compose(
                         device_->
                             AdapterName());
 
-            if (surfaceGlobeTransition.
-                    productionSurfaceWeight >
-                0.0)
+            if (productionWeight > 0.0)
             {
                 graph.AddPass(
                     prefix + ".ProductionTerrain",
@@ -1431,9 +1476,17 @@ StudioViewportRenderer::Compose(
                     });
             }
 
-            if (surfaceGlobeTransition.
-                    macroGlobeWeight >
-                    0.0 &&
+            const bool hasFarRepresentation =
+                representationBlend.richer !=
+                    celestial_representation::
+                        Representation::
+                            ProductionSurface ||
+                representationBlend.lower !=
+                    celestial_representation::
+                        Representation::
+                            ProductionSurface;
+
+            if (hasFarRepresentation &&
                 hasMacroGlobe &&
                 macroGlobeSurface != nullptr &&
                 macroGlobeSurface->terrain != nullptr &&
@@ -1447,25 +1500,98 @@ StudioViewportRenderer::Compose(
                         *shape,
                         *macroGlobeSurface->terrain);
 
+                auto& farPresentation =
+                    macroGlobePresentations_[
+                        info.id];
+
                 const auto globeCamera =
                     view->Camera();
 
-                const f32 globeOpacity =
+                const bool clearForFarOnly =
+                    productionWeight <= 0.0;
+
+                const auto drawRepresentation =
+                    [this,
+                     color,
+                     width,
+                     height,
+                     transitionGlobe,
+                     &farPresentation,
+                     shape = *shape,
+                     globeCamera,
+                     projectedRadius =
+                        representationDecision.
+                            projectedRadiusPixels](
+                        rhi::CommandList& commands,
+                        const celestial_representation::
+                            Representation representation,
+                        const f32 opacity)
+                    {
+                        if (opacity <= 0.0F)
+                        {
+                            return;
+                        }
+
+                        if (representation ==
+                            celestial_representation::
+                                Representation::
+                                    MacroDisplacedGlobe)
+                        {
+                            macroGlobeRenderer_.Draw(
+                                commands,
+                                *color,
+                                width,
+                                height,
+                                *transitionGlobe,
+                                globeCamera,
+                                opacity);
+                            return;
+                        }
+
+                        celestial_far_render::FarBodyDraw
+                            draw{
+                                .representation =
+                                    representation,
+                                .shape = shape,
+                                .camera = globeCamera,
+                                .appearance =
+                                    farPresentation.
+                                        appearanceSummary,
+                                .projectedRadiusPixels =
+                                    projectedRadius,
+                                .opacity = opacity,
+                                .stellar =
+                                    representation ==
+                                    celestial_representation::
+                                        Representation::
+                                            StellarPointProxy
+                            };
+
+                        farBodyRenderer_.Draw(
+                            commands,
+                            *color,
+                            width,
+                            height,
+                            draw,
+                            farPresentation.
+                                cachedDisc.get());
+                    };
+
+                const auto richer =
+                    representationBlend.richer;
+                const auto lower =
+                    representationBlend.lower;
+                const f32 lowerOpacity =
                     static_cast<f32>(
                         std::clamp(
-                            surfaceGlobeTransition.
-                                macroGlobeWeight,
+                            representationBlend.
+                                lowerWeight,
                             0.0,
                             1.0));
 
-                const bool clearForGlobeOnly =
-                    surfaceGlobeTransition.
-                        productionSurfaceWeight <=
-                    0.0;
-
                 graph.AddPass(
                     prefix +
-                        ".SurfaceGlobeTransition",
+                        ".CelestialFarTransition",
                     {
                         {
                             .texture = targets.color,
@@ -1477,18 +1603,16 @@ StudioViewportRenderer::Compose(
                                     Write
                         }
                     },
-                    [this,
-                     color,
-                     width,
-                     height,
-                     transitionGlobe,
-                     globeCamera,
-                     globeOpacity,
-                     clearForGlobeOnly](
+                    [color,
+                     clearForFarOnly,
+                     richer,
+                     lower,
+                     lowerOpacity,
+                     drawRepresentation](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
-                        if (clearForGlobeOnly)
+                        if (clearForFarOnly)
                         {
                             commands.ClearColorTarget(
                                 *color,
@@ -1500,14 +1624,28 @@ StudioViewportRenderer::Compose(
                                 });
                         }
 
-                        macroGlobeRenderer_.Draw(
-                            commands,
-                            *color,
-                            width,
-                            height,
-                            *transitionGlobe,
-                            globeCamera,
-                            globeOpacity);
+                        if (richer !=
+                            celestial_representation::
+                                Representation::
+                                    ProductionSurface)
+                        {
+                            drawRepresentation(
+                                commands,
+                                richer,
+                                1.0F);
+                        }
+
+                        if (lower != richer &&
+                            lower !=
+                                celestial_representation::
+                                    Representation::
+                                        ProductionSurface)
+                        {
+                            drawRepresentation(
+                                commands,
+                                lower,
+                                lowerOpacity);
+                        }
                     });
             }
             break;
