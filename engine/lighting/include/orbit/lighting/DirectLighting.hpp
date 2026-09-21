@@ -3,6 +3,7 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/lighting/LightingView.hpp>
+#include <orbit/lighting/LocalLightRegistry.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -40,11 +41,16 @@ public:
         rhi::Texture& surfaceBaseRoughness,
         rhi::Texture& surfaceNormalMetallic,
         rhi::Texture& surfaceEmissionClass,
+        rhi::Texture& depth,
+        rhi::Buffer& localLights,
+        rhi::Buffer& tileOffsets,
+        rhi::Buffer& tileLightIndices,
         rhi::Texture& targetSceneColor,
         u32 width,
         u32 height,
         const LightingView& view,
         const DirectionalLight& light,
+        const TiledLightGrid& localLightGrid,
         const DirectLightingSettings& settings = {});
 
 private:
