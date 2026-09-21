@@ -223,6 +223,7 @@ struct Constants
     float4 material;
     float4 emissionAndOpacity;
     float4 proxy;
+    float4 lighting;
 };
 [[vk::push_constant]] Constants g;
 
@@ -264,11 +265,7 @@ float4 main(VSOutput input) : SV_Target0
                     z));
 
         const float3 l =
-            normalize(
-                float3(
-                    0.55,
-                    0.72,
-                    0.48));
+            normalize(g.lighting.xyz);
 
         const float ndl =
             saturate(
@@ -295,7 +292,8 @@ float4 main(VSOutput input) : SV_Target0
 
         float3 color =
             g.albedoAndRoughness.xyz *
-                (0.05 + 0.95 * ndl) +
+                (0.05 + 0.95 * ndl) *
+                max(g.lighting.w, 0.0) +
             ocean *
                 limb *
                 (1.0 - roughness) *
@@ -414,7 +412,7 @@ float4 main(VSOutput input) : SV_Target0
             hit.z / (radii.z * radii.z)));
 
     const float3 l =
-        normalize(float3(0.55, 0.72, -0.48));
+        normalize(g.lighting.xyz);
 
     const float ndl =
         saturate(dot(n, l));
@@ -431,7 +429,9 @@ float4 main(VSOutput input) : SV_Target0
         pow(1.0 - saturate(abs(dot(n, -ray))), 4.0);
 
     float3 color =
-        g.albedoAndRoughness.xyz * diffuse +
+        g.albedoAndRoughness.xyz *
+            diffuse *
+            max(g.lighting.w, 0.0) +
         ocean * rim *
             (1.0 - roughness) *
             float3(0.20, 0.32, 0.45) +
@@ -811,7 +811,7 @@ FarBodyRenderer::FarBodyRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0,
-            .pushConstantDwords = 32,
+            .pushConstantDwords = 36,
             .topology =
                 rhi::PrimitiveTopology::
                     TriangleList,
@@ -988,7 +988,7 @@ void FarBodyRenderer::Draw(
             draw.camera.verticalFovRadians *
             0.5F);
 
-    const std::array<u32, 32>
+    const std::array<u32, 36>
         constants{
             bits(static_cast<f32>(
                 ellipsoid.radiiMeters.x /
@@ -1046,6 +1046,13 @@ void FarBodyRenderer::Draw(
             bits(pointFluxScale),
             bits(std::max(
                 draw.radiometricIntensity,
+                0.0F)),
+
+            bits(draw.lightDirectionBody.x),
+            bits(draw.lightDirectionBody.y),
+            bits(draw.lightDirectionBody.z),
+            bits(std::max(
+                draw.incidentLightScale,
                 0.0F))
         };
 
