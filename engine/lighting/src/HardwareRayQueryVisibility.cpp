@@ -503,7 +503,8 @@ HardwareRayQueryVisibilityBatch(
 }
 
 void HardwareRayQueryVisibilityBatch::RebuildScene(
-    const SoftwareProxyScene& scene)
+    const SoftwareProxyScene& scene,
+    const math::Double3 gpuOriginInFrameMeters)
 {
     accelerationStructure_.reset();
     primitiveBuffer_.reset();
@@ -517,10 +518,12 @@ void HardwareRayQueryVisibilityBatch::RebuildScene(
     }
 
     const auto aabbs =
-        scene.AccelerationAabbs();
+        scene.AccelerationAabbs(
+            gpuOriginInFrameMeters);
 
     const auto primitives =
-        scene.GpuPrimitives();
+        scene.GpuPrimitives(
+            gpuOriginInFrameMeters);
 
     if (aabbs.empty() ||
         aabbs.size() != primitives.size())
