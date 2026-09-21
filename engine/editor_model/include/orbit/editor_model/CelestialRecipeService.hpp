@@ -15,6 +15,7 @@ struct StarRecipe
     std::string name{"Star"};
     f64 massKilograms{1.98847e30};
     f64 radiusMeters{6.957e8};
+    f64 effectiveTemperatureKelvin{5772.0};
     f64 rotationPeriodSeconds{2.192832e6};
 };
 
