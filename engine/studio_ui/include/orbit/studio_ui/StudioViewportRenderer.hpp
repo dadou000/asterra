@@ -32,6 +32,7 @@
 #include <orbit/post_process/ColorLut.hpp>
 #include <orbit/post_process/DisplayResolve.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
+#include <orbit/post_process/HighlightEffects.hpp>
 #include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
@@ -225,6 +226,7 @@ struct StudioLuminanceHistogramDiagnostics
     post_process::LuminanceHistogramConfig config{};
     post_process::HumanEyeAdaptationState eyeState{};
     post_process::HumanEyeAdaptationConfig eyeConfig{};
+    post_process::HighlightEffectsConfig highlightConfig{};
     bool meteringMaskAvailable{false};
 };
 
@@ -365,6 +367,10 @@ public:
 
     void ResetHumanEyeAdaptation(
         std::string_view viewportId) noexcept;
+
+    void SetHighlightEffectsConfig(
+        std::string_view viewportId,
+        post_process::HighlightEffectsConfig config);
 
     void SetLuminanceMeteringOverlay(
         std::string_view viewportId,
@@ -683,6 +689,7 @@ private:
     lighting::ExactReflectionQueryRenderer exactReflectionQueryRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
     post_process::LuminanceHistogramRenderer luminanceHistogramRenderer_;
+    post_process::HighlightEffectsRenderer highlightEffectsRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
     std::unique_ptr<post_process::GpuColorLut> colorLut_;
