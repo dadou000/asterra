@@ -6,6 +6,8 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <type_traits>
 
@@ -499,5 +501,205 @@ ReferenceRadiusMeters() const noexcept
 u64 GpuMacroGlobeProduct::Fingerprint() const noexcept
 {
     return fingerprint_;
+}
+} // namespace orbit::celestial_globe
+
+
+namespace orbit::celestial_globe
+{
+namespace
+{
+constexpr const char* kMacroGlobeVertexShader = R"(
+struct VSInput
+{
+    float3 position : POSITION;
+    float3 normal : NORMAL;
+};
+
+struct Constants
+{
+    float4 cameraAndAspect;
+    float4 forwardAndTanHalfFov;
+    float4 upAndScale;
+};
+
+[[vk::push_constant]] Constants g_pc;
+
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float3 normal : NORMAL;
+};
+
+VSOutput main(VSInput input)
+{
+    const float3 forward = normalize(g_pc.forwardAndTanHalfFov.xyz);
+    const float3 upRequested = normalize(g_pc.upAndScale.xyz);
+    const float3 right = normalize(cross(forward, upRequested));
+    const float3 up = normalize(cross(right, forward));
+
+    const float3 camera = g_pc.cameraAndAspect.xyz;
+    const float3 world = input.position * g_pc.upAndScale.w;
+    const float3 relative = world - camera;
+
+    const float z = dot(relative, forward);
+    const float x = dot(relative, right);
+    const float y = dot(relative, up);
+
+    const float tanHalf = max(g_pc.forwardAndTanHalfFov.w, 0.001);
+    const float aspect = max(g_pc.cameraAndAspect.w, 0.001);
+
+    VSOutput output;
+    output.position = float4(
+        x / (z * tanHalf * aspect),
+        y / (z * tanHalf),
+        saturate(z / max(g_pc.upAndScale.w * 1000.0, 1.0)),
+        1.0);
+    output.normal = normalize(input.normal);
+    return output;
+}
+)";
+
+constexpr const char* kMacroGlobePixelShader = R"(
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float3 normal : NORMAL;
+};
+
+float4 main(VSOutput input) : SV_Target0
+{
+    const float3 n = normalize(input.normal);
+    const float3 l = normalize(float3(0.55, 0.72, -0.48));
+    const float ndl = saturate(dot(n, l));
+    const float rim = pow(1.0 - saturate(abs(n.z)), 3.0);
+
+    const float3 base = float3(0.12, 0.31, 0.39);
+    const float3 color =
+        base * (0.055 + 0.945 * ndl) +
+        float3(0.07, 0.11, 0.14) * rim;
+
+    return float4(color / (1.0 + color), 1.0);
+}
+)";
+} // namespace
+
+MacroGlobeRenderer::MacroGlobeRenderer(
+    rhi::Device& device,
+    const shader::Compiler& compiler)
+{
+    const auto vs = compiler.Compile({
+        .source = kMacroGlobeVertexShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Vertex,
+        .debug = false
+    });
+
+    const auto ps = compiler.Compile({
+        .source = kMacroGlobePixelShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false
+    });
+
+    static constexpr std::array<rhi::VertexAttribute, 2> attributes{{
+        {
+            .location = 0,
+            .format = rhi::VertexFormat::Float3,
+            .offsetBytes = 0
+        },
+        {
+            .location = 1,
+            .format = rhi::VertexFormat::Float3,
+            .offsetBytes = sizeof(math::Float3)
+        }
+    }};
+
+    pipeline_ = device.CreateGraphicsPipeline({
+        .vertexShader = {
+            .data = vs.bytecode.data(),
+            .size = vs.bytecode.size()
+        },
+        .pixelShader = {
+            .data = ps.bytecode.data(),
+            .size = ps.bytecode.size()
+        },
+        .vertexAttributes = attributes,
+        .vertexStrideBytes = sizeof(GpuMacroGlobeVertex),
+        .pushConstantDwords = 12,
+        .topology = rhi::PrimitiveTopology::TriangleList,
+        .fillMode = rhi::FillMode::Solid,
+        .cullMode = rhi::CullMode::Back,
+        .depthTest = false,
+        .depthWrite = false
+    });
+}
+
+void MacroGlobeRenderer::Draw(
+    rhi::CommandList& commands,
+    rhi::Texture& target,
+    const u32 width,
+    const u32 height,
+    GpuMacroGlobeProduct& globe,
+    const render_view::CameraState& camera)
+{
+    if (width == 0U || height == 0U)
+    {
+        return;
+    }
+
+    const f64 radius =
+        std::max(
+            globe.ReferenceRadiusMeters(),
+            1.0);
+
+    const auto bits =
+        [](const f32 value)
+        {
+            return std::bit_cast<u32>(value);
+        };
+
+    const std::array<u32, 12> constants{
+        bits(static_cast<f32>(camera.localPositionMeters.x / radius)),
+        bits(static_cast<f32>(camera.localPositionMeters.y / radius)),
+        bits(static_cast<f32>(camera.localPositionMeters.z / radius)),
+        bits(static_cast<f32>(width) / static_cast<f32>(height)),
+
+        bits(camera.forward.x),
+        bits(camera.forward.y),
+        bits(camera.forward.z),
+        bits(std::tan(camera.verticalFovRadians * 0.5F)),
+
+        bits(camera.up.x),
+        bits(camera.up.y),
+        bits(camera.up.z),
+        bits(1.0F)
+    };
+
+    commands.SetRenderTarget(target);
+    commands.SetViewport({
+        .x = 0.0F,
+        .y = 0.0F,
+        .width = static_cast<f32>(width),
+        .height = static_cast<f32>(height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F
+    });
+    commands.SetScissor({
+        .left = 0,
+        .top = 0,
+        .right = static_cast<i32>(width),
+        .bottom = static_cast<i32>(height)
+    });
+    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsConstants(constants);
+    commands.SetVertexBuffer(
+        globe.VertexBuffer(),
+        sizeof(GpuMacroGlobeVertex));
+    commands.SetIndexBuffer(
+        globe.IndexBuffer(),
+        rhi::IndexFormat::UInt32);
+    commands.DrawIndexed(
+        globe.IndexCount());
 }
 } // namespace orbit::celestial_globe
