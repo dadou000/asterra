@@ -18,7 +18,8 @@ public:
         const shader::Compiler& compiler);
 
     void RebuildScene(
-        const SoftwareProxyScene& scene);
+        const SoftwareProxyScene& scene,
+        math::Double3 gpuOriginInFrameMeters = {});
 
     [[nodiscard]] bool Supported() const noexcept;
     [[nodiscard]] bool Ready() const noexcept;
