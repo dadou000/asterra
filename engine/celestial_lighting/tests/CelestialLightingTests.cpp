@@ -27,7 +27,7 @@ namespace
 {
 int FailCode(const int code)
 {
-    std::cerr << "celestial-lighting failure code " << code << '\\n';
+    std::cerr << "celestial-lighting failure code " << code << '\n';
     return code;
 }
 } // namespace
