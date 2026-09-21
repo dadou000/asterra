@@ -14,6 +14,8 @@ add_library(OrbitLighting STATIC
     src/RadianceClipmap.cpp
     src/RadianceClipmapResidency.cpp
     src/ScreenSpaceFinalGather.cpp
+    src/RadianceEstimator.cpp
+    src/RadianceCacheSampler.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -89,6 +91,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingScreenSpaceFinalGatherTests
         tests/ScreenSpaceFinalGatherTests.cpp
+    )
+
+    add_executable(OrbitLightingRadianceEstimatorTests
+        tests/RadianceEstimatorTests.cpp
     )
 
     target_link_libraries(OrbitLightingSurfaceDataTests
@@ -200,6 +206,14 @@ if(BUILD_TESTING)
         OrbitLightingScreenSpaceFinalGatherTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingScreenSpaceFinalGatherTests)
 
+    target_link_libraries(OrbitLightingRadianceEstimatorTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingRadianceEstimatorTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingRadianceEstimatorTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -248,6 +262,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingScreenSpaceFinalGather
         COMMAND OrbitLightingScreenSpaceFinalGatherTests
+    )
+
+    add_test(
+        NAME Orbit.LightingRadianceEstimator
+        COMMAND OrbitLightingRadianceEstimatorTests
     )
 
     add_test(
