@@ -300,11 +300,69 @@ CelestialLightingService::DirectLightingAtSurface(
         .celestial = *direct,
         .cloudTransmittance =
             cloudTransmittance,
+        .ringTransmittance = 1.0,
         .irradianceWattsPerSquareMeter =
             direct->
                 irradianceWattsPerSquareMeter *
             cloudTransmittance
     };
+}
+
+std::optional<DirectSurfaceLighting>
+CelestialLightingService::DirectLightingAtSurface(
+    const universe::BodyId receiver,
+    const universe::BodyId emitter,
+    const std::vector<universe::BodyId>& occluders,
+    const time::SimulationTime atTime,
+    const celestial_clouds::CloudFieldProduct& clouds,
+    const celestial_rings::RingSystem& rings,
+    const math::Double3 surfaceUnitDirection) const
+{
+    const auto cloudy =
+        DirectLightingAtSurface(
+            receiver,
+            emitter,
+            occluders,
+            atTime,
+            clouds,
+            surfaceUnitDirection);
+
+    if (!cloudy.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto* receiverBody =
+        universe_.Bodies().FindBody(
+            receiver);
+
+    if (receiverBody == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const f64 radius =
+        universe::ReferenceRadiusMeters(
+            receiverBody->shape);
+
+    const f64 ringTransmittance =
+        celestial_rings::
+            RingShadowTransmittanceAtSurface(
+                rings,
+                radius,
+                math::Normalize(
+                    surfaceUnitDirection),
+                math::Normalize(
+                    cloudy->
+                        celestial.
+                        receiverBodyFixedToEmitterMeters));
+
+    auto result = *cloudy;
+    result.ringTransmittance =
+        ringTransmittance;
+    result.irradianceWattsPerSquareMeter *=
+        ringTransmittance;
+    return result;
 }
 
 std::optional<ReflectedBodyLighting>
