@@ -9,6 +9,82 @@ namespace orbit::lighting
 {
 namespace
 {
+[[nodiscard]] u64 FoldHash(
+    const content::ContentHash& hash) noexcept
+{
+    u64 value = 1469598103934665603ULL;
+
+    for (const auto byte : hash.Bytes())
+    {
+        value ^=
+            static_cast<u64>(
+                std::to_integer<u8>(byte));
+        value *=
+            1099511628211ULL;
+    }
+
+    return value != 0U
+        ? value
+        : 1U;
+}
+
+[[nodiscard]] u64 MixRevision(
+    const u64 a,
+    const u64 b) noexcept
+{
+    u64 value =
+        a ^
+        (b +
+         0x9e3779b97f4a7c15ULL +
+         (a << 6U) +
+         (a >> 2U));
+
+    return value != 0U
+        ? value
+        : 1U;
+}
+
+[[nodiscard]] u64 MaterialRevision(
+    const content::ContentService& content,
+    const content::AssetRecord& record,
+    u32 depth = 0U)
+{
+    if (depth > 32U)
+    {
+        throw std::runtime_error(
+            "Material revision traversal exceeded inheritance depth.");
+    }
+
+    u64 revision =
+        FoldHash(record.sourceHash);
+
+    if (record.kind ==
+            content::AssetKind::MaterialInstance &&
+        record.materialInstance.has_value())
+    {
+        const auto* parent =
+            content.FindByPath(
+                record.sourcePath.parent_path() /
+                record.materialInstance->parent);
+
+        if (parent == nullptr)
+        {
+            throw std::runtime_error(
+                "Material instance parent could not be resolved while deriving emissive revision.");
+        }
+
+        revision =
+            MixRevision(
+                revision,
+                MaterialRevision(
+                    content,
+                    *parent,
+                    depth + 1U));
+    }
+
+    return revision;
+}
+
 [[nodiscard]] f32 DecodeChannel(
     const u8 value,
     const EmissiveTextureTransfer transfer) noexcept
@@ -171,7 +247,9 @@ BuildRuntimeEmissiveSurface(
     }
 
     RuntimeEmissiveSurface result{
-        .geometry = geometry
+        .geometry = geometry,
+        .contentRevision =
+            geometry.contentRevision
     };
 
     if (emissiveTexture == nullptr)
@@ -265,6 +343,13 @@ BuildRuntimeEmissiveSurface(
             contentService,
             materialAsset);
 
+    u64 contentRevision =
+        geometry.contentRevision != 0U
+            ? geometry.contentRevision
+            : MaterialRevision(
+                  contentService,
+                  *record);
+
     const auto emissivePath =
         ResolveEmissiveTexturePath(
             contentService,
@@ -272,12 +357,15 @@ BuildRuntimeEmissiveSurface(
 
     if (emissivePath.empty())
     {
-        return
+        auto surface =
             BuildRuntimeEmissiveSurface(
                 geometry,
                 materialEmission.evaluated,
                 nullptr,
                 transfer);
+        surface.contentRevision =
+            contentRevision;
+        return surface;
     }
 
     const auto* textureAsset =
@@ -291,6 +379,12 @@ BuildRuntimeEmissiveSurface(
         throw std::runtime_error(
             "Material emissive texture is not indexed as a texture asset.");
     }
+
+    contentRevision =
+        MixRevision(
+            contentRevision,
+            FoldHash(
+                textureAsset->sourceHash));
 
     const auto imported =
         contentService.ImportDerived(
@@ -322,11 +416,14 @@ BuildRuntimeEmissiveSurface(
         content::DecodeRuntimeTexture(
             bytes);
 
-    return
+    auto surface =
         BuildRuntimeEmissiveSurface(
             geometry,
             materialEmission.evaluated,
             &texture,
             transfer);
+    surface.contentRevision =
+        contentRevision;
+    return surface;
 }
 } // namespace orbit::lighting
