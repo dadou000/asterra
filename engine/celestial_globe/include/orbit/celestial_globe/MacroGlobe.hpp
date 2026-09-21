@@ -82,6 +82,13 @@ private:
     u64 fingerprint_{0};
 };
 
+struct MacroGlobeLighting
+{
+    math::Float3 directionBody{
+        0.55F, 0.72F, -0.48F};
+    f32 irradianceScale{1.0F};
+};
+
 class MacroGlobeRenderer
 {
 public:
@@ -96,7 +103,8 @@ public:
         u32 height,
         GpuMacroGlobeProduct& globe,
         const render_view::CameraState& camera,
-        f32 opacity = 1.0F);
+        f32 opacity = 1.0F,
+        const MacroGlobeLighting& lighting = {});
 
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
