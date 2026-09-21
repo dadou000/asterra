@@ -227,7 +227,7 @@ float4 main(VSOutput input) : SV_Target0
             rim * 0.08;
 
     return float4(
-        color / (1.0 + color),
+        color,
         1.0);
 }
 )";
