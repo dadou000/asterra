@@ -2,6 +2,7 @@
 
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/volume_fields/VolumeFieldStorage.hpp>
 
 #include <string>
 
@@ -10,8 +11,9 @@ namespace orbit::studio_ui
 class VolumeAuthoringUi
 {
 public:
-    explicit VolumeAuthoringUi(
-        studio_session::StudioSession& session) noexcept;
+    VolumeAuthoringUi(
+        studio_session::StudioSession& session,
+        volume_fields::VolumeFieldStorageService& fields) noexcept;
 
     void Register(
         editor_ui::EditorUi& ui);
@@ -26,6 +28,7 @@ private:
         editor_ui::PanelContext& context);
 
     studio_session::StudioSession* session_{nullptr};
+    volume_fields::VolumeFieldStorageService* fields_{nullptr};
     std::string status_;
 };
 } // namespace orbit::studio_ui
