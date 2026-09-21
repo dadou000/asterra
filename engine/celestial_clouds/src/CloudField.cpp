@@ -732,6 +732,117 @@ CloudFieldProduct BuildCloudField(
     return result;
 }
 
+void CompositeOrbitalCloudAppearance(
+    const CloudFieldProduct& field,
+    celestial_appearance::PlanetaryAppearanceProduct& appearance)
+{
+    if (appearance.faceResolution == 0U ||
+        appearance.texels.empty() ||
+        field.faceResolution == 0U)
+    {
+        return;
+    }
+
+    for (u32 face = 0U;
+         face < 6U;
+         ++face)
+    {
+        for (u32 y = 0U;
+             y < appearance.faceResolution;
+             ++y)
+        {
+            const f64 v =
+                -1.0 +
+                2.0 *
+                static_cast<f64>(y) /
+                static_cast<f64>(
+                    appearance.faceResolution - 1U);
+
+            for (u32 x = 0U;
+                 x < appearance.faceResolution;
+                 ++x)
+            {
+                const f64 u =
+                    -1.0 +
+                    2.0 *
+                    static_cast<f64>(x) /
+                    static_cast<f64>(
+                        appearance.faceResolution - 1U);
+
+                const auto cloud =
+                    field.Sample(
+                        FaceDirection(
+                            face,
+                            u,
+                            v));
+
+                if (cloud.coverage <= 0.0F)
+                {
+                    continue;
+                }
+
+                auto& texel =
+                    appearance.texels[
+                        static_cast<std::size_t>(face) *
+                            appearance.faceResolution *
+                            appearance.faceResolution +
+                        static_cast<std::size_t>(y) *
+                            appearance.faceResolution +
+                        x];
+
+                const f32 opticalAlpha =
+                    static_cast<f32>(
+                        1.0 -
+                        std::exp(
+                            -0.35 *
+                            std::max(
+                                static_cast<f64>(
+                                    cloud.opticalDepth),
+                                0.0)));
+
+                const f32 blend =
+                    std::clamp(
+                        cloud.coverage *
+                            opticalAlpha,
+                        0.0F,
+                        1.0F);
+
+                const f32 scattering =
+                    std::clamp(
+                        cloud.
+                            singleScatteringAlbedo,
+                        0.0F,
+                        1.0F);
+
+                const math::Float3 cloudAlbedo{
+                    0.82F * scattering,
+                    0.84F * scattering,
+                    0.87F * scattering
+                };
+
+                texel.albedoLinear =
+                    texel.albedoLinear *
+                        (1.0F - blend) +
+                    cloudAlbedo *
+                        blend;
+
+                texel.roughness =
+                    std::clamp(
+                        texel.roughness *
+                            (1.0F - blend) +
+                        0.96F * blend,
+                        0.04F,
+                        1.0F);
+            }
+        }
+    }
+
+    appearance.fingerprint =
+        terrain::StableCombine64(
+            appearance.fingerprint,
+            field.fingerprint);
+}
+
 f64 CloudShadowTransmittanceAtSurface(
     const CloudFieldProduct& field,
     const f64 referenceRadiusMeters,
