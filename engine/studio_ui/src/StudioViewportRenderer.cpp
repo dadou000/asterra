@@ -6,6 +6,7 @@
 #include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
+#include <orbit/world_model/CelestialCloudBinding.hpp>
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -1152,6 +1153,21 @@ StudioViewportRenderer::AtmosphereDiagnostics(
         : std::optional(found->second);
 }
 
+std::optional<
+    StudioCloudDiagnostics>
+StudioViewportRenderer::CloudDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        cloudDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            cloudDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
 std::vector<StudioRenderedView>
 StudioViewportRenderer::Compose(
     render_graph::RenderGraph& graph,
@@ -1345,6 +1361,204 @@ StudioViewportRenderer::Compose(
                       ObjectForBody(
                           logicalTarget->target->body)
                 : std::nullopt;
+        std::vector<
+            world_model::ResolvedCloudLayer>
+            resolvedCloudLayers;
+
+        if (atmosphereBody.has_value())
+        {
+            resolvedCloudLayers =
+                world_model::ResolveCloudLayers(
+                    session.World().Objects(),
+                    *atmosphereBody);
+        }
+
+        if (!resolvedCloudLayers.empty() &&
+            logicalTarget->target.has_value())
+        {
+            std::vector<
+                celestial_clouds::CloudLayerParameters>
+                cloudParameters;
+            cloudParameters.reserve(
+                resolvedCloudLayers.size());
+
+            bool requiresClimate = false;
+            bool requiresExternal = false;
+
+            for (const auto& layer :
+                 resolvedCloudLayers)
+            {
+                cloudParameters.push_back(
+                    layer.parameters);
+
+                requiresClimate |=
+                    layer.parameters.sourceModel ==
+                    celestial_clouds::
+                        CloudSourceModel::
+                            ClimateProcedural;
+
+                requiresExternal |=
+                    layer.parameters.sourceModel ==
+                        celestial_clouds::
+                            CloudSourceModel::Authored ||
+                    layer.parameters.sourceModel ==
+                        celestial_clouds::
+                            CloudSourceModel::Imported;
+            }
+
+            const terrain::TerrainSource*
+                cloudClimateSource =
+                    hasMacroGlobe
+                        ? macroGlobeSurface->terrain.get()
+                        : nullptr;
+
+            if (requiresClimate &&
+                cloudClimateSource == nullptr)
+            {
+                cloudPresentations_.erase(
+                    info.id);
+                cloudDiagnostics_.erase(
+                    info.id);
+            }
+            else if (!requiresExternal)
+            {
+                const f64 referenceRadius =
+                    shape.has_value()
+                        ? universe::
+                              ReferenceRadiusMeters(
+                                  *shape)
+                        : 1.0;
+
+                const celestial_clouds::
+                    CloudFieldConfig
+                    cloudConfig{};
+
+                const u64 cloudFingerprint =
+                    celestial_clouds::
+                        CloudFieldFingerprint(
+                            cloudClimateSource,
+                            nullptr,
+                            referenceRadius,
+                            cloudParameters,
+                            atTime,
+                            cloudConfig);
+
+                auto& cloudPresentation =
+                    cloudPresentations_[info.id];
+
+                if (cloudPresentation.field ==
+                        nullptr ||
+                    cloudPresentation.body !=
+                        logicalTarget->
+                            target->body ||
+                    cloudPresentation.fingerprint !=
+                        cloudFingerprint)
+                {
+                    cloudPresentation.field =
+                        std::make_unique<
+                            celestial_clouds::
+                                CloudFieldProduct>(
+                                    celestial_clouds::
+                                        BuildCloudField(
+                                            cloudClimateSource,
+                                            nullptr,
+                                            referenceRadius,
+                                            cloudParameters,
+                                            atTime,
+                                            cloudConfig));
+
+                    cloudPresentation.gpu =
+                        std::make_unique<
+                            celestial_clouds::
+                                GpuCloudFieldProduct>(
+                                    *device_,
+                                    *cloudPresentation.
+                                        field);
+
+                    cloudPresentation.body =
+                        logicalTarget->
+                            target->body;
+                    cloudPresentation.fingerprint =
+                        cloudFingerprint;
+                }
+
+                f64 coverageSum = 0.0;
+                f64 opticalSum = 0.0;
+                u64 sampleCount = 0U;
+
+                for (const auto& layer :
+                     cloudPresentation.field->layers)
+                {
+                    for (const auto& texel :
+                         layer.texels)
+                    {
+                        coverageSum +=
+                            texel.coverage;
+                        opticalSum +=
+                            texel.opticalDepth;
+                        ++sampleCount;
+                    }
+                }
+
+                cloudDiagnostics_.insert_or_assign(
+                    info.id,
+                    StudioCloudDiagnostics{
+                        .body =
+                            logicalTarget->
+                                target->body,
+                        .fingerprint =
+                            cloudPresentation.
+                                fingerprint,
+                        .climateRevision =
+                            cloudPresentation.
+                                field->
+                                climateRevision,
+                        .timeBucket =
+                            cloudPresentation.
+                                field->
+                                timeBucket,
+                        .layerCount =
+                            static_cast<u32>(
+                                cloudPresentation.
+                                    field->
+                                    layers.size()),
+                        .meanCoverage =
+                            sampleCount > 0U
+                                ? coverageSum /
+                                      static_cast<f64>(
+                                          sampleCount)
+                                : 0.0,
+                        .meanOpticalDepth =
+                            sampleCount > 0U
+                                ? opticalSum /
+                                      static_cast<f64>(
+                                          sampleCount)
+                                : 0.0,
+                        .gpuResident =
+                            cloudPresentation.gpu !=
+                            nullptr
+                    });
+            }
+            else
+            {
+                // External authored/imported source selection is semantic
+                // authority; Studio waits for the selected source object's
+                // coverage adapter rather than silently substituting
+                // procedural weather.
+                cloudPresentations_.erase(
+                    info.id);
+                cloudDiagnostics_.erase(
+                    info.id);
+            }
+        }
+        else
+        {
+            cloudPresentations_.erase(
+                info.id);
+            cloudDiagnostics_.erase(
+                info.id);
+        }
+
 
         std::optional<
             world_model::ResolvedAtmosphereBody>
