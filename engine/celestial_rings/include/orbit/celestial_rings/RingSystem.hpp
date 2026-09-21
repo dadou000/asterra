@@ -2,7 +2,12 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/render_view/RenderView.hpp>
+#include <orbit/rhi/Command.hpp>
+#include <orbit/rhi/Device.hpp>
+#include <orbit/shader/ShaderCompiler.hpp>
 
+#include <memory>
 #include <vector>
 
 namespace orbit::celestial_rings
@@ -101,4 +106,52 @@ void ValidateRingSystem(
     const RingSystem& system,
     f64 referenceRadiusMeters,
     u32 radialSamples = 256U);
+class GpuRingMeshProduct
+{
+public:
+    GpuRingMeshProduct(
+        rhi::Device& device,
+        const RingMeshProduct& product);
+
+    [[nodiscard]] rhi::Buffer& VertexBuffer() noexcept;
+    [[nodiscard]] rhi::Buffer& IndexBuffer() noexcept;
+    [[nodiscard]] u32 IndexCount() const noexcept;
+    [[nodiscard]] f64 ReferenceRadiusMeters() const noexcept;
+    [[nodiscard]] u64 Fingerprint() const noexcept;
+
+private:
+    std::unique_ptr<rhi::Buffer> vertices_;
+    std::unique_ptr<rhi::Buffer> indices_;
+    u32 indexCount_{0};
+    f64 referenceRadiusMeters_{1.0};
+    u64 fingerprint_{0};
+};
+
+struct RingRenderLighting
+{
+    math::Float3 directionBody{0.55F,0.72F,-0.48F};
+    f32 irradianceScale{1.0F};
+};
+
+class RingRenderer
+{
+public:
+    RingRenderer(
+        rhi::Device& device,
+        const shader::Compiler& compiler);
+
+    void Draw(
+        rhi::CommandList& commands,
+        rhi::Texture& target,
+        u32 width,
+        u32 height,
+        GpuRingMeshProduct& rings,
+        const render_view::CameraState& camera,
+        math::Float3 planeNormalBody,
+        bool receiveBodyShadow,
+        const RingRenderLighting& lighting = {});
+private:
+    std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+};
+
 } // namespace orbit::celestial_rings
