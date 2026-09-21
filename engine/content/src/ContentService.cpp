@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -75,6 +76,74 @@ namespace
 {
     const auto value = table[key].value<std::string>();
     return value.has_value() ? std::filesystem::path(*value) : std::filesystem::path{};
+}
+
+[[nodiscard]] std::optional<std::array<f64, 3>> Color3(
+    const toml::table& table,
+    const std::string_view key)
+{
+    const auto* array =
+        table[key].as_array();
+
+    if (array == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    if (array->size() != 3U)
+    {
+        throw std::runtime_error(
+            std::string(key) +
+            " must contain exactly three numeric values.");
+    }
+
+    std::array<f64, 3> result{};
+
+    for (std::size_t index = 0U;
+         index < result.size();
+         ++index)
+    {
+        const auto value =
+            (*array)[index].value<f64>();
+
+        if (!value.has_value() ||
+            !std::isfinite(*value) ||
+            *value < 0.0)
+        {
+            throw std::runtime_error(
+                std::string(key) +
+                " values must be finite and non-negative.");
+        }
+
+        result[index] = *value;
+    }
+
+    return result;
+}
+
+void ValidateEmission(
+    const MaterialEmission& emission)
+{
+    if (!std::isfinite(
+            emission.luminanceNits) ||
+        emission.luminanceNits < 0.0 ||
+        !std::isfinite(emission.giScale) ||
+        emission.giScale < 0.0)
+    {
+        throw std::runtime_error(
+            "Material emission luminance and GI scale must be finite and non-negative.");
+    }
+
+    for (const f64 channel :
+         emission.colorLinear)
+    {
+        if (!std::isfinite(channel) ||
+            channel < 0.0)
+        {
+            throw std::runtime_error(
+                "Material emission color must be finite and non-negative.");
+        }
+    }
 }
 }
 
@@ -521,6 +590,30 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
         channels.emissive = ChannelPath(*material, "emissive");
         channels.roughnessFactor = (*material)["roughness_factor"].value_or(1.0);
         channels.metallicFactor = (*material)["metallic_factor"].value_or(0.0);
+
+        if (const auto color =
+                Color3(*material, "emission_color_linear");
+            color.has_value())
+        {
+            channels.emission.colorLinear =
+                *color;
+        }
+
+        channels.emission.luminanceNits =
+            (*material)["emission_luminance_nits"].
+                value_or(0.0);
+
+        channels.emission.contributesToGi =
+            (*material)["emission_gi_enabled"].
+                value_or(true);
+
+        channels.emission.giScale =
+            (*material)["emission_gi_scale"].
+                value_or(1.0);
+
+        ValidateEmission(
+            channels.emission);
+
         result.material = std::move(channels);
 
         if (const toml::array* tags = (*material)["tags"].as_array())
@@ -574,8 +667,40 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
             .metallicFactor =
                 (*instance)[
                     "metallic_factor"].
+                    value<f64>(),
+            .emissionColorLinear =
+                Color3(
+                    *instance,
+                    "emission_color_linear"),
+            .emissionLuminanceNits =
+                (*instance)[
+                    "emission_luminance_nits"].
+                    value<f64>(),
+            .emissionContributesToGi =
+                (*instance)[
+                    "emission_gi_enabled"].
+                    value<bool>(),
+            .emissionGiScale =
+                (*instance)[
+                    "emission_gi_scale"].
                     value<f64>()
         };
+
+        if (data.emissionLuminanceNits.has_value() &&
+            (!std::isfinite(*data.emissionLuminanceNits) ||
+             *data.emissionLuminanceNits < 0.0))
+        {
+            throw std::runtime_error(
+                "Material-instance emission luminance must be finite and non-negative.");
+        }
+
+        if (data.emissionGiScale.has_value() &&
+            (!std::isfinite(*data.emissionGiScale) ||
+             *data.emissionGiScale < 0.0))
+        {
+            throw std::runtime_error(
+                "Material-instance emission GI scale must be finite and non-negative.");
+        }
 
         result.materialInstance =
             std::move(data);
