@@ -11,6 +11,7 @@
 #include <orbit/world_model/CelestialMagnetosphereBinding.hpp>
 #include <orbit/world_model/CelestialSmallBodyBinding.hpp>
 #include <orbit/world_model/PropertyProvenanceSchema.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
 #include <array>
