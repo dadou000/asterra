@@ -27,8 +27,6 @@ struct ColorLutSettings
 {
     bool enabled{true};
     f32 strength{1.0F};
-    bool toneMapEnabled{true};
-    f32 exposureScale{1.0F};
 };
 
 class GpuColorLut
@@ -51,11 +49,9 @@ private:
     bool uploaded_{false};
 };
 
-// Display-referred 3D LUT correction. It intentionally does not own exposure,
-// tone mapping, bloom or output transfer. Those stages decide where this pass
-// sits in the final presentation chain. In the current 0.0.6 viewport it runs
-// after the existing renderer output; the HDR pipeline can later keep the same
-// renderer and place a scene-referred LUT behind an explicit HDR shaper.
+// Display-referred 3D LUT correction. Exposure and tone mapping are owned by
+// DisplayResolveRenderer. This pass only grades the bounded display-linear
+// signal and therefore cannot alter physical scene radiance or GI.
 class ColorLutRenderer
 {
 public:
