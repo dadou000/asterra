@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
@@ -16,7 +17,9 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace orbit::studio_ui
@@ -26,6 +29,15 @@ struct StudioRenderedView
     std::string id;
     render_view::ImportedTargets targets{};
     bool targeted{false};
+};
+
+struct StudioMacroGlobeDiagnostics
+{
+    universe::BodyId body{};
+    u64 terrainRevision{0};
+    u64 geometryFingerprint{0};
+    u64 appearanceFingerprint{0};
+    u32 appearanceTexels{0};
 };
 
 enum class StudioViewportPresentation : u8
@@ -87,6 +99,10 @@ public:
         const shader::Compiler& compiler,
         u32 framesInFlight = 1U);
 
+    [[nodiscard]] std::optional<StudioMacroGlobeDiagnostics>
+    MacroGlobeDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -112,6 +128,11 @@ private:
         universe::BodyId body{};
         u64 sourceRevision{0};
         u64 fingerprint{0};
+        u64 appearanceFingerprint{0};
+        u32 appearanceTexels{0};
+        std::unique_ptr<
+            celestial_appearance::GpuPlanetaryAppearanceProduct>
+            appearanceProduct;
         std::unique_ptr<celestial_globe::GpuMacroGlobeProduct> product;
     };
 
