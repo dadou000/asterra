@@ -36,6 +36,21 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kCelestialReferenceNodeType,
+        .displayName = "Reference / Barycenter Node",
+        .category = "Celestial/Reference",
+        .properties = {
+            schema::PropertySchema{
+                .id = kReferenceNodePositionMeters,
+                .name = "Parent-frame Position",
+                .kind = schema::PropertyKind::Vector3,
+                .unit = "m",
+                .defaultValue = math::Double3{}
+            }
+        }
+    });
+
+    schemas.RegisterType({
         .id = kCelestialBodyType,
         .displayName = "Celestial Body",
         .category = "World",
