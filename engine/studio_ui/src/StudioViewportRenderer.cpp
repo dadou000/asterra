@@ -2555,13 +2555,28 @@ StudioViewportRenderer::Compose(
                 auto& cloudPresentation =
                     cloudPresentations_[info.id];
 
-                if (cloudPresentation.field ==
+                const bool cloudNeedsBuild =
+                    cloudPresentation.field ==
                         nullptr ||
                     cloudPresentation.body !=
                         logicalTarget->
                             target->body ||
                     cloudPresentation.fingerprint !=
-                        cloudFingerprint)
+                        cloudFingerprint;
+
+                if (cloudNeedsBuild &&
+                    acquireCelestialGrant(
+                        info.id,
+                        logicalTarget->
+                            target->body,
+                        celestial_scheduler::
+                            WorkKind::CloudField,
+                        cloudFingerprint,
+                        celestial_scheduler::
+                            WorkBackend::Gpu,
+                        3U,
+                        70,
+                        true))
                 {
                     cloudPresentation.field =
                         std::make_unique<
@@ -2589,64 +2604,90 @@ StudioViewportRenderer::Compose(
                             target->body;
                     cloudPresentation.fingerprint =
                         cloudFingerprint;
-                }
 
-                f64 coverageSum = 0.0;
-                f64 opticalSum = 0.0;
-                u64 sampleCount = 0U;
-
-                for (const auto& layer :
-                     cloudPresentation.field->layers)
-                {
-                    for (const auto& texel :
-                         layer.texels)
-                    {
-                        coverageSum +=
-                            texel.coverage;
-                        opticalSum +=
-                            texel.opticalDepth;
-                        ++sampleCount;
-                    }
-                }
-
-                cloudDiagnostics_.insert_or_assign(
-                    info.id,
-                    StudioCloudDiagnostics{
-                        .body =
+                    static_cast<void>(
+                        completeCelestialGrant(
+                            info.id,
                             logicalTarget->
                                 target->body,
-                        .fingerprint =
-                            cloudPresentation.
-                                fingerprint,
-                        .climateRevision =
-                            cloudPresentation.
-                                field->
-                                climateRevision,
-                        .timeBucket =
-                            cloudPresentation.
-                                field->
-                                timeBucket,
-                        .layerCount =
-                            static_cast<u32>(
+                            celestial_scheduler::
+                                WorkKind::CloudField,
+                            cloudFingerprint));
+                }
+
+                const bool cloudCurrent =
+                    cloudPresentation.field !=
+                        nullptr &&
+                    cloudPresentation.body ==
+                        logicalTarget->
+                            target->body &&
+                    cloudPresentation.fingerprint ==
+                        cloudFingerprint;
+
+                if (cloudCurrent)
+                {
+                    f64 coverageSum = 0.0;
+                    f64 opticalSum = 0.0;
+                    u64 sampleCount = 0U;
+
+                    for (const auto& layer :
+                         cloudPresentation.field->layers)
+                    {
+                        for (const auto& texel :
+                             layer.texels)
+                        {
+                            coverageSum +=
+                                texel.coverage;
+                            opticalSum +=
+                                texel.opticalDepth;
+                            ++sampleCount;
+                        }
+                    }
+
+                    cloudDiagnostics_.insert_or_assign(
+                        info.id,
+                        StudioCloudDiagnostics{
+                            .body =
+                                logicalTarget->
+                                    target->body,
+                            .fingerprint =
+                                cloudPresentation.
+                                    fingerprint,
+                            .climateRevision =
                                 cloudPresentation.
                                     field->
-                                    layers.size()),
-                        .meanCoverage =
-                            sampleCount > 0U
-                                ? coverageSum /
-                                      static_cast<f64>(
-                                          sampleCount)
-                                : 0.0,
-                        .meanOpticalDepth =
-                            sampleCount > 0U
-                                ? opticalSum /
-                                      static_cast<f64>(
-                                          sampleCount)
-                                : 0.0,
-                        .gpuResident =
-                            cloudPresentation.gpu !=
-                            nullptr
-                    });
+                                    climateRevision,
+                            .timeBucket =
+                                cloudPresentation.
+                                    field->
+                                    timeBucket,
+                            .layerCount =
+                                static_cast<u32>(
+                                    cloudPresentation.
+                                        field->
+                                        layers.size()),
+                            .meanCoverage =
+                                sampleCount > 0U
+                                    ? coverageSum /
+                                          static_cast<f64>(
+                                              sampleCount)
+                                    : 0.0,
+                            .meanOpticalDepth =
+                                sampleCount > 0U
+                                    ? opticalSum /
+                                          static_cast<f64>(
+                                              sampleCount)
+                                    : 0.0,
+                            .gpuResident =
+                                cloudPresentation.gpu !=
+                                nullptr
+                        });
+                }
+                else
+                {
+                    cloudDiagnostics_.erase(
+                        info.id);
+                }
             }
             else
             {
