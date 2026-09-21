@@ -138,6 +138,35 @@ inline constexpr schema::PropertyId kAtmosphereAbsorptionHalfWidthMeters{
 inline constexpr schema::PropertyId kAtmosphereGroundAlbedo{
     .high = 0x4f5242495441544dULL, .low = 0x47524e44414c4201ULL};
 
+inline constexpr schema::PropertyId kAtmosphereAuthoringMode{
+    .high = 0x4f5242495441544dULL, .low = 0x415554484d4f4401ULL};
+inline constexpr schema::PropertyId kAtmospherePreset{
+    .high = 0x4f5242495441544dULL, .low = 0x5052455345540001ULL};
+inline constexpr schema::PropertyId kAtmosphereSurfacePressurePascals{
+    .high = 0x4f5242495441544dULL, .low = 0x5052455353555201ULL};
+inline constexpr schema::PropertyId kAtmosphereSurfaceTemperatureKelvin{
+    .high = 0x4f5242495441544dULL, .low = 0x54454d5045520001ULL};
+inline constexpr schema::PropertyId kAtmosphereSurfaceGravityMetersPerSecondSquared{
+    .high = 0x4f5242495441544dULL, .low = 0x4752415649545901ULL};
+inline constexpr schema::PropertyId kAtmosphereNitrogenFraction{
+    .high = 0x4f5242495441544dULL, .low = 0x4e32465241435401ULL};
+inline constexpr schema::PropertyId kAtmosphereOxygenFraction{
+    .high = 0x4f5242495441544dULL, .low = 0x4f32465241435401ULL};
+inline constexpr schema::PropertyId kAtmosphereArgonFraction{
+    .high = 0x4f5242495441544dULL, .low = 0x4152465241435401ULL};
+inline constexpr schema::PropertyId kAtmosphereCarbonDioxideFraction{
+    .high = 0x4f5242495441544dULL, .low = 0x434f324652414301ULL};
+inline constexpr schema::PropertyId kAtmosphereAerosolOpticalDepth550{
+    .high = 0x4f5242495441544dULL, .low = 0x414f443535300001ULL};
+inline constexpr schema::PropertyId kAtmosphereAerosolSingleScatteringAlbedo{
+    .high = 0x4f5242495441544dULL, .low = 0x4145525353410001ULL};
+inline constexpr schema::PropertyId kAtmosphereAerosolAngstromExponent{
+    .high = 0x4f5242495441544dULL, .low = 0x414e475354520001ULL};
+inline constexpr schema::PropertyId kAtmosphereAerosolScaleHeightMeters{
+    .high = 0x4f5242495441544dULL, .low = 0x4145525343480001ULL};
+inline constexpr schema::PropertyId kAtmosphereAbsorberScale{
+    .high = 0x4f5242495441544dULL, .low = 0x4142535343414c01ULL};
+
 inline constexpr schema::PropertyId kEphemerisSourceLabel{
     .high = 0x4f52424954455048ULL, .low = 0x534f555243450001ULL};
 inline constexpr schema::PropertyId kEphemerisSampleTimeMicroseconds{
