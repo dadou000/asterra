@@ -425,6 +425,178 @@ ResolveSurfaceGlobeTransition(
     };
 }
 
+RepresentationBlend
+ResolveRepresentationBlend(
+    const ResolveInput& input,
+    const Decision& decision)
+{
+    Validate(input);
+
+    const auto smoothBoundary =
+        [&](const Representation richer,
+            const Representation lower,
+            const f64 metric,
+            const f64 threshold)
+        {
+            RepresentationBlend blend{
+                .richer = richer,
+                .lower = lower,
+                .richerWeight = 1.0,
+                .lowerWeight = 0.0,
+                .overlapping = false
+            };
+
+            const f64 halfBand =
+                std::max(
+                    threshold *
+                        input.policy.
+                            hysteresisFraction,
+                    1.0e-12);
+
+            const f64 richerEdge =
+                threshold + halfBand;
+            const f64 lowerEdge =
+                std::max(
+                    threshold - halfBand,
+                    0.0);
+
+            if (metric >= richerEdge)
+            {
+                return blend;
+            }
+
+            if (metric <= lowerEdge)
+            {
+                blend.richerWeight = 0.0;
+                blend.lowerWeight = 1.0;
+                return blend;
+            }
+
+            const f64 t =
+                std::clamp(
+                    (richerEdge - metric) /
+                        std::max(
+                            richerEdge -
+                                lowerEdge,
+                            1.0e-12),
+                    0.0,
+                    1.0);
+
+            const f64 smooth =
+                t * t *
+                (3.0 - 2.0 * t);
+
+            blend.richerWeight =
+                1.0 - smooth;
+            blend.lowerWeight =
+                smooth;
+            blend.overlapping = true;
+            return blend;
+        };
+
+    const f64 quality =
+        input.policy.qualityScale;
+
+    if (input.features.productionSurfaceAvailable &&
+        input.features.macroDisplacementAvailable)
+    {
+        const f64 threshold =
+            input.policy.
+                productionSurfaceErrorPixels /
+            quality;
+        const f64 band =
+            threshold *
+            input.policy.hysteresisFraction;
+
+        if (std::abs(
+                decision.
+                    productionDetailErrorPixels -
+                threshold) <= band)
+        {
+            return smoothBoundary(
+                Representation::ProductionSurface,
+                Representation::MacroDisplacedGlobe,
+                decision.
+                    productionDetailErrorPixels,
+                threshold);
+        }
+    }
+
+    if (input.features.macroDisplacementAvailable)
+    {
+        const f64 threshold =
+            input.policy.
+                macroDisplacementErrorPixels /
+            quality;
+        const f64 band =
+            threshold *
+            input.policy.hysteresisFraction;
+
+        if (std::abs(
+                decision.
+                    macroDisplacementErrorPixels -
+                threshold) <= band)
+        {
+            return smoothBoundary(
+                Representation::MacroDisplacedGlobe,
+                Representation::SmoothGlobe,
+                decision.
+                    macroDisplacementErrorPixels,
+                threshold);
+        }
+    }
+
+    {
+        const f64 threshold =
+            input.policy.
+                smoothGlobeMinimumRadiusPixels /
+            quality;
+        const f64 band =
+            threshold *
+            input.policy.hysteresisFraction;
+
+        if (std::abs(
+                decision.projectedRadiusPixels -
+                threshold) <= band)
+        {
+            return smoothBoundary(
+                Representation::SmoothGlobe,
+                DiscChoice(input.features),
+                decision.projectedRadiusPixels,
+                threshold);
+        }
+    }
+
+    {
+        const f64 threshold =
+            input.policy.
+                discImpostorMinimumRadiusPixels /
+            quality;
+        const f64 band =
+            threshold *
+            input.policy.hysteresisFraction;
+
+        if (std::abs(
+                decision.projectedRadiusPixels -
+                threshold) <= band)
+        {
+            return smoothBoundary(
+                DiscChoice(input.features),
+                PointChoice(input.features),
+                decision.projectedRadiusPixels,
+                threshold);
+        }
+    }
+
+    return {
+        .richer = decision.representation,
+        .lower = decision.representation,
+        .richerWeight = 1.0,
+        .lowerWeight = 0.0,
+        .overlapping = false
+    };
+}
+
 std::string_view Name(
     const Representation representation) noexcept
 {
