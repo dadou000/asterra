@@ -2107,7 +2107,8 @@ StudioViewportRenderer::Compose(
                  width,
                  height,
                  globe,
-                 camera](
+                 camera,
+                 studioDirectLight](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -2127,7 +2128,16 @@ StudioViewportRenderer::Compose(
                         height,
                         *globe,
                         camera,
-                        1.0F);
+                        1.0F,
+                        celestial_globe::
+                            MacroGlobeLighting{
+                                .directionBody =
+                                    studioDirectLight.
+                                        directionBody,
+                                .irradianceScale =
+                                    studioDirectLight.
+                                        irradianceScale
+                            });
                 });
 
             break;
@@ -2386,7 +2396,8 @@ StudioViewportRenderer::Compose(
                      projectedRadius,
                      radiativeEmitter,
                      resolvedRadiometricIntensity,
-                     pointRadiometricIntensity](
+                     pointRadiometricIntensity,
+                     studioDirectLight](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -2431,6 +2442,14 @@ StudioViewportRenderer::Compose(
                                                        ? pointRadiometricIntensity
                                                        : resolvedRadiometricIntensity)
                                                 : 1.0F,
+                                        .lightDirectionBody =
+                                            studioDirectLight.
+                                                directionBody,
+                                        .incidentLightScale =
+                                            radiativeEmitter
+                                                ? 1.0F
+                                                : studioDirectLight.
+                                                    irradianceScale,
                                         .stellar =
                                             radiativeEmitter
                                     };
