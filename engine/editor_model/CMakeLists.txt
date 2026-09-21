@@ -5,6 +5,7 @@ add_library(OrbitEditorModel STATIC
     src/MaterialAuthoringCommands.cpp
     src/TerrainAuthoringCommands.cpp
     src/BuiltinSchemas.cpp
+    src/CelestialAuthoringModel.cpp
     src/ExplorerModel.cpp
     src/InspectorModel.cpp
     src/OutputLog.cpp
