@@ -1,5 +1,6 @@
 add_library(OrbitPostProcess STATIC
     src/ColorLut.cpp
+    src/DisplayResolve.cpp
 )
 
 add_library(Orbit::PostProcess ALIAS OrbitPostProcess)
