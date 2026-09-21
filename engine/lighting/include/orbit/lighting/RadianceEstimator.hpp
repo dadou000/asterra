@@ -36,8 +36,12 @@ struct RadianceEstimateSettings
     // estimator without changing cache residency/sampling contracts.
     f32 diffuseTransportScale{0.18F};
 
-    // Shared sky/ambient floor until sky visibility is integrated in M21.
+    // Legacy scalar fallback used when no physical sky summary is supplied.
     f32 ambientIrradianceScale{0.035F};
+
+    // Low-frequency scene-linear sky irradiance summary. When non-zero this
+    // replaces the scalar fallback and may carry atmospheric color.
+    math::Float3 skyIrradianceLinear{};
 
     f32 photopicLuminousEfficacy{683.0F};
     f32 solarReferenceIrradiance{1361.0F};
