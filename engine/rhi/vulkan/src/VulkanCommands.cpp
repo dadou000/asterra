@@ -1395,6 +1395,69 @@ void VulkanCommandList::SetComputeTexture(
         &write);
 }
 
+void VulkanCommandList::SetComputeAccelerationStructure(
+    const u32 slot,
+    AccelerationStructure& accelerationStructure)
+{
+    if (activeComputePipeline_ == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit cannot bind an acceleration structure without an "
+            "active compute pipeline.");
+    }
+
+    if (slot >= activeComputePipeline_->AccelerationStructures())
+    {
+        throw std::out_of_range(
+            "Orbit compute acceleration-structure slot exceeds the "
+            "active pipeline layout.");
+    }
+
+    auto* vulkanAccelerationStructure =
+        dynamic_cast<VulkanAccelerationStructure*>(
+            &accelerationStructure);
+
+    if (vulkanAccelerationStructure == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received an acceleration structure from "
+            "another backend.");
+    }
+
+    const VkAccelerationStructureKHR native =
+        vulkanAccelerationStructure->TopLevel();
+
+    VkWriteDescriptorSetAccelerationStructureKHR
+        accelerationInfo{};
+    accelerationInfo.sType =
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
+    accelerationInfo.accelerationStructureCount = 1U;
+    accelerationInfo.pAccelerationStructures =
+        &native;
+
+    VkWriteDescriptorSet write{};
+    write.sType =
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.pNext =
+        &accelerationInfo;
+    write.dstBinding =
+        activeComputePipeline_->ShaderResourceBuffers() +
+        activeComputePipeline_->StorageTextures() +
+        activeComputePipeline_->SampledTextures() +
+        slot;
+    write.descriptorCount = 1U;
+    write.descriptorType =
+        VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+
+    functions_->vkCmdPushDescriptorSetKHR(
+        nativeCommandList_,
+        VK_PIPELINE_BIND_POINT_COMPUTE,
+        activeComputePipeline_->Layout(),
+        0,
+        1,
+        &write);
+}
+
 void VulkanCommandList::Dispatch(
     const u32 groupCountX,
     const u32 groupCountY,
