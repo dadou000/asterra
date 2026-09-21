@@ -1,6 +1,7 @@
 add_library(OrbitStudioSession STATIC
     src/BezierHandleEditor.cpp
     src/StudioAuthoringBinding.cpp
+    src/StudioCelestialRoundTripVerifier.cpp
     src/StudioSession.cpp
     src/SimulationClock.cpp
     src/StudioRuntimeBinding.cpp
@@ -33,6 +34,11 @@ target_include_directories(OrbitStudioSession
 target_link_libraries(OrbitStudioSession
     PUBLIC
         Orbit::Core
+        Orbit::CelestialCompactObjects
+        Orbit::CelestialGiants
+        Orbit::CelestialMagnetosphere
+        Orbit::CelestialRepresentation
+        Orbit::CelestialSmallBodies
         Orbit::Documents
         Orbit::EditorRpc
         Orbit::EditorSession
@@ -443,5 +449,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.SimulationClock
         COMMAND OrbitSimulationClockTests
+    )
+
+
+    add_executable(OrbitStudioCelestialRoundTripVerifierTests
+        tests/StudioCelestialRoundTripVerifierTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioCelestialRoundTripVerifierTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioCelestialRoundTripVerifierTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitStudioCelestialRoundTripVerifierTests)
+
+    add_test(
+        NAME Orbit.StudioCelestialRoundTripVerifier
+        COMMAND OrbitStudioCelestialRoundTripVerifierTests
     )
 endif()
