@@ -5,6 +5,7 @@
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
+#include <orbit/studio_session/StudioCelestialRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
@@ -70,6 +71,10 @@ private:
     SurfaceAuthoringUi surfaceAuthoring_;
     StudioViewportRenderer viewportRenderer_;
     StudioViewportPanels viewportPanels_;
+
+    std::optional<
+        studio_session::StudioCelestialRoundTripReport>
+        celestialRoundTripReport_;
 
     std::unique_ptr<studio_session::StudioRuntimeBinding> runtime_;
     std::unique_ptr<StudioRenderViewSet> views_;
