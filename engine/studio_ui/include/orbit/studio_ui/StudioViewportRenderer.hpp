@@ -3,6 +3,7 @@
 #include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_atmosphere/Atmosphere.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
+#include <orbit/celestial_compact_render/CompactObjectRenderer.hpp>
 #include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/celestial_magnetosphere_render/AuroraRenderer.hpp>
@@ -115,6 +116,20 @@ struct StudioStellarDiagnostics
         celestial_representation::Representation::SmoothGlobe};
     f32 resolvedSceneIntensity{0.0F};
     f32 pointSceneIntensity{0.0F};
+};
+
+struct StudioCompactObjectDiagnostics
+{
+    universe::BodyId body{};
+    u64 fingerprint{0U};
+    f64 gravitationalRadiusMeters{0.0};
+    f64 schwarzschildRadiusMeters{0.0};
+    f64 photonSphereRadiusMeters{0.0};
+    f64 iscoRadiusMeters{0.0};
+    f64 shadowRadiusMeters{0.0};
+    f64 projectedShadowRadiusPixels{0.0};
+    bool accretionEnabled{false};
+    f64 accretionOuterRadiusMeters{0.0};
 };
 
 struct StudioMagnetosphereDiagnostics
@@ -308,6 +323,11 @@ public:
     [[nodiscard]] std::optional<
         StudioMagnetosphereDiagnostics>
     MagnetosphereDiagnostics(
+        std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] std::optional<
+        StudioCompactObjectDiagnostics>
+    CompactObjectDiagnostics(
         std::string_view viewportId) const noexcept;
 
     [[nodiscard]] std::optional<
@@ -531,6 +551,7 @@ private:
     celestial_far_render::FarBodyRenderer farBodyRenderer_;
     celestial_rings::RingRenderer ringRenderer_;
     celestial_magnetosphere_render::AuroraRenderer auroraRenderer_;
+    celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
@@ -592,6 +613,12 @@ private:
         StudioMagnetosphereDiagnostics,
         std::less<>>
         magnetosphereDiagnostics_;
+
+    std::map<
+        std::string,
+        StudioCompactObjectDiagnostics,
+        std::less<>>
+        compactObjectDiagnostics_;
 
     std::map<
         std::string,
