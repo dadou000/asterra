@@ -16,6 +16,7 @@ target_include_directories(
 target_link_libraries(
     OrbitCelestialGlobe
     PUBLIC
+        Orbit::CelestialAppearance
         Orbit::Core
         Orbit::Math
         Orbit::RenderView
