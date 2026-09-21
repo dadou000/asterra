@@ -210,6 +210,71 @@ AssetId ContentService::CreateMaterialInstance(
     return created->id;
 }
 
+void ContentService::SetMaterialEmissiveTexture(
+    const AssetId materialAsset,
+    std::filesystem::path texturePath)
+{
+    const AssetRecord* asset =
+        Find(materialAsset);
+
+    if (asset == nullptr ||
+        asset->kind != AssetKind::Material)
+    {
+        throw std::invalid_argument(
+            "Emissive texture can only be edited on base Material assets.");
+    }
+
+    const auto absolute =
+        projectRoot_ /
+        asset->sourcePath;
+
+    toml::table document =
+        toml::parse_file(
+            absolute.string());
+
+    toml::table* material =
+        document["material"].as_table();
+
+    if (material == nullptr)
+    {
+        throw std::runtime_error(
+            "Material authority table is missing while editing emissive texture.");
+    }
+
+    if (texturePath.empty())
+    {
+        material->erase("emissive");
+    }
+    else
+    {
+        material->insert_or_assign(
+            "emissive",
+            texturePath.generic_string());
+    }
+
+    std::ofstream output(
+        absolute,
+        std::ios::binary |
+        std::ios::trunc);
+
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Unable to open material asset for emissive texture update.");
+    }
+
+    output << document;
+    output.flush();
+
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Unable to persist material emissive texture update.");
+    }
+
+    Scan();
+}
+
 void ContentService::SetMaterialEmission(
     const AssetId materialAsset,
     const MaterialEmission& emission)
