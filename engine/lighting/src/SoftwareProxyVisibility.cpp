@@ -413,7 +413,8 @@ SoftwareProxyScene::Stats() const noexcept
 }
 
 std::vector<rhi::AccelerationAabb>
-SoftwareProxyScene::AccelerationAabbs() const
+SoftwareProxyScene::AccelerationAabbs(
+    const math::Double3 gpuOriginInFrameMeters) const
 {
     std::vector<rhi::AccelerationAabb> result;
     result.reserve(proxies_.size());
@@ -428,19 +429,25 @@ SoftwareProxyScene::AccelerationAabbs() const
         result.push_back({
             .minimum = {
                 static_cast<f32>(
-                    proxy.boundsMinimum.x),
+                    proxy.boundsMinimum.x -
+                    gpuOriginInFrameMeters.x),
                 static_cast<f32>(
-                    proxy.boundsMinimum.y),
+                    proxy.boundsMinimum.y -
+                    gpuOriginInFrameMeters.y),
                 static_cast<f32>(
-                    proxy.boundsMinimum.z)
+                    proxy.boundsMinimum.z -
+                    gpuOriginInFrameMeters.z)
             },
             .maximum = {
                 static_cast<f32>(
-                    proxy.boundsMaximum.x),
+                    proxy.boundsMaximum.x -
+                    gpuOriginInFrameMeters.x),
                 static_cast<f32>(
-                    proxy.boundsMaximum.y),
+                    proxy.boundsMaximum.y -
+                    gpuOriginInFrameMeters.y),
                 static_cast<f32>(
-                    proxy.boundsMaximum.z)
+                    proxy.boundsMaximum.z -
+                    gpuOriginInFrameMeters.z)
             },
             .primitiveId = index
         });
@@ -450,7 +457,8 @@ SoftwareProxyScene::AccelerationAabbs() const
 }
 
 std::vector<GpuVisibilityProxyPrimitive>
-SoftwareProxyScene::GpuPrimitives() const
+SoftwareProxyScene::GpuPrimitives(
+    const math::Double3 gpuOriginInFrameMeters) const
 {
     std::vector<GpuVisibilityProxyPrimitive> result;
     result.reserve(proxies_.size());
@@ -478,11 +486,14 @@ SoftwareProxyScene::GpuPrimitives() const
         result.push_back({
             .centerType = {
                 static_cast<f32>(
-                    transform.translation.x),
+                    transform.translation.x -
+                    gpuOriginInFrameMeters.x),
                 static_cast<f32>(
-                    transform.translation.y),
+                    transform.translation.y -
+                    gpuOriginInFrameMeters.y),
                 static_cast<f32>(
-                    transform.translation.z),
+                    transform.translation.z -
+                    gpuOriginInFrameMeters.z),
                 box ? 1.0F : 0.0F
             },
             .axisXExtent = {
