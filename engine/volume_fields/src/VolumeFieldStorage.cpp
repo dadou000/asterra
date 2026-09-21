@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <limits>
 #include <unordered_map>
 
 namespace orbit::volume_fields
@@ -32,25 +33,32 @@ struct GpuResidencyRecord
         divisor;
 }
 
-[[nodiscard]] u64 TileKey(
-    const TileCoord coord) noexcept
+struct TileCoordHash
 {
-    const auto bias =
-        [](const i32 value) -> u64
-        {
-            return static_cast<u64>(
+    [[nodiscard]] std::size_t operator()(
+        const TileCoord coord) const noexcept
+    {
+        std::size_t seed =
+            static_cast<std::size_t>(
                 static_cast<u32>(
-                    value));
-        };
-
-    u64 key =
-        bias(coord.x);
-    key ^= bias(coord.y) *
-        0x9e3779b185ebca87ULL;
-    key ^= bias(coord.z) *
-        0xc2b2ae3d27d4eb4fULL;
-    return key;
-}
+                    coord.x));
+        seed ^=
+            static_cast<std::size_t>(
+                static_cast<u32>(
+                    coord.y)) +
+            0x9e3779b9U +
+            (seed << 6U) +
+            (seed >> 2U);
+        seed ^=
+            static_cast<std::size_t>(
+                static_cast<u32>(
+                    coord.z)) +
+            0x9e3779b9U +
+            (seed << 6U) +
+            (seed >> 2U);
+        return seed;
+    }
+};
 
 [[nodiscard]] bool SameLayout(
     const math::Double3 a,
@@ -171,7 +179,10 @@ VolumeFieldStorage::Recenter(
         DesiredTileCoords(
             centerMeters);
 
-    std::unordered_map<u64, u32>
+    std::unordered_map<
+        TileCoord,
+        u32,
+        TileCoordHash>
         oldSlots;
     oldSlots.reserve(
         tiles_.size());
@@ -181,7 +192,7 @@ VolumeFieldStorage::Recenter(
         if (tile.resident)
         {
             oldSlots.emplace(
-                TileKey(tile.coord),
+                tile.coord,
                 tile.slot);
         }
     }
@@ -230,7 +241,7 @@ VolumeFieldStorage::Recenter(
     {
         const auto found =
             oldSlots.find(
-                TileKey(coord));
+                coord);
 
         if (found != oldSlots.end() &&
             tiles_[found->second].coord ==
@@ -342,7 +353,7 @@ VolumeFieldStorage::Recenter(
 }
 
 void VolumeFieldStorage::
-MarkAllResidentTilesValid() noexcept
+MarkAllResidentTilesValid()
 {
     for (auto& tile : tiles_)
     {
