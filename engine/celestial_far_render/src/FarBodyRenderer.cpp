@@ -125,19 +125,74 @@ SampleAppearance(
         y);
 }
 
-[[nodiscard]] u8 ToLinearUnorm8(
-    const f32 linear) noexcept
+[[nodiscard]] u16 FloatToHalfBits(
+    const f32 value) noexcept
 {
-    return static_cast<u8>(
-        std::clamp(
-            std::lround(
-                std::clamp(
-                    linear,
-                    0.0F,
-                    1.0F) *
-                255.0F),
-            0L,
-            255L));
+    const u32 bits = std::bit_cast<u32>(value);
+    const u32 sign = (bits >> 16U) & 0x8000U;
+    const u32 exponent = (bits >> 23U) & 0xFFU;
+    u32 mantissa = bits & 0x7FFFFFU;
+
+    if (exponent == 0xFFU)
+    {
+        return static_cast<u16>(
+            sign |
+            (mantissa == 0U ? 0x7C00U : 0x7E00U));
+    }
+
+    const i32 halfExponent =
+        static_cast<i32>(exponent) - 127 + 15;
+
+    if (halfExponent >= 31)
+    {
+        return static_cast<u16>(sign | 0x7C00U);
+    }
+
+    if (halfExponent <= 0)
+    {
+        if (halfExponent < -10)
+        {
+            return static_cast<u16>(sign);
+        }
+
+        mantissa |= 0x800000U;
+        const u32 shift =
+            static_cast<u32>(14 - halfExponent);
+        u32 halfMantissa = mantissa >> shift;
+        if ((mantissa >> (shift - 1U)) & 1U)
+        {
+            ++halfMantissa;
+        }
+
+        return static_cast<u16>(
+            sign |
+            (halfMantissa & 0x03FFU));
+    }
+
+    u32 halfMantissa = mantissa >> 13U;
+    if (mantissa & 0x00001000U)
+    {
+        ++halfMantissa;
+        if (halfMantissa == 0x0400U)
+        {
+            halfMantissa = 0U;
+            const u32 roundedExponent =
+                static_cast<u32>(halfExponent + 1);
+            if (roundedExponent >= 31U)
+            {
+                return static_cast<u16>(sign | 0x7C00U);
+            }
+
+            return static_cast<u16>(
+                sign |
+                (roundedExponent << 10U));
+        }
+    }
+
+    return static_cast<u16>(
+        sign |
+        (static_cast<u32>(halfExponent) << 10U) |
+        (halfMantissa & 0x03FFU));
 }
 
 [[nodiscard]] u64 DiscFingerprint(
@@ -592,7 +647,7 @@ CachedDiscProduct BuildCachedDisc(
         DiscFingerprint(
             appearance,
             config);
-    result.rgba8.resize(
+    result.rgba16.resize(
         static_cast<std::size_t>(
             config.resolution) *
         config.resolution *
@@ -660,12 +715,12 @@ CachedDiscProduct BuildCachedDisc(
                  x) *
                 4U;
 
-            result.rgba8[offset] =
-                ToLinearUnorm8(color.x);
-            result.rgba8[offset + 1U] =
-                ToLinearUnorm8(color.y);
-            result.rgba8[offset + 2U] =
-                ToLinearUnorm8(color.z);
+            result.rgba16[offset] =
+                FloatToHalfBits(color.x);
+            result.rgba16[offset + 1U] =
+                FloatToHalfBits(color.y);
+            result.rgba16[offset + 2U] =
+                FloatToHalfBits(color.z);
 
             const f64 edge =
                 std::clamp(
@@ -676,10 +731,9 @@ CachedDiscProduct BuildCachedDisc(
                     0.0,
                     1.0);
 
-            result.rgba8[offset + 3U] =
-                static_cast<u8>(
-                    std::lround(
-                        edge * 255.0));
+            result.rgba16[offset + 3U] =
+                FloatToHalfBits(
+                    static_cast<f32>(edge));
         }
     }
 
@@ -692,7 +746,7 @@ GpuCachedDiscProduct::GpuCachedDiscProduct(
     : fingerprint_(product.fingerprint)
 {
     if (product.resolution == 0U ||
-        product.rgba8.size() !=
+        product.rgba16.size() !=
             static_cast<std::size_t>(
                 product.resolution) *
                 product.resolution *
@@ -706,7 +760,7 @@ GpuCachedDiscProduct::GpuCachedDiscProduct(
         device.CreateBuffer({
             .sizeBytes =
                 static_cast<u64>(
-                    product.rgba8.size()),
+                    product.rgba16.size()),
             .usage =
                 rhi::BufferUsage::Generic,
             .memory =
@@ -720,7 +774,7 @@ GpuCachedDiscProduct::GpuCachedDiscProduct(
             .width = product.resolution,
             .height = product.resolution,
             .format =
-                rhi::TextureFormat::RGBA8_UNorm,
+                rhi::TextureFormat::RGBA16_Float,
             .initialState =
                 rhi::ResourceState::
                     CopyDestination
@@ -734,8 +788,8 @@ GpuCachedDiscProduct::GpuCachedDiscProduct(
 
     std::memcpy(
         staging_->Map(),
-        product.rgba8.data(),
-        product.rgba8.size());
+        product.rgba16.data(),
+        product.rgba16.size());
     staging_->Unmap();
 }
 
