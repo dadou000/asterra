@@ -441,7 +441,9 @@ MacroGlobeMesh BuildMacroGlobe(
 
 GpuMacroGlobeProduct::GpuMacroGlobeProduct(
     rhi::Device& device,
-    const MacroGlobeMesh& mesh)
+    const MacroGlobeMesh& mesh,
+    const celestial_appearance::PlanetaryAppearanceProduct*
+        appearance)
     : indexCount_(
           static_cast<u32>(
               mesh.indices.size())),
@@ -458,15 +460,31 @@ GpuMacroGlobeProduct::GpuMacroGlobeProduct(
             "GPU macro globe requires a valid CPU mesh.");
     }
 
+    if (appearance != nullptr &&
+        (appearance->texels.size() !=
+             mesh.vertices.size() ||
+         appearance->faceResolution *
+             appearance->faceResolution *
+             6U !=
+             appearance->texels.size()))
+    {
+        throw std::invalid_argument(
+            "Planetary appearance topology does not match macro globe topology.");
+    }
+
     std::vector<GpuMacroGlobeVertex>
         packed;
     packed.reserve(
         mesh.vertices.size());
 
-    for (const auto& vertex :
-         mesh.vertices)
+    for (std::size_t index = 0;
+         index < mesh.vertices.size();
+         ++index)
     {
-        packed.push_back({
+        const auto& vertex =
+            mesh.vertices[index];
+
+        GpuMacroGlobeVertex packedVertex{
             .positionNormalized = {
                 static_cast<f32>(
                     vertex.positionMeters.x /
@@ -486,7 +504,34 @@ GpuMacroGlobeProduct::GpuMacroGlobeProduct(
                 static_cast<f32>(
                     vertex.normal.z)
             }
-        });
+        };
+
+        if (appearance != nullptr)
+        {
+            const auto& texel =
+                appearance->texels[index];
+
+            packedVertex.albedoLinear =
+                texel.albedoLinear;
+            packedVertex.appearanceNormal =
+                texel.normal;
+            packedVertex.materialChannels = {
+                texel.roughness,
+                texel.oceanMask,
+                texel.iceMask,
+                0.0F
+            };
+            packedVertex.emissionLinear =
+                texel.emissionLinear;
+        }
+        else
+        {
+            packedVertex.appearanceNormal =
+                packedVertex.normal;
+        }
+
+        packed.push_back(
+            packedVertex);
     }
 
     vertices_ =
@@ -580,6 +625,10 @@ struct VSInput
 {
     float3 position : POSITION;
     float3 normal : NORMAL;
+    float3 albedo : COLOR0;
+    float3 appearanceNormal : NORMAL1;
+    float4 material : TEXCOORD0;
+    float3 emission : COLOR1;
 };
 
 struct Constants
@@ -595,6 +644,9 @@ struct VSOutput
 {
     float4 position : SV_Position;
     float3 normal : NORMAL;
+    float3 albedo : COLOR0;
+    float4 material : TEXCOORD0;
+    float3 emission : COLOR1;
 };
 
 VSOutput main(VSInput input)
@@ -621,7 +673,10 @@ VSOutput main(VSInput input)
         y / tanHalf,
         z * 0.5,
         z);
-    output.normal = normalize(input.normal);
+    output.normal = normalize(input.appearanceNormal);
+    output.albedo = input.albedo;
+    output.material = input.material;
+    output.emission = input.emission;
     return output;
 }
 )";
@@ -631,6 +686,9 @@ struct VSOutput
 {
     float4 position : SV_Position;
     float3 normal : NORMAL;
+    float3 albedo : COLOR0;
+    float4 material : TEXCOORD0;
+    float3 emission : COLOR1;
 };
 
 float4 main(VSOutput input) : SV_Target0
@@ -638,16 +696,33 @@ float4 main(VSOutput input) : SV_Target0
     const float3 n = normalize(input.normal);
     const float3 l = normalize(float3(0.55, 0.72, -0.48));
     const float ndl = saturate(dot(n, l));
-    const float rim = pow(1.0 - saturate(abs(n.z)), 3.0);
 
-    const float3 base = float3(0.12, 0.31, 0.39);
-    const float3 color =
-        base * (0.055 + 0.945 * ndl) +
-        float3(0.07, 0.11, 0.14) * rim;
+    const float roughness = saturate(input.material.x);
+    const float ocean = saturate(input.material.y);
+    const float ice = saturate(input.material.z);
 
-    return float4(color / (1.0 + color), 1.0);
+    const float diffuse =
+        0.045 + 0.955 * ndl;
+
+    const float grazing =
+        pow(1.0 - saturate(ndl), 5.0);
+
+    const float specularStrength =
+        lerp(0.08, 0.55, ocean) *
+        (1.0 - roughness * 0.75);
+
+    float3 color =
+        input.albedo * diffuse +
+        specularStrength * grazing *
+            float3(0.45, 0.58, 0.68) +
+        ice * 0.03 +
+        input.emission;
+
+    return float4(
+        color / (1.0 + color),
+        1.0);
 }
-)";
+)"
 } // namespace
 
 MacroGlobeRenderer::MacroGlobeRenderer(
@@ -668,7 +743,7 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         .debug = false
     });
 
-    static constexpr std::array<rhi::VertexAttribute, 2> attributes{{
+    static constexpr std::array<rhi::VertexAttribute, 6> attributes{{
         {
             .location = 0,
             .format = rhi::VertexFormat::Float3,
@@ -678,6 +753,28 @@ MacroGlobeRenderer::MacroGlobeRenderer(
             .location = 1,
             .format = rhi::VertexFormat::Float3,
             .offsetBytes = sizeof(math::Float3)
+        },
+        {
+            .location = 2,
+            .format = rhi::VertexFormat::Float3,
+            .offsetBytes = sizeof(math::Float3) * 2U
+        },
+        {
+            .location = 3,
+            .format = rhi::VertexFormat::Float3,
+            .offsetBytes = sizeof(math::Float3) * 3U
+        },
+        {
+            .location = 4,
+            .format = rhi::VertexFormat::Float4,
+            .offsetBytes = sizeof(math::Float3) * 4U
+        },
+        {
+            .location = 5,
+            .format = rhi::VertexFormat::Float3,
+            .offsetBytes =
+                sizeof(math::Float3) * 4U +
+                sizeof(math::Float4)
         }
     }};
 
