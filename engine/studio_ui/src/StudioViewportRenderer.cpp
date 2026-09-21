@@ -3043,43 +3043,6 @@ StudioViewportRenderer::Compose(
                     });
             }
 
-            if (frames != nullptr &&
-                !products.empty())
-            {
-                const auto* frameGraph = frames;
-                const auto pathProducts = products;
-
-                graph.AddPass(
-                    prefix + ".Paths",
-                    {
-                        {
-                            .texture = targets.color,
-                            .state = rhi::ResourceState::RenderTarget,
-                            .access = render_graph::Access::Write
-                        }
-                    },
-                    [this,
-                     color,
-                     width,
-                     height,
-                     camera,
-                     frameGraph,
-                     pathProducts,
-                     atTime](
-                        rhi::CommandList& commands,
-                        const render_graph::Resources&)
-                    {
-                        pathRenderer_.Draw(
-                            commands,
-                            *color,
-                            width,
-                            height,
-                            camera,
-                            *frameGraph,
-                            pathProducts,
-                            atTime);
-                    });
-            }
             break;
         }
 
@@ -3217,6 +3180,52 @@ StudioViewportRenderer::Compose(
                         height,
                         lightingView,
                         directLight);
+                });
+        }
+
+        if (presentation ==
+                StudioViewportPresentation::BodyPreview &&
+            frames != nullptr &&
+            !products.empty())
+        {
+            const auto* frameGraph = frames;
+            const auto pathProducts = products;
+            const auto camera =
+                view->Camera();
+
+            graph.AddPass(
+                prefix + ".Paths",
+                {
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 color,
+                 width,
+                 height,
+                 camera,
+                 frameGraph,
+                 pathProducts,
+                 atTime](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    pathRenderer_.Draw(
+                        commands,
+                        *color,
+                        width,
+                        height,
+                        camera,
+                        *frameGraph,
+                        pathProducts,
+                        atTime);
                 });
         }
 
