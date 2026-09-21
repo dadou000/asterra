@@ -54,6 +54,7 @@ struct ImportedTargets
     // presentation target so post-process passes never have to sample from
     // the same texture they are writing.
     render_graph::TextureHandle color;
+    render_graph::TextureHandle displayLinear;
     render_graph::TextureHandle display;
     render_graph::TextureHandle depth;
     render_graph::TextureHandle picking;
@@ -77,6 +78,7 @@ public:
     [[nodiscard]] const CameraState& Camera() const noexcept;
 
     [[nodiscard]] rhi::Texture& Color() noexcept;
+    [[nodiscard]] rhi::Texture& DisplayLinear() noexcept;
     [[nodiscard]] rhi::Texture& DisplayColor() noexcept;
     [[nodiscard]] rhi::Texture& Depth() noexcept;
     [[nodiscard]] rhi::Texture& Picking() noexcept;
@@ -95,6 +97,7 @@ private:
     u32 height_{1};
     CameraState camera_{};
     std::unique_ptr<rhi::Texture> color_;
+    std::unique_ptr<rhi::Texture> displayLinear_;
     std::unique_ptr<rhi::Texture> displayColor_;
     std::unique_ptr<rhi::Texture> depth_;
     std::unique_ptr<rhi::Texture> picking_;
