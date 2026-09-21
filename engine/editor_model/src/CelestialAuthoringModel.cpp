@@ -17,7 +17,7 @@ namespace
 {
 using namespace world_model;
 
-constexpr std::array<CelestialCapabilityDescriptor, 16>
+constexpr std::array<CelestialCapabilityDescriptor, 17>
 kCapabilities{{
     {kReferenceShapeCapabilityType, "Reference Shape", true},
     {kMassPropertiesCapabilityType, "Mass Properties", true},
@@ -31,6 +31,7 @@ kCapabilities{{
     {kRingSystemCapabilityType, "Ring System", true},
     {kRadiativeEmitterCapabilityType, "Radiative Emitter", true},
     {kPhotosphereCapabilityType, "Photosphere", true},
+    {kGiantAppearanceCapabilityType, "Giant Appearance", true},
     {kMagnetosphereCapabilityType, "Magnetosphere / Aurora", true},
     {kCometTailCapabilityType, "Comet Tail", true},
     {kCompactObjectCapabilityType, "Compact Object", true},
