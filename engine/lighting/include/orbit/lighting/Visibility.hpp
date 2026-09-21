@@ -240,6 +240,14 @@ public:
         const VisibilityQuery& query,
         VisibilityTraceDiagnostics* diagnostics = nullptr) const;
 
+    // Occlusion/nearest-surface mode: evaluates every qualifying provider and
+    // returns the closest sufficiently confident hit across representations.
+    // Unlike Trace(), a terminal miss from one provider does not suppress a
+    // hit from another representation.
+    [[nodiscard]] VisibilityResult TraceNearest(
+        const VisibilityQuery& query,
+        VisibilityTraceDiagnostics* diagnostics = nullptr) const;
+
 private:
     [[nodiscard]] bool Qualifies(
         const VisibilityProviderDesc& provider,
