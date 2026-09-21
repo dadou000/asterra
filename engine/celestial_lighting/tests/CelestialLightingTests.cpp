@@ -3,6 +3,7 @@
 #include <cmath>
 #include <numbers>
 #include <vector>
+#include <iostream>
 
 namespace
 {
@@ -21,6 +22,15 @@ bool Near(
         });
 }
 }
+
+namespace
+{
+int FailCode(const int code)
+{
+    std::cerr << "celestial-lighting failure code " << code << '\\n';
+    return code;
+}
+} // namespace
 
 int main()
 {
@@ -44,7 +54,7 @@ int main()
     if (clear.overlapping ||
         clear.visibleFraction != 1.0)
     {
-        return 1;
+        return FailCode(1);
     }
 
     const auto total =
@@ -60,7 +70,7 @@ int main()
         total.visibleFraction >
             1.0e-12)
     {
-        return 2;
+        return FailCode(2);
     }
 
     const auto annular =
@@ -76,7 +86,7 @@ int main()
         !(annular.visibleFraction > 0.0) ||
         !(annular.visibleFraction < 1.0))
     {
-        return 3;
+        return FailCode(3);
     }
 
     const auto behind =
@@ -91,7 +101,7 @@ int main()
     if (behind.occluderInFront ||
         behind.overlapping)
     {
-        return 4;
+        return FailCode(4);
     }
 
     const auto combined =
@@ -114,7 +124,7 @@ int main()
             combined.visibleFraction,
             annular.visibleFraction))
     {
-        return 5;
+        return FailCode(5);
     }
 
     const auto duplicateUnion =
@@ -137,7 +147,7 @@ int main()
             annular.visibleFraction) >
             0.02)
     {
-        return 6;
+        return FailCode(6);
     }
 
     const auto direct =
@@ -155,7 +165,7 @@ int main()
             direct.unoccludedWattsPerSquareMeter *
                 0.25))
     {
-        return 7;
+        return FailCode(7);
     }
 
     if (!Near(
@@ -167,7 +177,7 @@ int main()
             0.0,
             1.0e-8))
     {
-        return 8;
+        return FailCode(8);
     }
 
     const auto quarter =
@@ -183,8 +193,8 @@ int main()
         !(quarter.unitGeometricAlbedoIrradianceWattsPerSquareMeter >
             0.0))
     {
-        return 9;
+        return FailCode(9);
     }
 
-    return 0;
+    return FailCode(0);
 }
