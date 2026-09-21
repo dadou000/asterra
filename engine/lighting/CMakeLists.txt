@@ -17,6 +17,7 @@ add_library(OrbitLighting STATIC
     src/RadianceEstimator.cpp
     src/RadianceCacheSampler.cpp
     src/MaterialEmission.cpp
+    src/MaterialEmissionSurfaceOverride.cpp
     src/RuntimeMaterialEmission.cpp
 )
 
