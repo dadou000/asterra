@@ -94,7 +94,11 @@ LightingViewChange ClassifyLightingViewChange(
 
     if (explicitProjectionChange ||
         previous.verticalFovRadians !=
-            current.verticalFovRadians)
+            current.verticalFovRadians ||
+        previous.nearPlaneMeters !=
+            current.nearPlaneMeters ||
+        previous.farPlaneMeters !=
+            current.farPlaneMeters)
     {
         result |=
             LightingViewChange::ProjectionChanged;
