@@ -8,6 +8,7 @@
 #include <orbit/studio_session/StudioCelestialRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioCelestialValidationScenario.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
+#include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
@@ -71,6 +72,7 @@ private:
     ProjectAuthoringUi projectAuthoring_;
     SurfaceAuthoringUi surfaceAuthoring_;
     StudioViewportRenderer viewportRenderer_;
+    DisplayDiagnosticsUi displayDiagnostics_;
     StudioViewportPanels viewportPanels_;
 
     std::optional<
