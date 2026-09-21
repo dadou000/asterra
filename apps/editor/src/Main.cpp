@@ -7198,7 +7198,7 @@ int main(
             {
                 studioUiTextures.push_back({
                     .texture =
-                        renderedView.targets.color,
+                        renderedView.targets.display,
                     .state =
                         orbit::rhi::
                             ResourceState::
