@@ -162,6 +162,33 @@ f64 ResolvedPixelIrradianceWattsPerSquareMeter(
             viewportHeightPixels);
 }
 
+f64 EncodeIrradianceSceneLinear(
+    const f64 irradianceWattsPerSquareMeter,
+    const SceneEncodingSettings& settings)
+{
+    if (!std::isfinite(irradianceWattsPerSquareMeter) ||
+        irradianceWattsPerSquareMeter <= 0.0)
+    {
+        return 0.0;
+    }
+
+    RequireFinitePositive(
+        settings.referenceIrradianceWattsPerSquareMeter,
+        "Scene encoding reference irradiance must be finite and positive.");
+
+    if (!std::isfinite(settings.referenceSceneValue) ||
+        settings.referenceSceneValue <= 0.0)
+    {
+        throw std::invalid_argument(
+            "Scene encoding reference value must be finite and positive.");
+    }
+
+    return
+        irradianceWattsPerSquareMeter /
+        settings.referenceIrradianceWattsPerSquareMeter *
+        settings.referenceSceneValue;
+}
+
 ExposureState ResolveExposure(
     const ExposureSettings& settings)
 {
