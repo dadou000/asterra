@@ -406,7 +406,7 @@ DynamicPromotionSettingsFor(
 NBodyMemberForObject(
     const scene::ObjectId object) noexcept
 {
-    return {
+    celestial_orbits::NBodyMemberId result{
         .high =
             object.high ^
             0x4e424f44594d454dULL,
@@ -414,6 +414,13 @@ NBodyMemberForObject(
             object.low ^
             0x4f52424954563036ULL
     };
+
+    if (!result)
+    {
+        result.low = 1;
+    }
+
+    return result;
 }
 
 [[nodiscard]] std::optional<scene::ObjectRecord>
