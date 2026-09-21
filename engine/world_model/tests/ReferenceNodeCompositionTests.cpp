@@ -124,13 +124,43 @@ int main()
             return 3;
         }
 
-        if (composition.Frames().Parent(*binaryFrame) != systemFrame ||
-            composition.Frames().Parent(*nestedFrame) != binaryFrame ||
-            composition.Frames().Parent(*starFrame) != binaryFrame ||
-            composition.Frames().Parent(*planetFrame) != nestedFrame ||
-            composition.Frames().Parent(*moonFrame) != nestedFrame)
+        const auto starId =
+            composition.BodyForObject(starA);
+        const auto planetId =
+            composition.BodyForObject(planet);
+        const auto moonId =
+            composition.BodyForObject(moon);
+
+        const auto* starBody =
+            starId.has_value()
+                ? composition.Bodies().FindBody(*starId)
+                : nullptr;
+        const auto* planetBody =
+            planetId.has_value()
+                ? composition.Bodies().FindBody(*planetId)
+                : nullptr;
+        const auto* moonBody =
+            moonId.has_value()
+                ? composition.Bodies().FindBody(*moonId)
+                : nullptr;
+
+        if (starBody == nullptr ||
+            planetBody == nullptr ||
+            moonBody == nullptr)
         {
             return 4;
+        }
+
+        if (composition.Frames().Parent(*binaryFrame) != systemFrame ||
+            composition.Frames().Parent(*nestedFrame) != binaryFrame ||
+            composition.Frames().Parent(starBody->centerFrame) != binaryFrame ||
+            composition.Frames().Parent(planetBody->centerFrame) != nestedFrame ||
+            composition.Frames().Parent(moonBody->centerFrame) != nestedFrame ||
+            composition.Frames().Parent(*starFrame) != starBody->centerFrame ||
+            composition.Frames().Parent(*planetFrame) != planetBody->centerFrame ||
+            composition.Frames().Parent(*moonFrame) != moonBody->centerFrame)
+        {
+            return 5;
         }
 
         const auto binaryToSystem =
@@ -144,7 +174,7 @@ int main()
             binaryToSystem->translation.y != 2'000.0 ||
             binaryToSystem->translation.z != 3'000.0)
         {
-            return 5;
+            return 9;
         }
 
         const auto stableNestedFrame = *nestedFrame;
