@@ -23,6 +23,7 @@ struct AppearanceTexel
     math::Float3 normal{0.0F, 1.0F, 0.0F};
     f32 roughness{0.8F};
     f32 oceanMask{0.0F};
+    f32 waterDepthMeters{0.0F};
     f32 iceMask{0.0F};
     f32 directLightTransmittance{1.0F};
     math::Float3 emissionLinear{};
@@ -59,6 +60,7 @@ struct GpuAppearanceTexel
     f32 roughness{0.8F};
     math::Float3 normal{};
     f32 oceanMask{0.0F};
+    f32 waterDepthMeters{0.0F};
     math::Float3 emissionLinear{};
     f32 iceMask{0.0F};
     f32 directLightTransmittance{1.0F};
