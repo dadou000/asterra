@@ -241,7 +241,8 @@ void RenderView::CreateTargets()
                     RGBA16_Float,
             .initialState =
                 rhi::ResourceState::
-                    ShaderResource
+                    ShaderResource,
+            .allowUnorderedAccess = true
         });
 
     displayLinear_ =
