@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/commands/CommandService.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/time/SimulationTime.hpp>
@@ -32,13 +33,33 @@ struct SystemViewTrajectorySample
     math::Double3 positionMeters{};
 };
 
+struct AnalyticOrbitEdit
+{
+    f64 semiMajorAxisMeters{1.0};
+    f64 periapsisDistanceMeters{1.0};
+    f64 eccentricity{0.0};
+    f64 inclinationDegrees{0.0};
+    f64 ascendingNodeDegrees{0.0};
+    f64 argumentPeriapsisDegrees{0.0};
+    f64 meanAnomalyEpochDegrees{0.0};
+    f64 gravitationalParameterM3PerS2{1.0};
+};
+
+struct OrbitManipulationTarget
+{
+    scene::ObjectId body{};
+    scene::ObjectId capability{};
+    AnalyticOrbitEdit values{};
+};
+
 class SystemViewModel
 {
 public:
     SystemViewModel(
         scene::ObjectStore& objects,
         world_model::UniverseComposition& universe,
-        selection::SelectionService& selection);
+        selection::SelectionService& selection,
+        commands::CommandService& commands);
 
     [[nodiscard]] std::vector<scene::ObjectRecord>
     Systems() const;
@@ -59,6 +80,20 @@ public:
         f64 durationSeconds,
         u32 segments) const;
 
+    [[nodiscard]] std::optional<OrbitManipulationTarget>
+    AnalyticOrbitTarget(scene::ObjectId object) const;
+
+    void ApplyAnalyticOrbitEdit(
+        scene::ObjectId capability,
+        const AnalyticOrbitEdit& edit);
+
+    void SetReferenceNodePosition(
+        scene::ObjectId object,
+        math::Double3 positionMeters);
+
+    [[nodiscard]] f64 SuggestedTrajectoryDurationSeconds(
+        scene::ObjectId object) const;
+
     void Select(scene::ObjectId object);
 
 private:
@@ -69,5 +104,6 @@ private:
     scene::ObjectStore& objects_;
     world_model::UniverseComposition& universe_;
     selection::SelectionService& selection_;
+    commands::CommandService& commands_;
 };
 } // namespace orbit::editor_model
