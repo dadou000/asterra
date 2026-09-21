@@ -436,13 +436,22 @@ CelestialRecipeService::CreateRockyPlanetInternal(
 
     if (recipe.atmosphere)
     {
-        static_cast<void>(
+        const auto atmosphere =
             AddCapability(
                 commands_,
                 body,
                 world_model::kAtmosphereCapabilityType,
                 "Atmosphere",
-                "Physical"));
+                "Physical Scattering");
+
+        commands_.SetProperty(
+            atmosphere,
+            world_model::kAtmosphereTopRadiusMeters,
+            recipe.radiusMeters +
+                std::max(
+                    80'000.0,
+                    recipe.radiusMeters *
+                        0.012));
     }
 
     if (recipe.ocean)
