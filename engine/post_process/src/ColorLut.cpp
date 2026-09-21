@@ -226,10 +226,16 @@ float4 main(VSOutput input) : SV_Target0
     const bool inDomain =
         all(
             displayLinear >=
-                g.domainMinimum.xxx) &&
+                float3(
+                    g.domainMinimum,
+                    g.domainMinimum,
+                    g.domainMinimum)) &&
         all(
             displayLinear <=
-                g.domainMaximum.xxx);
+                float3(
+                    g.domainMaximum,
+                    g.domainMaximum,
+                    g.domainMaximum));
 
     if (active > 0.0 &&
         inDomain)
