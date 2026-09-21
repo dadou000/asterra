@@ -78,7 +78,7 @@ int main()
         return 2;
     }
 
-    if (sizeof(GpuVisibilityQuery) != 32U ||
+    if (sizeof(GpuVisibilityQuery) != 48U ||
         sizeof(GpuVisibilityResult) != 48U)
     {
         return 3;
