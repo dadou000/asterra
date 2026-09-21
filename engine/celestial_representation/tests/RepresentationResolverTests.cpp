@@ -8,7 +8,7 @@ int main()
 
     ResolveInput input{
         .bodyRadiusMeters = 6.4e6,
-        .maximumProductionDetailMeters = 5000.0,
+        .maximumProductionDetailMeters = 20'000.0,
         .maximumMacroDisplacementMeters = 12'000.0,
         .cameraDistanceToCenterMeters = 6.5e6,
         .verticalFieldOfViewRadians = 1.0,
