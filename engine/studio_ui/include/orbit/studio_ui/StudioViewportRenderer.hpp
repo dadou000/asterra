@@ -11,6 +11,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/SoftwareProxyVisibility.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/post_process/ColorLut.hpp>
 #include <orbit/post_process/DisplayResolve.hpp>
@@ -124,6 +125,18 @@ struct StudioCelestialLightingDiagnostics
     u32 contributingOccluders{0};
 };
 
+struct StudioVisibilityProxyDiagnostics
+{
+    universe::BodyId body{};
+    frames::FrameId frame{};
+    u64 semanticRevision{0U};
+    u32 proxyCount{0U};
+    u32 bvhNodeCount{0U};
+    u32 dynamicProxyCount{0U};
+    f32 maximumNominalErrorMeters{0.0F};
+    bool rebuiltThisFrame{false};
+};
+
 struct StudioSurfaceGlobeTransitionDiagnostics
 {
     universe::BodyId body{};
@@ -206,6 +219,11 @@ public:
     [[nodiscard]] std::optional<
         StudioSurfaceGlobeTransitionDiagnostics>
     SurfaceGlobeTransitionDiagnostics(
+        std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] std::optional<
+        StudioVisibilityProxyDiagnostics>
+    VisibilityProxyDiagnostics(
         std::string_view viewportId) const noexcept;
 
     [[nodiscard]] std::optional<
@@ -342,6 +360,18 @@ private:
         std::unique_ptr<celestial_globe::GpuMacroGlobeProduct> product;
     };
 
+    struct VisibilityProxyPresentation
+    {
+        universe::BodyId body{};
+        frames::FrameId frame{};
+        u64 semanticRevision{0U};
+        bool hasDynamic{false};
+        lighting::SoftwareProxyScene scene;
+        std::unique_ptr<
+            lighting::SoftwareProxyVisibilityProvider>
+            provider;
+    };
+
     struct TerrainPresentation
     {
         u64 universeGeneration{0U};
@@ -442,6 +472,18 @@ private:
         StudioSurfaceGlobeTransitionDiagnostics,
         std::less<>>
         transitionDiagnostics_;
+
+    std::map<
+        std::string,
+        StudioVisibilityProxyDiagnostics,
+        std::less<>>
+        visibilityProxyDiagnostics_;
+
+    std::map<
+        std::string,
+        VisibilityProxyPresentation,
+        std::less<>>
+        visibilityProxyPresentations_;
 
     std::map<
         std::string,
