@@ -1473,6 +1473,21 @@ StudioViewportRenderer::RingDiagnostics(
         : std::optional(found->second);
 }
 
+std::optional<
+    StudioStellarDiagnostics>
+StudioViewportRenderer::StellarDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        stellarDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            stellarDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
 std::vector<StudioRenderedView>
 StudioViewportRenderer::Compose(
     render_graph::RenderGraph& graph,
@@ -3387,6 +3402,9 @@ StudioViewportRenderer::Compose(
                 bool radiativeEmitter = false;
                 f32 resolvedRadiometricIntensity = 1.0F;
                 f32 pointRadiometricIntensity = 1.0F;
+                std::optional<
+                    world_model::ResolvedRadiativeBody>
+                    resolvedRadiativeForView;
 
                 const auto bodyObject =
                     session.World().
@@ -3397,15 +3415,17 @@ StudioViewportRenderer::Compose(
 
                 if (bodyObject.has_value())
                 {
-                    const auto radiative =
+                    resolvedRadiativeForView =
                         world_model::
                             ResolveRadiativeBody(
                                 session.World().
                                     Objects(),
                                 *bodyObject);
 
-                    if (radiative.has_value())
+                    if (resolvedRadiativeForView.has_value())
                     {
+                        const auto& radiative =
+                            *resolvedRadiativeForView;
                         radiativeEmitter = true;
 
 
@@ -3419,7 +3439,7 @@ StudioViewportRenderer::Compose(
                         const f64 pointIrradiance =
                             celestial_radiometry::
                                 IrradianceWattsPerSquareMeter(
-                                    radiative->
+                                    radiative.
                                         radiative.
                                         luminosityWatts,
                                     distanceMeters);
@@ -3427,7 +3447,7 @@ StudioViewportRenderer::Compose(
                         const f64 resolvedPixelIrradiance =
                             celestial_radiometry::
                                 ResolvedPixelIrradianceWattsPerSquareMeter(
-                                    radiative->
+                                    radiative.
                                         radiative.
                                         surfaceRadianceWattsPerSquareMeterSteradian,
                                     static_cast<f64>(
@@ -3544,31 +3564,37 @@ StudioViewportRenderer::Compose(
                                 blend.overlapping
                         });
 
+                const math::Float3 stellarColor =
+                    resolvedRadiativeForView.has_value()
+                        ? math::Float3{
+                              static_cast<f32>(
+                                  resolvedRadiativeForView->
+                                      stellarColorLinear.x),
+                              static_cast<f32>(
+                                  resolvedRadiativeForView->
+                                      stellarColorLinear.y),
+                              static_cast<f32>(
+                                  resolvedRadiativeForView->
+                                      stellarColorLinear.z)}
+                        : math::Float3{
+                              1.0F, 1.0F, 1.0F};
+
                 celestial_far_render::
                     AppearanceSummary appearance{
                         .albedoLinear =
                             radiativeEmitter
-                                ? math::Float3{
-                                      1.0F,
-                                      0.78F,
-                                      0.48F}
+                                ? stellarColor
                                 : math::Float3{
                                       0.18F,
                                       0.21F,
                                       0.23F},
                         .roughness =
                             radiativeEmitter
-                                ? 0.35F
+                                ? 0.0F
                                 : 0.82F,
                         .oceanFraction = 0.0F,
                         .iceFraction = 0.0F,
-                        .emissionLinear =
-                            radiativeEmitter
-                                ? math::Float3{
-                                      0.55F,
-                                      0.34F,
-                                      0.12F}
-                                : math::Float3{}
+                        .emissionLinear = {}
                     };
 
                 const auto richer =
@@ -3584,6 +3610,39 @@ StudioViewportRenderer::Compose(
                 const f64 projectedRadius =
                     decision.
                         projectedRadiusPixels;
+
+                if (resolvedRadiativeForView.has_value())
+                {
+                    stellarDiagnostics_.insert_or_assign(
+                        info.id,
+                        StudioStellarDiagnostics{
+                            .body =
+                                logicalTarget->
+                                    target->body,
+                            .appearanceFingerprint =
+                                resolvedRadiativeForView->
+                                    stellarAppearanceFingerprint,
+                            .effectiveTemperatureKelvin =
+                                resolvedRadiativeForView->
+                                    radiative.
+                                    effectiveTemperatureKelvin,
+                            .colorLinear =
+                                stellarColor,
+                            .projectedRadiusPixels =
+                                projectedRadius,
+                            .representation =
+                                decision.representation,
+                            .resolvedSceneIntensity =
+                                resolvedRadiometricIntensity,
+                            .pointSceneIntensity =
+                                pointRadiometricIntensity
+                        });
+                }
+                else
+                {
+                    stellarDiagnostics_.erase(
+                        info.id);
+                }
 
                 graph.AddPass(
                     prefix +
@@ -3631,6 +3690,7 @@ StudioViewportRenderer::Compose(
                      radiativeEmitter,
                      resolvedRadiometricIntensity,
                      pointRadiometricIntensity,
+                     resolvedRadiativeForView,
                      studioDirectLight,
                      resolvedOceanForView](
                         rhi::CommandList& commands,
@@ -3712,7 +3772,99 @@ StudioViewportRenderer::Compose(
                                         .oceanEnabled =
                                             resolvedOceanForView.has_value(),
                                         .stellar =
-                                            radiativeEmitter
+                                            radiativeEmitter,
+                                        .stellarColorLinear =
+                                            resolvedRadiativeForView.has_value()
+                                                ? math::Float3{
+                                                      static_cast<f32>(
+                                                          resolvedRadiativeForView->
+                                                              stellarColorLinear.x),
+                                                      static_cast<f32>(
+                                                          resolvedRadiativeForView->
+                                                              stellarColorLinear.y),
+                                                      static_cast<f32>(
+                                                          resolvedRadiativeForView->
+                                                              stellarColorLinear.z)}
+                                                : math::Float3{
+                                                      1.0F, 1.0F, 1.0F},
+                                        .stellarLimbDarkening =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          limbDarkening
+                                                    : 0.58),
+                                        .stellarGranulationStrength =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          granulationStrength
+                                                    : 0.10),
+                                        .stellarGranulationScale =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          granulationScale
+                                                    : 42.0),
+                                        .stellarActivityLevel =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          activityLevel
+                                                    : 0.12),
+                                        .stellarActivitySeed =
+                                            static_cast<u32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          activitySeed &
+                                                          0xffffffffULL
+                                                    : 1ULL),
+                                        .stellarChromosphereStrength =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          chromosphereStrength
+                                                    : 0.08),
+                                        .stellarChromosphereExtent =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          chromosphereExtent
+                                                    : 0.035),
+                                        .stellarCoronaStrength =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          coronaStrength
+                                                    : 0.025),
+                                        .stellarCoronaExtent =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          coronaExtent
+                                                    : 1.75),
+                                        .stellarGlareStrength =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          glareStrength
+                                                    : 0.35),
+                                        .stellarGlareRadiusPixels =
+                                            static_cast<f32>(
+                                                resolvedRadiativeForView.has_value()
+                                                    ? resolvedRadiativeForView->
+                                                          stellarAppearance.
+                                                          glareRadiusPixels
+                                                    : 5.0)
                                     };
 
                                 farBodyRenderer_.Draw(
