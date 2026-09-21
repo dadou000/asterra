@@ -714,6 +714,7 @@ AppearanceSummary SummarizeAppearance(
     f64 roughness = 0.0;
     f64 ocean = 0.0;
     f64 ice = 0.0;
+    f64 transmittance = 0.0;
 
     for (const auto& texel :
          appearance.texels)
@@ -735,6 +736,8 @@ AppearanceSummary SummarizeAppearance(
         roughness += texel.roughness;
         ocean += texel.oceanMask;
         ice += texel.iceMask;
+        transmittance +=
+            texel.directLightTransmittance;
     }
 
     const f64 inv =
@@ -757,6 +760,9 @@ AppearanceSummary SummarizeAppearance(
         .iceFraction =
             static_cast<f32>(
                 ice * inv),
+        .directLightTransmittance =
+            static_cast<f32>(
+                transmittance * inv),
         .emissionLinear = {
             static_cast<f32>(emission.x * inv),
             static_cast<f32>(emission.y * inv),
