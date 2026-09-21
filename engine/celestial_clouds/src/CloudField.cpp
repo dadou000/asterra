@@ -887,6 +887,17 @@ void CompositeOrbitalCloudAppearance(
                         0.96F * blend,
                         0.04F,
                         1.0F);
+
+                texel.directLightTransmittance =
+                    std::clamp(
+                        texel.directLightTransmittance *
+                            static_cast<f32>(
+                                std::exp(
+                                    -std::max(
+                                        optical,
+                                        0.0))),
+                        0.0F,
+                        1.0F);
             }
         }
     }
