@@ -2,7 +2,7 @@ name: Orbit V0.0.6 Celestial
 
 on:
   push:
-    branches: [orbit]
+    branches: [orbit, orbit-v006-closure]
     paths:
       - '.github/workflows/orbit-v006-celestial.yml'
       - 'tests/V006CelestialValidationTests.cpp'
