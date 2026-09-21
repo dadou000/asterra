@@ -621,6 +621,7 @@ SoftwareProxyVisibilityProvider::Trace(
     math::Double3 closestNormal{};
 
     bool budgetExhausted = false;
+    bool skippedForProxyLod = false;
 
     while (stackSize > 0U)
     {
@@ -680,6 +681,18 @@ SoftwareProxyVisibilityProvider::Trace(
                     query.body !=
                         proxy.source.body)
                 {
+                    continue;
+                }
+
+                if (std::isfinite(
+                        query.requirements.
+                            maximumNominalErrorMeters) &&
+                    proxy.source.
+                            nominalErrorMeters >
+                        query.requirements.
+                            maximumNominalErrorMeters)
+                {
+                    skippedForProxyLod = true;
                     continue;
                 }
 
@@ -773,10 +786,11 @@ SoftwareProxyVisibilityProvider::Trace(
             node.right;
     }
 
-    // A provisional hit is not trustworthy when traversal stopped
-    // early: an unvisited node could still contain a closer proxy. Budget
-    // exhaustion therefore never produces an accepted hit or terminal miss.
-    if (budgetExhausted)
+    // A provisional hit is not trustworthy when traversal stopped early or
+    // when a potentially closer proxy was rejected by the query's accuracy
+    // LOD. In both cases a finer backend must be allowed to continue.
+    if (budgetExhausted ||
+        skippedForProxyLod)
     {
         return {
             .resolution =
