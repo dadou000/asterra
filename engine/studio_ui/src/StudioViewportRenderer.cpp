@@ -5188,6 +5188,21 @@ StudioViewportRenderer::Compose(
                     radianceSourceRevision,
                     1.0F / 60.0F));
 
+            lighting::VisibilityProvider*
+                radianceVisibility = nullptr;
+
+            if (const auto proxyFound =
+                    visibilityProxyPresentations_.find(
+                        info.id);
+                proxyFound !=
+                        visibilityProxyPresentations_.end() &&
+                    proxyFound->second.provider !=
+                        nullptr)
+            {
+                radianceVisibility =
+                    proxyFound->second.provider.get();
+            }
+
             const auto radianceUpdates =
                 finalGather.radianceResidency->BuildUpdateList(
                     lightingView.cameraPositionInFrameMeters,
@@ -5201,7 +5216,8 @@ StudioViewportRenderer::Compose(
                         finalGather.radianceResidency->Config(),
                         lightingView,
                         directLight,
-                        localLightGrid.lights);
+                        localLightGrid.lights,
+                        radianceVisibility);
 
                 static_cast<void>(
                     finalGather.radianceResidency->CommitUpdate(
