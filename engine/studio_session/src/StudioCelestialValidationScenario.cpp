@@ -756,7 +756,7 @@ RunStudioCelestialValidationScenario(
 
         if (runtime.has_value())
         {
-            const world::WorldPosition ground{
+            const orbit::world::WorldPosition ground{
                 .meters = {
                     runtime->
                         planet.
@@ -783,7 +783,7 @@ RunStudioCelestialValidationScenario(
                         viewportId).
                     has_value();
 
-            const world::WorldPosition orbit{
+            const orbit::world::WorldPosition orbit{
                 .meters = {
                     runtime->
                         planet.
