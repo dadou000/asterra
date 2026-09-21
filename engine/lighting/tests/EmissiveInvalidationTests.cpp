@@ -77,7 +77,8 @@ int main()
         return 4;
     }
 
-    events = tracker.Update({});
+    events = tracker.Update(
+        std::span<const DynamicEmissiveSourceState>{});
 
     if (events.size() != 1U ||
         events.front().reason !=
