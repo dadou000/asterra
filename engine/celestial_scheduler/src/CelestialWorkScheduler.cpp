@@ -346,6 +346,22 @@ bool CelestialWorkScheduler::Complete(
     return true;
 }
 
+void CelestialWorkScheduler::Abandon(
+    const WorkKey& key,
+    const u64 authorityRevision) noexcept
+{
+    const auto found =
+        inFlight_.find(key);
+
+    if (found != inFlight_.end() &&
+        found->second.grant.
+                authorityRevision ==
+            authorityRevision)
+    {
+        inFlight_.erase(found);
+    }
+}
+
 void CelestialWorkScheduler::Invalidate(
     const WorkKey& key)
 {
