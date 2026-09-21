@@ -46,26 +46,50 @@ VSOutput main(uint vertexId : SV_VertexID)
 )";
 
 constexpr const char* kPs = R"(
+struct GpuLocalLight
+{
+    float4 positionType;
+    float4 directionRange;
+    float4 colorFlux;
+    float4 cone;
+};
+
 [[vk::binding(0, 0)]]
+StructuredBuffer<GpuLocalLight> g_localLights;
+
+[[vk::binding(1, 0)]]
+StructuredBuffer<uint> g_tileOffsets;
+
+[[vk::binding(2, 0)]]
+StructuredBuffer<uint> g_tileLightIndices;
+
+[[vk::binding(3, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness;
-[[vk::binding(0, 0)]]
+[[vk::binding(3, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler;
 
-[[vk::binding(1, 0)]]
+[[vk::binding(4, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic;
-[[vk::binding(1, 0)]]
+[[vk::binding(4, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler;
 
-[[vk::binding(2, 0)]]
+[[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass;
-[[vk::binding(2, 0)]]
+[[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler;
+
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_depth;
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_depthSampler;
 
 struct Constants
 {
@@ -73,6 +97,8 @@ struct Constants
     float4 lightColorAndAmbient;
     float4 cameraForwardAndAspect;
     float4 cameraUpAndTanHalfFov;
+    float4 depthRangeAndPhotometry;
+    uint4 localGrid;
 };
 [[vk::push_constant]] Constants g;
 
@@ -108,80 +134,26 @@ float GeometrySchlickGGX(float nDotV, float roughness)
         max(nDotV * (1.0 - k) + k, 1.0e-5);
 }
 
-float4 main(VSOutput input) : SV_Target0
+float3 EvaluateBrdf(
+    float3 n,
+    float3 v,
+    float3 l,
+    float3 baseColor,
+    float roughness,
+    float metallic)
 {
-    const float4 baseRoughness =
-        g_baseRoughness.Sample(
-            g_baseSampler,
-            input.uv);
-    const float4 normalMetallic =
-        g_normalMetallic.Sample(
-            g_normalSampler,
-            input.uv);
-    const float4 emissionClass =
-        g_emissionClass.Sample(
-            g_emissionSampler,
-            input.uv);
-
-    // Metadata 0 means no physical surface was written at this pixel.
-    if (emissionClass.a <= 0.0)
-    {
-        return float4(0.006, 0.010, 0.018, 1.0);
-    }
-
-    const float3 baseColor =
-        max(baseRoughness.rgb, 0.0);
-    const float roughness =
-        saturate(baseRoughness.a);
-    const float metallic =
-        saturate(normalMetallic.a);
-    const float3 n =
-        normalize(normalMetallic.xyz);
-
-    const float3 l =
-        normalize(g.lightDirectionAndScale.xyz);
-    const float irradiance =
-        max(g.lightDirectionAndScale.w, 0.0);
-    const float3 lightColor =
-        max(g.lightColorAndAmbient.rgb, 0.0);
-    const float ambient =
-        max(g.lightColorAndAmbient.w, 0.0);
-
-    const float3 cameraForward =
-        normalize(g.cameraForwardAndAspect.xyz);
-    const float3 requestedUp =
-        normalize(g.cameraUpAndTanHalfFov.xyz);
-    const float3 cameraRight =
-        normalize(cross(cameraForward, requestedUp));
-    const float3 cameraUp =
-        normalize(cross(cameraRight, cameraForward));
-    const float aspect =
-        max(g.cameraForwardAndAspect.w, 0.001);
-    const float tanHalfFov =
-        max(g.cameraUpAndTanHalfFov.w, 0.001);
-
-    const float2 ndc =
-        float2(
-            input.uv.x * 2.0 - 1.0,
-            1.0 - input.uv.y * 2.0);
-
-    const float3 cameraRay =
-        normalize(
-            cameraForward +
-            cameraRight *
-                (ndc.x * aspect * tanHalfFov) +
-            cameraUp *
-                (ndc.y * tanHalfFov));
-
-    const float3 v =
-        normalize(-cameraRay);
-    const float3 h =
-        normalize(l + v);
-
     const float nDotL =
         saturate(dot(n, l));
+
+    if (nDotL <= 0.0)
+    {
+        return 0.0;
+    }
+
     const float nDotV =
         saturate(dot(n, v));
+    const float3 h =
+        normalize(l + v);
     const float nDotH =
         saturate(dot(n, h));
     const float vDotH =
@@ -214,20 +186,326 @@ float4 main(VSOutput input) : SV_Target0
     const float3 diffuse =
         kd * baseColor / 3.14159265;
 
-    const float3 direct =
+    return
         (diffuse + specular) *
-        lightColor *
-        irradiance *
         nDotL;
+}
 
-    const float3 ambientTerm =
+float ReverseZViewDepth(float depth)
+{
+    const float nearPlane =
+        max(g.depthRangeAndPhotometry.x, 1.0e-5);
+    const float farPlane =
+        max(
+            g.depthRangeAndPhotometry.y,
+            nearPlane + 1.0e-4);
+
+    return
+        nearPlane * farPlane /
+        max(
+            depth * (farPlane - nearPlane) +
+                nearPlane,
+            1.0e-6);
+}
+
+float3 ReconstructSurfacePosition(
+    float depth,
+    float3 cameraRay,
+    float3 cameraForward)
+{
+    const float viewDepth =
+        ReverseZViewDepth(depth);
+
+    const float rayForward =
+        max(
+            dot(cameraRay, cameraForward),
+            1.0e-5);
+
+    return
+        cameraRay *
+        (viewDepth / rayForward);
+}
+
+float RangeAttenuation(float distanceMeters, float rangeMeters)
+{
+    const float normalized =
+        distanceMeters /
+        max(rangeMeters, 1.0e-4);
+
+    const float quartic =
+        normalized *
+        normalized *
+        normalized *
+        normalized;
+
+    const float smooth =
+        saturate(1.0 - quartic);
+
+    return smooth * smooth;
+}
+
+float LocalLightIrradianceScale(
+    GpuLocalLight light,
+    float distanceMeters,
+    float3 surfaceToLight)
+{
+    const float luminousFlux =
+        max(light.colorFlux.w, 0.0);
+
+    const float luminousEfficacy =
+        max(
+            g.depthRangeAndPhotometry.w,
+            1.0);
+
+    const float radiantWatts =
+        luminousFlux /
+        luminousEfficacy;
+
+    const float isSpot =
+        step(0.5, light.positionType.w);
+
+    float solidAngle =
+        4.0 * 3.14159265;
+
+    float angular = 1.0;
+
+    if (isSpot > 0.5)
+    {
+        const float outerCos =
+            clamp(light.cone.y, -1.0, 1.0);
+
+        solidAngle =
+            max(
+                2.0 * 3.14159265 *
+                    (1.0 - outerCos),
+                1.0e-4);
+
+        const float3 lightDirection =
+            normalize(light.directionRange.xyz);
+
+        const float spotCos =
+            dot(
+                -surfaceToLight,
+                lightDirection);
+
+        angular =
+            smoothstep(
+                outerCos,
+                max(light.cone.x, outerCos + 1.0e-5),
+                spotCos);
+    }
+
+    const float radiantIntensity =
+        radiantWatts /
+        solidAngle;
+
+    const float inverseSquare =
+        1.0 /
+        max(
+            distanceMeters *
+            distanceMeters,
+            0.0025);
+
+    const float referenceIrradiance =
+        max(
+            g.depthRangeAndPhotometry.z,
+            1.0e-5);
+
+    return
+        radiantIntensity *
+        inverseSquare *
+        RangeAttenuation(
+            distanceMeters,
+            light.directionRange.w) *
+        angular /
+        referenceIrradiance;
+}
+
+float4 main(VSOutput input) : SV_Target0
+{
+    const float4 baseRoughness =
+        g_baseRoughness.Sample(
+            g_baseSampler,
+            input.uv);
+    const float4 normalMetallic =
+        g_normalMetallic.Sample(
+            g_normalSampler,
+            input.uv);
+    const float4 emissionClass =
+        g_emissionClass.Sample(
+            g_emissionSampler,
+            input.uv);
+
+    // Metadata 0 means no physical surface was written at this pixel.
+    if (emissionClass.a <= 0.0)
+    {
+        return float4(0.006, 0.010, 0.018, 1.0);
+    }
+
+    const float3 baseColor =
+        max(baseRoughness.rgb, 0.0);
+    const float roughness =
+        saturate(baseRoughness.a);
+    const float metallic =
+        saturate(normalMetallic.a);
+    const float3 n =
+        normalize(normalMetallic.xyz);
+
+    const float3 cameraForward =
+        normalize(g.cameraForwardAndAspect.xyz);
+    const float3 requestedUp =
+        normalize(g.cameraUpAndTanHalfFov.xyz);
+    const float3 cameraRight =
+        normalize(cross(cameraForward, requestedUp));
+    const float3 cameraUp =
+        normalize(cross(cameraRight, cameraForward));
+    const float aspect =
+        max(g.cameraForwardAndAspect.w, 0.001);
+    const float tanHalfFov =
+        max(g.cameraUpAndTanHalfFov.w, 0.001);
+
+    const float2 ndc =
+        float2(
+            input.uv.x * 2.0 - 1.0,
+            1.0 - input.uv.y * 2.0);
+
+    const float3 cameraRay =
+        normalize(
+            cameraForward +
+            cameraRight *
+                (ndc.x * aspect * tanHalfFov) +
+            cameraUp *
+                (ndc.y * tanHalfFov));
+
+    const float3 v =
+        normalize(-cameraRay);
+
+    const float3 stellarDirection =
+        normalize(g.lightDirectionAndScale.xyz);
+    const float stellarIrradiance =
+        max(g.lightDirectionAndScale.w, 0.0);
+    const float3 stellarColor =
+        max(g.lightColorAndAmbient.rgb, 0.0);
+
+    float3 sceneLinear =
+        EvaluateBrdf(
+            n,
+            v,
+            stellarDirection,
+            baseColor,
+            roughness,
+            metallic) *
+        stellarColor *
+        stellarIrradiance;
+
+    const float ambient =
+        max(g.lightColorAndAmbient.w, 0.0);
+
+    sceneLinear +=
         baseColor *
         (1.0 - metallic) *
         ambient;
 
-    const float3 sceneLinear =
-        direct +
-        ambientTerm +
+    const float depth =
+        g_depth.Sample(
+            g_depthSampler,
+            input.uv).r;
+
+    // Reverse-Z depth 0 is the untouched/far clear value. Analytic globe
+    // representations currently do not populate geometric depth, so local
+    // lights are intentionally skipped there while stellar lighting remains
+    // common. Ground/local geometry receives exact camera-relative positions.
+    if (depth > 0.0 &&
+        g.localGrid.w > 0u &&
+        g.localGrid.x > 0u &&
+        g.localGrid.y > 0u)
+    {
+        const float3 surfacePosition =
+            ReconstructSurfacePosition(
+                depth,
+                cameraRay,
+                cameraForward);
+
+        const uint2 pixel =
+            uint2(
+                max(input.position.x, 0.0),
+                max(input.position.y, 0.0));
+
+        const uint2 tile =
+            min(
+                pixel / g.localGrid.x,
+                uint2(
+                    g.localGrid.y - 1u,
+                    g.localGrid.z - 1u));
+
+        const uint tileIndex =
+            tile.y * g.localGrid.y +
+            tile.x;
+
+        const uint first =
+            g_tileOffsets[tileIndex];
+        const uint end =
+            g_tileOffsets[tileIndex + 1u];
+
+        [loop]
+        for (uint cursor = first;
+             cursor < end;
+             ++cursor)
+        {
+            const uint lightIndex =
+                g_tileLightIndices[cursor];
+
+            if (lightIndex >= g.localGrid.w)
+            {
+                continue;
+            }
+
+            const GpuLocalLight local =
+                g_localLights[lightIndex];
+
+            const float3 delta =
+                local.positionType.xyz -
+                surfacePosition;
+
+            const float distanceMeters =
+                length(delta);
+
+            if (distanceMeters <= 1.0e-4 ||
+                distanceMeters >=
+                    local.directionRange.w)
+            {
+                continue;
+            }
+
+            const float3 l =
+                delta /
+                distanceMeters;
+
+            const float irradianceScale =
+                LocalLightIrradianceScale(
+                    local,
+                    distanceMeters,
+                    l);
+
+            if (irradianceScale <= 0.0)
+            {
+                continue;
+            }
+
+            sceneLinear +=
+                EvaluateBrdf(
+                    n,
+                    v,
+                    l,
+                    baseColor,
+                    roughness,
+                    metallic) *
+                max(local.colorFlux.rgb, 0.0) *
+                irradianceScale;
+        }
+    }
+
+    sceneLinear +=
         max(emissionClass.rgb, 0.0);
 
     return float4(sceneLinear, 1.0);
@@ -267,8 +545,9 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 16U,
-            .sampledTextures = 3U,
+            .pushConstantDwords = 24U,
+            .shaderResourceBuffers = 3U,
+            .sampledTextures = 4U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -288,11 +567,16 @@ void DirectLightingRenderer::Draw(
     rhi::Texture& surfaceBaseRoughness,
     rhi::Texture& surfaceNormalMetallic,
     rhi::Texture& surfaceEmissionClass,
+    rhi::Texture& depth,
+    rhi::Buffer& localLights,
+    rhi::Buffer& tileOffsets,
+    rhi::Buffer& tileLightIndices,
     rhi::Texture& targetSceneColor,
     const u32 width,
     const u32 height,
     const LightingView& view,
     const DirectionalLight& light,
+    const TiledLightGrid& localLightGrid,
     const DirectLightingSettings& settings)
 {
     if (width == 0U || height == 0U)
@@ -306,7 +590,12 @@ void DirectLightingRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 16> constants{
+    constexpr f32 kSolarReferenceIrradiance =
+        1361.0F;
+    constexpr f32 kPhotopicLuminousEfficacy =
+        683.0F;
+
+    const std::array<u32, 24> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -331,7 +620,22 @@ void DirectLightingRenderer::Draw(
         bits(view.up.y),
         bits(view.up.z),
         bits(std::tan(
-            view.verticalFovRadians * 0.5F))
+            view.verticalFovRadians * 0.5F)),
+
+        bits(std::max(
+            view.nearPlaneMeters,
+            1.0e-5F)),
+        bits(std::max(
+            view.farPlaneMeters,
+            view.nearPlaneMeters + 1.0e-4F)),
+        bits(kSolarReferenceIrradiance),
+        bits(kPhotopicLuminousEfficacy),
+
+        localLightGrid.tileSizePixels,
+        localLightGrid.tilesX,
+        localLightGrid.tilesY,
+        static_cast<u32>(
+            localLightGrid.lights.size())
     };
 
     commands.SetRenderTarget(targetSceneColor);
@@ -352,6 +656,17 @@ void DirectLightingRenderer::Draw(
 
     commands.SetGraphicsPipeline(*pipeline_);
     commands.SetGraphicsConstants(constants);
+
+    commands.SetGraphicsBuffer(
+        0U,
+        localLights);
+    commands.SetGraphicsBuffer(
+        1U,
+        tileOffsets);
+    commands.SetGraphicsBuffer(
+        2U,
+        tileLightIndices);
+
     commands.SetGraphicsTexture(
         0U,
         surfaceBaseRoughness);
@@ -361,6 +676,10 @@ void DirectLightingRenderer::Draw(
     commands.SetGraphicsTexture(
         2U,
         surfaceEmissionClass);
+    commands.SetGraphicsTexture(
+        3U,
+        depth);
+
     commands.Draw(6U);
 }
 } // namespace orbit::lighting
