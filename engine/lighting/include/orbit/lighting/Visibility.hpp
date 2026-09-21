@@ -188,10 +188,12 @@ struct GpuVisibilityResult
     f32 confidence{0.0F};
     f32 distanceMeters{0.0F};
 
-    // xyz = camera-relative hit position, w = reserved
+    // xyz = provider-relative hit position.
+    // w bit pattern carries materialId for GPU/readback consumers.
     math::Float4 position{};
 
-    // xyz = geometric normal, w = reserved/material seam
+    // xyz = geometric normal.
+    // w bit pattern carries instanceId.
     math::Float4 normal{};
 };
 
