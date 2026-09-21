@@ -171,6 +171,19 @@ NBodyDomain::NBodyDomain(
             "N-body domain requires at least one member.");
     }
 
+    std::sort(
+        members.begin(),
+        members.end(),
+        [](const NBodyMemberSeed& lhs,
+           const NBodyMemberSeed& rhs)
+        {
+            if (lhs.id.high != rhs.id.high)
+            {
+                return lhs.id.high < rhs.id.high;
+            }
+            return lhs.id.low < rhs.id.low;
+        });
+
     members_.reserve(members.size());
     indexById_.reserve(members.size());
 
