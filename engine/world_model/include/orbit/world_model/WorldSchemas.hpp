@@ -123,6 +123,11 @@ inline constexpr schema::TypeId kSpotLightType{
     .low = 0x53504f5400000001ULL
 };
 
+inline constexpr schema::TypeId kVisibilityProxyType{
+    .high = 0x4f52424954564953ULL,
+    .low = 0x50524f5859000001ULL
+};
+
 inline constexpr schema::PropertyId kSystemEpochMicroseconds{
     .high = 0x4f5242495450524fULL,
     .low = 0x505345504f434801ULL
@@ -667,6 +672,56 @@ inline constexpr schema::PropertyId kLightOuterConeDegrees{
 inline constexpr schema::PropertyId kLightEnabled{
     .high = 0x4f524249544c5052ULL,
     .low = 0x454e41424c454401ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyEnabled{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x454e41424c454401ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyShape{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x5348415045000001ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyPositionMeters{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x504f534954494f4eULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyEulerDegrees{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x45554c4552000001ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyRadiusMeters{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x5241444955530001ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyHalfExtentsMeters{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x455854454e545301ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyMaterialId{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x4d4154455249414cULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyInstanceId{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x494e5354414e4345ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyErrorMeters{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x4552524f52000001ULL
+};
+
+inline constexpr schema::PropertyId kVisibilityProxyDynamic{
+    .high = 0x4f52424954565052ULL,
+    .low = 0x44594e414d494301ULL
 };
 
 inline constexpr schema::PropertyId kDecalAsset{
