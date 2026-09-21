@@ -12,6 +12,7 @@
 #include <orbit/world_model/PropertyProvenanceSchema.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <type_traits>
@@ -326,22 +327,27 @@ FingerprintSemanticSubtree(
         HashDouble(
             hash,
             transform.translation.z);
-    hash =
-        HashDouble(
-            hash,
-            transform.rotation.x);
-    hash =
-        HashDouble(
-            hash,
-            transform.rotation.y);
-    hash =
-        HashDouble(
-            hash,
-            transform.rotation.z);
-    hash =
-        HashDouble(
-            hash,
-            transform.rotation.w);
+    const std::array axes{
+        transform.rotation.xAxis,
+        transform.rotation.yAxis,
+        transform.rotation.zAxis
+    };
+
+    for (const auto& axis : axes)
+    {
+        hash =
+            HashDouble(
+                hash,
+                axis.x);
+        hash =
+            HashDouble(
+                hash,
+                axis.y);
+        hash =
+            HashDouble(
+                hash,
+                axis.z);
+    }
 
     return hash;
 }
