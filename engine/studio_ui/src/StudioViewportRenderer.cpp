@@ -20,6 +20,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/LocalLightBinding.hpp>
 #include <orbit/world_model/VisibilityProxyBinding.hpp>
+#include <orbit/world_model/VolumeSchemas.hpp>
 #include <orbit/lighting/LocalLightRegistry.hpp>
 #include <orbit/lighting/AnalyticBodyVisibility.hpp>
 #include <orbit/lighting/TerrainHeightfieldVisibility.hpp>
@@ -650,6 +651,87 @@ SelectedLocalLightGizmoLines(
     return lines;
 }
 
+
+[[nodiscard]] std::vector<editor_ui::PreviewLine>
+SelectedVolumeDomainLines(
+    studio_session::StudioSession& session,
+    const render_view::CameraState& camera)
+{
+    std::vector<editor_ui::PreviewLine> lines;
+
+    if (!session.World().HasWorld() ||
+        session.World().Selection().Ordered().size() != 1U)
+    {
+        return lines;
+    }
+
+    const auto selected =
+        session.World().Selection().Ordered().front();
+
+    const auto volume =
+        world_model::ResolveVolumeDomain(
+            session.World().Objects(),
+            selected);
+
+    if (!volume.has_value())
+    {
+        return lines;
+    }
+
+    const auto center =
+        volume->centerMeters;
+    const auto half =
+        volume->halfExtentsMeters;
+
+    const auto relative =
+        [&](const f64 x,
+            const f64 y,
+            const f64 z)
+        {
+            return math::Float3{
+                static_cast<f32>(
+                    center.x + x -
+                    camera.localPositionMeters.x),
+                static_cast<f32>(
+                    center.y + y -
+                    camera.localPositionMeters.y),
+                static_cast<f32>(
+                    center.z + z -
+                    camera.localPositionMeters.z)
+            };
+        };
+
+    const std::array<math::Float3, 8> p{
+        relative(-half.x,-half.y,-half.z),
+        relative( half.x,-half.y,-half.z),
+        relative( half.x, half.y,-half.z),
+        relative(-half.x, half.y,-half.z),
+        relative(-half.x,-half.y, half.z),
+        relative( half.x,-half.y, half.z),
+        relative( half.x, half.y, half.z),
+        relative(-half.x, half.y, half.z)
+    };
+
+    constexpr std::array<std::array<u32,2>,12> edges{{
+        {{0,1}},{{1,2}},{{2,3}},{{3,0}},
+        {{4,5}},{{5,6}},{{6,7}},{{7,4}},
+        {{0,4}},{{1,5}},{{2,6}},{{3,7}}
+    }};
+
+    const math::Float4 color{
+        0.25F, 0.78F, 1.0F, 0.95F};
+
+    for (const auto& edge : edges)
+    {
+        lines.push_back({
+            .start = p[edge[0]],
+            .end = p[edge[1]],
+            .color = color
+        });
+    }
+
+    return lines;
+}
 
 [[nodiscard]] std::optional<StudioTerrainAuthoringOverlay>
 SelectedTerrainAuthoringOverlay(
@@ -9453,6 +9535,53 @@ StudioViewportRenderer::Compose(
                                 height,
                                 camera,
                                 lightGizmoLines);
+                    });
+            }
+        }
+
+        {
+            auto volumeDomainLines =
+                SelectedVolumeDomainLines(
+                    session,
+                    view->Camera());
+
+            if (!volumeDomainLines.empty())
+            {
+                const auto camera =
+                    view->Camera();
+
+                graph.AddPass(
+                    prefix + ".VolumeDomainBounds",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     width,
+                     height,
+                     camera,
+                     volumeDomainLines =
+                         std::move(
+                             volumeDomainLines)](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        pathRenderer_.
+                            DrawCameraRelativeLines(
+                                commands,
+                                *color,
+                                width,
+                                height,
+                                camera,
+                                volumeDomainLines);
                     });
             }
         }
