@@ -1500,8 +1500,8 @@ StudioViewportRenderer::Compose(
                         *shape,
                         *macroGlobeSurface->terrain);
 
-                auto& farPresentation =
-                    macroGlobePresentations_[
+                auto* farPresentation =
+                    &macroGlobePresentations_[
                         info.id];
 
                 const auto globeCamera =
@@ -1516,7 +1516,7 @@ StudioViewportRenderer::Compose(
                      width,
                      height,
                      transitionGlobe,
-                     &farPresentation,
+                     farPresentation,
                      shape = *shape,
                      globeCamera,
                      projectedRadius =
@@ -1555,7 +1555,7 @@ StudioViewportRenderer::Compose(
                                 .shape = shape,
                                 .camera = globeCamera,
                                 .appearance =
-                                    farPresentation.
+                                    farPresentation->
                                         appearanceSummary,
                                 .projectedRadiusPixels =
                                     projectedRadius,
@@ -1573,7 +1573,7 @@ StudioViewportRenderer::Compose(
                             width,
                             height,
                             draw,
-                            farPresentation.
+                            farPresentation->
                                 cachedDisc.get());
                     };
 
