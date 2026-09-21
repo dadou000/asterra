@@ -7,6 +7,7 @@
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialCloudBinding.hpp>
+#include <orbit/world_model/CelestialOceanBinding.hpp>
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -1171,6 +1172,27 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
                     radiusMeters,
                 appearanceConfig);
 
+    const auto bodyObject =
+        session.World().
+            Universe().
+            ObjectForBody(body);
+
+    const auto resolvedOcean =
+        bodyObject.has_value()
+            ? world_model::
+                  ResolveOceanBody(
+                      session.World().
+                          Objects(),
+                      *bodyObject)
+            : std::nullopt;
+
+    const u64 activeOceanFingerprint =
+        resolvedOcean.has_value()
+            ? celestial_ocean::
+                  OceanOpticalFingerprint(
+                      resolvedOcean->optical)
+            : 0U;
+
     const auto cloudFound =
         cloudPresentations_.find(
             viewportId);
@@ -1202,6 +1224,8 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             geometryFingerprint ||
         presentation.baseAppearanceFingerprint !=
             appearanceFingerprint ||
+        presentation.oceanFingerprint !=
+            activeOceanFingerprint ||
         presentation.cloudFingerprint !=
             activeCloudFingerprint;
 
@@ -1221,6 +1245,14 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
                     sphericalPlanet->
                         radiusMeters,
                     appearanceConfig);
+
+        if (resolvedOcean.has_value())
+        {
+            celestial_ocean::
+                ApplyOrbitalOceanAppearance(
+                    appearance,
+                    resolvedOcean->optical);
+        }
 
         if (activeCloudField != nullptr)
         {
@@ -1276,6 +1308,8 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             appearanceFingerprint;
         presentation.appearanceFingerprint =
             appearance.fingerprint;
+        presentation.oceanFingerprint =
+            activeOceanFingerprint;
         presentation.cloudFingerprint =
             activeCloudFingerprint;
         presentation.appearanceTexels =
@@ -1374,6 +1408,21 @@ StudioViewportRenderer::CloudDiagnostics(
 
     return found ==
             cloudDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
+    StudioOceanDiagnostics>
+StudioViewportRenderer::OceanDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        oceanDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            oceanDiagnostics_.end()
         ? std::nullopt
         : std::optional(found->second);
 }
