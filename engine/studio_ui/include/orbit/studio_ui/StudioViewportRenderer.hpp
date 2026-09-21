@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
+#include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
@@ -159,10 +160,16 @@ private:
         u64 sourceRevision{0};
         u64 fingerprint{0};
         u64 appearanceFingerprint{0};
+        u64 cachedDiscFingerprint{0};
         u32 appearanceTexels{0};
+        celestial_far_render::AppearanceSummary
+            appearanceSummary{};
         std::unique_ptr<
             celestial_appearance::GpuPlanetaryAppearanceProduct>
             appearanceProduct;
+        std::unique_ptr<
+            celestial_far_render::GpuCachedDiscProduct>
+            cachedDisc;
         std::unique_ptr<celestial_globe::GpuMacroGlobeProduct> product;
     };
 
@@ -187,6 +194,7 @@ private:
     u32 framesInFlight_{1U};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
     celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
+    celestial_far_render::FarBodyRenderer farBodyRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
     celestial_representation::RepresentationTracker
