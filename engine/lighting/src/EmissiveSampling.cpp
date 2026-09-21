@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace orbit::lighting
 {
@@ -231,8 +232,7 @@ EmissiveSampleSet BuildEmissiveSampleSet(
         // Use the energy centroid rather than the region midpoint so a tiny
         // LED inside an 8x8 leaf does not jump to the leaf center.
         const math::Double3 position =
-            hierarchy.nodes[nodeIndex].
-                centerInFrameMeters;
+            node.energyCentroidInFrameMeters;
 
         result.emitters.push_back({
             .sourceStableId =
