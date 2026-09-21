@@ -639,6 +639,7 @@ struct Constants
     float4 upAndScale;
     float4 transition;
     float4 lighting;
+    float4 ocean;
 };
 
 [[vk::push_constant]] Constants g_pc;
@@ -653,6 +654,7 @@ struct VSOutput
     float opacity : TEXCOORD1;
     float3 lightDirection : TEXCOORD2;
     float lightScale : TEXCOORD3;
+    float3 viewDirection : TEXCOORD4;
 };
 
 VSOutput main(VSInput input)
@@ -688,6 +690,8 @@ VSOutput main(VSInput input)
         normalize(g_pc.lighting.xyz);
     output.lightScale =
         max(g_pc.lighting.w, 0.0);
+    output.viewDirection =
+        normalize(camera - world);
     return output;
 }
 )";
@@ -703,6 +707,7 @@ struct VSOutput
     float opacity : TEXCOORD1;
     float3 lightDirection : TEXCOORD2;
     float lightScale : TEXCOORD3;
+    float3 viewDirection : TEXCOORD4;
 };
 
 float4 main(VSOutput input) : SV_Target0
@@ -713,24 +718,64 @@ float4 main(VSOutput input) : SV_Target0
     const float ndl = saturate(dot(n, l));
 
     const float roughness = saturate(input.material.x);
-    const float ocean = saturate(input.material.y);
+    const float oceanMask = saturate(input.material.y);
     const float ice = saturate(input.material.z);
+    const float cloudTransmission = saturate(input.material.w);
+
+    const float3 v = normalize(input.viewDirection);
+    const float3 h = normalize(l + v);
+    const float ndv = saturate(dot(n, v));
+    const float ndh = saturate(dot(n, h));
+    const float vdh = saturate(dot(v, h));
+
+    const float eta = max(g_pc.ocean.x, 1.0);
+    const float f0 =
+        pow((eta - 1.0) / (eta + 1.0), 2.0);
+    const float oceanRoughness =
+        clamp(g_pc.ocean.y, 0.01, 1.0);
+    const float alpha =
+        max(oceanRoughness * oceanRoughness, 0.0001);
+    const float a2 = alpha * alpha;
+    const float denom =
+        ndh * ndh * (a2 - 1.0) + 1.0;
+    const float D =
+        a2 / max(3.14159265 * denom * denom, 1e-6);
+    const float k =
+        (oceanRoughness + 1.0) *
+        (oceanRoughness + 1.0) / 8.0;
+    const float Gl =
+        ndl / max(ndl * (1.0 - k) + k, 1e-5);
+    const float Gv =
+        ndv / max(ndv * (1.0 - k) + k, 1e-5);
+    const float F =
+        f0 + (1.0 - f0) *
+        pow(1.0 - vdh, 5.0);
+
+    const float oceanEnabled =
+        saturate(g_pc.ocean.w);
+    const float glint =
+        oceanEnabled *
+        oceanMask *
+        (1.0 - ice) *
+        max(g_pc.ocean.z, 0.0) *
+        D * Gl * Gv * F /
+        max(4.0 * ndl * ndv, 1e-5);
+
+    const float direct =
+        ndl *
+        input.lightScale *
+        cloudTransmission;
 
     const float diffuse =
-        (0.045 + 0.955 * ndl) *
-        input.lightScale;
-
-    const float grazing =
-        pow(1.0 - saturate(ndl), 5.0);
-
-    const float specularStrength =
-        lerp(0.08, 0.55, ocean) *
-        (1.0 - roughness * 0.75);
+        0.045 * input.lightScale +
+        0.955 * direct;
 
     float3 color =
         input.albedo * diffuse +
-        specularStrength * grazing *
-            float3(0.45, 0.58, 0.68) +
+        glint *
+            input.lightScale *
+            cloudTransmission *
+            float3(1.0, 0.98, 0.94) +
         ice * 0.03 +
         input.emission;
 
@@ -751,6 +796,7 @@ struct VSOutput
     float opacity : TEXCOORD1;
     float3 lightDirection : TEXCOORD2;
     float lightScale : TEXCOORD3;
+    float3 viewDirection : TEXCOORD4;
 };
 
 struct SurfaceOutputs
@@ -899,7 +945,7 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         },
         .vertexAttributes = attributes,
         .vertexStrideBytes = sizeof(GpuMacroGlobeVertex),
-        .pushConstantDwords = 20,
+        .pushConstantDwords = 24,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::Back,
@@ -923,7 +969,7 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         },
         .vertexAttributes = attributes,
         .vertexStrideBytes = sizeof(GpuMacroGlobeVertex),
-        .pushConstantDwords = 20,
+        .pushConstantDwords = 24,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::Back,
@@ -966,7 +1012,7 @@ void MacroGlobeRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 20> constants{
+    const std::array<u32, 24> constants{
         bits(static_cast<f32>(camera.localPositionMeters.x / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.y / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.z / radius)),
@@ -992,7 +1038,21 @@ void MacroGlobeRenderer::Draw(
         bits(lighting.directionBody.z),
         bits(std::max(
             lighting.irradianceScale,
-            0.0F))
+            0.0F)),
+
+        bits(std::max(
+            lighting.oceanRefractiveIndex,
+            1.0F)),
+        bits(std::clamp(
+            lighting.oceanRoughness,
+            0.01F,
+            1.0F)),
+        bits(std::max(
+            lighting.oceanGlintStrength,
+            0.0F)),
+        bits(lighting.oceanEnabled
+            ? 1.0F
+            : 0.0F)
     };
 
     commands.SetRenderTarget(target);
@@ -1051,7 +1111,7 @@ void MacroGlobeRenderer::DrawSurface(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 20> constants{
+    const std::array<u32, 24> constants{
         bits(static_cast<f32>(camera.localPositionMeters.x / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.y / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.z / radius)),
@@ -1077,7 +1137,21 @@ void MacroGlobeRenderer::DrawSurface(
         bits(lighting.directionBody.z),
         bits(std::max(
             lighting.irradianceScale,
-            0.0F))
+            0.0F)),
+
+        bits(std::max(
+            lighting.oceanRefractiveIndex,
+            1.0F)),
+        bits(std::clamp(
+            lighting.oceanRoughness,
+            0.01F,
+            1.0F)),
+        bits(std::max(
+            lighting.oceanGlintStrength,
+            0.0F)),
+        bits(lighting.oceanEnabled
+            ? 1.0F
+            : 0.0F)
     };
 
     std::array<rhi::Texture*, 4> targets{
