@@ -1,9 +1,12 @@
 #include <orbit/world_model/UniverseComposition.hpp>
 
+#include <orbit/celestial_orbits/OrbitState.hpp>
+
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <numbers>
 #include <stdexcept>
 #include <type_traits>
@@ -103,19 +106,183 @@ template <typename Value>
     };
 }
 
-[[nodiscard]] universe::UniformRotationTransform
+[[nodiscard]] std::optional<scene::ObjectRecord>
+FindOrbitCapability(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId body)
+{
+    std::optional<scene::ObjectRecord> found;
+
+    for (const auto& child : objects.Children(body))
+    {
+        if (child.type != kOrbitCapabilityType)
+        {
+            continue;
+        }
+
+        const bool enabled =
+            PropertyOr<bool>(
+                objects,
+                child.id,
+                kCapabilityEnabled,
+                true);
+
+        if (!enabled)
+        {
+            continue;
+        }
+
+        if (found.has_value())
+        {
+            throw std::runtime_error(
+                "Celestial body has multiple enabled orbit capabilities.");
+        }
+
+        found = child;
+    }
+
+    return found;
+}
+
+[[nodiscard]] std::shared_ptr<
+    const celestial_orbits::OrbitStateProvider>
+OrbitProviderFor(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId body,
+    const time::SimulationTime systemEpoch)
+{
+    const auto orbitCapability =
+        FindOrbitCapability(objects, body);
+
+    if (!orbitCapability.has_value())
+    {
+        return std::make_shared<
+            celestial_orbits::FixedOrbitStateProvider>(
+                celestial_orbits::FixedOrbitState{
+                    .positionMeters =
+                        PropertyOr<math::Double3>(
+                            objects,
+                            body,
+                            kBodyParentPositionMeters,
+                            {})
+                });
+    }
+
+    const std::string model =
+        PropertyOr<std::string>(
+            objects,
+            orbitCapability->id,
+            kCapabilityModel,
+            std::string{"Fixed"});
+
+    if (model == "Fixed")
+    {
+        return std::make_shared<
+            celestial_orbits::FixedOrbitStateProvider>(
+                celestial_orbits::FixedOrbitState{
+                    .positionMeters =
+                        PropertyOr<math::Double3>(
+                            objects,
+                            body,
+                            kBodyParentPositionMeters,
+                            {})
+                });
+    }
+
+    if (model != "Analytic Conic")
+    {
+        throw std::runtime_error(
+            "Unsupported orbit capability model: " +
+            model);
+    }
+
+    const f64 degreesToRadians =
+        std::numbers::pi_v<f64> / 180.0;
+    const i64 orbitEpochMicroseconds =
+        PropertyOr<i64>(
+            objects,
+            orbitCapability->id,
+            kOrbitEpochMicroseconds,
+            systemEpoch.microsecondsFromEpoch);
+
+    const f64 eccentricity =
+        PropertyOr<f64>(
+            objects,
+            orbitCapability->id,
+            kOrbitEccentricity,
+            0.0);
+
+    const f64 phase =
+        std::abs(eccentricity - 1.0) <= 1.0e-10
+            ? PropertyOr<f64>(
+                objects,
+                orbitCapability->id,
+                kOrbitBarkerParameterEpoch,
+                0.0)
+            : PropertyOr<f64>(
+                objects,
+                orbitCapability->id,
+                kOrbitMeanAnomalyEpochDegrees,
+                0.0) *
+              degreesToRadians;
+
+    return std::make_shared<
+        celestial_orbits::AnalyticConicOrbitStateProvider>(
+            celestial_orbits::AnalyticConicElements{
+                .semiMajorAxisMeters =
+                    PropertyOr<f64>(
+                        objects,
+                        orbitCapability->id,
+                        kOrbitSemiMajorAxisMeters,
+                        1.0),
+                .periapsisDistanceMeters =
+                    PropertyOr<f64>(
+                        objects,
+                        orbitCapability->id,
+                        kOrbitPeriapsisDistanceMeters,
+                        1.0),
+                .eccentricity = eccentricity,
+                .inclinationRadians =
+                    PropertyOr<f64>(
+                        objects,
+                        orbitCapability->id,
+                        kOrbitInclinationDegrees,
+                        0.0) *
+                    degreesToRadians,
+                .longitudeAscendingNodeRadians =
+                    PropertyOr<f64>(
+                        objects,
+                        orbitCapability->id,
+                        kOrbitAscendingNodeDegrees,
+                        0.0) *
+                    degreesToRadians,
+                .argumentPeriapsisRadians =
+                    PropertyOr<f64>(
+                        objects,
+                        orbitCapability->id,
+                        kOrbitArgumentPeriapsisDegrees,
+                        0.0) *
+                    degreesToRadians,
+                .phaseAtEpoch = phase,
+                .gravitationalParameterM3PerS2 =
+                    PropertyOr<f64>(
+                        objects,
+                        orbitCapability->id,
+                        kOrbitGravitationalParameter,
+                        1.0),
+                .epoch = {
+                    .microsecondsFromEpoch =
+                        orbitEpochMicroseconds
+                }
+            });
+}
+
+[[nodiscard]] universe::BodyTransformModel
 TransformFor(
     const scene::ObjectStore& objects,
     const scene::ObjectId object,
     const time::SimulationTime epoch)
 {
-    const auto center =
-        PropertyOr<math::Double3>(
-            objects,
-            object,
-            kBodyParentPositionMeters,
-            {});
-
     const f64 periodSeconds =
         PropertyOr<f64>(
             objects,
@@ -147,11 +314,12 @@ TransformFor(
                 periodSeconds
             : 0.0;
 
-    return {
-        .centerInParentMeters = center,
-        // Zero tilt is +Z. Positive tilt tips the pole toward +Y in the
-        // parent frame; longitude/orbit conventions can later author a
-        // separate ascending-node orientation without changing this field.
+    return universe::OrbitDrivenUniformRotationTransform{
+        .orbitState =
+            OrbitProviderFor(
+                objects,
+                object,
+                epoch),
         .axisInParent = {
             0.0,
             std::sin(tiltRadians),
