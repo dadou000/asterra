@@ -17,6 +17,8 @@ inline constexpr schema::TypeId kOrbitCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x4f52424341500001ULL};
 inline constexpr schema::TypeId kRotationCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x524f544341500001ULL};
+inline constexpr schema::TypeId kGravityCapabilityType{
+    .high = 0x4f5242495443454cULL, .low = 0x4752415643415001ULL};
 inline constexpr schema::TypeId kSurfaceCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x5355524341500001ULL};
 inline constexpr schema::TypeId kAtmosphereCapabilityType{
@@ -91,6 +93,13 @@ inline constexpr schema::PropertyId kRotationEpochMicroseconds{
     .high = 0x4f52424954524f54ULL, .low = 0x45504f4348000001ULL};
 inline constexpr schema::PropertyId kRotationSynchronousPhaseOffsetDegrees{
     .high = 0x4f52424954524f54ULL, .low = 0x53594e434f464601ULL};
+
+inline constexpr schema::PropertyId kGravityDeriveMuFromMass{
+    .high = 0x4f52424954475241ULL, .low = 0x4445524956450001ULL};
+inline constexpr schema::PropertyId kGravityMuM3PerS2{
+    .high = 0x4f52424954475241ULL, .low = 0x4d55000000000001ULL};
+inline constexpr schema::PropertyId kGravitySofteningMeters{
+    .high = 0x4f52424954475241ULL, .low = 0x534f4654454e0001ULL};
 
 inline constexpr schema::PropertyId kEphemerisSourceLabel{
     .high = 0x4f52424954455048ULL, .low = 0x534f555243450001ULL};
