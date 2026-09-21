@@ -259,9 +259,79 @@ void RegisterCelestialCapabilitySchemas(
     RegisterCapability(
         schemas, kSurfaceCapabilityType,
         "Surface", "Terrain Authority", true);
-    RegisterCapability(
-        schemas, kAtmosphereCapabilityType,
-        "Atmosphere", "Physical");
+    schemas.RegisterType({
+        .id = kAtmosphereCapabilityType,
+        .displayName = "Atmosphere",
+        .category = "Celestial/Capability",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Physical Scattering"),
+            {.id = kAtmosphereTopRadiusMeters,
+             .name = "Top Radius",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 6.471e6,
+             .range = {.minimum = 0.000001}},
+            {.id = kAtmosphereRayleighScatteringPerMeter,
+             .name = "Rayleigh Scattering",
+             .kind = schema::PropertyKind::Vector3,
+             .unit = "1/m",
+             .defaultValue = math::Double3{
+                 5.802e-6, 13.558e-6, 33.1e-6}},
+            {.id = kAtmosphereRayleighScaleHeightMeters,
+             .name = "Rayleigh Scale Height",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 8000.0,
+             .range = {.minimum = 0.000001}},
+            {.id = kAtmosphereMieScatteringPerMeter,
+             .name = "Mie Scattering",
+             .kind = schema::PropertyKind::Vector3,
+             .unit = "1/m",
+             .defaultValue = math::Double3{
+                 3.996e-6, 3.996e-6, 3.996e-6}},
+            {.id = kAtmosphereMieExtinctionPerMeter,
+             .name = "Mie Extinction",
+             .kind = schema::PropertyKind::Vector3,
+             .unit = "1/m",
+             .defaultValue = math::Double3{
+                 4.44e-6, 4.44e-6, 4.44e-6}},
+            {.id = kAtmosphereMieScaleHeightMeters,
+             .name = "Mie Scale Height",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 1200.0,
+             .range = {.minimum = 0.000001}},
+            {.id = kAtmosphereMieAnisotropy,
+             .name = "Mie Anisotropy",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 0.8,
+             .range = {.minimum = -0.999, .maximum = 0.999}},
+            {.id = kAtmosphereAbsorptionExtinctionPerMeter,
+             .name = "Absorption Extinction",
+             .kind = schema::PropertyKind::Vector3,
+             .unit = "1/m",
+             .defaultValue = math::Double3{
+                 0.650e-6, 1.881e-6, 0.085e-6}},
+            {.id = kAtmosphereAbsorptionCenterHeightMeters,
+             .name = "Absorption Layer Center",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 25000.0,
+             .range = {.minimum = 0.0}},
+            {.id = kAtmosphereAbsorptionHalfWidthMeters,
+             .name = "Absorption Layer Half Width",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 15000.0,
+             .range = {.minimum = 0.000001}},
+            {.id = kAtmosphereGroundAlbedo,
+             .name = "Ground Albedo",
+             .kind = schema::PropertyKind::Vector3,
+             .defaultValue = math::Double3{
+                 0.10, 0.10, 0.10}}
+        }
+    });
     RegisterCapability(
         schemas, kOceanCapabilityType,
         "Ocean", "Surface Authority", true);
