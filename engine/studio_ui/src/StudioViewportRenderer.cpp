@@ -816,6 +816,27 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
                         radiusMeters,
                     appearanceConfig);
 
+        presentation.appearanceSummary =
+            celestial_far_render::
+                SummarizeAppearance(
+                    appearance);
+
+        const auto cachedDisc =
+            celestial_far_render::
+                BuildCachedDisc(
+                    appearance,
+                    {.resolution = 64U});
+
+        presentation.cachedDisc =
+            std::make_unique<
+                celestial_far_render::
+                    GpuCachedDiscProduct>(
+                        *device_,
+                        cachedDisc);
+
+        presentation.cachedDiscFingerprint =
+            cachedDisc.fingerprint;
+
         presentation.appearanceProduct =
             std::make_unique<
                 celestial_appearance::
