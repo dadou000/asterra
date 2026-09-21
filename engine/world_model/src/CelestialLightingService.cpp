@@ -243,6 +243,70 @@ CelestialLightingService::DirectLightingAtBody(
     };
 }
 
+std::optional<DirectSurfaceLighting>
+CelestialLightingService::DirectLightingAtSurface(
+    const universe::BodyId receiver,
+    const universe::BodyId emitter,
+    const std::vector<universe::BodyId>& occluders,
+    const time::SimulationTime atTime,
+    const celestial_clouds::CloudFieldProduct& clouds,
+    const math::Double3 surfaceUnitDirection) const
+{
+    const auto direct =
+        DirectLightingAtBody(
+            receiver,
+            emitter,
+            occluders,
+            atTime);
+
+    if (!direct.has_value())
+    {
+        return std::nullopt;
+    }
+
+    if (math::LengthSquared(
+            surfaceUnitDirection) <=
+        1.0e-20)
+    {
+        throw std::invalid_argument(
+            "Cloud-aware surface lighting requires a valid surface direction.");
+    }
+
+    const auto* receiverBody =
+        universe_.Bodies().FindBody(
+            receiver);
+
+    if (receiverBody == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const f64 radius =
+        universe::ReferenceRadiusMeters(
+            receiverBody->shape);
+
+    const f64 cloudTransmittance =
+        celestial_clouds::
+            CloudShadowTransmittanceAtSurface(
+                clouds,
+                radius,
+                math::Normalize(
+                    surfaceUnitDirection),
+                math::Normalize(
+                    direct->
+                        receiverBodyFixedToEmitterMeters));
+
+    return DirectSurfaceLighting{
+        .celestial = *direct,
+        .cloudTransmittance =
+            cloudTransmittance,
+        .irradianceWattsPerSquareMeter =
+            direct->
+                irradianceWattsPerSquareMeter *
+            cloudTransmittance
+    };
+}
+
 std::optional<ReflectedBodyLighting>
 CelestialLightingService::ReflectedLightingAtObserver(
     const universe::BodyId observer,
