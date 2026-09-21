@@ -68,6 +68,41 @@ void RegisterCapability(
 void RegisterCelestialCapabilitySchemas(
     schema::SchemaRegistry& schemas)
 {
+    schemas.RegisterType({
+        .id = kEphemerisAssetType,
+        .displayName = "Ephemeris Asset",
+        .category = "Celestial/Imported Data",
+        .properties = {
+            {.id = kEphemerisSourceLabel,
+             .name = "Source Label",
+             .kind = schema::PropertyKind::String,
+             .defaultValue = std::string{}}
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kEphemerisSampleType,
+        .displayName = "Ephemeris Sample",
+        .category = "Celestial/Imported Data",
+        .properties = {
+            {.id = kEphemerisSampleTimeMicroseconds,
+             .name = "Time",
+             .kind = schema::PropertyKind::Integer,
+             .unit = "us",
+             .defaultValue = i64{0}},
+            {.id = kEphemerisSamplePositionMeters,
+             .name = "Position",
+             .kind = schema::PropertyKind::Vector3,
+             .unit = "m",
+             .defaultValue = math::Double3{}},
+            {.id = kEphemerisSampleVelocityMetersPerSecond,
+             .name = "Velocity",
+             .kind = schema::PropertyKind::Vector3,
+             .unit = "m/s",
+             .defaultValue = math::Double3{}}
+        }
+    });
+
     RegisterCapability(
         schemas, kReferenceShapeCapabilityType,
         "Reference Shape", "Sphere");
