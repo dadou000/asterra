@@ -10,8 +10,10 @@
 namespace orbit::studio_ui
 {
 VolumeAuthoringUi::VolumeAuthoringUi(
-    studio_session::StudioSession& session) noexcept
-    : session_(&session)
+    studio_session::StudioSession& session,
+    volume_fields::VolumeFieldStorageService& fields) noexcept
+    : session_(&session),
+      fields_(&fields)
 {
 }
 
@@ -140,6 +142,64 @@ void VolumeAuthoringUi::Draw(
                     volume->sourceCount,
                     volume->effectorCount,
                     volume->resolution));
+
+            if (fields_ != nullptr)
+            {
+                fields_->RemoveMissing(
+                    world.Objects());
+
+                auto& storage =
+                    fields_->Ensure(
+                        *volume);
+
+                const auto& diagnostics =
+                    storage.Diagnostics();
+
+                const double memoryMiB =
+                    static_cast<double>(
+                        diagnostics.totalBytes) /
+                    (1024.0 * 1024.0);
+
+                context.Text(
+                    std::format(
+                        "GPU fields {:.2f} MiB | tiles {}x{}x{} @ {}^3",
+                        memoryMiB,
+                        diagnostics.tilesX,
+                        diagnostics.tilesY,
+                        diagnostics.tilesZ,
+                        diagnostics.tileEdge));
+
+                context.Text(
+                    std::format(
+                        "Residency {}/{} | valid {} | pending {}",
+                        diagnostics.residentTiles,
+                        diagnostics.tilesX *
+                            diagnostics.tilesY *
+                            diagnostics.tilesZ,
+                        diagnostics.validTiles,
+                        diagnostics.pendingTiles));
+
+                context.MutedText(
+                    std::format(
+                        "Last move reused {} | new {} | evicted {}",
+                        diagnostics.lastUpdate.reusedTiles,
+                        diagnostics.lastUpdate.newTiles,
+                        diagnostics.lastUpdate.evictedTiles));
+
+                for (const auto& channel :
+                     diagnostics.channels)
+                {
+                    context.MutedText(
+                        std::format(
+                            "Field {} | {} bytes/cell | {:.2f} MiB",
+                            static_cast<u64>(
+                                channel.field),
+                            channel.bytesPerCell,
+                            static_cast<double>(
+                                channel.sizeBytes) /
+                                (1024.0 * 1024.0)));
+                }
+            }
 
             context.MutedText(
                 "Exact domain, solver, representation and field properties are edited in the normal Properties Inspector.");
