@@ -188,7 +188,7 @@ int main()
         }
 
         UniverseComposition universe;
-        universe.Rebuild(objects);
+        (void)universe.Rebuild(objects);
 
         const auto starId =
             universe.BodyForObject(star);
