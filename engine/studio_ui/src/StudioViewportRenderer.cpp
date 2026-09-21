@@ -4288,42 +4288,6 @@ StudioViewportRenderer::Compose(
                             resolvedCompactForView->
                                 parameters);
 
-                const f64 cameraDistance =
-                    std::max(
-                        math::Length(
-                            camera.
-                                localPositionMeters),
-                        compactPresentation->
-                            shadowRadiusMeters);
-
-                const f64 angularRadius =
-                    cameraDistance >
-                            compactPresentation->
-                                shadowRadiusMeters
-                        ? std::asin(
-                              std::clamp(
-                                  compactPresentation->
-                                      shadowRadiusMeters /
-                                      cameraDistance,
-                                  0.0,
-                                  1.0))
-                        : static_cast<f64>(
-                              camera.
-                                  verticalFovRadians) *
-                              0.5;
-
-                const f64 projectedShadowRadiusPixels =
-                    angularRadius /
-                    std::max(
-                        static_cast<f64>(
-                            camera.
-                                verticalFovRadians),
-                        1.0e-6) *
-                    static_cast<f64>(
-                        std::max(
-                            height,
-                            1U));
-
                 const auto accretionProduct =
                     resolvedAccretionForView.has_value()
                         ? std::optional(
@@ -4335,6 +4299,118 @@ StudioViewportRenderer::Compose(
                                           parameters,
                                       64U))
                         : std::nullopt;
+
+                const f64 opticalRadiusMeters =
+                    std::max(
+                        compactPresentation->
+                            shadowRadiusMeters,
+                        accretionProduct.has_value()
+                            ? accretionProduct->
+                                  outerRadiusMeters
+                            : 0.0);
+
+                const f64 cameraDistance =
+                    std::max(
+                        math::Length(
+                            camera.
+                                localPositionMeters),
+                        opticalRadiusMeters);
+
+                celestial_representation::ResolveInput
+                    compactResolveInput{
+                        .bodyRadiusMeters =
+                            std::max(
+                                opticalRadiusMeters,
+                                1.0),
+                        .maximumProductionDetailMeters =
+                            0.0,
+                        .maximumMacroDisplacementMeters =
+                            0.0,
+                        .cameraDistanceToCenterMeters =
+                            cameraDistance,
+                        .verticalFieldOfViewRadians =
+                            static_cast<f64>(
+                                camera.
+                                    verticalFovRadians),
+                        .viewportHeightPixels =
+                            static_cast<f64>(
+                                std::max(
+                                    height,
+                                    1U)),
+                        .features = {
+                            .productionSurfaceAvailable =
+                                false,
+                            .macroDisplacementAvailable =
+                                false,
+                            .complexFarAppearance =
+                                false,
+                            .radiativeEmitter =
+                                false
+                        }
+                    };
+
+                const celestial_representation::
+                    RepresentationSubjectId
+                    compactSubject{
+                        .high =
+                            logicalTarget->
+                                target->body.high,
+                        .low =
+                            logicalTarget->
+                                target->body.low
+                    };
+
+                const auto compactDecision =
+                    representationTracker_.
+                        ResolveFor(
+                            compactSubject,
+                            compactResolveInput);
+
+                const auto compactBlend =
+                    celestial_representation::
+                        ResolveRepresentationBlend(
+                            compactResolveInput,
+                            compactDecision);
+
+                const auto pointWeightFor =
+                    [](const celestial_representation::
+                           Representation representation,
+                       const f64 weight)
+                    {
+                        return representation ==
+                                   celestial_representation::
+                                       Representation::
+                                           PointProxy ||
+                               representation ==
+                                   celestial_representation::
+                                       Representation::
+                                           StellarPointProxy
+                            ? weight
+                            : 0.0;
+                    };
+
+                const f64 pointProxyWeight =
+                    std::clamp(
+                        pointWeightFor(
+                            compactBlend.richer,
+                            compactBlend.richerWeight) +
+                        pointWeightFor(
+                            compactBlend.lower,
+                            compactBlend.lowerWeight),
+                        0.0,
+                        1.0);
+
+                const f64 projectedOpticalRadiusPixels =
+                    compactDecision.
+                        projectedRadiusPixels;
+
+                const f64 projectedShadowRadiusPixels =
+                    projectedOpticalRadiusPixels *
+                    compactPresentation->
+                        shadowRadiusMeters /
+                    std::max(
+                        opticalRadiusMeters,
+                        1.0e-9);
 
                 compactObjectDiagnostics_.
                     insert_or_assign(
@@ -4367,6 +4443,13 @@ StudioViewportRenderer::Compose(
                                     shadowRadiusMeters,
                             .projectedShadowRadiusPixels =
                                 projectedShadowRadiusPixels,
+                            .projectedOpticalRadiusPixels =
+                                projectedOpticalRadiusPixels,
+                            .representation =
+                                compactDecision.
+                                    representation,
+                            .pointProxyWeight =
+                                pointProxyWeight,
                             .accretionEnabled =
                                 resolvedAccretionForView.
                                     has_value(),
@@ -4392,6 +4475,11 @@ StudioViewportRenderer::Compose(
                             .camera = camera,
                             .projectedShadowRadiusPixels =
                                 projectedShadowRadiusPixels,
+                            .projectedOpticalRadiusPixels =
+                                projectedOpticalRadiusPixels,
+                            .pointProxyWeight =
+                                static_cast<f32>(
+                                    pointProxyWeight),
                             .opacity = 1.0F
                         };
 
