@@ -1,10 +1,16 @@
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 
+#include <orbit/editor_model/CelestialRecipeService.hpp>
+
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <array>
 #include <exception>
 #include <format>
+#include <limits>
+#include <span>
+#include <stdexcept>
 #include <string>
 
 namespace orbit::studio_ui
@@ -207,6 +213,125 @@ void CelestialAuthoringUi::Draw(
             {
                 status_ = exception.what();
             }
+        }
+    }
+
+    context.Separator();
+    context.Heading("Recipes");
+    context.MutedText(
+        "Recipes create ordinary editable objects and capabilities. The seed controls authored physical/orbital values; generation is one undoable transaction.");
+
+    static_cast<void>(
+        context.InputInteger(
+            "Seed##celestial-recipe-seed",
+            recipeSeed_));
+
+    static_cast<void>(
+        context.InputInteger(
+            "Rocky Planets##celestial-recipe-planets",
+            recipePlanetCount_));
+
+    static_cast<void>(
+        context.Checkbox(
+            "Generate Moons##celestial-recipe-moons",
+            recipeGenerateMoons_));
+
+    static_cast<void>(
+        context.InputText(
+            "Generated System Name##celestial-recipe-system-name",
+            recipeSystemName_));
+
+    static_cast<void>(
+        context.InputText(
+            "Primary Star Name##celestial-recipe-star-name",
+            recipeStarName_));
+
+    if (context.PrimaryButton(
+            "Generate Seeded System##celestial-recipe-generate"))
+    {
+        try
+        {
+            const auto roots =
+                world.Objects().Roots();
+
+            const auto worldRoot =
+                std::find_if(
+                    roots.begin(),
+                    roots.end(),
+                    [](const auto& object)
+                    {
+                        return object.type ==
+                            world_model::kWorldType;
+                    });
+
+            if (worldRoot == roots.end())
+            {
+                throw std::runtime_error(
+                    "World root is required before running a celestial recipe.");
+            }
+
+            if (recipePlanetCount_ <= 0 ||
+                recipePlanetCount_ >
+                    static_cast<i64>(
+                        std::numeric_limits<u32>::max()))
+            {
+                throw std::invalid_argument(
+                    "Rocky planet count must be between 1 and uint32 max.");
+            }
+
+            editor_model::CelestialRecipeService
+                recipes(
+                    world.Objects(),
+                    world.Commands());
+
+            const auto generated =
+                recipes.CreateSeededSystem(
+                    worldRoot->id,
+                    editor_model::
+                        SeededSystemRecipe{
+                            .seed =
+                                static_cast<u64>(
+                                    recipeSeed_),
+                            .systemName =
+                                recipeSystemName_,
+                            .starName =
+                                recipeStarName_,
+                            .rockyPlanetCount =
+                                static_cast<u32>(
+                                    recipePlanetCount_),
+                            .generateMoons =
+                                recipeGenerateMoons_
+                        });
+
+            const std::array selectedSystem{
+                generated.system
+            };
+
+            world.Selection().Set(
+                std::span(
+                    selectedSystem));
+
+            static_cast<void>(
+                world.RebuildUniverse());
+
+            status_ =
+                std::format(
+                    "Generated '{}' from seed {}: 1 star, {} rocky planet{}, {} moon{}.",
+                    recipeSystemName_,
+                    recipeSeed_,
+                    generated.planets.size(),
+                    generated.planets.size() == 1U
+                        ? ""
+                        : "s",
+                    generated.moons.size(),
+                    generated.moons.size() == 1U
+                        ? ""
+                        : "s");
+        }
+        catch (const std::exception& exception)
+        {
+            status_ =
+                exception.what();
         }
     }
 
