@@ -38,6 +38,11 @@ struct MacroGlobeMesh
     u64 fingerprint{0};
 };
 
+[[nodiscard]] u64 MacroGlobeFingerprint(
+    const terrain::TerrainSource& source,
+    const universe::BodyShape& shape,
+    const MacroGlobeConfig& config = {});
+
 [[nodiscard]] MacroGlobeMesh BuildMacroGlobe(
     const terrain::TerrainSource& source,
     const universe::BodyShape& shape,
