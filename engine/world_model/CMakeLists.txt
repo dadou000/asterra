@@ -9,6 +9,7 @@ add_library(OrbitWorldModel STATIC
     src/CelestialGiantBinding.cpp
     src/CelestialSmallBodyBinding.cpp
     src/CelestialMagnetosphereBinding.cpp
+    src/CelestialCompactObjectBinding.cpp
     src/AtmospherePropertySolver.cpp
     src/PropertyProvenanceSchema.cpp
     src/PropertyProvenanceStore.cpp
@@ -39,6 +40,7 @@ target_link_libraries(OrbitWorldModel
         Orbit::CelestialGiants
         Orbit::CelestialSmallBodies
         Orbit::CelestialMagnetosphere
+        Orbit::CelestialCompactObjects
         Orbit::CelestialStellar
         Orbit::CelestialOrbits
         Orbit::CelestialRadiometry
@@ -564,5 +566,31 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.CelestialMagnetosphereBinding
         COMMAND OrbitCelestialMagnetosphereBindingTests
+    )
+endif()
+
+
+if(BUILD_TESTING)
+    add_executable(
+        OrbitCelestialCompactObjectBindingTests
+        tests/CelestialCompactObjectBindingTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitCelestialCompactObjectBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitCelestialCompactObjectBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialCompactObjectBindingTests)
+
+    add_test(
+        NAME Orbit.CelestialCompactObjectBinding
+        COMMAND OrbitCelestialCompactObjectBindingTests
     )
 endif()
