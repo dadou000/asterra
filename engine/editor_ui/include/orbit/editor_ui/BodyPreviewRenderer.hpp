@@ -48,6 +48,17 @@ public:
         const render_view::CameraState& camera,
         const PreviewMaterial& material = {});
 
+    void DrawSurfaceData(
+        rhi::CommandList& commands,
+        rhi::Texture& surfaceBaseRoughness,
+        rhi::Texture& surfaceNormalMetallic,
+        rhi::Texture& surfaceEmissionClass,
+        u32 width,
+        u32 height,
+        const universe::BodyShape& shape,
+        const render_view::CameraState& camera,
+        const PreviewMaterial& material = {});
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
