@@ -14,7 +14,7 @@ target_link_libraries(OrbitLighting
     PUBLIC
         Orbit::Core
         Orbit::Math
-        Orbit::Rhi
+        Orbit::RHI
         Orbit::Shader
 )
 
