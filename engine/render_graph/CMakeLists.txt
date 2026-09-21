@@ -17,3 +17,24 @@ target_link_libraries(OrbitRenderGraph
 
 target_compile_features(OrbitRenderGraph PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitRenderGraph)
+
+
+if(BUILD_TESTING)
+    add_executable(OrbitRenderGraphBufferTests
+        tests/RenderGraphBufferTests.cpp
+    )
+
+    target_link_libraries(OrbitRenderGraphBufferTests
+        PRIVATE
+            Orbit::RenderGraph
+    )
+
+    target_compile_features(
+        OrbitRenderGraphBufferTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRenderGraphBufferTests)
+
+    add_test(
+        NAME Orbit.RenderGraphBuffers
+        COMMAND OrbitRenderGraphBufferTests
+    )
+endif()
