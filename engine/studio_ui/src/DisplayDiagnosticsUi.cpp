@@ -679,6 +679,181 @@ void DisplayDiagnosticsUi::DrawViewport(
         }
     }
 
+    if (viewportId == "studio.primary")
+    {
+        context.Separator();
+        context.Text("Output Transform");
+
+        auto output =
+            renderer_->
+                OutputTransformDiagnostics();
+
+        context.Text(
+            std::format(
+                "Requested {} | resolved {}",
+                post_process::
+                    OutputModeName(
+                        output.settings.mode),
+                post_process::
+                    OutputModeName(
+                        output.resolved.resolvedMode)));
+
+        context.Text(
+            std::format(
+                "Reference white {:7.1f} nits | output peak {:7.1f} nits",
+                output.resolved.referenceWhiteNits,
+                output.resolved.resolvedPeakNits));
+
+        if (output.capabilities.hdr10Supported)
+        {
+            context.MutedText(
+                std::format(
+                    "HDR10 presentation capability available | reported peak {:7.1f} nits",
+                    output.capabilities.reportedPeakNits));
+        }
+        else
+        {
+            context.MutedText(
+                "HDR10 presentation capability unavailable; Auto/HDR safely resolve to SDR.");
+        }
+
+        if (output.resolved.fellBackToSdr)
+        {
+            context.MutedText(
+                "HDR was requested but no compatible HDR10 output surface is available.");
+        }
+
+        if (context.Selectable(
+                "Auto##output-auto",
+                output.settings.mode ==
+                    post_process::
+                        OutputMode::Auto))
+        {
+            output.settings.mode =
+                post_process::
+                    OutputMode::Auto;
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        if (context.Selectable(
+                "SDR##output-sdr",
+                output.settings.mode ==
+                    post_process::
+                        OutputMode::Sdr))
+        {
+            output.settings.mode =
+                post_process::
+                    OutputMode::Sdr;
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        if (context.Selectable(
+                "HDR10 / PQ##output-hdr10",
+                output.settings.mode ==
+                    post_process::
+                        OutputMode::Hdr10))
+        {
+            output.settings.mode =
+                post_process::
+                    OutputMode::Hdr10;
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        f64 outputWhite =
+            output.settings.referenceWhiteNits;
+        f64 outputPeak =
+            output.settings.requestedPeakNits;
+
+        bool outputChanged =
+            context.InputDouble(
+                "Output Reference White nits##output-reference-white",
+                outputWhite);
+
+        outputChanged |=
+            context.InputDouble(
+                "Requested HDR Peak nits##output-peak",
+                outputPeak);
+
+        output.settings.referenceWhiteNits =
+            static_cast<f32>(
+                outputWhite);
+        output.settings.requestedPeakNits =
+            static_cast<f32>(
+                outputPeak);
+
+        if (outputChanged)
+        {
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        context.Text(
+            std::format(
+                "Test pattern: {}",
+                post_process::
+                    OutputTestPatternName(
+                        output.settings.testPattern)));
+
+        if (context.Button(
+                "Pattern Off##output-pattern-off"))
+        {
+            output.settings.testPattern =
+                post_process::
+                    OutputTestPattern::None;
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        if (context.Button(
+                "Linear Ramp##output-pattern-ramp"))
+        {
+            output.settings.testPattern =
+                post_process::
+                    OutputTestPattern::LinearRamp;
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        if (context.Button(
+                "Reference White##output-pattern-reference"))
+        {
+            output.settings.testPattern =
+                post_process::
+                    OutputTestPattern::ReferenceWhite;
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        if (context.Button(
+                "Peak White##output-pattern-peak"))
+        {
+            output.settings.testPattern =
+                post_process::
+                    OutputTestPattern::PeakWhite;
+            renderer_->
+                SetOutputTransformSettings(
+                    output.settings);
+        }
+
+        if (context.Button(
+                "Reset Output Defaults##output-reset"))
+        {
+            renderer_->
+                SetOutputTransformSettings(
+                    {});
+        }
+    }
+
     context.Separator();
     context.Text("Tone Mapping / Display Headroom");
 
