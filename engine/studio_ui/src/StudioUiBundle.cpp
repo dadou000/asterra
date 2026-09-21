@@ -1,8 +1,12 @@
 #include <orbit/studio_ui/StudioUiBundle.hpp>
 
+#include <orbit/world_model/PropertyProvenanceSchema.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
+
 #include <format>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 namespace orbit::studio_ui
 {
@@ -477,6 +481,263 @@ StudioUiBundle::StudioUiBundle(
                 drawPhysicalDiagnostics(
                     "studio.map",
                     "Body Map");
+
+                if (workspace_ != nullptr &&
+                    workspace_->HasProject())
+                {
+                    auto& world =
+                        workspace_->
+                            Session().
+                            World();
+
+                    const auto& selection =
+                        world.Selection().
+                            Ordered();
+
+                    if (!selection.empty())
+                    {
+                        auto cursor =
+                            world.Objects().
+                                Find(
+                                    selection.front());
+
+                        while (cursor.has_value() &&
+                               cursor->type !=
+                                   world_model::
+                                       kCelestialBodyType)
+                        {
+                            cursor =
+                                cursor->parent.
+                                    has_value()
+                                    ? world.Objects().
+                                          Find(
+                                              *cursor->
+                                                   parent)
+                                    : std::nullopt;
+                        }
+
+                        if (cursor.has_value())
+                        {
+                            u32 provenanceCount = 0U;
+                            u32 conflictCount = 0U;
+                            u32 solvedCount = 0U;
+                            u32 lockedCount = 0U;
+
+                            struct ProvenanceLine
+                            {
+                                std::string target;
+                                world_model::
+                                    PropertySourceMode
+                                    source{
+                                        world_model::
+                                            PropertySourceMode::
+                                                Default};
+                                world_model::
+                                    PropertySolveState
+                                    solve{
+                                        world_model::
+                                            PropertySolveState::
+                                                Free};
+                                std::string diagnostic;
+                            };
+
+                            std::vector<
+                                ProvenanceLine>
+                                provenanceLines;
+
+                            for (const auto& capability :
+                                 world.Objects().
+                                     Children(
+                                         cursor->id))
+                            {
+                                for (const auto& child :
+                                     world.Objects().
+                                         Children(
+                                             capability.id))
+                                {
+                                    if (child.type !=
+                                        world_model::
+                                            kPropertyProvenanceType)
+                                    {
+                                        continue;
+                                    }
+
+                                    ++provenanceCount;
+
+                                    const auto targetValue =
+                                        world.Objects().
+                                            GetProperty(
+                                                child.id,
+                                                world_model::
+                                                    kProvenanceTargetProperty);
+
+                                    const auto sourceValue =
+                                        world.Objects().
+                                            GetProperty(
+                                                child.id,
+                                                world_model::
+                                                    kProvenanceSourceMode);
+
+                                    const auto solveValue =
+                                        world.Objects().
+                                            GetProperty(
+                                                child.id,
+                                                world_model::
+                                                    kProvenanceSolveState);
+
+                                    const auto diagnosticValue =
+                                        world.Objects().
+                                            GetProperty(
+                                                child.id,
+                                                world_model::
+                                                    kProvenanceDiagnostic);
+
+                                    ProvenanceLine line{};
+
+                                    if (targetValue.
+                                            has_value())
+                                    {
+                                        if (const auto* text =
+                                                std::get_if<
+                                                    std::string>(
+                                                    &*targetValue);
+                                            text != nullptr)
+                                        {
+                                            line.target =
+                                                *text;
+                                        }
+                                    }
+
+                                    if (sourceValue.
+                                            has_value())
+                                    {
+                                        if (const auto* value =
+                                                std::get_if<
+                                                    i64>(
+                                                    &*sourceValue);
+                                            value != nullptr)
+                                        {
+                                            line.source =
+                                                static_cast<
+                                                    world_model::
+                                                        PropertySourceMode>(
+                                                            *value);
+                                        }
+                                    }
+
+                                    if (solveValue.
+                                            has_value())
+                                    {
+                                        if (const auto* value =
+                                                std::get_if<
+                                                    i64>(
+                                                    &*solveValue);
+                                            value != nullptr)
+                                        {
+                                            line.solve =
+                                                static_cast<
+                                                    world_model::
+                                                        PropertySolveState>(
+                                                            *value);
+                                        }
+                                    }
+
+                                    if (diagnosticValue.
+                                            has_value())
+                                    {
+                                        if (const auto* text =
+                                                std::get_if<
+                                                    std::string>(
+                                                    &*diagnosticValue);
+                                            text != nullptr)
+                                        {
+                                            line.diagnostic =
+                                                *text;
+                                        }
+                                    }
+
+                                    conflictCount +=
+                                        line.solve ==
+                                                world_model::
+                                                    PropertySolveState::
+                                                        Conflict
+                                            ? 1U
+                                            : 0U;
+
+                                    solvedCount +=
+                                        line.solve ==
+                                                world_model::
+                                                    PropertySolveState::
+                                                        Solved
+                                            ? 1U
+                                            : 0U;
+
+                                    lockedCount +=
+                                        line.solve ==
+                                                world_model::
+                                                    PropertySolveState::
+                                                        Locked
+                                            ? 1U
+                                            : 0U;
+
+                                    provenanceLines.
+                                        push_back(
+                                            std::move(
+                                                line));
+                                }
+                            }
+
+                            context.Separator();
+                            context.Text(
+                                "Selected Body Solver / Provenance");
+
+                            context.Text(
+                                std::format(
+                                    "Records: {} | solved {} | locked {} | conflicts {}",
+                                    provenanceCount,
+                                    solvedCount,
+                                    lockedCount,
+                                    conflictCount));
+
+                            if (provenanceLines.empty())
+                            {
+                                context.Text(
+                                    "No explicit provenance records; properties use schema/default authority unless otherwise derived by capability logic.");
+                            }
+                            else
+                            {
+                                for (const auto& line :
+                                     provenanceLines)
+                                {
+                                    context.Text(
+                                        std::format(
+                                            "{} | source {} | solve {}",
+                                            line.target.empty()
+                                                ? std::string(
+                                                      "<property>")
+                                                : line.target,
+                                            world_model::
+                                                ToString(
+                                                    line.source),
+                                            world_model::
+                                                ToString(
+                                                    line.solve)));
+
+                                    if (!line.
+                                            diagnostic.
+                                            empty())
+                                    {
+                                        context.Text(
+                                            std::format(
+                                                "  {}",
+                                                line.
+                                                    diagnostic));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
     });
 
