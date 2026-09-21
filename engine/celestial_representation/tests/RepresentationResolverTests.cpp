@@ -284,5 +284,78 @@ int main()
         return 18;
     }
 
+    ResolveInput farBlendInput = transitionInput;
+    farBlendInput.maximumProductionDetailMeters = 1.0;
+    farBlendInput.maximumMacroDisplacementMeters = 450.0;
+    farBlendInput.cameraDistanceToCenterMeters = 1.0e6;
+
+    Decision farDecision =
+        Resolve(farBlendInput);
+
+    farDecision.macroDisplacementErrorPixels =
+        farBlendInput.policy.macroDisplacementErrorPixels;
+
+    const auto macroSmoothBlend =
+        ResolveRepresentationBlend(
+            farBlendInput,
+            farDecision);
+
+    if (macroSmoothBlend.richer !=
+            Representation::MacroDisplacedGlobe ||
+        macroSmoothBlend.lower !=
+            Representation::SmoothGlobe ||
+        std::abs(
+            macroSmoothBlend.richerWeight -
+            0.5) > 1.0e-12 ||
+        std::abs(
+            macroSmoothBlend.lowerWeight -
+            0.5) > 1.0e-12)
+    {
+        return 19;
+    }
+
+    farDecision.macroDisplacementErrorPixels = 0.0;
+    farDecision.projectedRadiusPixels =
+        farBlendInput.policy.smoothGlobeMinimumRadiusPixels;
+
+    const auto smoothDiscBlend =
+        ResolveRepresentationBlend(
+            farBlendInput,
+            farDecision);
+
+    if (smoothDiscBlend.richer !=
+            Representation::SmoothGlobe ||
+        smoothDiscBlend.lower !=
+            Representation::CachedDiscImpostor ||
+        !smoothDiscBlend.overlapping)
+    {
+        return 20;
+    }
+
+    farDecision.projectedRadiusPixels =
+        farBlendInput.policy.discImpostorMinimumRadiusPixels;
+
+    const auto discPointBlend =
+        ResolveRepresentationBlend(
+            farBlendInput,
+            farDecision);
+
+    if (discPointBlend.richer !=
+            Representation::CachedDiscImpostor ||
+        discPointBlend.lower !=
+            Representation::PointProxy ||
+        !discPointBlend.overlapping)
+    {
+        return 21;
+    }
+
+    if (std::abs(
+            discPointBlend.richerWeight +
+            discPointBlend.lowerWeight -
+            1.0) > 1.0e-12)
+    {
+        return 22;
+    }
+
     return 0;
 }
