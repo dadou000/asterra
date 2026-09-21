@@ -359,6 +359,9 @@ public:
     [[nodiscard]] celestial_scheduler::SchedulerFrameStats
     CelestialSchedulerStats() const noexcept;
 
+    [[nodiscard]] celestial_scheduler::SchedulerBudget
+    CelestialSchedulerBudget() const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
