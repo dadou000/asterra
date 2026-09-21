@@ -166,5 +166,35 @@ int main()
         return 9;
     }
 
+    const auto snapshot =
+        residency.BuildGpuSnapshot(view);
+
+    if (snapshot.sourceRevision != 12U ||
+        snapshot.levels.size() != 2U ||
+        snapshot.cells.size() != 128U)
+    {
+        return 10;
+    }
+
+    if (snapshot.levels[0].cellOffset != 0U ||
+        snapshot.levels[0].cellCount != 64U ||
+        snapshot.levels[1].cellOffset != 64U ||
+        snapshot.levels[1].cellCount != 64U)
+    {
+        return 11;
+    }
+
+    const auto invalidIndex =
+        snapshot.levels[targetKey.level].cellOffset +
+        updates.front().physicalIndex;
+
+    if (invalidIndex >= snapshot.cells.size() ||
+        snapshot.cells[invalidIndex].
+                irradiance0.w !=
+            0.0F)
+    {
+        return 12;
+    }
+
     return 0;
 }
