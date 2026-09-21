@@ -191,7 +191,7 @@ RingRenderer::RingRenderer(
     const auto ps=compiler.Compile({
         .source=kPs,.entryPoint="main",
         .stage=shader::Stage::Pixel,.debug=false});
-    static constexpr std::array<rhi::VertexAttribute,6> attrs{{
+    static constexpr std::array<rhi::VertexAttribute,5> attrs{{
         {.location=0,.format=rhi::VertexFormat::Float3,
          .offsetBytes=static_cast<u32>(offsetof(RingVertex,positionNormalized))},
         {.location=1,.format=rhi::VertexFormat::Float3,
@@ -201,8 +201,6 @@ RingRenderer::RingRenderer(
         {.location=3,.format=rhi::VertexFormat::Float,
          .offsetBytes=static_cast<u32>(offsetof(RingVertex,singleScatteringAlbedo))},
         {.location=4,.format=rhi::VertexFormat::Float,
-         .offsetBytes=static_cast<u32>(offsetof(RingVertex,anisotropy))},
-        {.location=5,.format=rhi::VertexFormat::Float,
          .offsetBytes=static_cast<u32>(offsetof(RingVertex,anisotropy))}
     }};
     pipeline_=device.CreateGraphicsPipeline({
