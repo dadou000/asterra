@@ -15,6 +15,7 @@ struct DirectBodyLighting
     universe::BodyId receiver{};
     universe::BodyId emitter{};
     math::Double3 receiverToEmitterMeters{};
+    math::Double3 receiverBodyFixedToEmitterMeters{};
     f64 sourceDistanceMeters{0.0};
     f64 visibleFraction{1.0};
     f64 irradianceWattsPerSquareMeter{0.0};
