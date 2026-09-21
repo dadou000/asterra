@@ -1369,7 +1369,10 @@ void VulkanCommandList::SetComputeTexture(
     VkDescriptorImageInfo imageInfo{};
     imageInfo.sampler = defaultSampler_;
     imageInfo.imageView = vulkanTexture->View();
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageLayout =
+        texture.Format() == TextureFormat::D32_Float
+            ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL
+            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
