@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/post_process/ToneMapping.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -70,7 +71,7 @@ public:
         u32 width,
         u32 height,
         f32 exposureScale,
-        bool toneMapEnabled,
+        const ToneMappingConfig& toneMapping = {},
         const HighlightEffectsConfig& config = {});
 
 private:
