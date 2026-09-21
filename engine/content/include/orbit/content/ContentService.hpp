@@ -5,6 +5,7 @@
 #include <orbit/core/StrongId.hpp>
 #include <orbit/core/Types.hpp>
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -30,6 +31,14 @@ enum class AssetKind : u8
     Unknown
 };
 
+struct MaterialEmission
+{
+    std::array<f64, 3> colorLinear{1.0, 1.0, 1.0};
+    f64 luminanceNits{0.0};
+    bool contributesToGi{true};
+    f64 giScale{1.0};
+};
+
 struct MaterialChannels
 {
     std::filesystem::path baseColor;
@@ -40,6 +49,7 @@ struct MaterialChannels
     std::filesystem::path emissive;
     f64 roughnessFactor{1.0};
     f64 metallicFactor{0.0};
+    MaterialEmission emission{};
 };
 
 struct MaterialInstanceData
@@ -47,6 +57,10 @@ struct MaterialInstanceData
     std::filesystem::path parent;
     std::optional<f64> roughnessFactor;
     std::optional<f64> metallicFactor;
+    std::optional<std::array<f64, 3>> emissionColorLinear;
+    std::optional<f64> emissionLuminanceNits;
+    std::optional<bool> emissionContributesToGi;
+    std::optional<f64> emissionGiScale;
 };
 
 struct DecalData
@@ -166,6 +180,10 @@ public:
     [[nodiscard]] AssetId CreateMaterialInstance(
         AssetId baseMaterial,
         std::string instanceName = {});
+
+    void SetMaterialEmission(
+        AssetId materialAsset,
+        const MaterialEmission& emission);
 
     // Creates a persistent .orbitdecal authority asset from an indexed texture.
     // The decal owns semantic size/opacity metadata and references the texture
