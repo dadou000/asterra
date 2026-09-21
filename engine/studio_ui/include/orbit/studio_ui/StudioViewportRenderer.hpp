@@ -35,6 +35,7 @@
 #include <orbit/post_process/HighlightEffects.hpp>
 #include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/post_process/OutputTransform.hpp>
+#include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -510,6 +511,9 @@ public:
     void SetContentService(
         content::ContentService* content) noexcept;
 
+    void SetVolumeFieldStorageService(
+        volume_fields::VolumeFieldStorageService* fields) noexcept;
+
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -722,6 +726,7 @@ private:
     rhi::Device* device_{nullptr};
     const shader::Compiler* compiler_{nullptr};
     content::ContentService* content_{nullptr};
+    volume_fields::VolumeFieldStorageService* volumeFields_{nullptr};
     u32 framesInFlight_{1U};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
     celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
