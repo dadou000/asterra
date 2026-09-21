@@ -927,7 +927,7 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::Back,
-        .blendMode = rhi::BlendMode::Alpha,
+        .blendMode = rhi::BlendMode::Opaque,
         .depthTest = false,
         .depthWrite = false,
         .colorAttachmentFormats = {
