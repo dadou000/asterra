@@ -7756,6 +7756,36 @@ StudioViewportRenderer::Compose(
                     std::min(
                         lightingPlan.exactVisibilityQueries,
                         lightingPlan.reflectionQueries);
+                const auto exactSceneOrigin =
+                    exactReflectionHardware != nullptr
+                        ? exactReflectionHardware->
+                              GpuOriginInFrameMeters()
+                        : lightingView.
+                              gpuOriginInFrameMeters;
+
+                const math::Float3
+                    currentToExactSceneOrigin{
+                        static_cast<f32>(
+                            lightingView.
+                                gpuOriginInFrameMeters.x -
+                            exactSceneOrigin.x),
+                        static_cast<f32>(
+                            lightingView.
+                                gpuOriginInFrameMeters.y -
+                            exactSceneOrigin.y),
+                        static_cast<f32>(
+                            lightingView.
+                                gpuOriginInFrameMeters.z -
+                            exactSceneOrigin.z)
+                    };
+
+                const math::Float3
+                    exactSceneToCurrentOrigin{
+                        -currentToExactSceneOrigin.x,
+                        -currentToExactSceneOrigin.y,
+                        -currentToExactSceneOrigin.z
+                    };
+
 
                 render_graph::BufferHandle
                     exactReflectionQueriesHandle{};
@@ -8125,6 +8155,7 @@ StudioViewportRenderer::Compose(
                          width,
                          height,
                          lightingView,
+                         currentToExactSceneOrigin,
                          lightingPlan](
                             rhi::CommandList& commands,
                             const render_graph::Resources&
@@ -8157,6 +8188,7 @@ StudioViewportRenderer::Compose(
                                     width,
                                     height,
                                     lightingView,
+                                    currentToExactSceneOrigin,
                                     0.08F,
                                     40.0F,
                                     0.12F,
@@ -8297,7 +8329,8 @@ StudioViewportRenderer::Compose(
                          radianceLevelCount,
                          maximumExactReflectionQueries,
                          width,
-                         height](
+                         height,
+                         exactSceneToCurrentOrigin](
                             rhi::CommandList& commands,
                             const render_graph::Resources&
                                 resources)
@@ -8319,7 +8352,8 @@ StudioViewportRenderer::Compose(
                                     radianceLevelCount,
                                     maximumExactReflectionQueries,
                                     width,
-                                    height);
+                                    height,
+                                    exactSceneToCurrentOrigin);
                         });
                 }
 
