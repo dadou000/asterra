@@ -9,6 +9,7 @@
 #include <orbit/world_model/CelestialGiantBinding.hpp>
 #include <orbit/world_model/CelestialMagnetosphereBinding.hpp>
 #include <orbit/world_model/CelestialOceanBinding.hpp>
+#include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialRingBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/CelestialSmallBodyBinding.hpp>
@@ -428,21 +429,47 @@ RunStudioCelestialValidationScenario(
                 696'340'000.0,
                 1.98847e30);
 
-        static_cast<void>(
+        const auto helionEmitter =
             AddCapability(
                 world,
                 report.helion,
                 world_model::
                     kRadiativeEmitterCapabilityType,
-                "Radiative Emitter"));
+                "Radiative Emitter");
 
-        static_cast<void>(
+        world.Commands().SetProperty(
+            helionEmitter,
+            world_model::kCapabilityModel,
+            std::string{"Blackbody"});
+        world.Commands().SetProperty(
+            helionEmitter,
+            world_model::kEmitterDeriveLuminosity,
+            true);
+        world.Commands().SetProperty(
+            helionEmitter,
+            world_model::kEmitterEmissivity,
+            1.0);
+
+        const auto helionPhotosphere =
             AddCapability(
                 world,
                 report.helion,
                 world_model::
                     kPhotosphereCapabilityType,
-                "Photosphere"));
+                "Photosphere");
+
+        world.Commands().SetProperty(
+            helionPhotosphere,
+            world_model::kCapabilityModel,
+            std::string{"Blackbody"});
+        world.Commands().SetProperty(
+            helionPhotosphere,
+            world_model::kPhotosphereRadiusMeters,
+            696'340'000.0);
+        world.Commands().SetProperty(
+            helionPhotosphere,
+            world_model::kPhotosphereTemperatureKelvin,
+            5772.0);
 
         static_cast<void>(
             AddCapability(
@@ -603,21 +630,47 @@ RunStudioCelestialValidationScenario(
                     0.0,
                     0.0});
 
-        static_cast<void>(
+        const auto companionEmitter =
             AddCapability(
                 world,
                 report.companionStar,
                 world_model::
                     kRadiativeEmitterCapabilityType,
-                "Radiative Emitter"));
+                "Radiative Emitter");
 
-        static_cast<void>(
+        world.Commands().SetProperty(
+            companionEmitter,
+            world_model::kCapabilityModel,
+            std::string{"Blackbody"});
+        world.Commands().SetProperty(
+            companionEmitter,
+            world_model::kEmitterDeriveLuminosity,
+            true);
+        world.Commands().SetProperty(
+            companionEmitter,
+            world_model::kEmitterEmissivity,
+            1.0);
+
+        const auto companionPhotosphere =
             AddCapability(
                 world,
                 report.companionStar,
                 world_model::
                     kPhotosphereCapabilityType,
-                "Photosphere"));
+                "Photosphere");
+
+        world.Commands().SetProperty(
+            companionPhotosphere,
+            world_model::kCapabilityModel,
+            std::string{"Blackbody"});
+        world.Commands().SetProperty(
+            companionPhotosphere,
+            world_model::kPhotosphereRadiusMeters,
+            430'000'000.0);
+        world.Commands().SetProperty(
+            companionPhotosphere,
+            world_model::kPhotosphereTemperatureKelvin,
+            4800.0);
 
         report.ringedGiant =
             CreateBody(
@@ -937,23 +990,45 @@ RunStudioCelestialValidationScenario(
                 airlessBodyStressPassed,
             "Airless small-body appearance resolves without terrain authority.");
 
+        const auto resolvedHelion =
+            world_model::
+                ResolveRadiativeBody(
+                    world.Objects(),
+                    report.helion);
+
+        const auto resolvedCompanion =
+            world_model::
+                ResolveRadiativeBody(
+                    world.Objects(),
+                    report.companionStar);
+
         const f64 helionFlux =
-            celestial_lighting::
-                AttenuatedDirectIrradiance(
-                    3.828e26,
-                    149'597'870'700.0,
-                    1.0).
-                irradianceWattsPerSquareMeter;
+            resolvedHelion.has_value()
+                ? celestial_lighting::
+                      AttenuatedDirectIrradiance(
+                          resolvedHelion->
+                              radiative.
+                              luminosityWatts,
+                          149'597'870'700.0,
+                          1.0).
+                      irradianceWattsPerSquareMeter
+                : 0.0;
 
         const f64 companionFlux =
-            celestial_lighting::
-                AttenuatedDirectIrradiance(
-                    1.8e26,
-                    4.0e11,
-                    1.0).
-                irradianceWattsPerSquareMeter;
+            resolvedCompanion.has_value()
+                ? celestial_lighting::
+                      AttenuatedDirectIrradiance(
+                          resolvedCompanion->
+                              radiative.
+                              luminosityWatts,
+                          4.0e11,
+                          1.0).
+                      irradianceWattsPerSquareMeter
+                : 0.0;
 
         report.binaryStarStressPassed =
+            resolvedHelion.has_value() &&
+            resolvedCompanion.has_value() &&
             std::isfinite(helionFlux) &&
             std::isfinite(companionFlux) &&
             helionFlux > 0.0 &&
