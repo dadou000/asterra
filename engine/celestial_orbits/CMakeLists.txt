@@ -1,5 +1,6 @@
 add_library(OrbitCelestialOrbits STATIC
     src/OrbitState.cpp
+    src/ImportedEphemeris.cpp
 )
 
 add_library(Orbit::CelestialOrbits ALIAS OrbitCelestialOrbits)
@@ -36,5 +37,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.AnalyticConics
         COMMAND OrbitAnalyticConicTests
+    )
+
+    add_executable(OrbitImportedEphemerisTests
+        tests/ImportedEphemerisTests.cpp
+    )
+
+    target_link_libraries(OrbitImportedEphemerisTests
+        PRIVATE
+            Orbit::CelestialOrbits
+    )
+
+    target_compile_features(
+        OrbitImportedEphemerisTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitImportedEphemerisTests)
+
+    add_test(
+        NAME Orbit.ImportedEphemeris
+        COMMAND OrbitImportedEphemerisTests
     )
 endif()
