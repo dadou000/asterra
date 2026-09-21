@@ -23,6 +23,10 @@ if(BUILD_TESTING)
         tests/SurfaceDataTests.cpp
     )
 
+    add_executable(OrbitLightingSurfaceBufferTests
+        tests/SurfaceBufferTests.cpp
+    )
+
     target_link_libraries(OrbitLightingSurfaceDataTests
         PRIVATE
             Orbit::Lighting
@@ -32,8 +36,21 @@ if(BUILD_TESTING)
         OrbitLightingSurfaceDataTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingSurfaceDataTests)
 
+    target_link_libraries(OrbitLightingSurfaceBufferTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingSurfaceBufferTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingSurfaceBufferTests)
+
     add_test(
         NAME Orbit.LightingSurfaceData
         COMMAND OrbitLightingSurfaceDataTests
+    )
+
+    add_test(
+        NAME Orbit.LightingSurfaceBuffer
+        COMMAND OrbitLightingSurfaceBufferTests
     )
 endif()
