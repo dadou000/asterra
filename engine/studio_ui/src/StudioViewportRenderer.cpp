@@ -2796,7 +2796,8 @@ StudioViewportRenderer::Compose(
                 resolvedRingSystemForView->
                     parameters.fingerprint;
 
-            if (rings.nearMesh == nullptr ||
+            const bool ringsNeedBuild =
+                rings.nearMesh == nullptr ||
                 rings.farMesh == nullptr ||
                 rings.body !=
                     logicalTarget->
@@ -2804,7 +2805,21 @@ StudioViewportRenderer::Compose(
                 rings.fingerprint !=
                     semanticFingerprint ||
                 rings.referenceRadiusMeters !=
-                    referenceRadius)
+                    referenceRadius;
+
+            if (ringsNeedBuild &&
+                acquireCelestialGrant(
+                    info.id,
+                    logicalTarget->
+                        target->body,
+                    celestial_scheduler::
+                        WorkKind::RingPresentation,
+                    semanticFingerprint,
+                    celestial_scheduler::
+                        WorkBackend::Gpu,
+                    3U,
+                    65,
+                    true))
             {
                 const auto nearCpu =
                     celestial_rings::
@@ -2848,43 +2863,71 @@ StudioViewportRenderer::Compose(
                     semanticFingerprint;
                 rings.referenceRadiusMeters =
                     referenceRadius;
-            }
 
-            activeRingMesh =
-                activeRingNear
-                    ? rings.nearMesh.get()
-                    : rings.farMesh.get();
-
-            ringDiagnostics_.insert_or_assign(
-                info.id,
-                StudioRingDiagnostics{
-                    .body =
+                static_cast<void>(
+                    completeCelestialGrant(
+                        info.id,
                         logicalTarget->
                             target->body,
-                    .fingerprint =
-                        semanticFingerprint,
-                    .bandCount =
-                        static_cast<u32>(
+                        celestial_scheduler::
+                            WorkKind::RingPresentation,
+                        semanticFingerprint));
+            }
+
+            const bool ringsCurrent =
+                rings.nearMesh != nullptr &&
+                rings.farMesh != nullptr &&
+                rings.body ==
+                    logicalTarget->
+                        target->body &&
+                rings.fingerprint ==
+                    semanticFingerprint &&
+                rings.referenceRadiusMeters ==
+                    referenceRadius;
+
+            if (ringsCurrent)
+            {
+                activeRingMesh =
+                    activeRingNear
+                        ? rings.nearMesh.get()
+                        : rings.farMesh.get();
+
+                ringDiagnostics_.insert_or_assign(
+                    info.id,
+                    StudioRingDiagnostics{
+                        .body =
+                            logicalTarget->
+                                target->body,
+                        .fingerprint =
+                            semanticFingerprint,
+                        .bandCount =
+                            static_cast<u32>(
+                                resolvedRingSystemForView->
+                                    parameters.bands.size()),
+                        .innerRadiusMeters =
                             resolvedRingSystemForView->
-                                parameters.bands.size()),
-                    .innerRadiusMeters =
-                        resolvedRingSystemForView->
-                            parameters.bands.front().
-                            innerRadiusMeters,
-                    .outerRadiusMeters =
-                        outerRadius,
-                    .projectedOuterRadiusPixels =
-                        projectedRingRadiusPixels,
-                    .nearRepresentation =
-                        activeRingNear,
-                    .angularSegments =
-                        activeRingNear
-                            ? 256U
-                            : 64U,
-                    .farProfileSamples =
-                        rings.farProfile.
-                            radialSamples
-                });
+                                parameters.bands.front().
+                                innerRadiusMeters,
+                        .outerRadiusMeters =
+                            outerRadius,
+                        .projectedOuterRadiusPixels =
+                            projectedRingRadiusPixels,
+                        .nearRepresentation =
+                            activeRingNear,
+                        .angularSegments =
+                            activeRingNear
+                                ? 256U
+                                : 64U,
+                        .farProfileSamples =
+                            rings.farProfile.
+                                radialSamples
+                    });
+            }
+            else
+            {
+                ringDiagnostics_.erase(
+                    info.id);
+            }
         }
         else
         {
@@ -2964,7 +3007,8 @@ StudioViewportRenderer::Compose(
                 magnetospherePresentations_[
                     info.id];
 
-            if (presentation.nearAurora ==
+            const bool auroraNeedsBuild =
+                presentation.nearAurora ==
                     nullptr ||
                 presentation.farAurora ==
                     nullptr ||
@@ -2975,7 +3019,22 @@ StudioViewportRenderer::Compose(
                     resolvedMagnetosphereForView->
                         fingerprint ||
                 presentation.referenceRadiusMeters !=
-                    referenceRadius)
+                    referenceRadius;
+
+            if (auroraNeedsBuild &&
+                acquireCelestialGrant(
+                    info.id,
+                    logicalTarget->
+                        target->body,
+                    celestial_scheduler::
+                        WorkKind::AuroraPresentation,
+                    resolvedMagnetosphereForView->
+                        fingerprint,
+                    celestial_scheduler::
+                        WorkBackend::Gpu,
+                    3U,
+                    60,
+                    true))
             {
                 const auto nearCpu =
                     celestial_magnetosphere::
@@ -3013,65 +3072,97 @@ StudioViewportRenderer::Compose(
                         fingerprint;
                 presentation.referenceRadiusMeters =
                     referenceRadius;
+
+                static_cast<void>(
+                    completeCelestialGrant(
+                        info.id,
+                        logicalTarget->
+                            target->body,
+                        celestial_scheduler::
+                            WorkKind::AuroraPresentation,
+                        resolvedMagnetosphereForView->
+                            fingerprint));
             }
 
-            activeAuroraMesh =
-                activeAuroraNear
-                    ? presentation.
-                          nearAurora.get()
-                    : presentation.
-                          farAurora.get();
+            const bool auroraCurrent =
+                presentation.nearAurora !=
+                    nullptr &&
+                presentation.farAurora !=
+                    nullptr &&
+                presentation.body ==
+                    logicalTarget->
+                        target->body &&
+                presentation.fingerprint ==
+                    resolvedMagnetosphereForView->
+                        fingerprint &&
+                presentation.referenceRadiusMeters ==
+                    referenceRadius;
 
-            const auto product =
-                celestial_magnetosphere::
-                    BuildMagnetosphereProduct(
-                        resolvedMagnetosphereForView->
-                            parameters,
-                        referenceRadius,
-                        {.ovalSamples =
-                             activeAuroraNear
-                                 ? 256U
-                                 : 64U});
+            if (auroraCurrent)
+            {
+                activeAuroraMesh =
+                    activeAuroraNear
+                        ? presentation.
+                              nearAurora.get()
+                        : presentation.
+                              farAurora.get();
 
-            magnetosphereDiagnostics_.
-                insert_or_assign(
-                    info.id,
-                    StudioMagnetosphereDiagnostics{
-                        .body =
-                            logicalTarget->
-                                target->body,
-                        .fingerprint =
+                const auto product =
+                    celestial_magnetosphere::
+                        BuildMagnetosphereProduct(
                             resolvedMagnetosphereForView->
-                                fingerprint,
-                        .subsolarStandoffMeters =
-                            product.
-                                subsolarStandoffMeters,
-                        .tailExtentMeters =
-                            product.
-                                tailExtentMeters,
-                        .auroralCenterLatitudeDegrees =
-                            product.
-                                auroralCenterLatitudeDegrees,
-                        .auroralMinimumAltitudeMeters =
-                            resolvedMagnetosphereForView->
-                                parameters.
-                                auroralMinimumAltitudeMeters,
-                        .auroralMaximumAltitudeMeters =
-                            resolvedMagnetosphereForView->
-                                parameters.
-                                auroralMaximumAltitudeMeters,
-                        .projectedAuroraRadiusPixels =
-                            projectedAuroraRadiusPixels,
-                        .activity =
-                            resolvedMagnetosphereForView->
-                                parameters.activity,
-                        .nearRepresentation =
-                            activeAuroraNear,
-                        .angularSegments =
-                            activeAuroraNear
-                                ? 256U
-                                : 64U
-                    });
+                                parameters,
+                            referenceRadius,
+                            {.ovalSamples =
+                                 activeAuroraNear
+                                     ? 256U
+                                     : 64U});
+
+                magnetosphereDiagnostics_.
+                    insert_or_assign(
+                        info.id,
+                        StudioMagnetosphereDiagnostics{
+                            .body =
+                                logicalTarget->
+                                    target->body,
+                            .fingerprint =
+                                resolvedMagnetosphereForView->
+                                    fingerprint,
+                            .subsolarStandoffMeters =
+                                product.
+                                    subsolarStandoffMeters,
+                            .tailExtentMeters =
+                                product.
+                                    tailExtentMeters,
+                            .auroralCenterLatitudeDegrees =
+                                product.
+                                    auroralCenterLatitudeDegrees,
+                            .auroralMinimumAltitudeMeters =
+                                resolvedMagnetosphereForView->
+                                    parameters.
+                                    auroralMinimumAltitudeMeters,
+                            .auroralMaximumAltitudeMeters =
+                                resolvedMagnetosphereForView->
+                                    parameters.
+                                    auroralMaximumAltitudeMeters,
+                            .projectedAuroraRadiusPixels =
+                                projectedAuroraRadiusPixels,
+                            .activity =
+                                resolvedMagnetosphereForView->
+                                    parameters.activity,
+                            .nearRepresentation =
+                                activeAuroraNear,
+                            .angularSegments =
+                                activeAuroraNear
+                                    ? 256U
+                                    : 64U
+                        });
+            }
+            else
+            {
+                magnetosphereDiagnostics_.erase(
+                    info.id);
+            }
         }
         else
         {
