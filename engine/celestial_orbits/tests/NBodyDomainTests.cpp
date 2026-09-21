@@ -42,14 +42,22 @@ int main()
     class MovingSeed final : public OrbitStateProvider
     {
     public:
+        MovingSeed(
+            const double radiusMeters,
+            const double speedMetersPerSecond)
+            : radiusMeters_(radiusMeters),
+              speedMetersPerSecond_(speedMetersPerSecond)
+        {
+        }
+
         OrbitState EvaluateState(
             orbit::time::SimulationTime) const override
         {
             return {
                 .positionMeters =
-                    {radius, 0.0, 0.0},
+                    {radiusMeters_, 0.0, 0.0},
                 .velocityMetersPerSecond =
-                    {0.0, orbitalVelocity, 0.0},
+                    {0.0, speedMetersPerSecond_, 0.0},
                 .quality =
                     OrbitStateQuality::Fixed
             };
@@ -59,10 +67,16 @@ int main()
         {
             return "Seed";
         }
+
+    private:
+        double radiusMeters_{0.0};
+        double speedMetersPerSecond_{0.0};
     };
 
     const auto movingEarth =
-        std::make_shared<MovingSeed>();
+        std::make_shared<MovingSeed>(
+            radius,
+            orbitalVelocity);
 
     const NBodyMemberId sunId{
         .high = 1,
@@ -127,7 +141,7 @@ int main()
 
     if (!Near(
             std::sqrt(
-                math::Dot(
+                orbit::math::Dot(
                     quarter.positionMeters,
                     quarter.positionMeters)),
             radius,
