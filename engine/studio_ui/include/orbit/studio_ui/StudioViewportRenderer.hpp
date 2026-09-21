@@ -12,6 +12,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/post_process/ColorLut.hpp>
@@ -149,6 +150,9 @@ struct StudioVisibilityProxyDiagnostics
     u32 dynamicProxyCount{0U};
     f32 maximumNominalErrorMeters{0.0F};
     bool rebuiltThisFrame{false};
+    bool hardwareRayQuerySupported{false};
+    bool hardwareRayQueryReady{false};
+    u32 hardwarePrimitiveCount{0U};
 };
 
 struct StudioSurfaceGlobeTransitionDiagnostics
@@ -400,6 +404,9 @@ private:
         std::unique_ptr<
             lighting::SoftwareProxyVisibilityProvider>
             provider;
+        std::unique_ptr<
+            lighting::HardwareRayQueryVisibilityBatch>
+            hardware;
     };
 
     struct TerrainPresentation
