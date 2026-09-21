@@ -1,6 +1,7 @@
 add_library(OrbitWorldModel STATIC
     src/CelestialSchemas.cpp
     src/CelestialRadiometryBinding.cpp
+    src/CelestialLightingService.cpp
     src/PropertyProvenanceSchema.cpp
     src/PropertyProvenance.cpp
     src/PhysicalPropertySolver.cpp
@@ -18,6 +19,7 @@ target_include_directories(OrbitWorldModel
 target_link_libraries(OrbitWorldModel
     PUBLIC
         Orbit::CelestialGravity
+        Orbit::CelestialLighting
         Orbit::CelestialOrbits
         Orbit::CelestialRadiometry
         Orbit::CelestialRotation
