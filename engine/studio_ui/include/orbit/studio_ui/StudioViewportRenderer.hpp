@@ -475,6 +475,9 @@ public:
     [[nodiscard]] bool SelectColorLutAsset(
         std::string_view projectRelativePath);
 
+    [[nodiscard]] bool ImportColorLutFile(
+        std::string_view sourcePath);
+
     [[nodiscard]] StudioColorLutDiagnostics
     ColorLutDiagnostics() const;
 
