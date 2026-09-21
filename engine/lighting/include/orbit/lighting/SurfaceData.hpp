@@ -53,6 +53,10 @@ struct SurfaceData
     // exceed 1.0 and must never be display-clamped or tone-mapped here.
     math::Float3 emissionRadianceSceneLinear{};
 
+    // Independent GI multiplier. Zero means the surface remains visibly
+    // emissive but contributes no indirect-light energy.
+    f32 emissionGiScale{1.0F};
+
     u32 materialId{0U};
     u32 instanceId{0U};
     SurfaceClass surfaceClass{SurfaceClass::Unknown};
