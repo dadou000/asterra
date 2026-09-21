@@ -1,5 +1,6 @@
 #include <orbit/post_process/OutputTransform.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
