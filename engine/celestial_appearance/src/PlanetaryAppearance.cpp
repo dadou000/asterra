@@ -431,6 +431,11 @@ BuildPlanetaryAppearance(
                     },
                     .roughness = roughness,
                     .oceanMask = ocean,
+                    .waterDepthMeters =
+                        static_cast<f32>(
+                            std::max(
+                                sample.standingWaterDepthMeters,
+                                0.0)),
                     .iceMask = ice,
                     .directLightTransmittance = 1.0F,
                     // Terrain/climate authority currently provides no
@@ -480,6 +485,8 @@ GpuPlanetaryAppearanceProduct(
                 texel.normal,
             .oceanMask =
                 texel.oceanMask,
+            .waterDepthMeters =
+                texel.waterDepthMeters,
             .emissionLinear =
                 texel.emissionLinear,
             .iceMask =
