@@ -18,6 +18,8 @@
 #include <orbit/world_model/LocalLightBinding.hpp>
 #include <orbit/world_model/VisibilityProxyBinding.hpp>
 #include <orbit/lighting/LocalLightRegistry.hpp>
+#include <orbit/lighting/AnalyticBodyVisibility.hpp>
+#include <orbit/lighting/TerrainHeightfieldVisibility.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
 #include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
@@ -39,6 +41,54 @@ namespace orbit::studio_ui
 {
 namespace
 {
+[[nodiscard]] math::Float3 AtmosphereSkyIrradianceSummary(
+    const celestial_atmosphere::AtmosphereSkyView* sky) noexcept
+{
+    if (sky == nullptr ||
+        sky->skyView.texels.empty())
+    {
+        return {};
+    }
+
+    math::Double3 sum{};
+
+    for (const auto& texel : sky->skyView.texels)
+    {
+        sum.x += std::max(
+            static_cast<f64>(texel.x),
+            0.0);
+        sum.y += std::max(
+            static_cast<f64>(texel.y),
+            0.0);
+        sum.z += std::max(
+            static_cast<f64>(texel.z),
+            0.0);
+    }
+
+    const f64 inverseCount =
+        1.0 /
+        static_cast<f64>(
+            sky->skyView.texels.size());
+
+    // Convert average sky radiance to an approximate hemispherical
+    // irradiance and normalize by Orbit's solar reference irradiance.
+    constexpr f64 kPi =
+        3.14159265358979323846;
+    constexpr f64 kReferenceIrradiance =
+        1361.0;
+
+    const f64 scale =
+        inverseCount *
+        kPi /
+        kReferenceIrradiance;
+
+    return {
+        static_cast<f32>(sum.x * scale),
+        static_cast<f32>(sum.y * scale),
+        static_cast<f32>(sum.z * scale)
+    };
+}
+
 [[nodiscard]] bool SameClipmapConfig(
     const terrain_view::ClipmapConfig& a,
     const terrain_view::ClipmapConfig& b) noexcept
