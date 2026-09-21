@@ -72,7 +72,7 @@ GpuVisibilityQuery EncodeGpuVisibilityQuery(
     {
         origin =
             origin -
-            view.originInFrameMeters;
+            view.gpuOriginInFrameMeters;
     }
 
     math::Float3 direction =
