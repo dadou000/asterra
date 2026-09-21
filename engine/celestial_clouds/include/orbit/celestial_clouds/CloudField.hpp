@@ -41,6 +41,18 @@ struct CloudLayerParameters
     bool orbitalRepresentation{true};
 };
 
+class CloudCoverageSource
+{
+public:
+    virtual ~CloudCoverageSource() = default;
+
+    [[nodiscard]] virtual f64 SampleCoverage(
+        math::Double3 unitDirection,
+        time::SimulationTime atTime) const noexcept = 0;
+
+    [[nodiscard]] virtual u64 Revision() const noexcept = 0;
+};
+
 struct CloudFieldConfig
 {
     u32 faceResolution{65};
@@ -85,6 +97,7 @@ struct CloudFieldProduct
 
 [[nodiscard]] u64 CloudFieldFingerprint(
     const terrain::TerrainSource* climateSource,
+    const CloudCoverageSource* externalSource,
     f64 referenceRadiusMeters,
     const std::vector<CloudLayerParameters>& layers,
     time::SimulationTime atTime,
@@ -92,6 +105,7 @@ struct CloudFieldProduct
 
 [[nodiscard]] CloudFieldProduct BuildCloudField(
     const terrain::TerrainSource* climateSource,
+    const CloudCoverageSource* externalSource,
     f64 referenceRadiusMeters,
     const std::vector<CloudLayerParameters>& layers,
     time::SimulationTime atTime,
