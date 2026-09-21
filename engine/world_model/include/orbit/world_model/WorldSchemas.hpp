@@ -113,6 +113,16 @@ inline constexpr schema::TypeId kSurfaceDecalType{
     .low = 0x414c545950450001ULL
 };
 
+inline constexpr schema::TypeId kPointLightType{
+    .high = 0x4f524249544c4954ULL,
+    .low = 0x504f494e54000001ULL
+};
+
+inline constexpr schema::TypeId kSpotLightType{
+    .high = 0x4f524249544c4954ULL,
+    .low = 0x53504f5400000001ULL
+};
+
 inline constexpr schema::PropertyId kSystemEpochMicroseconds{
     .high = 0x4f5242495450524fULL,
     .low = 0x505345504f434801ULL
@@ -617,6 +627,46 @@ inline constexpr schema::PropertyId kTerrainConstraintEnabled{
 inline constexpr schema::PropertyId kTerrainConstraintPointDirection{
     .high = 0x4f52424954434e53ULL,
     .low = 0x504f494e54444952ULL
+};
+
+inline constexpr schema::PropertyId kLightPositionMeters{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x504f534954494f4eULL
+};
+
+inline constexpr schema::PropertyId kLightDirection{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x444952454354494fULL
+};
+
+inline constexpr schema::PropertyId kLightColorLinear{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x434f4c4f52000001ULL
+};
+
+inline constexpr schema::PropertyId kLightIntensityLumens{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x4c554d454e530001ULL
+};
+
+inline constexpr schema::PropertyId kLightRangeMeters{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x52414e4745000001ULL
+};
+
+inline constexpr schema::PropertyId kLightInnerConeDegrees{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x494e4e4552434f4eULL
+};
+
+inline constexpr schema::PropertyId kLightOuterConeDegrees{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x4f55544552434f4eULL
+};
+
+inline constexpr schema::PropertyId kLightEnabled{
+    .high = 0x4f524249544c5052ULL,
+    .low = 0x454e41424c454401ULL
 };
 
 inline constexpr schema::PropertyId kDecalAsset{
