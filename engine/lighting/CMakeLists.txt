@@ -109,6 +109,10 @@ if(BUILD_TESTING)
         tests/RuntimeMaterialEmissionTests.cpp
     )
 
+    add_executable(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
+        tests/RuntimeMaterialAssignmentIntegrationTests.cpp
+    )
+
     target_link_libraries(OrbitLightingSurfaceDataTests
         PRIVATE
             Orbit::Lighting
@@ -242,6 +246,17 @@ if(BUILD_TESTING)
         OrbitLightingRuntimeMaterialEmissionTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingRuntimeMaterialEmissionTests)
 
+    target_link_libraries(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::Lighting
+            Orbit::WorldModel
+    )
+    target_compile_features(
+        OrbitLightingRuntimeMaterialAssignmentIntegrationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingRuntimeMaterialAssignmentIntegrationTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -305,6 +320,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingRuntimeMaterialEmission
         COMMAND OrbitLightingRuntimeMaterialEmissionTests
+    )
+
+    add_test(
+        NAME Orbit.LightingRuntimeMaterialAssignmentIntegration
+        COMMAND OrbitLightingRuntimeMaterialAssignmentIntegrationTests
     )
 
     add_test(
