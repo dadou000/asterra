@@ -3,6 +3,7 @@
 #include <orbit/lighting/DirectLighting.hpp>
 #include <orbit/lighting/LocalLightRegistry.hpp>
 #include <orbit/lighting/RadianceClipmapResidency.hpp>
+#include <orbit/lighting/Visibility.hpp>
 
 #include <span>
 
@@ -29,5 +30,6 @@ EstimateRadianceCell(
     const LightingView& view,
     const DirectionalLight& stellar,
     std::span<const ResolvedLocalLight> localLights,
+    VisibilityProvider* visibility = nullptr,
     const RadianceEstimateSettings& settings = {});
 } // namespace orbit::lighting
