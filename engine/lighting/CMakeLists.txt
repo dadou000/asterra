@@ -17,6 +17,7 @@ add_library(OrbitLighting STATIC
     src/RadianceEstimator.cpp
     src/RadianceCacheSampler.cpp
     src/MaterialEmission.cpp
+    src/RuntimeMaterialEmission.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -29,6 +30,7 @@ target_include_directories(OrbitLighting
 target_link_libraries(OrbitLighting
     PUBLIC
         Orbit::Core
+        Orbit::Content
         Orbit::Frames
         Orbit::Math
         Orbit::RHI
@@ -100,6 +102,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingMaterialEmissionTests
         tests/MaterialEmissionTests.cpp
+    )
+
+    add_executable(OrbitLightingRuntimeMaterialEmissionTests
+        tests/RuntimeMaterialEmissionTests.cpp
     )
 
     target_link_libraries(OrbitLightingSurfaceDataTests
@@ -227,6 +233,14 @@ if(BUILD_TESTING)
         OrbitLightingMaterialEmissionTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingMaterialEmissionTests)
 
+    target_link_libraries(OrbitLightingRuntimeMaterialEmissionTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingRuntimeMaterialEmissionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingRuntimeMaterialEmissionTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -285,6 +299,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingMaterialEmission
         COMMAND OrbitLightingMaterialEmissionTests
+    )
+
+    add_test(
+        NAME Orbit.LightingRuntimeMaterialEmission
+        COMMAND OrbitLightingRuntimeMaterialEmissionTests
     )
 
     add_test(
