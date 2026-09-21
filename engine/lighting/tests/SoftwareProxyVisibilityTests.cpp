@@ -138,6 +138,24 @@ int main()
         return 3;
     }
 
+    query.direction =
+        {0.0F, 0.0F, 1.0F};
+    query.requirements.maximumNominalErrorMeters =
+        0.05F;
+
+    const auto lodRejected =
+        registry.Trace(query);
+
+    if (lodRejected.resolution !=
+            VisibilityResolution::Unresolved ||
+        lodRejected.terminal)
+    {
+        return 4;
+    }
+
+    query.requirements.maximumNominalErrorMeters =
+        0.5F;
+
     SoftwareProxyVisibilityProvider
         starved(
             scene,
@@ -159,7 +177,7 @@ int main()
             VisibilityResolution::Miss &&
         starvedResult.terminal)
     {
-        return 4;
+        return 5;
     }
 
     return 0;
