@@ -26,6 +26,7 @@ target_include_directories(OrbitStudioUi
 target_link_libraries(OrbitStudioUi
     PUBLIC
         Orbit::Camera
+        Orbit::CelestialGlobe
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::RenderGraph
