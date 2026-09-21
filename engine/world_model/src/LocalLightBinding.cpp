@@ -142,16 +142,33 @@ void Gather(
 
 std::vector<AuthoredLocalLight>
 ResolveAuthoredLocalLights(
-    const scene::ObjectStore& objects)
+    const scene::ObjectStore& objects,
+    const std::optional<scene::ObjectId> root)
 {
     std::vector<AuthoredLocalLight> result;
 
-    for (const auto& root :
+    if (root.has_value())
+    {
+        const auto record =
+            objects.Find(*root);
+
+        if (record.has_value())
+        {
+            Gather(
+                objects,
+                *record,
+                result);
+        }
+
+        return result;
+    }
+
+    for (const auto& rootRecord :
          objects.Roots())
     {
         Gather(
             objects,
-            root,
+            rootRecord,
             result);
     }
 
