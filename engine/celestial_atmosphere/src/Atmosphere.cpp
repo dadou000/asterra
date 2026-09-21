@@ -101,10 +101,19 @@ void Validate(
         !nonNegative3(
             p.absorptionExtinctionPerMeter) ||
         !nonNegative3(
-            p.groundAlbedo))
+            p.groundAlbedo) ||
+        p.mieExtinctionPerMeter.x <
+            p.mieScatteringPerMeter.x ||
+        p.mieExtinctionPerMeter.y <
+            p.mieScatteringPerMeter.y ||
+        p.mieExtinctionPerMeter.z <
+            p.mieScatteringPerMeter.z ||
+        p.groundAlbedo.x > 1.0 ||
+        p.groundAlbedo.y > 1.0 ||
+        p.groundAlbedo.z > 1.0)
     {
         throw std::invalid_argument(
-            "Atmosphere coefficients must be finite and non-negative.");
+            "Atmosphere coefficients are physically invalid.");
     }
 }
 
@@ -1138,9 +1147,6 @@ AtmosphereSkyView BuildSkyView(
     const math::Double3 sun =
         math::Normalize(
             input.sunDirectionBody);
-
-    const f64 sunMu =
-        sun.z;
 
     const u64 fingerprint =
         AtmosphereSkyFingerprint(
