@@ -1,5 +1,6 @@
 #include <orbit/studio_session/StudioCelestialRoundTripVerifier.hpp>
 
+#include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_compact_objects/CompactObject.hpp>
 #include <orbit/celestial_giants/GiantAppearance.hpp>
 #include <orbit/celestial_representation/RepresentationResolver.hpp>
@@ -462,6 +463,30 @@ DerivedAppearanceFingerprint(
         universe::
             ReferenceRadiusMeters(
                 body->shape);
+
+    const auto* terrainSurface =
+        world.Surfaces().
+            Registry().
+            FindTerrainSurface(
+                *bodyId);
+
+    if (terrainSurface != nullptr &&
+        terrainSurface->terrain != nullptr)
+    {
+        const auto planetaryAppearance =
+            celestial_appearance::
+                BuildPlanetaryAppearance(
+                    *terrainSurface->terrain,
+                    referenceRadius,
+                    {.faceResolution = 17U,
+                     .footprintScale = 1.5});
+
+        hash =
+            terrain::StableCombine64(
+                hash,
+                planetaryAppearance.
+                    fingerprint);
+    }
 
     if (const auto giant =
             world_model::
