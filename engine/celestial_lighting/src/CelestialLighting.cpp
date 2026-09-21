@@ -209,37 +209,199 @@ MultiOccluderResult CombinedOccultation(
     const ApparentDisc& source,
     const std::vector<ApparentDisc>& occluders)
 {
-    f64 visible = 1.0;
+    if (occluders.empty())
+    {
+        return {};
+    }
+
+    if (occluders.size() == 1U)
+    {
+        const auto single =
+            FiniteDiscOccultation(
+                source,
+                occluders.front());
+
+        return {
+            .visibleFraction =
+                single.visibleFraction,
+            .obscuredFraction =
+                single.obscuredFraction,
+            .contributingOccluders =
+                single.overlapping
+                    ? 1U
+                    : 0U
+        };
+    }
+
+    const f64 sourceDistance =
+        math::Length(
+            source.centerFromObserverMeters);
+    const f64 sourceAngular =
+        AngularRadius(source);
+    const math::Double3 sourceDirection =
+        source.centerFromObserverMeters /
+        sourceDistance;
+
+    const math::Double3 reference =
+        std::abs(sourceDirection.y) <
+                0.9
+            ? math::Double3{
+                  0.0, 1.0, 0.0}
+            : math::Double3{
+                  1.0, 0.0, 0.0};
+
+    const math::Double3 tangentA =
+        math::Normalize(
+            math::Cross(
+                reference,
+                sourceDirection));
+    const math::Double3 tangentB =
+        math::Normalize(
+            math::Cross(
+                sourceDirection,
+                tangentA));
+
+    struct PreparedOccluder
+    {
+        math::Double3 direction{};
+        f64 angularRadius{0.0};
+        bool inFront{false};
+        bool contributes{false};
+    };
+
+    std::vector<PreparedOccluder>
+        prepared;
+    prepared.reserve(
+        occluders.size());
+
     u32 contributing = 0U;
 
     for (const auto& occluder :
          occluders)
     {
-        const auto result =
+        const f64 distance =
+            math::Length(
+                occluder.
+                    centerFromObserverMeters);
+
+        const auto exact =
             FiniteDiscOccultation(
                 source,
                 occluder);
 
-        if (!result.overlapping)
+        PreparedOccluder item{
+            .direction =
+                occluder.
+                    centerFromObserverMeters /
+                distance,
+            .angularRadius =
+                exact.
+                    occluderAngularRadiusRadians,
+            .inFront =
+                exact.occluderInFront,
+            .contributes =
+                exact.overlapping
+        };
+
+        if (item.contributes)
         {
-            continue;
+            ++contributing;
         }
 
-        visible *=
-            result.visibleFraction;
-        ++contributing;
+        prepared.push_back(
+            item);
     }
 
-    visible =
-        std::clamp(
-            visible,
-            0.0,
-            1.0);
+    if (contributing == 0U)
+    {
+        return {};
+    }
+
+    // Deterministic equal-area sampling of the source disc. This evaluates
+    // the union of all projected occluder discs, so overlapping occluders
+    // are not double-counted. The single-occluder path above remains fully
+    // analytic.
+    constexpr u32 kSamples = 8192U;
+    constexpr f64 kGoldenAngle =
+        2.39996322972865332223;
+
+    u32 covered = 0U;
+
+    for (u32 sampleIndex = 0U;
+         sampleIndex < kSamples;
+         ++sampleIndex)
+    {
+        const f64 radialFraction =
+            std::sqrt(
+                (static_cast<f64>(
+                     sampleIndex) +
+                 0.5) /
+                static_cast<f64>(
+                    kSamples));
+
+        const f64 offsetAngle =
+            sourceAngular *
+            radialFraction;
+        const f64 azimuth =
+            kGoldenAngle *
+            static_cast<f64>(
+                sampleIndex);
+
+        const math::Double3 tangent =
+            tangentA *
+                std::cos(azimuth) +
+            tangentB *
+                std::sin(azimuth);
+
+        const math::Double3 sampleDirection =
+            sourceDirection *
+                std::cos(offsetAngle) +
+            tangent *
+                std::sin(offsetAngle);
+
+        bool occulted = false;
+
+        for (const auto& occluder :
+             prepared)
+        {
+            if (!occluder.inFront ||
+                !occluder.contributes)
+            {
+                continue;
+            }
+
+            const f64 separation =
+                std::acos(
+                    std::clamp(
+                        math::Dot(
+                            sampleDirection,
+                            occluder.direction),
+                        -1.0,
+                        1.0));
+
+            if (separation <=
+                occluder.angularRadius)
+            {
+                occulted = true;
+                break;
+            }
+        }
+
+        if (occulted)
+        {
+            ++covered;
+        }
+    }
+
+    const f64 obscured =
+        static_cast<f64>(covered) /
+        static_cast<f64>(kSamples);
 
     return {
-        .visibleFraction = visible,
+        .visibleFraction =
+            1.0 - obscured,
         .obscuredFraction =
-            1.0 - visible,
+            obscured,
         .contributingOccluders =
             contributing
     };
