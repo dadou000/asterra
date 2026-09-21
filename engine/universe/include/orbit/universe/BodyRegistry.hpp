@@ -115,7 +115,10 @@ struct CelestialBody
     BodyId id{};
     SystemId system{};
     std::string name;
+    // Body-fixed frame used by surfaces, atmosphere and orientation-aware fields.
     frames::FrameId frame{};
+    // Non-rotating body-center frame carrying orbital translation only.
+    frames::FrameId centerFrame{};
     frames::FrameId parentFrame{};
     BodyShape shape{};
     std::optional<MassProperties> mass;
@@ -135,6 +138,7 @@ struct BodyCreateDesc
     // composition layers provide stable IDs reconstructed from authority.
     BodyId id{};
     frames::FrameId frame{};
+    frames::FrameId centerFrame{};
 };
 
 class BodyRegistry
