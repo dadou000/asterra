@@ -630,6 +630,7 @@ struct VSInput
     float3 appearanceNormal : NORMAL1;
     float4 material : TEXCOORD0;
     float3 emission : COLOR1;
+    float opacity : TEXCOORD1;
 };
 
 struct Constants
@@ -679,6 +680,7 @@ VSOutput main(VSInput input)
     output.albedo = input.albedo;
     output.material = input.material;
     output.emission = input.emission;
+    output.opacity = saturate(g_pc.transition.x);
     return output;
 }
 )";
@@ -691,6 +693,7 @@ struct VSOutput
     float3 albedo : COLOR0;
     float4 material : TEXCOORD0;
     float3 emission : COLOR1;
+    float opacity : TEXCOORD1;
 };
 
 float4 main(VSOutput input) : SV_Target0
@@ -722,7 +725,7 @@ float4 main(VSOutput input) : SV_Target0
 
     return float4(
         color / (1.0 + color),
-        saturate(g_pc.transition.x));
+        saturate(input.opacity));
 }
 )";
 } // namespace
