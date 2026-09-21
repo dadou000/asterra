@@ -63,6 +63,7 @@
 #include <orbit/universe/ReferenceSurface.hpp>
 #include <orbit/world_model/MaterialAssignmentBinding.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/volume_fields/VolumeFieldStorage.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1970,6 +1971,11 @@ int main(
                 studioViews,
                 studioSession);
 
+        orbit::volume_fields::
+            VolumeFieldStorageService
+                volumeFieldStorage(
+                    device);
+
         orbit::studio_ui::StudioViewportRenderer
             studioViewportRenderer(
                 device,
@@ -1979,6 +1985,9 @@ int main(
         studioViewportRenderer.
             SetContentService(
                 &content);
+        studioViewportRenderer.
+            SetVolumeFieldStorageService(
+                &volumeFieldStorage);
 
         orbit::studio_ui::DisplayDiagnosticsUi
             displayDiagnosticsUi(
@@ -2056,7 +2065,8 @@ int main(
 
         orbit::studio_ui::VolumeAuthoringUi
             volumeAuthoringUi(
-                studioSession);
+                studioSession,
+                volumeFieldStorage);
         volumeAuthoringUi.Register(ui);
 
         if (terrainUiSmoke)
