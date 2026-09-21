@@ -27,6 +27,8 @@ struct ColorLutSettings
 {
     bool enabled{true};
     f32 strength{1.0F};
+    bool toneMapEnabled{true};
+    f32 exposureScale{1.0F};
 };
 
 class GpuColorLut
