@@ -244,4 +244,6 @@ External implementation families to compare during milestone research:
 - HDR display/tone-mapping/color-management references;
 - psychophysical light/dark adaptation references.
 
+Universal volumetric simulation/rendering is specified separately in [V007_UNIVERSAL_VOLUMETRICS.md](V007_UNIVERSAL_VOLUMETRICS.md). Volume lighting must consume the same V0.0.7 lighting authority described here rather than creating a parallel light model.
+
 Each milestone that selects a concrete algorithm beyond this baseline should add a focused research note with assumptions, alternatives and measured tradeoffs before freezing its constants.
