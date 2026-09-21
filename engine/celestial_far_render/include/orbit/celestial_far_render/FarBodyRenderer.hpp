@@ -83,6 +83,22 @@ struct FarBodyDraw
     f32 oceanRoughness{0.12F};
     f32 oceanGlintStrength{1.0F};
     bool oceanEnabled{false};
+
+    // M27 appearance-only giant controls. Mutually exclusive with stellar.
+    bool giantEnabled{false};
+    math::Float3 giantBaseColorLinear{0.62F, 0.48F, 0.31F};
+    math::Float3 giantBandColorLinear{0.90F, 0.78F, 0.58F};
+    math::Float3 giantPolarColorLinear{0.48F, 0.42F, 0.36F};
+    f32 giantBandFrequency{11.0F};
+    f32 giantBandStrength{0.72F};
+    f32 giantZonalShear{0.18F};
+    f32 giantStormStrength{0.35F};
+    f32 giantStormScale{5.0F};
+    f32 giantPolarStrength{0.22F};
+    f32 giantDepthContrast{0.25F};
+    f32 giantTurbulenceStrength{0.18F};
+    u32 giantSeed{1U};
+
     bool stellar{false};
 
     // M26 appearance-only stellar controls. They never alter M19 luminosity.
