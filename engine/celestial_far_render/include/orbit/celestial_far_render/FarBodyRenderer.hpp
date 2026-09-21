@@ -96,8 +96,20 @@ public:
         const FarBodyDraw& draw,
         GpuCachedDiscProduct* cachedDisc = nullptr);
 
+    // Emits only lighting-facing material/surface authority. Cached preview
+    // color is deliberately not decoded as albedo because it is already lit.
+    void DrawSurfaceData(
+        rhi::CommandList& commands,
+        rhi::Texture& surfaceBaseRoughness,
+        rhi::Texture& surfaceNormalMetallic,
+        rhi::Texture& surfaceEmissionClass,
+        u32 width,
+        u32 height,
+        const FarBodyDraw& draw);
+
 private:
     std::unique_ptr<rhi::GraphicsPipeline> analyticPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> cachedPipeline_;
+    std::unique_ptr<rhi::GraphicsPipeline> surfacePipeline_;
 };
 } // namespace orbit::celestial_far_render
