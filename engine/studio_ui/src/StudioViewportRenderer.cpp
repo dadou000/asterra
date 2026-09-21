@@ -873,6 +873,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       farBodyRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler),
+      displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
       colorLut_(
           std::make_unique<
@@ -913,6 +914,16 @@ void StudioViewportRenderer::SetColorLutSettings(
             0.0F,
             1.0F);
     colorLutSettings_ = settings;
+}
+
+void StudioViewportRenderer::SetDisplayResolveSettings(
+    post_process::DisplayResolveSettings settings) noexcept
+{
+    settings.exposureScale =
+        std::max(
+            settings.exposureScale,
+            0.0F);
+    displayResolveSettings_ = settings;
 }
 
 celestial_globe::GpuMacroGlobeProduct*
@@ -2454,9 +2465,6 @@ StudioViewportRenderer::Compose(
                     {
                         radiativeEmitter = true;
 
-                        const auto exposure =
-                            celestial_radiometry::
-                                ResolveExposure({});
 
                         const f64 distanceMeters =
                             std::max(
@@ -2489,16 +2497,14 @@ StudioViewportRenderer::Compose(
                         pointRadiometricIntensity =
                             static_cast<f32>(
                                 celestial_radiometry::
-                                    ExposeIrradiance(
-                                        pointIrradiance,
-                                        exposure));
+                                    EncodeIrradianceSceneLinear(
+                                        pointIrradiance));
 
                         resolvedRadiometricIntensity =
                             static_cast<f32>(
                                 celestial_radiometry::
-                                    ExposeIrradiance(
-                                        resolvedPixelIrradiance,
-                                        exposure));
+                                    EncodeIrradianceSceneLinear(
+                                        resolvedPixelIrradiance));
                     }
                 }
 
@@ -3010,12 +3016,56 @@ StudioViewportRenderer::Compose(
                 "Studio viewport LUT correction has no GPU LUT.");
         }
 
+        auto* displayLinear =
+            &view->DisplayLinear();
         auto* displayColor =
             &view->DisplayColor();
         auto* colorLut =
             colorLut_.get();
+        const auto displayResolveSettings =
+            displayResolveSettings_;
         const auto colorLutSettings =
             colorLutSettings_;
+
+        graph.AddPass(
+            prefix + ".DisplayResolve",
+            {
+                {
+                    .texture = targets.displayLinear,
+                    .state =
+                        rhi::ResourceState::
+                            ShaderResource,
+                    .access =
+                        render_graph::Access::
+                            Read
+                },
+                {
+                    .texture = targets.displayLinear,
+                    .state =
+                        rhi::ResourceState::
+                            RenderTarget,
+                    .access =
+                        render_graph::Access::
+                            Write
+                }
+            },
+            [this,
+             color,
+             displayLinear,
+             width,
+             height,
+             displayResolveSettings](
+                rhi::CommandList& commands,
+                const render_graph::Resources&)
+            {
+                displayResolveRenderer_.Draw(
+                    commands,
+                    *color,
+                    *displayLinear,
+                    width,
+                    height,
+                    displayResolveSettings);
+            });
 
         graph.AddPass(
             prefix + ".ColorLutCorrection",
@@ -3040,7 +3090,7 @@ StudioViewportRenderer::Compose(
                 }
             },
             [this,
-             color,
+             displayLinear,
              displayColor,
              width,
              height,
@@ -3051,7 +3101,7 @@ StudioViewportRenderer::Compose(
             {
                 colorLutRenderer_.Draw(
                     commands,
-                    *color,
+                    *displayLinear,
                     *displayColor,
                     width,
                     height,
