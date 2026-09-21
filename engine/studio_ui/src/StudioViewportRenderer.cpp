@@ -1865,6 +1865,50 @@ bool StudioViewportRenderer::SelectColorLutAsset(
     }
 }
 
+bool StudioViewportRenderer::ImportColorLutFile(
+    const std::string_view sourcePath)
+{
+    colorLutDiagnostic_.clear();
+
+    if (content_ == nullptr)
+    {
+        colorLutDiagnostic_ =
+            "Content service is unavailable.";
+        return false;
+    }
+
+    try
+    {
+        const auto importedId =
+            content_->ImportFile(
+                std::filesystem::path(
+                    sourcePath));
+
+        const auto* asset =
+            content_->Find(
+                importedId);
+
+        if (asset == nullptr ||
+            asset->kind !=
+                content::AssetKind::ColorLut)
+        {
+            colorLutDiagnostic_ =
+                "Imported file is not a supported .cube LUT.";
+            return false;
+        }
+
+        return SelectColorLutAsset(
+            asset->sourcePath.
+                generic_string());
+    }
+    catch (const std::exception& exception)
+    {
+        colorLutDiagnostic_ =
+            exception.what();
+        return false;
+    }
+}
+
 StudioColorLutDiagnostics
 StudioViewportRenderer::ColorLutDiagnostics() const
 {
