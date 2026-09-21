@@ -87,6 +87,10 @@ struct MacroGlobeLighting
     math::Float3 directionBody{
         0.55F, 0.72F, -0.48F};
     f32 irradianceScale{1.0F};
+    f32 oceanRefractiveIndex{1.333F};
+    f32 oceanRoughness{0.12F};
+    f32 oceanGlintStrength{1.0F};
+    bool oceanEnabled{false};
 };
 
 class MacroGlobeRenderer
