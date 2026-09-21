@@ -8,6 +8,7 @@
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialCloudBinding.hpp>
 #include <orbit/world_model/CelestialGiantBinding.hpp>
+#include <orbit/world_model/CelestialCompactObjectBinding.hpp>
 #include <orbit/world_model/CelestialMagnetosphereBinding.hpp>
 #include <orbit/world_model/CelestialSmallBodyBinding.hpp>
 #include <orbit/world_model/CelestialOceanBinding.hpp>
@@ -1439,6 +1440,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       farBodyRenderer_(device, compiler),
       ringRenderer_(device, compiler),
       auroraRenderer_(device, compiler),
+      compactObjectRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
@@ -1893,6 +1895,21 @@ StudioViewportRenderer::MagnetosphereDiagnostics(
 }
 
 std::optional<
+    StudioCompactObjectDiagnostics>
+StudioViewportRenderer::CompactObjectDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        compactObjectDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            compactObjectDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
     StudioStellarDiagnostics>
 StudioViewportRenderer::StellarDiagnostics(
     const std::string_view viewportId) const noexcept
@@ -1997,6 +2014,8 @@ StudioViewportRenderer::Compose(
         stellarDiagnostics_.erase(
             info.id);
         smallBodyDiagnostics_.erase(
+            info.id);
+        compactObjectDiagnostics_.erase(
             info.id);
 
         std::optional<universe::BodyShape> shape;
@@ -4224,6 +4243,248 @@ StudioViewportRenderer::Compose(
                 logicalTarget->mode ==
                 studio_session::
                     ViewportMode::Perspective;
+
+            const auto compactBodyObject =
+                logicalTarget->target.has_value()
+                    ? session.World().
+                          Universe().
+                          ObjectForBody(
+                              logicalTarget->
+                                  target->body)
+                    : std::nullopt;
+
+            const auto resolvedCompactForView =
+                compactBodyObject.has_value()
+                    ? world_model::
+                          ResolveCompactObject(
+                              session.World().
+                                  Objects(),
+                              *compactBodyObject)
+                    : std::nullopt;
+
+            std::optional<
+                world_model::ResolvedAccretionFlow>
+                resolvedAccretionForView;
+
+            std::optional<
+                celestial_compact_objects::
+                    CompactObjectPresentation>
+                compactPresentation;
+
+            if (resolvedCompactForView.has_value())
+            {
+                resolvedAccretionForView =
+                    world_model::
+                        ResolveAccretionFlow(
+                            session.World().
+                                Objects(),
+                            *compactBodyObject,
+                            resolvedCompactForView->
+                                parameters);
+
+                compactPresentation =
+                    celestial_compact_objects::
+                        BuildCompactObjectPresentation(
+                            resolvedCompactForView->
+                                parameters);
+
+                const f64 cameraDistance =
+                    std::max(
+                        math::Length(
+                            camera.
+                                localPositionMeters),
+                        compactPresentation->
+                            shadowRadiusMeters);
+
+                const f64 angularRadius =
+                    cameraDistance >
+                            compactPresentation->
+                                shadowRadiusMeters
+                        ? std::asin(
+                              std::clamp(
+                                  compactPresentation->
+                                      shadowRadiusMeters /
+                                      cameraDistance,
+                                  0.0,
+                                  1.0))
+                        : static_cast<f64>(
+                              camera.
+                                  verticalFovRadians) *
+                              0.5;
+
+                const f64 projectedShadowRadiusPixels =
+                    angularRadius /
+                    std::max(
+                        static_cast<f64>(
+                            camera.
+                                verticalFovRadians),
+                        1.0e-6) *
+                    static_cast<f64>(
+                        std::max(
+                            height,
+                            1U));
+
+                const auto accretionProduct =
+                    resolvedAccretionForView.has_value()
+                        ? std::optional(
+                              celestial_compact_objects::
+                                  BuildAccretionFlowProduct(
+                                      resolvedAccretionForView->
+                                          parameters,
+                                      resolvedCompactForView->
+                                          parameters,
+                                      64U))
+                        : std::nullopt;
+
+                compactObjectDiagnostics_.
+                    insert_or_assign(
+                        info.id,
+                        StudioCompactObjectDiagnostics{
+                            .body =
+                                logicalTarget->
+                                    target->body,
+                            .fingerprint =
+                                resolvedCompactForView->
+                                    fingerprint,
+                            .gravitationalRadiusMeters =
+                                compactPresentation->
+                                    scales.
+                                    gravitationalRadiusMeters,
+                            .schwarzschildRadiusMeters =
+                                compactPresentation->
+                                    scales.
+                                    schwarzschildRadiusMeters,
+                            .photonSphereRadiusMeters =
+                                compactPresentation->
+                                    scales.
+                                    photonSphereRadiusMeters,
+                            .iscoRadiusMeters =
+                                compactPresentation->
+                                    scales.
+                                    iscoRadiusMeters,
+                            .shadowRadiusMeters =
+                                compactPresentation->
+                                    shadowRadiusMeters,
+                            .projectedShadowRadiusPixels =
+                                projectedShadowRadiusPixels,
+                            .accretionEnabled =
+                                resolvedAccretionForView.
+                                    has_value(),
+                            .accretionOuterRadiusMeters =
+                                accretionProduct.has_value()
+                                    ? accretionProduct->
+                                          outerRadiusMeters
+                                    : 0.0
+                        });
+
+                const auto compactDraw =
+                    celestial_compact_render::
+                        CompactObjectDraw{
+                            .compact =
+                                *compactPresentation,
+                            .accretion =
+                                resolvedAccretionForView.
+                                    has_value()
+                                    ? std::optional(
+                                          resolvedAccretionForView->
+                                              parameters)
+                                    : std::nullopt,
+                            .camera = camera,
+                            .projectedShadowRadiusPixels =
+                                projectedShadowRadiusPixels,
+                            .opacity = 1.0F
+                        };
+
+                graph.AddPass(
+                    prefix +
+                        ".CompactObject",
+                    {
+                        {
+                            .texture =
+                                targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        },
+                        {
+                            .texture =
+                                targets.
+                                    surfaceBaseRoughness,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        },
+                        {
+                            .texture =
+                                targets.
+                                    surfaceNormalMetallic,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        },
+                        {
+                            .texture =
+                                targets.
+                                    surfaceEmissionClass,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     bodySurfaceBaseRoughness,
+                     bodySurfaceNormalMetallic,
+                     bodySurfaceEmissionClass,
+                     width,
+                     height,
+                     compactDraw](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        commands.ClearColorTarget(
+                            *color,
+                            {
+                                .red = 0.006F,
+                                .green = 0.010F,
+                                .blue = 0.018F,
+                                .alpha = 1.0F
+                            });
+                        commands.ClearColorTarget(
+                            *bodySurfaceBaseRoughness,
+                            {0.0F, 0.0F, 0.0F, 1.0F});
+                        commands.ClearColorTarget(
+                            *bodySurfaceNormalMetallic,
+                            {0.0F, 1.0F, 0.0F, 0.0F});
+                        commands.ClearColorTarget(
+                            *bodySurfaceEmissionClass,
+                            {0.0F, 0.0F, 0.0F, 0.0F});
+
+                        compactObjectRenderer_.Draw(
+                            commands,
+                            *color,
+                            width,
+                            height,
+                            compactDraw);
+                    });
+
+                transitionDiagnostics_.erase(
+                    info.id);
+
+                break;
+            }
 
             if (perspective &&
                 logicalTarget->target.has_value())
