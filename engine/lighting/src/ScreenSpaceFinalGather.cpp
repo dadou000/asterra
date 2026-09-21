@@ -636,7 +636,7 @@ ScreenSpaceFinalGatherRenderer(
                 .data = gather.bytecode.data(),
                 .size = gather.bytecode.size()
             },
-            .pushConstantDwords = 16U,
+            .pushConstantDwords = 20U,
             .shaderResourceBuffers = 0U,
             .storageTextures = 2U,
             .sampledTextures = 7U
@@ -691,75 +691,6 @@ void ScreenSpaceFinalGatherRenderer::Gather(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 16> constants{
-        width,
-        height,
-        std::clamp(
-            settings.stepsPerRay,
-            2U,
-            32U),
-        historyCompatible ? 1U : 0U,
-
-        bits(view.forward.x),
-        bits(view.forward.y),
-        bits(view.forward.z),
-        bits(
-            static_cast<f32>(width) /
-            static_cast<f32>(height)),
-
-        bits(view.up.x),
-        bits(view.up.y),
-        bits(view.up.z),
-        bits(std::tan(
-            view.verticalFovRadians *
-            0.5F)),
-
-        bits(std::max(
-            view.nearPlaneMeters,
-            1.0e-5F)),
-        bits(std::max(
-            view.farPlaneMeters,
-            view.nearPlaneMeters +
-                1.0e-4F)),
-        bits(std::max(
-            settings.radiusMeters,
-            0.05F)),
-        bits(std::max(
-            settings.thicknessMeters,
-            0.001F))
-    };
-
-    const std::array<u32, 4> tuning{
-        bits(std::clamp(
-            settings.temporalWeight,
-            0.0F,
-            0.99F)),
-        bits(std::max(
-            settings.historyDepthTolerance,
-            0.0001F)),
-        bits(std::clamp(
-            settings.historyNormalThreshold,
-            -1.0F,
-            1.0F)),
-        bits(std::max(
-            settings.intensity,
-            0.0F))
-    };
-
-    std::array<u32, 16> merged =
-        constants;
-    // Push constants are exactly 16 dwords. Re-purpose the final four
-    // depth/tuning entries by packing tuning into the shader's gatherTuning
-    // float4 through a second constants upload would overwrite from offset 0,
-    // so construct the final layout directly below.
-    merged[12] = tuning[0];
-    merged[13] = tuning[1];
-    merged[14] = tuning[2];
-    merged[15] = tuning[3];
-
-    // Radius/thickness are encoded by using the view's near/far pair and
-    // deriving trace scale from settings in the same final vector is required.
-    // Use a 20-dword pipeline layout instead; constants below match shader.
     const std::array<u32, 20> fullConstants{
         width,
         height,
