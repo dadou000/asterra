@@ -46,6 +46,29 @@ namespace
             {
                 return value.parentFromBody;
             }
+            else if constexpr (
+                std::is_same_v<
+                    Model,
+                    ProviderDrivenBodyTransform>)
+            {
+                if (!value.orbitState ||
+                    !value.orientation)
+                {
+                    throw std::runtime_error(
+                        "Provider-driven body transform is incomplete.");
+                }
+
+                return {
+                    .rotation =
+                        value.orientation->
+                            EvaluateOrientation(atTime).
+                            parentFromBodyRotation,
+                    .translation =
+                        value.orbitState->
+                            EvaluateState(atTime).
+                            positionMeters
+                };
+            }
             else
             {
                 const f64 elapsedSeconds =
@@ -174,6 +197,18 @@ void ValidateTransform(
                 std::decay_t<decltype(value)>;
 
             if constexpr (
+                std::is_same_v<
+                    Model,
+                    ProviderDrivenBodyTransform>)
+            {
+                if (!value.orbitState ||
+                    !value.orientation)
+                {
+                    throw std::invalid_argument(
+                        "Provider-driven transform requires orbit and orientation providers.");
+                }
+            }
+            else if constexpr (
                 std::is_same_v<Model, UniformRotationTransform> ||
                 std::is_same_v<Model, OrbitDrivenUniformRotationTransform>)
             {
