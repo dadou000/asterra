@@ -4,6 +4,7 @@ add_library(OrbitEditorModel STATIC
     src/AuthoringCommands.cpp
     src/MaterialAuthoringCommands.cpp
     src/TerrainAuthoringCommands.cpp
+    src/VolumeAuthoringCommands.cpp
     src/BuiltinSchemas.cpp
     src/CelestialAuthoringModel.cpp
     src/CelestialRecipeService.cpp
@@ -57,6 +58,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainAuthoringCommand
         COMMAND OrbitTerrainAuthoringCommandTests
+    )
+
+    add_executable(OrbitVolumeAuthoringCommandTests
+        tests/VolumeAuthoringCommandTests.cpp
+    )
+
+    target_link_libraries(OrbitVolumeAuthoringCommandTests
+        PRIVATE
+            Orbit::Documents
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitVolumeAuthoringCommandTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitVolumeAuthoringCommandTests)
+
+    add_test(
+        NAME Orbit.VolumeAuthoringCommand
+        COMMAND OrbitVolumeAuthoringCommandTests
     )
 endif()
 
