@@ -84,7 +84,8 @@ EstimateRadianceCell(
     const DirectionalLight& stellar,
     const std::span<const ResolvedLocalLight> localLights,
     VisibilityProvider* const visibility,
-    const RadianceEstimateSettings& settings)
+    const RadianceEstimateSettings& settings,
+    const std::span<const EmissiveVolumeSource> emissiveVolumes)
 {
     DirectionalIrradianceL1 result;
 
@@ -189,6 +190,157 @@ EstimateRadianceCell(
         std::max(
             settings.solarReferenceIrradiance,
             1.0e-5F);
+
+    for (const auto& source :
+         emissiveVolumes)
+    {
+        const math::Double3 deltaD =
+            source.centerInFrameMeters -
+            cellCenterFrame;
+
+        const f64 centerDistanceD =
+            math::Length(deltaD);
+
+        const f32 radius =
+            std::max(
+                source.radiusMeters,
+                0.01F);
+
+        const f32 centerDistance =
+            static_cast<f32>(
+                std::max(
+                    centerDistanceD,
+                    0.0));
+
+        const f32 surfaceDistance =
+            std::max(
+                centerDistance -
+                radius,
+                0.0F);
+
+        const f32 automaticRange =
+            std::max(
+                radius * 12.0F,
+                radius + 1.0F);
+
+        const f32 range =
+            source.influenceRangeMeters > 0.0F
+                ? source.influenceRangeMeters
+                : automaticRange;
+
+        if (surfaceDistance >= range)
+        {
+            continue;
+        }
+
+        math::Float3 direction{
+            0.0F, 1.0F, 0.0F};
+
+        if (centerDistanceD > 1.0e-8)
+        {
+            const auto directionD =
+                deltaD /
+                centerDistanceD;
+
+            direction = {
+                static_cast<f32>(directionD.x),
+                static_cast<f32>(directionD.y),
+                static_cast<f32>(directionD.z)
+            };
+        }
+
+        bool visible = true;
+
+        if (visibility != nullptr &&
+            surfaceDistance > 0.05F)
+        {
+            VisibilityQuery query{
+                .purpose =
+                    VisibilityPurpose::DiffuseGi,
+                .frame = view.frame,
+                .body = view.body,
+                .originInFrameMeters =
+                    cellCenterFrame,
+                .direction =
+                    direction,
+                .minimumDistanceMeters = 0.05F,
+                .maximumDistanceMeters =
+                    std::max(
+                        surfaceDistance,
+                        0.05F),
+                .importance = 1.0F,
+                .requirements = {
+                    .requireOffscreenCoverage = true
+                }
+            };
+
+            const auto visibilityResult =
+                visibility->Trace(query);
+
+            visible =
+                visibilityResult.resolution !=
+                    VisibilityResolution::Hit;
+        }
+
+        if (!visible)
+        {
+            continue;
+        }
+
+        const f32 normalized =
+            std::clamp(
+                surfaceDistance /
+                std::max(range, 0.01F),
+                0.0F,
+                1.0F);
+
+        const f32 fade =
+            (1.0F - normalized) *
+            (1.0F - normalized);
+
+        // Approximate projected solid-angle coverage of the bounded emitter.
+        // This intentionally stays low-frequency: the cache carries broad
+        // radiance while screen-space/future volumetric passes preserve detail.
+        const f32 coverage =
+            centerDistance <= radius
+                ? 1.0F
+                : std::clamp(
+                      (radius * radius) /
+                      std::max(
+                          centerDistance *
+                              centerDistance,
+                          radius * radius),
+                      0.0F,
+                      1.0F);
+
+        const f32 sourceScale =
+            std::max(
+                source.intensityScale,
+                0.0F) *
+            fade *
+            coverage *
+            transport;
+
+        const math::Float3 energy{
+            std::max(
+                source.emissionLinear.x,
+                0.0F) *
+                sourceScale,
+            std::max(
+                source.emissionLinear.y,
+                0.0F) *
+                sourceScale,
+            std::max(
+                source.emissionLinear.z,
+                0.0F) *
+                sourceScale
+        };
+
+        AddDirectionalLobe(
+            result,
+            direction,
+            energy);
+    }
 
     for (const auto& light :
          localLights)
