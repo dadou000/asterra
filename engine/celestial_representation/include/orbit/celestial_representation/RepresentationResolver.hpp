@@ -69,8 +69,21 @@ struct Decision
     bool hysteresisHeld{false};
 };
 
+struct SurfaceGlobeTransition
+{
+    f64 productionSurfaceWeight{0.0};
+    f64 macroGlobeWeight{0.0};
+    f64 transitionToGlobe{0.0};
+    bool overlapping{false};
+};
+
 [[nodiscard]] Decision Resolve(
     const ResolveInput& input);
+
+[[nodiscard]] SurfaceGlobeTransition
+ResolveSurfaceGlobeTransition(
+    const ResolveInput& input,
+    const Decision& decision);
 
 [[nodiscard]] std::string_view Name(
     Representation representation) noexcept;
