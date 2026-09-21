@@ -55,6 +55,7 @@ struct EmissiveHierarchyNode
     // Source-space centroid weighted by luminance * physical texel area.
     // This remains stable as the hierarchy collapses/refines.
     math::Double2 energyWeightedUv{0.5, 0.5};
+    math::Double3 energyCentroidInFrameMeters{};
 
     f64 areaMetersSquared{0.0};
     f64 radiantImportance{0.0};
