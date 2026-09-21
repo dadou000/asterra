@@ -1,10 +1,12 @@
 #pragma once
 
+#include <orbit/celestial_orbits/OrbitState.hpp>
 #include <orbit/core/StrongId.hpp>
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/math/RigidTransform.hpp>
 #include <orbit/time/SimulationTime.hpp>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -65,10 +67,28 @@ struct UniformRotationTransform
     time::SimulationTime epoch{};
 };
 
+// M05 compatibility bridge: orbital translation comes from the shared
+// celestial-orbits state provider while orientation remains the existing
+// uniform-spin model. M06 will formalize rotation as its own capability.
+struct OrbitDrivenUniformRotationTransform
+{
+    std::shared_ptr<const celestial_orbits::OrbitStateProvider>
+        orbitState;
+    math::Double3 axisInParent{
+        0.0,
+        0.0,
+        1.0
+    };
+    f64 angularVelocityRadiansPerSecond{0.0};
+    f64 phaseRadiansAtEpoch{0.0};
+    time::SimulationTime epoch{};
+};
+
 using BodyTransformModel =
     std::variant<
         FixedBodyTransform,
-        UniformRotationTransform>;
+        UniformRotationTransform,
+        OrbitDrivenUniformRotationTransform>;
 
 struct CelestialSystem
 {
