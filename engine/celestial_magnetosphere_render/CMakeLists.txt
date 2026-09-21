@@ -1,5 +1,5 @@
 add_library(OrbitCelestialMagnetosphereRender STATIC
-    ../celestial_magnetosphere/src/AuroraRenderer.cpp
+    src/AuroraRenderer.cpp
 )
 add_library(
     Orbit::CelestialMagnetosphereRender
