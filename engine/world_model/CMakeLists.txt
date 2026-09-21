@@ -278,3 +278,29 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialLightingCompositionTests
     )
 endif()
+
+
+if(BUILD_TESTING)
+    add_executable(
+        OrbitCelestialAtmosphereBindingTests
+        tests/CelestialAtmosphereBindingTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitCelestialAtmosphereBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitCelestialAtmosphereBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialAtmosphereBindingTests)
+
+    add_test(
+        NAME Orbit.CelestialAtmosphereBinding
+        COMMAND OrbitCelestialAtmosphereBindingTests
+    )
+endif()
