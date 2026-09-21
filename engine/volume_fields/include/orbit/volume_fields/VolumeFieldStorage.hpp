@@ -117,6 +117,9 @@ public:
 
     void MarkAllResidentTilesValid();
 
+    [[nodiscard]] u32 InvalidateBounds(
+        const world_model::VolumeInvalidationBounds& bounds);
+
     [[nodiscard]] const VolumeFieldDiagnostics&
     Diagnostics() const noexcept;
 
@@ -185,6 +188,13 @@ public:
     Ensure(
         const world_model::ResolvedVolumeDomain& domain);
 
+    [[nodiscard]] u32 SyncAuthoredInputs(
+        const scene::ObjectStore& objects,
+        scene::ObjectId volume);
+
+    [[nodiscard]] u32 LastInvalidatedTiles(
+        scene::ObjectId volume) const noexcept;
+
     [[nodiscard]] VolumeFieldStorage*
     Find(
         scene::ObjectId volume) noexcept;
@@ -201,6 +211,8 @@ private:
     {
         scene::ObjectId object{};
         std::unique_ptr<VolumeFieldStorage> storage;
+        std::vector<world_model::ResolvedVolumeInput> inputs;
+        u32 lastInvalidatedTiles{0U};
     };
 
     rhi::Device* device_{nullptr};
