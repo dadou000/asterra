@@ -17,7 +17,7 @@ on:
 
 concurrency:
   group: orbit-studio-real-device-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   terrain-ui-real-device:
