@@ -1,6 +1,7 @@
 #include <orbit/world_model/UniverseComposition.hpp>
 
 #include <orbit/celestial_orbits/OrbitState.hpp>
+#include <orbit/celestial_rotation/OrientationState.hpp>
 
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -277,59 +278,203 @@ OrbitProviderFor(
             });
 }
 
+[[nodiscard]] std::optional<scene::ObjectRecord>
+FindRotationCapability(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId body)
+{
+    std::optional<scene::ObjectRecord> found;
+
+    for (const auto& child : objects.Children(body))
+    {
+        if (child.type != kRotationCapabilityType)
+        {
+            continue;
+        }
+
+        const bool enabled =
+            PropertyOr<bool>(
+                objects,
+                child.id,
+                kCapabilityEnabled,
+                true);
+
+        if (!enabled)
+        {
+            continue;
+        }
+
+        if (found.has_value())
+        {
+            throw std::runtime_error(
+                "Celestial body has multiple enabled rotation capabilities.");
+        }
+
+        found = child;
+    }
+
+    return found;
+}
+
+[[nodiscard]] std::shared_ptr<
+    const celestial_rotation::OrientationProvider>
+OrientationProviderFor(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId body,
+    const time::SimulationTime systemEpoch,
+    std::shared_ptr<
+        const celestial_orbits::OrbitStateProvider> orbitState)
+{
+    const f64 degreesToRadians =
+        std::numbers::pi_v<f64> / 180.0;
+
+    const auto rotationCapability =
+        FindRotationCapability(objects, body);
+
+    if (!rotationCapability.has_value())
+    {
+        const f64 periodSeconds =
+            PropertyOr<f64>(
+                objects,
+                body,
+                kBodyRotationPeriodSeconds,
+                86'400.0);
+        const f64 tiltRadians =
+            PropertyOr<f64>(
+                objects,
+                body,
+                kBodyAxialTiltDegrees,
+                0.0) *
+            degreesToRadians;
+        const f64 phaseRadians =
+            PropertyOr<f64>(
+                objects,
+                body,
+                kBodyRotationPhaseDegrees,
+                0.0) *
+            degreesToRadians;
+
+        return std::make_shared<
+            celestial_rotation::UniformSpinOrientationProvider>(
+                celestial_rotation::UniformSpinOrientation{
+                    .axisInParent = {
+                        0.0,
+                        std::sin(tiltRadians),
+                        std::cos(tiltRadians)
+                    },
+                    .angularVelocityRadiansPerSecond =
+                        periodSeconds > 0.0
+                            ? (2.0 * std::numbers::pi_v<f64>) /
+                                periodSeconds
+                            : 0.0,
+                    .phaseRadiansAtEpoch = phaseRadians,
+                    .epoch = systemEpoch
+                });
+    }
+
+    const std::string model =
+        PropertyOr<std::string>(
+            objects,
+            rotationCapability->id,
+            kCapabilityModel,
+            std::string{"Uniform Spin"});
+
+    const math::Double3 axis =
+        PropertyOr<math::Double3>(
+            objects,
+            rotationCapability->id,
+            kRotationAxis,
+            {0.0, 0.0, 1.0});
+
+    if (model == "Fixed")
+    {
+        return std::make_shared<
+            celestial_rotation::FixedOrientationProvider>(
+                celestial_rotation::FixedOrientation{});
+    }
+
+    if (model == "Uniform Spin")
+    {
+        const f64 periodSeconds =
+            PropertyOr<f64>(
+                objects,
+                rotationCapability->id,
+                kRotationPeriodSeconds,
+                86'400.0);
+        const i64 epochMicroseconds =
+            PropertyOr<i64>(
+                objects,
+                rotationCapability->id,
+                kRotationEpochMicroseconds,
+                systemEpoch.microsecondsFromEpoch);
+
+        return std::make_shared<
+            celestial_rotation::UniformSpinOrientationProvider>(
+                celestial_rotation::UniformSpinOrientation{
+                    .axisInParent = axis,
+                    .angularVelocityRadiansPerSecond =
+                        periodSeconds > 0.0
+                            ? (2.0 * std::numbers::pi_v<f64>) /
+                                periodSeconds
+                            : 0.0,
+                    .phaseRadiansAtEpoch =
+                        PropertyOr<f64>(
+                            objects,
+                            rotationCapability->id,
+                            kRotationPhaseDegrees,
+                            0.0) *
+                        degreesToRadians,
+                    .epoch = {
+                        .microsecondsFromEpoch =
+                            epochMicroseconds
+                    }
+                });
+    }
+
+    if (model == "Synchronous")
+    {
+        return std::make_shared<
+            celestial_rotation::SynchronousOrientationProvider>(
+                celestial_rotation::SynchronousOrientation{
+                    .orbitState = std::move(orbitState),
+                    .poleInParent = axis,
+                    .phaseOffsetRadians =
+                        PropertyOr<f64>(
+                            objects,
+                            rotationCapability->id,
+                            kRotationSynchronousPhaseOffsetDegrees,
+                            0.0) *
+                        degreesToRadians
+                });
+    }
+
+    throw std::runtime_error(
+        "Unsupported rotation capability model: " +
+        model);
+}
+
 [[nodiscard]] universe::BodyTransformModel
 TransformFor(
     const scene::ObjectStore& objects,
     const scene::ObjectId object,
     const time::SimulationTime epoch)
 {
-    const f64 periodSeconds =
-        PropertyOr<f64>(
+    auto orbitState =
+        OrbitProviderFor(
             objects,
             object,
-            kBodyRotationPeriodSeconds,
-            86'400.0);
+            epoch);
 
-    const f64 tiltRadians =
-        PropertyOr<f64>(
+    auto orientation =
+        OrientationProviderFor(
             objects,
             object,
-            kBodyAxialTiltDegrees,
-            0.0) *
-        std::numbers::pi_v<f64> /
-        180.0;
+            epoch,
+            orbitState);
 
-    const f64 phaseRadians =
-        PropertyOr<f64>(
-            objects,
-            object,
-            kBodyRotationPhaseDegrees,
-            0.0) *
-        std::numbers::pi_v<f64> /
-        180.0;
-
-    const f64 angularVelocity =
-        periodSeconds > 0.0
-            ? (2.0 * std::numbers::pi_v<f64>) /
-                periodSeconds
-            : 0.0;
-
-    return universe::OrbitDrivenUniformRotationTransform{
-        .orbitState =
-            OrbitProviderFor(
-                objects,
-                object,
-                epoch),
-        .axisInParent = {
-            0.0,
-            std::sin(tiltRadians),
-            std::cos(tiltRadians)
-        },
-        .angularVelocityRadiansPerSecond =
-            angularVelocity,
-        .phaseRadiansAtEpoch =
-            phaseRadians,
-        .epoch = epoch
+    return universe::ProviderDrivenBodyTransform{
+        .orbitState = std::move(orbitState),
+        .orientation = std::move(orientation)
     };
 }
 } // namespace
