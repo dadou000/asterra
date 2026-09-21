@@ -314,6 +314,71 @@ CelestialLightingService::DirectLightingAtSurface(
     const universe::BodyId emitter,
     const std::vector<universe::BodyId>& occluders,
     const time::SimulationTime atTime,
+    const celestial_rings::RingSystem& rings,
+    const math::Double3 surfaceUnitDirection) const
+{
+    const auto direct =
+        DirectLightingAtBody(
+            receiver,
+            emitter,
+            occluders,
+            atTime);
+
+    if (!direct.has_value())
+    {
+        return std::nullopt;
+    }
+
+    if (math::LengthSquared(
+            surfaceUnitDirection) <=
+        1.0e-20)
+    {
+        throw std::invalid_argument(
+            "Ring-aware surface lighting requires a valid surface direction.");
+    }
+
+    const auto* receiverBody =
+        universe_.Bodies().FindBody(
+            receiver);
+
+    if (receiverBody == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const f64 radius =
+        universe::ReferenceRadiusMeters(
+            receiverBody->shape);
+
+    const f64 ringTransmittance =
+        celestial_rings::
+            RingShadowTransmittanceAtSurface(
+                rings,
+                radius,
+                math::Normalize(
+                    surfaceUnitDirection),
+                math::Normalize(
+                    direct->
+                        receiverBodyFixedToEmitterMeters));
+
+    return DirectSurfaceLighting{
+        .celestial = *direct,
+        .cloudTransmittance = 1.0,
+        .ringTransmittance =
+            ringTransmittance,
+        .irradianceWattsPerSquareMeter =
+            direct->
+                irradianceWattsPerSquareMeter *
+            ringTransmittance
+    };
+}
+
+std::optional<DirectSurfaceLighting>
+CelestialLightingService::DirectLightingAtSurface(
+    const universe::BodyId receiver,
+    const universe::BodyId emitter,
+    const std::vector<universe::BodyId>& occluders,
+    const time::SimulationTime atTime,
     const celestial_clouds::CloudFieldProduct& clouds,
     const celestial_rings::RingSystem& rings,
     const math::Double3 surfaceUnitDirection) const
