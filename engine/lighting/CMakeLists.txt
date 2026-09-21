@@ -1,5 +1,6 @@
 add_library(OrbitLighting STATIC
     src/SurfaceData.cpp
+    src/SurfaceDebugRenderer.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -13,6 +14,8 @@ target_link_libraries(OrbitLighting
     PUBLIC
         Orbit::Core
         Orbit::Math
+        Orbit::Rhi
+        Orbit::Shader
 )
 
 target_compile_features(OrbitLighting PUBLIC cxx_std_23)
