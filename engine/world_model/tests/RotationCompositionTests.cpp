@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <numbers>
 #include <string>
+#include <iostream>
 
 namespace
 {
@@ -20,6 +21,15 @@ bool Near(double a, double b, double rel = 2.0e-6)
     const double scale =
         std::max({1.0, std::abs(a), std::abs(b)});
     return std::abs(a - b) <= rel * scale;
+}
+} // namespace
+
+namespace
+{
+int FailCode(const int code)
+{
+    std::cerr << "rotation-composition failure code " << code << '\\n';
+    return code;
 }
 } // namespace
 
@@ -101,7 +111,7 @@ int main()
 
         if (compositionStats.bodies != 1U)
         {
-            return 1;
+            return FailCode(1);
         }
 
         const auto bodyFrame =
@@ -112,7 +122,7 @@ int main()
         if (!bodyFrame.has_value() ||
             !systemFrame.has_value())
         {
-            return 1;
+            return FailCode(1);
         }
 
         const auto atEpoch =
@@ -126,7 +136,7 @@ int main()
             !Near(atEpoch->rotation.xAxis.x, -1.0) ||
             !Near(atEpoch->rotation.xAxis.y, 0.0))
         {
-            return 2;
+            return FailCode(2);
         }
 
         const double period =
@@ -151,7 +161,7 @@ int main()
             !Near(atQuarter->rotation.xAxis.x, 0.0) ||
             !Near(atQuarter->rotation.xAxis.y, -1.0))
         {
-            return 3;
+            return FailCode(3);
         }
 
         commands.SetProperty(
@@ -169,7 +179,7 @@ int main()
 
         if (!composition.RebuildIfChanged(objects))
         {
-            return 4;
+            return FailCode(4);
         }
 
         const auto spun =
@@ -183,12 +193,12 @@ int main()
             !Near(spun->rotation.xAxis.x, 0.0) ||
             !Near(spun->rotation.xAxis.y, 1.0))
         {
-            return 5;
+            return FailCode(5);
         }
 
         world.Checkpoint();
     }
 
     std::filesystem::remove_all(root);
-    return 0;
+    return FailCode(0);
 }
