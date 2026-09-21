@@ -139,7 +139,11 @@ DisplayResolveRenderer::DisplayResolveRenderer(
             .blendMode =
                 rhi::BlendMode::Opaque,
             .depthTest = false,
-            .depthWrite = false
+            .depthWrite = false,
+            .colorAttachmentFormats = {
+                rhi::TextureFormat::RGBA16_Float
+            },
+            .colorAttachmentCount = 1U
         });
 }
 
