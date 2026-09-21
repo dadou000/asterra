@@ -30,6 +30,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialAtmosphere
         Orbit::CelestialClouds
         Orbit::CelestialOcean
+        Orbit::CelestialRings
         Orbit::CelestialGlobe
         Orbit::CelestialFarRender
         Orbit::CelestialRepresentation
