@@ -1,6 +1,7 @@
 add_library(OrbitPostProcess STATIC
     src/ColorLut.cpp
     src/DisplayResolve.cpp
+    src/HumanEyeAdaptation.cpp
     src/LuminanceHistogram.cpp
 )
 
@@ -30,6 +31,10 @@ if(BUILD_TESTING)
         tests/LuminanceHistogramTests.cpp
     )
 
+    add_executable(OrbitHumanEyeAdaptationTests
+        tests/HumanEyeAdaptationTests.cpp
+    )
+
     target_link_libraries(OrbitColorLutTests
         PRIVATE
             Orbit::PostProcess
@@ -39,9 +44,18 @@ if(BUILD_TESTING)
         PRIVATE
             Orbit::PostProcess
     )
+
+    target_link_libraries(OrbitHumanEyeAdaptationTests
+        PRIVATE
+            Orbit::PostProcess
+    )
     target_compile_features(
         OrbitLuminanceHistogramTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLuminanceHistogramTests)
+
+    target_compile_features(
+        OrbitHumanEyeAdaptationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitHumanEyeAdaptationTests)
 
     target_compile_features(OrbitColorLutTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitColorLutTests)
@@ -54,5 +68,10 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LuminanceHistogram
         COMMAND OrbitLuminanceHistogramTests
+    )
+
+    add_test(
+        NAME Orbit.HumanEyeAdaptation
+        COMMAND OrbitHumanEyeAdaptationTests
     )
 endif()
