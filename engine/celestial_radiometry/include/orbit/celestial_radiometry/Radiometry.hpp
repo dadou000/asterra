@@ -34,6 +34,15 @@ struct RadiativeState
     f64 luminosityWatts,
     f64 distanceMeters);
 
+[[nodiscard]] f64 CentralPixelSolidAngleSteradians(
+    f64 verticalFieldOfViewRadians,
+    u32 viewportHeightPixels);
+
+[[nodiscard]] f64 ResolvedPixelIrradianceWattsPerSquareMeter(
+    f64 radianceWattsPerSquareMeterSteradian,
+    f64 verticalFieldOfViewRadians,
+    u32 viewportHeightPixels);
+
 struct ExposureSettings
 {
     // Explicit calibration reference. An irradiance equal to this value is
