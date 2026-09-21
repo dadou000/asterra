@@ -1,0 +1,56 @@
+#pragma once
+
+#include <orbit/core/Types.hpp>
+#include <orbit/post_process/LuminanceHistogram.hpp>
+
+namespace orbit::post_process
+{
+struct HumanEyeAdaptationConfig
+{
+    // Photopic state follows a robust mix of the frame median and upper
+    // luminance distribution. Values are in log2 scene-luminance stops.
+    f32 photopicP50Weight{0.78F};
+    f32 photopicP95Weight{0.22F};
+    f32 photopicBrightenSeconds{0.18F};
+    f32 photopicDarkenSeconds{1.25F};
+
+    // Dark adaptation is deliberately separate from photopic exposure.
+    // It accumulates only when the median is below this scene threshold.
+    f32 darkThresholdLog2{-3.0F};
+    f32 darkFullLog2{-9.0F};
+    f32 darkAdaptSeconds{18.0F};
+    f32 darkResetSeconds{0.30F};
+
+    // Retinal/display overload reacts to highlights relative to the current
+    // photopic state. P99 catches large bright regions; peak catches tiny
+    // sources such as the sun or intense emissive pixels.
+    f32 overloadP99StartStops{4.0F};
+    f32 overloadPeakStartStops{7.0F};
+    f32 overloadSoftRangeStops{4.0F};
+    f32 overloadAttackSeconds{0.035F};
+    f32 overloadRecoverySeconds{0.10F};
+};
+
+struct HumanEyeAdaptationState
+{
+    bool initialized{false};
+
+    f32 photopicLog2{0.0F};
+    f32 darkAdaptation{0.0F};
+    f32 overload{0.0F};
+
+    f32 photopicTargetLog2{0.0F};
+    f32 darkTarget{0.0F};
+    f32 overloadTarget{0.0F};
+};
+
+[[nodiscard]] HumanEyeAdaptationState
+UpdateHumanEyeAdaptation(
+    HumanEyeAdaptationState state,
+    const LuminanceHistogramStatistics& statistics,
+    f32 deltaSeconds,
+    const HumanEyeAdaptationConfig& config = {}) noexcept;
+
+void ResetHumanEyeAdaptation(
+    HumanEyeAdaptationState& state) noexcept;
+} // namespace orbit::post_process
