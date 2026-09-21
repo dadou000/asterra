@@ -43,6 +43,18 @@ struct RadiativeState
     f64 verticalFieldOfViewRadians,
     u32 viewportHeightPixels);
 
+struct SceneEncodingSettings
+{
+    // Fixed conversion from physical irradiance to Orbit scene-linear units.
+    // This is a unit/calibration mapping, not view exposure or eye adaptation.
+    f64 referenceIrradianceWattsPerSquareMeter{1361.0};
+    f64 referenceSceneValue{0.18};
+};
+
+[[nodiscard]] f64 EncodeIrradianceSceneLinear(
+    f64 irradianceWattsPerSquareMeter,
+    const SceneEncodingSettings& settings = {});
+
 struct ExposureSettings
 {
     // Explicit calibration reference. An irradiance equal to this value is
