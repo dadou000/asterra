@@ -38,9 +38,9 @@ struct RingVertex
 {
     math::Float3 positionNormalized{};
     math::Float3 colorLinear{};
-    f32 opticalDepth{0.0F};
-    f32 singleScatteringAlbedo{0.0F};
-    f32 anisotropy{0.0F};
+    // x = normal optical depth, y = single-scattering albedo,
+    // z = phase anisotropy.
+    math::Float3 optical{};
 };
 
 struct RingMeshProduct
