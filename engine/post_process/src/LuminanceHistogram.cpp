@@ -71,6 +71,84 @@ namespace
             bins.size() - 1U);
 }
 
+constexpr const char* kOverlayVs = R"(
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+
+VSOutput main(uint vertexId : SV_VertexID)
+{
+    const float2 p[6] =
+    {
+        float2(-1,-1), float2(-1,1), float2(1,-1),
+        float2(1,-1), float2(-1,1), float2(1,1)
+    };
+    const float2 uv[6] =
+    {
+        float2(0,1), float2(0,0), float2(1,1),
+        float2(1,1), float2(0,0), float2(1,0)
+    };
+
+    VSOutput output;
+    output.position = float4(p[vertexId], 0, 1);
+    output.uv = uv[vertexId];
+    return output;
+}
+)";
+
+constexpr const char* kOverlayPs = R"(
+[[vk::binding(0, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_mask;
+[[vk::binding(0, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_maskSampler;
+
+struct Constants
+{
+    float opacity;
+    float3 padding;
+};
+[[vk::push_constant]] Constants g;
+
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+
+float4 main(VSOutput input) : SV_Target0
+{
+    const float4 mask =
+        g_mask.Sample(
+            g_maskSampler,
+            input.uv);
+
+    const float weight =
+        saturate(mask.r);
+    const float normalizedLog =
+        saturate(mask.g);
+
+    const float3 lowColor =
+        float3(0.05, 0.35, 1.0);
+    const float3 highColor =
+        float3(1.0, 0.22, 0.06);
+
+    const float3 color =
+        lerp(
+            lowColor,
+            highColor,
+            normalizedLog);
+
+    return float4(
+        color,
+        saturate(g.opacity) *
+            (0.18 + 0.82 * weight));
+}
+)";
+
 constexpr const char* kResetCs = R"(
 [[vk::binding(0, 0)]]
 RWByteAddressBuffer g_histogram : register(u0);
@@ -594,6 +672,50 @@ LuminanceHistogramRenderer(
             .pushConstantDwords = 4U,
             .shaderResourceBuffers = 2U
         });
+
+    const auto overlayVs =
+        compiler.Compile({
+            .source = kOverlayVs,
+            .entryPoint = "main",
+            .stage = shader::Stage::Vertex,
+            .debug = false
+        });
+
+    const auto overlayPs =
+        compiler.Compile({
+            .source = kOverlayPs,
+            .entryPoint = "main",
+            .stage = shader::Stage::Pixel,
+            .debug = false
+        });
+
+    overlayPipeline_ =
+        device.CreateGraphicsPipeline({
+            .vertexShader = {
+                .data = overlayVs.bytecode.data(),
+                .size = overlayVs.bytecode.size()
+            },
+            .pixelShader = {
+                .data = overlayPs.bytecode.data(),
+                .size = overlayPs.bytecode.size()
+            },
+            .vertexAttributes = {},
+            .vertexStrideBytes = 0U,
+            .pushConstantDwords = 4U,
+            .shaderResourceBuffers = 0U,
+            .sampledTextures = 1U,
+            .topology =
+                rhi::PrimitiveTopology::TriangleList,
+            .fillMode = rhi::FillMode::Solid,
+            .cullMode = rhi::CullMode::None,
+            .blendMode = rhi::BlendMode::Alpha,
+            .depthTest = false,
+            .depthWrite = false,
+            .colorAttachmentFormats = {
+                rhi::TextureFormat::RGBA8_UNorm
+            },
+            .colorAttachmentCount = 1U
+        });
 }
 
 void LuminanceHistogramRenderer::Reset(
@@ -711,4 +833,56 @@ void LuminanceHistogramRenderer::Reduce(
         1U,
         1U);
 }
+
+void LuminanceHistogramRenderer::DrawMeteringOverlay(
+    rhi::CommandList& commands,
+    rhi::Texture& meteringMask,
+    rhi::Texture& targetDisplay,
+    const u32 width,
+    const u32 height,
+    const f32 opacity)
+{
+    if (width == 0U || height == 0U)
+    {
+        return;
+    }
+
+    const std::array<u32, 4> constants{
+        std::bit_cast<u32>(
+            std::clamp(
+                opacity,
+                0.0F,
+                1.0F)),
+        0U,
+        0U,
+        0U
+    };
+
+    commands.SetRenderTarget(
+        targetDisplay);
+    commands.SetViewport({
+        .x = 0.0F,
+        .y = 0.0F,
+        .width = static_cast<f32>(width),
+        .height = static_cast<f32>(height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F
+    });
+    commands.SetScissor({
+        .left = 0,
+        .top = 0,
+        .right = static_cast<i32>(width),
+        .bottom = static_cast<i32>(height)
+    });
+
+    commands.SetGraphicsPipeline(
+        *overlayPipeline_);
+    commands.SetGraphicsConstants(
+        constants);
+    commands.SetGraphicsTexture(
+        0U,
+        meteringMask);
+    commands.Draw(6U);
+}
+
 } // namespace orbit::post_process
