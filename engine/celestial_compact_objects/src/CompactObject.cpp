@@ -159,7 +159,11 @@ BuildCompactObjectPresentation(
             p.shadowScale,
         .photonRingRadiusMeters =
             scales.
-                criticalImpactParameterMeters
+                criticalImpactParameterMeters,
+        .photonRingIntensity =
+            p.photonRingIntensity,
+        .lensingStrength =
+            p.lensingStrength
     };
 }
 
