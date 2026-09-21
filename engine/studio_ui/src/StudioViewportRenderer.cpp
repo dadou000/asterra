@@ -9670,8 +9670,18 @@ StudioViewportRenderer::Compose(
             &view->DisplayColor();
         auto* colorLut =
             colorLut_.get();
-        const auto displayResolveSettings =
+        auto displayResolveSettings =
             displayResolveSettings_;
+
+        // M25: eye adaptation controls presentation exposure only. The HDR
+        // scene target remains physically untouched for GI, histogram,
+        // bloom/glare extraction and future HDR output.
+        if (histogram.diagnostics.eyeState.initialized)
+        {
+            displayResolveSettings.exposureScale *=
+                histogram.diagnostics.eyeState.exposureScale;
+        }
+
         auto colorLutSettings =
             colorLutSettings_;
 
