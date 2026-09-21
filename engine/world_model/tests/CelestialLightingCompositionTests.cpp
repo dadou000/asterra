@@ -142,7 +142,7 @@ int main()
                 2000.0, 0.0, 0.0});
 
         orbit::world_model::UniverseComposition universe;
-        universe.Rebuild(objects);
+        (void)universe.Rebuild(objects);
 
         const auto starId =
             universe.BodyForObject(star);
