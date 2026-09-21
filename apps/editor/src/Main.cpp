@@ -7140,7 +7140,9 @@ int main(
 
             const auto lightingPlan =
                 lightingScheduler.BuildPlan(
-                    {},
+                    {
+                        .radianceCacheUpdates = 64U
+                    },
                     device.Capabilities().rayQuery);
 
             const auto renderedStudioViews =
