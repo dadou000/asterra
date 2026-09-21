@@ -425,9 +425,50 @@ void RegisterCelestialCapabilitySchemas(
              .advanced = true}
         }
     });
-    RegisterCapability(
-        schemas, kOceanCapabilityType,
-        "Ocean", "Surface Authority", true);
+    schemas.RegisterType({
+        .id = kOceanCapabilityType,
+        .displayName = "Ocean",
+        .category = "Celestial/Capability",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Surface Authority"),
+            SourceObjectProperty(),
+            {.id = kOceanRefractiveIndex,
+             .name = "Refractive Index",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 1.333,
+             .range = {.minimum = 1.0, .maximum = 2.5}},
+            {.id = kOceanOrbitalRoughness,
+             .name = "Orbital Roughness",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 0.12,
+             .range = {.minimum = 0.01, .maximum = 1.0}},
+            {.id = kOceanAbsorptionPerMeter,
+             .name = "Absorption",
+             .kind = schema::PropertyKind::Vector3,
+             .unit = "1/m",
+             .defaultValue = math::Double3{
+                 0.18, 0.055, 0.025},
+             .advanced = true},
+            {.id = kOceanDeepWaterColor,
+             .name = "Deep Water Color",
+             .kind = schema::PropertyKind::Vector3,
+             .defaultValue = math::Double3{
+                 0.008, 0.035, 0.075}},
+            {.id = kOceanGlintStrength,
+             .name = "Sun Glint Strength",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 1.0,
+             .range = {.minimum = 0.0, .maximum = 8.0}},
+            {.id = kOceanMinimumDepthForDeepColorMeters,
+             .name = "Deep Color Depth",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 40.0,
+             .range = {.minimum = 0.001},
+             .advanced = true}
+        }
+    });
     schemas.RegisterType({
         .id = kCloudLayerCapabilityType,
         .displayName = "Cloud Layer",
