@@ -11,6 +11,16 @@
 #include <cmath>
 #include <filesystem>
 #include <string>
+#include <iostream>
+
+namespace
+{
+int FailCode(const int code)
+{
+    std::cerr << "lighting-composition failure code " << code << '\\n';
+    return code;
+}
+} // namespace
 
 int main()
 {
@@ -158,7 +168,7 @@ int main()
             !planetId.has_value() ||
             !observerId.has_value())
         {
-            return 1;
+            return FailCode(1);
         }
 
         orbit::world_model::CelestialLightingService
@@ -177,7 +187,7 @@ int main()
             clear->visibleFraction != 1.0 ||
             clear->irradianceWattsPerSquareMeter <= 0.0)
         {
-            return 2;
+            return FailCode(2);
         }
 
         const auto eclipsed =
@@ -194,7 +204,7 @@ int main()
                 clear->irradianceWattsPerSquareMeter) ||
             eclipsed->contributingOccluders.size() != 1U)
         {
-            return 3;
+            return FailCode(3);
         }
 
         const auto reflected =
@@ -211,12 +221,12 @@ int main()
             reflected->sourceVisibleFractionAtReflector !=
                 eclipsed->visibleFraction)
         {
-            return 4;
+            return FailCode(4);
         }
 
         world.Checkpoint();
     }
 
     std::filesystem::remove_all(root);
-    return 0;
+    return FailCode(0);
 }
