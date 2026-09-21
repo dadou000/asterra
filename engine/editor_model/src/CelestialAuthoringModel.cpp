@@ -301,6 +301,32 @@ scene::ObjectId CelestialAuthoringModel::AddCapability(
     return created;
 }
 
+scene::ObjectId
+CelestialAuthoringModel::AddRingBand(
+    const std::string_view name)
+{
+    const auto selected =
+        PrimarySelection();
+
+    if (!selected.has_value() ||
+        selected->type !=
+            world_model::
+                kRingSystemCapabilityType)
+    {
+        throw std::runtime_error(
+            "Select a Ring System before adding a Ring Band.");
+    }
+
+    const auto created =
+        commands_.CreateObject(
+            world_model::kRingBandType,
+            name,
+            selected->id);
+
+    SelectOnly(created);
+    return created;
+}
+
 void CelestialAuthoringModel::
 RemoveSelectedCapability()
 {
@@ -360,6 +386,32 @@ RemoveSelectedCapability()
         throw;
     }
 
+    selection_.Clear();
+}
+
+void CelestialAuthoringModel::
+RemoveSelectedRingBand()
+{
+    const auto selected =
+        PrimarySelection();
+
+    if (!selected.has_value() ||
+        selected->type !=
+            world_model::kRingBandType)
+    {
+        throw std::runtime_error(
+            "Select a Ring Band to remove.");
+    }
+
+    if (!objects_.Children(
+             selected->id).empty())
+    {
+        throw std::runtime_error(
+            "Ring Band has child records; remove those first.");
+    }
+
+    commands_.DeleteObject(
+        selected->id);
     selection_.Clear();
 }
 
@@ -488,6 +540,40 @@ CelestialAuthoringModel::Validate() const
                             std::string("Body has multiple ") +
                             std::string(descriptor.label) +
                             " capabilities.",
+                        .object = object.id
+                    });
+                }
+            }
+        }
+
+        if (object.type ==
+            world_model::kRingBandType)
+        {
+            if (!object.parent.has_value())
+            {
+                result.push_back({
+                    .severity =
+                        CelestialDiagnosticSeverity::Error,
+                    .message =
+                        "Ring Band has no owning Ring System.",
+                    .object = object.id
+                });
+            }
+            else
+            {
+                const auto parent =
+                    objects_.Find(*object.parent);
+
+                if (!parent.has_value() ||
+                    parent->type !=
+                        world_model::
+                            kRingSystemCapabilityType)
+                {
+                    result.push_back({
+                        .severity =
+                            CelestialDiagnosticSeverity::Error,
+                        .message =
+                            "Ring Band must be parented directly under Ring System.",
                         .object = object.id
                     });
                 }
