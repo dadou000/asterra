@@ -81,6 +81,39 @@ ResolvedLocalLight ResolveLocalLight(
     };
 }
 
+GpuLocalLight EncodeGpuLocalLight(
+    const ResolvedLocalLight& light) noexcept
+{
+    return {
+        .positionType = {
+            light.positionCameraRelativeMeters.x,
+            light.positionCameraRelativeMeters.y,
+            light.positionCameraRelativeMeters.z,
+            light.type == LocalLightType::Spot
+                ? 1.0F
+                : 0.0F
+        },
+        .directionRange = {
+            light.direction.x,
+            light.direction.y,
+            light.direction.z,
+            light.rangeMeters
+        },
+        .colorFlux = {
+            light.colorLinear.x,
+            light.colorLinear.y,
+            light.colorLinear.z,
+            light.luminousFluxLumens
+        },
+        .cone = {
+            light.innerConeCosine,
+            light.outerConeCosine,
+            0.0F,
+            0.0F
+        }
+    };
+}
+
 TiledLightGrid BuildTiledLightGrid(
     const std::span<const LocalLight> lights,
     const LightingView& view,
