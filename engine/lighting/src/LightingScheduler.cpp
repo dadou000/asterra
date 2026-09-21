@@ -110,6 +110,17 @@ f32 LightingBudget::SectionMs(
     return 0.0F;
 }
 
+bool LightingGpuTimings::HasSection(
+    const LightingGpuSection section) const noexcept
+{
+    const u32 index =
+        static_cast<u32>(section);
+
+    return
+        index < valid.size() &&
+        valid[index];
+}
+
 f32 LightingGpuTimings::SectionMs(
     const LightingGpuSection section) const noexcept
 {
@@ -117,7 +128,8 @@ f32 LightingGpuTimings::SectionMs(
         static_cast<u32>(section);
 
     return
-        index < milliseconds.size()
+        index < milliseconds.size() &&
+                valid[index]
             ? ClampFiniteNonNegative(
                   milliseconds[index])
             : 0.0F;
@@ -127,12 +139,18 @@ f32 LightingGpuTimings::TotalMs() const noexcept
 {
     f32 total = 0.0F;
 
-    for (const f32 value :
-         milliseconds)
+    for (u32 index = 0U;
+         index < milliseconds.size();
+         ++index)
     {
+        if (!valid[index])
+        {
+            continue;
+        }
+
         total +=
             ClampFiniteNonNegative(
-                value);
+                milliseconds[index]);
     }
 
     return total;
@@ -197,9 +215,10 @@ f32 LightingScheduler::ScaleFor(
     const f32 minimumScale,
     const f32 previousScale) const noexcept
 {
-    if (!hasTimings_)
+    if (!hasTimings_ ||
+        !smoothed_.HasSection(section))
     {
-        return 1.0F;
+        return previousScale;
     }
 
     const f32 budget =
@@ -245,27 +264,36 @@ void LightingScheduler::RecordGpuTimings(
     constexpr f32 kTimingEwmaAlpha =
         0.20F;
 
-    if (!hasTimings_)
+    for (u32 index = 0U;
+         index < kLightingGpuSectionCount;
+         ++index)
     {
-        smoothed_ = timings;
-        hasTimings_ = true;
-    }
-    else
-    {
-        for (u32 index = 0U;
-             index < kLightingGpuSectionCount;
-             ++index)
+        if (!timings.valid[index])
         {
-            const f32 sample =
-                ClampFiniteNonNegative(
-                    timings.milliseconds[index]);
+            continue;
+        }
 
+        const f32 sample =
+            ClampFiniteNonNegative(
+                timings.milliseconds[index]);
+
+        if (!smoothed_.valid[index])
+        {
+            smoothed_.milliseconds[index] =
+                sample;
+            smoothed_.valid[index] =
+                true;
+        }
+        else
+        {
             smoothed_.milliseconds[index] =
                 MoveToward(
                     smoothed_.milliseconds[index],
                     sample,
                     kTimingEwmaAlpha);
         }
+
+        hasTimings_ = true;
     }
 
     visibilityScale_ =
@@ -359,6 +387,7 @@ LightingTimestampRecorder::LightingTimestampRecorder(
     }
 
     pools_.reserve(framesInFlight);
+    frameStates_.resize(framesInFlight);
 
     for (u32 index = 0U;
          index < framesInFlight;
@@ -396,6 +425,8 @@ void LightingTimestampRecorder::BeginFrame(
         0U,
         kLightingGpuSectionCount *
             2U);
+
+    frameStates_[frameSlot] = {};
 }
 
 void LightingTimestampRecorder::BeginSection(
@@ -409,6 +440,20 @@ void LightingTimestampRecorder::BeginSection(
         throw std::out_of_range(
             "Lighting timestamp section/frame slot is invalid.");
     }
+
+    const u32 sectionIndex =
+        static_cast<u32>(section);
+
+    // One timing interval per named section per frame slot. Multiple
+    // viewports may execute the same logical pass; the first interval is the
+    // stable scheduler sample instead of illegally rewriting a query slot.
+    if (frameStates_[frameSlot].begun[sectionIndex])
+    {
+        return;
+    }
+
+    frameStates_[frameSlot].begun[sectionIndex] =
+        true;
 
     commands.WriteTimestamp(
         *pools_[frameSlot],
@@ -428,6 +473,18 @@ void LightingTimestampRecorder::EndSection(
         throw std::out_of_range(
             "Lighting timestamp section/frame slot is invalid.");
     }
+
+    const u32 sectionIndex =
+        static_cast<u32>(section);
+
+    if (!frameStates_[frameSlot].begun[sectionIndex] ||
+        frameStates_[frameSlot].ended[sectionIndex])
+    {
+        return;
+    }
+
+    frameStates_[frameSlot].ended[sectionIndex] =
+        true;
 
     commands.WriteTimestamp(
         *pools_[frameSlot],
@@ -455,7 +512,8 @@ LightingTimestampRecorder::ResolveCompletedFrame(
     {
         std::array<u64, 2U> ticks{};
 
-        if (!pools_[frameSlot]->TryGetResults(
+        if (!frameStates_[frameSlot].ended[section] ||
+            !pools_[frameSlot]->TryGetResults(
                 section * 2U,
                 2U,
                 ticks.data()))
@@ -464,6 +522,7 @@ LightingTimestampRecorder::ResolveCompletedFrame(
         }
 
         anyResolved = true;
+        result.valid[section] = true;
 
         const u64 begin =
             ticks[0U];
