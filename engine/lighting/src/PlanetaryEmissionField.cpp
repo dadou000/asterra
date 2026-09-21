@@ -345,4 +345,112 @@ TotalPlanetaryIntegratedRadianceArea(
 
     return result;
 }
+
+math::Float3
+EvaluatePlanetaryEmissionRadiance(
+    const PlanetaryEmissionField& field,
+    const u32 level,
+    const math::Double3& directionFromBodyCenter,
+    const f64 referenceRadiusMeters) noexcept
+{
+    if (level >= field.levels.size() ||
+        !std::isfinite(referenceRadiusMeters) ||
+        referenceRadiusMeters <= 0.0)
+    {
+        return {};
+    }
+
+    const f64 length =
+        math::Length(
+            directionFromBodyCenter);
+
+    if (!std::isfinite(length) ||
+        length <= 1.0e-12)
+    {
+        return {};
+    }
+
+    const auto direction =
+        directionFromBodyCenter /
+        length;
+
+    const auto& map =
+        field.levels[level];
+
+    const f64 longitude =
+        std::atan2(
+            direction.z,
+            direction.x);
+
+    const f64 latitude =
+        std::asin(
+            std::clamp(
+                direction.y,
+                -1.0,
+                1.0));
+
+    const u32 x =
+        WrapLongitude(
+            longitude,
+            map.width);
+    const u32 y =
+        LatitudeIndex(
+            latitude,
+            map.height);
+
+    const auto& cell =
+        map.cells[
+            CellIndex(
+                x,
+                y,
+                map.width)];
+
+    constexpr f64 kPi =
+        3.14159265358979323846;
+    constexpr f64 kTwoPi =
+        6.28318530717958647692;
+
+    const f64 latitudeStep =
+        kPi /
+        static_cast<f64>(
+            map.height);
+    const f64 longitudeStep =
+        kTwoPi /
+        static_cast<f64>(
+            map.width);
+
+    const f64 latitude0 =
+        -0.5 * kPi +
+        static_cast<f64>(y) *
+            latitudeStep;
+
+    const f64 latitude1 =
+        std::min(
+            latitude0 +
+                latitudeStep,
+            0.5 * kPi);
+
+    const f64 area =
+        referenceRadiusMeters *
+        referenceRadiusMeters *
+        longitudeStep *
+        std::max(
+            std::sin(latitude1) -
+            std::sin(latitude0),
+            1.0e-12);
+
+    const f32 inverseArea =
+        static_cast<f32>(
+            1.0 / area);
+
+    return {
+        cell.integratedRadianceArea.x *
+            inverseArea,
+        cell.integratedRadianceArea.y *
+            inverseArea,
+        cell.integratedRadianceArea.z *
+            inverseArea
+    };
+}
+
 } // namespace orbit::lighting
