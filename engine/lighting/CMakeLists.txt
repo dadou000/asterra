@@ -140,6 +140,10 @@ if(BUILD_TESTING)
         tests/PlanetaryEmissionFieldTests.cpp
     )
 
+    add_executable(OrbitLightingPlanetaryEmissionAppearanceTests
+        tests/PlanetaryEmissionAppearanceTests.cpp
+    )
+
     add_executable(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
         tests/RuntimeMaterialAssignmentIntegrationTests.cpp
     )
@@ -325,6 +329,14 @@ if(BUILD_TESTING)
         OrbitLightingPlanetaryEmissionFieldTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingPlanetaryEmissionFieldTests)
 
+    target_link_libraries(OrbitLightingPlanetaryEmissionAppearanceTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingPlanetaryEmissionAppearanceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingPlanetaryEmissionAppearanceTests)
+
     target_link_libraries(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
         PRIVATE
             Orbit::Commands
@@ -429,6 +441,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingPlanetaryEmissionField
         COMMAND OrbitLightingPlanetaryEmissionFieldTests
+    )
+
+    add_test(
+        NAME Orbit.LightingPlanetaryEmissionAppearance
+        COMMAND OrbitLightingPlanetaryEmissionAppearanceTests
     )
 
     add_test(
