@@ -1843,10 +1843,21 @@ void FarBodyRenderer::DrawSurfaceData(
         bits(draw.camera.up.z),
         0U,
 
-        bits(draw.appearance.albedoLinear.x),
-        bits(draw.appearance.albedoLinear.y),
-        bits(draw.appearance.albedoLinear.z),
-        bits(draw.appearance.roughness),
+        bits(draw.stellar
+            ? draw.stellarColorLinear.x
+            : draw.appearance.albedoLinear.x),
+        bits(draw.stellar
+            ? draw.stellarColorLinear.y
+            : draw.appearance.albedoLinear.y),
+        bits(draw.stellar
+            ? draw.stellarColorLinear.z
+            : draw.appearance.albedoLinear.z),
+        bits(draw.stellar
+            ? std::clamp(
+                  draw.stellarLimbDarkening,
+                  0.0F,
+                  1.0F)
+            : draw.appearance.roughness),
 
         bits(draw.appearance.oceanFraction),
         bits(draw.appearance.iceFraction),
