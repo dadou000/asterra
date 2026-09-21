@@ -339,6 +339,18 @@ RenderView::Camera() const noexcept
     return camera_;
 }
 
+void RenderView::SetSurfaceDebugMode(
+    const lighting::SurfaceDebugMode mode) noexcept
+{
+    surfaceDebugMode_ = mode;
+}
+
+lighting::SurfaceDebugMode
+RenderView::SurfaceDebugMode() const noexcept
+{
+    return surfaceDebugMode_;
+}
+
 rhi::Texture& RenderView::Color() noexcept
 {
     return *color_;
