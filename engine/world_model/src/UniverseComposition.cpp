@@ -6,6 +6,7 @@
 #include <orbit/celestial_orbits/OrbitState.hpp>
 #include <orbit/celestial_rotation/OrientationState.hpp>
 
+#include <orbit/world_model/CelestialCompactObjectBinding.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cmath>
@@ -73,6 +74,30 @@ template <typename Value>
     const scene::ObjectStore& objects,
     const scene::ObjectId object)
 {
+    // Compact-object bodies do not require or imply a solid surface.
+    // BodyShape remains the registry's conservative spatial/reference
+    // envelope, so use the optical shadow scale instead of inventing a
+    // physical body radius.
+    if (const auto compact =
+            ResolveCompactObject(
+                objects,
+                object);
+        compact.has_value())
+    {
+        const auto presentation =
+            celestial_compact_objects::
+                BuildCompactObjectPresentation(
+                    compact->parameters);
+
+        return universe::SphereShape{
+            .radiusMeters =
+                std::max(
+                    presentation.
+                        shadowRadiusMeters,
+                    1.0)
+        };
+    }
+
     const f64 equatorialRadius =
         PropertyOr<f64>(
             objects,
