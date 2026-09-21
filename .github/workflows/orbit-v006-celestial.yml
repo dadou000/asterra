@@ -1,0 +1,98 @@
+name: Orbit V0.0.6 Celestial
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/orbit-v006-celestial.yml'
+      - 'tests/V006CelestialValidationTests.cpp'
+      - 'engine/celestial_*/**'
+      - 'engine/world_model/**'
+      - 'engine/studio_session/**'
+      - 'engine/studio_ui/**'
+      - 'engine/lighting/**'
+      - 'docs/V0.0.6_*'
+  pull_request:
+    branches: [orbit]
+  workflow_dispatch:
+
+concurrency:
+  group: orbit-v006-celestial-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  celestial-contracts:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=1.4.350 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE"
+          }
+
+          $sdk = "C:\VulkanSDK\1.4.350.0"
+          if (-not (Test-Path "$sdk\Include\vulkan\vulkan.h") -or
+              -not (Test-Path "$sdk\Lib\vulkan-1.lib")) {
+            throw "Vulkan SDK was not installed at the expected path: $sdk"
+          }
+
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        run: cmake -S . -B build-v006 -DORBIT_WARNINGS_AS_ERRORS=ON
+
+      - name: Build V0.0.6 celestial contracts
+        run: >
+          cmake --build build-v006 --config Release --parallel --target
+          OrbitV006CelestialValidationTests
+          OrbitCelestialRepresentationTests
+          OrbitCelestialAtmosphereTests
+          OrbitCelestialCloudTests
+          OrbitCelestialOceanTests
+          OrbitCelestialRingsTests
+          OrbitCelestialStellarTests
+          OrbitCelestialGiantsTests
+          OrbitCelestialSmallBodiesTests
+          OrbitCelestialMagnetosphereTests
+          OrbitCelestialCompactObjectTests
+          OrbitCelestialSchedulerTests
+          OrbitCelestialLightingTests
+          OrbitCelestialRadiometryTests
+          OrbitCelestialFarRenderTests
+          OrbitCelestialCapabilitySchemasTests
+          OrbitPropertyProvenanceTests
+          OrbitPhysicalPropertySolverTests
+          OrbitReferenceNodeCompositionTests
+          OrbitAnalyticOrbitCompositionTests
+          OrbitRotationCompositionTests
+          OrbitImportedEphemerisCompositionTests
+          OrbitNBodyPromotionCompositionTests
+          OrbitGravityCompositionTests
+          OrbitCelestialLightingCompositionTests
+          OrbitCelestialAtmosphereBindingTests
+          OrbitCelestialCloudCompositionTests
+          OrbitCelestialOceanBindingTests
+          OrbitCelestialRingBindingTests
+          OrbitCelestialStellarBindingTests
+          OrbitCelestialGiantBindingTests
+          OrbitCelestialSmallBodyBindingTests
+          OrbitCelestialMagnetosphereBindingTests
+          OrbitCelestialCompactObjectBindingTests
+          OrbitCelestialCompactCompositionTests
+          OrbitStudioCelestialRoundTripVerifierTests
+
+      - name: Run deterministic celestial suite
+        shell: pwsh
+        run: ctest --test-dir build-v006 -C Release -R "Orbit\.(V006CelestialValidation|Celestial|PropertyProvenance|PhysicalPropertySolver|ReferenceNodeComposition|AnalyticOrbitComposition|RotationComposition|ImportedEphemerisComposition|NBodyPromotionComposition|GravityComposition|StudioCelestialRoundTripVerifier)" --output-on-failure
+
+      - name: Record real-device requirement
+        shell: pwsh
+        run: |
+          Write-Host "Headless celestial contracts passed."
+          Write-Host "Real-device rendering remains covered by the manual 'Orbit Studio Real Device Smoke' workflow on the orbit-vulkan runner."
