@@ -12,6 +12,7 @@ add_library(OrbitLighting STATIC
     src/HardwareRayQueryVisibility.cpp
     src/LightingScheduler.cpp
     src/RadianceClipmap.cpp
+    src/RadianceClipmapResidency.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -79,6 +80,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingRadianceClipmapTests
         tests/RadianceClipmapTests.cpp
+    )
+
+    add_executable(OrbitLightingRadianceClipmapResidencyTests
+        tests/RadianceClipmapResidencyTests.cpp
     )
 
     target_link_libraries(OrbitLightingSurfaceDataTests
@@ -174,6 +179,14 @@ if(BUILD_TESTING)
         OrbitLightingRadianceClipmapTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingRadianceClipmapTests)
 
+    target_link_libraries(OrbitLightingRadianceClipmapResidencyTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingRadianceClipmapResidencyTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingRadianceClipmapResidencyTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -212,6 +225,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingRadianceClipmap
         COMMAND OrbitLightingRadianceClipmapTests
+    )
+
+    add_test(
+        NAME Orbit.LightingRadianceClipmapResidency
+        COMMAND OrbitLightingRadianceClipmapResidencyTests
     )
 
     add_test(
