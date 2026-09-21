@@ -12,7 +12,9 @@
 #include <array>
 #include <filesystem>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <variant>
 
 int main()
 {
@@ -81,7 +83,8 @@ int main()
         orbit::editor_model::SystemViewModel model(
             objects,
             universe,
-            selection);
+            selection,
+            commands);
 
         const auto systems =
             model.Systems();
@@ -131,6 +134,134 @@ int main()
             selectedSystem->id != system)
         {
             return 4;
+        }
+
+        const auto target =
+            model.AnalyticOrbitTarget(body);
+
+        if (!target.has_value())
+        {
+            return 5;
+        }
+
+        auto edited =
+            target->values;
+        edited.semiMajorAxisMeters =
+            20'000.0;
+        edited.eccentricity =
+            0.25;
+        edited.periapsisDistanceMeters =
+            15'000.0;
+        edited.inclinationDegrees =
+            12.5;
+
+        model.ApplyAnalyticOrbitEdit(
+            target->capability,
+            edited);
+
+        const auto editedA =
+            objects.GetProperty(
+                target->capability,
+                orbit::world_model::
+                    kOrbitSemiMajorAxisMeters);
+        const auto editedE =
+            objects.GetProperty(
+                target->capability,
+                orbit::world_model::
+                    kOrbitEccentricity);
+
+        if (!editedA.has_value() ||
+            !editedE.has_value() ||
+            std::get<double>(*editedA) !=
+                20'000.0 ||
+            std::get<double>(*editedE) !=
+                0.25)
+        {
+            return 6;
+        }
+
+        commands.Undo();
+
+        const auto undoneA =
+            objects.GetProperty(
+                target->capability,
+                orbit::world_model::
+                    kOrbitSemiMajorAxisMeters);
+        const auto undoneE =
+            objects.GetProperty(
+                target->capability,
+                orbit::world_model::
+                    kOrbitEccentricity);
+
+        if (!undoneA.has_value() ||
+            !undoneE.has_value() ||
+            std::get<double>(*undoneA) !=
+                10'000.0 ||
+            std::get<double>(*undoneE) !=
+                0.0)
+        {
+            return 7;
+        }
+
+        commands.Redo();
+
+        const auto redoneA =
+            objects.GetProperty(
+                target->capability,
+                orbit::world_model::
+                    kOrbitSemiMajorAxisMeters);
+
+        if (!redoneA.has_value() ||
+            std::get<double>(*redoneA) !=
+                20'000.0)
+        {
+            return 8;
+        }
+
+        bool invalidRejected = false;
+
+        try
+        {
+            auto invalid = edited;
+            invalid.eccentricity = -1.0;
+            model.ApplyAnalyticOrbitEdit(
+                target->capability,
+                invalid);
+        }
+        catch (const std::invalid_argument&)
+        {
+            invalidRejected = true;
+        }
+
+        if (!invalidRejected)
+        {
+            return 9;
+        }
+
+        const auto reference =
+            commands.CreateObject(
+                orbit::world_model::
+                    kCelestialReferenceNodeType,
+                "Barycenter",
+                system);
+
+        model.SetReferenceNodePosition(
+            reference,
+            {1.0, 2.0, 3.0});
+
+        const auto referencePosition =
+            objects.GetProperty(
+                reference,
+                orbit::world_model::
+                    kReferenceNodePositionMeters);
+
+        if (!referencePosition.has_value() ||
+            std::get<orbit::math::Double3>(
+                *referencePosition) !=
+                orbit::math::Double3{
+                    1.0, 2.0, 3.0})
+        {
+            return 10;
         }
 
         world.Checkpoint();
