@@ -6331,13 +6331,11 @@ StudioViewportRenderer::Compose(
                 activeAuroraMesh;
             const auto auroraCamera =
                 view->Camera();
+            // Mesh emission is already authored in scene-linear HDR and
+            // includes auroralIntensity. Keep draw scaling neutral so intensity
+            // is not applied twice.
             const f32 intensityScale =
-                static_cast<f32>(
-                    std::max(
-                        resolvedMagnetosphereForView->
-                            parameters.
-                            auroralIntensity,
-                        0.0));
+                1.0F;
 
             graph.AddPass(
                 prefix +
