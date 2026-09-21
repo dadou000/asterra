@@ -292,6 +292,9 @@ CelestialRecipeService::CreateStarInternal(
         !std::isfinite(recipe.radiusMeters) ||
         recipe.radiusMeters <= 0.0 ||
         !std::isfinite(
+            recipe.effectiveTemperatureKelvin) ||
+        recipe.effectiveTemperatureKelvin <= 0.0 ||
+        !std::isfinite(
             recipe.rotationPeriodSeconds) ||
         recipe.rotationPeriodSeconds <= 0.0)
     {
@@ -326,21 +329,43 @@ CelestialRecipeService::CreateStarInternal(
         random.Range(0.0, 12.0),
         random.Range(0.0, 360.0));
 
-    static_cast<void>(
+    const auto emitter =
         AddCapability(
             commands_,
             body,
             world_model::kRadiativeEmitterCapabilityType,
             "Radiative Emitter",
-            "Blackbody"));
+            "Blackbody");
 
-    static_cast<void>(
+    commands_.SetProperty(
+        emitter,
+        world_model::kEmitterEffectiveTemperatureKelvin,
+        recipe.effectiveTemperatureKelvin);
+    commands_.SetProperty(
+        emitter,
+        world_model::kEmitterEmissivity,
+        1.0);
+    commands_.SetProperty(
+        emitter,
+        world_model::kEmitterDeriveLuminosity,
+        true);
+
+    const auto photosphere =
         AddCapability(
             commands_,
             body,
             world_model::kPhotosphereCapabilityType,
             "Photosphere",
-            "Procedural"));
+            "Blackbody");
+
+    commands_.SetProperty(
+        photosphere,
+        world_model::kPhotosphereRadiusMeters,
+        recipe.radiusMeters);
+    commands_.SetProperty(
+        photosphere,
+        world_model::kPhotosphereTemperatureKelvin,
+        recipe.effectiveTemperatureKelvin);
 
     return body;
 }
@@ -687,6 +712,11 @@ CelestialRecipeService::CreateSeededSystem(
             .radiusMeters =
                 6.957e8 *
                 starRadiusScale,
+            .effectiveTemperatureKelvin =
+                5772.0 *
+                std::pow(
+                    starMassScale,
+                    0.50),
             .rotationPeriodSeconds =
                 random.Range(
                     12.0,
