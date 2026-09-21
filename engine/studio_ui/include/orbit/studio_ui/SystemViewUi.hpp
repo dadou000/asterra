@@ -22,6 +22,14 @@ public:
     };
 
 private:
+    enum class GizmoDragKind : u8
+    {
+        None = 0,
+        Periapsis = 1,
+        Apoapsis = 2,
+        ReferencePosition = 3
+    };
+
     void Draw(editor_ui::PanelContext& context);
 
     studio_session::StudioSession& session_;
@@ -29,6 +37,13 @@ private:
     i64 editedTimeMicroseconds_{0};
     f64 editedRate_{1.0};
     bool timeFieldsInitialized_{false};
+    std::optional<scene::ObjectId> focusedObject_;
+    f64 viewZoom_{1.0};
+    GizmoDragKind activeGizmo_{GizmoDragKind::None};
+    std::optional<editor_model::OrbitManipulationTarget> orbitDraft_;
+    std::optional<math::Double3> referenceDraft_;
+    f64 dragBasePhysicalRadius_{0.0};
+    f64 dragBaseScreenRadiusPixels_{0.0};
     std::string status_;
 };
 } // namespace orbit::studio_ui
