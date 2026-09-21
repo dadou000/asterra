@@ -637,6 +637,7 @@ struct Constants
     float4 cameraAndAspect;
     float4 forwardAndTanHalfFov;
     float4 upAndScale;
+    float4 transition;
 };
 
 [[vk::push_constant]] Constants g_pc;
@@ -721,7 +722,7 @@ float4 main(VSOutput input) : SV_Target0
 
     return float4(
         color / (1.0 + color),
-        1.0);
+        saturate(g_pc.transition.x));
 }
 )";
 } // namespace
@@ -806,10 +807,11 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         },
         .vertexAttributes = attributes,
         .vertexStrideBytes = sizeof(GpuMacroGlobeVertex),
-        .pushConstantDwords = 12,
+        .pushConstantDwords = 16,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::Back,
+        .blendMode = rhi::BlendMode::Alpha,
         .depthTest = false,
         .depthWrite = false
     });
@@ -821,7 +823,8 @@ void MacroGlobeRenderer::Draw(
     const u32 width,
     const u32 height,
     GpuMacroGlobeProduct& globe,
-    const render_view::CameraState& camera)
+    const render_view::CameraState& camera,
+    const f32 opacity)
 {
     if (width == 0U || height == 0U)
     {
@@ -839,7 +842,7 @@ void MacroGlobeRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 12> constants{
+    const std::array<u32, 16> constants{
         bits(static_cast<f32>(camera.localPositionMeters.x / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.y / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.z / radius)),
@@ -853,7 +856,12 @@ void MacroGlobeRenderer::Draw(
         bits(camera.up.x),
         bits(camera.up.y),
         bits(camera.up.z),
-        bits(1.0F)
+        bits(1.0F),
+
+        bits(std::clamp(opacity, 0.0F, 1.0F)),
+        0U,
+        0U,
+        0U
     };
 
     commands.SetRenderTarget(target);
