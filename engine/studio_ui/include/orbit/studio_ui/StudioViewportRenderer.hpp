@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
+#include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
@@ -38,6 +39,22 @@ struct StudioMacroGlobeDiagnostics
     u64 geometryFingerprint{0};
     u64 appearanceFingerprint{0};
     u32 appearanceTexels{0};
+};
+
+struct StudioSurfaceGlobeTransitionDiagnostics
+{
+    universe::BodyId body{};
+    celestial_representation::Representation representation{
+        celestial_representation::Representation::ProductionSurface};
+    celestial_representation::Representation lowerFidelityNeighbor{
+        celestial_representation::Representation::MacroDisplacedGlobe};
+    f64 productionSurfaceWeight{1.0};
+    f64 macroGlobeWeight{0.0};
+    f64 projectedRadiusPixels{0.0};
+    f64 productionDetailErrorPixels{0.0};
+    f64 macroDisplacementErrorPixels{0.0};
+    bool hysteresisHeld{false};
+    bool overlapping{false};
 };
 
 enum class StudioViewportPresentation : u8
@@ -103,6 +120,11 @@ public:
     MacroGlobeDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioSurfaceGlobeTransitionDiagnostics>
+    SurfaceGlobeTransitionDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -114,6 +136,14 @@ public:
         u32 frameIndex = 0U);
 
 private:
+    [[nodiscard]] celestial_globe::GpuMacroGlobeProduct*
+    EnsureMacroGlobePresentation(
+        std::string_view viewportId,
+        studio_session::StudioSession& session,
+        universe::BodyId body,
+        const universe::BodyShape& shape,
+        const terrain::TerrainSource& terrainSource);
+
     struct DebugPresentation
     {
         std::unique_ptr<terrain_debug::TerrainDebugTexture> texture;
@@ -159,12 +189,20 @@ private:
     celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
+    celestial_representation::RepresentationTracker
+        representationTracker_;
 
     std::map<
         std::string,
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioSurfaceGlobeTransitionDiagnostics,
+        std::less<>>
+        transitionDiagnostics_;
 
     std::map<
         std::string,
