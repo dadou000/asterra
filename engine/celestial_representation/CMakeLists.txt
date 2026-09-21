@@ -1,5 +1,6 @@
 add_library(OrbitCelestialRepresentation STATIC
     src/RepresentationResolver.cpp
+    src/RepresentationTracker.cpp
 )
 
 add_library(
