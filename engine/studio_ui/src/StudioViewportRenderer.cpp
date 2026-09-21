@@ -1706,6 +1706,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       finalGatherRenderer_(device, compiler),
       radianceCacheSampler_(device, compiler),
       hybridReflectionRenderer_(device, compiler),
+      exactReflectionQueryRenderer_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
