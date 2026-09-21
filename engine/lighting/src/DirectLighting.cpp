@@ -70,6 +70,8 @@ struct Constants
 {
     float4 lightDirectionAndScale;
     float4 lightColorAndAmbient;
+    float4 cameraForwardAndAspect;
+    float4 cameraUpAndTanHalfFov;
 };
 [[vk::push_constant]] Constants g;
 
@@ -144,11 +146,34 @@ float4 main(VSOutput input) : SV_Target0
     const float ambient =
         max(g.lightColorAndAmbient.w, 0.0);
 
-    // Until M04 depth reconstruction is consumed here, use the directional
-    // light as the half-vector reference. This still yields one shared BRDF
-    // and removes renderer-local suns; M05 local-light/view terms refine it.
+    const float3 cameraForward =
+        normalize(g.cameraForwardAndAspect.xyz);
+    const float3 requestedUp =
+        normalize(g.cameraUpAndTanHalfFov.xyz);
+    const float3 cameraRight =
+        normalize(cross(cameraForward, requestedUp));
+    const float3 cameraUp =
+        normalize(cross(cameraRight, cameraForward));
+    const float aspect =
+        max(g.cameraForwardAndAspect.w, 0.001);
+    const float tanHalfFov =
+        max(g.cameraUpAndTanHalfFov.w, 0.001);
+
+    const float2 ndc =
+        float2(
+            input.uv.x * 2.0 - 1.0,
+            1.0 - input.uv.y * 2.0);
+
+    const float3 cameraRay =
+        normalize(
+            cameraForward +
+            cameraRight *
+                (ndc.x * aspect * tanHalfFov) +
+            cameraUp *
+                (ndc.y * tanHalfFov));
+
     const float3 v =
-        normalize(float3(0.0, 0.0, 1.0));
+        normalize(-cameraRay);
     const float3 h =
         normalize(l + v);
 
@@ -241,7 +266,7 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 8U,
+            .pushConstantDwords = 16U,
             .sampledTextures = 3U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
@@ -265,6 +290,7 @@ void DirectLightingRenderer::Draw(
     rhi::Texture& targetSceneColor,
     const u32 width,
     const u32 height,
+    const LightingView& view,
     const DirectionalLight& light,
     const DirectLightingSettings& settings)
 {
@@ -279,7 +305,7 @@ void DirectLightingRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 8> constants{
+    const std::array<u32, 16> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -292,7 +318,19 @@ void DirectLightingRenderer::Draw(
         bits(std::max(light.colorLinear.z, 0.0F)),
         bits(std::max(
             settings.ambientIrradianceScale,
-            0.0F))
+            0.0F)),
+
+        bits(view.forward.x),
+        bits(view.forward.y),
+        bits(view.forward.z),
+        bits(static_cast<f32>(width) /
+             static_cast<f32>(height)),
+
+        bits(view.up.x),
+        bits(view.up.y),
+        bits(view.up.z),
+        bits(std::tan(
+            view.verticalFovRadians * 0.5F))
     };
 
     commands.SetRenderTarget(targetSceneColor);
