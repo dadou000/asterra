@@ -135,7 +135,7 @@ float3 TestPattern(
     if (g.testPattern >= 1.5 &&
         g.testPattern < 2.5)
     {
-        return 1.0.xxx;
+        return float3(1.0, 1.0, 1.0);
     }
 
     if (g.testPattern >= 2.5)
@@ -143,10 +143,10 @@ float3 TestPattern(
         const float relativePeak =
             g.resolvedPeakNits /
             max(g.referenceWhiteNits, 1.0e-3);
-        return relativePeak.xxx;
+        return float3(relativePeak, relativePeak, relativePeak);
     }
 
-    return -1.0.xxx;
+    return float3(-1.0, -1.0, -1.0);
 }
 
 float4 main(VSOutput input) : SV_Target0
