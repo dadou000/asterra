@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/lighting/LightingView.hpp>
 #include <orbit/math/Vector.hpp>
 
 #include <span>
@@ -8,29 +9,43 @@
 
 namespace orbit::lighting
 {
-struct EmissiveHierarchySampleGrid
+struct EmissiveSurfaceGrid
 {
+    frames::FrameId frame{};
+    universe::BodyId body{};
+    u64 stableId{0U};
+
+    // Rectangle authority in frame coordinates. origin is the lower-left
+    // corner; axisU/axisV span the complete physical emitting surface.
+    math::Double3 originInFrameMeters{};
+    math::Double3 axisUInFrameMeters{1.0, 0.0, 0.0};
+    math::Double3 axisVInFrameMeters{0.0, 1.0, 0.0};
+
     u32 width{0U};
     u32 height{0U};
-    f32 texelAreaSquareMeters{0.0F};
+
+    // Scene-linear GI radiance, row-major, width*height samples.
     std::span<const math::Float3> giRadiance;
 };
 
 struct EmissiveHierarchyNode
 {
-    u32 level{0U};
-    u32 x{0U};
-    u32 y{0U};
-    u32 widthTexels{0U};
-    u32 heightTexels{0U};
-
-    math::Float3 integratedEnergy{};
-    math::Float2 centroidUv{0.5F, 0.5F};
-    f32 totalAreaSquareMeters{0.0F};
-    f32 peakLuminance{0.0F};
-
     u32 firstChild{~0U};
     u32 childCount{0U};
+
+    u32 texelMinX{0U};
+    u32 texelMinY{0U};
+    u32 texelMaxX{0U};
+    u32 texelMaxY{0U};
+
+    math::Double3 centerInFrameMeters{};
+    math::Float3 averageRadiance{};
+    math::Float3 peakRadiance{};
+
+    f64 areaMetersSquared{0.0};
+    f64 radiantImportance{0.0};
+
+    u32 level{0U};
 
     [[nodiscard]] bool IsLeaf() const noexcept
     {
@@ -40,42 +55,44 @@ struct EmissiveHierarchyNode
 
 struct EmissiveHierarchy
 {
-    u32 sourceWidth{0U};
-    u32 sourceHeight{0U};
-    f32 texelAreaSquareMeters{0.0F};
+    frames::FrameId frame{};
+    universe::BodyId body{};
+    u64 stableId{0U};
 
+    math::Double3 surfaceNormal{};
     std::vector<EmissiveHierarchyNode> nodes;
     u32 root{~0U};
+    u32 sourceWidth{0U};
+    u32 sourceHeight{0U};
 };
 
-struct EmissiveHierarchySelectionSettings
+struct EmissiveHierarchySelectionConfig
 {
-    // Nodes larger than this on screen are refined when children are
-    // available. Far surfaces therefore collapse automatically.
-    f32 refineAboveProjectedPixels{24.0F};
+    // Descend while a node contributes at least this many projected pixels.
+    f32 subdivisionProjectedPixels{24.0F};
 
-    // Hard scheduler cap. Selection remains energy-aware when the cap is hit.
-    u32 maximumNodes{256U};
+    // Tiny but extremely energetic nodes may still be refined.
+    f64 minimumRadiantImportance{0.0};
+
+    u32 maximumSelectedNodes{4096U};
 };
 
-struct SelectedEmissiveNode
+struct EmissiveSelectedNode
 {
     u32 nodeIndex{0U};
-    math::Float3 integratedEnergy{};
-    math::Float2 centroidUv{};
-    f32 projectedWidthPixels{0.0F};
-    f32 importance{0.0F};
+    f32 projectedPixels{0.0F};
+    f64 weightedImportance{0.0};
 };
 
-[[nodiscard]] EmissiveHierarchy BuildEmissiveHierarchy(
-    const EmissiveHierarchySampleGrid& source);
+[[nodiscard]] EmissiveHierarchy
+BuildEmissiveHierarchy(
+    const EmissiveSurfaceGrid& surface);
 
-[[nodiscard]] std::vector<SelectedEmissiveNode>
-SelectEmissiveHierarchyNodes(
+[[nodiscard]] std::vector<EmissiveSelectedNode>
+SelectEmissiveHierarchy(
     const EmissiveHierarchy& hierarchy,
-    f32 projectedSurfaceWidthPixels,
-    const EmissiveHierarchySelectionSettings& settings = {});
-
-[[nodiscard]] u32 EmissiveHierarchyLeafCount(
-    const EmissiveHierarchy& hierarchy) noexcept;
+    const LightingView& view,
+    u32 viewportWidth,
+    u32 viewportHeight,
+    const EmissiveHierarchySelectionConfig& config = {});
 } // namespace orbit::lighting
