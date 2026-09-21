@@ -177,6 +177,10 @@ float4 main(VSOutput input) : SV_Target0
     const float metallic =
         saturate(
             g_pc.materialParameters.x);
+    const float3 emission =
+        max(
+            g_pc.materialParameters.yzw,
+            0.0);
 
     const float3 dielectricF0 =
         float3(0.04, 0.04, 0.04);
@@ -224,7 +228,8 @@ float4 main(VSOutput input) : SV_Target0
         specular *
             (0.35 + 0.65 * nDotL) +
         baseColor *
-            rim * 0.08;
+            rim * 0.08 +
+        emission;
 
     return float4(
         color,
@@ -329,9 +334,7 @@ SurfaceOutputs main(VSOutput input)
             saturate(g_pc.materialParameters.x));
     output.emissionClass =
         float4(
-            0.0,
-            0.0,
-            0.0,
+            max(g_pc.materialParameters.yzw, 0.0),
             EncodeSurfaceMeta(
                 3.0, // SurfaceClass::RigidGeometry
                 6.0)); // SurfaceRepresentation::LocalMesh
@@ -574,9 +577,9 @@ void BodyPreviewRenderer::Draw(
             material.metallic,
             0.0F,
             1.0F)),
-        bits(0.0F),
-        bits(0.0F),
-        bits(0.0F)
+        bits(std::max(material.emissionRadiance.x, 0.0F)),
+        bits(std::max(material.emissionRadiance.y, 0.0F)),
+        bits(std::max(material.emissionRadiance.z, 0.0F))
     };
 
     commands.SetRenderTarget(target);
