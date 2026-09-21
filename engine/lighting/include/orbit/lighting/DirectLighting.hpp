@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/lighting/LightingView.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -42,6 +43,7 @@ public:
         rhi::Texture& targetSceneColor,
         u32 width,
         u32 height,
+        const LightingView& view,
         const DirectionalLight& light,
         const DirectLightingSettings& settings = {});
 
