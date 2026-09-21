@@ -151,7 +151,7 @@ int main()
 
     // Hard queue cap: low-priority non-visible work must be discarded before
     // visible/high-priority requests.
-    for (u64 i = 0U; i < 8U; ++i)
+    for (orbit::u64 i = 0U; i < 8U; ++i)
     {
         scheduler.Enqueue({
             .key = {
