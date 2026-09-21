@@ -448,7 +448,10 @@ void HighlightEffectsRenderer::Draw(
 
         bits(std::max(config.flareCompactness, 1.0F)),
         bits(std::max(config.flareGhostScale, 0.0F)),
-        bits(static_cast<f32>(config.debugMode)),
+        bits(
+            static_cast<f32>(
+                static_cast<u8>(
+                    config.debugMode))),
         0U
     };
 
