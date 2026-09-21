@@ -31,6 +31,8 @@ namespace
         return "Body Map";
     case studio_session::ViewportMode::Debug:
         return "Debug";
+    case studio_session::ViewportMode::System:
+        return "System";
     }
 
     return "Perspective";
