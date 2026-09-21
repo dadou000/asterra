@@ -1,4 +1,5 @@
 #include <orbit/celestial_compact_objects/CompactObject.hpp>
+#include <orbit/celestial_representation/RepresentationResolver.hpp>
 
 #include <cmath>
 
@@ -88,6 +89,113 @@ int main()
         presentation.fingerprint)
     {
         return 6;
+    }
+
+    const f64 opticalRadius =
+        accretion.outerRadiusMeters;
+
+    const auto resolveAtPixels =
+        [&](const f64 projectedRadiusPixels)
+        {
+            const f64 fov = 1.0;
+            const f64 height = 1000.0;
+            const f64 angular =
+                projectedRadiusPixels *
+                fov /
+                height;
+            const f64 distance =
+                opticalRadius /
+                std::sin(angular);
+
+            return celestial_representation::
+                Resolve({
+                    .bodyRadiusMeters =
+                        opticalRadius,
+                    .maximumProductionDetailMeters =
+                        0.0,
+                    .maximumMacroDisplacementMeters =
+                        0.0,
+                    .cameraDistanceToCenterMeters =
+                        distance,
+                    .verticalFieldOfViewRadians =
+                        fov,
+                    .viewportHeightPixels =
+                        height,
+                    .features = {
+                        .productionSurfaceAvailable =
+                            false,
+                        .macroDisplacementAvailable =
+                            false,
+                        .complexFarAppearance =
+                            false,
+                        .radiativeEmitter =
+                            false
+                    }
+                });
+        };
+
+    const auto resolved =
+        resolveAtPixels(20.0);
+    const auto disc =
+        resolveAtPixels(2.0);
+    const auto point =
+        resolveAtPixels(0.2);
+
+    if (resolved.representation !=
+            celestial_representation::
+                Representation::SmoothGlobe ||
+        disc.representation !=
+            celestial_representation::
+                Representation::
+                    AnalyticDiscImpostor ||
+        point.representation !=
+            celestial_representation::
+                Representation::PointProxy)
+    {
+        return 7;
+    }
+
+    const auto boundary =
+        resolveAtPixels(0.55);
+
+    const auto boundaryBlend =
+        celestial_representation::
+            ResolveRepresentationBlend(
+                {
+                    .bodyRadiusMeters =
+                        opticalRadius,
+                    .maximumProductionDetailMeters =
+                        0.0,
+                    .maximumMacroDisplacementMeters =
+                        0.0,
+                    .cameraDistanceToCenterMeters =
+                        opticalRadius /
+                        std::sin(0.55 / 1000.0),
+                    .verticalFieldOfViewRadians =
+                        1.0,
+                    .viewportHeightPixels =
+                        1000.0,
+                    .features = {
+                        .productionSurfaceAvailable =
+                            false,
+                        .macroDisplacementAvailable =
+                            false,
+                        .complexFarAppearance =
+                            false,
+                        .radiativeEmitter =
+                            false
+                    }
+                },
+                boundary);
+
+    if (!boundaryBlend.overlapping ||
+        boundaryBlend.lower !=
+            celestial_representation::
+                Representation::PointProxy ||
+        !(boundaryBlend.lowerWeight > 0.0 &&
+          boundaryBlend.lowerWeight < 1.0))
+    {
+        return 8;
     }
 
     return 0;
