@@ -1,124 +1,150 @@
 #include <orbit/lighting/EmissiveHierarchy.hpp>
 
 #include <array>
-#include <cmath>
 
 int main()
 {
     using namespace orbit;
     using namespace orbit::lighting;
 
-    const std::array<math::Float3, 16> pixels{{
-        {8.0F, 0.0F, 0.0F}, {8.0F, 0.0F, 0.0F},
-        {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F},
-        {8.0F, 0.0F, 0.0F}, {8.0F, 0.0F, 0.0F},
-        {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F},
-        {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F},
-        {0.0F, 0.0F, 12.0F}, {0.0F, 0.0F, 12.0F},
-        {0.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F},
-        {0.0F, 0.0F, 12.0F}, {0.0F, 0.0F, 12.0F}
-    }};
+    constexpr u32 width = 8U;
+    constexpr u32 height = 4U;
+
+    std::array<
+        math::Float3,
+        width * height>
+        pixels{};
+
+    for (u32 y = 0U; y < height; ++y)
+    {
+        for (u32 x = 0U; x < width; ++x)
+        {
+            pixels[
+                y * width + x] =
+                x < width / 2U
+                    ? math::Float3{
+                          8.0F, 0.2F, 0.1F}
+                    : math::Float3{
+                          0.1F, 0.3F, 9.0F};
+        }
+    }
+
+    const frames::FrameId frame{
+        .high = 1U,
+        .low = 2U};
+    const universe::BodyId body{
+        .high = 3U,
+        .low = 4U};
 
     const auto hierarchy =
         BuildEmissiveHierarchy({
-            .width = 4U,
-            .height = 4U,
-            .texelAreaSquareMeters =
-                0.01F,
+            .frame = frame,
+            .body = body,
+            .stableId = 42U,
+            .originInFrameMeters =
+                {-2.0, -1.0, 0.0},
+            .axisUInFrameMeters =
+                {4.0, 0.0, 0.0},
+            .axisVInFrameMeters =
+                {0.0, 2.0, 0.0},
+            .width = width,
+            .height = height,
             .giRadiance = pixels
         });
 
-    if (hierarchy.root >=
+    if (hierarchy.nodes.empty() ||
+        hierarchy.root >=
             hierarchy.nodes.size() ||
-        EmissiveHierarchyLeafCount(
-            hierarchy) != 16U)
+        hierarchy.nodes[
+            hierarchy.root].
+            radiantImportance <= 0.0)
     {
         return 1;
     }
 
-    const auto& root =
-        hierarchy.nodes[
-            hierarchy.root];
+    LightingView view;
+    view.frame = frame;
+    view.body = body;
+    view.forward =
+        {0.0F, 0.0F, 1.0F};
+    view.up =
+        {0.0F, 1.0F, 0.0F};
+    view.verticalFovRadians =
+        1.0F;
 
-    if (root.integratedEnergy.x <= 0.0F ||
-        root.integratedEnergy.z <= 0.0F ||
-        root.childCount != 4U)
+    view.cameraPositionInFrameMeters =
+        {0.0, 0.0, -3.0};
+
+    const auto nearSelection =
+        SelectEmissiveHierarchy(
+            hierarchy,
+            view,
+            1920U,
+            1080U,
+            {
+                .subdivisionProjectedPixels =
+                    20.0F,
+                .minimumRadiantImportance =
+                    1.0e30,
+                .maximumSelectedNodes =
+                    256U
+            });
+
+    view.cameraPositionInFrameMeters =
+        {0.0, 0.0, -300.0};
+
+    const auto farSelection =
+        SelectEmissiveHierarchy(
+            hierarchy,
+            view,
+            1920U,
+            1080U,
+            {
+                .subdivisionProjectedPixels =
+                    20.0F,
+                .minimumRadiantImportance =
+                    1.0e30,
+                .maximumSelectedNodes =
+                    256U
+            });
+
+    if (nearSelection.size() <=
+            farSelection.size() ||
+        farSelection.size() != 1U)
     {
         return 2;
-    }
-
-    const auto far =
-        SelectEmissiveHierarchyNodes(
-            hierarchy,
-            8.0F,
-            {
-                .refineAboveProjectedPixels =
-                    24.0F,
-                .maximumNodes = 64U
-            });
-
-    if (far.size() != 1U ||
-        far.front().nodeIndex !=
-            hierarchy.root)
-    {
-        return 3;
-    }
-
-    const auto near =
-        SelectEmissiveHierarchyNodes(
-            hierarchy,
-            1024.0F,
-            {
-                .refineAboveProjectedPixels =
-                    24.0F,
-                .maximumNodes = 64U
-            });
-
-    if (near.size() <= 1U ||
-        near.size() > 16U)
-    {
-        return 4;
     }
 
     bool sawRed = false;
     bool sawBlue = false;
 
-    for (const auto& selected : near)
+    for (const auto selected :
+         nearSelection)
     {
-        if (selected.integratedEnergy.x >
-            selected.integratedEnergy.z *
-                2.0F)
-        {
-            sawRed = true;
-        }
+        const auto& node =
+            hierarchy.nodes[
+                selected.nodeIndex];
 
-        if (selected.integratedEnergy.z >
-            selected.integratedEnergy.x *
-                2.0F)
-        {
-            sawBlue = true;
-        }
+        sawRed |=
+            node.averageRadiance.x >
+            node.averageRadiance.z;
+
+        sawBlue |=
+            node.averageRadiance.z >
+            node.averageRadiance.x;
     }
 
     if (!sawRed || !sawBlue)
     {
-        return 5;
+        return 3;
     }
 
-    const auto capped =
-        SelectEmissiveHierarchyNodes(
-            hierarchy,
-            4096.0F,
-            {
-                .refineAboveProjectedPixels =
-                    1.0F,
-                .maximumNodes = 4U
-            });
-
-    if (capped.empty() ||
-        capped.size() > 4U)
+    // One hierarchy node collection represents the whole display: no Light
+    // object is created per source texel.
+    if (hierarchy.nodes.size() >=
+        pixels.size() * 2U)
     {
-        return 6;
+        return 4;
     }
 
     return 0;
