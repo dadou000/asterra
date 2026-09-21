@@ -2,6 +2,7 @@
 
 #include <orbit/editor_model/CelestialRecipeService.hpp>
 #include <orbit/world_model/AtmospherePropertySolver.hpp>
+#include <orbit/world_model/PropertyProvenanceStore.hpp>
 
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -262,6 +263,63 @@ void CelestialAuthoringUi::Draw(
             world_model::
                 AtmospherePropertySolver::
                     Presets();
+        const std::array provenanceTargets{
+            world_model::kAtmosphereTopRadiusMeters,
+            world_model::kAtmosphereRayleighScatteringPerMeter,
+            world_model::kAtmosphereRayleighScaleHeightMeters,
+            world_model::kAtmosphereMieScatteringPerMeter,
+            world_model::kAtmosphereMieExtinctionPerMeter,
+            world_model::kAtmosphereMieScaleHeightMeters,
+            world_model::kAtmosphereMieAnisotropy,
+            world_model::kAtmosphereAbsorptionExtinctionPerMeter,
+            world_model::kAtmosphereAbsorptionCenterHeightMeters,
+            world_model::kAtmosphereAbsorptionHalfWidthMeters
+        };
+
+        u32 derivedAuthority = 0U;
+        u32 explicitAuthority = 0U;
+        u32 importedAuthority = 0U;
+
+        for (const auto property :
+             provenanceTargets)
+        {
+            const auto provenance =
+                world_model::
+                    EffectivePropertyProvenance(
+                        world.Objects(),
+                        atmosphereCapability->id,
+                        property);
+
+            derivedAuthority +=
+                provenance.sourceMode ==
+                        world_model::
+                            PropertySourceMode::
+                                Derived
+                    ? 1U
+                    : 0U;
+            explicitAuthority +=
+                provenance.sourceMode ==
+                        world_model::
+                            PropertySourceMode::
+                                Explicit
+                    ? 1U
+                    : 0U;
+            importedAuthority +=
+                provenance.sourceMode ==
+                        world_model::
+                            PropertySourceMode::
+                                Imported
+                    ? 1U
+                    : 0U;
+        }
+
+        context.MutedText(
+            std::format(
+                "Derived authority: {} | Explicit: {} | Imported: {}",
+                derivedAuthority,
+                explicitAuthority,
+                importedAuthority));
+
 
         for (std::size_t index = 0;
              index < presets.size();
