@@ -28,7 +28,7 @@ namespace
 {
 int FailCode(const int code)
 {
-    std::cerr << "rotation-composition failure code " << code << '\\n';
+    std::cerr << "rotation-composition failure code " << code << '\n';
     return code;
 }
 } // namespace
@@ -114,25 +114,43 @@ int main()
             return FailCode(1);
         }
 
+        const auto bodyId =
+            composition.BodyForObject(bodyObject);
         const auto bodyFrame =
             composition.FrameForObject(bodyObject);
         const auto systemFrame =
             composition.FrameForObject(systemObject);
 
-        if (!bodyFrame.has_value() ||
+        if (!bodyId.has_value() ||
+            !bodyFrame.has_value() ||
             !systemFrame.has_value())
         {
             return FailCode(1);
         }
 
+        const auto* body =
+            composition.Bodies().FindBody(*bodyId);
+
+        if (body == nullptr)
+        {
+            return FailCode(1);
+        }
+
+        const auto centerAtEpoch =
+            composition.Frames().ResolveTransform(
+                body->centerFrame,
+                *systemFrame,
+                orbit::time::SimulationTime{});
         const auto atEpoch =
             composition.Frames().ResolveTransform(
                 *bodyFrame,
                 *systemFrame,
                 orbit::time::SimulationTime{});
 
-        if (!atEpoch.has_value() ||
-            !Near(atEpoch->translation.x, axis) ||
+        if (!centerAtEpoch.has_value() ||
+            !atEpoch.has_value() ||
+            !Near(centerAtEpoch->translation.x, axis) ||
+            !Near(centerAtEpoch->translation.y, 0.0) ||
             !Near(atEpoch->rotation.xAxis.x, -1.0) ||
             !Near(atEpoch->rotation.xAxis.y, 0.0))
         {
@@ -149,15 +167,21 @@ int main()
                     period * 0.25 * 1'000'000.0)
         };
 
+        const auto centerAtQuarter =
+            composition.Frames().ResolveTransform(
+                body->centerFrame,
+                *systemFrame,
+                quarter);
         const auto atQuarter =
             composition.Frames().ResolveTransform(
                 *bodyFrame,
                 *systemFrame,
                 quarter);
 
-        if (!atQuarter.has_value() ||
-            !Near(atQuarter->translation.x, 0.0) ||
-            !Near(atQuarter->translation.y, axis) ||
+        if (!centerAtQuarter.has_value() ||
+            !atQuarter.has_value() ||
+            !Near(centerAtQuarter->translation.x, 0.0) ||
+            !Near(centerAtQuarter->translation.y, axis) ||
             !Near(atQuarter->rotation.xAxis.x, 0.0) ||
             !Near(atQuarter->rotation.xAxis.y, -1.0))
         {
