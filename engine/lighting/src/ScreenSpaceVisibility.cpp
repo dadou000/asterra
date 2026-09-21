@@ -153,7 +153,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         return;
     }
 
-    const uint queryBase = index * 32u;
+    const uint queryBase = index * 48u;
 
     const float4 originMin =
         asfloat(
