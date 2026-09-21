@@ -25,6 +25,7 @@
 #include <orbit/lighting/RadianceCacheSampler.hpp>
 #include <orbit/lighting/RadianceEstimator.hpp>
 #include <orbit/lighting/RadianceClipmapResidency.hpp>
+#include <orbit/lighting/RepresentationLightingContinuity.hpp>
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
@@ -236,11 +237,25 @@ struct StudioSurfaceGlobeTransitionDiagnostics
         celestial_representation::Representation::ProductionSurface};
     celestial_representation::Representation lowerFidelityNeighbor{
         celestial_representation::Representation::MacroDisplacedGlobe};
+
+    f64 richerWeight{1.0};
+    f64 lowerWeight{0.0};
     f64 productionSurfaceWeight{1.0};
     f64 macroGlobeWeight{0.0};
+
     f64 projectedRadiusPixels{0.0};
     f64 productionDetailErrorPixels{0.0};
     f64 macroDisplacementErrorPixels{0.0};
+
+    u64 directLightingFingerprint{0U};
+    u64 emissionAuthorityFingerprint{0U};
+
+    bool directLightingCoherent{true};
+    bool emissionAuthorityCoherent{true};
+    bool broadIndirectCoherent{true};
+    bool continuityPassed{true};
+    bool radianceCacheRefreshRequested{false};
+
     bool hysteresisHeld{false};
     bool overlapping{false};
 };
