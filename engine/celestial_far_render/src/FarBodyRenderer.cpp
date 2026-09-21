@@ -246,6 +246,74 @@ float4 main(VSOutput input) : SV_Target0
     const float opacity = saturate(g.emissionAndOpacity.w);
     const float2 p = input.uv;
 
+    if (mode == 1u)
+    {
+        const float radiusNdc =
+            max(g.proxy.y, 0.00025);
+        const float2 q =
+            p / radiusNdc;
+        const float r2 =
+            dot(q, q);
+
+        if (r2 > 1.0)
+            discard;
+
+        const float z =
+            sqrt(
+                max(
+                    1.0 - r2,
+                    0.0));
+
+        const float3 n =
+            normalize(
+                float3(
+                    q.x,
+                    -q.y,
+                    z));
+
+        const float3 l =
+            normalize(
+                float3(
+                    0.55,
+                    0.72,
+                    0.48));
+
+        const float ndl =
+            saturate(
+                dot(n, l));
+
+        const float roughness =
+            saturate(
+                g.albedoAndRoughness.w);
+        const float ocean =
+            saturate(
+                g.material.x);
+        const float ice =
+            saturate(
+                g.material.y);
+        const float limb =
+            pow(
+                1.0 - saturate(z),
+                3.0);
+
+        float3 color =
+            g.albedoAndRoughness.xyz *
+                (0.05 + 0.95 * ndl) +
+            ocean *
+                limb *
+                (1.0 - roughness) *
+                float3(
+                    0.20,
+                    0.32,
+                    0.45) +
+            ice * 0.025 +
+            g.emissionAndOpacity.xyz;
+
+        return float4(
+            color / (1.0 + color),
+            opacity);
+    }
+
     if (mode >= 2u)
     {
         const float radiusNdc =
