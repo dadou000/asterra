@@ -57,6 +57,14 @@ int main()
         return 6;
     }
 
+    if (std::abs(
+            EncodeIrradianceSceneLinear(1361.0) -
+            0.18) >
+        1.0e-12)
+    {
+        return 7;
+    }
+
     const auto exposure =
         ResolveExposure({});
 
