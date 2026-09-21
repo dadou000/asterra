@@ -257,7 +257,8 @@ void ApplyEmissiveInvalidations(
             event.centerInFrameMeters,
             event.radiusMeters,
             sourceRevision,
-            priorityBoost);
+            priorityBoost,
+            true);
     }
 }
 } // namespace orbit::lighting
