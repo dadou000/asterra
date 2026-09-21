@@ -13,6 +13,7 @@
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
+#include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/post_process/ColorLut.hpp>
@@ -296,7 +297,8 @@ public:
         const studio_session::StudioRuntimeSnapshot& snapshot,
         time::SimulationTime atTime = {},
         bool drawPathDebug = true,
-        u32 frameIndex = 0U);
+        u32 frameIndex = 0U,
+        lighting::LightingTimestampRecorder* lightingTimestamps = nullptr);
 
 private:
     [[nodiscard]] celestial_globe::GpuMacroGlobeProduct*
