@@ -22,6 +22,7 @@
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
@@ -1913,6 +1914,17 @@ int main(
                 device,
                 compiler,
                 swapchain.BufferCount());
+
+        orbit::lighting::LightingScheduler
+            lightingScheduler;
+
+        orbit::lighting::LightingTimestampRecorder
+            lightingTimestamps(
+                device,
+                swapchain.BufferCount());
+
+        std::optional<orbit::u32>
+            completedLightingFrameSlot;
 
         auto* primaryStudioView =
             studioViews.Find(
@@ -6522,6 +6534,20 @@ int main(
             {
                 fence->Wait(
                     submittedFence);
+
+                if (completedLightingFrameSlot.has_value())
+                {
+                    if (const auto timings =
+                            lightingTimestamps.
+                                ResolveCompletedFrame(
+                                    *completedLightingFrameSlot);
+                        timings.has_value())
+                    {
+                        lightingScheduler.
+                            RecordGpuTimings(
+                                *timings);
+                    }
+                }
             }
 
             const auto frameCpuStarted =
@@ -6898,6 +6924,14 @@ int main(
                 swapchain.
                     CurrentBackBuffer();
 
+            const orbit::u32 lightingFrameSlot =
+                swapchain.
+                    CurrentBackBufferIndex();
+
+            lightingTimestamps.BeginFrame(
+                *commands,
+                lightingFrameSlot);
+
             orbit::render_graph::
                 RenderGraph graph(device);
 
@@ -7113,8 +7147,8 @@ int main(
                     studioSnapshot,
                     studioSession.Clock().Time(),
                     pathDebugVisualization,
-                    swapchain.
-                        CurrentBackBufferIndex());
+                    lightingFrameSlot,
+                    &lightingTimestamps);
 
             graph.AddPass(
                 "Studio.Canvas",
@@ -7268,6 +7302,9 @@ int main(
             graphicsQueue.Signal(
                 *fence,
                 submittedFence);
+
+            completedLightingFrameSlot =
+                lightingFrameSlot;
 
             if (terrainUiSmoke &&
                 terrainUiSmokeValidated)
