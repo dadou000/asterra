@@ -82,6 +82,11 @@ public:
         f64 radiusMeters,
         u64 sourceRevision);
 
+
+    // Marks resident cells for budgeted relighting while preserving their
+    // last valid value for GPU fallback until the refresh reaches them.
+    void RequestGlobalRefresh() noexcept;
+
     [[nodiscard]] std::vector<RadianceUpdateCandidate>
     BuildUpdateList(
         const math::Double3& observerInFrameMeters,
