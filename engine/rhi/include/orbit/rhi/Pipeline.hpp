@@ -125,6 +125,9 @@ struct ComputePipelineDesc
     // Read-only sampled texture bindings, placed after storageTextures.
     // See CommandList::SetComputeTexture.
     u32 sampledTextures{0};
+    // Top-level acceleration-structure descriptors are placed after all
+    // buffer/image bindings. See CommandList::SetComputeAccelerationStructure.
+    u32 accelerationStructures{0};
 };
 
 class ComputePipeline
