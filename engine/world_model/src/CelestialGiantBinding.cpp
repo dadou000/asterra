@@ -68,31 +68,54 @@ ResolveGiantAppearance(
         objects,found->id,kGiantClass,
         std::string{"Gas Giant"});
 
+    if (giantClass != "Gas Giant" &&
+        giantClass != "Ice Giant")
+        throw std::runtime_error(
+            "Giant Class must be 'Gas Giant' or 'Ice Giant'.");
+
+    const bool iceGiant =
+        giantClass == "Ice Giant";
+
     celestial_giants::GiantAppearanceParameters p{
         .giantClass=
-            giantClass=="Ice Giant"
+            iceGiant
                 ? celestial_giants::GiantClass::IceGiant
                 : celestial_giants::GiantClass::GasGiant,
         .seed=static_cast<u64>(std::max<i64>(
             PropertyOr<i64>(objects,found->id,kGiantSeed,i64{1}),0)),
         .baseColorLinear=PropertyOr<math::Double3>(
-            objects,found->id,kGiantBaseColorLinear,{0.62,0.48,0.31}),
+            objects,found->id,kGiantBaseColorLinear,
+            iceGiant
+                ? math::Double3{0.16,0.39,0.55}
+                : math::Double3{0.62,0.48,0.31}),
         .bandColorLinear=PropertyOr<math::Double3>(
-            objects,found->id,kGiantBandColorLinear,{0.90,0.78,0.58}),
+            objects,found->id,kGiantBandColorLinear,
+            iceGiant
+                ? math::Double3{0.30,0.59,0.70}
+                : math::Double3{0.90,0.78,0.58}),
         .polarColorLinear=PropertyOr<math::Double3>(
-            objects,found->id,kGiantPolarColorLinear,{0.48,0.42,0.36}),
+            objects,found->id,kGiantPolarColorLinear,
+            iceGiant
+                ? math::Double3{0.22,0.50,0.63}
+                : math::Double3{0.48,0.42,0.36}),
         .bandFrequency=PropertyOr<f64>(
-            objects,found->id,kGiantBandFrequency,11.0),
+            objects,found->id,kGiantBandFrequency,
+            iceGiant ? 7.0 : 11.0),
         .bandStrength=PropertyOr<f64>(
-            objects,found->id,kGiantBandStrength,0.72),
+            objects,found->id,kGiantBandStrength,
+            iceGiant ? 0.30 : 0.72),
         .zonalShear=PropertyOr<f64>(
-            objects,found->id,kGiantZonalShear,0.18),
+            objects,found->id,kGiantZonalShear,
+            iceGiant ? 0.10 : 0.18),
         .stormStrength=PropertyOr<f64>(
-            objects,found->id,kGiantStormStrength,0.35),
+            objects,found->id,kGiantStormStrength,
+            iceGiant ? 0.16 : 0.35),
         .stormScale=PropertyOr<f64>(
-            objects,found->id,kGiantStormScale,5.0),
+            objects,found->id,kGiantStormScale,
+            iceGiant ? 3.5 : 5.0),
         .polarStrength=PropertyOr<f64>(
-            objects,found->id,kGiantPolarStrength,0.22),
+            objects,found->id,kGiantPolarStrength,
+            iceGiant ? 0.35 : 0.22),
         .depthContrast=PropertyOr<f64>(
             objects,found->id,kGiantDepthContrast,0.25),
         .turbulenceStrength=PropertyOr<f64>(
