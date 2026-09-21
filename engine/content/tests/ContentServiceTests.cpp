@@ -333,6 +333,48 @@ int main()
             emissionGiScale.
             value_or(-1.0) == 0.4);
 
+    // Base-material emissive texture is independently editable from
+    // physical luminance/GI policy.
+    Write(
+        root /
+            "Content" /
+            "Materials" /
+            "Instances" /
+            "PanelGlow.png",
+        "emissive");
+
+    content.SetMaterialEmissiveTexture(
+        pbrMaterialId,
+        std::filesystem::path(
+            "../Instances/PanelGlow.png"));
+
+    const auto* texturedMaterial =
+        content.Find(
+            pbrMaterialId);
+
+    Check(texturedMaterial != nullptr);
+    Check(texturedMaterial->material.has_value());
+    Check(
+        texturedMaterial->material->emissive ==
+        std::filesystem::path(
+            "../Instances/PanelGlow.png"));
+
+    content.SetMaterialEmissiveTexture(
+        pbrMaterialId,
+        {});
+
+    const auto* clearedEmissionTexture =
+        content.Find(
+            pbrMaterialId);
+
+    Check(clearedEmissionTexture != nullptr);
+    Check(
+        clearedEmissionTexture->material.
+            has_value());
+    Check(
+        clearedEmissionTexture->material->
+            emissive.empty());
+
     const auto ambiguousPbr =
         root / "AmbiguousPbr";
 
