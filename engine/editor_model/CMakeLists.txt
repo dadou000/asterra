@@ -99,3 +99,23 @@ if(BUILD_TESTING)
     )
 endif()
 
+
+if(BUILD_TESTING)
+    add_executable(OrbitCelestialAuthoringModelTests
+        tests/CelestialAuthoringModelTests.cpp
+    )
+
+    target_link_libraries(OrbitCelestialAuthoringModelTests
+        PRIVATE
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitCelestialAuthoringModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCelestialAuthoringModelTests)
+
+    add_test(
+        NAME Orbit.CelestialAuthoringModel
+        COMMAND OrbitCelestialAuthoringModelTests
+    )
+endif()
