@@ -6,6 +6,7 @@
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
+#include <orbit/post_process/ColorLut.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -126,6 +127,12 @@ public:
     SurfaceGlobeTransitionDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    void SetColorLut(
+        post_process::ColorLutData lut);
+
+    void SetColorLutSettings(
+        post_process::ColorLutSettings settings) noexcept;
+
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -197,6 +204,9 @@ private:
     celestial_far_render::FarBodyRenderer farBodyRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
+    post_process::ColorLutRenderer colorLutRenderer_;
+    std::unique_ptr<post_process::GpuColorLut> colorLut_;
+    post_process::ColorLutSettings colorLutSettings_{};
     celestial_representation::RepresentationTracker
         representationTracker_;
 
