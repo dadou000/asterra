@@ -61,6 +61,9 @@ UpdateHumanEyeAdaptation(
         return state;
     }
 
+    const f32 previousCeilingExcess =
+        state.photopicCeilingExcessStops;
+
     const f32 p50 =
         FiniteOr(
             statistics.medianLog2,
@@ -218,6 +221,12 @@ UpdateHumanEyeAdaptation(
         return state;
     }
 
+    const bool releasingCeilingOverload =
+        previousCeilingExcess > 0.0F &&
+        state.photopicCeilingExcessStops <= 0.0F &&
+        state.photopicTargetLog2 <
+            state.photopicLog2;
+
     state.photopicLog2 =
         ExpApproach(
             state.photopicLog2,
@@ -226,7 +235,9 @@ UpdateHumanEyeAdaptation(
             state.photopicTargetLog2 >
                     state.photopicLog2
                 ? config.photopicBrightenSeconds
-                : config.photopicDarkenSeconds);
+                : (releasingCeilingOverload
+                    ? config.photopicCeilingRecoverySeconds
+                    : config.photopicDarkenSeconds));
 
     state.darkAdaptation =
         ExpApproach(
