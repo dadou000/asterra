@@ -561,6 +561,205 @@ void DisplayDiagnosticsUi::DrawViewport(
                 viewportId);
     }
 
+    context.Separator();
+    context.Text("Bloom / Glare / Flare");
+
+    auto highlightConfig =
+        diagnostics->highlightConfig;
+
+    bool bloomEnabled =
+        highlightConfig.bloomEnabled;
+    bool glareEnabled =
+        highlightConfig.glareEnabled;
+    bool flareEnabled =
+        highlightConfig.flareEnabled;
+
+    bool highlightChanged = false;
+
+    highlightChanged |=
+        context.Checkbox(
+            "Bloom##highlight-bloom-" +
+                std::string(viewportId),
+            bloomEnabled);
+    highlightChanged |=
+        context.Checkbox(
+            "Glare##highlight-glare-" +
+                std::string(viewportId),
+            glareEnabled);
+    highlightChanged |=
+        context.Checkbox(
+            "Flare##highlight-flare-" +
+                std::string(viewportId),
+            flareEnabled);
+
+    f64 bloomThreshold =
+        highlightConfig.bloomThreshold;
+    f64 bloomKnee =
+        highlightConfig.bloomKnee;
+    f64 bloomStrength =
+        highlightConfig.bloomStrength;
+    f64 bloomRadius =
+        highlightConfig.bloomRadiusPixels;
+
+    f64 glareThreshold =
+        highlightConfig.glareThreshold;
+    f64 glareStrength =
+        highlightConfig.glareStrength;
+    f64 glareRadius =
+        highlightConfig.glareRadiusPixels;
+
+    f64 flareThreshold =
+        highlightConfig.flareThreshold;
+    f64 flareStrength =
+        highlightConfig.flareStrength;
+    f64 flareCompactness =
+        highlightConfig.flareCompactness;
+    f64 flareGhostScale =
+        highlightConfig.flareGhostScale;
+
+    highlightChanged |=
+        context.InputDouble(
+            ("Bloom Threshold##highlight-bloom-threshold-" +
+             std::string(viewportId)),
+            bloomThreshold);
+    highlightChanged |=
+        context.InputDouble(
+            ("Bloom Soft Knee##highlight-bloom-knee-" +
+             std::string(viewportId)),
+            bloomKnee);
+    highlightChanged |=
+        context.InputDouble(
+            ("Bloom Strength##highlight-bloom-strength-" +
+             std::string(viewportId)),
+            bloomStrength);
+    highlightChanged |=
+        context.InputDouble(
+            ("Bloom Radius px##highlight-bloom-radius-" +
+             std::string(viewportId)),
+            bloomRadius);
+
+    highlightChanged |=
+        context.InputDouble(
+            ("Glare Threshold##highlight-glare-threshold-" +
+             std::string(viewportId)),
+            glareThreshold);
+    highlightChanged |=
+        context.InputDouble(
+            ("Glare Strength##highlight-glare-strength-" +
+             std::string(viewportId)),
+            glareStrength);
+    highlightChanged |=
+        context.InputDouble(
+            ("Glare Radius px##highlight-glare-radius-" +
+             std::string(viewportId)),
+            glareRadius);
+
+    highlightChanged |=
+        context.InputDouble(
+            ("Flare Threshold##highlight-flare-threshold-" +
+             std::string(viewportId)),
+            flareThreshold);
+    highlightChanged |=
+        context.InputDouble(
+            ("Flare Strength##highlight-flare-strength-" +
+             std::string(viewportId)),
+            flareStrength);
+    highlightChanged |=
+        context.InputDouble(
+            ("Flare Compactness##highlight-flare-compactness-" +
+             std::string(viewportId)),
+            flareCompactness);
+    highlightChanged |=
+        context.InputDouble(
+            ("Flare Ghost Scale##highlight-flare-ghost-" +
+             std::string(viewportId)),
+            flareGhostScale);
+
+    highlightConfig.bloomEnabled =
+        bloomEnabled;
+    highlightConfig.glareEnabled =
+        glareEnabled;
+    highlightConfig.flareEnabled =
+        flareEnabled;
+    highlightConfig.bloomThreshold =
+        static_cast<f32>(bloomThreshold);
+    highlightConfig.bloomKnee =
+        static_cast<f32>(bloomKnee);
+    highlightConfig.bloomStrength =
+        static_cast<f32>(bloomStrength);
+    highlightConfig.bloomRadiusPixels =
+        static_cast<f32>(bloomRadius);
+    highlightConfig.glareThreshold =
+        static_cast<f32>(glareThreshold);
+    highlightConfig.glareStrength =
+        static_cast<f32>(glareStrength);
+    highlightConfig.glareRadiusPixels =
+        static_cast<f32>(glareRadius);
+    highlightConfig.flareThreshold =
+        static_cast<f32>(flareThreshold);
+    highlightConfig.flareStrength =
+        static_cast<f32>(flareStrength);
+    highlightConfig.flareCompactness =
+        static_cast<f32>(flareCompactness);
+    highlightConfig.flareGhostScale =
+        static_cast<f32>(flareGhostScale);
+
+    if (context.Button(
+            "Composite##highlight-debug-composite-" +
+            std::string(viewportId)))
+    {
+        highlightConfig.debugMode =
+            post_process::
+                HighlightDebugMode::Composite;
+        highlightChanged = true;
+    }
+
+    if (context.Button(
+            "Bloom Extraction##highlight-debug-bloom-" +
+            std::string(viewportId)))
+    {
+        highlightConfig.debugMode =
+            post_process::
+                HighlightDebugMode::BloomExtraction;
+        highlightChanged = true;
+    }
+
+    if (context.Button(
+            "Glare Extraction##highlight-debug-glare-" +
+            std::string(viewportId)))
+    {
+        highlightConfig.debugMode =
+            post_process::
+                HighlightDebugMode::GlareExtraction;
+        highlightChanged = true;
+    }
+
+    if (context.Button(
+            "Flare Extraction##highlight-debug-flare-" +
+            std::string(viewportId)))
+    {
+        highlightConfig.debugMode =
+            post_process::
+                HighlightDebugMode::FlareExtraction;
+        highlightChanged = true;
+    }
+
+    if (context.Button(
+            "Reset Highlight Defaults##highlight-reset-" +
+            std::string(viewportId)))
+    {
+        highlightConfig = {};
+        highlightChanged = true;
+    }
+
+    if (highlightChanged)
+    {
+        renderer_->
+            SetHighlightEffectsConfig(
+                viewportId,
+                highlightConfig);
+    }
+
     bool overlay =
         renderer_->
             LuminanceMeteringOverlay(
