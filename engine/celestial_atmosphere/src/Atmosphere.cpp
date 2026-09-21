@@ -1540,7 +1540,8 @@ GpuAtmosphereLuts::GpuAtmosphereLuts(
     rhi::Device& device,
     const AtmosphereStaticLuts& staticLuts,
     const AtmosphereSkyView& skyView)
-    : transmittance_(
+    : device_(&device),
+      transmittance_(
           CreateTexture(
               device,
               staticLuts.transmittance)),
@@ -1571,6 +1572,23 @@ void GpuAtmosphereLuts::EnsureUploaded(
     EnsureTextureUploaded(
         commands,
         skyView_);
+}
+
+void GpuAtmosphereLuts::ReplaceSkyView(
+    const AtmosphereSkyView& skyView)
+{
+    if (device_ == nullptr)
+    {
+        throw std::logic_error(
+            "Atmosphere GPU product has no device.");
+    }
+
+    skyView_ =
+        CreateTexture(
+            *device_,
+            skyView.skyView);
+    skyFingerprint_ =
+        skyView.fingerprint;
 }
 
 rhi::Texture&
