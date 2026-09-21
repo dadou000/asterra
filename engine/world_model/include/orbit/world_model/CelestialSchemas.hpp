@@ -232,6 +232,10 @@ inline constexpr schema::PropertyId kAuroraMaximumAltitudeMeters{
     .high = 0x4f52424954415552ULL, .low = 0x4d4158414c540001ULL};
 inline constexpr schema::PropertyId kAuroraIntensity{
     .high = 0x4f52424954415552ULL, .low = 0x494e54454e530001ULL};
+inline constexpr schema::PropertyId kAuroraColorLinear{
+    .high = 0x4f52424954415552ULL, .low = 0x434f4c4f52000001ULL};
+inline constexpr schema::PropertyId kAuroraStructure{
+    .high = 0x4f52424954415552ULL, .low = 0x5354525543540001ULL};
 inline constexpr schema::PropertyId kAuroraSeed{
     .high = 0x4f52424954415552ULL, .low = 0x5345454400000001ULL};
 
