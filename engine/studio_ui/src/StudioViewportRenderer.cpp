@@ -1828,6 +1828,27 @@ StudioViewportRenderer::Compose(
                                 SoftwareProxyVisibilityProvider>(
                                     proxyPresentation.scene);
 
+                    if (proxyPresentation.hardware ==
+                            nullptr &&
+                        device_ != nullptr &&
+                        compiler_ != nullptr)
+                    {
+                        proxyPresentation.hardware =
+                            std::make_unique<
+                                lighting::
+                                    HardwareRayQueryVisibilityBatch>(
+                                        *device_,
+                                        *compiler_);
+                    }
+
+                    if (proxyPresentation.hardware !=
+                        nullptr)
+                    {
+                        proxyPresentation.hardware->
+                            RebuildScene(
+                                proxyPresentation.scene);
+                    }
+
                     const auto& stats =
                         proxyPresentation.scene.
                             Stats();
@@ -1853,7 +1874,23 @@ StudioViewportRenderer::Compose(
                                     stats.
                                         maximumNominalErrorMeters,
                                 .rebuiltThisFrame =
-                                    true
+                                    true,
+                                .hardwareRayQuerySupported =
+                                    proxyPresentation.hardware !=
+                                        nullptr &&
+                                    proxyPresentation.hardware->
+                                        Supported(),
+                                .hardwareRayQueryReady =
+                                    proxyPresentation.hardware !=
+                                        nullptr &&
+                                    proxyPresentation.hardware->
+                                        Ready(),
+                                .hardwarePrimitiveCount =
+                                    proxyPresentation.hardware !=
+                                        nullptr
+                                        ? proxyPresentation.hardware->
+                                              PrimitiveCount()
+                                        : 0U
                             });
                 }
                 else
