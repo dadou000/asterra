@@ -20,6 +20,10 @@ struct ScreenSpaceFinalGatherSettings
     u32 stepsPerRay{10U};
 };
 
+[[nodiscard]] bool CanReuseFinalGatherHistory(
+    const LightingView& previous,
+    const LightingView& current) noexcept;
+
 class ScreenSpaceFinalGatherRenderer
 {
 public:
