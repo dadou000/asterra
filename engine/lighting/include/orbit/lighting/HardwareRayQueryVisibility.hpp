@@ -24,6 +24,11 @@ public:
     [[nodiscard]] bool Supported() const noexcept;
     [[nodiscard]] bool Ready() const noexcept;
     [[nodiscard]] u32 PrimitiveCount() const noexcept;
+    [[nodiscard]] frames::FrameId SceneFrame() const noexcept;
+    [[nodiscard]] math::Double3 GpuOriginInFrameMeters() const noexcept;
+
+    [[nodiscard]] GpuVisibilityQuery EncodeQuery(
+        const VisibilityQuery& query) const;
 
     void Dispatch(
         rhi::CommandList& commands,
@@ -36,6 +41,8 @@ private:
     std::unique_ptr<rhi::ComputePipeline> pipeline_;
     std::unique_ptr<rhi::AccelerationStructure> accelerationStructure_;
     std::unique_ptr<rhi::Buffer> primitiveBuffer_;
+    frames::FrameId sceneFrame_{};
+    math::Double3 gpuOriginInFrameMeters_{};
     u32 primitiveCount_{0U};
     bool supported_{false};
 };
