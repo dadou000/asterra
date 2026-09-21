@@ -96,7 +96,13 @@ int main()
             orbit::math::Double3{0.0, 0.0, 1.0});
 
         orbit::world_model::UniverseComposition composition;
-        composition.Rebuild(objects);
+        const auto compositionStats =
+            composition.Rebuild(objects);
+
+        if (compositionStats.bodies != 1U)
+        {
+            return 1;
+        }
 
         const auto bodyFrame =
             composition.FrameForObject(bodyObject);
