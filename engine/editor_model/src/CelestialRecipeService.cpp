@@ -464,6 +464,33 @@ CelestialRecipeService::CreateRockyPlanetInternal(
             atmosphereSolver.ApplyPreset(
                 atmosphere,
                 "Earth-like"));
+
+        const auto clouds =
+            AddCapability(
+                commands_,
+                body,
+                world_model::kCloudLayerCapabilityType,
+                "Cloud Layer",
+                "Volumetric Layer");
+
+        commands_.SetProperty(
+            clouds,
+            world_model::kCloudSourceModel,
+            std::string{"Climate Procedural"});
+        commands_.SetProperty(
+            clouds,
+            world_model::kCloudSeed,
+            static_cast<i64>(
+                recipe.seed &
+                0x7fffffffffffffffULL));
+        commands_.SetProperty(
+            clouds,
+            world_model::kCloudCoverageBias,
+            random.Range(-0.10, 0.12));
+        commands_.SetProperty(
+            clouds,
+            world_model::kCloudOpticalDepth,
+            random.Range(5.5, 10.0));
     }
 
     if (recipe.ocean)
