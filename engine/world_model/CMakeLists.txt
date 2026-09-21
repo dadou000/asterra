@@ -4,6 +4,7 @@ add_library(OrbitWorldModel STATIC
     src/CelestialLightingService.cpp
     src/CelestialAtmosphereBinding.cpp
     src/PropertyProvenanceSchema.cpp
+    src/PropertyProvenanceStore.cpp
     src/PropertyProvenance.cpp
     src/PhysicalPropertySolver.cpp
     src/WorldSchemas.cpp
