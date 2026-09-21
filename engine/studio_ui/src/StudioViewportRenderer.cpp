@@ -1,6 +1,8 @@
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
 #include <orbit/celestial_radiometry/Radiometry.hpp>
+#include <orbit/content/ContentService.hpp>
+#include <orbit/lighting/MaterialEmission.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
@@ -1465,6 +1467,167 @@ ResolveStudioDirectLight(
 }
 
 
+[[nodiscard]] editor_ui::PreviewMaterial
+ResolveRuntimeMaterialAsset(
+    content::ContentService& content,
+    const content::AssetRecord* asset,
+    const u32 depth = 0U)
+{
+    editor_ui::PreviewMaterial result{};
+
+    if (asset == nullptr || depth > 8U)
+    {
+        return result;
+    }
+
+    if (asset->kind ==
+            content::AssetKind::Material &&
+        asset->material.has_value())
+    {
+        result.roughness =
+            static_cast<f32>(
+                std::clamp(
+                    asset->material->
+                        roughnessFactor,
+                    0.0,
+                    1.0));
+        result.metallic =
+            static_cast<f32>(
+                std::clamp(
+                    asset->material->
+                        metallicFactor,
+                    0.0,
+                    1.0));
+    }
+    else if (
+        asset->kind ==
+            content::AssetKind::MaterialInstance &&
+        asset->materialInstance.has_value())
+    {
+        const auto parentPath =
+            asset->sourcePath.parent_path() /
+            asset->materialInstance->parent;
+
+        result =
+            ResolveRuntimeMaterialAsset(
+                content,
+                content.FindByPath(
+                    parentPath),
+                depth + 1U);
+
+        if (asset->materialInstance->
+                roughnessFactor.has_value())
+        {
+            result.roughness =
+                static_cast<f32>(
+                    std::clamp(
+                        *asset->materialInstance->
+                            roughnessFactor,
+                        0.0,
+                        1.0));
+        }
+
+        if (asset->materialInstance->
+                metallicFactor.has_value())
+        {
+            result.metallic =
+                static_cast<f32>(
+                    std::clamp(
+                        *asset->materialInstance->
+                            metallicFactor,
+                        0.0,
+                        1.0));
+        }
+    }
+    else
+    {
+        return result;
+    }
+
+    const auto emission =
+        content.ResolveMaterialEmission(
+            asset->id);
+
+    const auto evaluated =
+        lighting::EvaluateMaterialEmission({
+            .colorLinear = {
+                static_cast<f32>(
+                    emission.colorLinear[0]),
+                static_cast<f32>(
+                    emission.colorLinear[1]),
+                static_cast<f32>(
+                    emission.colorLinear[2])
+            },
+            .luminanceNits =
+                static_cast<f32>(
+                    emission.luminanceNits),
+            .contributesToGi =
+                emission.contributesToGi,
+            .giScale =
+                static_cast<f32>(
+                    emission.giScale)
+        });
+
+    result.emissionRadiance =
+        evaluated.visibleRadiance;
+    result.emissionGiScale =
+        emission.contributesToGi
+            ? static_cast<f32>(
+                  std::max(
+                      emission.giScale,
+                      0.0))
+            : 0.0F;
+
+    return result;
+}
+
+[[nodiscard]] editor_ui::PreviewMaterial
+ResolveRuntimeBodyMaterial(
+    content::ContentService* content,
+    scene::ObjectStore& objects,
+    const std::optional<scene::ObjectId> bodyObject)
+{
+    if (content == nullptr ||
+        !bodyObject.has_value())
+    {
+        return {};
+    }
+
+    const auto property =
+        objects.GetProperty(
+            *bodyObject,
+            world_model::kBodyMaterialAsset);
+
+    if (!property.has_value())
+    {
+        return {};
+    }
+
+    const auto* textValue =
+        std::get_if<std::string>(
+            &*property);
+
+    if (textValue == nullptr ||
+        textValue->empty())
+    {
+        return {};
+    }
+
+    const auto assetId =
+        content::AssetId::Parse(
+            *textValue);
+
+    if (!assetId.has_value())
+    {
+        return {};
+    }
+
+    return ResolveRuntimeMaterialAsset(
+        *content,
+        content->Find(*assetId));
+}
+
+
 } // namespace
 
 StudioViewportRenderer::StudioViewportRenderer(
@@ -1500,6 +1663,12 @@ StudioViewportRenderer::StudioViewportRenderer(
         throw std::invalid_argument(
             "Studio terrain rendering requires at least one frame-in-flight slot.");
     }
+}
+
+void StudioViewportRenderer::SetContentService(
+    content::ContentService* const content) noexcept
+{
+    content_ = content;
 }
 
 void StudioViewportRenderer::SetColorLut(
@@ -4585,6 +4754,12 @@ StudioViewportRenderer::Compose(
                                   target->body)
                     : std::nullopt;
 
+            const auto bodyMaterial =
+                ResolveRuntimeBodyMaterial(
+                    content_,
+                    session.World().Objects(),
+                    compactBodyObject);
+
             const auto resolvedCompactForView =
                 compactBodyObject.has_value()
                     ? world_model::
@@ -5857,7 +6032,8 @@ StudioViewportRenderer::Compose(
                      width,
                      height,
                      camera,
-                     bodyShape](
+                     bodyShape,
+                     bodyMaterial](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -5877,7 +6053,8 @@ StudioViewportRenderer::Compose(
                             width,
                             height,
                             bodyShape,
-                            camera);
+                            camera,
+                            bodyMaterial);
                         bodyRenderer_.DrawSurfaceData(
                             commands,
                             *bodySurfaceBaseRoughness,
@@ -5886,7 +6063,8 @@ StudioViewportRenderer::Compose(
                             width,
                             height,
                             bodyShape,
-                            camera);
+                            camera,
+                            bodyMaterial);
                     });
             }
 
