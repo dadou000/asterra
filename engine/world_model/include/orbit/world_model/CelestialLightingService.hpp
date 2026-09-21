@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/celestial_lighting/CelestialLighting.hpp>
+#include <orbit/celestial_clouds/CloudField.hpp>
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
@@ -22,6 +23,13 @@ struct DirectBodyLighting
     std::vector<
         universe::BodyId>
         contributingOccluders;
+};
+
+struct DirectSurfaceLighting
+{
+    DirectBodyLighting celestial{};
+    f64 cloudTransmittance{1.0};
+    f64 irradianceWattsPerSquareMeter{0.0};
 };
 
 struct ReflectedBodyLighting
@@ -49,6 +57,15 @@ public:
         universe::BodyId emitter,
         const std::vector<universe::BodyId>& occluders,
         time::SimulationTime atTime) const;
+
+    [[nodiscard]] std::optional<DirectSurfaceLighting>
+    DirectLightingAtSurface(
+        universe::BodyId receiver,
+        universe::BodyId emitter,
+        const std::vector<universe::BodyId>& occluders,
+        time::SimulationTime atTime,
+        const celestial_clouds::CloudFieldProduct& clouds,
+        math::Double3 surfaceUnitDirection) const;
 
     [[nodiscard]] std::optional<ReflectedBodyLighting>
     ReflectedLightingAtObserver(
