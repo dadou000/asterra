@@ -9,6 +9,7 @@
 #include <orbit/world_model/CelestialCloudBinding.hpp>
 #include <orbit/world_model/CelestialOceanBinding.hpp>
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
+#include <orbit/world_model/CelestialRingBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/LocalLightBinding.hpp>
@@ -1051,6 +1052,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       bodyRenderer_(device, compiler),
       macroGlobeRenderer_(device, compiler),
       farBodyRenderer_(device, compiler),
+      ringRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
@@ -1452,6 +1454,21 @@ StudioViewportRenderer::OceanDiagnostics(
 
     return found ==
             oceanDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
+    StudioRingDiagnostics>
+StudioViewportRenderer::RingDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        ringDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            ringDiagnostics_.end()
         ? std::nullopt
         : std::optional(found->second);
 }
@@ -1864,6 +1881,176 @@ StudioViewportRenderer::Compose(
                         session.World().
                             Objects(),
                         *atmosphereBody);
+        }
+
+        std::optional<
+            world_model::ResolvedRingSystem>
+            resolvedRingSystemForView;
+
+        if (atmosphereBody.has_value())
+        {
+            resolvedRingSystemForView =
+                world_model::
+                    ResolveRingSystem(
+                        session.World().
+                            Objects(),
+                        *atmosphereBody);
+        }
+
+        celestial_rings::GpuRingMeshProduct*
+            activeRingMesh = nullptr;
+        bool activeRingNear = false;
+
+        if (resolvedRingSystemForView.has_value() &&
+            logicalTarget->target.has_value() &&
+            shape.has_value() &&
+            !resolvedRingSystemForView->
+                parameters.bands.empty())
+        {
+            const f64 referenceRadius =
+                ReferenceRadiusForShape(
+                    *shape);
+
+            const f64 outerRadius =
+                resolvedRingSystemForView->
+                    parameters.bands.back().
+                    outerRadiusMeters;
+
+            const f64 cameraDistance =
+                math::Length(
+                    view->Camera().
+                        localPositionMeters);
+
+            const f64 projectedRingRadiusPixels =
+                cameraDistance > outerRadius
+                    ? std::asin(
+                          std::clamp(
+                              outerRadius /
+                                  cameraDistance,
+                              0.0,
+                              1.0)) /
+                          std::max(
+                              static_cast<f64>(
+                                  view->Camera().
+                                      verticalFovRadians),
+                              1.0e-6) *
+                          static_cast<f64>(
+                              std::max(
+                                  view->Height(),
+                                  1U))
+                    : static_cast<f64>(
+                          std::max(
+                              view->Height(),
+                              1U)) *
+                          0.5;
+
+            activeRingNear =
+                projectedRingRadiusPixels >=
+                180.0;
+
+            auto& rings =
+                ringPresentations_[info.id];
+
+            const u64 semanticFingerprint =
+                resolvedRingSystemForView->
+                    parameters.fingerprint;
+
+            if (rings.nearMesh == nullptr ||
+                rings.farMesh == nullptr ||
+                rings.body !=
+                    logicalTarget->
+                        target->body ||
+                rings.fingerprint !=
+                    semanticFingerprint ||
+                rings.referenceRadiusMeters !=
+                    referenceRadius)
+            {
+                const auto nearCpu =
+                    celestial_rings::
+                        BuildRingMesh(
+                            resolvedRingSystemForView->
+                                parameters,
+                            referenceRadius,
+                            256U);
+
+                const auto farCpu =
+                    celestial_rings::
+                        BuildRingMesh(
+                            resolvedRingSystemForView->
+                                parameters,
+                            referenceRadius,
+                            64U);
+
+                rings.nearMesh =
+                    std::make_unique<
+                        celestial_rings::
+                            GpuRingMeshProduct>(
+                                *device_,
+                                nearCpu);
+                rings.farMesh =
+                    std::make_unique<
+                        celestial_rings::
+                            GpuRingMeshProduct>(
+                                *device_,
+                                farCpu);
+                rings.farProfile =
+                    celestial_rings::
+                        BuildFarRingProfile(
+                            resolvedRingSystemForView->
+                                parameters,
+                            referenceRadius,
+                            256U);
+                rings.body =
+                    logicalTarget->
+                        target->body;
+                rings.fingerprint =
+                    semanticFingerprint;
+                rings.referenceRadiusMeters =
+                    referenceRadius;
+            }
+
+            activeRingMesh =
+                activeRingNear
+                    ? rings.nearMesh.get()
+                    : rings.farMesh.get();
+
+            ringDiagnostics_.insert_or_assign(
+                info.id,
+                StudioRingDiagnostics{
+                    .body =
+                        logicalTarget->
+                            target->body,
+                    .fingerprint =
+                        semanticFingerprint,
+                    .bandCount =
+                        static_cast<u32>(
+                            resolvedRingSystemForView->
+                                parameters.bands.size()),
+                    .innerRadiusMeters =
+                        resolvedRingSystemForView->
+                            parameters.bands.front().
+                            innerRadiusMeters,
+                    .outerRadiusMeters =
+                        outerRadius,
+                    .projectedOuterRadiusPixels =
+                        projectedRingRadiusPixels,
+                    .nearRepresentation =
+                        activeRingNear,
+                    .angularSegments =
+                        activeRingNear
+                            ? 256U
+                            : 64U,
+                    .farProfileSamples =
+                        rings.farProfile.
+                            radialSamples
+                });
+        }
+        else
+        {
+            ringPresentations_.erase(
+                info.id);
+            ringDiagnostics_.erase(
+                info.id);
         }
 
         std::optional<
@@ -4098,6 +4285,77 @@ StudioViewportRenderer::Compose(
                     rhi::CommandList&,
                     const render_graph::Resources&)
                 {
+                });
+        }
+
+        if (activeRingMesh != nullptr &&
+            resolvedRingSystemForView.has_value())
+        {
+            auto* ringMesh =
+                activeRingMesh;
+            const auto ringCamera =
+                view->Camera();
+
+            const auto normal =
+                math::Normalize(
+                    resolvedRingSystemForView->
+                        parameters.
+                        planeNormalBody);
+
+            const math::Float3 ringNormal{
+                static_cast<f32>(normal.x),
+                static_cast<f32>(normal.y),
+                static_cast<f32>(normal.z)
+            };
+
+            const bool receiveBodyShadow =
+                resolvedRingSystemForView->
+                    parameters.
+                    receiveBodyShadow;
+
+            graph.AddPass(
+                prefix + ".CelestialRings",
+                {
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 color,
+                 width,
+                 height,
+                 ringMesh,
+                 ringCamera,
+                 ringNormal,
+                 receiveBodyShadow,
+                 studioDirectLight](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    ringRenderer_.Draw(
+                        commands,
+                        *color,
+                        width,
+                        height,
+                        *ringMesh,
+                        ringCamera,
+                        ringNormal,
+                        receiveBodyShadow,
+                        celestial_rings::
+                            RingRenderLighting{
+                                .directionBody =
+                                    studioDirectLight.
+                                        directionBody,
+                                .irradianceScale =
+                                    studioDirectLight.
+                                        irradianceScale
+                            });
                 });
         }
 
