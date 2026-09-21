@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 
 namespace orbit::lighting
 {
