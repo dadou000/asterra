@@ -173,7 +173,12 @@ RingMeshProduct BuildRingMesh(
     RingMeshProduct result;
     result.referenceRadiusMeters=referenceRadius;
     result.angularSegments=segments;
-    result.fingerprint=RingSystemFingerprint(system);
+    result.fingerprint=
+        terrain::StableCombine64(
+            terrain::StableCombine64(
+                RingSystemFingerprint(system),
+                std::bit_cast<u64>(referenceRadius)),
+            segments);
     const auto [a,b]=RingBasis(system.planeNormalBody);
 
     for(const auto& band:system.bands)
@@ -226,7 +231,12 @@ FarRingProfile BuildFarRingProfile(
     FarRingProfile result;
     result.referenceRadiusMeters=referenceRadius;
     result.radialSamples=samples;
-    result.fingerprint=RingSystemFingerprint(system);
+    result.fingerprint=
+        terrain::StableCombine64(
+            terrain::StableCombine64(
+                RingSystemFingerprint(system),
+                std::bit_cast<u64>(referenceRadius)),
+            samples);
     if(system.bands.empty())
         return result;
 
