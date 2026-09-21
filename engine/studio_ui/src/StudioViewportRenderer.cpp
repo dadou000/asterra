@@ -5466,8 +5466,12 @@ StudioViewportRenderer::Compose(
                             lighting::RadianceClipmapConfig{});
             }
 
-            const u64 radianceSourceRevision =
+            u64 radianceSourceRevision =
                 session.World().Objects().Revision();
+            radianceSourceRevision =
+                CombineFingerprint(
+                    radianceSourceRevision,
+                    source.Revision());
 
             static_cast<void>(
                 finalGather.radianceResidency->ScrollTo(
@@ -5630,6 +5634,111 @@ StudioViewportRenderer::Compose(
                             capability.low
                 });
             }
+
+            u64 lightingFingerprint =
+                0x4f52424954474931ULL;
+
+            const auto addLightingValue =
+                [&](const f32 value,
+                    const f32 quantum)
+                {
+                    lightingFingerprint =
+                        CombineFingerprint(
+                            lightingFingerprint,
+                            QuantizedLightingFingerprintValue(
+                                value,
+                                quantum));
+                };
+
+            addLightingValue(
+                directLight.directionToLight.x,
+                0.005F);
+            addLightingValue(
+                directLight.directionToLight.y,
+                0.005F);
+            addLightingValue(
+                directLight.directionToLight.z,
+                0.005F);
+            addLightingValue(
+                directLight.irradianceScale,
+                0.01F);
+            addLightingValue(
+                directLight.colorLinear.x,
+                0.01F);
+            addLightingValue(
+                directLight.colorLinear.y,
+                0.01F);
+            addLightingValue(
+                directLight.colorLinear.z,
+                0.01F);
+
+            addLightingValue(
+                radianceEstimateSettings.
+                    skyIrradianceLinear.x,
+                0.002F);
+            addLightingValue(
+                radianceEstimateSettings.
+                    skyIrradianceLinear.y,
+                0.002F);
+            addLightingValue(
+                radianceEstimateSettings.
+                    skyIrradianceLinear.z,
+                0.002F);
+
+            for (const auto& light :
+                 localLightGrid.lights)
+            {
+                lightingFingerprint =
+                    CombineFingerprint(
+                        lightingFingerprint,
+                        light.stableId);
+
+                addLightingValue(
+                    light.positionCameraRelativeMeters.x,
+                    0.05F);
+                addLightingValue(
+                    light.positionCameraRelativeMeters.y,
+                    0.05F);
+                addLightingValue(
+                    light.positionCameraRelativeMeters.z,
+                    0.05F);
+                addLightingValue(
+                    light.luminousFluxLumens,
+                    5.0F);
+            }
+
+            for (const auto& volume :
+                 emissiveVolumes)
+            {
+                lightingFingerprint =
+                    CombineFingerprint(
+                        lightingFingerprint,
+                        volume.stableId);
+
+                addLightingValue(
+                    volume.intensityScale,
+                    0.01F);
+                addLightingValue(
+                    volume.emissionLinear.x,
+                    0.01F);
+                addLightingValue(
+                    volume.emissionLinear.y,
+                    0.01F);
+                addLightingValue(
+                    volume.emissionLinear.z,
+                    0.01F);
+            }
+
+            if (finalGather.lightingFingerprint != 0U &&
+                finalGather.lightingFingerprint !=
+                    lightingFingerprint)
+            {
+                finalGather.radianceResidency->
+                    RequestGlobalRefresh();
+            }
+
+            finalGather.lightingFingerprint =
+                lightingFingerprint;
 
             const auto radianceUpdates =
                 finalGather.radianceResidency->BuildUpdateList(
