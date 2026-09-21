@@ -16,6 +16,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/EmissiveInvalidation.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/MaterialEmissionSurfaceOverride.hpp>
@@ -203,6 +204,14 @@ struct StudioCelestialLightingDiagnostics
     u32 contributingOccluders{0};
 };
 
+struct StudioEmissiveGiDiagnostics
+{
+    u32 trackedSources{0U};
+    u32 invalidationEventsThisFrame{0U};
+    u64 dirtyRadianceCells{0U};
+    u32 scheduledRadianceUpdates{0U};
+};
+
 struct StudioVisibilityProxyDiagnostics
 {
     universe::BodyId body{};
@@ -305,6 +314,11 @@ public:
     [[nodiscard]] std::optional<
         StudioVisibilityProxyDiagnostics>
     VisibilityProxyDiagnostics(
+        std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] std::optional<
+        StudioEmissiveGiDiagnostics>
+    EmissiveGiDiagnostics(
         std::string_view viewportId) const noexcept;
 
     [[nodiscard]] std::optional<
@@ -530,6 +544,8 @@ private:
         bool hasHistory{false};
         lighting::LightingView previousView{};
         u64 lightingFingerprint{0U};
+        lighting::EmissiveInvalidationTracker
+            emissiveInvalidationTracker;
         std::unique_ptr<
             lighting::RadianceClipmapResidency>
             radianceResidency;
@@ -722,6 +738,12 @@ private:
         StudioVisibilityProxyDiagnostics,
         std::less<>>
         visibilityProxyDiagnostics_;
+
+    std::map<
+        std::string,
+        StudioEmissiveGiDiagnostics,
+        std::less<>>
+        emissiveGiDiagnostics_;
 
     std::map<
         std::string,
