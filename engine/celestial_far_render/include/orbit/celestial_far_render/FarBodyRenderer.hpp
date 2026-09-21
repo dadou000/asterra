@@ -72,6 +72,7 @@ struct FarBodyDraw
     AppearanceSummary appearance{};
     f64 projectedRadiusPixels{1.0};
     f32 opacity{1.0F};
+    f32 radiometricIntensity{1.0F};
     bool stellar{false};
 };
 
