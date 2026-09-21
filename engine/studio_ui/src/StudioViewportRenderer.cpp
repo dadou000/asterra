@@ -1581,6 +1581,62 @@ ResolveRuntimeMaterialAsset(
     return result;
 }
 
+[[nodiscard]] std::optional<editor_ui::PreviewMaterial>
+ResolveRuntimeBodyMaterialIfAssigned(
+    content::ContentService* content,
+    scene::ObjectStore& objects,
+    const std::optional<scene::ObjectId> bodyObject)
+{
+    if (content == nullptr ||
+        !bodyObject.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto property =
+        objects.GetProperty(
+            *bodyObject,
+            world_model::kBodyMaterialAsset);
+
+    if (!property.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto* textValue =
+        std::get_if<std::string>(
+            &*property);
+
+    if (textValue == nullptr ||
+        textValue->empty())
+    {
+        return std::nullopt;
+    }
+
+    const auto assetId =
+        content::AssetId::Parse(
+            *textValue);
+
+    if (!assetId.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto* asset =
+        content->Find(*assetId);
+
+    if (asset == nullptr ||
+        (asset->kind != content::AssetKind::Material &&
+         asset->kind != content::AssetKind::MaterialInstance))
+    {
+        return std::nullopt;
+    }
+
+    return ResolveRuntimeMaterialAsset(
+        *content,
+        asset);
+}
+
 [[nodiscard]] editor_ui::PreviewMaterial
 ResolveRuntimeBodyMaterial(
     content::ContentService* content,
@@ -1646,6 +1702,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
+      materialEmissionSurfaceOverride_(device, compiler),
       finalGatherRenderer_(device, compiler),
       radianceCacheSampler_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
@@ -6253,6 +6310,21 @@ StudioViewportRenderer::Compose(
 
         if (usesPhysicalSurfaceLighting)
         {
+            const auto physicalBodyObject =
+                logicalTarget->target.has_value()
+                    ? session.World().
+                          Universe().
+                          ObjectForBody(
+                              logicalTarget->
+                                  target->body)
+                    : std::nullopt;
+
+            const auto runtimeMaterialOverride =
+                ResolveRuntimeBodyMaterialIfAssigned(
+                    content_,
+                    session.World().Objects(),
+                    physicalBodyObject);
+
             auto* lightingBaseRoughness =
                 &view->SurfaceBaseRoughness();
             auto* lightingNormalMetallic =
@@ -6898,6 +6970,53 @@ StudioViewportRenderer::Compose(
             const u32 radianceLevelCount =
                 static_cast<u32>(
                     radianceSnapshot.levels.size());
+
+            if (runtimeMaterialOverride.has_value() &&
+                presentation !=
+                    StudioViewportPresentation::BodyPreview)
+            {
+                const auto emission =
+                    runtimeMaterialOverride->
+                        emissionRadiance;
+
+                if (emission.x > 0.0F ||
+                    emission.y > 0.0F ||
+                    emission.z > 0.0F)
+                {
+                    graph.AddPass(
+                        prefix +
+                            ".RuntimeMaterialEmissionOverride",
+                        {
+                            {
+                                .texture =
+                                    targets.
+                                        surfaceEmissionClass,
+                                .state =
+                                    rhi::ResourceState::
+                                        UnorderedAccess,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            }
+                        },
+                        [this,
+                         lightingEmissionClass,
+                         width,
+                         height,
+                         emission](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            materialEmissionSurfaceOverride_.
+                                Apply(
+                                    commands,
+                                    *lightingEmissionClass,
+                                    width,
+                                    height,
+                                    emission);
+                        });
+                }
+            }
 
             graph.AddPass(
                 prefix + ".SharedDirectLighting",
