@@ -1708,6 +1708,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       hybridReflectionRenderer_(device, compiler),
       exactReflectionQueryRenderer_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
+      luminanceHistogramRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
       colorLut_(
@@ -2075,6 +2076,37 @@ SurfaceGlobeTransitionDiagnostics(
             transitionDiagnostics_.end()
         ? std::nullopt
         : std::optional(found->second);
+}
+
+std::optional<
+    StudioLuminanceHistogramDiagnostics>
+StudioViewportRenderer::
+LuminanceHistogramDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        luminanceHistogramPresentations_.find(
+            viewportId);
+
+    return found ==
+            luminanceHistogramPresentations_.end()
+        ? std::nullopt
+        : std::optional(
+              found->second.diagnostics);
+}
+
+rhi::Texture*
+StudioViewportRenderer::LuminanceMeteringMask(
+    const std::string_view viewportId) noexcept
+{
+    const auto found =
+        luminanceHistogramPresentations_.find(
+            viewportId);
+
+    return found ==
+                luminanceHistogramPresentations_.end()
+            ? nullptr
+            : found->second.meteringMask.get();
 }
 
 std::optional<
