@@ -2,6 +2,7 @@
 
 #include <orbit/lighting/Visibility.hpp>
 #include <orbit/math/RigidTransform.hpp>
+#include <orbit/rhi/AccelerationStructure.hpp>
 #include <orbit/time/SimulationTime.hpp>
 
 #include <span>
@@ -53,6 +54,26 @@ struct SoftwareProxySceneStats
     f32 maximumNominalErrorMeters{0.0F};
 };
 
+struct GpuVisibilityProxyPrimitive
+{
+    // centerType.xyz = center in SoftwareProxyScene::Frame()
+    // centerType.w   = 0 sphere, 1 oriented box
+    math::Float4 centerType{};
+
+    // Axis vectors are normalized in scene frame. w stores radius/extent.
+    math::Float4 axisXExtent{};
+    math::Float4 axisYExtent{};
+    math::Float4 axisZExtent{};
+
+    u32 materialId{0U};
+    u32 instanceId{0U};
+    f32 nominalErrorMeters{0.0F};
+    u32 reserved{0U};
+};
+
+static_assert(sizeof(GpuVisibilityProxyPrimitive) == 80U);
+
+
 class SoftwareProxyScene
 {
 public:
@@ -64,6 +85,12 @@ public:
 
     [[nodiscard]] frames::FrameId Frame() const noexcept;
     [[nodiscard]] const SoftwareProxySceneStats& Stats() const noexcept;
+
+    [[nodiscard]] std::vector<rhi::AccelerationAabb>
+    AccelerationAabbs() const;
+
+    [[nodiscard]] std::vector<GpuVisibilityProxyPrimitive>
+    GpuPrimitives() const;
 
 private:
     struct ResolvedProxy
