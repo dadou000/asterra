@@ -75,9 +75,7 @@ struct Constants
     float lutSize;
     float strength;
     float enabled;
-    float toneMapEnabled;
-    float exposureScale;
-    float3 padding;
+    float padding;
 };
 
 [[vk::push_constant]]
@@ -114,15 +112,7 @@ float4 main(VSOutput input) : SV_Target0
         g_source.Sample(g_sourceSampler, input.uv);
 
     float3 displayLinear =
-        max(source.rgb, 0.0) *
-        max(g.exposureScale, 0.0);
-
-    if (g.toneMapEnabled > 0.5)
-    {
-        displayLinear =
-            displayLinear /
-            (1.0 + displayLinear);
-    }
+        max(source.rgb, 0.0);
 
     const float active =
         saturate(g.enabled) *
@@ -319,7 +309,7 @@ ColorLutRenderer::ColorLutRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 8U,
+            .pushConstantDwords = 4U,
             .shaderResourceBuffers = 0U,
             .sampledTextures = 2U,
             .topology =
@@ -357,19 +347,13 @@ void ColorLutRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 8> constants{
+    const std::array<u32, 4> constants{
         bits(static_cast<f32>(lut.Size())),
         bits(std::clamp(
             settings.strength,
             0.0F,
             1.0F)),
         bits(settings.enabled ? 1.0F : 0.0F),
-        bits(settings.toneMapEnabled ? 1.0F : 0.0F),
-        bits(std::max(
-            settings.exposureScale,
-            0.0F)),
-        0U,
-        0U,
         0U
     };
 
