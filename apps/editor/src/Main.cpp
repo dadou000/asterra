@@ -23,6 +23,7 @@
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
+#include <orbit/lighting/MaterialEmission.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
@@ -1146,6 +1147,34 @@ PreviewMaterialForAsset(
                     content.FindByPath(texturePath));
         }
 
+        const auto emission =
+            content.ResolveMaterialEmission(
+                asset->id);
+
+        const auto evaluated =
+            orbit::lighting::
+                EvaluateMaterialEmission({
+                    .colorLinear = {
+                        static_cast<orbit::f32>(
+                            emission.colorLinear[0]),
+                        static_cast<orbit::f32>(
+                            emission.colorLinear[1]),
+                        static_cast<orbit::f32>(
+                            emission.colorLinear[2])
+                    },
+                    .luminanceNits =
+                        static_cast<orbit::f32>(
+                            emission.luminanceNits),
+                    .contributesToGi =
+                        emission.contributesToGi,
+                    .giScale =
+                        static_cast<orbit::f32>(
+                            emission.giScale)
+                });
+
+        result.emissionRadiance =
+            evaluated.visibleRadiance;
+
         return result;
     }
 
@@ -1180,6 +1209,34 @@ PreviewMaterialForAsset(
                     0.0,
                     1.0));
         }
+
+        const auto emission =
+            content.ResolveMaterialEmission(
+                asset->id);
+
+        const auto evaluated =
+            orbit::lighting::
+                EvaluateMaterialEmission({
+                    .colorLinear = {
+                        static_cast<orbit::f32>(
+                            emission.colorLinear[0]),
+                        static_cast<orbit::f32>(
+                            emission.colorLinear[1]),
+                        static_cast<orbit::f32>(
+                            emission.colorLinear[2])
+                    },
+                    .luminanceNits =
+                        static_cast<orbit::f32>(
+                            emission.luminanceNits),
+                    .contributesToGi =
+                        emission.contributesToGi,
+                    .giScale =
+                        static_cast<orbit::f32>(
+                            emission.giScale)
+                });
+
+        result.emissionRadiance =
+            evaluated.visibleRadiance;
 
         return result;
     }
