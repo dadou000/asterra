@@ -561,6 +561,123 @@ void DisplayDiagnosticsUi::DrawViewport(
                 viewportId);
     }
 
+    if (viewportId == "studio.primary")
+    {
+        context.Separator();
+        context.Text("Color LUT");
+
+        const auto lutDiagnostics =
+            renderer_->
+                ColorLutDiagnostics();
+
+        context.Text(
+            std::format(
+                "{} | {}^3 | {} / {}",
+                lutDiagnostics.sourcePath,
+                lutDiagnostics.size,
+                post_process::
+                    ColorLutDomainName(
+                        lutDiagnostics.domain),
+                post_process::
+                    ColorLutShaperName(
+                        lutDiagnostics.shaper)));
+
+        if (!lutDiagnostics.title.empty())
+        {
+            context.MutedText(
+                std::format(
+                    "Title: {}",
+                    lutDiagnostics.title));
+        }
+
+        context.MutedText(
+            lutDiagnostics.explicitMetadata
+                ? "Orbit domain/shaper metadata: explicit"
+                : "Orbit domain/shaper metadata: inferred default");
+
+        if (!lutDiagnostics.diagnostic.empty())
+        {
+            context.MutedText(
+                lutDiagnostics.diagnostic);
+        }
+
+        auto lutSettings =
+            renderer_->
+                ColorLutSettings();
+
+        bool lutEnabled =
+            lutSettings.enabled;
+        bool lutSettingsChanged =
+            context.Checkbox(
+                "Enable LUT##color-lut-enabled",
+                lutEnabled);
+
+        f64 lutStrength =
+            lutSettings.strength;
+
+        lutSettingsChanged |=
+            context.InputDouble(
+                "LUT Strength##color-lut-strength",
+                lutStrength);
+
+        lutSettings.enabled =
+            lutEnabled;
+        lutSettings.strength =
+            static_cast<f32>(
+                lutStrength);
+
+        if (lutSettingsChanged)
+        {
+            renderer_->
+                SetColorLutSettings(
+                    lutSettings);
+        }
+
+        context.Text("Project LUT Assets");
+
+        for (const auto& path :
+             renderer_->
+                 ColorLutAssetPaths())
+        {
+            if (context.Selectable(
+                    path,
+                    path ==
+                        lutDiagnostics.
+                            sourcePath))
+            {
+                static_cast<void>(
+                    renderer_->
+                        SelectColorLutAsset(
+                            path));
+            }
+        }
+
+        static std::string
+            importLutPath;
+
+        context.InputText(
+            "External .cube Path##color-lut-import-path",
+            importLutPath);
+
+        if (context.Button(
+                "Import & Select LUT##color-lut-import"))
+        {
+            static_cast<void>(
+                renderer_->
+                    ImportColorLutFile(
+                        importLutPath));
+        }
+
+        if (context.Button(
+                "Reset Identity LUT##color-lut-reset"))
+        {
+            renderer_->
+                SetColorLut(
+                    post_process::
+                        BuildIdentityColorLut());
+        }
+    }
+
     context.Separator();
     context.Text("Tone Mapping / Display Headroom");
 
