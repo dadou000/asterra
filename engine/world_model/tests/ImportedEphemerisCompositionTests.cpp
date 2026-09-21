@@ -126,7 +126,7 @@ int main()
             });
 
         orbit::world_model::UniverseComposition composition;
-        composition.Rebuild(objects);
+        (void)composition.Rebuild(objects);
 
         const auto bodyFrame =
             composition.FrameForObject(bodyObject);
