@@ -303,7 +303,7 @@ void VulkanCommandList::EndRenderingIfActive()
 }
 
 void VulkanCommandList::BeginRendering(
-    VkRenderingAttachmentInfo* colorAttachment,
+    const std::span<const VkRenderingAttachmentInfo> colorAttachments,
     VkRenderingAttachmentInfo* depthAttachment,
     const u32 width,
     const u32 height)
@@ -314,14 +314,12 @@ void VulkanCommandList::BeginRendering(
     // CopyBuffer on this command list -- which cannot be recorded
     // inside a dynamic-rendering scope -- can pause and transparently
     // resume rendering around the copy without ever re-clearing.
-    if (colorAttachment != nullptr)
+    pausedColorAttachments_.assign(
+        colorAttachments.begin(),
+        colorAttachments.end());
+    for (auto& attachment : pausedColorAttachments_)
     {
-        pausedColorAttachment_ = *colorAttachment;
-        pausedColorAttachment_->loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    }
-    else
-    {
-        pausedColorAttachment_.reset();
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     }
 
     if (depthAttachment != nullptr)
@@ -342,10 +340,12 @@ void VulkanCommandList::BeginRendering(
     renderingInfo.renderArea = {{0, 0}, {width, height}};
     renderingInfo.layerCount = 1;
 
-    if (colorAttachment != nullptr)
+    if (!colorAttachments.empty())
     {
-        renderingInfo.colorAttachmentCount = 1;
-        renderingInfo.pColorAttachments = colorAttachment;
+        renderingInfo.colorAttachmentCount =
+            static_cast<u32>(colorAttachments.size());
+        renderingInfo.pColorAttachments =
+            colorAttachments.data();
     }
 
     if (depthAttachment != nullptr)
@@ -372,9 +372,7 @@ void VulkanCommandList::ResumeRenderingIfPaused(const bool wasRendering)
     }
 
     BeginRendering(
-        pausedColorAttachment_.has_value()
-            ? &*pausedColorAttachment_
-            : nullptr,
+        pausedColorAttachments_,
         pausedDepthAttachment_.has_value()
             ? &*pausedDepthAttachment_
             : nullptr,
@@ -840,8 +838,11 @@ void VulkanCommandList::SetRenderTarget(Texture& texture)
         colorAttachment.clearValue = *pendingClear;
     }
 
+    const std::array colorAttachments{
+        colorAttachment
+    };
     BeginRendering(
-        &colorAttachment,
+        colorAttachments,
         nullptr,
         vulkanTexture->Width(),
         vulkanTexture->Height());
@@ -896,11 +897,123 @@ void VulkanCommandList::SetRenderTargets(
         depthAttachment.clearValue = *pendingDepthClear;
     }
 
+    const std::array colorAttachments{
+        colorAttachment
+    };
     BeginRendering(
-        &colorAttachment,
+        colorAttachments,
         &depthAttachment,
         vulkanColor->Width(),
         vulkanColor->Height());
+}
+
+void VulkanCommandList::SetRenderTargets(
+    const std::span<Texture* const> colors,
+    Texture* depth)
+{
+    if (colors.empty() || colors.size() > 4U)
+    {
+        throw std::invalid_argument(
+            "Orbit Vulkan MRT requires between one and four color targets.");
+    }
+
+    std::array<VkRenderingAttachmentInfo, 4> nativeColors{};
+    u32 width = 0U;
+    u32 height = 0U;
+
+    for (std::size_t index = 0; index < colors.size(); ++index)
+    {
+        auto* texture =
+            dynamic_cast<VulkanTexture*>(colors[index]);
+        if (texture == nullptr)
+        {
+            throw std::runtime_error(
+                "Orbit Vulkan received an incompatible MRT color target.");
+        }
+
+        if (index == 0U)
+        {
+            width = texture->Width();
+            height = texture->Height();
+        }
+        else if (texture->Width() != width ||
+                 texture->Height() != height)
+        {
+            throw std::invalid_argument(
+                "Orbit Vulkan MRT color targets must have equal extents.");
+        }
+
+        const auto pendingClear =
+            texture->TakePendingClear();
+
+        auto& attachment = nativeColors[index];
+        attachment.sType =
+            VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        attachment.imageView = texture->View();
+        attachment.imageLayout =
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp =
+            pendingClear.has_value()
+                ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                : VK_ATTACHMENT_LOAD_OP_LOAD;
+        attachment.storeOp =
+            VK_ATTACHMENT_STORE_OP_STORE;
+
+        if (pendingClear.has_value())
+        {
+            attachment.clearValue = *pendingClear;
+        }
+    }
+
+    VkRenderingAttachmentInfo depthAttachment{};
+    VkRenderingAttachmentInfo* depthPtr = nullptr;
+
+    if (depth != nullptr)
+    {
+        auto* nativeDepth =
+            dynamic_cast<VulkanTexture*>(depth);
+        if (nativeDepth == nullptr)
+        {
+            throw std::runtime_error(
+                "Orbit Vulkan received an incompatible MRT depth target.");
+        }
+        if (nativeDepth->Width() != width ||
+            nativeDepth->Height() != height)
+        {
+            throw std::invalid_argument(
+                "Orbit Vulkan MRT depth target must match color extents.");
+        }
+
+        const auto pendingDepthClear =
+            nativeDepth->TakePendingClear();
+
+        depthAttachment.sType =
+            VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView =
+            nativeDepth->View();
+        depthAttachment.imageLayout =
+            VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp =
+            pendingDepthClear.has_value()
+                ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                : VK_ATTACHMENT_LOAD_OP_LOAD;
+        depthAttachment.storeOp =
+            VK_ATTACHMENT_STORE_OP_STORE;
+        if (pendingDepthClear.has_value())
+        {
+            depthAttachment.clearValue =
+                *pendingDepthClear;
+        }
+        depthPtr = &depthAttachment;
+    }
+
+    BeginRendering(
+        std::span<const VkRenderingAttachmentInfo>(
+            nativeColors.data(),
+            colors.size()),
+        depthPtr,
+        width,
+        height);
 }
 
 void VulkanCommandList::SetViewport(const Viewport& viewport)
