@@ -1,0 +1,170 @@
+#include <orbit/lighting/RadianceClipmapResidency.hpp>
+
+#include <algorithm>
+
+int main()
+{
+    using namespace orbit;
+    using namespace orbit::lighting;
+
+    const RadianceClipmapConfig config{
+        .baseCellSizeMeters = 1.0,
+        .levelScale = 2.0,
+        .levelCount = 2U,
+        .cellsPerAxis = 4U
+    };
+
+    LightingView view;
+    view.frame = frames::FrameId{
+        .high = 1U,
+        .low = 2U};
+    view.body = universe::BodyId{
+        .high = 3U,
+        .low = 4U};
+
+    RadianceClipmapResidency residency(
+        config);
+
+    residency.Reset(
+        view,
+        {0.0, 0.0, 0.0},
+        10U);
+
+    auto initial =
+        residency.Stats();
+
+    if (initial.residentCells != 128U ||
+        initial.dirtyCells != 128U)
+    {
+        return 1;
+    }
+
+    // Stationary scene converges as update candidates are committed.
+    while (true)
+    {
+        const auto updates =
+            residency.BuildUpdateList(
+                {0.0, 0.0, 0.0},
+                13U);
+
+        if (updates.empty())
+        {
+            break;
+        }
+
+        for (const auto& update :
+             updates)
+        {
+            const bool committed =
+                residency.CommitUpdate(
+                    update.key,
+                    DirectionalIrradianceL1{
+                        .l0 = {
+                            1.0F,
+                            0.5F,
+                            0.25F}
+                    },
+                    16U,
+                    10U);
+
+            if (!committed)
+            {
+                return 2;
+            }
+        }
+    }
+
+    if (residency.Stats().dirtyCells != 0U)
+    {
+        return 3;
+    }
+
+    const auto oldKey =
+        RadianceCellForPoint(
+            {0.25, 0.25, 0.25},
+            config,
+            0U,
+            view);
+
+    if (residency.Lookup(
+            oldKey,
+            10U) == nullptr)
+    {
+        return 4;
+    }
+
+    // One-cell motion reuses most toroidal slots instead of full-clearing.
+    const auto scrolled =
+        residency.ScrollTo(
+            view,
+            {1.1, 0.0, 0.0},
+            10U,
+            0.016F);
+
+    if (scrolled.reusedCells == 0U ||
+        scrolled.replacedCells == 0U ||
+        scrolled.replacedCells >=
+            scrolled.residentCells)
+    {
+        return 5;
+    }
+
+    // Revision change rejects stale cells immediately.
+    static_cast<void>(
+        residency.ScrollTo(
+            view,
+            {1.1, 0.0, 0.0},
+            11U,
+            0.016F));
+
+    if (residency.Lookup(
+            oldKey,
+            11U) != nullptr ||
+        residency.Stats().dirtyCells == 0U)
+    {
+        return 6;
+    }
+
+    const auto updates =
+        residency.BuildUpdateList(
+            {1.1, 0.0, 0.0},
+            8U);
+
+    if (updates.empty())
+    {
+        return 7;
+    }
+
+    // A local invalidation marks nearby cells dirty without affecting the
+    // logical key identity.
+    const auto targetKey =
+        updates.front().key;
+
+    if (!residency.CommitUpdate(
+            targetKey,
+            {},
+            4U,
+            11U))
+    {
+        return 8;
+    }
+
+    const auto targetCenter =
+        RadianceCellCenterInFrame(
+            targetKey,
+            config);
+
+    residency.InvalidateSphere(
+        targetCenter,
+        0.1,
+        12U);
+
+    if (residency.Lookup(
+            targetKey,
+            12U) != nullptr)
+    {
+        return 9;
+    }
+
+    return 0;
+}
