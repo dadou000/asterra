@@ -50,6 +50,10 @@ int main()
             .width = width,
             .height = height,
             .giRadiance = pixels
+        },
+        {
+            .leafTileWidth = 1U,
+            .leafTileHeight = 1U
         });
 
     if (hierarchy.nodes.empty() ||
