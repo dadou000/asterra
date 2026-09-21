@@ -115,6 +115,29 @@ inline constexpr schema::PropertyId kPhotosphereRadiusMeters{
 inline constexpr schema::PropertyId kPhotosphereTemperatureKelvin{
     .high = 0x4f5242495450484fULL, .low = 0x54454d504b000001ULL};
 
+inline constexpr schema::PropertyId kPhotosphereLimbDarkening{
+    .high = 0x4f5242495450484fULL, .low = 0x4c494d4244415201ULL};
+inline constexpr schema::PropertyId kPhotosphereGranulationStrength{
+    .high = 0x4f5242495450484fULL, .low = 0x4752414e53545201ULL};
+inline constexpr schema::PropertyId kPhotosphereGranulationScale{
+    .high = 0x4f5242495450484fULL, .low = 0x4752414e53434c01ULL};
+inline constexpr schema::PropertyId kPhotosphereActivityLevel{
+    .high = 0x4f5242495450484fULL, .low = 0x4143544956495401ULL};
+inline constexpr schema::PropertyId kPhotosphereActivitySeed{
+    .high = 0x4f5242495450484fULL, .low = 0x4143545345454401ULL};
+inline constexpr schema::PropertyId kPhotosphereChromosphereStrength{
+    .high = 0x4f5242495450484fULL, .low = 0x4348524f4d535401ULL};
+inline constexpr schema::PropertyId kPhotosphereChromosphereExtent{
+    .high = 0x4f5242495450484fULL, .low = 0x4348524f4d455801ULL};
+inline constexpr schema::PropertyId kPhotosphereCoronaStrength{
+    .high = 0x4f5242495450484fULL, .low = 0x434f524f4e535401ULL};
+inline constexpr schema::PropertyId kPhotosphereCoronaExtent{
+    .high = 0x4f5242495450484fULL, .low = 0x434f524f4e455801ULL};
+inline constexpr schema::PropertyId kPhotosphereGlareStrength{
+    .high = 0x4f5242495450484fULL, .low = 0x474c415245535401ULL};
+inline constexpr schema::PropertyId kPhotosphereGlareRadiusPixels{
+    .high = 0x4f5242495450484fULL, .low = 0x474c415245525001ULL};
+
 inline constexpr schema::PropertyId kAtmosphereTopRadiusMeters{
     .high = 0x4f5242495441544dULL, .low = 0x544f505241440001ULL};
 inline constexpr schema::PropertyId kAtmosphereRayleighScatteringPerMeter{
