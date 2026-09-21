@@ -416,6 +416,10 @@ public:
         Texture& color,
         Texture& depth) override;
 
+    void SetRenderTargets(
+        std::span<Texture* const> colors,
+        Texture* depth) override;
+
     void SetViewport(const Viewport& viewport) override;
     void SetScissor(const ScissorRect& rect) override;
 
@@ -489,7 +493,7 @@ public:
 private:
     void EndRenderingIfActive();
     void BeginRendering(
-        VkRenderingAttachmentInfo* colorAttachment,
+        std::span<const VkRenderingAttachmentInfo> colorAttachments,
         VkRenderingAttachmentInfo* depthAttachment,
         u32 width,
         u32 height);
@@ -507,7 +511,7 @@ private:
     // call to fail against.
     [[nodiscard]] bool PauseRenderingIfActive();
     void ResumeRenderingIfPaused(bool wasRendering);
-    std::optional<VkRenderingAttachmentInfo> pausedColorAttachment_;
+    std::vector<VkRenderingAttachmentInfo> pausedColorAttachments_;
     std::optional<VkRenderingAttachmentInfo> pausedDepthAttachment_;
     u32 pausedWidth_{0};
     u32 pausedHeight_{0};
