@@ -21,6 +21,7 @@ struct CompileRequest
     Stage stage{Stage::Vertex};
     u32 shaderModelMajor{6U};
     u32 shaderModelMinor{0U};
+    bool enableSpirvRayQuery{false};
     bool debug{false};
 };
 
