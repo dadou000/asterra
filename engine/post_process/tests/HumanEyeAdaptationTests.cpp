@@ -110,6 +110,47 @@ int main()
     Check(state.overload < overloaded * 0.25F);
     Check(state.darkAdaptation < 0.25F);
 
+    HumanEyeAdaptationState rate60{};
+    HumanEyeAdaptationState rate20{};
+
+    rate60 =
+        UpdateHumanEyeAdaptation(
+            rate60,
+            Stats(0.0F, 1.0F, 2.0F, 3.0F),
+            1.0F / 60.0F);
+    rate20 =
+        UpdateHumanEyeAdaptation(
+            rate20,
+            Stats(0.0F, 1.0F, 2.0F, 3.0F),
+            1.0F / 20.0F);
+
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        rate60 =
+            UpdateHumanEyeAdaptation(
+                rate60,
+                Stats(-7.0F, -6.0F, -5.0F, -4.0F),
+                1.0F / 60.0F);
+    }
+
+    for (int frame = 0; frame < 40; ++frame)
+    {
+        rate20 =
+            UpdateHumanEyeAdaptation(
+                rate20,
+                Stats(-7.0F, -6.0F, -5.0F, -4.0F),
+                1.0F / 20.0F);
+    }
+
+    Check(std::abs(
+              rate60.photopicLog2 -
+              rate20.photopicLog2) <
+          0.02F);
+    Check(std::abs(
+              rate60.darkAdaptation -
+              rate20.darkAdaptation) <
+          0.01F);
+
     ResetHumanEyeAdaptation(state);
     Check(!state.initialized);
     Check(state.darkAdaptation == 0.0F);
