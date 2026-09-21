@@ -8274,6 +8274,16 @@ StudioViewportRenderer::Compose(
                                 .access =
                                     render_graph::Access::
                                         Read
+                            },
+                            {
+                                .texture =
+                                    targets.depth,
+                                .state =
+                                    rhi::ResourceState::
+                                        DepthRead,
+                                .access =
+                                    render_graph::Access::
+                                        Read
                             }
                         },
                         {
@@ -8322,6 +8332,7 @@ StudioViewportRenderer::Compose(
                          gatherScratch,
                          lightingBaseRoughness,
                          lightingNormalMetallic,
+                         lightingDepth,
                          exactReflectionResultsHandle,
                          exactReflectionPixelMapHandle,
                          radianceCellsHandle,
@@ -8330,6 +8341,7 @@ StudioViewportRenderer::Compose(
                          maximumExactReflectionQueries,
                          width,
                          height,
+                         lightingView,
                          exactSceneToCurrentOrigin](
                             rhi::CommandList& commands,
                             const render_graph::Resources&
@@ -8341,6 +8353,7 @@ StudioViewportRenderer::Compose(
                                     *gatherScratch,
                                     *lightingBaseRoughness,
                                     *lightingNormalMetallic,
+                                    *lightingDepth,
                                     resources.Buffer(
                                         exactReflectionResultsHandle),
                                     resources.Buffer(
@@ -8353,6 +8366,7 @@ StudioViewportRenderer::Compose(
                                     maximumExactReflectionQueries,
                                     width,
                                     height,
+                                    lightingView,
                                     exactSceneToCurrentOrigin);
                         });
                 }
