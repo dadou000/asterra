@@ -51,6 +51,19 @@ struct ResolvedLocalLight
     u64 stableId{0U};
 };
 
+struct GpuLocalLight
+{
+    math::Float4 positionType{};
+    math::Float4 directionRange{};
+    math::Float4 colorFlux{};
+    math::Float4 cone{};
+};
+
+static_assert(sizeof(GpuLocalLight) == 64U);
+
+[[nodiscard]] GpuLocalLight EncodeGpuLocalLight(
+    const ResolvedLocalLight& light) noexcept;
+
 struct TiledLightGridConfig
 {
     u32 tileSizePixels{16U};
