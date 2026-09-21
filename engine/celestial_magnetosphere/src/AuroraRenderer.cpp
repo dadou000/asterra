@@ -228,6 +228,37 @@ float4 main(VSOut i) : SV_Target0
     if(radial<bodyOcclusionRadius)
         discard;
 
+    // Hide auroral fragments whose camera ray intersects the solid body
+    // before reaching the curtain. The renderer is camera/body-relative,
+    // so a unit sphere is the conservative body-occlusion baseline.
+    const float3 camera=
+        g.cameraAndAspect.xyz;
+    const float3 toPoint=
+        i.bodyPosition-camera;
+    const float pointDistance=
+        length(toPoint);
+    const float3 ray=
+        toPoint/max(pointDistance,1e-6);
+
+    const float b=
+        2.0*dot(camera,ray);
+    const float cc=
+        dot(camera,camera)-
+        bodyOcclusionRadius*
+        bodyOcclusionRadius;
+    const float disc=
+        b*b-4.0*cc;
+
+    if(disc>=0.0)
+    {
+        const float nearT=
+            (-b-sqrt(disc))*0.5;
+
+        if(nearT>0.0 &&
+           nearT<pointDistance)
+            discard;
+    }
+
     // Treat the curtain as a thin emissive volume. Edge-on views remain
     // visible without inventing a surface normal or diffuse lighting term.
     const float heightFade=
