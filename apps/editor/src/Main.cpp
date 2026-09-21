@@ -53,6 +53,7 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
+#include <orbit/studio_ui/SystemViewUi.hpp>
 #include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
@@ -1938,6 +1939,11 @@ int main(
                 studioSession);
         celestialAuthoringUi.Register(ui);
 
+        orbit::studio_ui::SystemViewUi
+            systemViewUi(
+                studioSession);
+        systemViewUi.Register(ui);
+
         orbit::studio_ui::SurfaceAuthoringUi
             surfaceAuthoringUi(
                 studioSession);
@@ -1961,6 +1967,9 @@ int main(
                         CelestialAuthoringUi::kPanel) ||
                 !ui.HasPanel(
                     orbit::studio_ui::
+                        SystemViewUi::kPanel) ||
+                !ui.HasPanel(
+                    orbit::studio_ui::
                         ProjectSettingsUi::
                             kPanelId))
             {
@@ -1978,6 +1987,12 @@ int main(
                 ui.SetPanelOpen(
                     orbit::studio_ui::
                         CelestialAuthoringUi::kPanel,
+                    true));
+
+            static_cast<void>(
+                ui.SetPanelOpen(
+                    orbit::studio_ui::
+                        SystemViewUi::kPanel,
                     true));
 
             static_cast<void>(
@@ -6428,6 +6443,9 @@ int main(
 
             rpcServer.Poll();
 
+            studioSession.Clock().Advance(
+                deltaSeconds);
+
             const auto studioTick =
                 studioSession.Tick(false);
 
@@ -6976,7 +6994,7 @@ int main(
                     studioSession,
                     studioRuntime,
                     studioSnapshot,
-                    {},
+                    studioSession.Clock().Time(),
                     pathDebugVisualization,
                     swapchain.
                         CurrentBackBufferIndex());
