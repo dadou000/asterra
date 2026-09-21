@@ -2210,6 +2210,33 @@ void StudioViewportRenderer::SetHighlightEffectsConfig(
             config;
 }
 
+void StudioViewportRenderer::SetToneMappingConfig(
+    const std::string_view viewportId,
+    post_process::ToneMappingConfig config)
+{
+    config.referenceWhiteNits =
+        std::max(
+            config.referenceWhiteNits,
+            1.0e-3F);
+    config.peakNits =
+        std::max(
+            config.peakNits,
+            config.referenceWhiteNits);
+    config.shoulderStart =
+        std::max(
+            config.shoulderStart,
+            0.0F);
+    config.shoulderStrength =
+        std::max(
+            config.shoulderStrength,
+            1.0e-3F);
+
+    luminanceHistogramPresentations_[
+        std::string(viewportId)].
+        diagnostics.toneMapping =
+            config;
+}
+
 void StudioViewportRenderer::SetLuminanceMeteringOverlay(
     const std::string_view viewportId,
     const bool enabled)
@@ -9197,6 +9224,8 @@ StudioViewportRenderer::Compose(
                     histogram.diagnostics.eyeState;
                 const auto retainedHighlightConfig =
                     histogram.diagnostics.highlightConfig;
+                const auto retainedToneMapping =
+                    histogram.diagnostics.toneMapping;
                 const auto retainedEyeUpdate =
                     histogram.lastEyeUpdate;
                 const bool retainedHasEyeUpdateTime =
@@ -9213,6 +9242,8 @@ StudioViewportRenderer::Compose(
                     retainedEyeState;
                 histogram.diagnostics.highlightConfig =
                     retainedHighlightConfig;
+                histogram.diagnostics.toneMapping =
+                    retainedToneMapping;
                 histogram.lastEyeUpdate =
                     retainedEyeUpdate;
                 histogram.hasEyeUpdateTime =
@@ -9814,7 +9845,7 @@ StudioViewportRenderer::Compose(
                         width,
                         height,
                         displayResolveSettings.exposureScale,
-                        displayResolveSettings.toneMapEnabled,
+                        found->second.diagnostics.toneMapping,
                         highlightConfig);
                 });
         }
