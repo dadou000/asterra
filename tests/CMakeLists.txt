@@ -1186,3 +1186,32 @@ add_custom_target(OrbitV005IntegrationGate
     VERBATIM
     USES_TERMINAL
 )
+
+
+# V0.0.6 M34 deterministic celestial cross-module reference cases.
+# Module-owned tests remain authoritative for detailed behavior; this target
+# locks a small set of numerical, representation and scheduler invariants in
+# one release-level contract.
+add_executable(OrbitV006CelestialValidationTests
+    V006CelestialValidationTests.cpp
+)
+
+target_link_libraries(OrbitV006CelestialValidationTests
+    PRIVATE
+        Orbit::CelestialCompactObjects
+        Orbit::CelestialGiants
+        Orbit::CelestialMagnetosphere
+        Orbit::CelestialRepresentation
+        Orbit::CelestialScheduler
+        Orbit::CelestialSmallBodies
+)
+
+target_compile_features(
+    OrbitV006CelestialValidationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(
+    OrbitV006CelestialValidationTests)
+
+add_test(
+    NAME Orbit.V006CelestialValidation
+    COMMAND OrbitV006CelestialValidationTests
+)
