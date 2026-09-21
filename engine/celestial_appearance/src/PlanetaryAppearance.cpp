@@ -432,6 +432,7 @@ BuildPlanetaryAppearance(
                     .roughness = roughness,
                     .oceanMask = ocean,
                     .iceMask = ice,
+                    .directLightTransmittance = 1.0F,
                     // Terrain/climate authority currently provides no
                     // canonical emissive field. Keep the channel explicit
                     // and zero rather than inventing city/lava authority.
@@ -482,7 +483,9 @@ GpuPlanetaryAppearanceProduct(
             .emissionLinear =
                 texel.emissionLinear,
             .iceMask =
-                texel.iceMask
+                texel.iceMask,
+            .directLightTransmittance =
+                texel.directLightTransmittance
         });
     }
 
