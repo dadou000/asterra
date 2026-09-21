@@ -5687,6 +5687,109 @@ StudioViewportRenderer::Compose(
                         gatherSettings);
                 });
 
+            if (radianceLevelCount > 0U)
+            {
+                graph.AddPass(
+                    prefix + ".RadianceCacheFallback",
+                    {
+                        {
+                            .texture =
+                                currentIndirectHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    UnorderedAccess,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        },
+                        {
+                            .texture =
+                                targets.
+                                    surfaceBaseRoughness,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                targets.
+                                    surfaceNormalMetallic,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                targets.depth,
+                            .state =
+                                rhi::ResourceState::
+                                    DepthRead,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        }
+                    },
+                    {
+                        {
+                            .buffer =
+                                radianceCellsHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .buffer =
+                                radianceLevelsHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        }
+                    },
+                    [this,
+                     currentIndirect,
+                     lightingBaseRoughness,
+                     lightingNormalMetallic,
+                     lightingDepth,
+                     radianceCellsHandle,
+                     radianceLevelsHandle,
+                     radianceLevelCount,
+                     width,
+                     height,
+                     lightingView](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&
+                            resources)
+                    {
+                        radianceCacheSampler_.
+                            ResolveFallback(
+                                commands,
+                                *currentIndirect,
+                                *lightingBaseRoughness,
+                                *lightingNormalMetallic,
+                                *lightingDepth,
+                                resources.Buffer(
+                                    radianceCellsHandle),
+                                resources.Buffer(
+                                    radianceLevelsHandle),
+                                radianceLevelCount,
+                                width,
+                                height,
+                                lightingView);
+                    });
+            }
+
             graph.AddPass(
                 prefix + ".FinalGatherCombine",
                 {
