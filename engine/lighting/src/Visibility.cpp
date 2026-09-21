@@ -60,6 +60,58 @@ namespace
 }
 } // namespace
 
+GpuVisibilityQuery EncodeGpuVisibilityQuery(
+    const VisibilityQuery& query,
+    const LightingView& view) noexcept
+{
+    math::Double3 origin =
+        query.originInFrameMeters;
+
+    if (query.frame == view.frame)
+    {
+        origin =
+            origin -
+            view.originInFrameMeters;
+    }
+
+    math::Float3 direction =
+        query.direction;
+
+    const f32 lengthSquared =
+        math::LengthSquared(direction);
+
+    if (std::isfinite(lengthSquared) &&
+        lengthSquared > 1.0e-12F)
+    {
+        direction =
+            math::Normalize(direction);
+    }
+    else
+    {
+        direction =
+            {0.0F, 0.0F, 1.0F};
+    }
+
+    return {
+        .originMinimumDistance = {
+            static_cast<f32>(origin.x),
+            static_cast<f32>(origin.y),
+            static_cast<f32>(origin.z),
+            std::max(
+                query.minimumDistanceMeters,
+                0.0F)
+        },
+        .directionMaximumDistance = {
+            direction.x,
+            direction.y,
+            direction.z,
+            std::max(
+                query.maximumDistanceMeters,
+                query.minimumDistanceMeters)
+        }
+    };
+}
+
 bool ValidateVisibilityQuery(
     const VisibilityQuery& query) noexcept
 {
