@@ -30,6 +30,11 @@ namespace orbit::rhi::vulkan::detail
 struct DeviceFunctions
 {
     PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSetKHR{nullptr};
+    PFN_vkCreateAccelerationStructureKHR vkCreateAccelerationStructureKHR{nullptr};
+    PFN_vkDestroyAccelerationStructureKHR vkDestroyAccelerationStructureKHR{nullptr};
+    PFN_vkGetAccelerationStructureBuildSizesKHR vkGetAccelerationStructureBuildSizesKHR{nullptr};
+    PFN_vkCmdBuildAccelerationStructuresKHR vkCmdBuildAccelerationStructuresKHR{nullptr};
+    PFN_vkGetAccelerationStructureDeviceAddressKHR vkGetAccelerationStructureDeviceAddressKHR{nullptr};
 };
 
 // Maps an abstract ResourceState to how a *texture* attachment/image
@@ -168,6 +173,51 @@ private:
     VmaAllocation allocation_{nullptr};
     BufferDesc desc_{};
     bool mapped_{false};
+};
+
+class VulkanAccelerationStructure final
+    : public AccelerationStructure
+{
+public:
+    VulkanAccelerationStructure(
+        VkDevice device,
+        VmaAllocator allocator,
+        const DeviceFunctions& functions,
+        VkAccelerationStructureKHR bottomLevel,
+        VkAccelerationStructureKHR topLevel,
+        VkBuffer bottomLevelBuffer,
+        VmaAllocation bottomLevelAllocation,
+        VkBuffer topLevelBuffer,
+        VmaAllocation topLevelAllocation,
+        VkBuffer aabbBuffer,
+        VmaAllocation aabbAllocation,
+        VkBuffer instanceBuffer,
+        VmaAllocation instanceAllocation,
+        u32 primitiveCount);
+    ~VulkanAccelerationStructure() override;
+
+    [[nodiscard]] u32 PrimitiveCount() const noexcept override;
+    [[nodiscard]] VkAccelerationStructureKHR TopLevel() const noexcept;
+
+private:
+    VkDevice device_{VK_NULL_HANDLE};
+    VmaAllocator allocator_{nullptr};
+    const DeviceFunctions* functions_{nullptr};
+
+    VkAccelerationStructureKHR bottomLevel_{VK_NULL_HANDLE};
+    VkAccelerationStructureKHR topLevel_{VK_NULL_HANDLE};
+
+    VkBuffer bottomLevelBuffer_{VK_NULL_HANDLE};
+    VmaAllocation bottomLevelAllocation_{nullptr};
+    VkBuffer topLevelBuffer_{VK_NULL_HANDLE};
+    VmaAllocation topLevelAllocation_{nullptr};
+
+    VkBuffer aabbBuffer_{VK_NULL_HANDLE};
+    VmaAllocation aabbAllocation_{nullptr};
+    VkBuffer instanceBuffer_{VK_NULL_HANDLE};
+    VmaAllocation instanceAllocation_{nullptr};
+
+    u32 primitiveCount_{0U};
 };
 
 class VulkanTexture final : public Texture
@@ -309,7 +359,8 @@ public:
         u32 pushConstantDwords,
         u32 shaderResourceBuffers,
         u32 storageTextures,
-        u32 sampledTextures);
+        u32 sampledTextures,
+        u32 accelerationStructures);
     ~VulkanComputePipeline() override;
 
     VulkanComputePipeline(const VulkanComputePipeline&) = delete;
@@ -319,6 +370,7 @@ public:
     [[nodiscard]] u32 ShaderResourceBuffers() const noexcept override;
     [[nodiscard]] u32 StorageTextures() const noexcept override;
     [[nodiscard]] u32 SampledTextures() const noexcept override;
+    [[nodiscard]] u32 AccelerationStructures() const noexcept;
 
     [[nodiscard]] VkPipeline Native() const noexcept;
     [[nodiscard]] VkPipelineLayout Layout() const noexcept;
@@ -332,6 +384,7 @@ private:
     u32 shaderResourceBuffers_{0};
     u32 storageTextures_{0};
     u32 sampledTextures_{0};
+    u32 accelerationStructures_{0};
 };
 
 class VulkanCommandAllocator final : public CommandAllocator
@@ -454,6 +507,10 @@ public:
     void SetComputeTexture(
         u32 slot,
         Texture& texture) override;
+
+    void SetComputeAccelerationStructure(
+        u32 slot,
+        AccelerationStructure& accelerationStructure) override;
 
     void Dispatch(
         u32 groupCountX,
@@ -635,6 +692,10 @@ public:
 
     [[nodiscard]] std::unique_ptr<Texture> CreateTexture(
         const TextureDesc& desc) override;
+
+    [[nodiscard]] std::unique_ptr<AccelerationStructure>
+    CreateAabbAccelerationStructure(
+        std::span<const AccelerationAabb> aabbs) override;
 
     [[nodiscard]] std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         const GraphicsPipelineDesc& desc) override;
