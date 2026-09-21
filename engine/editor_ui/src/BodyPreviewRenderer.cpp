@@ -708,9 +708,15 @@ void BodyPreviewRenderer::DrawSurfaceData(
             material.metallic,
             0.0F,
             1.0F)),
-        0U,
-        0U,
-        0U
+        bits(std::max(
+            material.emissionRadiance.x,
+            0.0F)),
+        bits(std::max(
+            material.emissionRadiance.y,
+            0.0F)),
+        bits(std::max(
+            material.emissionRadiance.z,
+            0.0F))
     };
 
     std::array<rhi::Texture*, 3> targets{
