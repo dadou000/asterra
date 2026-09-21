@@ -122,6 +122,12 @@ public:
         const WorkKey& key,
         u64 authorityRevision);
 
+    // Releases a grant that became irrelevant before execution (for example a
+    // viewport retarget). This is not a stale completion and does not publish.
+    void Abandon(
+        const WorkKey& key,
+        u64 authorityRevision) noexcept;
+
     // Cancels/de-authorizes a subject/work pair. Any later completion for the
     // removed revision is stale.
     void Invalidate(
