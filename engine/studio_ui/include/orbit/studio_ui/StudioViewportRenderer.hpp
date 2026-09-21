@@ -227,6 +227,7 @@ struct StudioLuminanceHistogramDiagnostics
     post_process::HumanEyeAdaptationState eyeState{};
     post_process::HumanEyeAdaptationConfig eyeConfig{};
     post_process::HighlightEffectsConfig highlightConfig{};
+    post_process::ToneMappingConfig toneMapping{};
     bool meteringMaskAvailable{false};
 };
 
@@ -371,6 +372,10 @@ public:
     void SetHighlightEffectsConfig(
         std::string_view viewportId,
         post_process::HighlightEffectsConfig config);
+
+    void SetToneMappingConfig(
+        std::string_view viewportId,
+        post_process::ToneMappingConfig config);
 
     void SetLuminanceMeteringOverlay(
         std::string_view viewportId,
