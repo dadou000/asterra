@@ -317,6 +317,35 @@ MultiOccluderResult CombinedOccultation(
         return {};
     }
 
+    // Preserve the analytic single-occluder solution even when callers pass
+    // additional non-contributing bodies. Sampling is only necessary for a
+    // true multi-disc union and otherwise introduces avoidable quantization.
+    if (contributing == 1U)
+    {
+        for (std::size_t index = 0U;
+             index < prepared.size();
+             ++index)
+        {
+            if (!prepared[index].contributes)
+            {
+                continue;
+            }
+
+            const auto single =
+                FiniteDiscOccultation(
+                    source,
+                    occluders[index]);
+
+            return {
+                .visibleFraction =
+                    single.visibleFraction,
+                .obscuredFraction =
+                    single.obscuredFraction,
+                .contributingOccluders = 1U
+            };
+        }
+    }
+
     // Deterministic equal-area sampling of the source disc. This evaluates
     // the union of all projected occluder discs, so overlapping occluders
     // are not double-counted. The single-occluder path above remains fully
