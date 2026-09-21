@@ -17,6 +17,7 @@ target_link_libraries(
     OrbitCelestialFarRender
     PUBLIC
         Orbit::CelestialAppearance
+        Orbit::CelestialLighting
         Orbit::CelestialRepresentation
         Orbit::Core
         Orbit::Math
