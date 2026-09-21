@@ -192,6 +192,17 @@ struct Builder
                 : math::Double2{
                       centerU,
                       centerV};
+
+        result.nodes[index].
+            energyCentroidInFrameMeters =
+                surface->originInFrameMeters +
+                surface->axisUInFrameMeters *
+                    result.nodes[index].
+                        energyWeightedUv.x +
+                surface->axisVInFrameMeters *
+                    result.nodes[index].
+                        energyWeightedUv.y;
+
         result.nodes[index].areaMetersSquared =
             texelArea *
             static_cast<f64>(
