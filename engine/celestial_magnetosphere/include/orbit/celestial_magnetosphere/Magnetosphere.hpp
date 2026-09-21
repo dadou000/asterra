@@ -53,7 +53,7 @@ struct AuroraVertex
 {
     math::Float3 positionNormalized{};
     math::Float3 emissionLinear{};
-    f32 opacity{0.0F};
+    math::Float2 presentation{};
 };
 
 struct AuroraMeshProduct
