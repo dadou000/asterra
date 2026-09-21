@@ -19,20 +19,29 @@ namespace
 {
 using Microsoft::WRL::ComPtr;
 
-[[nodiscard]] const wchar_t* ProfileForStage(const Stage stage)
+[[nodiscard]] std::wstring ProfileForStage(
+    const Stage stage,
+    const u32 major,
+    const u32 minor)
 {
+    const wchar_t* prefix = nullptr;
+
     switch (stage)
     {
-    case Stage::Vertex:
-        return L"vs_6_0";
-    case Stage::Pixel:
-        return L"ps_6_0";
-    case Stage::Compute:
-        return L"cs_6_0";
+    case Stage::Vertex: prefix = L"vs"; break;
+    case Stage::Pixel: prefix = L"ps"; break;
+    case Stage::Compute: prefix = L"cs"; break;
+    default:
+        throw std::invalid_argument(
+            "Orbit received an invalid shader stage.");
     }
 
-    throw std::invalid_argument(
-        "Orbit received an invalid shader stage.");
+    return
+        std::wstring(prefix) +
+        L"_" +
+        std::to_wstring(major) +
+        L"_" +
+        std::to_wstring(minor);
 }
 
 // Every identifier this ever has to convert (entry points, shader
@@ -86,7 +95,17 @@ Binary DxcShaderCompiler::Compile(const CompileRequest& request) const
     }
 
     const std::wstring entryPoint = WidenAscii(request.entryPoint);
-    const std::wstring profile = ProfileForStage(request.stage);
+    if (request.shaderModelMajor < 6U)
+    {
+        throw std::invalid_argument(
+            "Orbit requires shader model 6.x or newer.");
+    }
+
+    const std::wstring profile =
+        ProfileForStage(
+            request.stage,
+            request.shaderModelMajor,
+            request.shaderModelMinor);
 
     std::vector<LPCWSTR> arguments{
         L"-E", entryPoint.c_str(),
