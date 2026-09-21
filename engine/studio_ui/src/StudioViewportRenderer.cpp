@@ -144,6 +144,212 @@ BuildVisibilityProxies(
 }
 
 [[nodiscard]] std::vector<editor_ui::PreviewLine>
+SelectedMagnetosphereDiagnosticLines(
+    studio_session::StudioSession& session,
+    const world_model::ResolvedMagnetosphere& resolved,
+    const f64 referenceRadiusMeters,
+    const render_view::CameraState& camera)
+{
+    std::vector<editor_ui::PreviewLine> lines;
+
+    if (!session.World().HasWorld() ||
+        session.World().Selection().Ordered().size() != 1U ||
+        referenceRadiusMeters <= 0.0)
+    {
+        return lines;
+    }
+
+    const auto selected =
+        session.World().Selection().Ordered().front();
+    const auto selectedRecord =
+        session.World().Objects().Find(selected);
+
+    if (!selectedRecord.has_value() ||
+        selectedRecord->type !=
+            world_model::kMagnetosphereCapabilityType)
+    {
+        return lines;
+    }
+
+    const auto toRelative =
+        [&](const math::Double3 p)
+        {
+            return math::Float3{
+                static_cast<f32>(p.x - camera.localPositionMeters.x),
+                static_cast<f32>(p.y - camera.localPositionMeters.y),
+                static_cast<f32>(p.z - camera.localPositionMeters.z)
+            };
+        };
+
+    auto axis = resolved.parameters.dipoleAxis;
+    if (math::LengthSquared(axis) <= 1.0e-20)
+        axis = {0.0, 0.0, 1.0};
+    axis = math::Normalize(axis);
+
+    math::Double3 reference{1.0, 0.0, 0.0};
+    if (std::abs(math::Dot(axis, reference)) > 0.9)
+        reference = {0.0, 1.0, 0.0};
+
+    const auto basisU =
+        math::Normalize(
+            reference - axis * math::Dot(axis, reference));
+    const auto basisV =
+        math::Normalize(math::Cross(axis, basisU));
+
+    constexpr math::Float4 kFieldColor{
+        0.28F, 0.72F, 1.0F, 0.8F};
+    constexpr math::Float4 kMagnetopauseColor{
+        0.85F, 0.36F, 1.0F, 0.85F};
+
+    constexpr u32 kFieldShells = 6U;
+    constexpr u32 kFieldSteps = 64U;
+    constexpr f64 kDegreesToRadians =
+        0.017453292519943295769;
+
+    for (u32 shell = 0U; shell < kFieldShells; ++shell)
+    {
+        const f64 azimuth =
+            2.0 * std::numbers::pi_v<f64> *
+            static_cast<f64>(shell) /
+            static_cast<f64>(kFieldShells);
+
+        const auto equatorial =
+            basisU * std::cos(azimuth) +
+            basisV * std::sin(azimuth);
+
+        const f64 lShell =
+            2.0 + static_cast<f64>(shell % 3U) * 0.85;
+
+        std::optional<math::Double3> previous;
+
+        for (u32 step = 0U; step <= kFieldSteps; ++step)
+        {
+            const f64 latitude =
+                (-70.0 +
+                 140.0 * static_cast<f64>(step) /
+                     static_cast<f64>(kFieldSteps)) *
+                kDegreesToRadians;
+
+            const f64 cosLatitude = std::cos(latitude);
+            const f64 radiusBodyRadii =
+                lShell * cosLatitude * cosLatitude;
+
+            const auto direction =
+                math::Normalize(
+                    axis * std::sin(latitude) +
+                    equatorial * cosLatitude);
+
+            const auto point =
+                direction *
+                (radiusBodyRadii * referenceRadiusMeters);
+
+            if (radiusBodyRadii > 1.03)
+            {
+                if (previous.has_value())
+                {
+                    lines.push_back({
+                        .start = toRelative(*previous),
+                        .end = toRelative(point),
+                        .color = kFieldColor
+                    });
+                }
+                previous = point;
+            }
+            else
+            {
+                previous.reset();
+            }
+        }
+    }
+
+    auto wind = resolved.parameters.solarWindDirection;
+    if (math::LengthSquared(wind) <= 1.0e-20)
+        wind = {-1.0, 0.0, 0.0};
+
+    const auto sunward = -math::Normalize(wind);
+
+    math::Double3 windReference{0.0, 1.0, 0.0};
+    if (std::abs(math::Dot(sunward, windReference)) > 0.9)
+        windReference = {0.0, 0.0, 1.0};
+
+    const auto windU =
+        math::Normalize(
+            windReference -
+            sunward * math::Dot(sunward, windReference));
+    const auto windV =
+        math::Normalize(math::Cross(sunward, windU));
+
+    constexpr u32 kEnvelopeSteps = 72U;
+
+    const auto addEnvelope =
+        [&](const math::Double3 transverse)
+        {
+            std::optional<math::Double3> previousPositive;
+            std::optional<math::Double3> previousNegative;
+
+            for (u32 step = 0U; step <= kEnvelopeSteps; ++step)
+            {
+                const f64 theta =
+                    (std::numbers::pi_v<f64> - 0.08) *
+                    static_cast<f64>(step) /
+                    static_cast<f64>(kEnvelopeSteps);
+
+                const auto positiveDirection =
+                    math::Normalize(
+                        sunward * std::cos(theta) +
+                        transverse * std::sin(theta));
+
+                const auto negativeDirection =
+                    math::Normalize(
+                        sunward * std::cos(theta) -
+                        transverse * std::sin(theta));
+
+                const auto positivePoint =
+                    positiveDirection *
+                    celestial_magnetosphere::
+                        MagnetopauseRadiusMeters(
+                            resolved.parameters,
+                            referenceRadiusMeters,
+                            positiveDirection);
+
+                const auto negativePoint =
+                    negativeDirection *
+                    celestial_magnetosphere::
+                        MagnetopauseRadiusMeters(
+                            resolved.parameters,
+                            referenceRadiusMeters,
+                            negativeDirection);
+
+                if (previousPositive.has_value())
+                {
+                    lines.push_back({
+                        .start = toRelative(*previousPositive),
+                        .end = toRelative(positivePoint),
+                        .color = kMagnetopauseColor
+                    });
+                }
+
+                if (previousNegative.has_value())
+                {
+                    lines.push_back({
+                        .start = toRelative(*previousNegative),
+                        .end = toRelative(negativePoint),
+                        .color = kMagnetopauseColor
+                    });
+                }
+
+                previousPositive = positivePoint;
+                previousNegative = negativePoint;
+            }
+        };
+
+    addEnvelope(windU);
+    addEnvelope(windV);
+
+    return lines;
+}
+
+[[nodiscard]] std::vector<editor_ui::PreviewLine>
 SelectedLocalLightGizmoLines(
     studio_session::StudioSession& session,
     const render_view::CameraState& camera)
@@ -6284,6 +6490,52 @@ StudioViewportRenderer::Compose(
                                 height,
                                 camera,
                                 overlayLines);
+                    });
+            }
+        }
+
+        if (resolvedMagnetosphereForView.has_value() &&
+            shape.has_value() &&
+            logicalTarget->mode !=
+                studio_session::ViewportMode::Debug)
+        {
+            auto magnetosphereLines =
+                SelectedMagnetosphereDiagnosticLines(
+                    session,
+                    *resolvedMagnetosphereForView,
+                    ReferenceRadiusForShape(*shape),
+                    view->Camera());
+
+            if (!magnetosphereLines.empty())
+            {
+                const auto camera = view->Camera();
+
+                graph.AddPass(
+                    prefix + ".MagnetosphereDiagnostics",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        }
+                    },
+                    [this,
+                     color,
+                     width,
+                     height,
+                     camera,
+                     magnetosphereLines =
+                         std::move(magnetosphereLines)](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        pathRenderer_.DrawCameraRelativeLines(
+                            commands,
+                            *color,
+                            width,
+                            height,
+                            camera,
+                            magnetosphereLines);
                     });
             }
         }
