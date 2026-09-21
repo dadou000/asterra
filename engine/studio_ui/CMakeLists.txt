@@ -10,6 +10,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioUiBundle.cpp
     src/SurfaceAuthoringUi.cpp
     src/SystemViewUi.cpp
+    src/VolumeAuthoringUi.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
