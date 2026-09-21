@@ -470,6 +470,26 @@ void RadianceClipmapResidency::InvalidateSphere(
     }
 }
 
+void RadianceClipmapResidency::RequestGlobalRefresh() noexcept
+{
+    for (auto& level : levels_)
+    {
+        for (auto& slot : level.slots)
+        {
+            if (!slot.occupied ||
+                !BelongsToCurrentWindow(slot.key))
+            {
+                continue;
+            }
+
+            // Keep cell.valid intact. Dirty means "schedule a refresh";
+            // invalid means "do not sample". Dynamic lighting changes need
+            // the former so large caches can converge under a fixed budget.
+            slot.dirty = true;
+        }
+    }
+}
+
 std::vector<RadianceUpdateCandidate>
 RadianceClipmapResidency::BuildUpdateList(
     const math::Double3& observerInFrameMeters,
@@ -761,7 +781,6 @@ RadianceClipmapResidency::BuildGpuSnapshot(
                 slot.occupied &&
                 BelongsToCurrentWindow(
                     slot.key) &&
-                !slot.dirty &&
                 slot.cell.valid &&
                 slot.sourceRevision ==
                     sourceRevision_ &&
