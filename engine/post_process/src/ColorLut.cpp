@@ -529,34 +529,65 @@ ParseCubeColorLut(
     result.lut.rgba8.resize(
         expectedSamples * 4U);
 
-    // .cube order is red-fastest, then green, then blue, which matches
-    // Orbit's packed horizontal blue-slice representation.
-    for (std::size_t index = 0U;
-         index < samples.size();
-         ++index)
+    // .cube rows are R-fastest, then G, then B. Orbit packs blue
+    // slices horizontally and green along texture Y, so the semantic axes
+    // match but row-major byte order requires an explicit remap.
+    for (u32 blue = 0U;
+         blue < declaredSize;
+         ++blue)
     {
-        for (u32 channel = 0U;
-             channel < 3U;
-             ++channel)
+        for (u32 green = 0U;
+             green < declaredSize;
+             ++green)
         {
-            const f32 value =
-                std::clamp(
-                    samples[index][channel],
-                    0.0F,
-                    1.0F);
+            for (u32 red = 0U;
+                 red < declaredSize;
+                 ++red)
+            {
+                const std::size_t cubeIndex =
+                    (static_cast<std::size_t>(blue) *
+                         declaredSize *
+                         declaredSize) +
+                    (static_cast<std::size_t>(green) *
+                         declaredSize) +
+                    red;
 
-            result.lut.rgba8[
-                index * 4U +
-                channel] =
-                static_cast<u8>(
-                    std::lround(
-                        value *
-                        255.0F));
+                const u32 packedX =
+                    blue * declaredSize +
+                    red;
+                const u32 packedY =
+                    green;
+                const std::size_t packedOffset =
+                    (static_cast<std::size_t>(packedY) *
+                         declaredSize *
+                         declaredSize +
+                     packedX) *
+                    4U;
+
+                for (u32 channel = 0U;
+                     channel < 3U;
+                     ++channel)
+                {
+                    const f32 value =
+                        std::clamp(
+                            samples[cubeIndex][channel],
+                            0.0F,
+                            1.0F);
+
+                    result.lut.rgba8[
+                        packedOffset +
+                        channel] =
+                        static_cast<u8>(
+                            std::lround(
+                                value *
+                                255.0F));
+                }
+
+                result.lut.rgba8[
+                    packedOffset + 3U] =
+                        255U;
+            }
         }
-
-        result.lut.rgba8[
-            index * 4U + 3U] =
-                255U;
     }
 
     result.canonicalCube =
@@ -639,23 +670,45 @@ std::string SerializeCubeColorLut(
         << lut.metadata.domainMaximum
         << '\n';
 
-    for (std::size_t index = 0U;
-         index < expectedBytes;
-         index += 4U)
+    for (u32 blue = 0U;
+         blue < lut.size;
+         ++blue)
     {
-        output
-            << static_cast<f32>(
-                   lut.rgba8[index]) /
-                   255.0F
-            << ' '
-            << static_cast<f32>(
-                   lut.rgba8[index + 1U]) /
-                   255.0F
-            << ' '
-            << static_cast<f32>(
-                   lut.rgba8[index + 2U]) /
-                   255.0F
-            << '\n';
+        for (u32 green = 0U;
+             green < lut.size;
+             ++green)
+        {
+            for (u32 red = 0U;
+                 red < lut.size;
+                 ++red)
+            {
+                const u32 packedX =
+                    blue * lut.size +
+                    red;
+                const u32 packedY =
+                    green;
+                const std::size_t offset =
+                    (static_cast<std::size_t>(packedY) *
+                         lut.size *
+                         lut.size +
+                     packedX) *
+                    4U;
+
+                output
+                    << static_cast<f32>(
+                           lut.rgba8[offset]) /
+                           255.0F
+                    << ' '
+                    << static_cast<f32>(
+                           lut.rgba8[offset + 1U]) /
+                           255.0F
+                    << ' '
+                    << static_cast<f32>(
+                           lut.rgba8[offset + 2U]) /
+                           255.0F
+                    << '\n';
+            }
+        }
     }
 
     return output.str();
