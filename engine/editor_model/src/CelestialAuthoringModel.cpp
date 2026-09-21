@@ -1,6 +1,7 @@
 #include <orbit/editor_model/CelestialAuthoringModel.hpp>
 
 #include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/PropertyProvenanceSchema.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
@@ -312,14 +313,52 @@ RemoveSelectedCapability()
             "Select a celestial capability to remove.");
     }
 
-    if (!objects_.Children(selected->id).empty())
+    const auto children =
+        objects_.Children(
+            selected->id);
+
+    const bool onlyProvenanceChildren =
+        std::all_of(
+            children.begin(),
+            children.end(),
+            [](const scene::ObjectRecord& child)
+            {
+                return child.type ==
+                    world_model::
+                        kPropertyProvenanceType;
+            });
+
+    if (!onlyProvenanceChildren)
     {
         throw std::runtime_error(
-            "Capability has child records; remove those first.");
+            "Capability has non-provenance child records; remove those first.");
     }
 
-    commands_.DeleteObject(
-        selected->id);
+    commands_.BeginTransaction(
+        "Remove Celestial Capability");
+
+    try
+    {
+        for (const auto& child :
+             children)
+        {
+            commands_.DeleteObject(
+                child.id);
+        }
+
+        commands_.DeleteObject(
+            selected->id);
+        commands_.CommitTransaction();
+    }
+    catch (...)
+    {
+        if (commands_.HasActiveTransaction())
+        {
+            commands_.RollbackTransaction();
+        }
+
+        throw;
+    }
 
     selection_.Clear();
 }
