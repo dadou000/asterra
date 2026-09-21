@@ -219,6 +219,20 @@ struct StudioEmissiveGiDiagnostics
     u32 scheduledRadianceUpdates{0U};
 };
 
+struct StudioColorLutDiagnostics
+{
+    std::string sourcePath{"<identity>"};
+    std::string title{"Orbit Identity"};
+    u32 size{32U};
+    post_process::ColorLutDomain domain{
+        post_process::ColorLutDomain::DisplayLinear};
+    post_process::ColorLutShaper shaper{
+        post_process::ColorLutShaper::None};
+    bool compatible{true};
+    bool explicitMetadata{true};
+    std::string diagnostic;
+};
+
 struct StudioLuminanceHistogramDiagnostics
 {
     post_process::LuminanceHistogramStatistics statistics{};
@@ -454,6 +468,18 @@ public:
 
     void SetColorLut(
         post_process::ColorLutData lut);
+
+    [[nodiscard]] std::vector<std::string>
+    ColorLutAssetPaths() const;
+
+    [[nodiscard]] bool SelectColorLutAsset(
+        std::string_view projectRelativePath);
+
+    [[nodiscard]] StudioColorLutDiagnostics
+    ColorLutDiagnostics() const;
+
+    [[nodiscard]] post_process::ColorLutSettings
+    ColorLutSettings() const noexcept;
 
     void SetColorLutSettings(
         post_process::ColorLutSettings settings) noexcept;
@@ -698,6 +724,10 @@ private:
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
     std::unique_ptr<post_process::GpuColorLut> colorLut_;
+    post_process::ColorLutData colorLutData_{
+        post_process::BuildIdentityColorLut()};
+    std::string colorLutSourcePath_{"<identity>"};
+    std::string colorLutDiagnostic_;
     post_process::ColorLutSettings colorLutSettings_{};
     post_process::DisplayResolveSettings displayResolveSettings_{};
     celestial_representation::RepresentationTracker
