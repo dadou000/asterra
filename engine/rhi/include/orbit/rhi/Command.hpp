@@ -128,6 +128,12 @@ public:
         Texture& color,
         Texture& depth) = 0;
 
+    // General MRT entry point. All color targets must have equal extents.
+    // depth may be null for color-only passes.
+    virtual void SetRenderTargets(
+        std::span<Texture* const> colors,
+        Texture* depth) = 0;
+
     virtual void SetViewport(const Viewport& viewport) = 0;
     virtual void SetScissor(const ScissorRect& rect) = 0;
 
