@@ -55,14 +55,17 @@ float4 main(VSOut i) : SV_Target0
     const float shadowRadiusNdc=max(g.screen.x,1e-7);
 
     const float2 q=
-        float2(i.p.x*aspect,i.p.y)/
+        float2(
+            (i.p.x-g.screen.z)*aspect,
+            i.p.y-g.screen.w)/
         shadowRadiusNdc;
 
     const float r=length(q);
     const float ringRadius=max(g.compact.x,1e-4);
     const float ringIntensity=max(g.compact.y,0.0);
     const float opacity=saturate(g.compact.z);
-    const float fluxScale=saturate(g.screen.w);
+    const float fluxScale=
+        saturate(g.cameraForward.w);
 
     const float3 forward=
         normalize(g.cameraForward.xyz);
@@ -105,7 +108,7 @@ float4 main(VSOut i) : SV_Target0
     float3 color=float3(0,0,0);
     float alpha=0.0;
 
-    if(g.screen.z>0.5 &&
+    if(g.compact.w>0.5 &&
        discRadius>=inner &&
        discRadius<=outer)
     {
@@ -330,6 +333,78 @@ void CompactObjectRenderer::Draw(
             static_cast<f64>(
                 std::max(height,1U)));
 
+    const auto cameraForward =
+        math::Normalize(
+            math::Double3{
+                static_cast<f64>(
+                    draw.camera.forward.x),
+                static_cast<f64>(
+                    draw.camera.forward.y),
+                static_cast<f64>(
+                    draw.camera.forward.z)});
+
+    const auto requestedUp =
+        math::Normalize(
+            math::Double3{
+                static_cast<f64>(
+                    draw.camera.up.x),
+                static_cast<f64>(
+                    draw.camera.up.y),
+                static_cast<f64>(
+                    draw.camera.up.z)});
+
+    const auto cameraRight =
+        math::Normalize(
+            math::Cross(
+                cameraForward,
+                requestedUp));
+
+    const auto cameraUp =
+        math::Normalize(
+            math::Cross(
+                cameraRight,
+                cameraForward));
+
+    const auto toCenter =
+        draw.camera.localPositionMeters *
+        -1.0;
+
+    const f64 centerDepth =
+        math::Dot(
+            toCenter,
+            cameraForward);
+
+    if (centerDepth <= 1.0e-9)
+    {
+        return;
+    }
+
+    const f64 tanHalfFov =
+        std::max(
+            std::tan(
+                static_cast<f64>(
+                    draw.camera.
+                        verticalFovRadians) *
+                0.5),
+            1.0e-6);
+
+    const f32 centerNdcX =
+        static_cast<f32>(
+            math::Dot(
+                toCenter,
+                cameraRight) /
+            (centerDepth *
+             tanHalfFov *
+             static_cast<f64>(aspect)));
+
+    const f32 centerNdcY =
+        static_cast<f32>(
+            -math::Dot(
+                toCenter,
+                cameraUp) /
+            (centerDepth *
+             tanHalfFov));
+
     const f64 shadowRadius=
         std::max(
             draw.compact.shadowRadiusMeters,
@@ -416,9 +491,8 @@ void CompactObjectRenderer::Draw(
         constants{
             bits(shadowRadiusNdc),
             bits(aspect),
-            bits(draw.accretion.has_value()
-                     ?1.0F:0.0F),
-            bits(fluxScale),
+            bits(centerNdcX),
+            bits(centerNdcY),
 
             bits(ringRatio),
             bits(static_cast<f32>(
@@ -432,7 +506,8 @@ void CompactObjectRenderer::Draw(
                 draw.opacity,
                 0.0F,
                 1.0F)),
-            0U,
+            bits(draw.accretion.has_value()
+                     ?1.0F:0.0F),
 
             bits(flowColor.x),
             bits(flowColor.y),
@@ -447,7 +522,7 @@ void CompactObjectRenderer::Draw(
             bits(draw.camera.forward.x),
             bits(draw.camera.forward.y),
             bits(draw.camera.forward.z),
-            0U,
+            bits(fluxScale),
 
             bits(draw.camera.up.x),
             bits(draw.camera.up.y),
