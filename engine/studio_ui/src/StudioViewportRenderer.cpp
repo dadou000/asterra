@@ -2146,6 +2146,12 @@ StudioViewportRenderer::CelestialSchedulerStats() const noexcept
     return celestialScheduler_.Stats();
 }
 
+celestial_scheduler::SchedulerBudget
+StudioViewportRenderer::CelestialSchedulerBudget() const noexcept
+{
+    return celestialScheduler_.Budget();
+}
+
 std::optional<
     StudioStellarDiagnostics>
 StudioViewportRenderer::StellarDiagnostics(
