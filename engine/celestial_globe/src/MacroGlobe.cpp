@@ -11,6 +11,7 @@
 #include <numbers>
 #include <stdexcept>
 #include <type_traits>
+#include <variant>
 
 namespace orbit::celestial_globe
 {
@@ -589,10 +590,10 @@ VSOutput main(VSInput input)
 
     VSOutput output;
     output.position = float4(
-        x / (z * tanHalf * aspect),
-        y / (z * tanHalf),
-        saturate(z / max(g_pc.upAndScale.w * 1000.0, 1.0)),
-        1.0);
+        x / (tanHalf * aspect),
+        y / tanHalf,
+        z * 0.5,
+        z);
     output.normal = normalize(input.normal);
     return output;
 }
