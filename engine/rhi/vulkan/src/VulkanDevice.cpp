@@ -590,19 +590,12 @@ struct ValidationFeatureRequest
         features12.pNext =
             &accelerationFeatures;
 
-        void** tail =
-            reinterpret_cast<void**>(
-                &accelerationFeatures.pNext);
-
         if (capabilities.rayQuery)
         {
             rayQueryFeatures.rayQuery =
                 VK_TRUE;
-            *tail =
+            accelerationFeatures.pNext =
                 &rayQueryFeatures;
-            tail =
-                reinterpret_cast<void**>(
-                    &rayQueryFeatures.pNext);
 
             enabledExtensions.push_back(
                 VK_KHR_RAY_QUERY_EXTENSION_NAME);
@@ -612,8 +605,17 @@ struct ValidationFeatureRequest
         {
             rayPipelineFeatures.rayTracingPipeline =
                 VK_TRUE;
-            *tail =
-                &rayPipelineFeatures;
+
+            if (capabilities.rayQuery)
+            {
+                rayQueryFeatures.pNext =
+                    &rayPipelineFeatures;
+            }
+            else
+            {
+                accelerationFeatures.pNext =
+                    &rayPipelineFeatures;
+            }
 
             enabledExtensions.push_back(
                 VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
