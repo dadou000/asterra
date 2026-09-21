@@ -542,16 +542,18 @@ SoftwareProxyVisibilityProvider(
               VisibilityCapability::Offscreen |
               VisibilityCapability::DynamicGeometry |
               VisibilityCapability::SurfaceMaterial,
-          .nominalErrorMeters =
-              scene.Stats().
-                  maximumNominalErrorMeters,
+          // Per-proxy error is evaluated at hit time. The registry-level
+          // provider must remain eligible when at least one fine proxy can
+          // satisfy a query even if other proxies are coarser.
+          .nominalErrorMeters = 0.0F,
           .priority = 10
       })
 {
     budget_.maximumNodeVisits =
-        std::max(
+        std::clamp(
             budget_.maximumNodeVisits,
-            1U);
+            1U,
+            256U);
     budget_.maximumPrimitiveTests =
         std::max(
             budget_.maximumPrimitiveTests,
