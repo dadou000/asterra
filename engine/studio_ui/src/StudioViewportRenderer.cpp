@@ -54,6 +54,45 @@ namespace
          (seed >> 2U));
 }
 
+[[nodiscard]] u64 StableViewportHash(
+    const std::string_view value) noexcept
+{
+    u64 hash =
+        1469598103934665603ULL;
+
+    for (const unsigned char ch :
+         value)
+    {
+        hash ^= static_cast<u64>(ch);
+        hash *=
+            1099511628211ULL;
+    }
+
+    return hash;
+}
+
+[[nodiscard]]
+celestial_scheduler::WorkKey
+CelestialWorkKeyFor(
+    const std::string_view viewportId,
+    const universe::BodyId body,
+    const celestial_scheduler::WorkKind kind) noexcept
+{
+    const u64 viewportHash =
+        StableViewportHash(
+            viewportId);
+
+    return {
+        .subjectHigh =
+            body.high ^
+            viewportHash,
+        .subjectLow =
+            body.low ^
+            (viewportHash << 1U),
+        .kind = kind
+    };
+}
+
 [[nodiscard]] u64 QuantizedLightingFingerprintValue(
     const f32 value,
     const f32 quantum) noexcept
@@ -1909,6 +1948,12 @@ StudioViewportRenderer::CompactObjectDiagnostics(
         : std::optional(found->second);
 }
 
+celestial_scheduler::SchedulerFrameStats
+StudioViewportRenderer::CelestialSchedulerStats() const noexcept
+{
+    return celestialScheduler_.Stats();
+}
+
 std::optional<
     StudioStellarDiagnostics>
 StudioViewportRenderer::StellarDiagnostics(
@@ -1979,6 +2024,85 @@ StudioViewportRenderer::Compose(
         frames = &runtime.Frames(snapshot);
         products = runtime.PathProducts(snapshot).Products();
     }
+
+    const auto celestialFrameGrants =
+        celestialScheduler_.
+            BuildFramePlan();
+
+    std::vector<bool>
+        celestialGrantConsumed(
+            celestialFrameGrants.size(),
+            false);
+
+    const auto acquireCelestialGrant =
+        [&](const std::string_view viewportId,
+            const universe::BodyId body,
+            const celestial_scheduler::WorkKind kind,
+            const u64 authorityRevision,
+            const celestial_scheduler::WorkBackend backend,
+            const u32 costUnits,
+            const i32 priority,
+            const bool visible)
+        {
+            const auto key =
+                CelestialWorkKeyFor(
+                    viewportId,
+                    body,
+                    kind);
+
+            for (std::size_t index = 0U;
+                 index <
+                     celestialFrameGrants.size();
+                 ++index)
+            {
+                if (celestialGrantConsumed[index])
+                {
+                    continue;
+                }
+
+                const auto& grant =
+                    celestialFrameGrants[index];
+
+                if (grant.key == key &&
+                    grant.authorityRevision ==
+                        authorityRevision)
+                {
+                    celestialGrantConsumed[index] =
+                        true;
+                    return true;
+                }
+            }
+
+            celestialScheduler_.Enqueue({
+                .key = key,
+                .authorityRevision =
+                    authorityRevision,
+                .backend = backend,
+                .costUnits =
+                    std::max(
+                        costUnits,
+                        1U),
+                .priority = priority,
+                .visible = visible
+            });
+
+            return false;
+        };
+
+    const auto completeCelestialGrant =
+        [&](const std::string_view viewportId,
+            const universe::BodyId body,
+            const celestial_scheduler::WorkKind kind,
+            const u64 authorityRevision)
+        {
+            return
+                celestialScheduler_.Complete(
+                    CelestialWorkKeyFor(
+                        viewportId,
+                        body,
+                        kind),
+                    authorityRevision);
+        };
 
     std::vector<StudioRenderedView> rendered;
     const auto catalog = views.Catalog();
@@ -7496,6 +7620,23 @@ StudioViewportRenderer::Compose(
         {
             ++iterator;
         }
+    }
+
+    for (std::size_t index = 0U;
+         index < celestialFrameGrants.size();
+         ++index)
+    {
+        if (celestialGrantConsumed[index])
+        {
+            continue;
+        }
+
+        const auto& grant =
+            celestialFrameGrants[index];
+
+        celestialScheduler_.Abandon(
+            grant.key,
+            grant.authorityRevision);
     }
 
     return rendered;
