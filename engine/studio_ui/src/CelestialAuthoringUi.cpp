@@ -5,6 +5,7 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <algorithm>
 #include <array>
 #include <exception>
 #include <format>
@@ -268,6 +269,12 @@ void CelestialAuthoringUi::Draw(
             {
                 throw std::runtime_error(
                     "World root is required before running a celestial recipe.");
+            }
+
+            if (recipeSeed_ < 0)
+            {
+                throw std::invalid_argument(
+                    "Recipe seed must be non-negative.");
             }
 
             if (recipePlanetCount_ <= 0 ||
