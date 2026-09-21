@@ -1492,6 +1492,22 @@ SurfaceGlobeTransitionDiagnostics(
 }
 
 std::optional<
+    StudioVisibilityProxyDiagnostics>
+StudioViewportRenderer::
+VisibilityProxyDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        visibilityProxyDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            visibilityProxyDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
     StudioCelestialLightingDiagnostics>
 StudioViewportRenderer::
 CelestialLightingDiagnostics(
@@ -1703,6 +1719,152 @@ StudioViewportRenderer::Compose(
 
             view->Lighting() =
                 currentLightingView;
+        }
+
+        if (logicalTarget->target.has_value() &&
+            snapshot.hasWorld &&
+            bodies != nullptr &&
+            frames != nullptr)
+        {
+            const auto targetBody =
+                logicalTarget->target->body;
+
+            const auto* bodyRecord =
+                bodies->FindBody(
+                    targetBody);
+
+            const auto bodyObject =
+                session.World().
+                    Universe().
+                    ObjectForBody(
+                        targetBody);
+
+            if (bodyRecord != nullptr &&
+                bodyObject.has_value())
+            {
+                const u64 semanticRevision =
+                    session.World().
+                        Objects().
+                        Revision();
+
+                auto& proxyPresentation =
+                    visibilityProxyPresentations_[
+                        info.id];
+
+                const bool requiresRebuild =
+                    proxyPresentation.provider ==
+                        nullptr ||
+                    proxyPresentation.body !=
+                        targetBody ||
+                    proxyPresentation.frame !=
+                        view->Lighting().frame ||
+                    proxyPresentation.
+                            semanticRevision !=
+                        semanticRevision ||
+                    proxyPresentation.hasDynamic;
+
+                if (requiresRebuild)
+                {
+                    const auto resolved =
+                        world_model::
+                            ResolveVisibilityProxies(
+                                session.World().
+                                    Objects(),
+                                *bodyObject);
+
+                    const auto proxies =
+                        BuildVisibilityProxies(
+                            resolved,
+                            targetBody,
+                            bodyRecord->frame);
+
+                    const bool hasDynamic =
+                        std::any_of(
+                            proxies.begin(),
+                            proxies.end(),
+                            [](const auto& proxy)
+                            {
+                                return proxy.dynamic;
+                            });
+
+                    proxyPresentation.scene.Rebuild(
+                        proxies,
+                        view->Lighting().frame,
+                        *frames,
+                        atTime);
+
+                    proxyPresentation.body =
+                        targetBody;
+                    proxyPresentation.frame =
+                        view->Lighting().frame;
+                    proxyPresentation.semanticRevision =
+                        semanticRevision;
+                    proxyPresentation.hasDynamic =
+                        hasDynamic;
+
+                    proxyPresentation.provider =
+                        std::make_unique<
+                            lighting::
+                                SoftwareProxyVisibilityProvider>(
+                                    proxyPresentation.scene);
+
+                    const auto& stats =
+                        proxyPresentation.scene.
+                            Stats();
+
+                    visibilityProxyDiagnostics_.
+                        insert_or_assign(
+                            info.id,
+                            StudioVisibilityProxyDiagnostics{
+                                .body =
+                                    targetBody,
+                                .frame =
+                                    view->Lighting().
+                                        frame,
+                                .semanticRevision =
+                                    semanticRevision,
+                                .proxyCount =
+                                    stats.proxyCount,
+                                .bvhNodeCount =
+                                    stats.nodeCount,
+                                .dynamicProxyCount =
+                                    stats.dynamicProxyCount,
+                                .maximumNominalErrorMeters =
+                                    stats.
+                                        maximumNominalErrorMeters,
+                                .rebuiltThisFrame =
+                                    true
+                            });
+                }
+                else
+                {
+                    auto diagnostics =
+                        visibilityProxyDiagnostics_[
+                            info.id];
+
+                    diagnostics.rebuiltThisFrame =
+                        false;
+
+                    visibilityProxyDiagnostics_.
+                        insert_or_assign(
+                            info.id,
+                            diagnostics);
+                }
+            }
+            else
+            {
+                visibilityProxyPresentations_.
+                    erase(info.id);
+                visibilityProxyDiagnostics_.
+                    erase(info.id);
+            }
+        }
+        else
+        {
+            visibilityProxyPresentations_.
+                erase(info.id);
+            visibilityProxyDiagnostics_.
+                erase(info.id);
         }
 
         const auto terrainRuntime =
