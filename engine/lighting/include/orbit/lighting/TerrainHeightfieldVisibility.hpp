@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/lighting/Visibility.hpp>
+#include <orbit/math/RigidTransform.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/world/Planet.hpp>
