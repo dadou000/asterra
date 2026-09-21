@@ -540,4 +540,93 @@ SelectEmissiveHierarchy(
 
     return selected;
 }
+
+std::vector<GpuEmissiveHierarchyNode>
+EncodeGpuEmissiveHierarchy(
+    const EmissiveHierarchy& hierarchy,
+    const LightingView& view)
+{
+    if (hierarchy.frame != view.frame ||
+        hierarchy.body != view.body)
+    {
+        throw std::invalid_argument(
+            "Emissive hierarchy GPU encoding requires matching LightingView authority.");
+    }
+
+    std::vector<GpuEmissiveHierarchyNode> result;
+    result.reserve(hierarchy.nodes.size());
+
+    for (const auto& node : hierarchy.nodes)
+    {
+        const auto center =
+            ToLightingCameraRelative(
+                node.centerInFrameMeters,
+                view);
+
+        const auto centroid =
+            ToLightingCameraRelative(
+                node.energyCentroidInFrameMeters,
+                view);
+
+        result.push_back({
+            .centerArea = {
+                center.x,
+                center.y,
+                center.z,
+                static_cast<f32>(
+                    std::max(
+                        node.areaMetersSquared,
+                        0.0))
+            },
+            .averagePeakLuminance = {
+                std::max(node.averageRadiance.x, 0.0F),
+                std::max(node.averageRadiance.y, 0.0F),
+                std::max(node.averageRadiance.z, 0.0F),
+                static_cast<f32>(
+                    std::max(
+                        node.peakLuminance,
+                        0.0))
+            },
+            .peakRadianceImportance = {
+                std::max(node.peakRadiance.x, 0.0F),
+                std::max(node.peakRadiance.y, 0.0F),
+                std::max(node.peakRadiance.z, 0.0F),
+                static_cast<f32>(
+                    std::max(
+                        node.radiantImportance,
+                        0.0))
+            },
+            .integratedRadianceArea = {
+                std::max(node.integratedRadianceArea.x, 0.0F),
+                std::max(node.integratedRadianceArea.y, 0.0F),
+                std::max(node.integratedRadianceArea.z, 0.0F),
+                0.0F
+            },
+            .energyCentroidLevel = {
+                centroid.x,
+                centroid.y,
+                centroid.z,
+                static_cast<f32>(
+                    node.level)
+            },
+            .children =
+                node.children,
+            .texelBounds = {
+                node.texelMinX,
+                node.texelMinY,
+                node.texelMaxX,
+                node.texelMaxY
+            },
+            .metadata = {
+                node.childCount,
+                hierarchy.sourceWidth,
+                hierarchy.sourceHeight,
+                0U
+            }
+        });
+    }
+
+    return result;
+}
+
 } // namespace orbit::lighting
