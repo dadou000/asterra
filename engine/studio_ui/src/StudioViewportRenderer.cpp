@@ -10,6 +10,8 @@
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world_model/LocalLightBinding.hpp>
+#include <orbit/lighting/LocalLightRegistry.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
 #include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
@@ -1307,6 +1309,10 @@ StudioViewportRenderer::Compose(
                 view->Camera().up;
             currentLightingView.verticalFovRadians =
                 view->Camera().verticalFovRadians;
+            currentLightingView.nearPlaneMeters =
+                view->Camera().nearPlaneMeters;
+            currentLightingView.farPlaneMeters =
+                view->Camera().farPlaneMeters;
 
             currentLightingView.change =
                 lighting::ClassifyLightingViewChange(
