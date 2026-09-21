@@ -701,6 +701,35 @@ BuildPhysicalRenderPages(
 
     return result;
 }
+[[nodiscard]] f64 ReferenceRadiusForShape(
+    const universe::BodyShape& shape)
+{
+    return std::visit(
+        [](const auto& value) -> f64
+        {
+            using Shape =
+                std::decay_t<
+                    decltype(value)>;
+
+            if constexpr (
+                std::is_same_v<
+                    Shape,
+                    universe::SphereShape>)
+            {
+                return value.radiusMeters;
+            }
+            else
+            {
+                return std::max({
+                    value.radiiMeters.x,
+                    value.radiiMeters.y,
+                    value.radiiMeters.z
+                });
+            }
+        },
+        shape);
+}
+
 } // namespace
 
 StudioViewportRenderer::StudioViewportRenderer(
@@ -1863,44 +1892,301 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::BodyPreview:
         {
-            transitionDiagnostics_.erase(
-                info.id);
-
-            macroGlobePresentations_.erase(
-                info.id);
-
             terrainPresentations_.erase(
                 info.id);
 
-            const auto camera = view->Camera();
-            const auto bodyShape = *shape;
+            const auto camera =
+                view->Camera();
+            const auto bodyShape =
+                *shape;
 
-            graph.AddPass(
-                prefix + ".Body",
+            const bool perspective =
+                logicalTarget->mode ==
+                studio_session::
+                    ViewportMode::Perspective;
+
+            if (perspective &&
+                logicalTarget->target.has_value())
+            {
+                bool radiativeEmitter = false;
+
+                const auto bodyObject =
+                    session.World().
+                        Universe().
+                        ObjectForBody(
+                            logicalTarget->
+                                target->body);
+
+                if (bodyObject.has_value())
                 {
+                    for (const auto& child :
+                         session.World().
+                             Objects().
+                             Children(
+                                 *bodyObject))
                     {
-                        .texture = targets.color,
-                        .state = rhi::ResourceState::RenderTarget,
-                        .access = render_graph::Access::Write
+                        if (child.type ==
+                            world_model::
+                                kRadiativeEmitterCapabilityType)
+                        {
+                            radiativeEmitter = true;
+                            break;
+                        }
                     }
-                },
-                [this,
-                 color,
-                 width,
-                 height,
-                 camera,
-                 bodyShape](
-                    rhi::CommandList& commands,
-                    const render_graph::Resources&)
-                {
-                    bodyRenderer_.Draw(
-                        commands,
-                        *color,
-                        width,
-                        height,
-                        bodyShape,
-                        camera);
-                });
+                }
+
+                const f64 radius =
+                    ReferenceRadiusForShape(
+                        bodyShape);
+
+                celestial_representation::ResolveInput
+                    input{
+                        .bodyRadiusMeters =
+                            radius,
+                        .maximumProductionDetailMeters =
+                            0.0,
+                        .maximumMacroDisplacementMeters =
+                            0.0,
+                        .cameraDistanceToCenterMeters =
+                            std::max(
+                                math::Length(
+                                    camera.
+                                        localPositionMeters),
+                                radius),
+                        .verticalFieldOfViewRadians =
+                            static_cast<f64>(
+                                camera.
+                                    verticalFovRadians),
+                        .viewportHeightPixels =
+                            static_cast<f64>(
+                                std::max(
+                                    height,
+                                    1U)),
+                        .features = {
+                            .productionSurfaceAvailable =
+                                false,
+                            .macroDisplacementAvailable =
+                                false,
+                            .complexFarAppearance =
+                                false,
+                            .radiativeEmitter =
+                                radiativeEmitter
+                        }
+                    };
+
+                const celestial_representation::
+                    RepresentationSubjectId
+                    subject{
+                        .high =
+                            logicalTarget->
+                                target->body.high,
+                        .low =
+                            logicalTarget->
+                                target->body.low
+                    };
+
+                const auto decision =
+                    representationTracker_.
+                        ResolveFor(
+                            subject,
+                            input);
+
+                const auto blend =
+                    celestial_representation::
+                        ResolveRepresentationBlend(
+                            input,
+                            decision);
+
+                transitionDiagnostics_.
+                    insert_or_assign(
+                        info.id,
+                        StudioSurfaceGlobeTransitionDiagnostics{
+                            .body =
+                                logicalTarget->
+                                    target->body,
+                            .representation =
+                                decision.
+                                    representation,
+                            .lowerFidelityNeighbor =
+                                decision.
+                                    lowerFidelityNeighbor,
+                            .productionSurfaceWeight =
+                                0.0,
+                            .macroGlobeWeight =
+                                0.0,
+                            .projectedRadiusPixels =
+                                decision.
+                                    projectedRadiusPixels,
+                            .productionDetailErrorPixels =
+                                0.0,
+                            .macroDisplacementErrorPixels =
+                                0.0,
+                            .hysteresisHeld =
+                                decision.
+                                    hysteresisHeld,
+                            .overlapping =
+                                blend.overlapping
+                        });
+
+                celestial_far_render::
+                    AppearanceSummary appearance{
+                        .albedoLinear =
+                            radiativeEmitter
+                                ? math::Float3{
+                                      1.0F,
+                                      0.78F,
+                                      0.48F}
+                                : math::Float3{
+                                      0.18F,
+                                      0.21F,
+                                      0.23F},
+                        .roughness =
+                            radiativeEmitter
+                                ? 0.35F
+                                : 0.82F,
+                        .oceanFraction = 0.0F,
+                        .iceFraction = 0.0F,
+                        .emissionLinear =
+                            radiativeEmitter
+                                ? math::Float3{
+                                      0.55F,
+                                      0.34F,
+                                      0.12F}
+                                : math::Float3{}
+                    };
+
+                const auto richer =
+                    blend.richer;
+                const auto lower =
+                    blend.lower;
+                const f32 lowerOpacity =
+                    static_cast<f32>(
+                        std::clamp(
+                            blend.lowerWeight,
+                            0.0,
+                            1.0));
+                const f64 projectedRadius =
+                    decision.
+                        projectedRadiusPixels;
+
+                graph.AddPass(
+                    prefix +
+                        ".FarBody",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     width,
+                     height,
+                     bodyShape,
+                     camera,
+                     appearance,
+                     richer,
+                     lower,
+                     lowerOpacity,
+                     projectedRadius,
+                     radiativeEmitter](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        commands.ClearColorTarget(
+                            *color,
+                            {
+                                .red = 0.006F,
+                                .green = 0.010F,
+                                .blue = 0.018F,
+                                .alpha = 1.0F
+                            });
+
+                        const auto draw =
+                            [&](const celestial_representation::
+                                    Representation representation,
+                                const f32 opacity)
+                            {
+                                celestial_far_render::
+                                    FarBodyDraw far{
+                                        .representation =
+                                            representation,
+                                        .shape =
+                                            bodyShape,
+                                        .camera =
+                                            camera,
+                                        .appearance =
+                                            appearance,
+                                        .projectedRadiusPixels =
+                                            projectedRadius,
+                                        .opacity =
+                                            opacity,
+                                        .stellar =
+                                            radiativeEmitter
+                                    };
+
+                                farBodyRenderer_.Draw(
+                                    commands,
+                                    *color,
+                                    width,
+                                    height,
+                                    far,
+                                    nullptr);
+                            };
+
+                        draw(
+                            richer,
+                            1.0F);
+
+                        if (lower != richer)
+                        {
+                            draw(
+                                lower,
+                                lowerOpacity);
+                        }
+                    });
+            }
+            else
+            {
+                transitionDiagnostics_.erase(
+                    info.id);
+
+                graph.AddPass(
+                    prefix + ".Body",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     width,
+                     height,
+                     camera,
+                     bodyShape](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        bodyRenderer_.Draw(
+                            commands,
+                            *color,
+                            width,
+                            height,
+                            bodyShape,
+                            camera);
+                    });
+            }
 
             if (frames != nullptr &&
                 !products.empty())
@@ -1924,8 +2210,7 @@ StudioViewportRenderer::Compose(
                      camera,
                      frameGraph,
                      pathProducts,
-                     atTime,
-                     drawPathDebug](
+                     atTime](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -1936,12 +2221,8 @@ StudioViewportRenderer::Compose(
                             height,
                             camera,
                             *frameGraph,
-                            atTime,
-                            std::span<
-                                const path_geometry::PathDerivedProduct* const>(
-                                    pathProducts.data(),
-                                    pathProducts.size()),
-                            drawPathDebug);
+                            pathProducts,
+                            atTime);
                     });
             }
             break;
