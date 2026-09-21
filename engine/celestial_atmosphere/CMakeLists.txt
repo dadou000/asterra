@@ -18,7 +18,7 @@ target_link_libraries(
     PUBLIC
         Orbit::Core
         Orbit::Math
-        Orbit::Rhi
+        Orbit::RHI
 )
 
 target_compile_features(
