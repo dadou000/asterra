@@ -8,6 +8,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioTerrainOverlayGeometry.cpp
     src/StudioUiBundle.cpp
     src/SurfaceAuthoringUi.cpp
+    src/SystemViewUi.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
