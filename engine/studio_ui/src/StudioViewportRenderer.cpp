@@ -1153,6 +1153,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
       finalGatherRenderer_(device, compiler),
+      radianceCacheSampler_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
