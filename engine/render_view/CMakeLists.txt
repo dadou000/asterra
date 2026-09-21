@@ -15,6 +15,7 @@ target_link_libraries(OrbitRenderView
         Orbit::Core
         Orbit::Frames
         Orbit::Math
+        Orbit::Lighting
         Orbit::RHI
         Orbit::RenderGraph
         Orbit::Shader
