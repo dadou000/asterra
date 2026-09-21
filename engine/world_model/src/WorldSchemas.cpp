@@ -803,6 +803,35 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kPointLightType,
+        .displayName = "Point Light",
+        .category = "World / Lighting",
+        .properties = {
+            {.id=kLightPositionMeters,.name="Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
+            {.id=kLightColorLinear,.name="Color",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{1.0,1.0,1.0}},
+            {.id=kLightIntensityLumens,.name="Luminous Flux",.kind=schema::PropertyKind::Float,.unit="lm",.defaultValue=800.0,.range={.minimum=0.0}},
+            {.id=kLightRangeMeters,.name="Range",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=12.0,.range={.minimum=0.001}},
+            {.id=kLightEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true}
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kSpotLightType,
+        .displayName = "Spot Light",
+        .category = "World / Lighting",
+        .properties = {
+            {.id=kLightPositionMeters,.name="Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
+            {.id=kLightDirection,.name="Direction",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{0.0,-1.0,0.0}},
+            {.id=kLightColorLinear,.name="Color",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{1.0,1.0,1.0}},
+            {.id=kLightIntensityLumens,.name="Luminous Flux",.kind=schema::PropertyKind::Float,.unit="lm",.defaultValue=1200.0,.range={.minimum=0.0}},
+            {.id=kLightRangeMeters,.name="Range",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=20.0,.range={.minimum=0.001}},
+            {.id=kLightInnerConeDegrees,.name="Inner Cone",.kind=schema::PropertyKind::Float,.unit="deg",.defaultValue=22.5,.range={.minimum=0.0,.maximum=179.0}},
+            {.id=kLightOuterConeDegrees,.name="Outer Cone",.kind=schema::PropertyKind::Float,.unit="deg",.defaultValue=35.0,.range={.minimum=0.0,.maximum=179.0}},
+            {.id=kLightEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true}
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",
