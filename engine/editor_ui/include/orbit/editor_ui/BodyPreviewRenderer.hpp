@@ -21,6 +21,7 @@ struct PreviewMaterial
     f32 roughness{0.65F};
     f32 metallic{0.0F};
     math::Float3 emissionRadiance{};
+    f32 emissionGiScale{1.0F};
 };
 
 // Lightweight but real editor body/material preview. It renders analytic
