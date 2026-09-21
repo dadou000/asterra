@@ -101,6 +101,20 @@ inline constexpr schema::PropertyId kGravityMuM3PerS2{
 inline constexpr schema::PropertyId kGravitySofteningMeters{
     .high = 0x4f52424954475241ULL, .low = 0x534f4654454e0001ULL};
 
+inline constexpr schema::PropertyId kEmitterLuminosityWatts{
+    .high = 0x4f52424954454d49ULL, .low = 0x4c554d494e000001ULL};
+inline constexpr schema::PropertyId kEmitterEffectiveTemperatureKelvin{
+    .high = 0x4f52424954454d49ULL, .low = 0x54454d504b000001ULL};
+inline constexpr schema::PropertyId kEmitterEmissivity{
+    .high = 0x4f52424954454d49ULL, .low = 0x454d495353000001ULL};
+inline constexpr schema::PropertyId kEmitterDeriveLuminosity{
+    .high = 0x4f52424954454d49ULL, .low = 0x4445524956450001ULL};
+
+inline constexpr schema::PropertyId kPhotosphereRadiusMeters{
+    .high = 0x4f5242495450484fULL, .low = 0x5241444955530001ULL};
+inline constexpr schema::PropertyId kPhotosphereTemperatureKelvin{
+    .high = 0x4f5242495450484fULL, .low = 0x54454d504b000001ULL};
+
 inline constexpr schema::PropertyId kEphemerisSourceLabel{
     .high = 0x4f52424954455048ULL, .low = 0x534f555243450001ULL};
 inline constexpr schema::PropertyId kEphemerisSampleTimeMicroseconds{
