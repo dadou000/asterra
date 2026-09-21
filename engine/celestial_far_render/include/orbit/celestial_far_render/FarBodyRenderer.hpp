@@ -36,7 +36,9 @@ struct CachedDiscProduct
     u32 resolution{0};
     u64 appearanceFingerprint{0};
     u64 fingerprint{0};
-    std::vector<u8> rgba8;
+    // Scene-linear half-float RGBA. Far-body emission must retain HDR values
+    // until the shared presentation resolve instead of being clamped to UNorm.
+    std::vector<u16> rgba16;
 };
 
 [[nodiscard]] CachedDiscProduct BuildCachedDisc(
