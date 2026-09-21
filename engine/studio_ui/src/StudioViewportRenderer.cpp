@@ -8,6 +8,7 @@
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialCloudBinding.hpp>
 #include <orbit/world_model/CelestialGiantBinding.hpp>
+#include <orbit/world_model/CelestialMagnetosphereBinding.hpp>
 #include <orbit/world_model/CelestialSmallBodyBinding.hpp>
 #include <orbit/world_model/CelestialOceanBinding.hpp>
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
@@ -1149,6 +1150,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       macroGlobeRenderer_(device, compiler),
       farBodyRenderer_(device, compiler),
       ringRenderer_(device, compiler),
+      auroraRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
@@ -1583,6 +1585,21 @@ StudioViewportRenderer::RingDiagnostics(
 
     return found ==
             ringDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
+    StudioMagnetosphereDiagnostics>
+StudioViewportRenderer::MagnetosphereDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        magnetosphereDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            magnetosphereDiagnostics_.end()
         ? std::nullopt
         : std::optional(found->second);
 }
@@ -2402,6 +2419,193 @@ StudioViewportRenderer::Compose(
             ringPresentations_.erase(
                 info.id);
             ringDiagnostics_.erase(
+                info.id);
+        }
+
+        std::optional<
+            world_model::ResolvedMagnetosphere>
+            resolvedMagnetosphereForView;
+
+        if (atmosphereBody.has_value() &&
+            shape.has_value())
+        {
+            resolvedMagnetosphereForView =
+                world_model::
+                    ResolveMagnetosphere(
+                        session.World().
+                            Objects(),
+                        *atmosphereBody,
+                        ReferenceRadiusForShape(
+                            *shape));
+        }
+
+        celestial_magnetosphere_render::
+            GpuAuroraMeshProduct*
+            activeAuroraMesh = nullptr;
+        bool activeAuroraNear = false;
+
+        if (resolvedMagnetosphereForView.has_value() &&
+            logicalTarget->target.has_value() &&
+            shape.has_value())
+        {
+            const f64 referenceRadius =
+                ReferenceRadiusForShape(
+                    *shape);
+            const f64 outerRadius =
+                referenceRadius +
+                resolvedMagnetosphereForView->
+                    parameters.
+                    auroralMaximumAltitudeMeters;
+            const f64 cameraDistance =
+                math::Length(
+                    view->Camera().
+                        localPositionMeters);
+
+            const f64 projectedAuroraRadiusPixels =
+                cameraDistance > outerRadius
+                    ? std::asin(
+                          std::clamp(
+                              outerRadius /
+                                  cameraDistance,
+                              0.0,
+                              1.0)) /
+                          std::max(
+                              static_cast<f64>(
+                                  view->Camera().
+                                      verticalFovRadians),
+                              1.0e-6) *
+                          static_cast<f64>(
+                              std::max(
+                                  view->Height(),
+                                  1U))
+                    : static_cast<f64>(
+                          std::max(
+                              view->Height(),
+                              1U)) *
+                          0.5;
+
+            activeAuroraNear =
+                projectedAuroraRadiusPixels >=
+                160.0;
+
+            auto& presentation =
+                magnetospherePresentations_[
+                    info.id];
+
+            if (presentation.nearAurora ==
+                    nullptr ||
+                presentation.farAurora ==
+                    nullptr ||
+                presentation.body !=
+                    logicalTarget->
+                        target->body ||
+                presentation.fingerprint !=
+                    resolvedMagnetosphereForView->
+                        fingerprint ||
+                presentation.referenceRadiusMeters !=
+                    referenceRadius)
+            {
+                const auto nearCpu =
+                    celestial_magnetosphere::
+                        BuildAuroraCurtainMesh(
+                            resolvedMagnetosphereForView->
+                                parameters,
+                            referenceRadius,
+                            256U);
+
+                const auto farCpu =
+                    celestial_magnetosphere::
+                        BuildAuroraCurtainMesh(
+                            resolvedMagnetosphereForView->
+                                parameters,
+                            referenceRadius,
+                            64U);
+
+                presentation.nearAurora =
+                    std::make_unique<
+                        celestial_magnetosphere_render::
+                            GpuAuroraMeshProduct>(
+                                *device_,
+                                nearCpu);
+                presentation.farAurora =
+                    std::make_unique<
+                        celestial_magnetosphere_render::
+                            GpuAuroraMeshProduct>(
+                                *device_,
+                                farCpu);
+                presentation.body =
+                    logicalTarget->
+                        target->body;
+                presentation.fingerprint =
+                    resolvedMagnetosphereForView->
+                        fingerprint;
+                presentation.referenceRadiusMeters =
+                    referenceRadius;
+            }
+
+            activeAuroraMesh =
+                activeAuroraNear
+                    ? presentation.
+                          nearAurora.get()
+                    : presentation.
+                          farAurora.get();
+
+            const auto product =
+                celestial_magnetosphere::
+                    BuildMagnetosphereProduct(
+                        resolvedMagnetosphereForView->
+                            parameters,
+                        referenceRadius,
+                        {.ovalSamples =
+                             activeAuroraNear
+                                 ? 256U
+                                 : 64U});
+
+            magnetosphereDiagnostics_.
+                insert_or_assign(
+                    info.id,
+                    StudioMagnetosphereDiagnostics{
+                        .body =
+                            logicalTarget->
+                                target->body,
+                        .fingerprint =
+                            resolvedMagnetosphereForView->
+                                fingerprint,
+                        .subsolarStandoffMeters =
+                            product.
+                                subsolarStandoffMeters,
+                        .tailExtentMeters =
+                            product.
+                                tailExtentMeters,
+                        .auroralCenterLatitudeDegrees =
+                            product.
+                                auroralCenterLatitudeDegrees,
+                        .auroralMinimumAltitudeMeters =
+                            resolvedMagnetosphereForView->
+                                parameters.
+                                auroralMinimumAltitudeMeters,
+                        .auroralMaximumAltitudeMeters =
+                            resolvedMagnetosphereForView->
+                                parameters.
+                                auroralMaximumAltitudeMeters,
+                        .projectedAuroraRadiusPixels =
+                            projectedAuroraRadiusPixels,
+                        .activity =
+                            resolvedMagnetosphereForView->
+                                parameters.activity,
+                        .nearRepresentation =
+                            activeAuroraNear,
+                        .angularSegments =
+                            activeAuroraNear
+                                ? 256U
+                                : 64U
+                    });
+        }
+        else
+        {
+            magnetospherePresentations_.erase(
+                info.id);
+            magnetosphereDiagnostics_.erase(
                 info.id);
         }
 
@@ -5613,6 +5817,58 @@ StudioViewportRenderer::Compose(
                                     studioDirectLight.
                                         irradianceScale
                             });
+                });
+        }
+
+        if (activeAuroraMesh != nullptr &&
+            resolvedMagnetosphereForView.has_value() &&
+            logicalTarget->mode !=
+                studio_session::ViewportMode::Debug)
+        {
+            auto* auroraMesh =
+                activeAuroraMesh;
+            const auto auroraCamera =
+                view->Camera();
+            const f32 intensityScale =
+                static_cast<f32>(
+                    std::max(
+                        resolvedMagnetosphereForView->
+                            parameters.
+                            auroralIntensity,
+                        0.0));
+
+            graph.AddPass(
+                prefix +
+                    ".CelestialAurora",
+                {
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 color,
+                 width,
+                 height,
+                 auroraMesh,
+                 auroraCamera,
+                 intensityScale](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    auroraRenderer_.Draw(
+                        commands,
+                        *color,
+                        width,
+                        height,
+                        *auroraMesh,
+                        auroraCamera,
+                        intensityScale);
                 });
         }
 
