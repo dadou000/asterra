@@ -54,6 +54,20 @@ inline constexpr schema::PropertyId kVolumeChildScalar{
     .high = 0x4f52424954564f4cULL, .low = 0x43485343414c4101ULL};
 inline constexpr schema::PropertyId kVolumeChildVector{
     .high = 0x4f52424954564f4cULL, .low = 0x4348564543544f01ULL};
+inline constexpr schema::PropertyId kVolumeChildOrder{
+    .high = 0x4f52424954564f4cULL, .low = 0x43484f5244455201ULL};
+inline constexpr schema::PropertyId kVolumeChildShape{
+    .high = 0x4f52424954564f4cULL, .low = 0x4348534841504501ULL};
+inline constexpr schema::PropertyId kVolumeChildHalfExtentsMeters{
+    .high = 0x4f52424954564f4cULL, .low = 0x434848414c464501ULL};
+inline constexpr schema::PropertyId kVolumeChildFieldMask{
+    .high = 0x4f52424954564f4cULL, .low = 0x43484649454c4401ULL};
+inline constexpr schema::PropertyId kVolumeChildAsset{
+    .high = 0x4f52424954564f4cULL, .low = 0x4348415353455401ULL};
+inline constexpr schema::PropertyId kVolumeChildTargetObject{
+    .high = 0x4f52424954564f4cULL, .low = 0x4348544152474501ULL};
+inline constexpr schema::PropertyId kVolumeChildPaintEnabled{
+    .high = 0x4f52424954564f4cULL, .low = 0x43485041494e5401ULL};
 
 enum class VolumeSolverPolicy : i64
 {
@@ -72,6 +86,38 @@ enum class VolumeRepresentationMode : i64
     Baked = 4
 };
 
+enum class VolumeSourceKind : i64
+{
+    Brush = 0,
+    TextureMask = 1,
+    Terrain = 2,
+    Spline = 3,
+    MeshSdf = 4,
+    CollisionProxy = 5,
+    Particles = 6,
+    ObjectMotion = 7,
+    WorldMotion = 8
+};
+
+enum class VolumeEffectorKind : i64
+{
+    Obstacle = 0,
+    Drag = 1,
+    Wind = 2,
+    Temperature = 3,
+    Dissipation = 4
+};
+
+enum class VolumeSourceShape : i64
+{
+    Point = 0,
+    Sphere = 1,
+    Box = 2,
+    Spline = 3,
+    Mesh = 4,
+    TerrainPatch = 5
+};
+
 enum class VolumeField : u64
 {
     Density = 1ULL << 0U,
@@ -82,6 +128,41 @@ enum class VolumeField : u64
     Emission = 1ULL << 5U,
     Moisture = 1ULL << 6U,
     Sediment = 1ULL << 7U
+};
+
+struct VolumeInvalidationBounds
+{
+    math::Double3 minimumMeters{};
+    math::Double3 maximumMeters{};
+
+    [[nodiscard]] bool IsValid() const noexcept;
+};
+
+enum class VolumeInputRole : u8
+{
+    Source = 0U,
+    Effector = 1U
+};
+
+struct ResolvedVolumeInput
+{
+    scene::ObjectId object{};
+    VolumeInputRole role{VolumeInputRole::Source};
+    bool enabled{true};
+    i64 order{0};
+    i64 kind{0};
+    VolumeSourceShape shape{VolumeSourceShape::Sphere};
+    math::Double3 positionMeters{};
+    f64 radiusMeters{1.0};
+    math::Double3 halfExtentsMeters{1.0, 1.0, 1.0};
+    f64 scalarValue{1.0};
+    math::Double3 vectorValue{};
+    u64 fieldMask{0U};
+    std::string asset;
+    std::optional<scene::ObjectId> targetObject;
+    bool paintEnabled{false};
+    VolumeInvalidationBounds bounds{};
+    u64 fingerprint{0U};
 };
 
 struct ResolvedVolumeDomain
@@ -111,6 +192,28 @@ ResolveVolumeDomain(
 [[nodiscard]] std::string_view
 VolumeSolverPolicyName(
     VolumeSolverPolicy policy) noexcept;
+
+[[nodiscard]] std::vector<ResolvedVolumeInput>
+ResolveVolumeInputs(
+    const scene::ObjectStore& objects,
+    scene::ObjectId volume);
+
+[[nodiscard]] VolumeInvalidationBounds
+UnionVolumeInvalidationBounds(
+    const VolumeInvalidationBounds& a,
+    const VolumeInvalidationBounds& b) noexcept;
+
+[[nodiscard]] std::string_view
+VolumeSourceKindName(
+    VolumeSourceKind kind) noexcept;
+
+[[nodiscard]] std::string_view
+VolumeEffectorKindName(
+    VolumeEffectorKind kind) noexcept;
+
+[[nodiscard]] std::string_view
+VolumeSourceShapeName(
+    VolumeSourceShape shape) noexcept;
 
 [[nodiscard]] std::string_view
 VolumeRepresentationModeName(
