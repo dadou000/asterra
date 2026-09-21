@@ -1,5 +1,6 @@
 add_library(OrbitLighting STATIC
     src/SurfaceData.cpp
+    src/LocalLightRegistry.cpp
     src/SurfaceDebugRenderer.cpp
     src/LightingView.cpp
     src/DirectLighting.cpp
@@ -34,6 +35,10 @@ if(BUILD_TESTING)
         tests/SurfaceBufferTests.cpp
     )
 
+    add_executable(OrbitLightingLocalLightRegistryTests
+        tests/LocalLightRegistryTests.cpp
+    )
+
     add_executable(OrbitLightingViewTests
         tests/LightingViewTests.cpp
     )
@@ -54,6 +59,14 @@ if(BUILD_TESTING)
     target_compile_features(
         OrbitLightingSurfaceBufferTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingSurfaceBufferTests)
+
+    target_link_libraries(OrbitLightingLocalLightRegistryTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingLocalLightRegistryTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingLocalLightRegistryTests)
 
     target_link_libraries(OrbitLightingViewTests
         PRIVATE
@@ -76,5 +89,10 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingSurfaceBuffer
         COMMAND OrbitLightingSurfaceBufferTests
+    )
+
+    add_test(
+        NAME Orbit.LightingLocalLightRegistry
+        COMMAND OrbitLightingLocalLightRegistryTests
     )
 endif()
