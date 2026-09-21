@@ -513,6 +513,132 @@ float4 main(VSOutput input) : SV_Target0
 }
 )";
 
+constexpr const char* kSurfacePs = R"(
+struct Constants
+{
+    float4 radiiAndAspect;
+    float4 cameraAndTanHalfFov;
+    float4 forward;
+    float4 up;
+    float4 albedoAndRoughness;
+    float4 material;
+    float4 emissionAndOpacity;
+    float4 proxy;
+    float4 lighting;
+};
+[[vk::push_constant]] Constants g;
+
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+
+struct SurfaceOutputs
+{
+    float4 baseRoughness : SV_Target0;
+    float4 normalMetallic : SV_Target1;
+    float4 emissionClass : SV_Target2;
+};
+
+float EncodeSurfaceMeta(float surfaceClass, float representation)
+{
+    return surfaceClass + representation / 16.0;
+}
+
+SurfaceOutputs main(VSOutput input)
+{
+    const uint mode = (uint)round(g.proxy.x);
+    const float2 p = input.uv;
+    float3 n = float3(0.0, 0.0, 1.0);
+
+    if (mode == 1u || mode >= 2u)
+    {
+        const float radiusNdc =
+            max(g.proxy.y, 0.00025);
+        const float2 q =
+            p / radiusNdc;
+        const float r2 = dot(q, q);
+        if (r2 > 1.0)
+            discard;
+
+        const float z =
+            sqrt(max(1.0 - r2, 0.0));
+        n = normalize(float3(q.x, -q.y, z));
+    }
+    else
+    {
+        const float3 radii =
+            max(
+                g.radiiAndAspect.xyz,
+                float3(0.001, 0.001, 0.001));
+        const float3 camera =
+            g.cameraAndTanHalfFov.xyz;
+        const float3 forward =
+            normalize(g.forward.xyz);
+        const float3 requestedUp =
+            normalize(g.up.xyz);
+        const float3 right =
+            normalize(cross(forward, requestedUp));
+        const float3 cameraUp =
+            normalize(cross(right, forward));
+        const float tanHalf =
+            max(g.cameraAndTanHalfFov.w, 0.001);
+
+        const float3 ray =
+            normalize(
+                forward +
+                right *
+                    (p.x *
+                     g.radiiAndAspect.w *
+                     tanHalf) -
+                cameraUp *
+                    (p.y * tanHalf));
+
+        const float3 ro = camera / radii;
+        const float3 rd = ray / radii;
+        const float a = dot(rd, rd);
+        const float b = 2.0 * dot(ro, rd);
+        const float c = dot(ro, ro) - 1.0;
+        const float disc = b * b - 4.0 * a * c;
+        if (disc < 0.0)
+            discard;
+
+        const float t =
+            (-b - sqrt(disc)) / (2.0 * a);
+        if (t < 0.0)
+            discard;
+
+        const float3 hit =
+            camera + ray * t;
+        n =
+            normalize(float3(
+                hit.x / (radii.x * radii.x),
+                hit.y / (radii.y * radii.y),
+                hit.z / (radii.z * radii.z)));
+    }
+
+    SurfaceOutputs output;
+    output.baseRoughness =
+        float4(
+            max(g.albedoAndRoughness.xyz, 0.0),
+            saturate(g.albedoAndRoughness.w));
+    output.normalMetallic =
+        float4(
+            n,
+            0.0);
+    output.emissionClass =
+        float4(
+            max(g.emissionAndOpacity.xyz, 0.0),
+            EncodeSurfaceMeta(
+                6.0,
+                mode == 0u ? 3.0 :
+                mode == 1u ? 4.0 :
+                5.0));
+    return output;
+}
+)";
+
 constexpr const char* kCachedPs = R"(
 [[vk::binding(0, 0)]]
 [[vk::combinedImageSampler]]
@@ -855,6 +981,14 @@ FarBodyRenderer::FarBodyRenderer(
             .debug = false
         });
 
+    const auto surfacePs =
+        compiler.Compile({
+            .source = kSurfacePs,
+            .entryPoint = "main",
+            .stage = shader::Stage::Pixel,
+            .debug = false
+        });
+
     analyticPipeline_ =
         device.CreateGraphicsPipeline({
             .vertexShader = {
@@ -913,6 +1047,36 @@ FarBodyRenderer::FarBodyRenderer(
             },
             .colorAttachmentCount = 1U
         });
+
+    surfacePipeline_ =
+        device.CreateGraphicsPipeline({
+            .vertexShader = {
+                .data = vs.bytecode.data(),
+                .size = vs.bytecode.size()
+            },
+            .pixelShader = {
+                .data = surfacePs.bytecode.data(),
+                .size = surfacePs.bytecode.size()
+            },
+            .vertexAttributes = {},
+            .vertexStrideBytes = 0,
+            .pushConstantDwords = 36,
+            .topology =
+                rhi::PrimitiveTopology::
+                    TriangleList,
+            .fillMode = rhi::FillMode::Solid,
+            .cullMode = rhi::CullMode::None,
+            .blendMode = rhi::BlendMode::Opaque,
+            .depthTest = false,
+            .depthWrite = false,
+            .colorAttachmentFormats = {
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float
+            },
+            .colorAttachmentCount = 3U
+        });
+
 }
 
 void FarBodyRenderer::Draw(
@@ -1169,6 +1333,167 @@ void FarBodyRenderer::Draw(
 
     commands.SetGraphicsPipeline(
         *analyticPipeline_);
+    commands.SetGraphicsConstants(
+        constants);
+    commands.Draw(6);
+}
+
+void FarBodyRenderer::DrawSurfaceData(
+    rhi::CommandList& commands,
+    rhi::Texture& surfaceBaseRoughness,
+    rhi::Texture& surfaceNormalMetallic,
+    rhi::Texture& surfaceEmissionClass,
+    const u32 width,
+    const u32 height,
+    const FarBodyDraw& draw)
+{
+    if (width == 0U ||
+        height == 0U ||
+        draw.opacity <= 0.0F)
+    {
+        return;
+    }
+
+    const auto ellipsoid =
+        AsEllipsoid(draw.shape);
+
+    const f64 scale =
+        std::max({
+            ellipsoid.radiiMeters.x,
+            ellipsoid.radiiMeters.y,
+            ellipsoid.radiiMeters.z,
+            1.0
+        });
+
+    const auto bits =
+        [](const f32 value)
+        {
+            return std::bit_cast<u32>(value);
+        };
+
+    const f64 minimumRasterRadiusPixels = 0.5;
+    const f64 rasterRadiusPixels =
+        std::max(
+            draw.projectedRadiusPixels,
+            minimumRasterRadiusPixels);
+    const f32 radiusNdc =
+        static_cast<f32>(
+            2.0 * rasterRadiusPixels /
+            static_cast<f64>(
+                std::max(height, 1U)));
+
+    u32 mode = 0U;
+    switch (draw.representation)
+    {
+    case celestial_representation::Representation::SmoothGlobe:
+        mode = 0U;
+        break;
+    case celestial_representation::Representation::AnalyticDiscImpostor:
+    case celestial_representation::Representation::CachedDiscImpostor:
+        mode = 1U;
+        break;
+    case celestial_representation::Representation::PointProxy:
+        mode = 2U;
+        break;
+    case celestial_representation::Representation::StellarPointProxy:
+        mode = 3U;
+        break;
+    default:
+        mode = 0U;
+        break;
+    }
+
+    const f32 tanHalfFov =
+        std::tan(
+            draw.camera.verticalFovRadians *
+            0.5F);
+
+    const std::array<u32, 36> constants{
+        bits(static_cast<f32>(
+            ellipsoid.radiiMeters.x / scale)),
+        bits(static_cast<f32>(
+            ellipsoid.radiiMeters.y / scale)),
+        bits(static_cast<f32>(
+            ellipsoid.radiiMeters.z / scale)),
+        bits(static_cast<f32>(width) /
+             static_cast<f32>(height)),
+
+        bits(static_cast<f32>(
+            draw.camera.localPositionMeters.x / scale)),
+        bits(static_cast<f32>(
+            draw.camera.localPositionMeters.y / scale)),
+        bits(static_cast<f32>(
+            draw.camera.localPositionMeters.z / scale)),
+        bits(tanHalfFov),
+
+        bits(draw.camera.forward.x),
+        bits(draw.camera.forward.y),
+        bits(draw.camera.forward.z),
+        0U,
+
+        bits(draw.camera.up.x),
+        bits(draw.camera.up.y),
+        bits(draw.camera.up.z),
+        0U,
+
+        bits(draw.appearance.albedoLinear.x),
+        bits(draw.appearance.albedoLinear.y),
+        bits(draw.appearance.albedoLinear.z),
+        bits(draw.appearance.roughness),
+
+        bits(draw.appearance.oceanFraction),
+        bits(draw.appearance.iceFraction),
+        bits(draw.stellar ? 1.0F : 0.0F),
+        0U,
+
+        bits(draw.appearance.emissionLinear.x),
+        bits(draw.appearance.emissionLinear.y),
+        bits(draw.appearance.emissionLinear.z),
+        bits(std::clamp(
+            draw.opacity,
+            0.0F,
+            1.0F)),
+
+        bits(static_cast<f32>(mode)),
+        bits(radiusNdc),
+        1U,
+        bits(std::max(
+            draw.radiometricIntensity,
+            0.0F)),
+
+        bits(draw.lightDirectionBody.x),
+        bits(draw.lightDirectionBody.y),
+        bits(draw.lightDirectionBody.z),
+        bits(std::max(
+            draw.incidentLightScale,
+            0.0F))
+    };
+
+    std::array<rhi::Texture*, 3> targets{
+        &surfaceBaseRoughness,
+        &surfaceNormalMetallic,
+        &surfaceEmissionClass
+    };
+
+    commands.SetRenderTargets(
+        targets,
+        nullptr);
+    commands.SetViewport({
+        .x = 0.0F,
+        .y = 0.0F,
+        .width = static_cast<f32>(width),
+        .height = static_cast<f32>(height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F
+    });
+    commands.SetScissor({
+        .left = 0,
+        .top = 0,
+        .right = static_cast<i32>(width),
+        .bottom = static_cast<i32>(height)
+    });
+    commands.SetGraphicsPipeline(
+        *surfacePipeline_);
     commands.SetGraphicsConstants(
         constants);
     commands.Draw(6);
