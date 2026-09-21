@@ -198,6 +198,52 @@ void Validate(
             infinity();
 }
 
+struct RaySphereInterval
+{
+    f64 nearMeters{
+        std::numeric_limits<f64>::
+            infinity()};
+    f64 farMeters{
+        std::numeric_limits<f64>::
+            infinity()};
+    bool intersects{false};
+};
+
+[[nodiscard]] RaySphereInterval RaySphereIntervalFor(
+    const math::Double3 origin,
+    const math::Double3 direction,
+    const f64 radius)
+{
+    const f64 b =
+        math::Dot(
+            origin,
+            direction);
+    const f64 c =
+        math::Dot(origin, origin) -
+        radius * radius;
+    const f64 discriminant =
+        b * b - c;
+
+    if (discriminant < 0.0)
+    {
+        return {};
+    }
+
+    const f64 root =
+        std::sqrt(
+            std::max(
+                discriminant,
+                0.0));
+
+    return {
+        .nearMeters =
+            -b - root,
+        .farMeters =
+            -b + root,
+        .intersects = true
+    };
+}
+
 struct RayBoundary
 {
     f64 distanceMeters{0.0};
@@ -1021,8 +1067,8 @@ AtmosphereSkyView BuildSkyView(
         AtmosphereFingerprint(p, c) ||
         !std::isfinite(
             input.observerRadiusMeters) ||
-        input.observerRadiusMeters <
-            p.bottomRadiusMeters ||
+        input.observerRadiusMeters <=
+            0.0 ||
         !std::isfinite(
             input.sunDirectionBody.x) ||
         !std::isfinite(
@@ -1086,10 +1132,7 @@ AtmosphereSkyView BuildSkyView(
     const math::Double3 origin{
         0.0,
         0.0,
-        std::min(
-            input.observerRadiusMeters,
-            p.topRadiusMeters -
-                1.0e-3)};
+        input.observerRadiusMeters};
 
     for (u32 y = 0U;
          y < sky.height;
@@ -1128,20 +1171,86 @@ AtmosphereSkyView BuildSkyView(
                         relativeAzimuth),
                 cosView};
 
-            const auto boundary =
-                BoundaryDistance(
-                    p,
-                    origin,
-                    view);
+            f64 segmentStart = 0.0;
+            f64 segmentEnd = 0.0;
 
-            if (!std::isfinite(
-                    boundary.distanceMeters))
+            const f64 originRadius =
+                math::Length(origin);
+
+            if (originRadius <=
+                p.topRadiusMeters)
+            {
+                const auto boundary =
+                    BoundaryDistance(
+                        p,
+                        origin,
+                        view);
+
+                if (!std::isfinite(
+                        boundary.distanceMeters))
+                {
+                    continue;
+                }
+
+                segmentEnd =
+                    boundary.distanceMeters;
+            }
+            else
+            {
+                const auto topInterval =
+                    RaySphereIntervalFor(
+                        origin,
+                        view,
+                        p.topRadiusMeters);
+
+                if (!topInterval.intersects ||
+                    topInterval.farMeters <=
+                        0.0)
+                {
+                    continue;
+                }
+
+                segmentStart =
+                    std::max(
+                        topInterval.nearMeters,
+                        0.0);
+                segmentEnd =
+                    topInterval.farMeters;
+
+                const auto groundInterval =
+                    RaySphereIntervalFor(
+                        origin,
+                        view,
+                        p.bottomRadiusMeters);
+
+                if (groundInterval.intersects)
+                {
+                    const f64 groundEntry =
+                        groundInterval.nearMeters >
+                                segmentStart
+                            ? groundInterval.nearMeters
+                            : groundInterval.farMeters;
+
+                    if (groundEntry >
+                            segmentStart &&
+                        groundEntry <
+                            segmentEnd)
+                    {
+                        segmentEnd =
+                            groundEntry;
+                    }
+                }
+            }
+
+            if (!(segmentEnd >
+                  segmentStart))
             {
                 continue;
             }
 
             const f64 step =
-                boundary.distanceMeters /
+                (segmentEnd -
+                 segmentStart) /
                 static_cast<f64>(
                     c.skyViewSteps);
 
@@ -1169,6 +1278,7 @@ AtmosphereSkyView BuildSkyView(
                  ++i)
             {
                 const f64 t =
+                    segmentStart +
                     (static_cast<f64>(i) +
                      0.5) *
                     step;
