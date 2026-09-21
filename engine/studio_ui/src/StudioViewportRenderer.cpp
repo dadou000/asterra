@@ -734,6 +734,129 @@ BuildPhysicalRenderPages(
         },
         shape);
 }
+struct ResolvedStudioDirectLight
+{
+    math::Float3 directionBody{
+        0.55F, 0.72F, -0.48F};
+    f32 irradianceScale{0.0F};
+    std::optional<
+        world_model::DirectBodyLighting>
+        direct;
+};
+
+[[nodiscard]] ResolvedStudioDirectLight
+ResolveStudioDirectLight(
+    studio_session::StudioSession& session,
+    const universe::BodyId receiver,
+    const time::SimulationTime atTime)
+{
+    ResolvedStudioDirectLight result;
+
+    auto& universe =
+        session.World().
+            Universe();
+
+    const auto* receiverBody =
+        universe.Bodies().
+            FindBody(receiver);
+
+    if (receiverBody == nullptr)
+    {
+        return result;
+    }
+
+    const auto candidates =
+        universe.Bodies().
+            Bodies(
+                receiverBody->system);
+
+    world_model::CelestialLightingService
+        lighting(
+            session.World().Objects(),
+            universe);
+
+    f64 bestIrradiance = -1.0;
+
+    for (const auto emitter :
+         candidates)
+    {
+        if (emitter == receiver)
+        {
+            continue;
+        }
+
+        const auto emitterObject =
+            universe.ObjectForBody(
+                emitter);
+
+        if (!emitterObject.has_value() ||
+            !world_model::
+                ResolveRadiativeBody(
+                    session.World().
+                        Objects(),
+                    *emitterObject).
+                has_value())
+        {
+            continue;
+        }
+
+        std::vector<universe::BodyId>
+            occluders;
+
+        for (const auto other :
+             candidates)
+        {
+            if (other != receiver &&
+                other != emitter)
+            {
+                occluders.push_back(
+                    other);
+            }
+        }
+
+        const auto direct =
+            lighting.DirectLightingAtBody(
+                receiver,
+                emitter,
+                occluders,
+                atTime);
+
+        if (!direct.has_value() ||
+            direct->
+                irradianceWattsPerSquareMeter <=
+                bestIrradiance)
+        {
+            continue;
+        }
+
+        bestIrradiance =
+            direct->
+                irradianceWattsPerSquareMeter;
+
+        const auto direction =
+            math::Normalize(
+                direct->
+                    receiverBodyFixedToEmitterMeters);
+
+        result.directionBody = {
+            static_cast<f32>(direction.x),
+            static_cast<f32>(direction.y),
+            static_cast<f32>(direction.z)
+        };
+
+        result.irradianceScale =
+            static_cast<f32>(
+                direct->
+                    irradianceWattsPerSquareMeter /
+                1361.0);
+
+        result.direct =
+            direct;
+    }
+
+    return result;
+}
+
 
 } // namespace
 
@@ -980,6 +1103,22 @@ SurfaceGlobeTransitionDiagnostics(
 
     return found ==
             transitionDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
+    StudioCelestialLightingDiagnostics>
+StudioViewportRenderer::
+CelestialLightingDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        lightingDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            lightingDiagnostics_.end()
         ? std::nullopt
         : std::optional(found->second);
 }
