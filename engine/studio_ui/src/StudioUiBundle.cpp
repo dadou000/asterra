@@ -738,6 +738,154 @@ StudioUiBundle::StudioUiBundle(
                         }
                     }
                 }
+
+
+                context.Separator();
+                context.Text("Celestial Save / Reopen Equivalence");
+                context.Text(
+                    "Checkpoints the active world, reopens the project in an isolated Studio workspace, "
+                    "then regenerates celestial runtime/appearance/representation fingerprints.");
+
+                if (context.Button(
+                        "Save, Reopen & Verify Celestial##celestial-roundtrip"))
+                {
+                    celestialRoundTripReport_.reset();
+
+                    if (workspace_ != nullptr &&
+                        workspace_->HasProject())
+                    {
+                        auto& liveSession =
+                            workspace_->Session();
+
+                        auto selected =
+                            liveSession.World().
+                                Selection().
+                                Ordered();
+
+                        std::optional<scene::ObjectId>
+                            body;
+
+                        if (!selected.empty())
+                        {
+                            auto cursor =
+                                liveSession.World().
+                                    Objects().
+                                    Find(
+                                        selected.front());
+
+                            while (cursor.has_value())
+                            {
+                                if (cursor->type ==
+                                    world_model::
+                                        kCelestialBodyType)
+                                {
+                                    body =
+                                        cursor->id;
+                                    break;
+                                }
+
+                                cursor =
+                                    cursor->parent.
+                                        has_value()
+                                        ? liveSession.World().
+                                              Objects().
+                                              Find(
+                                                  *cursor->
+                                                       parent)
+                                        : std::nullopt;
+                            }
+                        }
+
+                        if (body.has_value())
+                        {
+                            celestialRoundTripReport_ =
+                                studio_session::
+                                    VerifyStudioCelestialRoundTrip(
+                                        workspace_->Project(),
+                                        liveSession,
+                                        *body);
+                        }
+                        else
+                        {
+                            studio_session::
+                                StudioCelestialRoundTripReport
+                                report{};
+                            report.failureStage =
+                                "selection";
+                            report.diagnostic =
+                                "Select a celestial body or one of its capabilities first.";
+                            celestialRoundTripReport_ =
+                                std::move(report);
+                        }
+                    }
+                }
+
+                if (celestialRoundTripReport_.has_value())
+                {
+                    const auto& report =
+                        *celestialRoundTripReport_;
+
+                    context.Text(
+                        std::format(
+                            "Result: {}",
+                            report.success
+                                ? "PASS"
+                                : "FAIL"));
+
+                    context.Text(
+                        std::format(
+                            "Semantic: {} -> {}",
+                            report.semanticFingerprintBefore,
+                            report.semanticFingerprintAfter));
+
+                    context.Text(
+                        std::format(
+                            "Orbit/runtime: {} -> {}",
+                            report.runtimeOrbitFingerprintBefore,
+                            report.runtimeOrbitFingerprintAfter));
+
+                    context.Text(
+                        std::format(
+                            "Appearance: {} -> {}",
+                            report.derivedAppearanceFingerprintBefore,
+                            report.derivedAppearanceFingerprintAfter));
+
+                    context.Text(
+                        std::format(
+                            "Representation: {} -> {}",
+                            report.representationFingerprintBefore,
+                            report.representationFingerprintAfter));
+
+                    context.Text(
+                        std::format(
+                            "IDs {} | provenance {} | fresh workspace {} | regenerated {}",
+                            report.semanticIdsPreserved
+                                ? "preserved"
+                                : "changed",
+                            report.provenancePreserved
+                                ? "preserved"
+                                : "changed",
+                            report.freshWorkspaceRecomposition
+                                ? "yes"
+                                : "no",
+                            report.derivedProductsRegenerated
+                                ? "yes"
+                                : "no"));
+
+                    if (!report.failureStage.empty())
+                    {
+                        context.Text(
+                            std::format(
+                                "Stage: {}",
+                                report.failureStage));
+                    }
+
+                    if (!report.diagnostic.empty())
+                    {
+                        context.Text(
+                            report.diagnostic);
+                    }
+                }
             }
     });
 
