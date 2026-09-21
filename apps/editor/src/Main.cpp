@@ -5701,11 +5701,10 @@ int main(
                             {
                                 context.Text(
                                     "Emission Texture: " +
-                                    baseMaterial->sourcePath.
-                                        parent_path().
-                                        append(
-                                            baseMaterial->material->
-                                                emissive).
+                                    (baseMaterial->sourcePath.
+                                         parent_path() /
+                                     baseMaterial->material->
+                                         emissive).
                                         generic_string());
                             }
                             else
