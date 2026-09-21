@@ -4,6 +4,7 @@ add_library(OrbitLighting STATIC
     src/SurfaceDebugRenderer.cpp
     src/LightingView.cpp
     src/DirectLighting.cpp
+    src/Visibility.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -43,6 +44,10 @@ if(BUILD_TESTING)
         tests/LightingViewTests.cpp
     )
 
+    add_executable(OrbitLightingVisibilityTests
+        tests/VisibilityTests.cpp
+    )
+
     target_link_libraries(OrbitLightingSurfaceDataTests
         PRIVATE
             Orbit::Lighting
@@ -76,9 +81,22 @@ if(BUILD_TESTING)
         OrbitLightingViewTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingViewTests)
 
+    target_link_libraries(OrbitLightingVisibilityTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingVisibilityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingVisibilityTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
+    )
+
+    add_test(
+        NAME Orbit.LightingVisibility
+        COMMAND OrbitLightingVisibilityTests
     )
 
     add_test(
