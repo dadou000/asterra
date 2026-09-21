@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -240,6 +241,42 @@ int main()
             return 8;
         }
 
+        commands.SetProperty(
+            atmosphere,
+            kAtmosphereMieAnisotropy,
+            0.45);
+
+        static_cast<void>(
+            WritePropertyProvenance(
+                objects,
+                commands,
+                atmosphere,
+                kAtmosphereMieAnisotropy,
+                PropertyProvenance{
+                    .sourceMode =
+                        PropertySourceMode::Imported,
+                    .solveState =
+                        PropertySolveState::Locked,
+                    .sourceAsset =
+                        "test://imported-aerosol-profile",
+                    .sourceProperty =
+                        "Imported aerosol phase profile"
+                }));
+
+        const auto importedConflict =
+            solver.Solve(
+                atmosphere);
+
+        if (!importedConflict.HasConflict() ||
+            RequireProperty<f64>(
+                objects,
+                atmosphere,
+                kAtmosphereMieAnisotropy) !=
+                0.45)
+        {
+            return 9;
+        }
+
         const auto rayleigh =
             RequireProperty<math::Double3>(
                 objects,
@@ -269,7 +306,7 @@ int main()
                 kAtmosphereRayleighScatteringPerMeter) !=
                 rayleigh)
         {
-            return 9;
+            return 10;
         }
 
         world.Checkpoint();
