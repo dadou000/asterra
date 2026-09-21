@@ -209,6 +209,8 @@ ResolveRadiativeBody(
                 ? std::optional(
                       photosphere->id)
                 : std::nullopt,
+        .photosphereRadiusMeters =
+            radiusMeters,
         .radiative = state
     };
 }
