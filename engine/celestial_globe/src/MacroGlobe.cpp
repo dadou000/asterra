@@ -630,7 +630,6 @@ struct VSInput
     float3 appearanceNormal : NORMAL1;
     float4 material : TEXCOORD0;
     float3 emission : COLOR1;
-    float opacity : TEXCOORD1;
 };
 
 struct Constants
@@ -650,6 +649,7 @@ struct VSOutput
     float3 albedo : COLOR0;
     float4 material : TEXCOORD0;
     float3 emission : COLOR1;
+    float opacity : TEXCOORD1;
 };
 
 VSOutput main(VSInput input)
