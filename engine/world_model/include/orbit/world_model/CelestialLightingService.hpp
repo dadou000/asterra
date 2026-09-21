@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_lighting/CelestialLighting.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
+#include <orbit/celestial_rings/RingSystem.hpp>
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
@@ -29,6 +30,7 @@ struct DirectSurfaceLighting
 {
     DirectBodyLighting celestial{};
     f64 cloudTransmittance{1.0};
+    f64 ringTransmittance{1.0};
     f64 irradianceWattsPerSquareMeter{0.0};
 };
 
@@ -65,6 +67,16 @@ public:
         const std::vector<universe::BodyId>& occluders,
         time::SimulationTime atTime,
         const celestial_clouds::CloudFieldProduct& clouds,
+        math::Double3 surfaceUnitDirection) const;
+
+    [[nodiscard]] std::optional<DirectSurfaceLighting>
+    DirectLightingAtSurface(
+        universe::BodyId receiver,
+        universe::BodyId emitter,
+        const std::vector<universe::BodyId>& occluders,
+        time::SimulationTime atTime,
+        const celestial_clouds::CloudFieldProduct& clouds,
+        const celestial_rings::RingSystem& rings,
         math::Double3 surfaceUnitDirection) const;
 
     [[nodiscard]] std::optional<ReflectedBodyLighting>
