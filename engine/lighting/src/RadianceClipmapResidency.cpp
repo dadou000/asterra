@@ -386,7 +386,9 @@ RadianceClipmapResidency::ScrollTo(
 void RadianceClipmapResidency::InvalidateSphere(
     const math::Double3& centerInFrameMeters,
     const f64 radiusMeters,
-    const u64 sourceRevision)
+    const u64 sourceRevision,
+    const f32 priorityBoost,
+    const bool preservePreviousValue)
 {
     if (!std::isfinite(radiusMeters) ||
         radiusMeters < 0.0)
@@ -450,7 +452,18 @@ void RadianceClipmapResidency::InvalidateSphere(
                 influenceSquared)
             {
                 slot.dirty = true;
-                slot.cell.valid = false;
+                slot.invalidationPriorityBoost =
+                    std::max(
+                        slot.invalidationPriorityBoost,
+                        std::max(
+                            priorityBoost,
+                            0.0F));
+
+                if (!preservePreviousValue)
+                {
+                    slot.cell.valid = false;
+                }
+
                 slot.sourceRevision =
                     sourceRevision;
                 slot.cell.revision =
@@ -486,6 +499,10 @@ void RadianceClipmapResidency::RequestGlobalRefresh() noexcept
             // invalid means "do not sample". Dynamic lighting changes need
             // the former so large caches can converge under a fixed budget.
             slot.dirty = true;
+            slot.invalidationPriorityBoost =
+                std::max(
+                    slot.invalidationPriorityBoost,
+                    0.25F);
         }
     }
 }
@@ -581,7 +598,12 @@ RadianceClipmapResidency::BuildUpdateList(
                 .priority =
                     levelWeight *
                     distanceWeight *
-                    ageWeight,
+                    ageWeight *
+                    (1.0F +
+                     std::max(
+                         slot.
+                             invalidationPriorityBoost,
+                         0.0F)),
                 .ageSeconds =
                     age
             });
@@ -660,6 +682,8 @@ bool RadianceClipmapResidency::CommitUpdate(
 
     slot->sourceRevision =
         sourceRevision;
+    slot->invalidationPriorityBoost =
+        0.0F;
     slot->dirty = false;
 
     return true;
