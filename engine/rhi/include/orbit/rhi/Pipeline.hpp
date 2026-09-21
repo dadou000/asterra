@@ -1,7 +1,9 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/rhi/Resource.hpp>
 
+#include <array>
 #include <cstddef>
 #include <span>
 
@@ -78,6 +80,17 @@ struct GraphicsPipelineDesc
     DepthCompare depthCompare{DepthCompare::LessEqual};
     bool depthTest{false};
     bool depthWrite{false};
+
+    // Dynamic-rendering attachment contract. Pipelines must declare the
+    // formats/count they are compatible with; this is also the MRT seam used
+    // by the V0.0.7 lighting surface buffer.
+    std::array<TextureFormat, 4> colorAttachmentFormats{
+        TextureFormat::RGBA8_UNorm,
+        TextureFormat::RGBA8_UNorm,
+        TextureFormat::RGBA8_UNorm,
+        TextureFormat::RGBA8_UNorm
+    };
+    u32 colorAttachmentCount{1U};
 };
 
 class GraphicsPipeline
