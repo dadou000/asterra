@@ -520,7 +520,7 @@ GpuMacroGlobeProduct::GpuMacroGlobeProduct(
                 texel.roughness,
                 texel.oceanMask,
                 texel.iceMask,
-                0.0F
+                texel.directLightTransmittance
             };
             packedVertex.emissionLinear =
                 texel.emissionLinear;
