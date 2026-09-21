@@ -742,6 +742,23 @@ void ScreenSpaceFinalGatherRenderer::Gather(
             return std::bit_cast<u32>(value);
         };
 
+    const std::array<u32, 4> tuning{
+        bits(std::clamp(
+            settings.temporalWeight,
+            0.0F,
+            0.99F)),
+        bits(std::max(
+            settings.historyDepthTolerance,
+            0.0001F)),
+        bits(std::clamp(
+            settings.historyNormalThreshold,
+            -1.0F,
+            1.0F)),
+        bits(std::max(
+            settings.intensity,
+            0.0F))
+    };
+
     const std::array<u32, 20> fullConstants{
         width,
         height,
