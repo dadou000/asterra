@@ -74,6 +74,7 @@ int main()
     const auto a =
         BuildCloudField(
             &climate,
+            nullptr,
             6.371e6,
             {layer},
             {},
@@ -82,6 +83,7 @@ int main()
     const auto b =
         BuildCloudField(
             &climate,
+            nullptr,
             6.371e6,
             {layer},
             {},
@@ -108,6 +110,7 @@ int main()
     const auto later =
         BuildCloudField(
             &climate,
+            nullptr,
             6.371e6,
             {layer},
             {
@@ -145,6 +148,7 @@ int main()
     const auto noShadow =
         BuildCloudField(
             &climate,
+            nullptr,
             6.371e6,
             {noShadowLayer},
             {},
