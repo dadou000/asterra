@@ -4,10 +4,12 @@
 #include <orbit/editor_model/CelestialRecipeService.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
+#include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/UniverseComposition.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <optional>
 #include <stdexcept>
@@ -271,6 +273,31 @@ int main()
             !planetSurface)
         {
             return 8;
+        }
+
+        const auto resolvedRadiative =
+            orbit::world_model::
+                ResolveRadiativeBody(
+                    objects,
+                    first.star);
+
+        if (!resolvedRadiative.has_value() ||
+            !std::isfinite(
+                resolvedRadiative->
+                    radiative.
+                    luminosityWatts) ||
+            resolvedRadiative->
+                    radiative.
+                    luminosityWatts <= 0.0 ||
+            !std::isfinite(
+                resolvedRadiative->
+                    radiative.
+                    surfaceRadianceWattsPerSquareMeterSteradian) ||
+            resolvedRadiative->
+                    radiative.
+                    surfaceRadianceWattsPerSquareMeterSteradian <= 0.0)
+        {
+            return 9;
         }
 
         world.Checkpoint();
