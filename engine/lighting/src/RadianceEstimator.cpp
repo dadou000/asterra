@@ -451,7 +451,10 @@ EstimateRadianceCell(
         const f32 scale =
             static_cast<f32>(
                 geometry) *
-            transport;
+            transport *
+            std::max(
+                emitter.estimatorWeight,
+                0.0F);
 
         const math::Float3 energy{
             std::max(
