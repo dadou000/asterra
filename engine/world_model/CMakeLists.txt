@@ -3,6 +3,7 @@ add_library(OrbitWorldModel STATIC
     src/CelestialRadiometryBinding.cpp
     src/CelestialLightingService.cpp
     src/CelestialAtmosphereBinding.cpp
+    src/AtmospherePropertySolver.cpp
     src/PropertyProvenanceSchema.cpp
     src/PropertyProvenanceStore.cpp
     src/PropertyProvenance.cpp
