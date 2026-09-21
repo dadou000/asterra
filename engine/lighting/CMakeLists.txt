@@ -15,6 +15,7 @@ add_library(OrbitLighting STATIC
     src/RadianceClipmapResidency.cpp
     src/ScreenSpaceFinalGather.cpp
     src/RadianceEstimator.cpp
+    src/SkyVisibility.cpp
     src/RadianceCacheSampler.cpp
     src/MaterialEmission.cpp
     src/MaterialEmissionSurfaceOverride.cpp
@@ -110,6 +111,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingRadianceEstimatorTests
         tests/RadianceEstimatorTests.cpp
+    )
+
+    add_executable(OrbitLightingSkyVisibilityTests
+        tests/SkyVisibilityTests.cpp
     )
 
     add_executable(OrbitLightingMaterialEmissionTests
@@ -281,6 +286,14 @@ if(BUILD_TESTING)
         OrbitLightingRadianceEstimatorTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingRadianceEstimatorTests)
 
+    target_link_libraries(OrbitLightingSkyVisibilityTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingSkyVisibilityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingSkyVisibilityTests)
+
     target_link_libraries(OrbitLightingMaterialEmissionTests
         PRIVATE
             Orbit::Lighting
@@ -441,6 +454,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingRadianceEstimator
         COMMAND OrbitLightingRadianceEstimatorTests
+    )
+
+    add_test(
+        NAME Orbit.LightingSkyVisibility
+        COMMAND OrbitLightingSkyVisibilityTests
     )
 
     add_test(
