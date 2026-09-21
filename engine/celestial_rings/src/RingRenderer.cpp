@@ -53,9 +53,7 @@ struct VSIn
 {
     float3 position : POSITION;
     float3 color : COLOR0;
-    float opticalDepth : TEXCOORD0;
-    float singleScatteringAlbedo : TEXCOORD1;
-    float anisotropy : TEXCOORD2;
+    float3 optical : TEXCOORD0;
 };
 struct Constants
 {
@@ -94,9 +92,9 @@ VSOut main(VSIn i)
     o.position=float4(x/(tanHalf*aspect),y/tanHalf,z*0.5,z);
     o.bodyPosition=i.position;
     o.color=i.color;
-    o.opticalDepth=max(i.opticalDepth,0.0);
-    o.singleScatteringAlbedo=saturate(i.singleScatteringAlbedo);
-    o.anisotropy=clamp(i.anisotropy,-0.999,0.999);
+    o.opticalDepth=max(i.optical.x,0.0);
+    o.singleScatteringAlbedo=saturate(i.optical.y);
+    o.anisotropy=clamp(i.optical.z,-0.999,0.999);
     o.viewDirection=normalize(camera-world);
     return o;
 }
@@ -191,17 +189,13 @@ RingRenderer::RingRenderer(
     const auto ps=compiler.Compile({
         .source=kPs,.entryPoint="main",
         .stage=shader::Stage::Pixel,.debug=false});
-    static constexpr std::array<rhi::VertexAttribute,5> attrs{{
+        static constexpr std::array<rhi::VertexAttribute,3> attrs{{
         {.location=0,.format=rhi::VertexFormat::Float3,
          .offsetBytes=static_cast<u32>(offsetof(RingVertex,positionNormalized))},
         {.location=1,.format=rhi::VertexFormat::Float3,
          .offsetBytes=static_cast<u32>(offsetof(RingVertex,colorLinear))},
-        {.location=2,.format=rhi::VertexFormat::Float,
-         .offsetBytes=static_cast<u32>(offsetof(RingVertex,opticalDepth))},
-        {.location=3,.format=rhi::VertexFormat::Float,
-         .offsetBytes=static_cast<u32>(offsetof(RingVertex,singleScatteringAlbedo))},
-        {.location=4,.format=rhi::VertexFormat::Float,
-         .offsetBytes=static_cast<u32>(offsetof(RingVertex,anisotropy))}
+        {.location=2,.format=rhi::VertexFormat::Float3,
+         .offsetBytes=static_cast<u32>(offsetof(RingVertex,optical))}
     }};
     pipeline_=device.CreateGraphicsPipeline({
         .vertexShader={.data=vs.bytecode.data(),.size=vs.bytecode.size()},
