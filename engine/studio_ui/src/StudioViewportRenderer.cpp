@@ -3350,6 +3350,8 @@ StudioViewportRenderer::Compose(
                 &view->SurfaceNormalMetallic();
             auto* lightingEmissionClass =
                 &view->SurfaceEmissionClass();
+            auto* lightingDepth =
+                &view->Depth();
 
             const auto lightingView =
                 view->Lighting();
@@ -3366,6 +3368,254 @@ StudioViewportRenderer::Compose(
                     .irradianceScale =
                         studioDirectLight.irradianceScale
                 };
+
+            std::optional<scene::ObjectId>
+                authoredLightRoot;
+
+            if (logicalTarget->target.has_value() &&
+                snapshot.hasWorld)
+            {
+                authoredLightRoot =
+                    session.World().
+                        Universe().
+                        ObjectForBody(
+                            logicalTarget->
+                                target->body);
+            }
+
+            const auto authoredLights =
+                world_model::
+                    ResolveAuthoredLocalLights(
+                        session.World().Objects(),
+                        authoredLightRoot);
+
+            std::vector<lighting::LocalLight>
+                localLights;
+            localLights.reserve(
+                authoredLights.size());
+
+            constexpr f64 kDegreesToRadians =
+                0.017453292519943295769;
+
+            for (const auto& authored :
+                 authoredLights)
+            {
+                localLights.push_back({
+                    .type =
+                        authored.kind ==
+                                world_model::
+                                    AuthoredLightKind::
+                                        Spot
+                            ? lighting::
+                                LocalLightType::
+                                    Spot
+                            : lighting::
+                                LocalLightType::
+                                    Point,
+                    .positionInFrameMeters =
+                        authored.positionMeters,
+                    .direction = {
+                        static_cast<f32>(
+                            authored.direction.x),
+                        static_cast<f32>(
+                            authored.direction.y),
+                        static_cast<f32>(
+                            authored.direction.z)
+                    },
+                    .colorLinear = {
+                        static_cast<f32>(
+                            authored.colorLinear.x),
+                        static_cast<f32>(
+                            authored.colorLinear.y),
+                        static_cast<f32>(
+                            authored.colorLinear.z)
+                    },
+                    .luminousFluxLumens =
+                        static_cast<f32>(
+                            authored.
+                                luminousFluxLumens),
+                    .rangeMeters =
+                        static_cast<f32>(
+                            authored.rangeMeters),
+                    .innerConeRadians =
+                        static_cast<f32>(
+                            authored.
+                                innerConeDegrees *
+                            kDegreesToRadians),
+                    .outerConeRadians =
+                        static_cast<f32>(
+                            authored.
+                                outerConeDegrees *
+                            kDegreesToRadians),
+                    .stableId =
+                        authored.object.high ^
+                        authored.object.low
+                });
+            }
+
+            const lighting::TiledLightGrid
+                localLightGrid =
+                    lighting::BuildTiledLightGrid(
+                        localLights,
+                        lightingView,
+                        width,
+                        height);
+
+            std::vector<lighting::GpuLocalLight>
+                gpuLights;
+            gpuLights.reserve(
+                localLightGrid.lights.size());
+
+            for (const auto& light :
+                 localLightGrid.lights)
+            {
+                gpuLights.push_back(
+                    lighting::
+                        EncodeGpuLocalLight(
+                            light));
+            }
+
+            const u64 lightBufferBytes =
+                std::max<u64>(
+                    sizeof(
+                        lighting::GpuLocalLight),
+                    static_cast<u64>(
+                        gpuLights.size()) *
+                        sizeof(
+                            lighting::
+                                GpuLocalLight));
+
+            const u64 offsetBufferBytes =
+                std::max<u64>(
+                    sizeof(u32),
+                    static_cast<u64>(
+                        localLightGrid.
+                            offsets.size()) *
+                        sizeof(u32));
+
+            const u64 indexBufferBytes =
+                std::max<u64>(
+                    sizeof(u32),
+                    static_cast<u64>(
+                        localLightGrid.
+                            lightIndices.size()) *
+                        sizeof(u32));
+
+            const auto localLightsHandle =
+                graph.CreateBuffer(
+                    prefix + ".LocalLights",
+                    {
+                        .sizeBytes =
+                            lightBufferBytes,
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                HostVisible,
+                        .initialState =
+                            rhi::ResourceState::
+                                ShaderResource
+                    });
+
+            const auto localOffsetsHandle =
+                graph.CreateBuffer(
+                    prefix + ".LocalLightOffsets",
+                    {
+                        .sizeBytes =
+                            offsetBufferBytes,
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                HostVisible,
+                        .initialState =
+                            rhi::ResourceState::
+                                ShaderResource
+                    });
+
+            const auto localIndicesHandle =
+                graph.CreateBuffer(
+                    prefix + ".LocalLightIndices",
+                    {
+                        .sizeBytes =
+                            indexBufferBytes,
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                HostVisible,
+                        .initialState =
+                            rhi::ResourceState::
+                                ShaderResource
+                    });
+
+            const auto uploadBuffer =
+                [](rhi::Buffer& buffer,
+                   const void* source,
+                   const u64 sourceBytes)
+                {
+                    auto* destination =
+                        buffer.Map();
+
+                    std::memset(
+                        destination,
+                        0,
+                        static_cast<std::size_t>(
+                            buffer.SizeBytes()));
+
+                    if (source != nullptr &&
+                        sourceBytes > 0U)
+                    {
+                        std::memcpy(
+                            destination,
+                            source,
+                            static_cast<
+                                std::size_t>(
+                                    sourceBytes));
+                    }
+
+                    buffer.Unmap();
+                };
+
+            uploadBuffer(
+                graph.Buffer(
+                    localLightsHandle),
+                gpuLights.empty()
+                    ? nullptr
+                    : gpuLights.data(),
+                static_cast<u64>(
+                    gpuLights.size()) *
+                    sizeof(
+                        lighting::
+                            GpuLocalLight));
+
+            uploadBuffer(
+                graph.Buffer(
+                    localOffsetsHandle),
+                localLightGrid.offsets.empty()
+                    ? nullptr
+                    : localLightGrid.
+                        offsets.data(),
+                static_cast<u64>(
+                    localLightGrid.
+                        offsets.size()) *
+                    sizeof(u32));
+
+            uploadBuffer(
+                graph.Buffer(
+                    localIndicesHandle),
+                localLightGrid.
+                        lightIndices.empty()
+                    ? nullptr
+                    : localLightGrid.
+                        lightIndices.data(),
+                static_cast<u64>(
+                    localLightGrid.
+                        lightIndices.size()) *
+                    sizeof(u32));
 
             graph.AddPass(
                 prefix + ".SharedDirectLighting",
@@ -3401,6 +3651,15 @@ StudioViewportRenderer::Compose(
                                 Read
                     },
                     {
+                        .texture = targets.depth,
+                        .state =
+                            rhi::ResourceState::
+                                DepthRead,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
                         .texture = targets.color,
                         .state =
                             rhi::ResourceState::
@@ -3410,28 +3669,96 @@ StudioViewportRenderer::Compose(
                                 Write
                     }
                 },
+                {
+                    {
+                        .buffer =
+                            localLightsHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .buffer =
+                            localOffsetsHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .buffer =
+                            localIndicesHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    }
+                },
                 [this,
                  lightingBaseRoughness,
                  lightingNormalMetallic,
                  lightingEmissionClass,
+                 lightingDepth,
                  color,
                  width,
                  height,
                  lightingView,
-                 directLight](
+                 directLight,
+                 localLightGrid,
+                 localLightsHandle,
+                 localOffsetsHandle,
+                 localIndicesHandle](
                     rhi::CommandList& commands,
-                    const render_graph::Resources&)
+                    const render_graph::Resources&
+                        resources)
                 {
                     directLightingRenderer_.Draw(
                         commands,
                         *lightingBaseRoughness,
                         *lightingNormalMetallic,
                         *lightingEmissionClass,
+                        *lightingDepth,
+                        resources.Buffer(
+                            localLightsHandle),
+                        resources.Buffer(
+                            localOffsetsHandle),
+                        resources.Buffer(
+                            localIndicesHandle),
                         *color,
                         width,
                         height,
                         lightingView,
-                        directLight);
+                        directLight,
+                        localLightGrid);
+                });
+
+            // RenderView imports depth as DepthWrite on the next frame.
+            // Shared direct lighting samples it read-only, so close this frame
+            // by returning the actual Vulkan image to that persistent state.
+            graph.AddPass(
+                prefix + ".RestoreDepthWrite",
+                {
+                    {
+                        .texture = targets.depth,
+                        .state =
+                            rhi::ResourceState::
+                                DepthWrite,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [](
+                    rhi::CommandList&,
+                    const render_graph::Resources&)
+                {
                 });
         }
 
