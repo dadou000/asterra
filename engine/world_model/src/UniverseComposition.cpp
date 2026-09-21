@@ -595,13 +595,18 @@ OrientationProviderFor(
 TransformFor(
     const scene::ObjectStore& objects,
     const scene::ObjectId object,
-    const time::SimulationTime epoch)
+    const time::SimulationTime epoch,
+    std::shared_ptr<
+        const celestial_orbits::OrbitStateProvider>
+        orbitOverride = {})
 {
     auto orbitState =
-        OrbitProviderFor(
-            objects,
-            object,
-            epoch);
+        orbitOverride
+            ? std::move(orbitOverride)
+            : OrbitProviderFor(
+                objects,
+                object,
+                epoch);
 
     auto orientation =
         OrientationProviderFor(
