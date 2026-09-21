@@ -173,6 +173,12 @@ struct GpuVisibilityQuery
     // transforms happen before encoding.
     math::Float4 originMinimumDistance{};
     math::Float4 directionMaximumDistance{};
+
+    // x = maximum nominal proxy error (infinity allowed)
+    // y = minimum confidence
+    // z = importance
+    // w = requirement flags encoded as float bits
+    math::Float4 requirements{};
 };
 
 struct GpuVisibilityResult
@@ -189,7 +195,7 @@ struct GpuVisibilityResult
     math::Float4 normal{};
 };
 
-static_assert(sizeof(GpuVisibilityQuery) == 32U);
+static_assert(sizeof(GpuVisibilityQuery) == 48U);
 static_assert(sizeof(GpuVisibilityResult) == 48U);
 
 [[nodiscard]] GpuVisibilityQuery EncodeGpuVisibilityQuery(
