@@ -1,6 +1,10 @@
 #include <orbit/world_model/VolumeSchemas.hpp>
 
 #include <algorithm>
+#include <bit>
+#include <cmath>
+#include <limits>
+#include <string>
 
 namespace orbit::world_model
 {
@@ -61,7 +65,14 @@ void RegisterVolumeSchemas(
             {.id=kVolumeChildPositionMeters,.name="Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
             {.id=kVolumeChildRadiusMeters,.name="Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=1.0,.range={.minimum=0.0}},
             {.id=kVolumeChildScalar,.name="Scalar Value",.kind=schema::PropertyKind::Float,.defaultValue=1.0},
-            {.id=kVolumeChildVector,.name="Vector Value",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{}}
+            {.id=kVolumeChildVector,.name="Vector Value",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{}},
+            {.id=kVolumeChildOrder,.name="Order",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0}},
+            {.id=kVolumeChildShape,.name="Shape",.kind=schema::PropertyKind::Integer,.defaultValue=i64{1},.range={.minimum=0.0,.maximum=5.0}},
+            {.id=kVolumeChildHalfExtentsMeters,.name="Half Extents",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{1.0,1.0,1.0}},
+            {.id=kVolumeChildFieldMask,.name="Field Mask",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0}},
+            {.id=kVolumeChildAsset,.name="Asset / Path",.kind=schema::PropertyKind::String,.defaultValue=std::string{}},
+            {.id=kVolumeChildTargetObject,.name="Target Object",.kind=schema::PropertyKind::ObjectReference,.defaultValue=schema::ObjectReferenceValue{}},
+            {.id=kVolumeChildPaintEnabled,.name="Terrain Paint Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=false}
         };
 
     schemas.RegisterType({
@@ -131,6 +142,430 @@ ResolveVolumeDomain(
     }
 
     return result;
+}
+
+
+bool VolumeInvalidationBounds::IsValid() const noexcept
+{
+    return
+        std::isfinite(minimumMeters.x) &&
+        std::isfinite(minimumMeters.y) &&
+        std::isfinite(minimumMeters.z) &&
+        std::isfinite(maximumMeters.x) &&
+        std::isfinite(maximumMeters.y) &&
+        std::isfinite(maximumMeters.z) &&
+        minimumMeters.x <= maximumMeters.x &&
+        minimumMeters.y <= maximumMeters.y &&
+        minimumMeters.z <= maximumMeters.z;
+}
+
+VolumeInvalidationBounds
+UnionVolumeInvalidationBounds(
+    const VolumeInvalidationBounds& a,
+    const VolumeInvalidationBounds& b) noexcept
+{
+    if (!a.IsValid())
+    {
+        return b;
+    }
+
+    if (!b.IsValid())
+    {
+        return a;
+    }
+
+    return {
+        .minimumMeters = {
+            std::min(a.minimumMeters.x, b.minimumMeters.x),
+            std::min(a.minimumMeters.y, b.minimumMeters.y),
+            std::min(a.minimumMeters.z, b.minimumMeters.z)
+        },
+        .maximumMeters = {
+            std::max(a.maximumMeters.x, b.maximumMeters.x),
+            std::max(a.maximumMeters.y, b.maximumMeters.y),
+            std::max(a.maximumMeters.z, b.maximumMeters.z)
+        }
+    };
+}
+
+namespace
+{
+[[nodiscard]] std::optional<scene::ObjectId>
+ReadObjectReference(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId object,
+    const schema::PropertyId property)
+{
+    const auto value =
+        objects.GetProperty(
+            object,
+            property);
+
+    if (!value.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto* reference =
+        std::get_if<
+            schema::ObjectReferenceValue>(
+                &*value);
+
+    if (reference == nullptr ||
+        (reference->high == 0U &&
+         reference->low == 0U))
+    {
+        return std::nullopt;
+    }
+
+    return scene::ObjectId{
+        .high = reference->high,
+        .low = reference->low
+    };
+}
+
+void HashMix(
+    u64& hash,
+    const u64 value) noexcept
+{
+    hash ^= value;
+    hash *=
+        1099511628211ULL;
+}
+
+void HashDouble(
+    u64& hash,
+    const f64 value) noexcept
+{
+    HashMix(
+        hash,
+        std::bit_cast<u64>(value));
+}
+
+[[nodiscard]] u64 FingerprintInput(
+    const ResolvedVolumeInput& input) noexcept
+{
+    u64 hash =
+        1469598103934665603ULL;
+
+    HashMix(hash, input.object.high);
+    HashMix(hash, input.object.low);
+    HashMix(hash, static_cast<u64>(input.role));
+    HashMix(hash, input.enabled ? 1U : 0U);
+    HashMix(hash, static_cast<u64>(input.order));
+    HashMix(hash, static_cast<u64>(input.kind));
+    HashMix(hash, static_cast<u64>(input.shape));
+
+    HashDouble(hash, input.positionMeters.x);
+    HashDouble(hash, input.positionMeters.y);
+    HashDouble(hash, input.positionMeters.z);
+    HashDouble(hash, input.radiusMeters);
+    HashDouble(hash, input.halfExtentsMeters.x);
+    HashDouble(hash, input.halfExtentsMeters.y);
+    HashDouble(hash, input.halfExtentsMeters.z);
+    HashDouble(hash, input.scalarValue);
+    HashDouble(hash, input.vectorValue.x);
+    HashDouble(hash, input.vectorValue.y);
+    HashDouble(hash, input.vectorValue.z);
+
+    HashMix(hash, input.fieldMask);
+    HashMix(hash, input.paintEnabled ? 1U : 0U);
+
+    for (const char character : input.asset)
+    {
+        HashMix(
+            hash,
+            static_cast<u64>(
+                static_cast<unsigned char>(
+                    character)));
+    }
+
+    if (input.targetObject.has_value())
+    {
+        HashMix(hash, input.targetObject->high);
+        HashMix(hash, input.targetObject->low);
+    }
+
+    return hash;
+}
+
+[[nodiscard]] VolumeInvalidationBounds
+BoundsForInput(
+    const ResolvedVolumeInput& input) noexcept
+{
+    const f64 radius =
+        std::max(
+            input.radiusMeters,
+            0.0);
+
+    math::Double3 half =
+        input.halfExtentsMeters;
+
+    half.x =
+        std::max(
+            std::abs(half.x),
+            radius);
+    half.y =
+        std::max(
+            std::abs(half.y),
+            radius);
+    half.z =
+        std::max(
+            std::abs(half.z),
+            radius);
+
+    if (input.shape ==
+            VolumeSourceShape::Point ||
+        input.shape ==
+            VolumeSourceShape::Sphere)
+    {
+        half = {
+            radius,
+            radius,
+            radius
+        };
+    }
+
+    if (input.shape ==
+            VolumeSourceShape::Spline)
+    {
+        half.x +=
+            std::abs(
+                input.vectorValue.x);
+        half.y +=
+            std::abs(
+                input.vectorValue.y);
+        half.z +=
+            std::abs(
+                input.vectorValue.z);
+    }
+
+    return {
+        .minimumMeters = {
+            input.positionMeters.x - half.x,
+            input.positionMeters.y - half.y,
+            input.positionMeters.z - half.z
+        },
+        .maximumMeters = {
+            input.positionMeters.x + half.x,
+            input.positionMeters.y + half.y,
+            input.positionMeters.z + half.z
+        }
+    };
+}
+} // namespace
+
+std::vector<ResolvedVolumeInput>
+ResolveVolumeInputs(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId volume)
+{
+    const auto volumeRecord =
+        objects.Find(volume);
+
+    if (!volumeRecord.has_value() ||
+        volumeRecord->type !=
+            kVolumeType)
+    {
+        return {};
+    }
+
+    std::vector<ResolvedVolumeInput>
+        result;
+
+    for (const auto& child :
+         objects.Children(volume))
+    {
+        VolumeInputRole role{};
+
+        if (child.type ==
+            kVolumeSourceType)
+        {
+            role =
+                VolumeInputRole::Source;
+        }
+        else if (child.type ==
+                 kVolumeEffectorType)
+        {
+            role =
+                VolumeInputRole::Effector;
+        }
+        else
+        {
+            continue;
+        }
+
+        ResolvedVolumeInput input{
+            .object = child.id,
+            .role = role,
+            .enabled =
+                Read<bool>(
+                    objects,
+                    child.id,
+                    kVolumeChildEnabled,
+                    true),
+            .order =
+                Read<i64>(
+                    objects,
+                    child.id,
+                    kVolumeChildOrder,
+                    child.sortOrder),
+            .kind =
+                Read<i64>(
+                    objects,
+                    child.id,
+                    kVolumeChildKind,
+                    0),
+            .shape =
+                static_cast<VolumeSourceShape>(
+                    std::clamp<i64>(
+                        Read<i64>(
+                            objects,
+                            child.id,
+                            kVolumeChildShape,
+                            1),
+                        0,
+                        5)),
+            .positionMeters =
+                Read<math::Double3>(
+                    objects,
+                    child.id,
+                    kVolumeChildPositionMeters,
+                    {}),
+            .radiusMeters =
+                std::max(
+                    Read<f64>(
+                        objects,
+                        child.id,
+                        kVolumeChildRadiusMeters,
+                        1.0),
+                    0.0),
+            .halfExtentsMeters =
+                Read<math::Double3>(
+                    objects,
+                    child.id,
+                    kVolumeChildHalfExtentsMeters,
+                    {1.0, 1.0, 1.0}),
+            .scalarValue =
+                Read<f64>(
+                    objects,
+                    child.id,
+                    kVolumeChildScalar,
+                    1.0),
+            .vectorValue =
+                Read<math::Double3>(
+                    objects,
+                    child.id,
+                    kVolumeChildVector,
+                    {}),
+            .fieldMask =
+                static_cast<u64>(
+                    std::max<i64>(
+                        Read<i64>(
+                            objects,
+                            child.id,
+                            kVolumeChildFieldMask,
+                            0),
+                        0)),
+            .asset =
+                Read<std::string>(
+                    objects,
+                    child.id,
+                    kVolumeChildAsset,
+                    {}),
+            .targetObject =
+                ReadObjectReference(
+                    objects,
+                    child.id,
+                    kVolumeChildTargetObject),
+            .paintEnabled =
+                Read<bool>(
+                    objects,
+                    child.id,
+                    kVolumeChildPaintEnabled,
+                    false)
+        };
+
+        input.bounds =
+            BoundsForInput(input);
+        input.fingerprint =
+            FingerprintInput(input);
+
+        result.push_back(
+            std::move(input));
+    }
+
+    std::stable_sort(
+        result.begin(),
+        result.end(),
+        [](
+            const ResolvedVolumeInput& a,
+            const ResolvedVolumeInput& b)
+        {
+            if (a.order != b.order)
+            {
+                return a.order < b.order;
+            }
+
+            return
+                a.object.ToString() <
+                b.object.ToString();
+        });
+
+    return result;
+}
+
+std::string_view
+VolumeSourceKindName(
+    const VolumeSourceKind kind) noexcept
+{
+    switch (kind)
+    {
+    case VolumeSourceKind::Brush: return "Brush";
+    case VolumeSourceKind::TextureMask: return "Texture / Mask";
+    case VolumeSourceKind::Terrain: return "Terrain Paint";
+    case VolumeSourceKind::Spline: return "Spline";
+    case VolumeSourceKind::MeshSdf: return "Mesh / SDF";
+    case VolumeSourceKind::CollisionProxy: return "Collision Proxy";
+    case VolumeSourceKind::Particles: return "Particles";
+    case VolumeSourceKind::ObjectMotion: return "Object Motion";
+    case VolumeSourceKind::WorldMotion: return "World Motion";
+    }
+
+    return "Unknown";
+}
+
+std::string_view
+VolumeEffectorKindName(
+    const VolumeEffectorKind kind) noexcept
+{
+    switch (kind)
+    {
+    case VolumeEffectorKind::Obstacle: return "Obstacle";
+    case VolumeEffectorKind::Drag: return "Drag";
+    case VolumeEffectorKind::Wind: return "Wind";
+    case VolumeEffectorKind::Temperature: return "Temperature";
+    case VolumeEffectorKind::Dissipation: return "Dissipation";
+    }
+
+    return "Unknown";
+}
+
+std::string_view
+VolumeSourceShapeName(
+    const VolumeSourceShape shape) noexcept
+{
+    switch (shape)
+    {
+    case VolumeSourceShape::Point: return "Point";
+    case VolumeSourceShape::Sphere: return "Sphere";
+    case VolumeSourceShape::Box: return "Box";
+    case VolumeSourceShape::Spline: return "Spline";
+    case VolumeSourceShape::Mesh: return "Mesh";
+    case VolumeSourceShape::TerrainPatch: return "Terrain Patch";
+    }
+
+    return "Unknown";
 }
 
 std::string_view
