@@ -1846,7 +1846,9 @@ StudioViewportRenderer::Compose(
                     {
                         proxyPresentation.hardware->
                             RebuildScene(
-                                proxyPresentation.scene);
+                                proxyPresentation.scene,
+                                view->Lighting().
+                                    gpuOriginInFrameMeters);
                     }
 
                     const auto& stats =
