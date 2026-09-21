@@ -15,6 +15,9 @@
 #include <orbit/lighting/DirectLighting.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
+#include <orbit/lighting/RadianceCacheSampler.hpp>
+#include <orbit/lighting/RadianceEstimator.hpp>
+#include <orbit/lighting/RadianceClipmapResidency.hpp>
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
@@ -443,6 +446,9 @@ private:
         bool writeA{true};
         bool hasHistory{false};
         lighting::LightingView previousView{};
+        std::unique_ptr<
+            lighting::RadianceClipmapResidency>
+            radianceResidency;
 
         std::unique_ptr<rhi::Texture> indirectA;
         std::unique_ptr<rhi::Texture> indirectB;
@@ -493,6 +499,7 @@ private:
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
     lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;
+    lighting::RadianceCacheSampler radianceCacheSampler_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
