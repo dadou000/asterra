@@ -191,6 +191,35 @@ int main()
         return 4;
     }
 
+    AlwaysHitProvider skyBlocker;
+    VisibilityRegistry skyBlockerRegistry;
+    skyBlockerRegistry.Register(skyBlocker);
+
+    const auto blockedSky =
+        EstimateRadianceCell(
+            key,
+            config,
+            view,
+            DirectionalLight{
+                .irradianceScale = 0.0F
+            },
+            {},
+            &skyBlockerRegistry,
+            {
+                .diffuseTransportScale = 1.0F,
+                .ambientIrradianceScale = 0.0F,
+                .skyIrradianceLinear = {
+                    0.1F, 0.2F, 0.5F
+                }
+            });
+
+    if (blockedSky.l0.x != 0.0F ||
+        blockedSky.l0.y != 0.0F ||
+        blockedSky.l0.z != 0.0F)
+    {
+        return 5;
+    }
+
     AlwaysHitProvider blocker;
     VisibilityRegistry blockerRegistry;
     blockerRegistry.Register(blocker);
@@ -212,7 +241,7 @@ int main()
         blocked.l1z.x != 0.0F ||
         blocked.l0.x >= noLocal.l0.x)
     {
-        return 5;
+        return 6;
     }
 
     return 0;
