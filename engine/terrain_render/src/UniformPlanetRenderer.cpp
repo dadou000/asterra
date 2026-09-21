@@ -37,6 +37,8 @@ struct VSOutput
     float3 localPosition : TEXCOORD6;
     float spacingMeters : TEXCOORD7;
     float3 worldPosition : TEXCOORD8;
+    float3 bodyFixedNormal : TEXCOORD9;
+    float3 bodyFixedSurfaceDirection : TEXCOORD10;
     float horizonClip : SV_ClipDistance0;
 };
 float3 Direction(uint2 cell)
@@ -97,6 +99,8 @@ VSOutput main(uint id : SV_VertexID)
     output.biome1 = Unpack(data.w);
     output.terrainNormal = LocalDirection(normal);
     output.surfaceDirection = localDir;
+    output.bodyFixedNormal = normal;
+    output.bodyFixedSurfaceDirection = direction;
     output.waterDepth = asfloat(data.y);
     output.localPosition = local;
     // Unlike localPosition/surfaceDirection above (deliberately
