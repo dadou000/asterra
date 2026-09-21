@@ -31,6 +31,7 @@
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/post_process/ColorLut.hpp>
 #include <orbit/post_process/DisplayResolve.hpp>
+#include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -215,6 +216,14 @@ struct StudioEmissiveGiDiagnostics
     u32 scheduledRadianceUpdates{0U};
 };
 
+struct StudioLuminanceHistogramDiagnostics
+{
+    post_process::LuminanceHistogramStatistics statistics{};
+    std::array<u32, post_process::kLuminanceHistogramBins> bins{};
+    post_process::LuminanceHistogramConfig config{};
+    bool meteringMaskAvailable{false};
+};
+
 struct StudioVisibilityProxyDiagnostics
 {
     universe::BodyId body{};
@@ -332,6 +341,15 @@ public:
         StudioVisibilityProxyDiagnostics>
     VisibilityProxyDiagnostics(
         std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] std::optional<
+        StudioLuminanceHistogramDiagnostics>
+    LuminanceHistogramDiagnostics(
+        std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] rhi::Texture*
+    LuminanceMeteringMask(
+        std::string_view viewportId) noexcept;
 
     [[nodiscard]] std::optional<
         StudioEmissiveGiDiagnostics>
@@ -553,6 +571,19 @@ private:
         std::unique_ptr<celestial_globe::GpuMacroGlobeProduct> product;
     };
 
+    struct LuminanceHistogramPresentation
+    {
+        u32 width{0U};
+        u32 height{0U};
+        std::unique_ptr<rhi::Texture> meteringMask;
+        std::vector<std::unique_ptr<rhi::Buffer>>
+            histogramReadback;
+        std::vector<std::unique_ptr<rhi::Buffer>>
+            statisticsReadback;
+        std::vector<bool> submitted;
+        StudioLuminanceHistogramDiagnostics diagnostics{};
+    };
+
     struct FinalGatherPresentation
     {
         u32 width{0U};
@@ -625,6 +656,7 @@ private:
     lighting::HybridReflectionRenderer hybridReflectionRenderer_;
     lighting::ExactReflectionQueryRenderer exactReflectionQueryRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
+    post_process::LuminanceHistogramRenderer luminanceHistogramRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
     std::unique_ptr<post_process::GpuColorLut> colorLut_;
@@ -775,6 +807,12 @@ private:
         FinalGatherPresentation,
         std::less<>>
         finalGatherPresentations_;
+
+    std::map<
+        std::string,
+        LuminanceHistogramPresentation,
+        std::less<>>
+        luminanceHistogramPresentations_;
 
     std::map<
         std::string,
