@@ -13,6 +13,7 @@ add_library(OrbitWorldModel STATIC
     src/PhysicalPropertySolver.cpp
     src/WorldSchemas.cpp
     src/LocalLightBinding.cpp
+    src/VisibilityProxyBinding.cpp
     src/UniverseComposition.cpp
 )
 
@@ -73,6 +74,10 @@ if(BUILD_TESTING)
         tests/LocalLightBindingTests.cpp
     )
 
+    add_executable(OrbitVisibilityProxyBindingTests
+        tests/VisibilityProxyBindingTests.cpp
+    )
+
     add_executable(OrbitSurfaceAuthorityContractTests
         tests/SurfaceAuthorityContractTests.cpp
     )
@@ -82,6 +87,21 @@ if(BUILD_TESTING)
             Orbit::Commands
             Orbit::Documents
             Orbit::WorldModel
+    )
+
+    target_link_libraries(OrbitVisibilityProxyBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+    target_compile_features(
+        OrbitVisibilityProxyBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitVisibilityProxyBindingTests)
+
+    add_test(
+        NAME Orbit.VisibilityProxyBinding
+        COMMAND OrbitVisibilityProxyBindingTests
     )
     target_compile_features(
         OrbitLocalLightBindingTests PRIVATE cxx_std_23)
