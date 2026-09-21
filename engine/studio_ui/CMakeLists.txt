@@ -30,6 +30,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialGlobe
         Orbit::CelestialFarRender
         Orbit::CelestialRepresentation
+        Orbit::CelestialRadiometry
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::PostProcess
