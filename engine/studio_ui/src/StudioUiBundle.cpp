@@ -109,6 +109,187 @@ StudioUiBundle::StudioUiBundle(
                     context.Text(
                         "Derived celestial work is being budgeted across frames.");
                 }
+
+                context.Separator();
+                context.Text("Advanced Representation Quality");
+
+                auto quality =
+                    viewportRenderer_.
+                        CelestialQualityPolicy();
+
+                bool qualityChanged = false;
+
+                qualityChanged |=
+                    context.InputDouble(
+                        "Quality Scale##celestial-quality-scale",
+                        quality.qualityScale);
+
+                qualityChanged |=
+                    context.InputDouble(
+                        "Surface Error (px)##celestial-quality-surface",
+                        quality.productionSurfaceErrorPixels);
+
+                qualityChanged |=
+                    context.InputDouble(
+                        "Macro Error (px)##celestial-quality-macro",
+                        quality.macroDisplacementErrorPixels);
+
+                qualityChanged |=
+                    context.InputDouble(
+                        "Smooth Globe Min Radius (px)##celestial-quality-smooth",
+                        quality.smoothGlobeMinimumRadiusPixels);
+
+                qualityChanged |=
+                    context.InputDouble(
+                        "Disc Min Radius (px)##celestial-quality-disc",
+                        quality.discImpostorMinimumRadiusPixels);
+
+                qualityChanged |=
+                    context.InputDouble(
+                        "LOD Hysteresis##celestial-quality-hysteresis",
+                        quality.hysteresisFraction);
+
+                if (qualityChanged)
+                {
+                    viewportRenderer_.
+                        SetCelestialQualityPolicy(
+                            quality);
+                }
+
+                if (context.Button(
+                        "Reset Celestial Quality##celestial-quality-reset"))
+                {
+                    viewportRenderer_.
+                        SetCelestialQualityPolicy({});
+                }
+
+                const auto drawRepresentationDiagnostics =
+                    [this, &context](
+                        const std::string_view viewportId,
+                        const std::string_view label)
+                    {
+                        const auto transition =
+                            viewportRenderer_.
+                                SurfaceGlobeTransitionDiagnostics(
+                                    viewportId);
+
+                        if (!transition.has_value())
+                        {
+                            return;
+                        }
+
+                        const auto qualityPolicy =
+                            viewportRenderer_.
+                                CelestialQualityPolicy();
+
+                        context.Separator();
+                        context.Text(
+                            std::format(
+                                "{}: {}",
+                                label,
+                                celestial_representation::
+                                    Name(
+                                        transition->
+                                            representation)));
+
+                        context.Text(
+                            std::format(
+                                "Projected radius: {:.3f} px",
+                                transition->
+                                    projectedRadiusPixels));
+
+                        switch (
+                            transition->
+                                representation)
+                        {
+                        case celestial_representation::
+                                 Representation::
+                                     ProductionSurface:
+                            context.Text(
+                                std::format(
+                                    "Why: production detail error {:.3f} px >= {:.3f} px threshold.",
+                                    transition->
+                                        productionDetailErrorPixels,
+                                    qualityPolicy.
+                                        productionSurfaceErrorPixels /
+                                        qualityPolicy.qualityScale));
+                            break;
+
+                        case celestial_representation::
+                                 Representation::
+                                     MacroDisplacedGlobe:
+                            context.Text(
+                                std::format(
+                                    "Why: macro displacement error {:.3f} px >= {:.3f} px threshold.",
+                                    transition->
+                                        macroDisplacementErrorPixels,
+                                    qualityPolicy.
+                                        macroDisplacementErrorPixels /
+                                        qualityPolicy.qualityScale));
+                            break;
+
+                        case celestial_representation::
+                                 Representation::
+                                     SmoothGlobe:
+                            context.Text(
+                                std::format(
+                                    "Why: apparent radius is above the smooth-globe threshold ({:.3f} px).",
+                                    qualityPolicy.
+                                        smoothGlobeMinimumRadiusPixels /
+                                        qualityPolicy.qualityScale));
+                            break;
+
+                        case celestial_representation::
+                                 Representation::
+                                     AnalyticDiscImpostor:
+                        case celestial_representation::
+                                 Representation::
+                                     CachedDiscImpostor:
+                            context.Text(
+                                std::format(
+                                    "Why: apparent radius is below smooth-globe and above disc threshold ({:.3f} px).",
+                                    qualityPolicy.
+                                        discImpostorMinimumRadiusPixels /
+                                        qualityPolicy.qualityScale));
+                            break;
+
+                        case celestial_representation::
+                                 Representation::
+                                     PointProxy:
+                        case celestial_representation::
+                                 Representation::
+                                     StellarPointProxy:
+                            context.Text(
+                                std::format(
+                                    "Why: apparent radius is below the disc threshold ({:.3f} px).",
+                                    qualityPolicy.
+                                        discImpostorMinimumRadiusPixels /
+                                        qualityPolicy.qualityScale));
+                            break;
+                        }
+
+                        if (transition->
+                                hysteresisHeld)
+                        {
+                            context.Text(
+                                "Hysteresis is holding the previous representation.");
+                        }
+
+                        if (transition->
+                                overlapping)
+                        {
+                            context.Text(
+                                "Representation cross-fade is active.");
+                        }
+                    };
+
+                drawRepresentationDiagnostics(
+                    "studio.primary",
+                    "Primary View");
+
+                drawRepresentationDiagnostics(
+                    "studio.map",
+                    "Body Map");
             }
     });
 
