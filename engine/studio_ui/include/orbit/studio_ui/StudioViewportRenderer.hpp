@@ -574,13 +574,14 @@ private:
     celestial_representation::RepresentationTracker
         representationTracker_;
     celestial_scheduler::CelestialWorkScheduler
-        celestialScheduler_{{
-            .maxCpuJobsPerFrame = 3U,
-            .maxGpuJobsPerFrame = 2U,
-            .maxCpuCostUnitsPerFrame = 6U,
-            .maxGpuCostUnitsPerFrame = 6U,
-            .maxPendingRequests = 192U
-        }};
+        celestialScheduler_{
+            celestial_scheduler::SchedulerBudget{
+                .maxCpuJobsPerFrame = 3U,
+                .maxGpuJobsPerFrame = 2U,
+                .maxCpuCostUnitsPerFrame = 6U,
+                .maxGpuCostUnitsPerFrame = 6U,
+                .maxPendingRequests = 192U
+            }};
 
     std::map<
         std::string,
