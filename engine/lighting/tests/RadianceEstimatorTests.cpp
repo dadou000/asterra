@@ -212,7 +212,7 @@ int main()
         blocked.l1z.x != 0.0F ||
         blocked.l0.x >= noLocal.l0.x)
     {
-        return 4;
+        return 5;
     }
 
     return 0;
