@@ -44,6 +44,182 @@ namespace
         a.overlapCells == b.overlapCells;
 }
 
+[[nodiscard]] std::vector<editor_ui::PreviewLine>
+SelectedLocalLightGizmoLines(
+    studio_session::StudioSession& session,
+    const render_view::CameraState& camera)
+{
+    std::vector<editor_ui::PreviewLine> lines;
+
+    if (!session.World().HasWorld() ||
+        session.World().Selection().Ordered().size() != 1U)
+    {
+        return lines;
+    }
+
+    const auto selected =
+        session.World().Selection().Ordered().front();
+
+    const auto record =
+        session.World().Objects().Find(
+            selected);
+
+    if (!record.has_value() ||
+        (record->type != world_model::kPointLightType &&
+         record->type != world_model::kSpotLightType))
+    {
+        return lines;
+    }
+
+    const auto resolved =
+        world_model::ResolveAuthoredLocalLights(
+            session.World().Objects(),
+            selected);
+
+    if (resolved.empty())
+    {
+        return lines;
+    }
+
+    const auto& light = resolved.front();
+
+    const math::Float3 center{
+        static_cast<f32>(
+            light.positionMeters.x -
+            camera.localPositionMeters.x),
+        static_cast<f32>(
+            light.positionMeters.y -
+            camera.localPositionMeters.y),
+        static_cast<f32>(
+            light.positionMeters.z -
+            camera.localPositionMeters.z)
+    };
+
+    const f32 range =
+        static_cast<f32>(
+            std::max(
+                light.rangeMeters,
+                0.001));
+
+    const math::Float4 color =
+        light.kind ==
+                world_model::AuthoredLightKind::Spot
+            ? math::Float4{
+                  1.0F, 0.55F, 0.15F, 1.0F}
+            : math::Float4{
+                  1.0F, 0.82F, 0.25F, 1.0F};
+
+    const auto addLine =
+        [&lines, color](
+            const math::Float3 a,
+            const math::Float3 b)
+        {
+            lines.push_back({
+                .start = a,
+                .end = b,
+                .color = color
+            });
+        };
+
+    if (light.kind ==
+        world_model::AuthoredLightKind::Point)
+    {
+        addLine(
+            center + math::Float3{-range, 0.0F, 0.0F},
+            center + math::Float3{ range, 0.0F, 0.0F});
+        addLine(
+            center + math::Float3{0.0F, -range, 0.0F},
+            center + math::Float3{0.0F,  range, 0.0F});
+        addLine(
+            center + math::Float3{0.0F, 0.0F, -range},
+            center + math::Float3{0.0F, 0.0F,  range});
+        return lines;
+    }
+
+    math::Float3 direction{
+        static_cast<f32>(light.direction.x),
+        static_cast<f32>(light.direction.y),
+        static_cast<f32>(light.direction.z)
+    };
+
+    if (math::LengthSquared(direction) <= 1.0e-8F)
+    {
+        direction = {0.0F, -1.0F, 0.0F};
+    }
+    else
+    {
+        direction = math::Normalize(direction);
+    }
+
+    math::Float3 upHint{0.0F, 1.0F, 0.0F};
+
+    if (std::abs(
+            math::Dot(
+                direction,
+                upHint)) >
+        0.95F)
+    {
+        upHint = {1.0F, 0.0F, 0.0F};
+    }
+
+    const math::Float3 right =
+        math::Normalize(
+            math::Cross(
+                upHint,
+                direction));
+    const math::Float3 coneUp =
+        math::Normalize(
+            math::Cross(
+                direction,
+                right));
+
+    constexpr f64 kDegreesToRadians =
+        0.017453292519943295769;
+
+    const f32 outerRadians =
+        static_cast<f32>(
+            std::clamp(
+                light.outerConeDegrees,
+                0.0,
+                89.5) *
+            kDegreesToRadians);
+
+    const f32 coneRadius =
+        std::tan(outerRadians) *
+        range;
+
+    const math::Float3 tip =
+        center +
+        direction * range;
+
+    const std::array rim{
+        tip + right * coneRadius,
+        tip + coneUp * coneRadius,
+        tip - right * coneRadius,
+        tip - coneUp * coneRadius
+    };
+
+    addLine(center, tip);
+
+    for (const auto& point : rim)
+    {
+        addLine(center, point);
+    }
+
+    for (std::size_t index = 0U;
+         index < rim.size();
+         ++index)
+    {
+        addLine(
+            rim[index],
+            rim[(index + 1U) %
+                rim.size()]);
+    }
+
+    return lines;
+}
+
+
 [[nodiscard]] std::optional<StudioTerrainAuthoringOverlay>
 SelectedTerrainAuthoringOverlay(
     studio_session::StudioSession& session,
@@ -3953,6 +4129,53 @@ StudioViewportRenderer::Compose(
                                 height,
                                 camera,
                                 overlayLines);
+                    });
+            }
+        }
+
+        {
+            auto lightGizmoLines =
+                SelectedLocalLightGizmoLines(
+                    session,
+                    view->Camera());
+
+            if (!lightGizmoLines.empty())
+            {
+                const auto camera =
+                    view->Camera();
+
+                graph.AddPass(
+                    prefix + ".LocalLightGizmo",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     width,
+                     height,
+                     camera,
+                     lightGizmoLines =
+                        std::move(
+                            lightGizmoLines)](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        pathRenderer_.
+                            DrawCameraRelativeLines(
+                                commands,
+                                *color,
+                                width,
+                                height,
+                                camera,
+                                lightGizmoLines);
                     });
             }
         }
