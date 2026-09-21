@@ -26,34 +26,34 @@ struct GpuRadianceLevelInfo
 };
 
 [[vk::binding(0, 0)]]
-RWTexture2D<float4> g_indirect : register(u0);
+StructuredBuffer<GpuRadianceCell> g_cells : register(t0);
 
 [[vk::binding(1, 0)]]
+StructuredBuffer<GpuRadianceLevelInfo> g_levels : register(t1);
+
+[[vk::binding(2, 0)]]
+RWTexture2D<float4> g_indirect : register(u2);
+
+[[vk::binding(3, 0)]]
 [[vk::combinedImageSampler]]
-Texture2D g_baseRoughness : register(t1);
-[[vk::binding(1, 0)]]
+Texture2D g_baseRoughness : register(t3);
+[[vk::binding(3, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler : register(s1);
 
-[[vk::binding(2, 0)]]
+[[vk::binding(4, 0)]]
 [[vk::combinedImageSampler]]
-Texture2D g_normalMetallic : register(t2);
-[[vk::binding(2, 0)]]
+Texture2D g_normalMetallic : register(t4);
+[[vk::binding(4, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler : register(s2);
 
-[[vk::binding(3, 0)]]
+[[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
-Texture2D g_depth : register(t3);
-[[vk::binding(3, 0)]]
+Texture2D g_depth : register(t5);
+[[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler : register(s3);
-
-[[vk::binding(4, 0)]]
-StructuredBuffer<GpuRadianceCell> g_cells : register(t4);
-
-[[vk::binding(5, 0)]]
-StructuredBuffer<GpuRadianceLevelInfo> g_levels : register(t5);
 
 struct Constants
 {
