@@ -655,9 +655,10 @@ void DisplayDiagnosticsUi::DrawViewport(
         static std::string
             importLutPath;
 
-        context.InputText(
-            "External .cube Path##color-lut-import-path",
-            importLutPath);
+        static_cast<void>(
+            context.InputText(
+                "External .cube Path##color-lut-import-path",
+                importLutPath));
 
         if (context.Button(
                 "Import & Select LUT##color-lut-import"))
