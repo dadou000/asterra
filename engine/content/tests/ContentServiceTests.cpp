@@ -51,6 +51,10 @@ int main()
         "roughness = \"steel_rough.ktx2\"\n"
         "metallic_factor = 1.0\n"
         "roughness_factor = 0.32\n"
+        "emission_color_linear = [0.25, 0.5, 1.0]\n"
+        "emission_luminance_nits = 1200.0\n"
+        "emission_gi_enabled = true\n"
+        "emission_gi_scale = 0.75\n"
         "tags = [\"metal\", \"industrial\"]\n");
     Write(root / "Content" / "Materials" / "steel_base.ktx2", "texture");
     Write(root / "Content" / "Materials" / "steel_normal.ktx2", "texture");
@@ -73,6 +77,10 @@ int main()
     Check(materials[0].name == "Brushed Steel");
     Check(materials[0].material.has_value());
     Check(materials[0].material->metallicFactor == 1.0);
+    Check(materials[0].material->emission.luminanceNits == 1200.0);
+    Check(materials[0].material->emission.colorLinear[2] == 1.0);
+    Check(materials[0].material->emission.contributesToGi);
+    Check(materials[0].material->emission.giScale == 0.75);
     Check(materials[0].tags.size() == 2);
     Check(
         materials[0].sourceHash.ToHex().size() ==
@@ -261,6 +269,69 @@ int main()
             pbrMaterialId).
             size() >=
         1);
+
+    content.SetMaterialEmission(
+        pbrMaterialId,
+        {
+            .colorLinear = {0.1, 0.8, 0.3},
+            .luminanceNits = 3500.0,
+            .contributesToGi = false,
+            .giScale = 2.0
+        });
+
+    const auto* editedBase =
+        content.Find(pbrMaterialId);
+
+    Check(editedBase != nullptr);
+    Check(editedBase->material.has_value());
+    Check(
+        editedBase->material->emission.
+            luminanceNits == 3500.0);
+    Check(
+        editedBase->material->emission.
+            colorLinear[1] == 0.8);
+    Check(
+        !editedBase->material->emission.
+            contributesToGi);
+    Check(
+        editedBase->material->emission.
+            giScale == 2.0);
+
+    content.SetMaterialEmission(
+        instanceId,
+        {
+            .colorLinear = {1.0, 0.25, 0.05},
+            .luminanceNits = 900.0,
+            .contributesToGi = true,
+            .giScale = 0.4
+        });
+
+    const auto* editedInstance =
+        content.Find(instanceId);
+
+    Check(editedInstance != nullptr);
+    Check(
+        editedInstance->materialInstance.
+            has_value());
+    Check(
+        editedInstance->materialInstance->
+            emissionLuminanceNits.
+            value_or(-1.0) == 900.0);
+    Check(
+        editedInstance->materialInstance->
+            emissionColorLinear.
+            has_value());
+    Check(
+        (*editedInstance->materialInstance->
+            emissionColorLinear)[0] == 1.0);
+    Check(
+        editedInstance->materialInstance->
+            emissionContributesToGi.
+            value_or(false));
+    Check(
+        editedInstance->materialInstance->
+            emissionGiScale.
+            value_or(-1.0) == 0.4);
 
     const auto ambiguousPbr =
         root / "AmbiguousPbr";
