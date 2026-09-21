@@ -3220,11 +3220,19 @@ StudioViewportRenderer::Compose(
             colorLut_.get();
         const auto displayResolveSettings =
             displayResolveSettings_;
-        const auto colorLutSettings =
+        auto colorLutSettings =
             colorLutSettings_;
 
         const auto surfaceDebugMode =
             view->SurfaceDebugMode();
+
+        if (surfaceDebugMode !=
+            lighting::SurfaceDebugMode::Lit)
+        {
+            // Diagnostic colors are data visualization, not presentation.
+            // Do not let a user grade/LUT disguise the underlying buffers.
+            colorLutSettings.enabled = false;
+        }
 
         if (surfaceDebugMode ==
             lighting::SurfaceDebugMode::Lit)
