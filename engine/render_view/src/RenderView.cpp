@@ -202,7 +202,7 @@ void RenderView::CreateTargets()
             .height = height_,
             .format =
                 rhi::TextureFormat::
-                    RGBA8_UNorm,
+                    RGBA16_Float,
             .initialState =
                 rhi::ResourceState::
                     ShaderResource
