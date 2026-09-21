@@ -128,6 +128,10 @@ struct StudioCompactObjectDiagnostics
     f64 iscoRadiusMeters{0.0};
     f64 shadowRadiusMeters{0.0};
     f64 projectedShadowRadiusPixels{0.0};
+    f64 projectedOpticalRadiusPixels{0.0};
+    celestial_representation::Representation representation{
+        celestial_representation::Representation::PointProxy};
+    f64 pointProxyWeight{0.0};
     bool accretionEnabled{false};
     f64 accretionOuterRadiusMeters{0.0};
 };
