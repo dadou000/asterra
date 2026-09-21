@@ -515,7 +515,8 @@ DerivedAppearanceFingerprint(
             world_model::
                 ResolveMagnetosphere(
                     world.Objects(),
-                    bodyObject);
+                    bodyObject,
+                    referenceRadius);
         magnetosphere.has_value())
     {
         hash =
