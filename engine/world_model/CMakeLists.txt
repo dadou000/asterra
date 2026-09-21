@@ -250,3 +250,29 @@ if(BUILD_TESTING)
         COMMAND OrbitGravityCompositionTests
     )
 endif()
+
+
+if(BUILD_TESTING)
+    add_executable(
+        OrbitCelestialLightingCompositionTests
+        tests/CelestialLightingCompositionTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitCelestialLightingCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitCelestialLightingCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialLightingCompositionTests)
+
+    add_test(
+        NAME Orbit.CelestialLightingComposition
+        COMMAND OrbitCelestialLightingCompositionTests
+    )
+endif()
