@@ -1,5 +1,7 @@
 #include <orbit/editor_model/CelestialRecipeService.hpp>
 
+#include <orbit/world_model/AtmospherePropertySolver.hpp>
+
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -452,6 +454,16 @@ CelestialRecipeService::CreateRockyPlanetInternal(
                     80'000.0,
                     recipe.radiusMeters *
                         0.012));
+
+        world_model::AtmospherePropertySolver
+            atmosphereSolver(
+                objects_,
+                commands_);
+
+        static_cast<void>(
+            atmosphereSolver.ApplyPreset(
+                atmosphere,
+                "Earth-like"));
     }
 
     if (recipe.ocean)
