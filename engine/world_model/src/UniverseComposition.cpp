@@ -1070,6 +1070,11 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                             object.id,
                             0x424f44594652414dULL,
                             0x4f52424954563033ULL);
+                    const frames::FrameId centerFrame =
+                        DerivedId<frames::FrameId>(
+                            object.id,
+                            0x424f445943454e54ULL,
+                            0x4f52424954563036ULL);
 
                     const f64 massKilograms =
                         PropertyOr<f64>(
@@ -1099,7 +1104,8 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                                     std::move(
                                         orbitOverride)),
                             .id = bodyId,
-                            .frame = bodyFrame
+                            .frame = bodyFrame,
+                            .centerFrame = centerFrame
                         }));
 
                     candidateBodyIds.emplace(
@@ -1140,8 +1146,12 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                             sourceId);
                     }
 
+                    // Structural celestial children orbit the body center,
+                    // never the rotating surface/body-fixed frame.
                     childParentFrame =
-                        bodyFrame;
+                        centerFrame;
+                    // A translating body-centered frame is still not a valid
+                    // inertial domain for M08 N-body promotion.
                     childFrameInertial = false;
                     ++bodyCount;
                 }
