@@ -3031,7 +3031,7 @@ StudioViewportRenderer::Compose(
             prefix + ".DisplayResolve",
             {
                 {
-                    .texture = targets.displayLinear,
+                    .texture = targets.color,
                     .state =
                         rhi::ResourceState::
                             ShaderResource,
@@ -3071,7 +3071,7 @@ StudioViewportRenderer::Compose(
             prefix + ".ColorLutCorrection",
             {
                 {
-                    .texture = targets.color,
+                    .texture = targets.displayLinear,
                     .state =
                         rhi::ResourceState::
                             ShaderResource,
