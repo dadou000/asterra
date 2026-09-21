@@ -32,22 +32,30 @@ namespace
             "Orientation axis must be non-zero.");
     }
 
-    const math::Double3 normalized =
+    const math::Double3 z =
         math::Normalize(axis);
 
+    math::Double3 reference =
+        std::abs(z.x) < 0.9
+            ? math::Double3{1.0, 0.0, 0.0}
+            : math::Double3{0.0, 1.0, 0.0};
+
+    math::Double3 x =
+        reference -
+        z * math::Dot(reference, z);
+    x = math::Normalize(x);
+
+    math::Double3 y =
+        math::Normalize(
+            math::Cross(z, x));
+
+    x = RotateAroundAxis(x, z, phase);
+    y = RotateAroundAxis(y, z, phase);
+
     return {
-        .xAxis = RotateAroundAxis(
-            {1.0, 0.0, 0.0},
-            normalized,
-            phase),
-        .yAxis = RotateAroundAxis(
-            {0.0, 1.0, 0.0},
-            normalized,
-            phase),
-        .zAxis = RotateAroundAxis(
-            {0.0, 0.0, 1.0},
-            normalized,
-            phase)
+        .xAxis = x,
+        .yAxis = y,
+        .zAxis = z
     };
 }
 } // namespace
