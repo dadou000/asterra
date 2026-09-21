@@ -70,5 +70,16 @@ inline constexpr schema::PropertyId kOrbitGravitationalParameter{
 inline constexpr schema::PropertyId kOrbitEpochMicroseconds{
     .high = 0x4f524249544f5242ULL, .low = 0x45504f4348555301ULL};
 
+inline constexpr schema::PropertyId kRotationAxis{
+    .high = 0x4f52424954524f54ULL, .low = 0x4158495300000001ULL};
+inline constexpr schema::PropertyId kRotationPeriodSeconds{
+    .high = 0x4f52424954524f54ULL, .low = 0x504552494f440001ULL};
+inline constexpr schema::PropertyId kRotationPhaseDegrees{
+    .high = 0x4f52424954524f54ULL, .low = 0x5048415345000001ULL};
+inline constexpr schema::PropertyId kRotationEpochMicroseconds{
+    .high = 0x4f52424954524f54ULL, .low = 0x45504f4348000001ULL};
+inline constexpr schema::PropertyId kRotationSynchronousPhaseOffsetDegrees{
+    .high = 0x4f52424954524f54ULL, .low = 0x53594e434f464601ULL};
+
 void RegisterCelestialCapabilitySchemas(schema::SchemaRegistry& schemas);
 } // namespace orbit::world_model
