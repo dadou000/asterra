@@ -25,7 +25,9 @@ StudioUiBundle::StudioUiBundle(
       surfaceAuthoring_(workspace),
       viewportRenderer_(
           device,
-          compiler)
+          compiler),
+      displayDiagnostics_(
+          viewportRenderer_)
 {
     projectAuthoring_.SetWorkspaceChangedCallback(
         [this]()
@@ -36,6 +38,7 @@ StudioUiBundle::StudioUiBundle(
     projectAuthoring_.Register(ui);
     surfaceAuthoring_.Register(ui);
     viewportPanels_.Register(ui);
+    displayDiagnostics_.Register(ui);
 
     ui.RegisterPanel({
         .id = {
