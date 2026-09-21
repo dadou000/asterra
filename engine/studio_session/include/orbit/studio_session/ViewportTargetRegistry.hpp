@@ -16,7 +16,8 @@ enum class ViewportMode : u8
 {
     Perspective,
     BodyMap,
-    Debug
+    Debug,
+    System
 };
 
 struct ViewportTargetState
