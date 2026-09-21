@@ -151,6 +151,73 @@ int main()
               rate20.darkAdaptation) <
           0.01F);
 
+    HumanEyeAdaptationConfig ceilingConfig{};
+    ceilingConfig.photopicCeilingLog2 = 2.0F;
+    ceilingConfig.photopicCeilingRecoverySeconds = 0.08F;
+
+    HumanEyeAdaptationState ceilingState{};
+
+    ceilingState =
+        UpdateHumanEyeAdaptation(
+            ceilingState,
+            Stats(8.0F, 10.0F, 12.0F, 14.0F),
+            1.0F / 60.0F,
+            ceilingConfig);
+
+    Check(ceilingState.rawPhotopicTargetLog2 > 2.0F);
+    Check(std::abs(
+              ceilingState.photopicTargetLog2 -
+              2.0F) <
+          0.001F);
+    Check(ceilingState.photopicCeilingExcessStops > 0.0F);
+    Check(ceilingState.p99ExcessStops >= 10.0F);
+    Check(ceilingState.peakExcessStops >= 12.0F);
+    Check(ceilingState.ceilingRecoveryActive);
+
+    const float ceilingExposure =
+        ceilingState.exposureScale;
+
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        ceilingState =
+            UpdateHumanEyeAdaptation(
+                ceilingState,
+                Stats(0.0F, 0.5F, 1.0F, 1.5F),
+                1.0F / 60.0F,
+                ceilingConfig);
+    }
+
+    Check(ceilingState.photopicLog2 < 0.20F);
+    Check(ceilingState.exposureScale > ceilingExposure * 2.0F);
+    Check(ceilingState.photopicCeilingExcessStops == 0.0F);
+
+    HumanEyeAdaptationState brighterClouds{};
+    HumanEyeAdaptationState absurdClouds{};
+
+    brighterClouds =
+        UpdateHumanEyeAdaptation(
+            brighterClouds,
+            Stats(6.0F, 8.0F, 10.0F, 12.0F),
+            1.0F,
+            ceilingConfig);
+    absurdClouds =
+        UpdateHumanEyeAdaptation(
+            absurdClouds,
+            Stats(16.0F, 18.0F, 20.0F, 22.0F),
+            1.0F,
+            ceilingConfig);
+
+    Check(std::abs(
+              brighterClouds.photopicLog2 -
+              absurdClouds.photopicLog2) <
+          0.001F);
+    Check(std::abs(
+              brighterClouds.exposureScale -
+              absurdClouds.exposureScale) <
+          0.0001F);
+    Check(absurdClouds.peakExcessStops >
+          brighterClouds.peakExcessStops);
+
     ResetHumanEyeAdaptation(state);
     Check(!state.initialized);
     Check(state.darkAdaptation == 0.0F);
