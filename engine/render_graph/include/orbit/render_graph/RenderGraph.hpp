@@ -25,6 +25,19 @@ struct TextureHandle
         const TextureHandle&) const noexcept = default;
 };
 
+struct BufferHandle
+{
+    u32 index{~0U};
+
+    [[nodiscard]] constexpr bool IsValid() const noexcept
+    {
+        return index != ~0U;
+    }
+
+    [[nodiscard]] constexpr bool operator==(
+        const BufferHandle&) const noexcept = default;
+};
+
 enum class Access : u8
 {
     Read,
@@ -39,25 +52,44 @@ struct TextureUse
     Access access{Access::Read};
 };
 
+struct BufferUse
+{
+    BufferHandle buffer{};
+    rhi::ResourceState state{
+        rhi::ResourceState::Common};
+    Access access{Access::Read};
+};
+
 class Resources
 {
 public:
     [[nodiscard]] rhi::Texture& Texture(
         TextureHandle handle) const;
 
+    [[nodiscard]] rhi::Buffer& Buffer(
+        BufferHandle handle) const;
+
 private:
-    struct EntryView
+    struct TextureEntryView
     {
         rhi::Texture* texture{nullptr};
     };
 
+    struct BufferEntryView
+    {
+        rhi::Buffer* buffer{nullptr};
+    };
+
     explicit Resources(
-        const std::vector<EntryView>* entries)
-        : entries_(entries)
+        const std::vector<TextureEntryView>* textureEntries,
+        const std::vector<BufferEntryView>* bufferEntries)
+        : textureEntries_(textureEntries),
+          bufferEntries_(bufferEntries)
     {
     }
 
-    const std::vector<EntryView>* entries_{nullptr};
+    const std::vector<TextureEntryView>* textureEntries_{nullptr};
+    const std::vector<BufferEntryView>* bufferEntries_{nullptr};
 
     friend class RenderGraph;
 };
@@ -87,9 +119,24 @@ public:
         std::string_view name,
         const rhi::TextureDesc& desc);
 
+    [[nodiscard]] BufferHandle ImportBuffer(
+        std::string_view name,
+        rhi::Buffer& buffer,
+        rhi::ResourceState currentState);
+
+    [[nodiscard]] BufferHandle CreateBuffer(
+        std::string_view name,
+        const rhi::BufferDesc& desc);
+
     void AddPass(
         std::string_view name,
-        std::vector<TextureUse> uses,
+        std::vector<TextureUse> textureUses,
+        PassCallback callback);
+
+    void AddPass(
+        std::string_view name,
+        std::vector<TextureUse> textureUses,
+        std::vector<BufferUse> bufferUses,
         PassCallback callback);
 
     // Validates hazards and topologically orders passes. Execute()
@@ -101,12 +148,16 @@ public:
     [[nodiscard]] rhi::Texture& Texture(
         TextureHandle handle);
 
+    [[nodiscard]] rhi::Buffer& Buffer(
+        BufferHandle handle);
+
     [[nodiscard]] std::size_t PassCount() const noexcept;
     [[nodiscard]] std::vector<std::string>
     CompiledPassNames() const;
 
 private:
     struct TextureEntry;
+    struct BufferEntry;
     struct PassEntry;
 
     [[nodiscard]] TextureEntry& RequireTexture(
@@ -114,8 +165,14 @@ private:
     [[nodiscard]] const TextureEntry& RequireTexture(
         TextureHandle handle) const;
 
+    [[nodiscard]] BufferEntry& RequireBuffer(
+        BufferHandle handle);
+    [[nodiscard]] const BufferEntry& RequireBuffer(
+        BufferHandle handle) const;
+
     rhi::Device& device_;
     std::vector<TextureEntry> textures_;
+    std::vector<BufferEntry> buffers_;
     std::vector<PassEntry> passes_;
     std::vector<u32> executionOrder_;
     bool compiled_{false};
