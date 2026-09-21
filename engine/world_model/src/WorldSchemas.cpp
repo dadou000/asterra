@@ -832,6 +832,32 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kMaterialAssignmentType,
+        .displayName = "Material Assignment",
+        .category = "Material",
+        .properties = {
+            {
+                .id = kMaterialAssignmentAsset,
+                .name = "Material Asset",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{}
+            },
+            {
+                .id = kMaterialAssignmentSlot,
+                .name = "Slot",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{"default"}
+            },
+            {
+                .id = kMaterialAssignmentEnabled,
+                .name = "Enabled",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = true
+            }
+        }
+    });
+
+    schemas.RegisterType({
         .id = kVisibilityProxyType,
         .displayName = "Visibility Proxy",
         .category = "World / Visibility",
