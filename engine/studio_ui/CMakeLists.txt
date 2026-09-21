@@ -40,6 +40,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialRepresentation
         Orbit::CelestialScheduler
         Orbit::CelestialRadiometry
+        Orbit::Content
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::Lighting
