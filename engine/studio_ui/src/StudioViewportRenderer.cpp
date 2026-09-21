@@ -3122,7 +3122,19 @@ StudioViewportRenderer::Compose(
                 presentation.staticFingerprint !=
                     staticFingerprint;
 
-            if (staticChanged)
+            if (staticChanged &&
+                acquireCelestialGrant(
+                    info.id,
+                    logicalTarget->
+                        target->body,
+                    celestial_scheduler::
+                        WorkKind::AtmosphereLut,
+                    staticFingerprint,
+                    celestial_scheduler::
+                        WorkBackend::Gpu,
+                    4U,
+                    90,
+                    true))
             {
                 presentation.staticLuts =
                     std::make_unique<
@@ -3145,8 +3157,28 @@ StudioViewportRenderer::Compose(
                 presentation.skyView.reset();
                 presentation.gpu.reset();
                 presentation.skyFingerprint = 0U;
+
+                static_cast<void>(
+                    completeCelestialGrant(
+                        info.id,
+                        logicalTarget->
+                            target->body,
+                        celestial_scheduler::
+                            WorkKind::AtmosphereLut,
+                        staticFingerprint));
             }
 
+            const bool atmosphereCurrent =
+                presentation.staticLuts !=
+                    nullptr &&
+                presentation.body ==
+                    logicalTarget->
+                        target->body &&
+                presentation.staticFingerprint ==
+                    staticFingerprint;
+
+            if (atmosphereCurrent)
+            {
             const f64 rawObserverRadius =
                 math::Length(
                     view->Camera().
@@ -3288,6 +3320,12 @@ StudioViewportRenderer::Compose(
                                 skyView->
                                 skyView.height
                     });
+            }
+            else
+            {
+                atmosphereDiagnostics_.erase(
+                    info.id);
+            }
         }
         else
         {
