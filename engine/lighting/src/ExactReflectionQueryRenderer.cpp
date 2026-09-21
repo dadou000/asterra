@@ -359,16 +359,24 @@ Texture2D g_normalMetallic : register(t6);
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler : register(s6);
 
+[[vk::binding(7, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_depth : register(t7);
+[[vk::binding(7, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_depthSampler : register(s7);
+
 struct Constants
 {
     uint maximumQueries;
     uint width;
     uint height;
     uint levelCount;
-    float cacheStrength;
-    float sceneToCurrentX;
-    float sceneToCurrentY;
-    float sceneToCurrentZ;
+
+    float4 forwardAspect;
+    float4 upTanHalfFov;
+    float4 depthAndStrength;
+    float4 sceneToCurrent;
 };
 
 [[vk::push_constant]]
@@ -469,6 +477,69 @@ float3 SampleCache(
     return 0.0;
 }
 
+float ReverseZViewDepth(float depth)
+{
+    const float nearPlane =
+        max(g.depthAndStrength.x, 1.0e-5);
+    const float farPlane =
+        max(
+            g.depthAndStrength.y,
+            nearPlane + 1.0e-4);
+
+    return
+        nearPlane * farPlane /
+        max(
+            depth * (farPlane - nearPlane) +
+                nearPlane,
+            1.0e-6);
+}
+
+float3 ViewRay(float2 uv)
+{
+    const float3 forward =
+        normalize(g.forwardAspect.xyz);
+    const float3 requestedUp =
+        normalize(g.upTanHalfFov.xyz);
+    const float3 right =
+        normalize(cross(forward, requestedUp));
+    const float3 up =
+        normalize(cross(right, forward));
+
+    const float aspect =
+        max(g.forwardAspect.w, 0.001);
+    const float tanHalfFov =
+        max(g.upTanHalfFov.w, 0.001);
+
+    const float2 ndc = {
+        uv.x * 2.0 - 1.0,
+        1.0 - uv.y * 2.0
+    };
+
+    return normalize(
+        forward +
+        right *
+            (ndc.x * aspect * tanHalfFov) +
+        up *
+            (ndc.y * tanHalfFov));
+}
+
+float3 ReconstructPosition(
+    float2 uv,
+    float depth)
+{
+    const float3 ray =
+        ViewRay(uv);
+    const float3 forward =
+        normalize(g.forwardAspect.xyz);
+    const float viewDepth =
+        ReverseZViewDepth(depth);
+
+    return
+        ray *
+        (viewDepth /
+         max(dot(ray, forward), 1.0e-5));
+}
+
 float3 FresnelSchlick(
     float cosTheta,
     float3 f0)
@@ -536,10 +607,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         asfloat(
             g_results.Load3(
                 base + 16u)) +
-        float3(
-            g.sceneToCurrentX,
-            g.sceneToCurrentY,
-            g.sceneToCurrentZ);
+        g.sceneToCurrent.xyz;
 
     const float3 hitNormal =
         normalize(
@@ -561,14 +629,52 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
     const float metallic =
         saturate(normalMetallic.w);
 
-    // The hit is shaded from Orbit's common broad radiance representation.
-    // Exact visibility determines *where* the mirror ray lands; radiance
-    // authority remains shared with RT-off paths.
-    const float3 hitRadiance =
+    const float2 uv =
+        (float2(pixel) + 0.5) /
+        float2(g.width, g.height);
+
+    const float sourceDepth =
+        g_depth.SampleLevel(
+            g_depthSampler,
+            uv,
+            0).r;
+
+    if (sourceDepth <= 0.0)
+    {
+        return;
+    }
+
+    const float3 viewRay =
+        ViewRay(uv);
+
+    const float3 sourcePosition =
+        ReconstructPosition(
+            uv,
+            sourceDepth);
+
+    const float3 reflectionDirection =
+        normalize(
+            reflect(
+                viewRay,
+                sourceNormal));
+
+    const float cacheStrength =
+        max(g.depthAndStrength.z, 0.0);
+
+    // The base hybrid pass already contributed cache fallback at this pixel.
+    // Re-evaluate that exact same broad term so the precise hit replaces it
+    // rather than double-counting reflection energy.
+    const float3 baselineCacheRadiance =
+        SampleCache(
+            sourcePosition,
+            reflectionDirection) *
+        cacheStrength;
+
+    const float3 exactHitRadiance =
         SampleCache(
             hitPosition,
             -hitNormal) *
-        max(g.cacheStrength, 0.0);
+        cacheStrength;
 
     const float3 dielectricF0 =
         float3(0.04, 0.04, 0.04);
@@ -581,12 +687,28 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 
     const float3 fresnel =
         FresnelSchlick(
-            saturate(sourceNormal.z),
+            saturate(
+                dot(
+                    sourceNormal,
+                    -viewRay)),
             f0);
 
-    const float3 contribution =
-        hitRadiance *
+    const float roughness =
+        saturate(baseRoughness.a);
+
+    const float roughnessAttenuation =
+        max(
+            1.0 -
+            0.55 *
+                roughness *
+                roughness,
+            0.0);
+
+    const float3 replacementDelta =
+        (exactHitRadiance -
+         baselineCacheRadiance) *
         fresnel *
+        roughnessAttenuation *
         confidence;
 
     float4 target =
@@ -595,7 +717,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
     target.rgb =
         max(
             target.rgb +
-            contribution,
+            replacementDelta,
             0.0);
 
     g_target[pixel] =
@@ -643,10 +765,10 @@ ExactReflectionQueryRenderer(
                 .data = resolve.bytecode.data(),
                 .size = resolve.bytecode.size()
             },
-            .pushConstantDwords = 8U,
+            .pushConstantDwords = 20U,
             .shaderResourceBuffers = 4U,
             .storageTextures = 1U,
-            .sampledTextures = 2U
+            .sampledTextures = 3U
         });
 }
 
@@ -740,6 +862,7 @@ void ExactReflectionQueryRenderer::ResolveResults(
     rhi::Texture& targetSceneColor,
     rhi::Texture& surfaceBaseRoughness,
     rhi::Texture& surfaceNormalMetallic,
+    rhi::Texture& depth,
     rhi::Buffer& results,
     rhi::Buffer& pixelMap,
     rhi::Buffer& radianceCells,
@@ -748,6 +871,7 @@ void ExactReflectionQueryRenderer::ResolveResults(
     const u32 maximumQueries,
     const u32 width,
     const u32 height,
+    const LightingView& view,
     const math::Float3 sceneToCurrentOriginMeters,
     const f32 cacheStrength)
 {
@@ -759,19 +883,46 @@ void ExactReflectionQueryRenderer::ResolveResults(
         return;
     }
 
-    const std::array<u32, 8> constants{
+    const auto bits =
+        [](const f32 value)
+        {
+            return std::bit_cast<u32>(value);
+        };
+
+    const std::array<u32, 20> constants{
         maximumQueries,
         width,
         height,
         radianceLevelCount,
-        std::bit_cast<u32>(
-            std::max(cacheStrength, 0.0F)),
-        std::bit_cast<u32>(
-            sceneToCurrentOriginMeters.x),
-        std::bit_cast<u32>(
-            sceneToCurrentOriginMeters.y),
-        std::bit_cast<u32>(
-            sceneToCurrentOriginMeters.z)
+
+        bits(view.forward.x),
+        bits(view.forward.y),
+        bits(view.forward.z),
+        bits(
+            static_cast<f32>(width) /
+            static_cast<f32>(height)),
+
+        bits(view.up.x),
+        bits(view.up.y),
+        bits(view.up.z),
+        bits(std::tan(
+            view.verticalFovRadians *
+            0.5F)),
+
+        bits(std::max(
+            view.nearPlaneMeters,
+            1.0e-5F)),
+        bits(std::max(
+            view.farPlaneMeters,
+            view.nearPlaneMeters +
+                1.0e-4F)),
+        bits(std::max(cacheStrength, 0.0F)),
+        0U,
+
+        bits(sceneToCurrentOriginMeters.x),
+        bits(sceneToCurrentOriginMeters.y),
+        bits(sceneToCurrentOriginMeters.z),
+        0U
     };
 
     commands.SetComputePipeline(*resolvePipeline_);
@@ -792,6 +943,9 @@ void ExactReflectionQueryRenderer::ResolveResults(
     commands.SetComputeTexture(
         1U,
         surfaceNormalMetallic);
+    commands.SetComputeTexture(
+        2U,
+        depth);
 
     commands.Dispatch(
         (maximumQueries + 63U) / 64U,
