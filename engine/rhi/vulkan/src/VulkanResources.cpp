@@ -858,6 +858,27 @@ VulkanDevice::CreateAabbAccelerationStructure(
                 "Orbit failed to create the proxy TLAS.");
         }
 
+        VkPhysicalDeviceAccelerationStructurePropertiesKHR
+            accelerationProperties{};
+        accelerationProperties.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
+
+        VkPhysicalDeviceProperties2 properties2{};
+        properties2.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties2.pNext =
+            &accelerationProperties;
+
+        vkGetPhysicalDeviceProperties2(
+            physicalDevice_,
+            &properties2);
+
+        const VkDeviceSize scratchAlignment =
+            std::max<VkDeviceSize>(
+                accelerationProperties.
+                    minAccelerationStructureScratchOffsetAlignment,
+                1U);
+
         const VkDeviceSize scratchSize =
             std::max(
                 bottomSizes.buildScratchSize,
@@ -865,22 +886,31 @@ VulkanDevice::CreateAabbAccelerationStructure(
 
         scratchBuffer =
             createBuffer(
-                scratchSize,
+                scratchSize +
+                    scratchAlignment -
+                    1U,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 false);
 
+        const VkDeviceAddress scratchBase =
+            deviceAddress(
+                scratchBuffer.buffer);
+
+        const VkDeviceAddress scratchAddress =
+            (scratchBase +
+             scratchAlignment - 1U) &
+            ~(scratchAlignment - 1U);
+
         bottomBuild.dstAccelerationStructure =
             bottomLevel;
         bottomBuild.scratchData.deviceAddress =
-            deviceAddress(
-                scratchBuffer.buffer);
+            scratchAddress;
 
         topBuild.dstAccelerationStructure =
             topLevel;
         topBuild.scratchData.deviceAddress =
-            deviceAddress(
-                scratchBuffer.buffer);
+            scratchAddress;
 
         VkAccelerationStructureBuildRangeInfoKHR
             bottomRange{};
