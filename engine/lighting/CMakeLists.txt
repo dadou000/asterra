@@ -16,6 +16,7 @@ add_library(OrbitLighting STATIC
     src/ScreenSpaceFinalGather.cpp
     src/RadianceEstimator.cpp
     src/RadianceCacheSampler.cpp
+    src/EmissiveMaterial.cpp
     src/MaterialEmission.cpp
 )
 
@@ -96,6 +97,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingRadianceEstimatorTests
         tests/RadianceEstimatorTests.cpp
+    )
+
+    add_executable(OrbitLightingEmissiveMaterialTests
+        tests/EmissiveMaterialTests.cpp
     )
 
     add_executable(OrbitLightingMaterialEmissionTests
@@ -219,6 +224,14 @@ if(BUILD_TESTING)
         OrbitLightingRadianceEstimatorTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingRadianceEstimatorTests)
 
+    target_link_libraries(OrbitLightingEmissiveMaterialTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingEmissiveMaterialTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingEmissiveMaterialTests)
+
     target_link_libraries(OrbitLightingMaterialEmissionTests
         PRIVATE
             Orbit::Lighting
@@ -280,6 +293,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingRadianceEstimator
         COMMAND OrbitLightingRadianceEstimatorTests
+    )
+
+    add_test(
+        NAME Orbit.LightingEmissiveMaterial
+        COMMAND OrbitLightingEmissiveMaterialTests
     )
 
     add_test(
