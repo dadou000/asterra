@@ -13,7 +13,8 @@ enum class OrbitStateQuality : u8
     ExactAnalytic = 0,
     Fixed = 1,
     SampledExact = 2,
-    SampledInterpolated = 3
+    SampledInterpolated = 3,
+    DynamicIntegrated = 4
 };
 
 struct OrbitState
