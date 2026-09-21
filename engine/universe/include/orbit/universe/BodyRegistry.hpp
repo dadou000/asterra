@@ -120,6 +120,9 @@ struct CelestialBody
     // Non-rotating body-center frame carrying orbital translation only.
     frames::FrameId centerFrame{};
     frames::FrameId parentFrame{};
+    // Spatial/reference envelope only. This is not surface authority:
+    // compact objects, volumetric giants, and other non-solid bodies may use
+    // it for culling/representation while having no Surface capability.
     BodyShape shape{};
     std::optional<MassProperties> mass;
     BodyTransformModel transformModel{};
@@ -131,6 +134,7 @@ struct BodyCreateDesc
     std::string_view name;
     // Invalid means the system inertial frame.
     frames::FrameId parentFrame{};
+    // Conservative spatial/reference envelope; never implies a surface.
     BodyShape shape{};
     std::optional<MassProperties> mass;
     BodyTransformModel transformModel{};
