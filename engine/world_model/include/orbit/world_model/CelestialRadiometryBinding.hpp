@@ -12,6 +12,7 @@ struct ResolvedRadiativeBody
     scene::ObjectId body{};
     scene::ObjectId emitterCapability{};
     std::optional<scene::ObjectId> photosphereCapability;
+    f64 photosphereRadiusMeters{1.0};
     celestial_radiometry::RadiativeState radiative{};
 };
 
