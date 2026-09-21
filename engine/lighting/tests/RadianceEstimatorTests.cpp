@@ -132,6 +132,30 @@ int main()
         return 2;
     }
 
+    const auto withSky =
+        EstimateRadianceCell(
+            key,
+            config,
+            view,
+            DirectionalLight{
+                .irradianceScale = 0.0F
+            },
+            {},
+            nullptr,
+            {
+                .diffuseTransportScale = 1.0F,
+                .ambientIrradianceScale = 0.0F,
+                .skyIrradianceLinear = {
+                    0.1F, 0.2F, 0.5F
+                }
+            });
+
+    if (withSky.l0.z <= withSky.l0.y ||
+        withSky.l0.y <= withSky.l0.x)
+    {
+        return 3;
+    }
+
     const EmissiveVolumeSource volume{
         .centerInFrameMeters =
             {5.0, 0.0, 0.0},
@@ -164,10 +188,12 @@ int main()
         withVolume.l0.y <=
             withVolume.l0.x)
     {
-        return 3;
+        return 4;
     }
 
     AlwaysHitProvider blocker;
+    VisibilityRegistry blockerRegistry;
+    blockerRegistry.Register(blocker);
 
     const auto blocked =
         EstimateRadianceCell(
@@ -178,7 +204,7 @@ int main()
             std::span<const ResolvedLocalLight>(
                 &lamp,
                 1U),
-            &blocker);
+            &blockerRegistry);
 
     // Ambient remains, but stellar/local directional energy is suppressed.
     if (blocked.l1x.x != 0.0F ||
