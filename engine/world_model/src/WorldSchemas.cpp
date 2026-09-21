@@ -832,6 +832,24 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kVisibilityProxyType,
+        .displayName = "Visibility Proxy",
+        .category = "World / Visibility",
+        .properties = {
+            {.id=kVisibilityProxyEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kVisibilityProxyShape,.name="Shape",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kVisibilityProxyPositionMeters,.name="Body-local Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
+            {.id=kVisibilityProxyEulerDegrees,.name="Body-local Euler Rotation",.kind=schema::PropertyKind::Vector3,.unit="deg",.defaultValue=math::Double3{}},
+            {.id=kVisibilityProxyRadiusMeters,.name="Sphere Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.5,.range={.minimum=0.001}},
+            {.id=kVisibilityProxyHalfExtentsMeters,.name="Box Half Extents",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{0.5,0.5,0.5}},
+            {.id=kVisibilityProxyMaterialId,.name="Material ID",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0},.advanced=true},
+            {.id=kVisibilityProxyInstanceId,.name="Instance ID",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0},.advanced=true},
+            {.id=kVisibilityProxyErrorMeters,.name="Maximum Approximation Error",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.25,.range={.minimum=0.0},.advanced=true},
+            {.id=kVisibilityProxyDynamic,.name="Dynamic",.kind=schema::PropertyKind::Boolean,.defaultValue=false,.advanced=true}
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",
