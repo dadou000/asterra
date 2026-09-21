@@ -1,3 +1,4 @@
+#include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 
 #include <cmath>
@@ -54,6 +55,23 @@ int main()
                     .footprintScale = 1.5
                 });
 
+    const auto appearance =
+        orbit::celestial_appearance::
+            BuildPlanetaryAppearance(
+                terrain,
+                1.0e6,
+                {
+                    .faceResolution = 9,
+                    .footprintScale = 1.5
+                });
+
+    if (appearance.texels.size() !=
+            mesh.vertices.size() ||
+        appearance.faceResolution != 9U)
+    {
+        return 2;
+    }
+
     const auto fingerprint =
         orbit::celestial_globe::
             MacroGlobeFingerprint(
@@ -78,7 +96,7 @@ int main()
         mesh.sourceRevision != 42 ||
         mesh.sampleFootprintMeters <= 0.0)
     {
-        return 2;
+        return 3;
     }
 
     if (mesh.minimumRadiusMeters >=
@@ -86,7 +104,7 @@ int main()
         mesh.maximumRadiusMeters <=
             1.0e6)
     {
-        return 3;
+        return 4;
     }
 
     for (const auto& vertex :
@@ -101,7 +119,7 @@ int main()
                 normalLength - 1.0) >
                 1.0e-9)
         {
-            return 4;
+            return 5;
         }
     }
 
@@ -122,7 +140,7 @@ int main()
     if (revisedMesh.fingerprint ==
         mesh.fingerprint)
     {
-        return 5;
+        return 6;
     }
 
     const auto ellipsoid =
@@ -146,7 +164,7 @@ int main()
         ellipsoid.maximumRadiusMeters <=
             ellipsoid.minimumRadiusMeters)
     {
-        return 6;
+        return 7;
     }
 
     return 0;
