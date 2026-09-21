@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioUiBundle.hpp>
 
+#include <format>
 #include <stdexcept>
 #include <utility>
 
@@ -30,6 +31,87 @@ StudioUiBundle::StudioUiBundle(
     projectAuthoring_.Register(ui);
     surfaceAuthoring_.Register(ui);
     viewportPanels_.Register(ui);
+
+    ui.RegisterPanel({
+        .id = {
+            .high = 0x4f5242495443454cULL,
+            .low = 0x504552464d333101ULL
+        },
+        .title = "Celestial Performance",
+        .defaultOpen = false,
+        .defaultDock =
+            editor_ui::DockRegion::Right,
+        .dockOrder = 40,
+        .minSize = {
+            .width = 280.0F,
+            .height = 180.0F
+        },
+        .draw =
+            [this](
+                editor_ui::PanelContext& context)
+            {
+                const auto stats =
+                    viewportRenderer_.
+                        CelestialSchedulerStats();
+                const auto budget =
+                    viewportRenderer_.
+                        CelestialSchedulerBudget();
+
+                context.Text(
+                    std::format(
+                        "CPU grants: {}/{} jobs, {}/{} cost",
+                        stats.cpuJobsGranted,
+                        budget.maxCpuJobsPerFrame,
+                        stats.cpuCostGranted,
+                        budget.maxCpuCostUnitsPerFrame));
+
+                context.Text(
+                    std::format(
+                        "GPU grants: {}/{} jobs, {}/{} cost",
+                        stats.gpuJobsGranted,
+                        budget.maxGpuJobsPerFrame,
+                        stats.gpuCostGranted,
+                        budget.maxGpuCostUnitsPerFrame));
+
+                context.Separator();
+
+                context.Text(
+                    std::format(
+                        "Pending: {} / {}",
+                        stats.pendingRequests,
+                        budget.maxPendingRequests));
+
+                context.Text(
+                    std::format(
+                        "In flight: {}",
+                        stats.inFlightRequests));
+
+                context.Text(
+                    std::format(
+                        "Stale completions rejected: {}",
+                        stats.staleCompletionsRejected));
+
+                context.Text(
+                    std::format(
+                        "Queue drops: {}",
+                        stats.queueDrops));
+
+                context.Separator();
+
+                if (stats.pendingRequests == 0U &&
+                    stats.inFlightRequests == 0U)
+                {
+                    context.Text(
+                        "Celestial derived caches are current.");
+                }
+                else
+                {
+                    context.Text(
+                        "Derived celestial work is being budgeted across frames.");
+                }
+            }
+    });
+
     static_cast<void>(SynchronizeProject());
 }
 
