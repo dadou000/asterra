@@ -4,6 +4,7 @@ add_library(OrbitPostProcess STATIC
     src/HumanEyeAdaptation.cpp
     src/HighlightEffects.cpp
     src/LuminanceHistogram.cpp
+    src/ToneMapping.cpp
 )
 
 add_library(Orbit::PostProcess ALIAS OrbitPostProcess)
@@ -40,6 +41,10 @@ if(BUILD_TESTING)
         tests/HighlightEffectsTests.cpp
     )
 
+    add_executable(OrbitToneMappingTests
+        tests/ToneMappingTests.cpp
+    )
+
     target_link_libraries(OrbitColorLutTests
         PRIVATE
             Orbit::PostProcess
@@ -59,6 +64,11 @@ if(BUILD_TESTING)
         PRIVATE
             Orbit::PostProcess
     )
+
+    target_link_libraries(OrbitToneMappingTests
+        PRIVATE
+            Orbit::PostProcess
+    )
     target_compile_features(
         OrbitLuminanceHistogramTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLuminanceHistogramTests)
@@ -70,6 +80,10 @@ if(BUILD_TESTING)
     target_compile_features(
         OrbitHighlightEffectsTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitHighlightEffectsTests)
+
+    target_compile_features(
+        OrbitToneMappingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitToneMappingTests)
 
     target_compile_features(OrbitColorLutTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitColorLutTests)
@@ -92,5 +106,10 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.HighlightEffects
         COMMAND OrbitHighlightEffectsTests
+    )
+
+    add_test(
+        NAME Orbit.ToneMapping
+        COMMAND OrbitToneMappingTests
     )
 endif()
