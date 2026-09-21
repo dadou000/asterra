@@ -128,6 +128,11 @@ inline constexpr schema::TypeId kVisibilityProxyType{
     .low = 0x50524f5859000001ULL
 };
 
+inline constexpr schema::TypeId kMaterialAssignmentType{
+    .high = 0x4f524249544d4154ULL,
+    .low = 0x41535349474e0001ULL
+};
+
 inline constexpr schema::PropertyId kSystemEpochMicroseconds{
     .high = 0x4f5242495450524fULL,
     .low = 0x505345504f434801ULL
@@ -722,6 +727,21 @@ inline constexpr schema::PropertyId kVisibilityProxyErrorMeters{
 inline constexpr schema::PropertyId kVisibilityProxyDynamic{
     .high = 0x4f52424954565052ULL,
     .low = 0x44594e414d494301ULL
+};
+
+inline constexpr schema::PropertyId kMaterialAssignmentAsset{
+    .high = 0x4f524249544d4154ULL,
+    .low = 0x4153534554000001ULL
+};
+
+inline constexpr schema::PropertyId kMaterialAssignmentSlot{
+    .high = 0x4f524249544d4154ULL,
+    .low = 0x534c4f5400000001ULL
+};
+
+inline constexpr schema::PropertyId kMaterialAssignmentEnabled{
+    .high = 0x4f524249544d4154ULL,
+    .low = 0x454e41424c454401ULL
 };
 
 inline constexpr schema::PropertyId kDecalAsset{
