@@ -333,6 +333,98 @@ Decision Resolve(
     return result;
 }
 
+SurfaceGlobeTransition
+ResolveSurfaceGlobeTransition(
+    const ResolveInput& input,
+    const Decision& decision)
+{
+    Validate(input);
+
+    if (!input.features.productionSurfaceAvailable)
+    {
+        return {
+            .productionSurfaceWeight = 0.0,
+            .macroGlobeWeight =
+                input.features.macroDisplacementAvailable
+                    ? 1.0
+                    : 0.0,
+            .transitionToGlobe =
+                input.features.macroDisplacementAvailable
+                    ? 1.0
+                    : 0.0,
+            .overlapping = false
+        };
+    }
+
+    if (!input.features.macroDisplacementAvailable)
+    {
+        return {
+            .productionSurfaceWeight = 1.0,
+            .macroGlobeWeight = 0.0,
+            .transitionToGlobe = 0.0,
+            .overlapping = false
+        };
+    }
+
+    const f64 threshold =
+        input.policy.productionSurfaceErrorPixels /
+        input.policy.qualityScale;
+
+    const f64 halfBand =
+        std::max(
+            threshold *
+                input.policy.hysteresisFraction,
+            1.0e-12);
+
+    const f64 richerEdge =
+        threshold + halfBand;
+    const f64 globeEdge =
+        std::max(
+            threshold - halfBand,
+            0.0);
+
+    f64 transition = 0.0;
+
+    if (decision.productionDetailErrorPixels >=
+        richerEdge)
+    {
+        transition = 0.0;
+    }
+    else if (
+        decision.productionDetailErrorPixels <=
+        globeEdge)
+    {
+        transition = 1.0;
+    }
+    else
+    {
+        const f64 t =
+            std::clamp(
+                (richerEdge -
+                 decision.productionDetailErrorPixels) /
+                    std::max(
+                        richerEdge - globeEdge,
+                        1.0e-12),
+                0.0,
+                1.0);
+
+        transition =
+            t * t * (3.0 - 2.0 * t);
+    }
+
+    return {
+        .productionSurfaceWeight =
+            1.0 - transition,
+        .macroGlobeWeight =
+            transition,
+        .transitionToGlobe =
+            transition,
+        .overlapping =
+            transition > 0.0 &&
+            transition < 1.0
+    };
+}
+
 std::string_view Name(
     const Representation representation) noexcept
 {
