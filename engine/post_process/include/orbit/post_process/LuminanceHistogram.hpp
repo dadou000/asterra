@@ -112,9 +112,20 @@ public:
         rhi::Buffer& statistics,
         const LuminanceHistogramConfig& config = {});
 
+    // Visualization only. This runs after display/LUT output and never feeds
+    // back into metering or physical lighting.
+    void DrawMeteringOverlay(
+        rhi::CommandList& commands,
+        rhi::Texture& meteringMask,
+        rhi::Texture& targetDisplay,
+        u32 width,
+        u32 height,
+        f32 opacity = 0.35F);
+
 private:
     std::unique_ptr<rhi::ComputePipeline> resetPipeline_;
     std::unique_ptr<rhi::ComputePipeline> histogramPipeline_;
     std::unique_ptr<rhi::ComputePipeline> reducePipeline_;
+    std::unique_ptr<rhi::GraphicsPipeline> overlayPipeline_;
 };
 } // namespace orbit::post_process
