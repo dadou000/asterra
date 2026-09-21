@@ -594,3 +594,29 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialCompactObjectBindingTests
     )
 endif()
+
+
+if(BUILD_TESTING)
+    add_executable(
+        OrbitCelestialCompactCompositionTests
+        tests/CelestialCompactCompositionTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitCelestialCompactCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitCelestialCompactCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialCompactCompositionTests)
+
+    add_test(
+        NAME Orbit.CelestialCompactComposition
+        COMMAND OrbitCelestialCompactCompositionTests
+    )
+endif()
