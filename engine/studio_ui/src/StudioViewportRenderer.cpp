@@ -1817,6 +1817,12 @@ void StudioViewportRenderer::SetContentService(
     content_ = content;
 }
 
+void StudioViewportRenderer::SetVolumeFieldStorageService(
+    volume_fields::VolumeFieldStorageService* const fields) noexcept
+{
+    volumeFields_ = fields;
+}
+
 void StudioViewportRenderer::SetColorLut(
     post_process::ColorLutData lut)
 {
@@ -9535,6 +9541,72 @@ StudioViewportRenderer::Compose(
                                 height,
                                 camera,
                                 lightGizmoLines);
+                    });
+            }
+        }
+
+        if (volumeFields_ != nullptr &&
+            session.World().HasWorld() &&
+            session.World().Selection().Ordered().size() == 1U)
+        {
+            const auto selectedVolume =
+                world_model::ResolveVolumeDomain(
+                    session.World().Objects(),
+                    session.World().Selection().Ordered().front());
+
+            if (selectedVolume.has_value())
+            {
+                volumeFields_->RemoveMissing(
+                    session.World().Objects());
+
+                auto& fieldStorage =
+                    volumeFields_->Ensure(
+                        *selectedVolume);
+
+                auto importedFields =
+                    fieldStorage.Import(
+                        graph,
+                        prefix + ".VolumeFields");
+
+                std::vector<render_graph::BufferUse>
+                    fieldReads;
+                fieldReads.reserve(
+                    importedFields.channels.size() + 1U);
+
+                for (const auto& channel :
+                     importedFields.channels)
+                {
+                    fieldReads.push_back({
+                        .buffer = channel.buffer,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    });
+                }
+
+                fieldReads.push_back({
+                    .buffer =
+                        importedFields.residency,
+                    .state =
+                        rhi::ResourceState::
+                            ShaderResource,
+                    .access =
+                        render_graph::Access::
+                            Read
+                });
+
+                graph.AddPass(
+                    prefix +
+                        ".VolumeFieldsReady",
+                    {},
+                    std::move(fieldReads),
+                    [](
+                        rhi::CommandList&,
+                        const render_graph::Resources&)
+                    {
                     });
             }
         }
