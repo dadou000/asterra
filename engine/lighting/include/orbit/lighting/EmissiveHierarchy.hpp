@@ -44,6 +44,18 @@ struct EmissiveHierarchyNode
     math::Float3 averageRadiance{};
     math::Float3 peakRadiance{};
 
+    // Integral of GI radiance over physical emitting area. This is the
+    // energy-preserving quantity used when a subtree collapses to one node.
+    math::Float3 integratedRadianceArea{};
+
+    // Brightest luminance represented by this node; used by M17 to promote
+    // tiny high-energy emitters that projected-area selection would miss.
+    f64 peakLuminance{0.0};
+
+    // Source-space centroid weighted by luminance * physical texel area.
+    // This remains stable as the hierarchy collapses/refines.
+    math::Double2 energyWeightedUv{0.5, 0.5};
+
     f64 areaMetersSquared{0.0};
     f64 radiantImportance{0.0};
 
