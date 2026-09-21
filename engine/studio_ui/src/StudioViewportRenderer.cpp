@@ -1361,7 +1361,9 @@ StudioViewportRenderer::Compose(
                         .macroDisplacementAvailable =
                             hasMacroGlobe,
                         .complexFarAppearance =
-                            hasMacroGlobe,
+                            hasMacroGlobe &&
+                            !studioDirectLight.
+                                direct.has_value(),
                         .radiativeEmitter = false
                     }
                 };
@@ -1755,6 +1757,7 @@ StudioViewportRenderer::Compose(
                      farPresentation,
                      shape = *shape,
                      globeCamera,
+                     studioDirectLight,
                      projectedRadius =
                         representationDecision.
                             projectedRadiusPixels](
@@ -1780,7 +1783,16 @@ StudioViewportRenderer::Compose(
                                 height,
                                 *transitionGlobe,
                                 globeCamera,
-                                opacity);
+                                opacity,
+                                celestial_globe::
+                                    MacroGlobeLighting{
+                                        .directionBody =
+                                            studioDirectLight.
+                                                directionBody,
+                                        .irradianceScale =
+                                            studioDirectLight.
+                                                irradianceScale
+                                    });
                             return;
                         }
 
@@ -1796,6 +1808,12 @@ StudioViewportRenderer::Compose(
                                 .projectedRadiusPixels =
                                     projectedRadius,
                                 .opacity = opacity,
+                                .lightDirectionBody =
+                                    studioDirectLight.
+                                        directionBody,
+                                .incidentLightScale =
+                                    studioDirectLight.
+                                        irradianceScale,
                                 .stellar =
                                     representation ==
                                     celestial_representation::
