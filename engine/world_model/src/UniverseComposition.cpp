@@ -720,18 +720,21 @@ UniverseCompositionStats UniverseComposition::Rebuild(
         std::function<void(
             const scene::ObjectRecord&,
             frames::FrameId,
+            bool,
             std::shared_ptr<
                 const celestial_orbits::OrbitStateProvider>)>
             composeNode;
 
         std::function<void(
             const scene::ObjectRecord&,
-            frames::FrameId)>
+            frames::FrameId,
+            bool)>
             composeChildren;
 
         composeChildren =
             [&](const scene::ObjectRecord& parentObject,
-                const frames::FrameId parentFrame)
+                const frames::FrameId parentFrame,
+                const bool parentFrameInertial)
             {
                 const auto children =
                     objects.Children(parentObject.id);
@@ -767,11 +770,10 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                         continue;
                     }
 
-                    if (parentObject.type ==
-                        kCelestialBodyType)
+                    if (!parentFrameInertial)
                     {
                         throw std::runtime_error(
-                            "Dynamic N-body promotion is not permitted directly under a rotating body-fixed frame. Use a system or reference/barycenter node.");
+                            "Dynamic N-body promotion requires an inertial system/reference frame and cannot run below a rotating body-fixed frame.");
                     }
 
                     if (!sharedSettings.has_value())
@@ -871,6 +873,7 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                     composeNode(
                         child,
                         parentFrame,
+                        parentFrameInertial,
                         promoted ==
                                 promotedProviders.end()
                             ? nullptr
@@ -881,12 +884,15 @@ UniverseCompositionStats UniverseComposition::Rebuild(
         composeNode =
             [&](const scene::ObjectRecord& object,
                 const frames::FrameId parentFrame,
+                const bool parentFrameInertial,
                 std::shared_ptr<
                     const celestial_orbits::OrbitStateProvider>
                     orbitOverride)
             {
                 frames::FrameId childParentFrame =
                     parentFrame;
+                bool childFrameInertial =
+                    parentFrameInertial;
 
                 if (object.type ==
                     kCelestialReferenceNodeType)
@@ -979,6 +985,7 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                         object.id);
                     childParentFrame =
                         bodyFrame;
+                    childFrameInertial = false;
                     ++bodyCount;
                 }
                 else
@@ -988,12 +995,14 @@ UniverseCompositionStats UniverseComposition::Rebuild(
 
                 composeChildren(
                     object,
-                    childParentFrame);
+                    childParentFrame,
+                    childFrameInertial);
             };
 
         composeChildren(
             systemObject,
-            systemFrame);
+            systemFrame,
+            true);
     }
 
     frames_ = std::move(candidateFrames);
