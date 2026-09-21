@@ -138,6 +138,54 @@ int main()
 
         if (a == 0U || a != b)
             return 4;
+
+        const auto shape =
+            celestial_small_bodies::
+                BuildSmallBodyShape(
+                    p,
+                    {.faceResolution = 17U});
+
+        if (shape.fingerprint != a ||
+            shape.radiusScale.size() !=
+                6U * 17U * 17U ||
+            !std::isfinite(
+                shape.minimumRadiusScale) ||
+            !std::isfinite(
+                shape.maximumRadiusScale) ||
+            shape.minimumRadiusScale <= 0.18 ||
+            shape.maximumRadiusScale <=
+                shape.minimumRadiusScale)
+        {
+            return 5;
+        }
+
+        const auto opposition =
+            celestial_small_bodies::
+                EvaluateRoughSurfacePhotometry(
+                    p,
+                    {
+                        .normal = {0.0, 0.0, 1.0},
+                        .lightDirection = {0.0, 0.0, 1.0},
+                        .viewDirection = {0.0, 0.0, 1.0}
+                    });
+
+        const auto offOpposition =
+            celestial_small_bodies::
+                EvaluateRoughSurfacePhotometry(
+                    p,
+                    {
+                        .normal = {0.0, 0.0, 1.0},
+                        .lightDirection = {0.0, 0.0, 1.0},
+                        .viewDirection = {0.5, 0.0, 0.8660254037844386}
+                    });
+
+        if (!std::isfinite(opposition) ||
+            !std::isfinite(offOpposition) ||
+            opposition <= offOpposition ||
+            offOpposition <= 0.0)
+        {
+            return 6;
+        }
     }
 
     {
