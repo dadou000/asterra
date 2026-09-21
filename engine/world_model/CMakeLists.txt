@@ -16,6 +16,7 @@ target_include_directories(OrbitWorldModel
 
 target_link_libraries(OrbitWorldModel
     PUBLIC
+        Orbit::CelestialGravity
         Orbit::CelestialOrbits
         Orbit::CelestialRotation
         Orbit::Core
