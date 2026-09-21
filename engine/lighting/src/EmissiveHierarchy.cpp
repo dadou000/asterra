@@ -30,6 +30,7 @@ struct Builder
     const EmissiveSurfaceGrid* surface{nullptr};
     EmissiveHierarchy result;
     f64 texelArea{0.0};
+    EmissiveHierarchyBuildConfig config{};
 
     [[nodiscard]] u32 Build(
         const u32 minX,
@@ -158,8 +159,14 @@ struct Builder
         const u32 height =
             maxY - minY;
 
-        if (width <= 1U &&
-            height <= 1U)
+        if (width <=
+                std::max(
+                    config.leafTileWidth,
+                    1U) &&
+            height <=
+                std::max(
+                    config.leafTileHeight,
+                    1U))
         {
             return index;
         }
@@ -215,9 +222,8 @@ struct Builder
             maxX,
             maxY);
 
-        const u32 firstChild =
-            static_cast<u32>(
-                result.nodes.size());
+        result.nodes[index].childCount =
+            regionCount;
 
         for (u32 region = 0U;
              region < regionCount;
@@ -226,19 +232,15 @@ struct Builder
             const auto r =
                 regions[region];
 
-            static_cast<void>(
-                Build(
-                    r[0],
-                    r[1],
-                    r[2],
-                    r[3],
-                    level + 1U));
+            result.nodes[index].
+                children[region] =
+                    Build(
+                        r[0],
+                        r[1],
+                        r[2],
+                        r[3],
+                        level + 1U);
         }
-
-        result.nodes[index].firstChild =
-            firstChild;
-        result.nodes[index].childCount =
-            regionCount;
 
         return index;
     }
@@ -319,8 +321,16 @@ struct Builder
 } // namespace
 
 EmissiveHierarchy BuildEmissiveHierarchy(
-    const EmissiveSurfaceGrid& surface)
+    const EmissiveSurfaceGrid& surface,
+    const EmissiveHierarchyBuildConfig& config)
 {
+    if (config.leafTileWidth == 0U ||
+        config.leafTileHeight == 0U)
+    {
+        throw std::invalid_argument(
+            "Emissive hierarchy leaf tile dimensions must be non-zero.");
+    }
+
     if (!surface.frame ||
         !surface.body ||
         surface.stableId == 0U ||
@@ -364,6 +374,7 @@ EmissiveHierarchy BuildEmissiveHierarchy(
         surface.width;
     builder.result.sourceHeight =
         surface.height;
+    builder.config = config;
     builder.texelArea =
         area /
         (static_cast<f64>(
@@ -430,14 +441,17 @@ SelectEmissiveHierarchy(
                     projected,
                     0.0F));
 
+        const bool refineForEnergy =
+            config.minimumRadiantImportance > 0.0 &&
+            weightedImportance >=
+                config.minimumRadiantImportance;
+
         const bool refine =
             !node.IsLeaf() &&
             (projected >=
                  config.
                      subdivisionProjectedPixels ||
-             weightedImportance >=
-                 config.
-                     minimumRadiantImportance);
+             refineForEnergy);
 
         if (refine &&
             selected.size() +
@@ -450,10 +464,10 @@ SelectEmissiveHierarchy(
                  ++child)
             {
                 stack.push_back(
-                    node.firstChild +
-                    (node.childCount -
-                     1U -
-                     child));
+                    node.children[
+                        node.childCount -
+                        1U -
+                        child]);
             }
 
             continue;
