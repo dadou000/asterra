@@ -29,6 +29,11 @@ private:
     std::string newSystemName_{"Celestial System"};
     std::string newBodyName_{"Celestial Body"};
     std::string newReferenceName_{"Barycenter"};
+    i64 recipeSeed_{1};
+    i64 recipePlanetCount_{4};
+    bool recipeGenerateMoons_{true};
+    std::string recipeSystemName_{"Generated System"};
+    std::string recipeStarName_{"Primary"};
     std::vector<editor_model::CelestialDiagnostic> diagnostics_;
     std::string status_;
 };
