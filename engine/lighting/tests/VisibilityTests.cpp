@@ -1,6 +1,7 @@
 #include <orbit/lighting/Visibility.hpp>
 
 #include <stdexcept>
+#include <utility>
 
 namespace
 {
