@@ -362,6 +362,12 @@ public:
     [[nodiscard]] celestial_scheduler::SchedulerBudget
     CelestialSchedulerBudget() const noexcept;
 
+    void SetCelestialQualityPolicy(
+        celestial_representation::QualityPolicy policy) noexcept;
+
+    [[nodiscard]] celestial_representation::QualityPolicy
+    CelestialQualityPolicy() const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -588,6 +594,8 @@ private:
     post_process::DisplayResolveSettings displayResolveSettings_{};
     celestial_representation::RepresentationTracker
         representationTracker_;
+    celestial_representation::QualityPolicy
+        celestialQualityPolicy_{};
     celestial_scheduler::CelestialWorkScheduler
         celestialScheduler_{
             celestial_scheduler::SchedulerBudget{
