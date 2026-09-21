@@ -33,6 +33,33 @@ struct RadianceResidencyStats
     u64 dirtyCells{0U};
 };
 
+
+struct GpuRadianceLevelInfo
+{
+    // xyz = center logical cell center in camera-relative GPU meters
+    // w   = cell size in meters
+    math::Float4 centerCellSize{};
+
+    u32 centerModuloX{0U};
+    u32 centerModuloY{0U};
+    u32 centerModuloZ{0U};
+    u32 cellsPerAxis{0U};
+
+    u32 cellOffset{0U};
+    u32 cellCount{0U};
+    u32 level{0U};
+    u32 reserved{0U};
+};
+
+static_assert(sizeof(GpuRadianceLevelInfo) == 48U);
+
+struct RadianceGpuSnapshot
+{
+    u64 sourceRevision{0U};
+    std::vector<GpuRadianceLevelInfo> levels;
+    std::vector<GpuRadianceCell> cells;
+};
+
 class RadianceClipmapResidency
 {
 public:
@@ -71,6 +98,9 @@ public:
         u64 requiredRevision) const noexcept;
 
     [[nodiscard]] RadianceResidencyStats Stats() const noexcept;
+
+    [[nodiscard]] RadianceGpuSnapshot BuildGpuSnapshot(
+        const LightingView& view) const;
 
     [[nodiscard]] const RadianceClipmapConfig& Config() const noexcept;
 
