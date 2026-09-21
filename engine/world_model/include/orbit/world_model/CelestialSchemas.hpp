@@ -49,5 +49,26 @@ inline constexpr schema::PropertyId kCapabilityModel{
 inline constexpr schema::PropertyId kCapabilitySourceObject{
     .high = 0x4f5242495443454cULL, .low = 0x50524f5053520001ULL};
 
+inline constexpr schema::PropertyId kOrbitSemiMajorAxisMeters{
+    .high = 0x4f524249544f5242ULL, .low = 0x53454d494d414a01ULL};
+inline constexpr schema::PropertyId kOrbitPeriapsisDistanceMeters{
+    .high = 0x4f524249544f5242ULL, .low = 0x5045524941505301ULL};
+inline constexpr schema::PropertyId kOrbitEccentricity{
+    .high = 0x4f524249544f5242ULL, .low = 0x454343454e545201ULL};
+inline constexpr schema::PropertyId kOrbitInclinationDegrees{
+    .high = 0x4f524249544f5242ULL, .low = 0x494e434c494e4501ULL};
+inline constexpr schema::PropertyId kOrbitAscendingNodeDegrees{
+    .high = 0x4f524249544f5242ULL, .low = 0x4153434e4f444501ULL};
+inline constexpr schema::PropertyId kOrbitArgumentPeriapsisDegrees{
+    .high = 0x4f524249544f5242ULL, .low = 0x4152475045524901ULL};
+inline constexpr schema::PropertyId kOrbitMeanAnomalyEpochDegrees{
+    .high = 0x4f524249544f5242ULL, .low = 0x4d45414e414e4f01ULL};
+inline constexpr schema::PropertyId kOrbitBarkerParameterEpoch{
+    .high = 0x4f524249544f5242ULL, .low = 0x4241524b45520001ULL};
+inline constexpr schema::PropertyId kOrbitGravitationalParameter{
+    .high = 0x4f524249544f5242ULL, .low = 0x4752415650415201ULL};
+inline constexpr schema::PropertyId kOrbitEpochMicroseconds{
+    .high = 0x4f524249544f5242ULL, .low = 0x45504f4348555301ULL};
+
 void RegisterCelestialCapabilitySchemas(schema::SchemaRegistry& schemas);
 } // namespace orbit::world_model
