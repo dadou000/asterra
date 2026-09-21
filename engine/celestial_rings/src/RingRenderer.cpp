@@ -1,8 +1,10 @@
 #include <orbit/celestial_rings/RingSystem.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
+#include <cmath>
 #include <cstring>
 #include <stdexcept>
 
