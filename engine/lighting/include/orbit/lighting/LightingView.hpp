@@ -61,6 +61,8 @@ struct LightingView
     math::Float3 forward{0.0F, 0.0F, 1.0F};
     math::Float3 up{0.0F, 1.0F, 0.0F};
     f32 verticalFovRadians{1.0F};
+    f32 nearPlaneMeters{0.05F};
+    f32 farPlaneMeters{12'000'000.0F};
 
     LightingViewChange change{
         LightingViewChange::None};
