@@ -204,6 +204,37 @@ inline constexpr schema::PropertyId kSmallBodySingleScatteringAlbedo{
 inline constexpr schema::PropertyId kSmallBodyMacroscopicRoughnessRadians{
     .high = 0x4f52424954534d42ULL, .low = 0x4d4143524f550001ULL};
 
+inline constexpr schema::PropertyId kMagnetosphereDipoleAxis{
+    .high = 0x4f524249544d4147ULL, .low = 0x4449504158495301ULL};
+inline constexpr schema::PropertyId kMagnetosphereEquatorialFieldTesla{
+    .high = 0x4f524249544d4147ULL, .low = 0x45514649454c4401ULL};
+inline constexpr schema::PropertyId kMagnetosphereSolarWindDirection{
+    .high = 0x4f524249544d4147ULL, .low = 0x5357444952454301ULL};
+inline constexpr schema::PropertyId kMagnetosphereSubsolarStandoffBodyRadii{
+    .high = 0x4f524249544d4147ULL, .low = 0x5354414e444f4601ULL};
+inline constexpr schema::PropertyId kMagnetosphereFlaringAlpha{
+    .high = 0x4f524249544d4147ULL, .low = 0x464c4152494e4701ULL};
+inline constexpr schema::PropertyId kMagnetosphereMaximumTailBodyRadii{
+    .high = 0x4f524249544d4147ULL, .low = 0x5441494c4d415801ULL};
+inline constexpr schema::PropertyId kMagnetosphereSolarWindPressurePascals{
+    .high = 0x4f524249544d4147ULL, .low = 0x5357505245535301ULL};
+inline constexpr schema::PropertyId kMagnetosphereImfBzTesla{
+    .high = 0x4f524249544d4147ULL, .low = 0x494d46425a000001ULL};
+inline constexpr schema::PropertyId kMagnetosphereActivity{
+    .high = 0x4f524249544d4147ULL, .low = 0x4143544956495401ULL};
+inline constexpr schema::PropertyId kAuroraOvalLatitudeDegrees{
+    .high = 0x4f52424954415552ULL, .low = 0x4f56414c4c415401ULL};
+inline constexpr schema::PropertyId kAuroraOvalWidthDegrees{
+    .high = 0x4f52424954415552ULL, .low = 0x4f56414c57494401ULL};
+inline constexpr schema::PropertyId kAuroraMinimumAltitudeMeters{
+    .high = 0x4f52424954415552ULL, .low = 0x4d494e414c540001ULL};
+inline constexpr schema::PropertyId kAuroraMaximumAltitudeMeters{
+    .high = 0x4f52424954415552ULL, .low = 0x4d4158414c540001ULL};
+inline constexpr schema::PropertyId kAuroraIntensity{
+    .high = 0x4f52424954415552ULL, .low = 0x494e54454e530001ULL};
+inline constexpr schema::PropertyId kAuroraSeed{
+    .high = 0x4f52424954415552ULL, .low = 0x5345454400000001ULL};
+
 inline constexpr schema::PropertyId kAtmosphereTopRadiusMeters{
     .high = 0x4f5242495441544dULL, .low = 0x544f505241440001ULL};
 inline constexpr schema::PropertyId kAtmosphereRayleighScatteringPerMeter{
