@@ -601,6 +601,7 @@ struct Constants
     float4 emissionAndOpacity;
     float4 proxy;
     float4 lighting;
+    float4 ocean;
 };
 [[vk::push_constant]] Constants g;
 
@@ -722,7 +723,7 @@ SurfaceOutputs main(VSOutput input)
             surfaceEmission,
             EncodeSurfaceMeta(
                 6.0,
-                g.material.w));
+                g.proxy.x));
     return output;
 }
 )";
