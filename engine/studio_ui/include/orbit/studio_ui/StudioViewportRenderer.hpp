@@ -337,6 +337,9 @@ private:
         std::unique_ptr<
             celestial_appearance::PlanetaryAppearanceProduct>
             appearance;
+        std::unique_ptr<
+            celestial_appearance::GpuPlanetaryAppearanceProduct>
+            gpuAppearance;
     };
 
     struct RingPresentation
