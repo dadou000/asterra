@@ -142,29 +142,84 @@ int main()
         }
 
         const auto* transform =
-            std::get_if<orbit::universe::UniformRotationTransform>(
-                &planet->transformModel);
+            std::get_if<
+                orbit::universe::ProviderDrivenBodyTransform>(
+                    &planet->transformModel);
+
+        const auto systemFrame =
+            composition.FrameForObject(systemObject);
+        const auto planetFrame =
+            composition.FrameForObject(planetObject);
+        const auto parentFromPlanet =
+            systemFrame.has_value() &&
+                    planetFrame.has_value()
+                ? composition.Frames().ResolveTransform(
+                      *planetFrame,
+                      *systemFrame,
+                      orbit::time::SimulationTime{
+                          .microsecondsFromEpoch = 123456})
+                : std::nullopt;
 
         if (transform == nullptr ||
-            transform->centerInParentMeters.x != 10'000.0 ||
-            transform->centerInParentMeters.y != 20'000.0 ||
-            transform->centerInParentMeters.z != 30'000.0 ||
-            transform->epoch.microsecondsFromEpoch != 123456 ||
-            transform->angularVelocityRadiansPerSecond <= 0.0)
+            !transform->orbitState ||
+            !transform->orientation ||
+            !parentFromPlanet.has_value() ||
+            parentFromPlanet->translation.x != 10'000.0 ||
+            parentFromPlanet->translation.y != 20'000.0 ||
+            parentFromPlanet->translation.z != 30'000.0)
         {
             return 5;
         }
 
-        if (moon->parentFrame != planet->frame ||
+        if (moon->parentFrame != planet->centerFrame ||
+            moon->parentFrame == planet->frame ||
             composition.ObjectForBody(*moonId) !=
                 std::optional<orbit::scene::ObjectId>(moonObject))
         {
             return 6;
         }
 
-        if (composition.RebuildIfChanged(objects))
+        const auto moonFrame =
+            composition.FrameForObject(moonObject);
+
+        const auto moonAtEpoch =
+            moonFrame.has_value() &&
+                    systemFrame.has_value()
+                ? composition.Frames().ResolveTransform(
+                      *moonFrame,
+                      *systemFrame,
+                      orbit::time::SimulationTime{
+                          .microsecondsFromEpoch = 123456})
+                : std::nullopt;
+
+        commands.SetProperty(
+            planetObject,
+            orbit::world_model::kBodyRotationPhaseDegrees,
+            95.0);
+
+        if (!composition.RebuildIfChanged(objects))
         {
             return 7;
+        }
+
+        const auto moonAfterSpinChange =
+            composition.Frames().ResolveTransform(
+                *composition.FrameForObject(moonObject),
+                *composition.FrameForObject(systemObject),
+                orbit::time::SimulationTime{
+                    .microsecondsFromEpoch = 123456});
+
+        if (!moonAtEpoch.has_value() ||
+            !moonAfterSpinChange.has_value() ||
+            moonAtEpoch->translation !=
+                moonAfterSpinChange->translation)
+        {
+            return 12;
+        }
+
+        if (composition.RebuildIfChanged(objects))
+        {
+            return 11;
         }
 
         commands.SetProperty(

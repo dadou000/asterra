@@ -16,6 +16,15 @@ Read [docs/V0.0.3_SPEC.md](docs/V0.0.3_SPEC.md) before adding new world, editor,
 
 World and celestial setup is tracked explicitly by **M20A — World & Celestial Authoring** in [docs/V0.0.3_WORLD_AUTHORING.md](docs/V0.0.3_WORLD_AUTHORING.md). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. The production foundation now includes semantic World/System/Body schemas, runtime-backed body properties, transactional contextual system/body creation, multi-world project enumeration/creation/startup-world selection, metadata-driven command surfaces and regression coverage. Project-browser UI, active-world session switching and live semantic-to-runtime universe synchronization remain M20A acceptance items rather than placeholders.
 
+
+## V0.0.6 — Celestial Systems & Orbital Rendering
+
+V0.0.6 is the next major scaffold after the accepted V0.0.5 terrain/Studio loop. It adds a research-backed celestial capability model, property provenance/solvers, barycenters and complex orbit systems, dedicated orbital globe/impostor/point rendering, astronomical lighting/exposure, atmospheres, clouds, oceans, rings, stellar bodies, gas giants, small bodies and deep schema-driven Studio authoring.
+
+The release keeps one semantic body authority while allowing independent simulation and rendering representations. Production toroidal terrain remains the ground path; orbital and far-distance representations are derived from the same world data.
+
+Read [docs/V0.0.6_SPEC.md](docs/V0.0.6_SPEC.md) before implementing celestial systems. Progress is tracked in [docs/V0.0.6_PROGRESS.md](docs/V0.0.6_PROGRESS.md), and the initial research contract is in [docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
+
 ## Build
 
 ### One-click Windows build

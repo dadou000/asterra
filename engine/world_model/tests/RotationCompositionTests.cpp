@@ -1,0 +1,188 @@
+#include <orbit/commands/CommandService.hpp>
+#include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/documents/WorldDatabase.hpp>
+#include <orbit/scene/ObjectStore.hpp>
+#include <orbit/schema/SchemaRegistry.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/UniverseComposition.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <numbers>
+#include <string>
+
+namespace
+{
+bool Near(double a, double b, double rel = 2.0e-6)
+{
+    const double scale =
+        std::max({1.0, std::abs(a), std::abs(b)});
+    return std::abs(a - b) <= rel * scale;
+}
+} // namespace
+
+int main()
+{
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() /
+        ("orbit-rotation-composition-" +
+         orbit::documents::ProjectId::Random().ToString());
+
+    std::filesystem::remove_all(root);
+
+    {
+        auto project =
+            orbit::documents::ProjectDocument::Create(
+                root,
+                "Rotation Composition Test");
+        orbit::documents::WorldDatabase world(
+            project.StartupWorldPath());
+        orbit::schema::SchemaRegistry schemas;
+        orbit::world_model::RegisterSchemas(schemas);
+        orbit::scene::ObjectStore objects(world);
+        orbit::commands::CommandService commands(
+            objects,
+            schemas);
+
+        const auto worldObject = commands.CreateObject(
+            orbit::world_model::kWorldType,
+            "World");
+        const auto systemObject = commands.CreateObject(
+            orbit::world_model::kCelestialSystemType,
+            "System",
+            worldObject);
+        const auto bodyObject = commands.CreateObject(
+            orbit::world_model::kCelestialBodyType,
+            "Locked Moon",
+            systemObject);
+        const auto orbitCapability = commands.CreateObject(
+            orbit::world_model::kOrbitCapabilityType,
+            "Orbit",
+            bodyObject);
+        const auto rotationCapability = commands.CreateObject(
+            orbit::world_model::kRotationCapabilityType,
+            "Rotation",
+            bodyObject);
+
+        constexpr double axis = 7.0e6;
+        constexpr double mu = 3.986004418e14;
+
+        commands.SetProperty(
+            orbitCapability,
+            orbit::world_model::kCapabilityModel,
+            std::string{"Analytic Conic"});
+        commands.SetProperty(
+            orbitCapability,
+            orbit::world_model::kOrbitSemiMajorAxisMeters,
+            axis);
+        commands.SetProperty(
+            orbitCapability,
+            orbit::world_model::kOrbitEccentricity,
+            0.0);
+        commands.SetProperty(
+            orbitCapability,
+            orbit::world_model::kOrbitGravitationalParameter,
+            mu);
+
+        commands.SetProperty(
+            rotationCapability,
+            orbit::world_model::kCapabilityModel,
+            std::string{"Synchronous"});
+        commands.SetProperty(
+            rotationCapability,
+            orbit::world_model::kRotationAxis,
+            orbit::math::Double3{0.0, 0.0, 1.0});
+
+        orbit::world_model::UniverseComposition composition;
+        composition.Rebuild(objects);
+
+        const auto bodyFrame =
+            composition.FrameForObject(bodyObject);
+        const auto systemFrame =
+            composition.FrameForObject(systemObject);
+
+        if (!bodyFrame.has_value() ||
+            !systemFrame.has_value())
+        {
+            return 1;
+        }
+
+        const auto atEpoch =
+            composition.Frames().ResolveTransform(
+                *bodyFrame,
+                *systemFrame,
+                orbit::time::SimulationTime{});
+
+        if (!atEpoch.has_value() ||
+            !Near(atEpoch->translation.x, axis) ||
+            !Near(atEpoch->rotation.xAxis.x, -1.0) ||
+            !Near(atEpoch->rotation.xAxis.y, 0.0))
+        {
+            return 2;
+        }
+
+        const double period =
+            2.0 * std::numbers::pi_v<double> *
+            std::sqrt(axis * axis * axis / mu);
+
+        const orbit::time::SimulationTime quarter{
+            .microsecondsFromEpoch =
+                static_cast<orbit::i64>(
+                    period * 0.25 * 1'000'000.0)
+        };
+
+        const auto atQuarter =
+            composition.Frames().ResolveTransform(
+                *bodyFrame,
+                *systemFrame,
+                quarter);
+
+        if (!atQuarter.has_value() ||
+            !Near(atQuarter->translation.x, 0.0) ||
+            !Near(atQuarter->translation.y, axis) ||
+            !Near(atQuarter->rotation.xAxis.x, 0.0) ||
+            !Near(atQuarter->rotation.xAxis.y, -1.0))
+        {
+            return 3;
+        }
+
+        commands.SetProperty(
+            rotationCapability,
+            orbit::world_model::kCapabilityModel,
+            std::string{"Uniform Spin"});
+        commands.SetProperty(
+            rotationCapability,
+            orbit::world_model::kRotationPeriodSeconds,
+            4.0);
+        commands.SetProperty(
+            rotationCapability,
+            orbit::world_model::kRotationPhaseDegrees,
+            0.0);
+
+        if (!composition.RebuildIfChanged(objects))
+        {
+            return 4;
+        }
+
+        const auto spun =
+            composition.Frames().ResolveTransform(
+                *composition.FrameForObject(bodyObject),
+                *composition.FrameForObject(systemObject),
+                orbit::time::SimulationTime{
+                    .microsecondsFromEpoch = 1'000'000});
+
+        if (!spun.has_value() ||
+            !Near(spun->rotation.xAxis.x, 0.0) ||
+            !Near(spun->rotation.xAxis.y, 1.0))
+        {
+            return 5;
+        }
+
+        world.Checkpoint();
+    }
+
+    std::filesystem::remove_all(root);
+    return 0;
+}

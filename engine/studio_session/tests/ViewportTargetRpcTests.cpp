@@ -233,6 +233,20 @@ int main()
                     }));
         Check(debug.Find("mode")->AsString() == "debug");
 
+        const auto systemMode =
+            Call(
+                studio,
+                "5b",
+                "view.set_mode",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"id", "primary"},
+                        {"mode", "system"}
+                    }));
+        Check(
+            systemMode.Find("mode")->AsString() ==
+            "system");
+
         studio.CloseWorld();
         const auto closedCatalog =
             Call(studio, "6", "view.list");

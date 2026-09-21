@@ -19,6 +19,13 @@ inline constexpr schema::TypeId kCelestialBodyType{
     .low = 0x5954595045000001ULL
 };
 
+// V0.0.6 M04: a non-renderable semantic reference/barycenter node. It owns
+// a FrameGraph frame but never becomes a CelestialBody or renderable surface.
+inline constexpr schema::TypeId kCelestialReferenceNodeType{
+    .high = 0x4f52424954524546ULL,
+    .low = 0x4e4f444500000001ULL
+};
+
 // Real body capability record. The semantic child is CPU authority; the
 // surface_model composition layer reconstructs SurfaceRegistry +
 // AnalyticTerrainSource from these properties.
@@ -109,6 +116,11 @@ inline constexpr schema::TypeId kSurfaceDecalType{
 inline constexpr schema::PropertyId kSystemEpochMicroseconds{
     .high = 0x4f5242495450524fULL,
     .low = 0x505345504f434801ULL
+};
+
+inline constexpr schema::PropertyId kReferenceNodePositionMeters{
+    .high = 0x4f5242495450524fULL,
+    .low = 0x505245464e4f4401ULL
 };
 
 inline constexpr schema::PropertyId kBodyEllipsoidEnabled{

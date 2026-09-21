@@ -74,10 +74,14 @@ namespace
     {
         return ViewportMode::Debug;
     }
+    if (text == "system")
+    {
+        return ViewportMode::System;
+    }
 
     throw rpc::Error(
         -32602,
-        "Viewport mode must be perspective, body_map, or debug.");
+        "Viewport mode must be perspective, body_map, debug, or system.");
 }
 
 [[nodiscard]] const char* ModeName(
@@ -91,6 +95,8 @@ namespace
         return "body_map";
     case ViewportMode::Debug:
         return "debug";
+    case ViewportMode::System:
+        return "system";
     }
 
     return "perspective";

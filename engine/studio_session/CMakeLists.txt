@@ -2,6 +2,7 @@ add_library(OrbitStudioSession STATIC
     src/BezierHandleEditor.cpp
     src/StudioAuthoringBinding.cpp
     src/StudioSession.cpp
+    src/SimulationClock.cpp
     src/StudioRuntimeBinding.cpp
     src/StudioTerrainAuthoringInvalidation.cpp
     src/StudioTerrainRebuildScheduler.cpp
@@ -424,5 +425,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.ViewportTargetRpc
         COMMAND OrbitViewportTargetRpcTests
+    )
+
+    add_executable(OrbitSimulationClockTests
+        tests/SimulationClockTests.cpp
+    )
+
+    target_link_libraries(OrbitSimulationClockTests
+        PRIVATE
+            Orbit::StudioSession
+    )
+
+    target_compile_features(
+        OrbitSimulationClockTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitSimulationClockTests)
+
+    add_test(
+        NAME Orbit.SimulationClock
+        COMMAND OrbitSimulationClockTests
     )
 endif()

@@ -46,12 +46,14 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
+#include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
+#include <orbit/studio_ui/SystemViewUi.hpp>
 #include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
@@ -1955,6 +1957,16 @@ int main(
                 studioSession);
         projectSettingsUi.Register(ui);
 
+        orbit::studio_ui::CelestialAuthoringUi
+            celestialAuthoringUi(
+                studioSession);
+        celestialAuthoringUi.Register(ui);
+
+        orbit::studio_ui::SystemViewUi
+            systemViewUi(
+                studioSession);
+        systemViewUi.Register(ui);
+
         orbit::studio_ui::SurfaceAuthoringUi
             surfaceAuthoringUi(
                 studioSession);
@@ -1975,17 +1987,35 @@ int main(
                         SurfaceAuthoringUi::kPanel) ||
                 !ui.HasPanel(
                     orbit::studio_ui::
+                        CelestialAuthoringUi::kPanel) ||
+                !ui.HasPanel(
+                    orbit::studio_ui::
+                        SystemViewUi::kPanel) ||
+                !ui.HasPanel(
+                    orbit::studio_ui::
                         ProjectSettingsUi::
                             kPanelId))
             {
                 throw std::runtime_error(
-                    "Terrain UI smoke preflight failed: active authoring/validation panels are not registered.");
+                    "Studio UI smoke preflight failed: active authoring/validation panels are not registered.");
             }
 
             static_cast<void>(
                 ui.SetPanelOpen(
                     orbit::studio_ui::
                         SurfaceAuthoringUi::kPanel,
+                    true));
+
+            static_cast<void>(
+                ui.SetPanelOpen(
+                    orbit::studio_ui::
+                        CelestialAuthoringUi::kPanel,
+                    true));
+
+            static_cast<void>(
+                ui.SetPanelOpen(
+                    orbit::studio_ui::
+                        SystemViewUi::kPanel,
                     true));
 
             static_cast<void>(
@@ -2067,6 +2097,7 @@ int main(
         orbit::editor_ui::PreviewMaterial
             materialPreviewMaterial{};
         std::string renameBuffer;
+        bool showAdvancedProperties = false;
         orbit::build::BuildService
             buildService;
         std::string selectedBuildProfile =
@@ -5039,6 +5070,7 @@ int main(
                 [&inspector,
                  &presentActions,
                  &content,
+                 &showAdvancedProperties,
                  &worldSession](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -5082,9 +5114,27 @@ int main(
 
                     context.Separator();
 
+                    static_cast<void>(
+                        context.Checkbox(
+                            "Advanced Properties##properties-advanced",
+                            showAdvancedProperties));
+
+                    if (!showAdvancedProperties)
+                    {
+                        context.MutedText(
+                            "Advanced schema fields are hidden. Enable Advanced Properties to expose the full authoring contract.");
+                    }
+
+                    context.Separator();
+
                     for (auto property :
                          inspector().CommonProperties())
                     {
+                        if (property.schema.advanced &&
+                            !showAdvancedProperties)
+                        {
+                            continue;
+                        }
                         context.Text(
                             std::format(
                                 "{}{}{}",
@@ -6510,6 +6560,9 @@ int main(
 
             rpcServer.Poll();
 
+            studioSession.Clock().Advance(
+                deltaSeconds);
+
             const auto studioTick =
                 studioSession.Tick(false);
 
@@ -7058,7 +7111,7 @@ int main(
                     studioSession,
                     studioRuntime,
                     studioSnapshot,
-                    {},
+                    studioSession.Clock().Time(),
                     pathDebugVisualization,
                     swapchain.
                         CurrentBackBufferIndex());

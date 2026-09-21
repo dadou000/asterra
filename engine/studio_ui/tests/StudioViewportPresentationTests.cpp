@@ -121,6 +121,7 @@ void TestPresentationPolicy()
             true,
             true,
             false,
+            false,
             false) ==
         StudioViewportPresentation::ProductionTerrain);
 
@@ -130,6 +131,7 @@ void TestPresentationPolicy()
             true,
             false,
             false,
+            false,
             false) ==
         StudioViewportPresentation::BodyPreview);
 
@@ -139,12 +141,24 @@ void TestPresentationPolicy()
             true,
             true,
             false,
+            false,
             false) ==
         StudioViewportPresentation::BodyPreview);
 
     Check(
         SelectStudioViewportPresentation(
             ViewportMode::BodyMap,
+            true,
+            false,
+            true,
+            false,
+            false) ==
+        StudioViewportPresentation::MacroGlobe);
+
+    Check(
+        SelectStudioViewportPresentation(
+            ViewportMode::BodyMap,
+            false,
             false,
             false,
             false,
@@ -156,6 +170,7 @@ void TestPresentationPolicy()
             ViewportMode::Debug,
             true,
             false,
+            false,
             true,
             true) ==
         StudioViewportPresentation::TerrainDebug);
@@ -166,6 +181,7 @@ void TestPresentationPolicy()
             true,
             false,
             false,
+            false,
             false) ==
         StudioViewportPresentation::TerrainDebugUnavailable);
 
@@ -174,6 +190,7 @@ void TestPresentationPolicy()
             ViewportMode::Debug,
             true,
             false,
+            false,
             true,
             false) ==
         StudioViewportPresentation::TerrainDebugUnavailable);
@@ -181,6 +198,7 @@ void TestPresentationPolicy()
     Check(
         SelectStudioViewportPresentation(
             ViewportMode::Debug,
+            false,
             false,
             false,
             true,
@@ -266,6 +284,7 @@ void TestM29StudioAcceptance()
             SelectStudioViewportPresentation(
                 ViewportMode::Debug,
                 true,
+                false,
                 false,
                 true,
                 source->Has(

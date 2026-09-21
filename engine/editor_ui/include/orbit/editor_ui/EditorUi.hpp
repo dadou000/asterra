@@ -46,6 +46,19 @@ struct ImageInteraction
     f32 v{0.0F};
 };
 
+struct CanvasInteraction
+{
+    bool hovered{false};
+    bool clicked{false};
+    bool doubleClicked{false};
+    bool rightClicked{false};
+    bool dragging{false};
+    bool leftDown{false};
+    bool leftReleased{false};
+    f32 u{0.0F};
+    f32 v{0.0F};
+};
+
 struct ActionPresentation
 {
     std::string label;
@@ -69,6 +82,10 @@ public:
     [[nodiscard]] TreeItemInteraction TreeItem(std::string_view label, bool selected);
     void TreePop();
     [[nodiscard]] ImageInteraction Image(rhi::Texture& texture, UiSize size);
+    [[nodiscard]] CanvasInteraction Canvas(std::string_view id, UiSize size);
+    void CanvasLine(math::Float2 a, math::Float2 b, math::Float4 color, f32 thickness = 1.0F);
+    void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
+    void CanvasText(math::Float2 position, math::Float4 color, std::string_view text);
     [[nodiscard]] bool Checkbox(std::string_view label, bool& value);
     [[nodiscard]] bool InputDouble(std::string_view label, f64& value);
     [[nodiscard]] bool InputInteger(std::string_view label, i64& value);
@@ -93,6 +110,9 @@ private:
 
     bool forceTreeOpen_{false};
     std::vector<std::string>* automationTrace_{nullptr};
+    math::Float2 canvasOrigin_{};
+    UiSize canvasSize_{};
+    bool canvasActive_{false};
 
     friend class EditorUi;
 };

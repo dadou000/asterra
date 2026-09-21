@@ -1,4 +1,5 @@
 add_library(OrbitStudioUi STATIC
+    src/CelestialAuthoringUi.cpp
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
     src/StudioRenderViewSet.cpp
@@ -7,6 +8,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioTerrainOverlayGeometry.cpp
     src/StudioUiBundle.cpp
     src/SurfaceAuthoringUi.cpp
+    src/SystemViewUi.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
@@ -24,6 +26,9 @@ target_include_directories(OrbitStudioUi
 target_link_libraries(OrbitStudioUi
     PUBLIC
         Orbit::Camera
+        Orbit::CelestialAppearance
+        Orbit::CelestialGlobe
+        Orbit::CelestialRepresentation
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::RenderGraph

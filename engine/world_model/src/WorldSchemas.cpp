@@ -1,4 +1,6 @@
 #include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/PropertyProvenanceSchema.hpp>
 
 #include <string>
 #include <utility>
@@ -8,6 +10,9 @@ namespace orbit::world_model
 void RegisterSchemas(
     schema::SchemaRegistry& schemas)
 {
+    RegisterCelestialCapabilitySchemas(schemas);
+    RegisterPropertyProvenanceSchema(schemas);
+
     schemas.RegisterType({
         .id = kWorldType,
         .displayName = "World",
@@ -26,6 +31,21 @@ void RegisterSchemas(
                 .unit = "us",
                 .defaultValue = i64{0},
                 .advanced = true
+            }
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kCelestialReferenceNodeType,
+        .displayName = "Reference / Barycenter Node",
+        .category = "Celestial/Reference",
+        .properties = {
+            schema::PropertySchema{
+                .id = kReferenceNodePositionMeters,
+                .name = "Parent-frame Position",
+                .kind = schema::PropertyKind::Vector3,
+                .unit = "m",
+                .defaultValue = math::Double3{}
             }
         }
     });

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
+#include <orbit/celestial_globe/MacroGlobe.hpp>
+#include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
@@ -15,7 +18,9 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace orbit::studio_ui
@@ -27,10 +32,36 @@ struct StudioRenderedView
     bool targeted{false};
 };
 
+struct StudioMacroGlobeDiagnostics
+{
+    universe::BodyId body{};
+    u64 terrainRevision{0};
+    u64 geometryFingerprint{0};
+    u64 appearanceFingerprint{0};
+    u32 appearanceTexels{0};
+};
+
+struct StudioSurfaceGlobeTransitionDiagnostics
+{
+    universe::BodyId body{};
+    celestial_representation::Representation representation{
+        celestial_representation::Representation::ProductionSurface};
+    celestial_representation::Representation lowerFidelityNeighbor{
+        celestial_representation::Representation::MacroDisplacedGlobe};
+    f64 productionSurfaceWeight{1.0};
+    f64 macroGlobeWeight{0.0};
+    f64 projectedRadiusPixels{0.0};
+    f64 productionDetailErrorPixels{0.0};
+    f64 macroDisplacementErrorPixels{0.0};
+    bool hysteresisHeld{false};
+    bool overlapping{false};
+};
+
 enum class StudioViewportPresentation : u8
 {
     Blank,
     BodyPreview,
+    MacroGlobe,
     ProductionTerrain,
     TerrainDebug,
     TerrainDebugUnavailable
@@ -44,6 +75,7 @@ SelectStudioViewportPresentation(
     const studio_session::ViewportMode mode,
     const bool hasBody,
     const bool hasTerrainRuntime,
+    const bool hasMacroGlobe,
     const bool hasLiveDebugPage,
     const bool hasSelectedDebugField) noexcept
 {
@@ -59,6 +91,13 @@ SelectStudioViewportPresentation(
         hasTerrainRuntime)
     {
         return StudioViewportPresentation::ProductionTerrain;
+    }
+
+    if (mode == studio_session::ViewportMode::BodyMap &&
+        hasBody &&
+        hasMacroGlobe)
+    {
+        return StudioViewportPresentation::MacroGlobe;
     }
 
     return hasBody
@@ -77,6 +116,15 @@ public:
         const shader::Compiler& compiler,
         u32 framesInFlight = 1U);
 
+    [[nodiscard]] std::optional<StudioMacroGlobeDiagnostics>
+    MacroGlobeDiagnostics(
+        std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] std::optional<
+        StudioSurfaceGlobeTransitionDiagnostics>
+    SurfaceGlobeTransitionDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -88,6 +136,14 @@ public:
         u32 frameIndex = 0U);
 
 private:
+    [[nodiscard]] celestial_globe::GpuMacroGlobeProduct*
+    EnsureMacroGlobePresentation(
+        std::string_view viewportId,
+        studio_session::StudioSession& session,
+        universe::BodyId body,
+        const universe::BodyShape& shape,
+        const terrain::TerrainSource& terrainSource);
+
     struct DebugPresentation
     {
         std::unique_ptr<terrain_debug::TerrainDebugTexture> texture;
@@ -95,6 +151,19 @@ private:
         terrain_debug::TerrainDebugField field{
             terrain_debug::TerrainDebugField::Uplift};
         u64 seamFingerprint{0};
+    };
+
+    struct MacroGlobePresentation
+    {
+        universe::BodyId body{};
+        u64 sourceRevision{0};
+        u64 fingerprint{0};
+        u64 appearanceFingerprint{0};
+        u32 appearanceTexels{0};
+        std::unique_ptr<
+            celestial_appearance::GpuPlanetaryAppearanceProduct>
+            appearanceProduct;
+        std::unique_ptr<celestial_globe::GpuMacroGlobeProduct> product;
     };
 
     struct TerrainPresentation
@@ -117,14 +186,29 @@ private:
     const shader::Compiler* compiler_{nullptr};
     u32 framesInFlight_{1U};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
+    celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
+    celestial_representation::RepresentationTracker
+        representationTracker_;
 
     std::map<
         std::string,
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioSurfaceGlobeTransitionDiagnostics,
+        std::less<>>
+        transitionDiagnostics_;
+
+    std::map<
+        std::string,
+        MacroGlobePresentation,
+        std::less<>>
+        macroGlobePresentations_;
 
     std::map<
         std::string,

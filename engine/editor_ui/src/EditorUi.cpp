@@ -1225,6 +1225,210 @@ ImageInteraction PanelContext::Image(
     };
 }
 
+CanvasInteraction PanelContext::Canvas(
+    const std::string_view id,
+    const UiSize size)
+{
+    TraceWidget(id);
+
+    const std::string ownedId(id);
+    const ImVec2 origin =
+        ImGui::GetCursorScreenPos();
+
+    ImGui::InvisibleButton(
+        ownedId.c_str(),
+        ImVec2(
+            std::max(size.width, 1.0F),
+            std::max(size.height, 1.0F)));
+
+    const ImVec2 maximum{
+        origin.x + std::max(size.width, 1.0F),
+        origin.y + std::max(size.height, 1.0F)
+    };
+
+    ImGui::GetWindowDrawList()->AddRectFilled(
+        origin,
+        maximum,
+        ImGui::GetColorU32(
+            ImVec4(0.025F, 0.032F, 0.043F, 1.0F)),
+        4.0F);
+
+    ImGui::GetWindowDrawList()->AddRect(
+        origin,
+        maximum,
+        ImGui::GetColorU32(
+            ImVec4(0.15F, 0.20F, 0.25F, 1.0F)),
+        4.0F);
+
+    canvasOrigin_ = {
+        origin.x,
+        origin.y
+    };
+    canvasSize_ = size;
+    canvasActive_ = true;
+
+    const bool hovered =
+        ImGui::IsItemHovered();
+
+    f32 u = 0.0F;
+    f32 v = 0.0F;
+
+    if (hovered &&
+        size.width > 0.0F &&
+        size.height > 0.0F)
+    {
+        const ImVec2 mouse =
+            ImGui::GetMousePos();
+
+        u = std::clamp(
+            (mouse.x - origin.x) /
+                size.width,
+            0.0F,
+            1.0F);
+        v = std::clamp(
+            (mouse.y - origin.y) /
+                size.height,
+            0.0F,
+            1.0F);
+    }
+
+    return {
+        .hovered = hovered,
+        .clicked =
+            ImGui::IsItemClicked(
+                ImGuiMouseButton_Left),
+        .doubleClicked =
+            hovered &&
+            ImGui::IsMouseDoubleClicked(
+                ImGuiMouseButton_Left),
+        .rightClicked =
+            ImGui::IsItemClicked(
+                ImGuiMouseButton_Right),
+        .dragging =
+            hovered &&
+            ImGui::IsMouseDragging(
+                ImGuiMouseButton_Left,
+                1.0F),
+        .leftDown =
+            hovered &&
+            ImGui::IsMouseDown(
+                ImGuiMouseButton_Left),
+        .leftReleased =
+            ImGui::IsMouseReleased(
+                ImGuiMouseButton_Left),
+        .u = u,
+        .v = v
+    };
+}
+
+void PanelContext::CanvasLine(
+    const math::Float2 a,
+    const math::Float2 b,
+    const math::Float4 color,
+    const f32 thickness)
+{
+    if (!canvasActive_)
+    {
+        return;
+    }
+
+    const auto map =
+        [this](const math::Float2 p)
+        {
+            return ImVec2(
+                canvasOrigin_.x +
+                    p.x * canvasSize_.width,
+                canvasOrigin_.y +
+                    p.y * canvasSize_.height);
+        };
+
+    ImGui::GetWindowDrawList()->AddLine(
+        map(a),
+        map(b),
+        ImGui::ColorConvertFloat4ToU32(
+            ImVec4(
+                color.x,
+                color.y,
+                color.z,
+                color.w)),
+        thickness);
+}
+
+void PanelContext::CanvasCircle(
+    const math::Float2 center,
+    const f32 radiusPixels,
+    const math::Float4 color,
+    const bool filled,
+    const f32 thickness)
+{
+    if (!canvasActive_)
+    {
+        return;
+    }
+
+    const ImVec2 mapped{
+        canvasOrigin_.x +
+            center.x * canvasSize_.width,
+        canvasOrigin_.y +
+            center.y * canvasSize_.height
+    };
+
+    const ImU32 packed =
+        ImGui::ColorConvertFloat4ToU32(
+            ImVec4(
+                color.x,
+                color.y,
+                color.z,
+                color.w));
+
+    if (filled)
+    {
+        ImGui::GetWindowDrawList()->AddCircleFilled(
+            mapped,
+            radiusPixels,
+            packed,
+            24);
+    }
+    else
+    {
+        ImGui::GetWindowDrawList()->AddCircle(
+            mapped,
+            radiusPixels,
+            packed,
+            24,
+            thickness);
+    }
+}
+
+void PanelContext::CanvasText(
+    const math::Float2 position,
+    const math::Float4 color,
+    const std::string_view text)
+{
+    if (!canvasActive_)
+    {
+        return;
+    }
+
+    const ImVec2 mapped{
+        canvasOrigin_.x +
+            position.x * canvasSize_.width,
+        canvasOrigin_.y +
+            position.y * canvasSize_.height
+    };
+
+    ImGui::GetWindowDrawList()->AddText(
+        mapped,
+        ImGui::ColorConvertFloat4ToU32(
+            ImVec4(
+                color.x,
+                color.y,
+                color.z,
+                color.w)),
+        text.data(),
+        text.data() + text.size());
+}
+
 bool PanelContext::Checkbox(
     const std::string_view label,
     bool& value)

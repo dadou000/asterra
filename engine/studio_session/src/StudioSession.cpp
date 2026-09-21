@@ -179,6 +179,18 @@ StudioSession::TerrainPerformance() const noexcept
     return terrainPerformance_;
 }
 
+SimulationClock&
+StudioSession::Clock() noexcept
+{
+    return clock_;
+}
+
+const SimulationClock&
+StudioSession::Clock() const noexcept
+{
+    return clock_;
+}
+
 void StudioSession::QueueTerrainInvalidation(
     const terrain_dependency::TerrainInvalidationRequest& request)
 {
