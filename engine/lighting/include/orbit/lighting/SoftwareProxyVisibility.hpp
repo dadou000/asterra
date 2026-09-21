@@ -87,10 +87,12 @@ public:
     [[nodiscard]] const SoftwareProxySceneStats& Stats() const noexcept;
 
     [[nodiscard]] std::vector<rhi::AccelerationAabb>
-    AccelerationAabbs() const;
+    AccelerationAabbs(
+        math::Double3 gpuOriginInFrameMeters = {}) const;
 
     [[nodiscard]] std::vector<GpuVisibilityProxyPrimitive>
-    GpuPrimitives() const;
+    GpuPrimitives(
+        math::Double3 gpuOriginInFrameMeters = {}) const;
 
 private:
     struct ResolvedProxy
