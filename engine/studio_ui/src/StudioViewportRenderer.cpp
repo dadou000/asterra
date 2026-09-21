@@ -41,6 +41,37 @@ namespace orbit::studio_ui
 {
 namespace
 {
+[[nodiscard]] u64 CombineFingerprint(
+    const u64 seed,
+    const u64 value) noexcept
+{
+    return
+        seed ^
+        (value +
+         0x9e3779b97f4a7c15ULL +
+         (seed << 6U) +
+         (seed >> 2U));
+}
+
+[[nodiscard]] u64 QuantizedLightingFingerprintValue(
+    const f32 value,
+    const f32 quantum) noexcept
+{
+    if (!std::isfinite(value) ||
+        quantum <= 0.0F)
+    {
+        return 0U;
+    }
+
+    const i64 quantized =
+        static_cast<i64>(
+            std::llround(
+                static_cast<f64>(value) /
+                static_cast<f64>(quantum)));
+
+    return static_cast<u64>(quantized);
+}
+
 [[nodiscard]] math::Float3 AtmosphereSkyIrradianceSummary(
     const celestial_atmosphere::AtmosphereSkyView* sky) noexcept
 {
