@@ -62,6 +62,7 @@ float4 main(VSOut i) : SV_Target0
     const float ringRadius=max(g.compact.x,1e-4);
     const float ringIntensity=max(g.compact.y,0.0);
     const float opacity=saturate(g.compact.z);
+    const float fluxScale=saturate(g.screen.w);
 
     const float3 forward=
         normalize(g.cameraForward.xyz);
@@ -145,14 +146,16 @@ float4 main(VSOut i) : SV_Target0
             max(g.flowColor.w,0.0)*
             radialEmission*
             boost*
-            edge;
+            edge*
+            fluxScale;
 
         alpha=max(
             alpha,
             saturate(
                 (0.18+
                  0.82*radialEmission)*
-                edge));
+                edge*
+                fluxScale));
     }
 
     const float ringWidth=
@@ -170,19 +173,21 @@ float4 main(VSOut i) : SV_Target0
     color+=
         max(g.flowColor.xyz,float3(1,0.72,0.38))*
         ring*
-        ringIntensity;
+        ringIntensity*
+        fluxScale;
 
     alpha=max(
         alpha,
         saturate(
             ring*
-            ringIntensity));
+            ringIntensity*
+            fluxScale));
 
     if(r<=1.0)
     {
         // The capture shadow is optical, not a physical surface.
         color=float3(0,0,0);
-        alpha=opacity;
+        alpha=opacity*fluxScale;
     }
 
     if(alpha<=1e-4)
@@ -270,10 +275,58 @@ void CompactObjectRenderer::Draw(
         static_cast<f32>(
             std::max(height,1U));
 
+    const f64 actualOpticalRadiusPixels =
+        std::max(
+            draw.projectedOpticalRadiusPixels,
+            draw.projectedShadowRadiusPixels);
+
+    constexpr f64 kMinimumPointRasterRadiusPixels =
+        0.75;
+
+    const f64 pointWeight =
+        std::clamp(
+            static_cast<f64>(
+                draw.pointProxyWeight),
+            0.0,
+            1.0);
+
+    const f64 targetOpticalRadiusPixels =
+        std::max(
+            actualOpticalRadiusPixels,
+            kMinimumPointRasterRadiusPixels);
+
+    const f64 effectiveOpticalRadiusPixels =
+        std::lerp(
+            actualOpticalRadiusPixels,
+            targetOpticalRadiusPixels,
+            pointWeight);
+
+    const f64 rasterScale =
+        actualOpticalRadiusPixels > 1.0e-9
+            ? effectiveOpticalRadiusPixels /
+                  actualOpticalRadiusPixels
+            : 1.0;
+
+    const f64 effectiveShadowRadiusPixels =
+        draw.projectedShadowRadiusPixels *
+        rasterScale;
+
+    const f32 fluxScale =
+        static_cast<f32>(
+            std::clamp(
+                actualOpticalRadiusPixels *
+                    actualOpticalRadiusPixels /
+                std::max(
+                    effectiveOpticalRadiusPixels *
+                        effectiveOpticalRadiusPixels,
+                    1.0e-12),
+                0.0,
+                1.0));
+
     const f32 shadowRadiusNdc=
         static_cast<f32>(
             2.0*
-            draw.projectedShadowRadiusPixels/
+            effectiveShadowRadiusPixels/
             static_cast<f64>(
                 std::max(height,1U)));
 
@@ -365,7 +418,7 @@ void CompactObjectRenderer::Draw(
             bits(aspect),
             bits(draw.accretion.has_value()
                      ?1.0F:0.0F),
-            0U,
+            bits(fluxScale),
 
             bits(ringRatio),
             bits(static_cast<f32>(
