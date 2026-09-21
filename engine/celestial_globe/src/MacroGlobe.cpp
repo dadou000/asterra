@@ -6,6 +6,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <numbers>
@@ -747,34 +748,50 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         {
             .location = 0,
             .format = rhi::VertexFormat::Float3,
-            .offsetBytes = 0
+            .offsetBytes = static_cast<u32>(
+                offsetof(
+                    GpuMacroGlobeVertex,
+                    positionNormalized))
         },
         {
             .location = 1,
             .format = rhi::VertexFormat::Float3,
-            .offsetBytes = sizeof(math::Float3)
+            .offsetBytes = static_cast<u32>(
+                offsetof(
+                    GpuMacroGlobeVertex,
+                    normal))
         },
         {
             .location = 2,
             .format = rhi::VertexFormat::Float3,
-            .offsetBytes = sizeof(math::Float3) * 2U
+            .offsetBytes = static_cast<u32>(
+                offsetof(
+                    GpuMacroGlobeVertex,
+                    albedoLinear))
         },
         {
             .location = 3,
             .format = rhi::VertexFormat::Float3,
-            .offsetBytes = sizeof(math::Float3) * 3U
+            .offsetBytes = static_cast<u32>(
+                offsetof(
+                    GpuMacroGlobeVertex,
+                    appearanceNormal))
         },
         {
             .location = 4,
             .format = rhi::VertexFormat::Float4,
-            .offsetBytes = sizeof(math::Float3) * 4U
+            .offsetBytes = static_cast<u32>(
+                offsetof(
+                    GpuMacroGlobeVertex,
+                    materialChannels))
         },
         {
             .location = 5,
             .format = rhi::VertexFormat::Float3,
-            .offsetBytes =
-                sizeof(math::Float3) * 4U +
-                sizeof(math::Float4)
+            .offsetBytes = static_cast<u32>(
+                offsetof(
+                    GpuMacroGlobeVertex,
+                    emissionLinear))
         }
     }};
 
