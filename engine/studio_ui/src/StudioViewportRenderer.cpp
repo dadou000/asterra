@@ -873,6 +873,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       farBodyRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler),
+      surfaceDebugRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
       colorLut_(
