@@ -46,6 +46,7 @@ struct HumanEyeAdaptationConfig
 struct HumanEyeAdaptationState
 {
     bool initialized{false};
+    bool ceilingRecoveryActive{false};
 
     f32 photopicLog2{0.0F};
     f32 darkAdaptation{0.0F};
