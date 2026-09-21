@@ -27,6 +27,7 @@ add_library(OrbitLighting STATIC
     src/PlanetaryEmissionAppearance.cpp
     src/PlanetaryEmissionService.cpp
     src/ReflectionPolicy.cpp
+    src/HybridReflectionRenderer.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
