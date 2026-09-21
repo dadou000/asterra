@@ -42,6 +42,10 @@ struct EmissiveSampledEmitter
     f32 projectedPixels{0.0F};
     f32 samplingProbability{0.0F};
 
+    // Multiplicative Monte-Carlo correction used when M10 budgets require
+    // stochastic subsampling. Deterministically retained emitters use 1.
+    f32 estimatorWeight{1.0F};
+
     bool promotedSmallEmitter{false};
 };
 
@@ -62,4 +66,21 @@ BuildEmissiveSampleSet(
     u32 viewportWidth,
     u32 viewportHeight,
     const EmissiveSamplingConfig& config = {});
+
+
+struct EmissiveBudgetSelectionConfig
+{
+    u32 maximumSamples{256U};
+
+    // Stable frame/sequence salt. Equal input + sequence gives identical
+    // selections, which is useful for deterministic captures/tests.
+    u64 sequence{0U};
+
+    bool preservePromotedEmitters{true};
+};
+
+[[nodiscard]] std::vector<EmissiveSampledEmitter>
+SelectEmissiveSamplesForBudget(
+    const EmissiveSampleSet& source,
+    const EmissiveBudgetSelectionConfig& config = {});
 } // namespace orbit::lighting
