@@ -6,6 +6,7 @@ add_library(OrbitLighting STATIC
     src/DirectLighting.cpp
     src/Visibility.cpp
     src/AnalyticBodyVisibility.cpp
+    src/TerrainHeightfieldVisibility.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -23,6 +24,8 @@ target_link_libraries(OrbitLighting
         Orbit::RHI
         Orbit::Shader
         Orbit::Universe
+        Orbit::Terrain
+        Orbit::World
 )
 
 target_compile_features(OrbitLighting PUBLIC cxx_std_23)
@@ -51,6 +54,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingAnalyticBodyVisibilityTests
         tests/AnalyticBodyVisibilityTests.cpp
+    )
+
+    add_executable(OrbitLightingTerrainHeightfieldVisibilityTests
+        tests/TerrainHeightfieldVisibilityTests.cpp
     )
 
     target_link_libraries(OrbitLightingSurfaceDataTests
@@ -103,6 +110,15 @@ if(BUILD_TESTING)
     orbit_enable_warnings(
         OrbitLightingAnalyticBodyVisibilityTests)
 
+    target_link_libraries(OrbitLightingTerrainHeightfieldVisibilityTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingTerrainHeightfieldVisibilityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitLightingTerrainHeightfieldVisibilityTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -116,6 +132,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingAnalyticBodyVisibility
         COMMAND OrbitLightingAnalyticBodyVisibilityTests
+    )
+
+    add_test(
+        NAME Orbit.LightingTerrainHeightfieldVisibility
+        COMMAND OrbitLightingTerrainHeightfieldVisibilityTests
     )
 
     add_test(
