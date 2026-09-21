@@ -44,6 +44,7 @@ target_link_libraries(OrbitLighting
     PUBLIC
         Orbit::Core
         Orbit::CelestialAppearance
+        Orbit::CelestialRepresentation
         Orbit::Content
         Orbit::Frames
         Orbit::Math
