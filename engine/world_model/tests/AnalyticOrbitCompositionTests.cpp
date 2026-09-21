@@ -32,7 +32,7 @@ namespace
 {
 int FailCode(const int code)
 {
-    std::cerr << "analytic-orbit failure code " << code << '\\n';
+    std::cerr << "analytic-orbit failure code " << code << '\n';
     return code;
 }
 } // namespace
@@ -109,20 +109,28 @@ int main()
             return FailCode(1);
         }
 
-        const auto bodyFrame =
-            composition.FrameForObject(bodyObject);
+        const auto bodyId =
+            composition.BodyForObject(bodyObject);
         const auto systemFrame =
             composition.FrameForObject(systemObject);
 
-        if (!bodyFrame.has_value() ||
+        if (!bodyId.has_value() ||
             !systemFrame.has_value())
+        {
+            return FailCode(2);
+        }
+
+        const auto* body =
+            composition.Bodies().FindBody(*bodyId);
+
+        if (body == nullptr)
         {
             return FailCode(2);
         }
 
         const auto atEpoch =
             composition.Frames().ResolveTransform(
-                *bodyFrame,
+                body->centerFrame,
                 *systemFrame,
                 orbit::time::SimulationTime{});
 
@@ -146,7 +154,7 @@ int main()
 
         const auto atQuarter =
             composition.Frames().ResolveTransform(
-                *bodyFrame,
+                body->centerFrame,
                 *systemFrame,
                 quarter);
 
@@ -173,13 +181,28 @@ int main()
             return FailCode(5);
         }
 
-        const auto fixedBodyFrame =
-            composition.FrameForObject(bodyObject);
+        const auto fixedBodyId =
+            composition.BodyForObject(bodyObject);
         const auto fixedSystemFrame =
             composition.FrameForObject(systemObject);
+
+        if (!fixedBodyId.has_value() ||
+            !fixedSystemFrame.has_value())
+        {
+            return FailCode(6);
+        }
+
+        const auto* fixedBody =
+            composition.Bodies().FindBody(*fixedBodyId);
+
+        if (fixedBody == nullptr)
+        {
+            return FailCode(6);
+        }
+
         const auto fixed =
             composition.Frames().ResolveTransform(
-                *fixedBodyFrame,
+                fixedBody->centerFrame,
                 *fixedSystemFrame,
                 quarter);
 
