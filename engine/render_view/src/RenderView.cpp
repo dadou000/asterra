@@ -351,6 +351,17 @@ RenderView::SurfaceDebugMode() const noexcept
     return surfaceDebugMode_;
 }
 
+lighting::LightingView& RenderView::Lighting() noexcept
+{
+    return lightingView_;
+}
+
+const lighting::LightingView&
+RenderView::Lighting() const noexcept
+{
+    return lightingView_;
+}
+
 rhi::Texture& RenderView::Color() noexcept
 {
     return *color_;
