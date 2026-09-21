@@ -52,10 +52,10 @@ int main()
         .format =
             content::RuntimeTextureFormat::
                 Rgba8Unorm,
-        .pixels = {
-            pixels.begin(),
-            pixels.end()
-        }
+        .pixels =
+            std::vector<std::byte>(
+                pixels.begin(),
+                pixels.end())
     };
 
     const auto surface =
