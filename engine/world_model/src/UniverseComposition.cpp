@@ -194,6 +194,8 @@ UniverseCompositionStats UniverseComposition::Rebuild(
         candidateSystems;
     std::unordered_map<scene::ObjectId, universe::BodyId>
         candidateBodyIds;
+    std::unordered_map<scene::ObjectId, frames::FrameId>
+        candidateFrameIds;
     std::unordered_map<universe::BodyId, scene::ObjectId>
         candidateObjects;
 
@@ -220,6 +222,7 @@ UniverseCompositionStats UniverseComposition::Rebuild(
     }
 
     u32 bodyCount = 0;
+    u32 referenceNodeCount = 0;
 
     for (const auto& systemObject : systemObjects)
     {
@@ -243,6 +246,9 @@ UniverseCompositionStats UniverseComposition::Rebuild(
         candidateSystems.emplace(
             systemObject.id,
             systemId);
+        candidateFrameIds.emplace(
+            systemObject.id,
+            systemFrame);
 
         const i64 epochMicroseconds =
             PropertyOr<i64>(
@@ -257,75 +263,122 @@ UniverseCompositionStats UniverseComposition::Rebuild(
 
         std::function<void(
             const scene::ObjectRecord&,
-            frames::FrameId)> composeBody;
+            frames::FrameId)> composeNode;
 
-        composeBody =
-            [&](const scene::ObjectRecord& bodyObject,
+        composeNode =
+            [&](const scene::ObjectRecord& object,
                 const frames::FrameId parentFrame)
             {
-                if (bodyObject.type !=
-                    kCelestialBodyType)
+                frames::FrameId childParentFrame =
+                    parentFrame;
+
+                if (object.type ==
+                    kCelestialReferenceNodeType)
+                {
+                    const frames::FrameId referenceFrame =
+                        DerivedId<frames::FrameId>(
+                            object.id,
+                            0x5245464652414d45ULL,
+                            0x4f52424954563036ULL);
+
+                    const math::Double3 position =
+                        PropertyOr<math::Double3>(
+                            objects,
+                            object.id,
+                            kReferenceNodePositionMeters,
+                            {});
+
+                    static_cast<void>(
+                        candidateFrames->CreateFrame(
+                            referenceFrame,
+                            parentFrame,
+                            [position](
+                                const time::SimulationTime)
+                            {
+                                return math::RigidTransformD{
+                                    .translation = position
+                                };
+                            }));
+
+                    candidateFrameIds.emplace(
+                        object.id,
+                        referenceFrame);
+                    childParentFrame =
+                        referenceFrame;
+                    ++referenceNodeCount;
+                }
+                else if (object.type ==
+                         kCelestialBodyType)
+                {
+                    const universe::BodyId bodyId =
+                        DerivedId<universe::BodyId>(
+                            object.id,
+                            0x424f445949440003ULL,
+                            0x4f52424954563033ULL);
+                    const frames::FrameId bodyFrame =
+                        DerivedId<frames::FrameId>(
+                            object.id,
+                            0x424f44594652414dULL,
+                            0x4f52424954563033ULL);
+
+                    const f64 massKilograms =
+                        PropertyOr<f64>(
+                            objects,
+                            object.id,
+                            kBodyMass,
+                            5.0e24);
+
+                    static_cast<void>(
+                        candidateBodies->CreateBody({
+                            .system = systemId,
+                            .name = object.name,
+                            .parentFrame = parentFrame,
+                            .shape = BodyShapeFor(
+                                objects,
+                                object.id),
+                            .mass =
+                                universe::MassProperties{
+                                    .massKilograms =
+                                        massKilograms
+                                },
+                            .transformModel =
+                                TransformFor(
+                                    objects,
+                                    object.id,
+                                    epoch),
+                            .id = bodyId,
+                            .frame = bodyFrame
+                        }));
+
+                    candidateBodyIds.emplace(
+                        object.id,
+                        bodyId);
+                    candidateFrameIds.emplace(
+                        object.id,
+                        bodyFrame);
+                    candidateObjects.emplace(
+                        bodyId,
+                        object.id);
+                    childParentFrame =
+                        bodyFrame;
+                    ++bodyCount;
+                }
+                else
                 {
                     return;
                 }
 
-                const universe::BodyId bodyId =
-                    DerivedId<universe::BodyId>(
-                        bodyObject.id,
-                        0x424f445949440003ULL,
-                        0x4f52424954563033ULL);
-                const frames::FrameId bodyFrame =
-                    DerivedId<frames::FrameId>(
-                        bodyObject.id,
-                        0x424f44594652414dULL,
-                        0x4f52424954563033ULL);
-
-                const f64 massKilograms =
-                    PropertyOr<f64>(
-                        objects,
-                        bodyObject.id,
-                        kBodyMass,
-                        5.0e24);
-
-                static_cast<void>(
-                    candidateBodies->CreateBody({
-                        .system = systemId,
-                        .name = bodyObject.name,
-                        .parentFrame = parentFrame,
-                        .shape = BodyShapeFor(
-                            objects,
-                            bodyObject.id),
-                        .mass =
-                            universe::MassProperties{
-                                .massKilograms =
-                                    massKilograms
-                            },
-                        .transformModel =
-                            TransformFor(
-                                objects,
-                                bodyObject.id,
-                                epoch),
-                        .id = bodyId,
-                        .frame = bodyFrame
-                    }));
-
-                candidateBodyIds.emplace(
-                    bodyObject.id,
-                    bodyId);
-                candidateObjects.emplace(
-                    bodyId,
-                    bodyObject.id);
-                ++bodyCount;
-
                 for (const auto& child :
-                     objects.Children(bodyObject.id))
+                     objects.Children(object.id))
                 {
                     if (child.type ==
-                        kCelestialBodyType)
+                            kCelestialBodyType ||
+                        child.type ==
+                            kCelestialReferenceNodeType)
                     {
-                        composeBody(
+                        composeNode(
                             child,
-                            bodyFrame);
+                            childParentFrame);
                     }
                 }
             };
@@ -334,9 +387,11 @@ UniverseCompositionStats UniverseComposition::Rebuild(
              objects.Children(systemObject.id))
         {
             if (child.type ==
-                kCelestialBodyType)
+                    kCelestialBodyType ||
+                child.type ==
+                    kCelestialReferenceNodeType)
             {
-                composeBody(
+                composeNode(
                     child,
                     systemFrame);
             }
@@ -349,6 +404,8 @@ UniverseCompositionStats UniverseComposition::Rebuild(
         std::move(candidateSystems);
     bodyByObject_ =
         std::move(candidateBodyIds);
+    frameByObject_ =
+        std::move(candidateFrameIds);
     objectByBody_ =
         std::move(candidateObjects);
     sourceRevision_ = objects.Revision();
@@ -356,6 +413,7 @@ UniverseCompositionStats UniverseComposition::Rebuild(
     return {
         .systems =
             static_cast<u32>(systemByObject_.size()),
+        .referenceNodes = referenceNodeCount,
         .bodies = bodyCount,
         .sourceRevision = sourceRevision_
     };
@@ -409,6 +467,16 @@ UniverseComposition::BodyForObject(
 {
     const auto found = bodyByObject_.find(object);
     return found == bodyByObject_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<frames::FrameId>
+UniverseComposition::FrameForObject(
+    const scene::ObjectId object) const noexcept
+{
+    const auto found = frameByObject_.find(object);
+    return found == frameByObject_.end()
         ? std::nullopt
         : std::optional(found->second);
 }
