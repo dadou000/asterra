@@ -6,6 +6,7 @@
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world_model/VisibilityProxyBinding.hpp>
 
 #include <algorithm>
 #include <array>
@@ -662,6 +663,197 @@ void StudioViewportPanels::DrawView(
         catch (const std::exception& exception)
         {
             status_ = exception.what();
+        }
+    }
+
+    context.Separator();
+    context.Text("Visibility Proxies");
+
+    const auto createVisibilityProxy =
+        [this, renderView, target](
+            const bool box)
+        {
+            if (!session_->World().HasWorld() ||
+                !target->target.has_value())
+            {
+                throw std::runtime_error(
+                    "A targeted world/body viewport is required to add a visibility proxy.");
+            }
+
+            auto& world =
+                session_->World();
+
+            const auto bodyObject =
+                world.Universe().
+                    ObjectForBody(
+                        target->target->body);
+
+            if (!bodyObject.has_value())
+            {
+                throw std::runtime_error(
+                    "Target body has no semantic object for visibility-proxy parenting.");
+            }
+
+            auto& commands =
+                world.Commands();
+
+            commands.BeginTransaction(
+                box
+                    ? "Add Box Visibility Proxy"
+                    : "Add Sphere Visibility Proxy");
+
+            scene::ObjectId created{};
+
+            try
+            {
+                created =
+                    commands.CreateObject(
+                        world_model::
+                            kVisibilityProxyType,
+                        box
+                            ? "Box Visibility Proxy"
+                            : "Sphere Visibility Proxy",
+                        *bodyObject);
+
+                const auto& camera =
+                    renderView->Camera();
+
+                const math::Double3 position{
+                    camera.localPositionMeters.x +
+                        static_cast<f64>(
+                            camera.forward.x) *
+                            5.0,
+                    camera.localPositionMeters.y +
+                        static_cast<f64>(
+                            camera.forward.y) *
+                            5.0,
+                    camera.localPositionMeters.z +
+                        static_cast<f64>(
+                            camera.forward.z) *
+                            5.0
+                };
+
+                commands.SetProperty(
+                    created,
+                    world_model::
+                        kVisibilityProxyPositionMeters,
+                    position);
+
+                if (box)
+                {
+                    commands.SetProperty(
+                        created,
+                        world_model::
+                            kVisibilityProxyShape,
+                        i64{1});
+                    commands.SetProperty(
+                        created,
+                        world_model::
+                            kVisibilityProxyHalfExtentsMeters,
+                        math::Double3{
+                            1.0, 1.0, 1.0});
+                }
+                else
+                {
+                    commands.SetProperty(
+                        created,
+                        world_model::
+                            kVisibilityProxyShape,
+                        i64{0});
+                    commands.SetProperty(
+                        created,
+                        world_model::
+                            kVisibilityProxyRadiusMeters,
+                        1.0);
+                }
+
+                commands.CommitTransaction();
+            }
+            catch (...)
+            {
+                if (commands.HasActiveTransaction())
+                {
+                    commands.RollbackTransaction();
+                }
+                throw;
+            }
+
+            const std::array selected{
+                created
+            };
+
+            world.Selection().Set(
+                std::span(selected));
+        };
+
+    const std::string addSphereProxy =
+        "Add Sphere Proxy##visibility-add-sphere:" +
+        std::string(id);
+    const std::string addBoxProxy =
+        "Add Box Proxy##visibility-add-box:" +
+        std::string(id);
+
+    if (context.Button(addSphereProxy))
+    {
+        try
+        {
+            createVisibilityProxy(false);
+            status_ =
+                "Sphere visibility proxy created and selected.";
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+        }
+    }
+
+    context.SameLine();
+
+    if (context.Button(addBoxProxy))
+    {
+        try
+        {
+            createVisibilityProxy(true);
+            status_ =
+                "Box visibility proxy created and selected.";
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+        }
+    }
+
+    if (target->target.has_value())
+    {
+        const auto bodyObject =
+            session_->World().
+                Universe().
+                ObjectForBody(
+                    target->target->body);
+
+        if (bodyObject.has_value())
+        {
+            const auto proxies =
+                world_model::
+                    ResolveVisibilityProxies(
+                        session_->World().
+                            Objects(),
+                        *bodyObject);
+
+            const auto dynamicCount =
+                std::count_if(
+                    proxies.begin(),
+                    proxies.end(),
+                    [](const auto& proxy)
+                    {
+                        return proxy.dynamic;
+                    });
+
+            context.Text(
+                std::format(
+                    "Authored proxies: {} ({} dynamic)",
+                    proxies.size(),
+                    dynamicCount));
         }
     }
 
