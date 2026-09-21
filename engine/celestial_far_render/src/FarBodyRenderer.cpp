@@ -638,17 +638,25 @@ float4 main(VSOutput input) : SV_Target0
                 dot(n, l));
 
         const float roughness =
-            saturate(
-                g.albedoAndRoughness.w);
+            giant > 0.5
+                ? 0.90
+                : saturate(
+                      g.albedoAndRoughness.w);
         const float ocean =
-            saturate(
-                g.material.x);
+            giant > 0.5
+                ? 0.0
+                : saturate(
+                      g.material.x);
         const float ice =
-            saturate(
-                g.material.y);
+            giant > 0.5
+                ? 0.0
+                : saturate(
+                      g.material.y);
 
         const float cloudTransmission =
-            saturate(g.material.w);
+            giant > 0.5
+                ? 1.0
+                : saturate(g.material.w);
         const float3 v =
             normalize(float3(-q.x, q.y, z));
         const float glint =
@@ -831,12 +839,22 @@ float4 main(VSOutput input) : SV_Target0
 
     const float ndl =
         saturate(dot(n, l));
+    const float giant =
+        g.material.z > 1.5
+            ? 1.0
+            : 0.0;
     const float roughness =
-        saturate(g.albedoAndRoughness.w);
+        giant > 0.5
+            ? 0.90
+            : saturate(g.albedoAndRoughness.w);
     const float ocean =
-        saturate(g.material.x);
+        giant > 0.5
+            ? 0.0
+            : saturate(g.material.x);
     const float ice =
-        saturate(g.material.y);
+        giant > 0.5
+            ? 0.0
+            : saturate(g.material.y);
 
     const float diffuse =
         0.045 + 0.955 * ndl;
@@ -844,7 +862,9 @@ float4 main(VSOutput input) : SV_Target0
         pow(1.0 - saturate(abs(dot(n, -ray))), 4.0);
 
     const float cloudTransmission =
-        saturate(g.material.w);
+        giant > 0.5
+            ? 1.0
+            : saturate(g.material.w);
     const float3 viewDirection =
         normalize(-ray);
     const float glint =
@@ -859,10 +879,6 @@ float4 main(VSOutput input) : SV_Target0
             g.ocean.x,
             g.ocean.z);
 
-    const float giant =
-        g.material.z > 1.5
-            ? 1.0
-            : 0.0;
     const float3 surfaceColor =
         giant > 0.5
             ? GiantSurfaceColor(n)
