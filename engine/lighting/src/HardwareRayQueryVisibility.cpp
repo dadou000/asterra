@@ -483,6 +483,7 @@ HardwareRayQueryVisibilityBatch(
             .stage = shader::Stage::Compute,
             .shaderModelMajor = 6U,
             .shaderModelMinor = 5U,
+            .enableSpirvRayQuery = true,
             .debug = false
         });
 
