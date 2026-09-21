@@ -1,9 +1,11 @@
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
+#include <orbit/celestial_radiometry/Radiometry.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
+#include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
@@ -1960,6 +1962,8 @@ StudioViewportRenderer::Compose(
                 logicalTarget->target.has_value())
             {
                 bool radiativeEmitter = false;
+                f32 resolvedRadiometricIntensity = 1.0F;
+                f32 pointRadiometricIntensity = 1.0F;
 
                 const auto bodyObject =
                     session.World().
@@ -1970,33 +1974,62 @@ StudioViewportRenderer::Compose(
 
                 if (bodyObject.has_value())
                 {
-                    for (const auto& child :
-                         session.World().
-                             Objects().
-                             Children(
-                                 *bodyObject))
-                    {
-                        if (child.type ==
-                            world_model::
-                                kRadiativeEmitterCapabilityType)
-                        {
-                            const auto enabled =
+                    const auto radiative =
+                        world_model::
+                            ResolveRadiativeBody(
                                 session.World().
-                                    Objects().
-                                    GetProperty(
-                                        child.id,
-                                        world_model::
-                                            kCapabilityEnabled);
+                                    Objects(),
+                                *bodyObject);
 
-                            if (!enabled.has_value() ||
-                                !std::holds_alternative<bool>(
-                                    *enabled) ||
-                                std::get<bool>(*enabled))
-                            {
-                                radiativeEmitter = true;
-                                break;
-                            }
-                        }
+                    if (radiative.has_value())
+                    {
+                        radiativeEmitter = true;
+
+                        const auto exposure =
+                            celestial_radiometry::
+                                ResolveExposure({});
+
+                        const f64 distanceMeters =
+                            std::max(
+                                math::Length(
+                                    camera.
+                                        localPositionMeters),
+                                1.0);
+
+                        const f64 pointIrradiance =
+                            celestial_radiometry::
+                                IrradianceWattsPerSquareMeter(
+                                    radiative->
+                                        radiative.
+                                        luminosityWatts,
+                                    distanceMeters);
+
+                        const f64 resolvedPixelIrradiance =
+                            celestial_radiometry::
+                                ResolvedPixelIrradianceWattsPerSquareMeter(
+                                    radiative->
+                                        radiative.
+                                        surfaceRadianceWattsPerSquareMeterSteradian,
+                                    static_cast<f64>(
+                                        camera.
+                                            verticalFovRadians),
+                                    std::max(
+                                        height,
+                                        1U));
+
+                        pointRadiometricIntensity =
+                            static_cast<f32>(
+                                celestial_radiometry::
+                                    ExposeIrradiance(
+                                        pointIrradiance,
+                                        exposure));
+
+                        resolvedRadiometricIntensity =
+                            static_cast<f32>(
+                                celestial_radiometry::
+                                    ExposeIrradiance(
+                                        resolvedPixelIrradiance,
+                                        exposure));
                     }
                 }
 
@@ -2159,7 +2192,9 @@ StudioViewportRenderer::Compose(
                      lower,
                      lowerOpacity,
                      projectedRadius,
-                     radiativeEmitter](
+                     radiativeEmitter,
+                     resolvedRadiometricIntensity,
+                     pointRadiometricIntensity](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -2191,6 +2226,19 @@ StudioViewportRenderer::Compose(
                                             projectedRadius,
                                         .opacity =
                                             opacity,
+                                        .radiometricIntensity =
+                                            radiativeEmitter
+                                                ? (representation ==
+                                                           celestial_representation::
+                                                               Representation::
+                                                                   PointProxy ||
+                                                   representation ==
+                                                       celestial_representation::
+                                                           Representation::
+                                                               StellarPointProxy
+                                                       ? pointRadiometricIntensity
+                                                       : resolvedRadiometricIntensity)
+                                                : 1.0F,
                                         .stellar =
                                             radiativeEmitter
                                     };
