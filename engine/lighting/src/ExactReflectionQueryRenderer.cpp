@@ -306,7 +306,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
                 g.tuning.y,
                 g.tuning.z,
                 1.0,
-                asfloat(2u | 4u))));
+                asfloat(1u | 2u))));
 
     g_pixelMap.Store(
         queryIndex * 4u,
