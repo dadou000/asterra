@@ -1,4 +1,5 @@
 #include <orbit/celestial_representation/RepresentationResolver.hpp>
+#include <orbit/celestial_representation/RepresentationTracker.hpp>
 
 #include <cmath>
 
@@ -95,7 +96,7 @@ int main()
     ResolveInput hysteresis = input;
     hysteresis.features.radiativeEmitter = false;
     hysteresis.cameraDistanceToCenterMeters =
-        1.25e10;
+        1.304e10;
     hysteresis.previous =
         Representation::AnalyticDiscImpostor;
 
@@ -103,9 +104,8 @@ int main()
         Resolve(hysteresis);
 
     if (held.representation !=
-            Representation::AnalyticDiscImpostor &&
-        held.representation !=
-            Representation::PointProxy)
+            Representation::AnalyticDiscImpostor ||
+        !held.hysteresisHeld)
     {
         return 8;
     }
@@ -114,6 +114,56 @@ int main()
         held.blendToLower > 1.0)
     {
         return 9;
+    }
+
+    ResolveInput qualityCase = input;
+    qualityCase.features.radiativeEmitter = false;
+    qualityCase.cameraDistanceToCenterMeters =
+        1.6e10;
+    qualityCase.policy.qualityScale = 1.0;
+
+    const auto normalQuality =
+        Resolve(qualityCase);
+
+    qualityCase.policy.qualityScale = 2.0;
+
+    const auto highQuality =
+        Resolve(qualityCase);
+
+    if (normalQuality.representation !=
+            Representation::PointProxy ||
+        highQuality.representation ==
+            Representation::PointProxy)
+    {
+        return 10;
+    }
+
+    RepresentationTracker tracker;
+    const RepresentationSubjectId subject{
+        .high = 7,
+        .low = 9
+    };
+
+    ResolveInput tracked = hysteresis;
+    tracked.previous.reset();
+
+    const auto trackedFirst =
+        tracker.ResolveFor(
+            subject,
+            tracked);
+
+    if (!tracker.Previous(subject).has_value() ||
+        tracker.Previous(subject) !=
+            trackedFirst.representation)
+    {
+        return 11;
+    }
+
+    tracker.Reset(subject);
+
+    if (tracker.Previous(subject).has_value())
+    {
+        return 12;
     }
 
     return 0;
