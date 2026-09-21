@@ -7636,7 +7636,9 @@ int main(
             const auto lightingPlan =
                 lightingScheduler.BuildPlan(
                     {
-                        .radianceCacheUpdates = 64U
+                        .exactVisibilityQueries = 2'048U,
+                        .radianceCacheUpdates = 64U,
+                        .reflectionQueries = 2'048U
                     },
                     device.Capabilities().rayQuery);
 
