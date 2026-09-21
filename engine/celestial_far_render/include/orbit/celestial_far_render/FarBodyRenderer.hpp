@@ -84,6 +84,20 @@ struct FarBodyDraw
     f32 oceanGlintStrength{1.0F};
     bool oceanEnabled{false};
     bool stellar{false};
+
+    // M26 appearance-only stellar controls. They never alter M19 luminosity.
+    math::Float3 stellarColorLinear{1.0F, 1.0F, 1.0F};
+    f32 stellarLimbDarkening{0.58F};
+    f32 stellarGranulationStrength{0.10F};
+    f32 stellarGranulationScale{42.0F};
+    f32 stellarActivityLevel{0.12F};
+    u32 stellarActivitySeed{1U};
+    f32 stellarChromosphereStrength{0.08F};
+    f32 stellarChromosphereExtent{0.035F};
+    f32 stellarCoronaStrength{0.025F};
+    f32 stellarCoronaExtent{1.75F};
+    f32 stellarGlareStrength{0.35F};
+    f32 stellarGlareRadiusPixels{5.0F};
 };
 
 class FarBodyRenderer
