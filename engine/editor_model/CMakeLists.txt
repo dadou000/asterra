@@ -10,6 +10,7 @@ add_library(OrbitEditorModel STATIC
     src/InspectorModel.cpp
     src/OutputLog.cpp
     src/SurfaceAuthoringModel.cpp
+    src/SystemViewModel.cpp
 )
 
 add_library(Orbit::EditorModel ALIAS OrbitEditorModel)
@@ -117,5 +118,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.CelestialAuthoringModel
         COMMAND OrbitCelestialAuthoringModelTests
+    )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitSystemViewModelTests
+        tests/SystemViewModelTests.cpp
+    )
+
+    target_link_libraries(OrbitSystemViewModelTests
+        PRIVATE
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitSystemViewModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitSystemViewModelTests)
+
+    add_test(
+        NAME Orbit.SystemViewModel
+        COMMAND OrbitSystemViewModelTests
     )
 endif()
