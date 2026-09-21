@@ -21,6 +21,11 @@ struct RuntimeEmissiveSurfaceGeometry
     universe::BodyId body{};
     u64 stableId{0U};
 
+    // Optional live-source revision. Runtime displays/video sources increment
+    // this when texel content changes; authored material builds derive a
+    // revision from material/texture content hashes when this is zero.
+    u64 contentRevision{0U};
+
     math::Double3 originInFrameMeters{};
     math::Double3 axisUInFrameMeters{1.0, 0.0, 0.0};
     math::Double3 axisVInFrameMeters{0.0, 1.0, 0.0};
@@ -29,6 +34,7 @@ struct RuntimeEmissiveSurfaceGeometry
 struct RuntimeEmissiveSurface
 {
     RuntimeEmissiveSurfaceGeometry geometry{};
+    u64 contentRevision{0U};
     u32 width{0U};
     u32 height{0U};
     std::vector<math::Float3> giRadiance;
