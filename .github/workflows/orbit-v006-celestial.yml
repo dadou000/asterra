@@ -9,6 +9,8 @@ on:
       - 'engine/celestial_*/**'
       - 'engine/world_model/**/Celestial*'
       - 'engine/world_model/**/PropertyProvenance*'
+      - 'engine/world_model/tests/AnalyticOrbitCompositionTests.cpp'
+      - 'engine/world_model/tests/RotationCompositionTests.cpp'
       - 'engine/studio_session/**/StudioCelestial*'
       - 'engine/studio_ui/**/Celestial*'
       - 'docs/V0.0.6_*'
@@ -100,4 +102,4 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Headless celestial contracts passed."
-          Write-Host "Real-device rendering remains covered by the manual 'Orbit Studio Real Device Smoke' workflow on the orbit-vulkan runner."
+          Write-Host "Real-device rendering is gated separately by 'Orbit Studio Real Device Smoke' on the orbit-vulkan runner; workflow_dispatch remains available for explicit reruns."
