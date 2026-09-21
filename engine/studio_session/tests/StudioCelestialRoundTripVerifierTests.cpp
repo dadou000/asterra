@@ -163,6 +163,7 @@ int main()
         return 4;
     }
 
+    workspace.CloseProject();
     std::filesystem::remove_all(root);
     return 0;
 }
