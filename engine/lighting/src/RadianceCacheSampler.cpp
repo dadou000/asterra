@@ -39,21 +39,21 @@ RWTexture2D<float4> g_indirect : register(u2);
 Texture2D g_baseRoughness : register(t3);
 [[vk::binding(3, 0)]]
 [[vk::combinedImageSampler]]
-SamplerState g_baseSampler : register(s1);
+SamplerState g_baseSampler : register(s3);
 
 [[vk::binding(4, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic : register(t4);
 [[vk::binding(4, 0)]]
 [[vk::combinedImageSampler]]
-SamplerState g_normalSampler : register(s2);
+SamplerState g_normalSampler : register(s4);
 
 [[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth : register(t5);
 [[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
-SamplerState g_depthSampler : register(s3);
+SamplerState g_depthSampler : register(s5);
 
 struct Constants
 {
