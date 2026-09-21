@@ -1,5 +1,6 @@
 #include <orbit/lighting/Visibility.hpp>
 
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
