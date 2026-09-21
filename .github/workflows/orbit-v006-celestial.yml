@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: orbit-v006-celestial-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   celestial-contracts:
