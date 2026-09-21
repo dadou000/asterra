@@ -18,6 +18,7 @@
 #include <orbit/lighting/DirectLighting.hpp>
 #include <orbit/lighting/EmissiveInvalidation.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
+#include <orbit/lighting/HybridReflectionRenderer.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/MaterialEmissionSurfaceOverride.hpp>
 #include <orbit/lighting/RadianceCacheSampler.hpp>
@@ -605,6 +606,7 @@ private:
         materialEmissionSurfaceOverride_;
     lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;
     lighting::RadianceCacheSampler radianceCacheSampler_;
+    lighting::HybridReflectionRenderer hybridReflectionRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
