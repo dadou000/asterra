@@ -7734,6 +7734,187 @@ StudioViewportRenderer::Compose(
                     }
                 });
 
+            if (radianceLevelCount > 0U)
+            {
+                graph.AddPass(
+                    prefix + ".HybridReflections",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                targets.
+                                    surfaceBaseRoughness,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                targets.
+                                    surfaceNormalMetallic,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture = targets.depth,
+                            .state =
+                                rhi::ResourceState::
+                                    DepthRead,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                gatherScratchHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    UnorderedAccess,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    {
+                        {
+                            .buffer =
+                                radianceCellsHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .buffer =
+                                radianceLevelsHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        }
+                    },
+                    [this,
+                     color,
+                     lightingBaseRoughness,
+                     lightingNormalMetallic,
+                     lightingDepth,
+                     gatherScratch,
+                     radianceCellsHandle,
+                     radianceLevelsHandle,
+                     radianceLevelCount,
+                     width,
+                     height,
+                     lightingView,
+                     lightingPlan,
+                     lightingTimestamps,
+                     frameIndex](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&
+                            resources)
+                    {
+                        if (lightingTimestamps != nullptr)
+                        {
+                            lightingTimestamps->
+                                BeginSection(
+                                    commands,
+                                    frameIndex,
+                                    lighting::
+                                        LightingGpuSection::
+                                            Reflections);
+                        }
+
+                        hybridReflectionRenderer_.
+                            Resolve(
+                                commands,
+                                *color,
+                                *lightingBaseRoughness,
+                                *lightingNormalMetallic,
+                                *lightingDepth,
+                                resources.Buffer(
+                                    radianceCellsHandle),
+                                resources.Buffer(
+                                    radianceLevelsHandle),
+                                radianceLevelCount,
+                                *gatherScratch,
+                                width,
+                                height,
+                                lightingView,
+                                lightingPlan.
+                                    reflectionScale);
+                    });
+
+                graph.AddPass(
+                    prefix + ".HybridReflectionsCopyBack",
+                    {
+                        {
+                            .texture =
+                                gatherScratchHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     gatherScratch,
+                     color,
+                     width,
+                     height,
+                     lightingTimestamps,
+                     frameIndex](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        debugComposite_.Draw(
+                            commands,
+                            *gatherScratch,
+                            *color,
+                            width,
+                            height);
+
+                        if (lightingTimestamps != nullptr)
+                        {
+                            lightingTimestamps->
+                                EndSection(
+                                    commands,
+                                    frameIndex,
+                                    lighting::
+                                        LightingGpuSection::
+                                            Reflections);
+                        }
+                    });
+            }
+
             graph.AddPass(
                 prefix + ".FinalGatherRestoreHistory",
                 {
