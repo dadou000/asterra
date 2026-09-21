@@ -10,6 +10,7 @@ target_include_directories(OrbitRHI
 target_link_libraries(OrbitRHI
     INTERFACE
         Orbit::Core
+        Orbit::Math
 )
 
 target_compile_features(OrbitRHI INTERFACE cxx_std_23)
