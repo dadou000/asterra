@@ -195,5 +195,77 @@ int main()
         return 4;
     }
 
+    MockProvider fartherHighPriority(
+        {
+            .providerId = 10U,
+            .name = "far-high-priority",
+            .kind =
+                VisibilityBackendKind::Analytic,
+            .capabilities =
+                VisibilityCapability::Offscreen,
+            .nominalErrorMeters = 0.0F,
+            .priority = 1000
+        },
+        {
+            .resolution =
+                VisibilityResolution::Hit,
+            .hit = {
+                .distanceMeters = 80.0F
+            },
+            .confidence = 1.0F,
+            .terminal = true
+        });
+
+    MockProvider nearerLowPriority(
+        {
+            .providerId = 11U,
+            .name = "near-low-priority",
+            .kind =
+                VisibilityBackendKind::SoftwareProxy,
+            .capabilities =
+                VisibilityCapability::Offscreen,
+            .nominalErrorMeters = 0.0F,
+            .priority = 1
+        },
+        {
+            .resolution =
+                VisibilityResolution::Hit,
+            .hit = {
+                .distanceMeters = 4.0F
+            },
+            .confidence = 1.0F,
+            .terminal = true
+        });
+
+    VisibilityRegistry nearestRegistry;
+    nearestRegistry.Register(
+        fartherHighPriority);
+    nearestRegistry.Register(
+        nearerLowPriority);
+
+    VisibilityQuery nearestQuery = query;
+    nearestQuery.requirements = {
+        .requireOffscreenCoverage = true
+    };
+    nearestQuery.requirements.
+        maximumNominalErrorMeters =
+            std::numeric_limits<f32>::
+                infinity();
+
+    const auto nearest =
+        nearestRegistry.TraceNearest(
+            nearestQuery);
+
+    if (nearest.resolution !=
+            VisibilityResolution::Hit ||
+        nearest.providerId != 11U ||
+        nearest.hit.distanceMeters !=
+            4.0F ||
+        fartherHighPriority.traceCount != 1 ||
+        nearerLowPriority.traceCount != 1)
+    {
+        return 5;
+    }
+
     return 0;
 }
