@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/celestial_orbits/OrbitState.hpp>
+#include <orbit/celestial_rotation/OrientationState.hpp>
 #include <orbit/core/StrongId.hpp>
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/math/RigidTransform.hpp>
@@ -84,11 +85,23 @@ struct OrbitDrivenUniformRotationTransform
     time::SimulationTime epoch{};
 };
 
+// M06 permanent composition path: orbital translation and body-fixed
+// orientation are independent providers and are composed only when the
+// FrameGraph asks for parentFromBody.
+struct ProviderDrivenBodyTransform
+{
+    std::shared_ptr<const celestial_orbits::OrbitStateProvider>
+        orbitState;
+    std::shared_ptr<const celestial_rotation::OrientationProvider>
+        orientation;
+};
+
 using BodyTransformModel =
     std::variant<
         FixedBodyTransform,
         UniformRotationTransform,
-        OrbitDrivenUniformRotationTransform>;
+        OrbitDrivenUniformRotationTransform,
+        ProviderDrivenBodyTransform>;
 
 struct CelestialSystem
 {
