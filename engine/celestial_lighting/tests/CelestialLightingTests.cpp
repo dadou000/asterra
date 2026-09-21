@@ -117,6 +117,29 @@ int main()
         return 5;
     }
 
+    const auto duplicateUnion =
+        CombinedOccultation(
+            source,
+            {
+                ApparentDisc{
+                    .centerFromObserverMeters = {
+                        0.0, 0.0, 500.0},
+                    .radiusMeters = 20.0},
+                ApparentDisc{
+                    .centerFromObserverMeters = {
+                        0.0, 0.0, 500.0},
+                    .radiusMeters = 20.0}
+            });
+
+    if (duplicateUnion.contributingOccluders != 2U ||
+        std::abs(
+            duplicateUnion.visibleFraction -
+            annular.visibleFraction) >
+            0.02)
+    {
+        return 6;
+    }
+
     const auto direct =
         AttenuatedDirectIrradiance(
             3.828e26,
@@ -132,7 +155,7 @@ int main()
             direct.unoccludedWattsPerSquareMeter *
                 0.25))
     {
-        return 6;
+        return 7;
     }
 
     if (!Near(
@@ -144,7 +167,7 @@ int main()
             0.0,
             1.0e-8))
     {
-        return 7;
+        return 8;
     }
 
     const auto quarter =
@@ -160,7 +183,7 @@ int main()
         !(quarter.unitGeometricAlbedoIrradianceWattsPerSquareMeter >
             0.0))
     {
-        return 8;
+        return 9;
     }
 
     return 0;
