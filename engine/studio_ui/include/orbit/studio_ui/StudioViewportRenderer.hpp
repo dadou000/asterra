@@ -6,6 +6,7 @@
 #include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/celestial_giants/GiantAppearance.hpp>
+#include <orbit/celestial_small_bodies/SmallBodyAppearance.hpp>
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/celestial_rings/RingSystem.hpp>
@@ -79,6 +80,20 @@ struct StudioGiantDiagnostics
     f64 bandFrequency{0.0};
     f64 bandStrength{0.0};
     f64 stormStrength{0.0};
+    f64 projectedRadiusPixels{0.0};
+    celestial_representation::Representation representation{
+        celestial_representation::Representation::SmoothGlobe};
+};
+
+struct StudioSmallBodyDiagnostics
+{
+    universe::BodyId body{};
+    u64 appearanceFingerprint{0};
+    f64 minimumRadiusScale{1.0};
+    f64 maximumRadiusScale{1.0};
+    f64 irregularity{0.0};
+    f64 craterDensity{0.0};
+    f64 oppositionStrength{0.0};
     f64 projectedRadiusPixels{0.0};
     celestial_representation::Representation representation{
         celestial_representation::Representation::SmoothGlobe};
@@ -280,6 +295,11 @@ public:
     GiantDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioSmallBodyDiagnostics>
+    SmallBodyDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -336,6 +356,21 @@ private:
         u64 fingerprint{0};
         celestial_far_render::AppearanceSummary
             summary{};
+        std::unique_ptr<
+            celestial_appearance::PlanetaryAppearanceProduct>
+            appearance;
+        std::unique_ptr<
+            celestial_appearance::GpuPlanetaryAppearanceProduct>
+            gpuAppearance;
+    };
+
+    struct SmallBodyPresentation
+    {
+        universe::BodyId body{};
+        u64 fingerprint{0};
+        f64 minimumRadiusScale{1.0};
+        f64 maximumRadiusScale{1.0};
+        celestial_far_render::AppearanceSummary summary{};
         std::unique_ptr<
             celestial_appearance::PlanetaryAppearanceProduct>
             appearance;
@@ -466,6 +501,18 @@ private:
         GiantPresentation,
         std::less<>>
         giantPresentations_;
+
+    std::map<
+        std::string,
+        StudioSmallBodyDiagnostics,
+        std::less<>>
+        smallBodyDiagnostics_;
+
+    std::map<
+        std::string,
+        SmallBodyPresentation,
+        std::less<>>
+        smallBodyPresentations_;
 
     std::map<
         std::string,
