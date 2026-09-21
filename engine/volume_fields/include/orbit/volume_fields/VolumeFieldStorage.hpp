@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace orbit::volume_fields
@@ -114,7 +115,7 @@ public:
     Recenter(
         math::Double3 centerMeters);
 
-    void MarkAllResidentTilesValid() noexcept;
+    void MarkAllResidentTilesValid();
 
     [[nodiscard]] const VolumeFieldDiagnostics&
     Diagnostics() const noexcept;
