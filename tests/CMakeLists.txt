@@ -1215,3 +1215,17 @@ add_test(
     NAME Orbit.V006CelestialValidation
     COMMAND OrbitV006CelestialValidationTests
 )
+
+
+# V0.0.6 M35 headless final integration gate. Pixel/device acceptance remains
+# the responsibility of the self-hosted Orbit Studio Real Device Smoke workflow.
+add_custom_target(OrbitV006FinalIntegrationGate
+    COMMAND $<TARGET_FILE:OrbitV006CelestialValidationTests>
+    COMMAND $<TARGET_FILE:OrbitStudioCelestialRoundTripVerifierTests>
+    COMMAND $<TARGET_FILE:OrbitStudioCelestialValidationScenarioTests>
+    DEPENDS
+        OrbitV006CelestialValidationTests
+        OrbitStudioCelestialRoundTripVerifierTests
+        OrbitStudioCelestialValidationScenarioTests
+    USES_TERMINAL
+)
