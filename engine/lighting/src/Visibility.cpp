@@ -396,6 +396,7 @@ VisibilityResult VisibilityRegistry::TraceNearest(
     VisibilityResult closest{};
     bool hasClosest = false;
     bool sawUnresolved = false;
+    bool attempted = false;
     bool allTerminalMiss = true;
     VisibilityResult last{};
 
@@ -407,6 +408,8 @@ VisibilityResult VisibilityRegistry::TraceNearest(
         {
             continue;
         }
+
+        attempted = true;
 
         auto result = provider->Trace(query);
         const auto& desc = provider->Description();
@@ -462,12 +465,13 @@ VisibilityResult VisibilityRegistry::TraceNearest(
 
     if (hasClosest)
     {
-        closest.terminal = true;
+        closest.terminal =
+            !sawUnresolved;
         return closest;
     }
 
-    if (allTerminalMiss &&
-        !providers_.empty())
+    if (attempted &&
+        allTerminalMiss)
     {
         last.resolution =
             VisibilityResolution::Miss;
