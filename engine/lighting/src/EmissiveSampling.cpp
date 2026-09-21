@@ -275,4 +275,255 @@ EmissiveSampleSet BuildEmissiveSampleSet(
 
     return result;
 }
+
+std::vector<EmissiveSampledEmitter>
+SelectEmissiveSamplesForBudget(
+    const EmissiveSampleSet& source,
+    const EmissiveBudgetSelectionConfig& config)
+{
+    std::vector<EmissiveSampledEmitter> result;
+
+    if (config.maximumSamples == 0U ||
+        source.emitters.empty())
+    {
+        return result;
+    }
+
+    if (source.emitters.size() <=
+        config.maximumSamples)
+    {
+        result = source.emitters;
+
+        for (auto& emitter : result)
+        {
+            emitter.estimatorWeight = 1.0F;
+        }
+
+        return result;
+    }
+
+    result.reserve(
+        config.maximumSamples);
+
+    std::vector<std::size_t> remaining;
+    remaining.reserve(
+        source.emitters.size());
+
+    if (config.preservePromotedEmitters)
+    {
+        std::vector<std::size_t> promoted;
+
+        for (std::size_t index = 0U;
+             index < source.emitters.size();
+             ++index)
+        {
+            if (source.emitters[index].
+                    promotedSmallEmitter)
+            {
+                promoted.push_back(index);
+            }
+            else
+            {
+                remaining.push_back(index);
+            }
+        }
+
+        std::stable_sort(
+            promoted.begin(),
+            promoted.end(),
+            [&source](
+                const std::size_t a,
+                const std::size_t b)
+            {
+                const auto& ea =
+                    source.emitters[a];
+                const auto& eb =
+                    source.emitters[b];
+
+                if (ea.radiantImportance !=
+                    eb.radiantImportance)
+                {
+                    return
+                        ea.radiantImportance >
+                        eb.radiantImportance;
+                }
+
+                if (ea.sourceStableId !=
+                    eb.sourceStableId)
+                {
+                    return
+                        ea.sourceStableId <
+                        eb.sourceStableId;
+                }
+
+                return
+                    ea.nodeIndex <
+                    eb.nodeIndex;
+            });
+
+        const std::size_t retainCount =
+            std::min<std::size_t>(
+                promoted.size(),
+                config.maximumSamples);
+
+        for (std::size_t i = 0U;
+             i < retainCount;
+             ++i)
+        {
+            auto emitter =
+                source.emitters[
+                    promoted[i]];
+            emitter.estimatorWeight =
+                1.0F;
+            result.push_back(
+                emitter);
+        }
+
+        // If promoted emitters alone saturate the budget there is no safe
+        // stochastic room left. Keeping the strongest ones deterministic is
+        // preferable to flickering tiny high-energy sources.
+        if (result.size() >=
+            config.maximumSamples)
+        {
+            return result;
+        }
+
+        for (std::size_t i = retainCount;
+             i < promoted.size();
+             ++i)
+        {
+            remaining.push_back(
+                promoted[i]);
+        }
+    }
+    else
+    {
+        remaining.resize(
+            source.emitters.size());
+
+        for (std::size_t index = 0U;
+             index < remaining.size();
+             ++index)
+        {
+            remaining[index] =
+                index;
+        }
+    }
+
+    const u32 stochasticDraws =
+        config.maximumSamples -
+        static_cast<u32>(
+            result.size());
+
+    if (stochasticDraws == 0U ||
+        remaining.empty())
+    {
+        return result;
+    }
+
+    f64 totalImportance = 0.0;
+
+    for (const auto index : remaining)
+    {
+        totalImportance +=
+            std::max(
+                source.emitters[index].
+                    radiantImportance,
+                0.0);
+    }
+
+    if (!(totalImportance > 0.0) ||
+        !std::isfinite(totalImportance))
+    {
+        return result;
+    }
+
+    const auto random01 =
+        [](u64 value) noexcept
+        {
+            // SplitMix64 finalizer. Use the high 53 bits to produce a stable
+            // double in [0,1).
+            value +=
+                0x9e3779b97f4a7c15ULL;
+            value =
+                (value ^
+                 (value >> 30U)) *
+                0xbf58476d1ce4e5b9ULL;
+            value =
+                (value ^
+                 (value >> 27U)) *
+                0x94d049bb133111ebULL;
+            value ^=
+                value >> 31U;
+
+            return
+                static_cast<f64>(
+                    value >> 11U) *
+                (1.0 /
+                 9007199254740992.0);
+        };
+
+    for (u32 draw = 0U;
+         draw < stochasticDraws;
+         ++draw)
+    {
+        const f64 target =
+            random01(
+                config.sequence ^
+                (static_cast<u64>(draw) *
+                 0xd1342543de82ef95ULL)) *
+            totalImportance;
+
+        f64 cumulative = 0.0;
+        std::size_t chosen =
+            remaining.back();
+
+        for (const auto index : remaining)
+        {
+            cumulative +=
+                std::max(
+                    source.emitters[index].
+                        radiantImportance,
+                    0.0);
+
+            if (target < cumulative)
+            {
+                chosen = index;
+                break;
+            }
+        }
+
+        auto emitter =
+            source.emitters[chosen];
+
+        const f64 probability =
+            std::max(
+                emitter.radiantImportance,
+                0.0) /
+            totalImportance;
+
+        if (!(probability > 0.0) ||
+            !std::isfinite(probability))
+        {
+            continue;
+        }
+
+        emitter.samplingProbability =
+            static_cast<f32>(
+                probability);
+
+        emitter.estimatorWeight =
+            static_cast<f32>(
+                1.0 /
+                (static_cast<f64>(
+                     stochasticDraws) *
+                 probability));
+
+        result.push_back(
+            emitter);
+    }
+
+    return result;
+}
+
 } // namespace orbit::lighting
