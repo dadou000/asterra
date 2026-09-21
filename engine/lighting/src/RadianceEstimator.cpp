@@ -426,11 +426,11 @@ EstimateRadianceCell(
                 }
             };
 
-            const auto result =
+            const auto visibilityResult =
                 visibility->TraceNearest(query);
 
             visible =
-                result.resolution !=
+                visibilityResult.resolution !=
                     VisibilityResolution::Hit;
         }
 
