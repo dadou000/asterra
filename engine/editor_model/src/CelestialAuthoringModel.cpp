@@ -3,6 +3,7 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <stdexcept>
