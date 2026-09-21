@@ -7,6 +7,7 @@
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
+#include <orbit/celestial_rings/RingSystem.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
@@ -64,6 +65,19 @@ struct StudioAtmosphereDiagnostics
     u32 multiScatteringHeight{0};
     u32 skyViewWidth{0};
     u32 skyViewHeight{0};
+};
+
+struct StudioRingDiagnostics
+{
+    universe::BodyId body{};
+    u64 fingerprint{0};
+    u32 bandCount{0};
+    f64 innerRadiusMeters{0.0};
+    f64 outerRadiusMeters{0.0};
+    f64 projectedOuterRadiusPixels{0.0};
+    bool nearRepresentation{false};
+    u32 angularSegments{0};
+    u32 farProfileSamples{0};
 };
 
 struct StudioOceanDiagnostics
@@ -201,6 +215,11 @@ public:
     OceanDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioRingDiagnostics>
+    RingDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -248,6 +267,21 @@ private:
         std::unique_ptr<
             celestial_clouds::GpuCloudFieldProduct>
             gpu;
+    };
+
+    struct RingPresentation
+    {
+        universe::BodyId body{};
+        u64 fingerprint{0};
+        f64 referenceRadiusMeters{1.0};
+        std::unique_ptr<
+            celestial_rings::GpuRingMeshProduct>
+            nearMesh;
+        std::unique_ptr<
+            celestial_rings::GpuRingMeshProduct>
+            farMesh;
+        celestial_rings::FarRingProfile
+            farProfile{};
     };
 
     struct AtmospherePresentation
@@ -312,6 +346,7 @@ private:
     editor_ui::BodyPreviewRenderer bodyRenderer_;
     celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
     celestial_far_render::FarBodyRenderer farBodyRenderer_;
+    celestial_rings::RingRenderer ringRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
@@ -329,6 +364,18 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioRingDiagnostics,
+        std::less<>>
+        ringDiagnostics_;
+
+    std::map<
+        std::string,
+        RingPresentation,
+        std::less<>>
+        ringPresentations_;
 
     std::map<
         std::string,
