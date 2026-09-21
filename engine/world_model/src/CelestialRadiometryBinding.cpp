@@ -200,6 +200,113 @@ ResolveRadiativeBody(
                 deriveLuminosity
         });
 
+    celestial_stellar::StellarAppearanceParameters
+        stellarAppearance{
+            .effectiveTemperatureKelvin =
+                temperatureKelvin,
+            .limbDarkening =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereLimbDarkening,
+                          0.58)
+                    : 0.58,
+            .granulationStrength =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereGranulationStrength,
+                          0.10)
+                    : 0.10,
+            .granulationScale =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereGranulationScale,
+                          42.0)
+                    : 42.0,
+            .activityLevel =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereActivityLevel,
+                          0.12)
+                    : 0.12,
+            .activitySeed =
+                static_cast<u64>(
+                    std::max<i64>(
+                        photosphere.has_value()
+                            ? PropertyOr<i64>(
+                                  objects,
+                                  photosphere->id,
+                                  kPhotosphereActivitySeed,
+                                  i64{1})
+                            : i64{1},
+                        0)),
+            .chromosphereStrength =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereChromosphereStrength,
+                          0.08)
+                    : 0.08,
+            .chromosphereExtent =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereChromosphereExtent,
+                          0.035)
+                    : 0.035,
+            .coronaStrength =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereCoronaStrength,
+                          0.025)
+                    : 0.025,
+            .coronaExtent =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereCoronaExtent,
+                          1.75)
+                    : 1.75,
+            .glareStrength =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereGlareStrength,
+                          0.35)
+                    : 0.35,
+            .glareRadiusPixels =
+                photosphere.has_value()
+                    ? PropertyOr<f64>(
+                          objects,
+                          photosphere->id,
+                          kPhotosphereGlareRadiusPixels,
+                          5.0)
+                    : 5.0
+        };
+
+    const auto stellarColor =
+        celestial_stellar::
+            BlackbodyColorLinear(
+                temperatureKelvin);
+
+    const u64 stellarFingerprint =
+        celestial_stellar::
+            StellarAppearanceFingerprint(
+                stellarAppearance);
+
     return ResolvedRadiativeBody{
         .body = body,
         .emitterCapability =
@@ -211,7 +318,13 @@ ResolveRadiativeBody(
                 : std::nullopt,
         .photosphereRadiusMeters =
             radiusMeters,
-        .radiative = state
+        .radiative = state,
+        .stellarAppearance =
+            stellarAppearance,
+        .stellarColorLinear =
+            stellarColor,
+        .stellarAppearanceFingerprint =
+            stellarFingerprint
     };
 }
 } // namespace orbit::world_model
