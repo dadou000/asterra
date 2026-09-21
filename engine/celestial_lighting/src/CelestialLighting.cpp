@@ -331,17 +331,26 @@ MultiOccluderResult CombinedOccultation(
          sampleIndex < kSamples;
          ++sampleIndex)
     {
-        const f64 radialFraction =
-            std::sqrt(
-                (static_cast<f64>(
-                     sampleIndex) +
-                 0.5) /
-                static_cast<f64>(
-                    kSamples));
+        const f64 areaFraction =
+            (static_cast<f64>(
+                 sampleIndex) +
+             0.5) /
+            static_cast<f64>(
+                kSamples);
+
+        const f64 cosOffset =
+            1.0 -
+            areaFraction *
+                (1.0 -
+                 std::cos(
+                     sourceAngular));
 
         const f64 offsetAngle =
-            sourceAngular *
-            radialFraction;
+            std::acos(
+                std::clamp(
+                    cosOffset,
+                    -1.0,
+                    1.0));
         const f64 azimuth =
             kGoldenAngle *
             static_cast<f64>(
