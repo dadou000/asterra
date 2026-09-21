@@ -1652,6 +1652,10 @@ StudioViewportRenderer::Compose(
                 "Studio RenderView has no logical viewport target.");
         }
 
+        // Per-view diagnostics are rebuilt from the current target every frame.
+        stellarDiagnostics_.erase(
+            info.id);
+
         std::optional<universe::BodyShape> shape;
 
         if (logicalTarget->target.has_value())
