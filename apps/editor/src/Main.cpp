@@ -57,6 +57,7 @@
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/SystemViewUi.hpp>
+#include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
@@ -2052,6 +2053,11 @@ int main(
             surfaceAuthoringUi(
                 studioSession);
         surfaceAuthoringUi.Register(ui);
+
+        orbit::studio_ui::VolumeAuthoringUi
+            volumeAuthoringUi(
+                studioSession);
+        volumeAuthoringUi.Register(ui);
 
         if (terrainUiSmoke)
         {
