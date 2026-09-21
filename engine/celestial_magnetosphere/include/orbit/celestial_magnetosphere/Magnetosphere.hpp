@@ -2,7 +2,12 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/render_view/RenderView.hpp>
+#include <orbit/rhi/Command.hpp>
+#include <orbit/rhi/Device.hpp>
+#include <orbit/shader/ShaderCompiler.hpp>
 
+#include <memory>
 #include <vector>
 
 namespace orbit::celestial_magnetosphere
@@ -39,12 +44,30 @@ struct MagnetosphereParameters
     f64 auroralMinimumAltitudeMeters{100000.0};
     f64 auroralMaximumAltitudeMeters{300000.0};
     f64 auroralIntensity{1.0};
+    math::Double3 auroralColorLinear{0.12, 1.8, 0.42};
+    f64 auroralStructure{0.65};
     u64 auroralSeed{1};
 };
 
 struct MagnetosphereConfig
 {
     u32 ovalSamples{256};
+};
+
+struct AuroraVertex
+{
+    math::Float3 positionNormalized{};
+    math::Float3 emissionLinear{};
+    f32 opacity{0.0F};
+};
+
+struct AuroraMeshProduct
+{
+    f64 referenceRadiusMeters{1.0};
+    u32 angularSegments{0};
+    u64 fingerprint{0};
+    std::vector<AuroraVertex> vertices;
+    std::vector<u32> indices;
 };
 
 struct MagnetosphereProduct
@@ -82,5 +105,51 @@ struct MagnetosphereProduct
     const MagnetosphereParameters& parameters,
     f64 referenceRadiusMeters,
     const MagnetosphereConfig& config = {});
+
+[[nodiscard]] AuroraMeshProduct BuildAuroraCurtainMesh(
+    const MagnetosphereParameters& parameters,
+    f64 referenceRadiusMeters,
+    u32 angularSegments = 256U);
+
+class GpuAuroraMeshProduct
+{
+public:
+    GpuAuroraMeshProduct(
+        rhi::Device& device,
+        const AuroraMeshProduct& product);
+
+    [[nodiscard]] rhi::Buffer& VertexBuffer() noexcept;
+    [[nodiscard]] rhi::Buffer& IndexBuffer() noexcept;
+    [[nodiscard]] u32 IndexCount() const noexcept;
+    [[nodiscard]] f64 ReferenceRadiusMeters() const noexcept;
+    [[nodiscard]] u64 Fingerprint() const noexcept;
+
+private:
+    std::unique_ptr<rhi::Buffer> vertices_;
+    std::unique_ptr<rhi::Buffer> indices_;
+    u32 indexCount_{0};
+    f64 referenceRadiusMeters_{1.0};
+    u64 fingerprint_{0};
+};
+
+class AuroraRenderer
+{
+public:
+    AuroraRenderer(
+        rhi::Device& device,
+        const shader::Compiler& compiler);
+
+    void Draw(
+        rhi::CommandList& commands,
+        rhi::Texture& target,
+        u32 width,
+        u32 height,
+        GpuAuroraMeshProduct& mesh,
+        const render_view::CameraState& camera,
+        f32 intensityScale = 1.0F);
+
+private:
+    std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+};
 
 } // namespace orbit::celestial_magnetosphere
