@@ -8,6 +8,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <filesystem>
+#include <string>
 
 int main()
 {
