@@ -1317,6 +1317,35 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
                 appearance.texels.size());
     }
 
+    if (resolvedOcean.has_value())
+    {
+        oceanDiagnostics_.insert_or_assign(
+            std::string(viewportId),
+            StudioOceanDiagnostics{
+                .body = body,
+                .opticalFingerprint =
+                    activeOceanFingerprint,
+                .refractiveIndex =
+                    resolvedOcean->
+                        optical.refractiveIndex,
+                .orbitalRoughness =
+                    resolvedOcean->
+                        optical.orbitalRoughness,
+                .glintStrength =
+                    resolvedOcean->
+                        optical.glintStrength,
+                .oceanFraction =
+                    presentation.
+                        appearanceSummary.
+                        oceanFraction
+            });
+    }
+    else
+    {
+        oceanDiagnostics_.erase(
+            viewportId);
+    }
+
     return presentation.product.get();
 }
 
@@ -1822,6 +1851,20 @@ StudioViewportRenderer::Compose(
                 info.id);
         }
 
+
+        std::optional<
+            world_model::ResolvedOceanBody>
+            resolvedOceanForView;
+
+        if (atmosphereBody.has_value())
+        {
+            resolvedOceanForView =
+                world_model::
+                    ResolveOceanBody(
+                        session.World().
+                            Objects(),
+                        *atmosphereBody);
+        }
 
         std::optional<
             world_model::ResolvedAtmosphereBody>
@@ -2597,6 +2640,7 @@ StudioViewportRenderer::Compose(
                      shape = *shape,
                      globeCamera,
                      studioDirectLight,
+                     resolvedOceanForView,
                      projectedRadius =
                         representationDecision.
                             projectedRadiusPixels](
@@ -2620,7 +2664,24 @@ StudioViewportRenderer::Compose(
                                     .directionBody =
                                         studioDirectLight.directionBody,
                                     .irradianceScale =
-                                        studioDirectLight.irradianceScale
+                                        studioDirectLight.irradianceScale,
+                                    .oceanRefractiveIndex =
+                                        static_cast<f32>(
+                                            resolvedOceanForView.has_value()
+                                                ? resolvedOceanForView->optical.refractiveIndex
+                                                : 1.333),
+                                    .oceanRoughness =
+                                        static_cast<f32>(
+                                            resolvedOceanForView.has_value()
+                                                ? resolvedOceanForView->optical.orbitalRoughness
+                                                : 0.12),
+                                    .oceanGlintStrength =
+                                        static_cast<f32>(
+                                            resolvedOceanForView.has_value()
+                                                ? resolvedOceanForView->optical.glintStrength
+                                                : 1.0),
+                                    .oceanEnabled =
+                                        resolvedOceanForView.has_value()
                                 };
 
                             if (opacity >= 0.5F)
@@ -2671,6 +2732,23 @@ StudioViewportRenderer::Compose(
                                 .incidentLightScale =
                                     studioDirectLight.
                                         irradianceScale,
+                                .oceanRefractiveIndex =
+                                    static_cast<f32>(
+                                        resolvedOceanForView.has_value()
+                                            ? resolvedOceanForView->optical.refractiveIndex
+                                            : 1.333),
+                                .oceanRoughness =
+                                    static_cast<f32>(
+                                        resolvedOceanForView.has_value()
+                                            ? resolvedOceanForView->optical.orbitalRoughness
+                                            : 0.12),
+                                .oceanGlintStrength =
+                                    static_cast<f32>(
+                                        resolvedOceanForView.has_value()
+                                            ? resolvedOceanForView->optical.glintStrength
+                                            : 1.0),
+                                .oceanEnabled =
+                                    resolvedOceanForView.has_value(),
                                 .stellar =
                                     representation ==
                                     celestial_representation::
@@ -3028,7 +3106,8 @@ StudioViewportRenderer::Compose(
                  height,
                  globe,
                  camera,
-                 studioDirectLight](
+                 studioDirectLight,
+                 resolvedOceanForView](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -3068,7 +3147,24 @@ StudioViewportRenderer::Compose(
                                         directionBody,
                                 .irradianceScale =
                                     studioDirectLight.
-                                        irradianceScale
+                                        irradianceScale,
+                                .oceanRefractiveIndex =
+                                    static_cast<f32>(
+                                        resolvedOceanForView.has_value()
+                                            ? resolvedOceanForView->optical.refractiveIndex
+                                            : 1.333),
+                                .oceanRoughness =
+                                    static_cast<f32>(
+                                        resolvedOceanForView.has_value()
+                                            ? resolvedOceanForView->optical.orbitalRoughness
+                                            : 0.12),
+                                .oceanGlintStrength =
+                                    static_cast<f32>(
+                                        resolvedOceanForView.has_value()
+                                            ? resolvedOceanForView->optical.glintStrength
+                                            : 1.0),
+                                .oceanEnabled =
+                                    resolvedOceanForView.has_value()
                             });
                 });
 
@@ -3348,7 +3444,8 @@ StudioViewportRenderer::Compose(
                      radiativeEmitter,
                      resolvedRadiometricIntensity,
                      pointRadiometricIntensity,
-                     studioDirectLight](
+                     studioDirectLight,
+                     resolvedOceanForView](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -3410,6 +3507,23 @@ StudioViewportRenderer::Compose(
                                                 ? 1.0F
                                                 : studioDirectLight.
                                                     irradianceScale,
+                                        .oceanRefractiveIndex =
+                                            static_cast<f32>(
+                                                resolvedOceanForView.has_value()
+                                                    ? resolvedOceanForView->optical.refractiveIndex
+                                                    : 1.333),
+                                        .oceanRoughness =
+                                            static_cast<f32>(
+                                                resolvedOceanForView.has_value()
+                                                    ? resolvedOceanForView->optical.orbitalRoughness
+                                                    : 0.12),
+                                        .oceanGlintStrength =
+                                            static_cast<f32>(
+                                                resolvedOceanForView.has_value()
+                                                    ? resolvedOceanForView->optical.glintStrength
+                                                    : 1.0),
+                                        .oceanEnabled =
+                                            resolvedOceanForView.has_value(),
                                         .stellar =
                                             radiativeEmitter
                                     };
