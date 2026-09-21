@@ -2109,6 +2109,64 @@ StudioViewportRenderer::LuminanceMeteringMask(
             : found->second.meteringMask.get();
 }
 
+void StudioViewportRenderer::SetLuminanceHistogramConfig(
+    const std::string_view viewportId,
+    post_process::LuminanceHistogramConfig config)
+{
+    if (!std::isfinite(config.minimumLog2) ||
+        !std::isfinite(config.maximumLog2))
+    {
+        throw std::invalid_argument(
+            "Luminance histogram log range must be finite.");
+    }
+
+    if (config.maximumLog2 <=
+        config.minimumLog2 + 0.01F)
+    {
+        config.maximumLog2 =
+            config.minimumLog2 + 0.01F;
+    }
+
+    config.centerWeightStrength =
+        std::clamp(
+            config.centerWeightStrength,
+            0.0F,
+            1.0F);
+    config.centerWeightRadius =
+        std::max(
+            config.centerWeightRadius,
+            0.05F);
+
+    luminanceHistogramPresentations_[
+        std::string(viewportId)].
+        diagnostics.config =
+            config;
+}
+
+void StudioViewportRenderer::SetLuminanceMeteringOverlay(
+    const std::string_view viewportId,
+    const bool enabled)
+{
+    luminanceHistogramPresentations_[
+        std::string(viewportId)].
+        showMeteringOverlay =
+            enabled;
+}
+
+bool StudioViewportRenderer::LuminanceMeteringOverlay(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        luminanceHistogramPresentations_.find(
+            viewportId);
+
+    return
+        found !=
+            luminanceHistogramPresentations_.end() &&
+        found->second.showMeteringOverlay;
+}
+
+
 std::optional<
     StudioVisibilityProxyDiagnostics>
 StudioViewportRenderer::
@@ -9064,7 +9122,16 @@ StudioViewportRenderer::Compose(
 
             if (recreateHistogram)
             {
+                const auto retainedConfig =
+                    histogram.diagnostics.config;
+                const bool retainedOverlay =
+                    histogram.showMeteringOverlay;
+
                 histogram = {};
+                histogram.diagnostics.config =
+                    retainedConfig;
+                histogram.showMeteringOverlay =
+                    retainedOverlay;
                 histogram.width = width;
                 histogram.height = height;
 
@@ -9703,6 +9770,82 @@ StudioViewportRenderer::Compose(
                     *colorLut,
                     colorLutSettings);
             });
+
+        if (histogram.showMeteringOverlay &&
+            histogram.meteringMask != nullptr)
+        {
+            const auto histogramMaskHandle =
+                graph.ImportTexture(
+                    prefix +
+                        ".LuminanceMeteringOverlayMask",
+                    *histogram.meteringMask,
+                    rhi::ResourceState::
+                        ShaderResource);
+
+            graph.AddPass(
+                prefix +
+                    ".LuminanceMeteringOverlay",
+                {
+                    {
+                        .texture =
+                            histogramMaskHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            targets.display,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 mask =
+                    histogram.meteringMask.get(),
+                 displayColor,
+                 width,
+                 height](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    luminanceHistogramRenderer_.
+                        DrawMeteringOverlay(
+                            commands,
+                            *mask,
+                            *displayColor,
+                            width,
+                            height);
+                });
+
+            graph.AddPass(
+                prefix +
+                    ".LuminanceMeteringOverlayRestore",
+                {
+                    {
+                        .texture =
+                            targets.display,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    }
+                },
+                [](
+                    rhi::CommandList&,
+                    const render_graph::Resources&)
+                {
+                });
+        }
 
         rendered.push_back({
             .id = info.id,
