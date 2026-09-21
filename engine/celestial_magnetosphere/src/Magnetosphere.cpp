@@ -193,9 +193,10 @@ f64 MagnetopauseRadiusMeters(
             unitDirectionBody,
             {1.0,0.0,0.0});
     const auto sunward=
-        -SafeNormalize(
+        SafeNormalize(
             p.solarWindDirection,
-            {-1.0,0.0,0.0});
+            {-1.0,0.0,0.0}) *
+        -1.0;
 
     const f64 cosTheta=
         std::clamp(
@@ -338,7 +339,7 @@ MagnetosphereProduct BuildMagnetosphereProduct(
 
         result.southAuroralRing.push_back(
             RingPoint(
-                -axis,
+                axis * -1.0,
                 centerLatitude*
                     std::numbers::pi_v<f64>/
                     180.0,
