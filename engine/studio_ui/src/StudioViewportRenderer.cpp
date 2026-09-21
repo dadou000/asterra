@@ -5445,8 +5445,8 @@ StudioViewportRenderer::Compose(
                     radianceSourceRevision,
                     1.0F / 60.0F));
 
-            lighting::VisibilityProvider*
-                radianceVisibility = nullptr;
+            lighting::VisibilityRegistry
+                radianceVisibility;
 
             if (const auto proxyFound =
                     visibilityProxyPresentations_.find(
@@ -5456,8 +5456,76 @@ StudioViewportRenderer::Compose(
                     proxyFound->second.provider !=
                         nullptr)
             {
-                radianceVisibility =
-                    proxyFound->second.provider.get();
+                radianceVisibility.Register(
+                    *proxyFound->second.provider);
+            }
+
+            std::unique_ptr<
+                lighting::AnalyticBodyVisibilityProvider>
+                analyticVisibility;
+
+            std::unique_ptr<
+                lighting::TerrainHeightfieldVisibilityProvider>
+                terrainVisibility;
+
+            if (bodies != nullptr &&
+                frames != nullptr)
+            {
+                analyticVisibility =
+                    std::make_unique<
+                        lighting::
+                            AnalyticBodyVisibilityProvider>(
+                                *bodies,
+                                *frames,
+                                atTime);
+
+                radianceVisibility.Register(
+                    *analyticVisibility);
+
+                terrainVisibility =
+                    std::make_unique<
+                        lighting::
+                            TerrainHeightfieldVisibilityProvider>(
+                                terrainRuntime->body,
+                                terrainRuntime->planet,
+                                source,
+                                *bodies,
+                                *frames,
+                                lighting::
+                                    TerrainVisibilityConfig{},
+                                atTime);
+
+                radianceVisibility.Register(
+                    *terrainVisibility);
+            }
+
+            lighting::RadianceEstimateSettings
+                radianceEstimateSettings{};
+
+            if (const auto atmosphereFound =
+                    atmospherePresentations_.find(
+                        info.id);
+                atmosphereFound !=
+                        atmospherePresentations_.end() &&
+                    atmosphereFound->second.skyView !=
+                        nullptr)
+            {
+                const auto skyIrradiance =
+                    AtmosphereSkyIrradianceSummary(
+                        atmosphereFound->second.
+                            skyView.get());
+
+                if (skyIrradiance.x > 0.0F ||
+                    skyIrradiance.y > 0.0F ||
+                    skyIrradiance.z > 0.0F)
+                {
+                    radianceEstimateSettings.
+                        ambientIrradianceScale =
+                            0.0F;
+                    radianceEstimateSettings.
+                        skyIrradianceLinear =
+                            skyIrradiance;
+                }
             }
 
             std::vector<
@@ -5546,8 +5614,8 @@ StudioViewportRenderer::Compose(
                         lightingView,
                         directLight,
                         localLightGrid.lights,
-                        radianceVisibility,
-                        {},
+                        &radianceVisibility,
+                        radianceEstimateSettings,
                         emissiveVolumes);
 
                 static_cast<void>(
