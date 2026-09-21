@@ -14,6 +14,17 @@ struct HumanEyeAdaptationConfig
     f32 photopicBrightenSeconds{0.18F};
     f32 photopicDarkenSeconds{1.25F};
 
+    // M25 calibrated ceiling: the adaptation state cannot chase a robust
+    // bright-scene target above this scene-linear log2 luminance. Scene HDR
+    // itself is never clamped; excess remains available for highlight FX.
+    f32 photopicCeilingLog2{2.0F};
+
+    // Exposure is presentation-only and maps the adapted luminance to middle
+    // gray. Bounds protect the display path from invalid/extreme values.
+    f32 exposureMiddleGray{0.18F};
+    f32 minimumExposureScale{1.0F / 4096.0F};
+    f32 maximumExposureScale{4096.0F};
+
     // Dark adaptation is deliberately separate from photopic exposure.
     // It accumulates only when the median is below this scene threshold.
     f32 darkThresholdLog2{-3.0F};
@@ -39,7 +50,17 @@ struct HumanEyeAdaptationState
     f32 darkAdaptation{0.0F};
     f32 overload{0.0F};
 
+    f32 rawPhotopicTargetLog2{0.0F};
     f32 photopicTargetLog2{0.0F};
+    f32 photopicCeilingExcessStops{0.0F};
+
+    f32 p95ExcessStops{0.0F};
+    f32 p99ExcessStops{0.0F};
+    f32 peakExcessStops{0.0F};
+
+    f32 exposureScale{1.0F};
+    f32 targetExposureScale{1.0F};
+
     f32 darkTarget{0.0F};
     f32 overloadTarget{0.0F};
 };
