@@ -18,6 +18,7 @@ int main()
         -3.0F,
         1200.0F
     };
+    source.emissionGiScale = 2.5F;
 
     const auto canonical =
         Canonicalize(source);
@@ -43,7 +44,8 @@ int main()
     // energy is rejected.
     if (canonical.emissionRadianceSceneLinear.x != 25.0F ||
         canonical.emissionRadianceSceneLinear.y != 0.0F ||
-        canonical.emissionRadianceSceneLinear.z != 1200.0F)
+        canonical.emissionRadianceSceneLinear.z != 1200.0F ||
+        canonical.emissionGiScale != 2.5F)
     {
         return 3;
     }
