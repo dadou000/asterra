@@ -27,7 +27,7 @@ namespace
              (1.0 - c));
 }
 
-[[nodiscard]] math::RigidTransformD EvaluateTransform(
+[[nodiscard]] math::RigidTransformD EvaluateCenterTransform(
     const BodyTransformModel& model,
     const time::SimulationTime atTime)
 {
@@ -36,37 +36,100 @@ namespace
             -> math::RigidTransformD
         {
             using Model =
-                std::decay_t<
-                    decltype(value)>;
+                std::decay_t<decltype(value)>;
+
+            math::Double3 translation{};
 
             if constexpr (
                 std::is_same_v<
                     Model,
                     FixedBodyTransform>)
             {
-                return value.parentFromBody;
+                translation =
+                    value.parentFromBody.translation;
+            }
+            else if constexpr (
+                std::is_same_v<
+                    Model,
+                    UniformRotationTransform>)
+            {
+                translation =
+                    value.centerInParentMeters;
+            }
+            else if constexpr (
+                std::is_same_v<
+                    Model,
+                    OrbitDrivenUniformRotationTransform>)
+            {
+                if (!value.orbitState)
+                {
+                    throw std::runtime_error(
+                        "Orbit-driven body transform has no orbit state provider.");
+                }
+
+                translation =
+                    value.orbitState->
+                        EvaluateState(atTime).
+                        positionMeters;
+            }
+            else
+            {
+                if (!value.orbitState)
+                {
+                    throw std::runtime_error(
+                        "Provider-driven body transform has no orbit state provider.");
+                }
+
+                translation =
+                    value.orbitState->
+                        EvaluateState(atTime).
+                        positionMeters;
+            }
+
+            return {
+                .translation = translation
+            };
+        },
+        model);
+}
+
+[[nodiscard]] math::RigidTransformD EvaluateBodyOrientation(
+    const BodyTransformModel& model,
+    const time::SimulationTime atTime)
+{
+    return std::visit(
+        [atTime](const auto& value)
+            -> math::RigidTransformD
+        {
+            using Model =
+                std::decay_t<decltype(value)>;
+
+            if constexpr (
+                std::is_same_v<
+                    Model,
+                    FixedBodyTransform>)
+            {
+                return {
+                    .rotation =
+                        value.parentFromBody.rotation
+                };
             }
             else if constexpr (
                 std::is_same_v<
                     Model,
                     ProviderDrivenBodyTransform>)
             {
-                if (!value.orbitState ||
-                    !value.orientation)
+                if (!value.orientation)
                 {
                     throw std::runtime_error(
-                        "Provider-driven body transform is incomplete.");
+                        "Provider-driven body transform has no orientation provider.");
                 }
 
                 return {
                     .rotation =
                         value.orientation->
                             EvaluateOrientation(atTime).
-                            parentFromBodyRotation,
-                    .translation =
-                        value.orbitState->
-                            EvaluateState(atTime).
-                            positionMeters
+                            parentFromBodyRotation
                 };
             }
             else
@@ -86,53 +149,24 @@ namespace
                     math::Normalize(
                         value.axisInParent);
 
-                const math::Double3 x =
-                    RotateAroundAxis(
-                        {1.0, 0.0, 0.0},
-                        axis,
-                        angle);
-                const math::Double3 y =
-                    RotateAroundAxis(
-                        {0.0, 1.0, 0.0},
-                        axis,
-                        angle);
-                const math::Double3 z =
-                    RotateAroundAxis(
-                        {0.0, 0.0, 1.0},
-                        axis,
-                        angle);
-
-                math::Double3 translation{};
-
-                if constexpr (
-                    std::is_same_v<
-                        Model,
-                        UniformRotationTransform>)
-                {
-                    translation =
-                        value.centerInParentMeters;
-                }
-                else
-                {
-                    if (!value.orbitState)
-                    {
-                        throw std::runtime_error(
-                            "Orbit-driven body transform has no orbit state provider.");
-                    }
-
-                    translation =
-                        value.orbitState->
-                            EvaluateState(atTime).
-                            positionMeters;
-                }
-
                 return {
                     .rotation = {
-                        .xAxis = x,
-                        .yAxis = y,
-                        .zAxis = z
-                    },
-                    .translation = translation
+                        .xAxis =
+                            RotateAroundAxis(
+                                {1.0, 0.0, 0.0},
+                                axis,
+                                angle),
+                        .yAxis =
+                            RotateAroundAxis(
+                                {0.0, 1.0, 0.0},
+                                axis,
+                                angle),
+                        .zAxis =
+                            RotateAroundAxis(
+                                {0.0, 0.0, 1.0},
+                                axis,
+                                angle)
+                    }
                 };
             }
         },
@@ -418,6 +452,26 @@ BodyId BodyRegistry::CreateBody(
             "Celestial body ID already exists.");
     }
 
+    frames::FrameId centerFrame =
+        desc.centerFrame;
+
+    if (!centerFrame)
+    {
+        centerFrame =
+            frames::FrameId::Random();
+
+        while (frameGraph_.Contains(centerFrame))
+        {
+            centerFrame =
+                frames::FrameId::Random();
+        }
+    }
+    else if (frameGraph_.Contains(centerFrame))
+    {
+        throw std::invalid_argument(
+            "Celestial body center frame already exists.");
+    }
+
     frames::FrameId bodyFrame =
         desc.frame;
 
@@ -426,13 +480,15 @@ BodyId BodyRegistry::CreateBody(
         bodyFrame =
             frames::FrameId::Random();
 
-        while (frameGraph_.Contains(bodyFrame))
+        while (frameGraph_.Contains(bodyFrame) ||
+               bodyFrame == centerFrame)
         {
             bodyFrame =
                 frames::FrameId::Random();
         }
     }
-    else if (frameGraph_.Contains(bodyFrame))
+    else if (frameGraph_.Contains(bodyFrame) ||
+             bodyFrame == centerFrame)
     {
         throw std::invalid_argument(
             "Celestial body frame already exists.");
@@ -443,12 +499,24 @@ BodyId BodyRegistry::CreateBody(
 
     static_cast<void>(
         frameGraph_.CreateFrame(
-            bodyFrame,
+            centerFrame,
             parentFrame,
             [model](
-            const time::SimulationTime atTime)
-        {
-                return EvaluateTransform(
+                const time::SimulationTime atTime)
+            {
+                return EvaluateCenterTransform(
+                    model,
+                    atTime);
+            }));
+
+    static_cast<void>(
+        frameGraph_.CreateFrame(
+            bodyFrame,
+            centerFrame,
+            [model](
+                const time::SimulationTime atTime)
+            {
+                return EvaluateBodyOrientation(
                     model,
                     atTime);
             }));
@@ -458,6 +526,7 @@ BodyId BodyRegistry::CreateBody(
         .system = desc.system,
         .name = std::string(desc.name),
         .frame = bodyFrame,
+        .centerFrame = centerFrame,
         .parentFrame = parentFrame,
         .shape = desc.shape,
         .mass = desc.mass,
