@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
@@ -208,4 +209,105 @@ AssetId ContentService::CreateMaterialInstance(
 
     return created->id;
 }
+
+void ContentService::SetMaterialEmission(
+    const AssetId materialAsset,
+    const MaterialEmission& emission)
+{
+    const AssetRecord* asset =
+        Find(materialAsset);
+
+    if (asset == nullptr ||
+        (asset->kind != AssetKind::Material &&
+         asset->kind != AssetKind::MaterialInstance))
+    {
+        throw std::invalid_argument(
+            "Physical emission can only be edited on Material or Material Instance assets.");
+    }
+
+    if (!std::isfinite(emission.luminanceNits) ||
+        emission.luminanceNits < 0.0 ||
+        !std::isfinite(emission.giScale) ||
+        emission.giScale < 0.0)
+    {
+        throw std::invalid_argument(
+            "Emission luminance and GI scale must be finite and non-negative.");
+    }
+
+    for (const f64 channel : emission.colorLinear)
+    {
+        if (!std::isfinite(channel) ||
+            channel < 0.0)
+        {
+            throw std::invalid_argument(
+                "Emission color must be finite and non-negative.");
+        }
+    }
+
+    const auto absolute =
+        projectRoot_ /
+        asset->sourcePath;
+
+    toml::table document =
+        toml::parse_file(
+            absolute.string());
+
+    const char* tableName =
+        asset->kind == AssetKind::Material
+            ? "material"
+            : "material_instance";
+
+    toml::table* table =
+        document[tableName].as_table();
+
+    if (table == nullptr)
+    {
+        throw std::runtime_error(
+            "Material authority table is missing while editing emission.");
+    }
+
+    toml::array color;
+    color.push_back(emission.colorLinear[0]);
+    color.push_back(emission.colorLinear[1]);
+    color.push_back(emission.colorLinear[2]);
+
+    table->insert_or_assign(
+        "emission_color_linear",
+        std::move(color));
+
+    table->insert_or_assign(
+        "emission_luminance_nits",
+        emission.luminanceNits);
+
+    table->insert_or_assign(
+        "emission_gi_enabled",
+        emission.contributesToGi);
+
+    table->insert_or_assign(
+        "emission_gi_scale",
+        emission.giScale);
+
+    std::ofstream output(
+        absolute,
+        std::ios::binary |
+        std::ios::trunc);
+
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Unable to open material asset for emission update.");
+    }
+
+    output << document;
+    output.flush();
+
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Unable to persist material emission update.");
+    }
+
+    Scan();
+}
+
 } // namespace orbit::content
