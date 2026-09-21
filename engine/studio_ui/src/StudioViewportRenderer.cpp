@@ -4,6 +4,7 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
@@ -17,7 +18,9 @@
 #include <cstring>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace orbit::studio_ui
 {
@@ -1610,6 +1613,13 @@ StudioViewportRenderer::Compose(
                     representationBlend.richer;
                 const auto lower =
                     representationBlend.lower;
+                const f32 richerOpacity =
+                    static_cast<f32>(
+                        std::clamp(
+                            representationBlend.
+                                richerWeight,
+                            0.0,
+                            1.0));
                 const f32 lowerOpacity =
                     static_cast<f32>(
                         std::clamp(
@@ -1636,11 +1646,30 @@ StudioViewportRenderer::Compose(
                      clearForFarOnly,
                      richer,
                      lower,
+                     richerOpacity,
                      lowerOpacity,
+                     farPresentation,
                      drawRepresentation](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
+                        if ((richer ==
+                                 celestial_representation::
+                                     Representation::
+                                         CachedDiscImpostor ||
+                             lower ==
+                                 celestial_representation::
+                                     Representation::
+                                         CachedDiscImpostor) &&
+                            farPresentation->cachedDisc !=
+                                nullptr)
+                        {
+                            farPresentation->
+                                cachedDisc->
+                                EnsureUploaded(
+                                    commands);
+                        }
+
                         if (clearForFarOnly)
                         {
                             commands.ClearColorTarget(
@@ -1661,7 +1690,7 @@ StudioViewportRenderer::Compose(
                             drawRepresentation(
                                 commands,
                                 richer,
-                                1.0F);
+                                richerOpacity);
                         }
 
                         if (lower != richer &&
@@ -2059,6 +2088,12 @@ StudioViewportRenderer::Compose(
                     blend.richer;
                 const auto lower =
                     blend.lower;
+                const f32 richerOpacity =
+                    static_cast<f32>(
+                        std::clamp(
+                            blend.richerWeight,
+                            0.0,
+                            1.0));
                 const f32 lowerOpacity =
                     static_cast<f32>(
                         std::clamp(
@@ -2092,6 +2127,7 @@ StudioViewportRenderer::Compose(
                      appearance,
                      richer,
                      lower,
+                     richerOpacity,
                      lowerOpacity,
                      projectedRadius,
                      radiativeEmitter](
@@ -2141,7 +2177,7 @@ StudioViewportRenderer::Compose(
 
                         draw(
                             richer,
-                            1.0F);
+                            richerOpacity);
 
                         if (lower != richer)
                         {
