@@ -1400,10 +1400,28 @@ void FarBodyRenderer::Draw(
 
     const f64 minimumRasterRadiusPixels =
         0.5;
-    const f64 rasterRadiusPixels =
+
+    const bool stellarPointProxy =
+        draw.stellar &&
+        draw.representation ==
+            celestial_representation::
+                Representation::
+                    StellarPointProxy;
+
+    const f64 stellarCoreRadiusPixels =
         std::max(
             draw.projectedRadiusPixels,
             minimumRasterRadiusPixels);
+
+    const f64 rasterRadiusPixels =
+        stellarPointProxy
+            ? std::max(
+                  static_cast<f64>(
+                      draw.stellarGlareRadiusPixels),
+                  minimumRasterRadiusPixels)
+            : std::max(
+                  draw.projectedRadiusPixels,
+                  minimumRasterRadiusPixels);
 
     const f32 radiusNdc =
         static_cast<f32>(
@@ -1415,14 +1433,31 @@ void FarBodyRenderer::Draw(
                     1U)));
 
     const f32 pointFluxScale =
-        static_cast<f32>(
-            std::clamp(
-                (draw.projectedRadiusPixels *
-                 draw.projectedRadiusPixels) /
-                    (rasterRadiusPixels *
-                     rasterRadiusPixels),
-                0.0,
-                1.0));
+        stellarPointProxy
+            ? static_cast<f32>(
+                  1.0 /
+                  std::max(
+                      rasterRadiusPixels *
+                          rasterRadiusPixels,
+                      0.25))
+            : static_cast<f32>(
+                  std::clamp(
+                      (draw.projectedRadiusPixels *
+                       draw.projectedRadiusPixels) /
+                          (rasterRadiusPixels *
+                           rasterRadiusPixels),
+                      0.0,
+                      1.0));
+
+    const f32 stellarCoreToGlare =
+        stellarPointProxy
+            ? static_cast<f32>(
+                  std::clamp(
+                      stellarCoreRadiusPixels /
+                          rasterRadiusPixels,
+                      0.02,
+                      1.0))
+            : 1.0F;
 
     commands.SetRenderTarget(target);
     commands.SetViewport({
@@ -1501,6 +1536,12 @@ void FarBodyRenderer::Draw(
     default:
         mode = 0U;
         break;
+    }
+
+    if (draw.stellar &&
+        mode == 0U)
+    {
+        mode = 1U;
     }
 
     const f32 tanHalfFov =
@@ -1590,22 +1631,57 @@ void FarBodyRenderer::Draw(
             bits(draw.camera.up.z),
             0U,
 
-            bits(draw.appearance.albedoLinear.x),
-            bits(draw.appearance.albedoLinear.y),
-            bits(draw.appearance.albedoLinear.z),
-            bits(draw.appearance.roughness),
+            bits(draw.stellar
+                ? draw.stellarColorLinear.x
+                : draw.appearance.albedoLinear.x),
+            bits(draw.stellar
+                ? draw.stellarColorLinear.y
+                : draw.appearance.albedoLinear.y),
+            bits(draw.stellar
+                ? draw.stellarColorLinear.z
+                : draw.appearance.albedoLinear.z),
+            bits(draw.stellar
+                ? std::clamp(
+                      draw.stellarLimbDarkening,
+                      0.0F,
+                      1.0F)
+                : draw.appearance.roughness),
 
-            bits(draw.appearance.oceanFraction),
-            bits(draw.appearance.iceFraction),
+            bits(draw.stellar
+                ? std::clamp(
+                      draw.stellarGranulationStrength,
+                      0.0F,
+                      1.0F)
+                : draw.appearance.oceanFraction),
+            bits(draw.stellar
+                ? std::clamp(
+                      draw.stellarActivityLevel,
+                      0.0F,
+                      1.0F)
+                : draw.appearance.iceFraction),
             bits(draw.stellar ? 1.0F : 0.0F),
-            bits(std::clamp(
-                draw.appearance.directLightTransmittance,
-                0.0F,
-                1.0F)),
+            draw.stellar
+                ? draw.stellarActivitySeed
+                : bits(std::clamp(
+                      draw.appearance.directLightTransmittance,
+                      0.0F,
+                      1.0F)),
 
-            bits(draw.appearance.emissionLinear.x),
-            bits(draw.appearance.emissionLinear.y),
-            bits(draw.appearance.emissionLinear.z),
+            bits(draw.stellar
+                ? std::max(
+                      draw.stellarGranulationScale,
+                      1.0F)
+                : draw.appearance.emissionLinear.x),
+            bits(draw.stellar
+                ? std::max(
+                      draw.stellarChromosphereStrength,
+                      0.0F)
+                : draw.appearance.emissionLinear.y),
+            bits(draw.stellar
+                ? std::max(
+                      draw.stellarChromosphereExtent,
+                      0.0F)
+                : draw.appearance.emissionLinear.z),
             bits(std::clamp(
                 draw.opacity,
                 0.0F,
@@ -1616,26 +1692,50 @@ void FarBodyRenderer::Draw(
             bits(pointFluxScale),
             bits(proxyRadiometricIntensity),
 
-            bits(draw.lightDirectionBody.x),
-            bits(draw.lightDirectionBody.y),
-            bits(draw.lightDirectionBody.z),
-            bits(std::max(
-                draw.incidentLightScale,
-                0.0F)),
+            bits(draw.stellar
+                ? std::max(
+                      draw.stellarCoronaStrength,
+                      0.0F)
+                : draw.lightDirectionBody.x),
+            bits(draw.stellar
+                ? std::max(
+                      draw.stellarCoronaExtent,
+                      0.0F)
+                : draw.lightDirectionBody.y),
+            bits(draw.stellar
+                ? std::max(
+                      draw.stellarGlareStrength,
+                      0.0F)
+                : draw.lightDirectionBody.z),
+            bits(draw.stellar
+                ? std::max(
+                      draw.stellarGlareRadiusPixels,
+                      0.5F)
+                : std::max(
+                      draw.incidentLightScale,
+                      0.0F)),
 
-            bits(std::max(
-                draw.oceanRefractiveIndex,
-                1.0F)),
-            bits(std::clamp(
-                draw.oceanRoughness,
-                0.01F,
-                1.0F)),
-            bits(std::max(
-                draw.oceanGlintStrength,
-                0.0F)),
-            bits(draw.oceanEnabled
-                ? 1.0F
-                : 0.0F)
+            bits(draw.stellar
+                ? stellarCoreToGlare
+                : std::max(
+                      draw.oceanRefractiveIndex,
+                      1.0F)),
+            bits(draw.stellar
+                ? 0.0F
+                : std::clamp(
+                      draw.oceanRoughness,
+                      0.01F,
+                      1.0F)),
+            bits(draw.stellar
+                ? 0.0F
+                : std::max(
+                      draw.oceanGlintStrength,
+                      0.0F)),
+            bits(draw.stellar
+                ? 0.0F
+                : (draw.oceanEnabled
+                    ? 1.0F
+                    : 0.0F))
         };
 
     commands.SetGraphicsPipeline(
