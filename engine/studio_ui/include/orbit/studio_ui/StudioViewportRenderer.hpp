@@ -34,6 +34,7 @@
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 #include <orbit/post_process/HighlightEffects.hpp>
 #include <orbit/post_process/LuminanceHistogram.hpp>
+#include <orbit/post_process/OutputTransform.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -231,6 +232,13 @@ struct StudioColorLutDiagnostics
     bool compatible{true};
     bool explicitMetadata{true};
     std::string diagnostic;
+};
+
+struct StudioOutputTransformDiagnostics
+{
+    post_process::OutputTransformSettings settings{};
+    post_process::OutputDisplayCapabilities capabilities{};
+    post_process::OutputTransformDiagnostics resolved{};
 };
 
 struct StudioLuminanceHistogramDiagnostics
@@ -487,6 +495,15 @@ public:
     void SetColorLutSettings(
         post_process::ColorLutSettings settings) noexcept;
 
+    [[nodiscard]] StudioOutputTransformDiagnostics
+    OutputTransformDiagnostics() const noexcept;
+
+    void SetOutputTransformSettings(
+        post_process::OutputTransformSettings settings) noexcept;
+
+    void SetOutputDisplayCapabilities(
+        post_process::OutputDisplayCapabilities capabilities) noexcept;
+
     void SetDisplayResolveSettings(
         post_process::DisplayResolveSettings settings) noexcept;
 
@@ -726,12 +743,15 @@ private:
     post_process::HighlightEffectsRenderer highlightEffectsRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
+    post_process::OutputTransformRenderer outputTransformRenderer_;
     std::unique_ptr<post_process::GpuColorLut> colorLut_;
     post_process::ColorLutData colorLutData_{
         post_process::BuildIdentityColorLut()};
     std::string colorLutSourcePath_{"<identity>"};
     std::string colorLutDiagnostic_;
     post_process::ColorLutSettings colorLutSettings_{};
+    post_process::OutputTransformSettings outputTransformSettings_{};
+    post_process::OutputDisplayCapabilities outputDisplayCapabilities_{};
     post_process::DisplayResolveSettings displayResolveSettings_{};
     celestial_representation::RepresentationTracker
         representationTracker_;
