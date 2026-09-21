@@ -28,6 +28,7 @@ enum class AssetKind : u8
     Mesh,
     PathProfile,
     Shader,
+    ColorLut,
     Unknown
 };
 
@@ -128,6 +129,7 @@ public:
 
     [[nodiscard]] const AssetRecord* Find(AssetId id) const noexcept;
     [[nodiscard]] const AssetRecord* FindByPath(const std::filesystem::path& path) const noexcept;
+    [[nodiscard]] std::filesystem::path AbsolutePath(AssetId id) const;
     [[nodiscard]] std::vector<AssetRecord> Search(std::string_view query, std::optional<AssetKind> kind = std::nullopt) const;
     [[nodiscard]] std::vector<AssetRecord> All() const;
     [[nodiscard]] std::vector<AssetId> Dependencies(
