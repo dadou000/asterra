@@ -171,16 +171,55 @@ int main()
             return 5;
         }
 
-        if (moon->parentFrame != planet->frame ||
+        if (moon->parentFrame != planet->centerFrame ||
+            moon->parentFrame == planet->frame ||
             composition.ObjectForBody(*moonId) !=
                 std::optional<orbit::scene::ObjectId>(moonObject))
         {
             return 6;
         }
 
-        if (composition.RebuildIfChanged(objects))
+        const auto moonFrame =
+            composition.FrameForObject(moonObject);
+
+        const auto moonAtEpoch =
+            moonFrame.has_value() &&
+                    systemFrame.has_value()
+                ? composition.Frames().ResolveTransform(
+                      *moonFrame,
+                      *systemFrame,
+                      orbit::time::SimulationTime{
+                          .microsecondsFromEpoch = 123456})
+                : std::nullopt;
+
+        commands.SetProperty(
+            planetObject,
+            orbit::world_model::kBodyRotationPhaseDegrees,
+            95.0);
+
+        if (!composition.RebuildIfChanged(objects))
         {
             return 7;
+        }
+
+        const auto moonAfterSpinChange =
+            composition.Frames().ResolveTransform(
+                *composition.FrameForObject(moonObject),
+                *composition.FrameForObject(systemObject),
+                orbit::time::SimulationTime{
+                    .microsecondsFromEpoch = 123456});
+
+        if (!moonAtEpoch.has_value() ||
+            !moonAfterSpinChange.has_value() ||
+            moonAtEpoch->translation !=
+                moonAfterSpinChange->translation)
+        {
+            return 12;
+        }
+
+        if (composition.RebuildIfChanged(objects))
+        {
+            return 11;
         }
 
         commands.SetProperty(
