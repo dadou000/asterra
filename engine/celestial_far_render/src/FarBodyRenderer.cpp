@@ -1973,40 +1973,28 @@ void FarBodyRenderer::DrawSurfaceData(
         bits(draw.camera.forward.x),
         bits(draw.camera.forward.y),
         bits(draw.camera.forward.z),
-        bits(draw.giantEnabled
-            ? std::clamp(draw.giantDepthContrast, 0.0F, 1.0F)
-            : 0.0F),
+        0U,
 
         bits(draw.camera.up.x),
         bits(draw.camera.up.y),
         bits(draw.camera.up.z),
-        bits(draw.giantEnabled
-            ? std::clamp(draw.giantTurbulenceStrength, 0.0F, 1.0F)
-            : 0.0F),
+        0U,
 
         bits(draw.stellar
             ? draw.stellarColorLinear.x
-            : draw.giantEnabled
-                ? draw.giantBaseColorLinear.x
-                : draw.appearance.albedoLinear.x),
+            : draw.appearance.albedoLinear.x),
         bits(draw.stellar
             ? draw.stellarColorLinear.y
-            : draw.giantEnabled
-                ? draw.giantBaseColorLinear.y
-                : draw.appearance.albedoLinear.y),
+            : draw.appearance.albedoLinear.y),
         bits(draw.stellar
             ? draw.stellarColorLinear.z
-            : draw.giantEnabled
-                ? draw.giantBaseColorLinear.z
-                : draw.appearance.albedoLinear.z),
+            : draw.appearance.albedoLinear.z),
         bits(draw.stellar
             ? std::clamp(
                   draw.stellarLimbDarkening,
                   0.0F,
                   1.0F)
-            : draw.giantEnabled
-                ? std::max(draw.giantZonalShear, 0.0F)
-                : draw.appearance.roughness),
+            : draw.appearance.roughness),
 
         bits(draw.appearance.oceanFraction),
         bits(draw.appearance.iceFraction),
