@@ -198,6 +198,55 @@ void CelestialAuthoringUi::Draw(
     }
 
     if (selected.has_value() &&
+        selected->type ==
+            world_model::
+                kRingSystemCapabilityType)
+    {
+        context.Separator();
+        context.Heading("Ring Bands");
+        context.MutedText(
+            "Bands are ordinary children of this Ring System. Add as many physical radial intervals as needed.");
+
+        if (context.Button(
+                "+ Ring Band##celestial-add-ring-band"))
+        {
+            try
+            {
+                static_cast<void>(
+                    model.AddRingBand());
+                status_ =
+                    "Ring Band added.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
+    }
+
+    if (selected.has_value() &&
+        selected->type ==
+            world_model::kRingBandType)
+    {
+        context.Separator();
+
+        if (context.Button(
+                "Remove Selected Ring Band##celestial-remove-ring-band"))
+        {
+            try
+            {
+                model.RemoveSelectedRingBand();
+                status_ =
+                    "Ring Band removed.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
+    }
+
+    if (selected.has_value() &&
         model.IsCapabilityType(
             selected->type))
     {
