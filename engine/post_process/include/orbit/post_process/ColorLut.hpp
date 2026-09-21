@@ -76,6 +76,12 @@ ColorLutDomainName(
 ColorLutShaperName(
     ColorLutShaper shaper) noexcept;
 
+[[nodiscard]] f32
+BlendColorLutChannel(
+    f32 source,
+    f32 corrected,
+    f32 strength) noexcept;
+
 struct ColorLutSettings
 {
     bool enabled{true};
@@ -94,11 +100,15 @@ public:
 
     [[nodiscard]] rhi::Texture& Texture() noexcept;
     [[nodiscard]] u32 Size() const noexcept;
+    [[nodiscard]] f32 DomainMinimum() const noexcept;
+    [[nodiscard]] f32 DomainMaximum() const noexcept;
 
 private:
     std::unique_ptr<rhi::Buffer> staging_;
     std::unique_ptr<rhi::Texture> texture_;
     u32 size_{0U};
+    f32 domainMinimum_{0.0F};
+    f32 domainMaximum_{1.0F};
     bool uploaded_{false};
 };
 
