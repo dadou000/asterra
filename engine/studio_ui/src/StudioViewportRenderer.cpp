@@ -746,13 +746,47 @@ StudioViewportRenderer::StudioViewportRenderer(
       macroGlobeRenderer_(device, compiler),
       farBodyRenderer_(device, compiler),
       pathRenderer_(device, compiler),
-      debugComposite_(device, compiler)
+      debugComposite_(device, compiler),
+      colorLutRenderer_(device, compiler),
+      colorLut_(
+          std::make_unique<
+              post_process::GpuColorLut>(
+                  device,
+                  post_process::
+                      BuildIdentityColorLut()))
 {
     if (framesInFlight_ == 0U)
     {
         throw std::invalid_argument(
             "Studio terrain rendering requires at least one frame-in-flight slot.");
     }
+}
+
+void StudioViewportRenderer::SetColorLut(
+    post_process::ColorLutData lut)
+{
+    if (device_ == nullptr)
+    {
+        throw std::logic_error(
+            "Studio viewport renderer has no device for LUT replacement.");
+    }
+
+    colorLut_ =
+        std::make_unique<
+            post_process::GpuColorLut>(
+                *device_,
+                lut);
+}
+
+void StudioViewportRenderer::SetColorLutSettings(
+    post_process::ColorLutSettings settings) noexcept
+{
+    settings.strength =
+        std::clamp(
+            settings.strength,
+            0.0F,
+            1.0F);
+    colorLutSettings_ = settings;
 }
 
 celestial_globe::GpuMacroGlobeProduct*
@@ -2443,6 +2477,61 @@ StudioViewportRenderer::Compose(
                     });
             }
         }
+
+        if (colorLut_ == nullptr)
+        {
+            throw std::logic_error(
+                "Studio viewport LUT correction has no GPU LUT.");
+        }
+
+        auto* displayColor =
+            &view->DisplayColor();
+        auto* colorLut =
+            colorLut_.get();
+        const auto colorLutSettings =
+            colorLutSettings_;
+
+        graph.AddPass(
+            prefix + ".ColorLutCorrection",
+            {
+                {
+                    .texture = targets.color,
+                    .state =
+                        rhi::ResourceState::
+                            ShaderResource,
+                    .access =
+                        render_graph::Access::
+                            Read
+                },
+                {
+                    .texture = targets.display,
+                    .state =
+                        rhi::ResourceState::
+                            RenderTarget,
+                    .access =
+                        render_graph::Access::
+                            Write
+                }
+            },
+            [this,
+             color,
+             displayColor,
+             width,
+             height,
+             colorLut,
+             colorLutSettings](
+                rhi::CommandList& commands,
+                const render_graph::Resources&)
+            {
+                colorLutRenderer_.Draw(
+                    commands,
+                    *color,
+                    *displayColor,
+                    width,
+                    height,
+                    *colorLut,
+                    colorLutSettings);
+            });
 
         rendered.push_back({
             .id = info.id,
