@@ -3230,10 +3230,25 @@ StudioViewportRenderer::Compose(
                         skyInput,
                         atmosphereConfig);
 
-            if (presentation.skyView ==
+            const bool skyNeedsBuild =
+                presentation.skyView ==
                     nullptr ||
                 presentation.skyFingerprint !=
-                    skyFingerprint)
+                    skyFingerprint;
+
+            if (skyNeedsBuild &&
+                acquireCelestialGrant(
+                    info.id,
+                    logicalTarget->
+                        target->body,
+                    celestial_scheduler::
+                        WorkKind::AtmosphereSky,
+                    skyFingerprint,
+                    celestial_scheduler::
+                        WorkBackend::Gpu,
+                    2U,
+                    95,
+                    true))
             {
                 presentation.skyView =
                     std::make_unique<
@@ -3271,8 +3286,25 @@ StudioViewportRenderer::Compose(
                             *presentation.
                                 skyView);
                 }
+
+                static_cast<void>(
+                    completeCelestialGrant(
+                        info.id,
+                        logicalTarget->
+                            target->body,
+                        celestial_scheduler::
+                            WorkKind::AtmosphereSky,
+                        skyFingerprint));
             }
 
+            const bool skyCurrent =
+                presentation.skyView !=
+                    nullptr &&
+                presentation.skyFingerprint ==
+                    skyFingerprint;
+
+            if (skyCurrent)
+            {
             atmosphereDiagnostics_.
                 insert_or_assign(
                     info.id,
@@ -3320,6 +3352,12 @@ StudioViewportRenderer::Compose(
                                 skyView->
                                 skyView.height
                     });
+            }
+            else
+            {
+                atmosphereDiagnostics_.erase(
+                    info.id);
+            }
             }
             else
             {
