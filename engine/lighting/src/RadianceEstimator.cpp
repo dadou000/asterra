@@ -1,4 +1,5 @@
 #include <orbit/lighting/RadianceEstimator.hpp>
+#include <orbit/lighting/SkyVisibility.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -105,7 +106,7 @@ EstimateRadianceCell(
             settings.ambientIrradianceScale,
             0.0F);
 
-    const math::Float3 ambientEnergy =
+    math::Float3 ambientEnergy =
         hasSkySummary
             ? math::Float3{
                   std::max(settings.skyIrradianceLinear.x, 0.0F),
@@ -116,11 +117,65 @@ EstimateRadianceCell(
                   fallbackAmbient,
                   fallbackAmbient};
 
+    SkyVisibilityEstimate skyVisibility;
+
+    if (hasSkySummary &&
+        visibility != nullptr)
+    {
+        const auto skyCellCenter =
+            RadianceCellCenterInFrame(
+                key,
+                config);
+
+        math::Float3 bodyUp{
+            static_cast<f32>(skyCellCenter.x),
+            static_cast<f32>(skyCellCenter.y),
+            static_cast<f32>(skyCellCenter.z)
+        };
+
+        if (math::LengthSquared(bodyUp) <=
+            1.0e-10F)
+        {
+            bodyUp =
+                {0.0F, 1.0F, 0.0F};
+        }
+
+        skyVisibility =
+            EstimateSkyVisibility(
+                *visibility,
+                view.frame,
+                view.body,
+                skyCellCenter,
+                bodyUp);
+
+        ambientEnergy =
+            ambientEnergy *
+            skyVisibility.visibleFraction;
+    }
+
     result.l0 = {
         ambientEnergy.x * transport,
         ambientEnergy.y * transport,
         ambientEnergy.z * transport
     };
+
+    if (hasSkySummary &&
+        skyVisibility.visibleFraction > 0.0F &&
+        math::LengthSquared(
+            skyVisibility.openDirection) >
+            1.0e-10F)
+    {
+        const math::Float3 directionalSky{
+            ambientEnergy.x * transport * 0.35F,
+            ambientEnergy.y * transport * 0.35F,
+            ambientEnergy.z * transport * 0.35F
+        };
+
+        AddDirectionalLobe(
+            result,
+            skyVisibility.openDirection,
+            directionalSky);
+    }
 
     const math::Float3 stellarEnergy{
         std::max(
