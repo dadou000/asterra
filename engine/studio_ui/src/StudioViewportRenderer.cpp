@@ -1714,7 +1714,9 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
     studio_session::StudioSession& session,
     const universe::BodyId body,
     const universe::BodyShape& shape,
-    const terrain::TerrainSource& terrainSource)
+    const terrain::TerrainSource& terrainSource,
+    const std::function<bool(u64)>& acquireGrant,
+    const std::function<void(u64)>& completeGrant)
 {
     if (device_ == nullptr)
     {
@@ -1811,6 +1813,23 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             ? activeCloudField->fingerprint
             : 0U;
 
+    u64 derivedRevision =
+        CombineFingerprint(
+            geometryFingerprint,
+            appearanceFingerprint);
+    derivedRevision =
+        CombineFingerprint(
+            derivedRevision,
+            sourceRevision);
+    derivedRevision =
+        CombineFingerprint(
+            derivedRevision,
+            activeOceanFingerprint);
+    derivedRevision =
+        CombineFingerprint(
+            derivedRevision,
+            activeCloudFingerprint);
+
     const bool recreate =
         presentation.product == nullptr ||
         presentation.appearanceProduct ==
@@ -1829,7 +1848,8 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
         presentation.cloudFingerprint !=
             activeCloudFingerprint;
 
-    if (recreate)
+    if (recreate &&
+        acquireGrant(derivedRevision))
     {
         const auto mesh =
             celestial_globe::
@@ -1915,6 +1935,9 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
         presentation.appearanceTexels =
             static_cast<u32>(
                 appearance.texels.size());
+
+        completeGrant(
+            derivedRevision);
     }
 
     if (resolvedOcean.has_value())
