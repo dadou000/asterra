@@ -123,25 +123,17 @@ SampleAppearance(
         y);
 }
 
-[[nodiscard]] u8 ToSrgb8(
+[[nodiscard]] u8 ToLinearUnorm8(
     const f32 linear) noexcept
 {
-    const f32 x =
-        std::max(linear, 0.0F);
-
-    const f32 encoded =
-        x <= 0.0031308F
-            ? 12.92F * x
-            : 1.055F *
-                  std::pow(
-                      x,
-                      1.0F / 2.4F) -
-              0.055F;
-
     return static_cast<u8>(
         std::clamp(
             std::lround(
-                encoded * 255.0F),
+                std::clamp(
+                    linear,
+                    0.0F,
+                    1.0F) *
+                255.0F),
             0L,
             255L));
 }
@@ -328,15 +320,20 @@ float4 main(VSOutput input) : SV_Target0
         const float edge =
             saturate((1.0 - r2) * 4.0);
 
+        const float fluxScale =
+            saturate(g.proxy.z);
+
         float3 color =
-            g.albedoAndRoughness.xyz +
-            g.emissionAndOpacity.xyz;
+            (g.albedoAndRoughness.xyz +
+             g.emissionAndOpacity.xyz) *
+            fluxScale;
 
         if (mode == 3u)
         {
             color +=
                 float3(1.0, 0.88, 0.62) *
-                (0.4 + 0.6 * edge);
+                (0.4 + 0.6 * edge) *
+                fluxScale;
         }
 
         return float4(
@@ -631,12 +628,18 @@ CachedDiscProduct BuildCachedDisc(
                  x) *
                 4U;
 
+            const math::Float3 mapped{
+                color.x / (1.0F + color.x),
+                color.y / (1.0F + color.y),
+                color.z / (1.0F + color.z)
+            };
+
             result.rgba8[offset] =
-                ToSrgb8(color.x);
+                ToLinearUnorm8(mapped.x);
             result.rgba8[offset + 1U] =
-                ToSrgb8(color.y);
+                ToLinearUnorm8(mapped.y);
             result.rgba8[offset + 2U] =
-                ToSrgb8(color.z);
+                ToLinearUnorm8(mapped.z);
 
             const f64 edge =
                 std::clamp(
@@ -854,20 +857,31 @@ void FarBodyRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
+    const f64 minimumRasterRadiusPixels =
+        0.5;
+    const f64 rasterRadiusPixels =
+        std::max(
+            draw.projectedRadiusPixels,
+            minimumRasterRadiusPixels);
+
     const f32 radiusNdc =
         static_cast<f32>(
-            std::max(
-                2.0 *
-                    draw.projectedRadiusPixels /
-                    static_cast<f64>(
-                        std::max(
-                            height,
-                            1U)),
-                1.0 /
-                    static_cast<f64>(
-                        std::max(
-                            height,
-                            1U))));
+            2.0 *
+            rasterRadiusPixels /
+            static_cast<f64>(
+                std::max(
+                    height,
+                    1U)));
+
+    const f32 pointFluxScale =
+        static_cast<f32>(
+            std::clamp(
+                (draw.projectedRadiusPixels *
+                 draw.projectedRadiusPixels) /
+                    (rasterRadiusPixels *
+                     rasterRadiusPixels),
+                0.0,
+                1.0));
 
     commands.SetRenderTarget(target);
     commands.SetViewport({
@@ -1005,8 +1019,8 @@ void FarBodyRenderer::Draw(
 
             bits(static_cast<f32>(mode)),
             bits(radiusNdc),
-            bits(draw.stellar ? 1.0F : 0.0F),
-            0U
+            bits(pointFluxScale),
+            bits(draw.stellar ? 1.0F : 0.0F)
         };
 
     commands.SetGraphicsPipeline(
