@@ -34,6 +34,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialRadiometry
         Orbit::EditorModel
         Orbit::EditorUi
+        Orbit::Lighting
         Orbit::PostProcess
         Orbit::RenderGraph
         Orbit::RenderView
