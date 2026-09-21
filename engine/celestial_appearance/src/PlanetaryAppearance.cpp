@@ -493,12 +493,12 @@ GpuPlanetaryAppearanceProduct(
                     packed.size() *
                     sizeof(GpuAppearanceTexel)),
             .usage =
-                rhi::BufferUsage::Storage,
+                rhi::BufferUsage::Structured,
             .memory =
                 rhi::MemoryUsage::HostVisible,
             .initialState =
                 rhi::ResourceState::
-                    ShaderRead
+                    ShaderResource
         });
 
     if (!buffer_)
