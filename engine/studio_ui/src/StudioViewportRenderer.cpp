@@ -993,6 +993,24 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
                     radiusMeters,
                 appearanceConfig);
 
+    const auto cloudFound =
+        cloudPresentations_.find(
+            viewportId);
+
+    const celestial_clouds::CloudFieldProduct*
+        activeCloudField =
+            cloudFound !=
+                    cloudPresentations_.end() &&
+                cloudFound->second.field !=
+                    nullptr
+                ? cloudFound->second.field.get()
+                : nullptr;
+
+    const u64 activeCloudFingerprint =
+        activeCloudField != nullptr
+            ? activeCloudField->fingerprint
+            : 0U;
+
     const bool recreate =
         presentation.product == nullptr ||
         presentation.appearanceProduct ==
@@ -1004,8 +1022,11 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             sourceRevision ||
         presentation.fingerprint !=
             geometryFingerprint ||
-        presentation.appearanceFingerprint !=
-            appearanceFingerprint;
+        (presentation.appearanceFingerprint !=
+             appearanceFingerprint &&
+         presentation.cloudFingerprint == 0U) ||
+        presentation.cloudFingerprint !=
+            activeCloudFingerprint;
 
     if (recreate)
     {
@@ -1016,13 +1037,21 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
                     shape,
                     globeConfig);
 
-        const auto appearance =
+        auto appearance =
             celestial_appearance::
                 BuildPlanetaryAppearance(
                     terrainSource,
                     sphericalPlanet->
                         radiusMeters,
                     appearanceConfig);
+
+        if (activeCloudField != nullptr)
+        {
+            celestial_clouds::
+                CompositeOrbitalCloudAppearance(
+                    *activeCloudField,
+                    appearance);
+        }
 
         presentation.appearanceSummary =
             celestial_far_render::
@@ -1067,7 +1096,9 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
         presentation.fingerprint =
             geometryFingerprint;
         presentation.appearanceFingerprint =
-            appearanceFingerprint;
+            appearance.fingerprint;
+        presentation.cloudFingerprint =
+            activeCloudFingerprint;
         presentation.appearanceTexels =
             static_cast<u32>(
                 appearance.texels.size());
