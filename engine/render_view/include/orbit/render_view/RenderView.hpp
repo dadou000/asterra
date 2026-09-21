@@ -60,6 +60,7 @@ struct ImportedTargets
     render_graph::TextureHandle surfaceNormalMetallic;
     render_graph::TextureHandle surfaceEmissionClass;
     render_graph::TextureHandle displayLinear;
+    render_graph::TextureHandle displayGraded;
     render_graph::TextureHandle display;
     render_graph::TextureHandle depth;
     render_graph::TextureHandle picking;
@@ -95,6 +96,7 @@ public:
     [[nodiscard]] rhi::Texture& SurfaceNormalMetallic() noexcept;
     [[nodiscard]] rhi::Texture& SurfaceEmissionClass() noexcept;
     [[nodiscard]] rhi::Texture& DisplayLinear() noexcept;
+    [[nodiscard]] rhi::Texture& DisplayGraded() noexcept;
     [[nodiscard]] rhi::Texture& DisplayColor() noexcept;
     [[nodiscard]] rhi::Texture& Depth() noexcept;
     [[nodiscard]] rhi::Texture& Picking() noexcept;
@@ -120,6 +122,7 @@ private:
     std::unique_ptr<rhi::Texture> surfaceNormalMetallic_;
     std::unique_ptr<rhi::Texture> surfaceEmissionClass_;
     std::unique_ptr<rhi::Texture> displayLinear_;
+    std::unique_ptr<rhi::Texture> displayGraded_;
     std::unique_ptr<rhi::Texture> displayColor_;
     std::unique_ptr<rhi::Texture> depth_;
     std::unique_ptr<rhi::Texture> picking_;
