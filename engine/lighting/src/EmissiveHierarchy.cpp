@@ -1,420 +1,473 @@
 #include <orbit/lighting/EmissiveHierarchy.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
-#include <queue>
+#include <limits>
 #include <stdexcept>
 
 namespace orbit::lighting
 {
 namespace
 {
-[[nodiscard]] f32 Luminance(
+[[nodiscard]] f64 Luminance(
     const math::Float3 value) noexcept
 {
     return
-        std::max(value.x, 0.0F) * 0.2126F +
-        std::max(value.y, 0.0F) * 0.7152F +
-        std::max(value.z, 0.0F) * 0.0722F;
+        0.2126 *
+            static_cast<f64>(
+                std::max(value.x, 0.0F)) +
+        0.7152 *
+            static_cast<f64>(
+                std::max(value.y, 0.0F)) +
+        0.0722 *
+            static_cast<f64>(
+                std::max(value.z, 0.0F));
 }
 
-struct BuildContext
+struct Builder
 {
-    const EmissiveHierarchySampleGrid* source{nullptr};
-    EmissiveHierarchy* hierarchy{nullptr};
-};
+    const EmissiveSurfaceGrid* surface{nullptr};
+    EmissiveHierarchy result;
+    f64 texelArea{0.0};
 
-u32 BuildNode(
-    BuildContext& context,
-    const u32 x,
-    const u32 y,
-    const u32 width,
-    const u32 height,
-    const u32 level)
-{
-    const u32 nodeIndex =
-        static_cast<u32>(
-            context.hierarchy->nodes.size());
-
-    context.hierarchy->nodes.push_back({
-        .level = level,
-        .x = x,
-        .y = y,
-        .widthTexels = width,
-        .heightTexels = height
-    });
-
-    auto& node =
-        context.hierarchy->nodes[nodeIndex];
-
-    if (width == 1U &&
-        height == 1U)
+    [[nodiscard]] u32 Build(
+        const u32 minX,
+        const u32 minY,
+        const u32 maxX,
+        const u32 maxY,
+        const u32 level)
     {
-        const auto radiance =
-            context.source->giRadiance[
-                static_cast<std::size_t>(y) *
-                    context.source->width +
-                x];
+        const u32 index =
+            static_cast<u32>(
+                result.nodes.size());
 
-        node.totalAreaSquareMeters =
-            context.source->texelAreaSquareMeters;
+        result.nodes.emplace_back();
 
-        node.integratedEnergy = {
-            std::max(radiance.x, 0.0F) *
-                node.totalAreaSquareMeters,
-            std::max(radiance.y, 0.0F) *
-                node.totalAreaSquareMeters,
-            std::max(radiance.z, 0.0F) *
-                node.totalAreaSquareMeters
-        };
+        auto& placeholder =
+            result.nodes[index];
 
-        node.peakLuminance =
-            Luminance(radiance);
+        placeholder.texelMinX = minX;
+        placeholder.texelMinY = minY;
+        placeholder.texelMaxX = maxX;
+        placeholder.texelMaxY = maxY;
+        placeholder.level = level;
 
-        node.centroidUv = {
-            (static_cast<f32>(x) + 0.5F) /
-                static_cast<f32>(
-                    context.source->width),
-            (static_cast<f32>(y) + 0.5F) /
-                static_cast<f32>(
-                    context.source->height)
-        };
+        math::Double3 center{};
+        math::Float3 sum{};
+        math::Float3 peak{};
+        f64 importance = 0.0;
 
-        return nodeIndex;
-    }
+        const u64 texelCount =
+            static_cast<u64>(
+                maxX - minX) *
+            static_cast<u64>(
+                maxY - minY);
 
-    const u32 leftWidth =
-        (width + 1U) / 2U;
-    const u32 rightWidth =
-        width - leftWidth;
-    const u32 topHeight =
-        (height + 1U) / 2U;
-    const u32 bottomHeight =
-        height - topHeight;
-
-    struct Region
-    {
-        u32 x;
-        u32 y;
-        u32 width;
-        u32 height;
-    };
-
-    const Region regions[4]{
-        {x, y, leftWidth, topHeight},
-        {x + leftWidth, y, rightWidth, topHeight},
-        {x, y + topHeight, leftWidth, bottomHeight},
-        {x + leftWidth, y + topHeight, rightWidth, bottomHeight}
-    };
-
-    const u32 firstChild =
-        static_cast<u32>(
-            context.hierarchy->nodes.size());
-
-    u32 childCount = 0U;
-
-    math::Float3 integrated{};
-    f32 area = 0.0F;
-    f32 peak = 0.0F;
-    f32 energyWeight = 0.0F;
-    math::Float2 weightedCentroid{};
-
-    for (const auto& region : regions)
-    {
-        if (region.width == 0U ||
-            region.height == 0U)
+        for (u32 y = minY; y < maxY; ++y)
         {
-            continue;
+            for (u32 x = minX; x < maxX; ++x)
+            {
+                const auto radiance =
+                    surface->giRadiance[
+                        static_cast<std::size_t>(y) *
+                            surface->width +
+                        x];
+
+                sum.x += std::max(radiance.x, 0.0F);
+                sum.y += std::max(radiance.y, 0.0F);
+                sum.z += std::max(radiance.z, 0.0F);
+
+                peak.x =
+                    std::max(
+                        peak.x,
+                        std::max(
+                            radiance.x,
+                            0.0F));
+                peak.y =
+                    std::max(
+                        peak.y,
+                        std::max(
+                            radiance.y,
+                            0.0F));
+                peak.z =
+                    std::max(
+                        peak.z,
+                        std::max(
+                            radiance.z,
+                            0.0F));
+
+                importance +=
+                    Luminance(radiance) *
+                    texelArea;
+            }
         }
 
-        const u32 childIndex =
-            BuildNode(
-                context,
-                region.x,
-                region.y,
-                region.width,
-                region.height,
-                level + 1U);
+        const f64 inverseCount =
+            texelCount > 0U
+                ? 1.0 /
+                    static_cast<f64>(
+                        texelCount)
+                : 0.0;
 
-        ++childCount;
+        const f64 centerU =
+            (static_cast<f64>(minX + maxX) *
+             0.5) /
+            static_cast<f64>(
+                surface->width);
 
-        const auto& child =
-            context.hierarchy->
-                nodes[childIndex];
+        const f64 centerV =
+            (static_cast<f64>(minY + maxY) *
+             0.5) /
+            static_cast<f64>(
+                surface->height);
 
-        integrated.x +=
-            child.integratedEnergy.x;
-        integrated.y +=
-            child.integratedEnergy.y;
-        integrated.z +=
-            child.integratedEnergy.z;
+        center =
+            surface->originInFrameMeters +
+            surface->axisUInFrameMeters *
+                centerU +
+            surface->axisVInFrameMeters *
+                centerV;
 
-        area +=
-            child.totalAreaSquareMeters;
-        peak =
-            std::max(
-                peak,
-                child.peakLuminance);
+        // result.nodes can reallocate while children are appended, so write
+        // parent fields through index after all recursive calls.
+        result.nodes[index].centerInFrameMeters =
+            center;
+        result.nodes[index].averageRadiance = {
+            static_cast<f32>(
+                static_cast<f64>(sum.x) *
+                inverseCount),
+            static_cast<f32>(
+                static_cast<f64>(sum.y) *
+                inverseCount),
+            static_cast<f32>(
+                static_cast<f64>(sum.z) *
+                inverseCount)
+        };
+        result.nodes[index].peakRadiance =
+            peak;
+        result.nodes[index].areaMetersSquared =
+            texelArea *
+            static_cast<f64>(
+                texelCount);
+        result.nodes[index].radiantImportance =
+            importance;
 
-        const f32 childEnergy =
-            std::max(
-                Luminance(
-                    child.integratedEnergy),
-                0.0F);
+        const u32 width =
+            maxX - minX;
+        const u32 height =
+            maxY - minY;
 
-        weightedCentroid.x +=
-            child.centroidUv.x *
-            childEnergy;
-        weightedCentroid.y +=
-            child.centroidUv.y *
-            childEnergy;
-        energyWeight +=
-            childEnergy;
-    }
+        if (width <= 1U &&
+            height <= 1U)
+        {
+            return index;
+        }
 
-    node = {
-        .level = level,
-        .x = x,
-        .y = y,
-        .widthTexels = width,
-        .heightTexels = height,
-        .integratedEnergy = integrated,
-        .centroidUv =
-            energyWeight > 1.0e-8F
-                ? math::Float2{
-                      weightedCentroid.x /
-                          energyWeight,
-                      weightedCentroid.y /
-                          energyWeight}
-                : math::Float2{
-                      (static_cast<f32>(x) +
-                       static_cast<f32>(width) *
-                           0.5F) /
-                          static_cast<f32>(
-                              context.source->width),
-                      (static_cast<f32>(y) +
-                       static_cast<f32>(height) *
-                           0.5F) /
-                          static_cast<f32>(
-                              context.source->height)},
-        .totalAreaSquareMeters = area,
-        .peakLuminance = peak,
-        .firstChild = firstChild,
-        .childCount = childCount
-    };
+        const u32 splitX =
+            width > 1U
+                ? minX + width / 2U
+                : maxX;
 
-    return nodeIndex;
-}
+        const u32 splitY =
+            height > 1U
+                ? minY + height / 2U
+                : maxY;
 
-struct Candidate
-{
-    u32 nodeIndex{0U};
-    f32 projectedPixels{0.0F};
-    f32 importance{0.0F};
+        std::array<
+            std::array<u32, 4>,
+            4> regions{};
+        u32 regionCount = 0U;
 
-    bool operator<(
-        const Candidate& other) const noexcept
-    {
-        return importance <
-            other.importance;
+        const auto addRegion =
+            [&](const u32 x0,
+                const u32 y0,
+                const u32 x1,
+                const u32 y1)
+            {
+                if (x1 > x0 &&
+                    y1 > y0)
+                {
+                    regions[regionCount++] = {
+                        x0, y0, x1, y1
+                    };
+                }
+            };
+
+        addRegion(
+            minX,
+            minY,
+            splitX,
+            splitY);
+        addRegion(
+            splitX,
+            minY,
+            maxX,
+            splitY);
+        addRegion(
+            minX,
+            splitY,
+            splitX,
+            maxY);
+        addRegion(
+            splitX,
+            splitY,
+            maxX,
+            maxY);
+
+        const u32 firstChild =
+            static_cast<u32>(
+                result.nodes.size());
+
+        for (u32 region = 0U;
+             region < regionCount;
+             ++region)
+        {
+            const auto r =
+                regions[region];
+
+            static_cast<void>(
+                Build(
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    level + 1U));
+        }
+
+        result.nodes[index].firstChild =
+            firstChild;
+        result.nodes[index].childCount =
+            regionCount;
+
+        return index;
     }
 };
 
-[[nodiscard]] f32 NodeProjectedPixels(
-    const EmissiveHierarchy& hierarchy,
+[[nodiscard]] f32 ProjectedPixels(
     const EmissiveHierarchyNode& node,
-    const f32 surfacePixels) noexcept
+    const EmissiveHierarchy& hierarchy,
+    const LightingView& view,
+    const u32 viewportWidth,
+    const u32 viewportHeight) noexcept
 {
-    if (hierarchy.sourceWidth == 0U)
+    if (viewportWidth == 0U ||
+        viewportHeight == 0U)
     {
         return 0.0F;
     }
 
-    return
-        surfacePixels *
-        static_cast<f32>(
-            node.widthTexels) /
-        static_cast<f32>(
-            hierarchy.sourceWidth);
-}
+    const auto relativeD =
+        node.centerInFrameMeters -
+        view.cameraPositionInFrameMeters;
 
-[[nodiscard]] f32 NodeImportance(
-    const EmissiveHierarchyNode& node,
-    const f32 projectedPixels) noexcept
-{
-    return
-        Luminance(
-            node.integratedEnergy) *
-        std::max(
-            projectedPixels,
-            0.0F);
+    const f64 distanceSquared =
+        math::LengthSquared(
+            relativeD);
+
+    if (!std::isfinite(distanceSquared) ||
+        distanceSquared <= 1.0e-12)
+    {
+        return
+            static_cast<f32>(
+                viewportWidth *
+                viewportHeight);
+    }
+
+    const f64 distance =
+        std::sqrt(
+            distanceSquared);
+
+    const auto directionD =
+        relativeD /
+        distance;
+
+    const f64 facing =
+        std::abs(
+            math::Dot(
+                hierarchy.surfaceNormal,
+                directionD));
+
+    const f64 projectedArea =
+        node.areaMetersSquared *
+        facing /
+        distanceSquared;
+
+    const f64 focalPixels =
+        static_cast<f64>(
+            viewportHeight) /
+        (2.0 *
+         std::tan(
+             static_cast<f64>(
+                 view.verticalFovRadians) *
+             0.5));
+
+    const f64 pixelArea =
+        projectedArea *
+        focalPixels *
+        focalPixels;
+
+    if (!std::isfinite(pixelArea) ||
+        pixelArea <= 0.0)
+    {
+        return 0.0F;
+    }
+
+    return static_cast<f32>(
+        std::sqrt(pixelArea));
 }
 } // namespace
 
 EmissiveHierarchy BuildEmissiveHierarchy(
-    const EmissiveHierarchySampleGrid& source)
+    const EmissiveSurfaceGrid& surface)
 {
-    if (source.width == 0U ||
-        source.height == 0U ||
-        !std::isfinite(
-            source.texelAreaSquareMeters) ||
-        source.texelAreaSquareMeters <= 0.0F ||
-        source.giRadiance.size() !=
+    if (!surface.frame ||
+        !surface.body ||
+        surface.stableId == 0U ||
+        surface.width == 0U ||
+        surface.height == 0U ||
+        surface.giRadiance.size() !=
             static_cast<std::size_t>(
-                source.width) *
-            source.height)
+                surface.width) *
+            surface.height)
     {
         throw std::invalid_argument(
-            "Emissive hierarchy source grid is invalid.");
+            "Emissive hierarchy requires valid authority, dimensions and radiance samples.");
     }
 
-    EmissiveHierarchy result{
-        .sourceWidth = source.width,
-        .sourceHeight = source.height,
-        .texelAreaSquareMeters =
-            source.texelAreaSquareMeters
-    };
+    const auto cross =
+        math::Cross(
+            surface.axisUInFrameMeters,
+            surface.axisVInFrameMeters);
 
-    result.nodes.reserve(
-        static_cast<std::size_t>(
-            source.width) *
-        source.height *
-        2U);
+    const f64 area =
+        math::Length(cross);
 
-    BuildContext context{
-        .source = &source,
-        .hierarchy = &result
-    };
+    if (!std::isfinite(area) ||
+        area <= 1.0e-12)
+    {
+        throw std::invalid_argument(
+            "Emissive surface axes must span non-zero physical area.");
+    }
 
-    result.root =
-        BuildNode(
-            context,
+    Builder builder;
+    builder.surface = &surface;
+    builder.result.frame =
+        surface.frame;
+    builder.result.body =
+        surface.body;
+    builder.result.stableId =
+        surface.stableId;
+    builder.result.surfaceNormal =
+        math::Normalize(cross);
+    builder.result.sourceWidth =
+        surface.width;
+    builder.result.sourceHeight =
+        surface.height;
+    builder.texelArea =
+        area /
+        (static_cast<f64>(
+             surface.width) *
+         static_cast<f64>(
+             surface.height));
+
+    builder.result.root =
+        builder.Build(
             0U,
             0U,
-            source.width,
-            source.height,
+            surface.width,
+            surface.height,
             0U);
 
-    return result;
+    return builder.result;
 }
 
-std::vector<SelectedEmissiveNode>
-SelectEmissiveHierarchyNodes(
+std::vector<EmissiveSelectedNode>
+SelectEmissiveHierarchy(
     const EmissiveHierarchy& hierarchy,
-    const f32 projectedSurfaceWidthPixels,
-    const EmissiveHierarchySelectionSettings& settings)
+    const LightingView& view,
+    const u32 viewportWidth,
+    const u32 viewportHeight,
+    const EmissiveHierarchySelectionConfig& config)
 {
-    std::vector<SelectedEmissiveNode>
-        result;
+    std::vector<EmissiveSelectedNode> selected;
 
-    if (hierarchy.nodes.empty() ||
-        hierarchy.root >=
+    if (hierarchy.root >=
             hierarchy.nodes.size() ||
-        settings.maximumNodes == 0U)
+        view.frame != hierarchy.frame ||
+        view.body != hierarchy.body ||
+        config.maximumSelectedNodes == 0U)
     {
-        return result;
+        return selected;
     }
 
-    std::priority_queue<Candidate>
-        pending;
+    std::vector<u32> stack{
+        hierarchy.root};
 
-    const auto pushNode =
-        [&](const u32 index)
-        {
-            const auto& node =
-                hierarchy.nodes[index];
-
-            const f32 projected =
-                NodeProjectedPixels(
-                    hierarchy,
-                    node,
-                    projectedSurfaceWidthPixels);
-
-            pending.push({
-                .nodeIndex = index,
-                .projectedPixels =
-                    projected,
-                .importance =
-                    NodeImportance(
-                        node,
-                        projected)
-            });
-        };
-
-    pushNode(
-        hierarchy.root);
-
-    while (!pending.empty())
+    while (!stack.empty() &&
+           selected.size() <
+               config.maximumSelectedNodes)
     {
-        const Candidate candidate =
-            pending.top();
-        pending.pop();
+        const u32 nodeIndex =
+            stack.back();
+        stack.pop_back();
 
         const auto& node =
-            hierarchy.nodes[
-                candidate.nodeIndex];
+            hierarchy.nodes[nodeIndex];
 
-        const bool shouldRefine =
+        const f32 projected =
+            ProjectedPixels(
+                node,
+                hierarchy,
+                view,
+                viewportWidth,
+                viewportHeight);
+
+        const f64 weightedImportance =
+            node.radiantImportance *
+            static_cast<f64>(
+                std::max(
+                    projected,
+                    0.0F));
+
+        const bool refine =
             !node.IsLeaf() &&
-            candidate.projectedPixels >
-                settings.
-                    refineAboveProjectedPixels &&
-            result.size() +
-                pending.size() +
-                node.childCount <=
-                settings.maximumNodes;
+            (projected >=
+                 config.
+                     subdivisionProjectedPixels ||
+             weightedImportance >=
+                 config.
+                     minimumRadiantImportance);
 
-        if (shouldRefine)
+        if (refine &&
+            selected.size() +
+                    stack.size() +
+                    node.childCount <=
+                config.maximumSelectedNodes)
         {
-            for (u32 offset = 0U;
-                 offset < node.childCount;
-                 ++offset)
+            for (u32 child = 0U;
+                 child < node.childCount;
+                 ++child)
             {
-                pushNode(
+                stack.push_back(
                     node.firstChild +
-                    offset);
+                    (node.childCount -
+                     1U -
+                     child));
             }
 
             continue;
         }
 
-        result.push_back({
-            .nodeIndex =
-                candidate.nodeIndex,
-            .integratedEnergy =
-                node.integratedEnergy,
-            .centroidUv =
-                node.centroidUv,
-            .projectedWidthPixels =
-                candidate.projectedPixels,
-            .importance =
-                candidate.importance
+        selected.push_back({
+            .nodeIndex = nodeIndex,
+            .projectedPixels =
+                projected,
+            .weightedImportance =
+                weightedImportance
         });
-
-        if (result.size() >=
-            settings.maximumNodes)
-        {
-            break;
-        }
     }
 
-    return result;
-}
-
-u32 EmissiveHierarchyLeafCount(
-    const EmissiveHierarchy& hierarchy) noexcept
-{
-    u32 count = 0U;
-
-    for (const auto& node :
-         hierarchy.nodes)
-    {
-        if (node.IsLeaf())
-        {
-            ++count;
-        }
-    }
-
-    return count;
+    return selected;
 }
 } // namespace orbit::lighting
