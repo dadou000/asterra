@@ -9,7 +9,7 @@ target_link_libraries(OrbitCelestialRings PUBLIC
     Orbit::Core
     Orbit::Math
     Orbit::RenderView
-    Orbit::Rhi
+    Orbit::RHI
     Orbit::Shader
     Orbit::Terrain
 )
