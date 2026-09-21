@@ -17,7 +17,7 @@ namespace
 {
 int FailCode(const int code)
 {
-    std::cerr << "lighting-composition failure code " << code << '\\n';
+    std::cerr << "lighting-composition failure code " << code << '\n';
     return code;
 }
 } // namespace
@@ -112,7 +112,7 @@ int main()
         commands.SetProperty(
             moon,
             orbit::world_model::kBodyRadius,
-            75.0);
+            20.0);
         commands.SetProperty(
             moon,
             orbit::world_model::kBodyParentPositionMeters,
