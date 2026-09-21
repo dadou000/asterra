@@ -1,7 +1,9 @@
 #include <orbit/lighting/AnalyticBodyVisibility.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 #include <variant>
 
