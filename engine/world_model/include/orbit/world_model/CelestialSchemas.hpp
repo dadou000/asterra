@@ -98,6 +98,40 @@ inline constexpr schema::PropertyId kRotationEpochMicroseconds{
 inline constexpr schema::PropertyId kRotationSynchronousPhaseOffsetDegrees{
     .high = 0x4f52424954524f54ULL, .low = 0x53594e434f464601ULL};
 
+inline constexpr schema::PropertyId kCompactGravitationalParameter{
+    .high = 0x4f52424954434d50ULL, .low = 0x4d55000000000001ULL};
+inline constexpr schema::PropertyId kCompactDimensionlessSpin{
+    .high = 0x4f52424954434d50ULL, .low = 0x5350494e00000001ULL};
+inline constexpr schema::PropertyId kCompactSpinAxis{
+    .high = 0x4f52424954434d50ULL, .low = 0x4158495300000001ULL};
+inline constexpr schema::PropertyId kCompactShadowScale{
+    .high = 0x4f52424954434d50ULL, .low = 0x5348445753434c01ULL};
+inline constexpr schema::PropertyId kCompactLensingStrength{
+    .high = 0x4f52424954434d50ULL, .low = 0x4c454e5354520001ULL};
+inline constexpr schema::PropertyId kCompactPhotonRingIntensity{
+    .high = 0x4f52424954434d50ULL, .low = 0x504852494e470001ULL};
+
+inline constexpr schema::PropertyId kAccretionInnerRadiusRg{
+    .high = 0x4f52424954414343ULL, .low = 0x494e4e4552524701ULL};
+inline constexpr schema::PropertyId kAccretionOuterRadiusRg{
+    .high = 0x4f52424954414343ULL, .low = 0x4f55544552524701ULL};
+inline constexpr schema::PropertyId kAccretionAxis{
+    .high = 0x4f52424954414343ULL, .low = 0x4158495300000001ULL};
+inline constexpr schema::PropertyId kAccretionColorLinear{
+    .high = 0x4f52424954414343ULL, .low = 0x434f4c4f52000001ULL};
+inline constexpr schema::PropertyId kAccretionIntensity{
+    .high = 0x4f52424954414343ULL, .low = 0x494e54454e530001ULL};
+inline constexpr schema::PropertyId kAccretionTemperatureKelvin{
+    .high = 0x4f52424954414343ULL, .low = 0x54454d504b000001ULL};
+inline constexpr schema::PropertyId kAccretionRadialFalloffExponent{
+    .high = 0x4f52424954414343ULL, .low = 0x52414446414c4c01ULL};
+inline constexpr schema::PropertyId kAccretionThicknessRatio{
+    .high = 0x4f52424954414343ULL, .low = 0x544849434b000001ULL};
+inline constexpr schema::PropertyId kAccretionDopplerStrength{
+    .high = 0x4f52424954414343ULL, .low = 0x444f50504c455201ULL};
+inline constexpr schema::PropertyId kAccretionSeed{
+    .high = 0x4f52424954414343ULL, .low = 0x5345454400000001ULL};
+
 inline constexpr schema::PropertyId kGravityDeriveMuFromMass{
     .high = 0x4f52424954475241ULL, .low = 0x4445524956450001ULL};
 inline constexpr schema::PropertyId kGravityMuM3PerS2{
