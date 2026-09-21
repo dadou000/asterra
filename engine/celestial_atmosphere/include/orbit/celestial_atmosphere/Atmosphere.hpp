@@ -131,6 +131,9 @@ public:
     void EnsureUploaded(
         rhi::CommandList& commands);
 
+    void ReplaceSkyView(
+        const AtmosphereSkyView& skyView);
+
     [[nodiscard]] rhi::Texture& Transmittance() noexcept;
     [[nodiscard]] rhi::Texture& MultiScattering() noexcept;
     [[nodiscard]] rhi::Texture& SkyView() noexcept;
@@ -154,6 +157,7 @@ private:
         rhi::CommandList& commands,
         UploadTexture& product);
 
+    rhi::Device* device_{nullptr};
     UploadTexture transmittance_;
     UploadTexture multiScattering_;
     UploadTexture skyView_;
