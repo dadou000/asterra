@@ -267,7 +267,7 @@ SelectedMagnetosphereDiagnosticLines(
     if (math::LengthSquared(wind) <= 1.0e-20)
         wind = {-1.0, 0.0, 0.0};
 
-    const auto sunward = -math::Normalize(wind);
+    const auto sunward = math::Normalize(wind) * -1.0;
 
     math::Double3 windReference{0.0, 1.0, 0.0};
     if (std::abs(math::Dot(sunward, windReference)) > 0.9)
