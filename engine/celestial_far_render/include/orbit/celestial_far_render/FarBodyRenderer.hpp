@@ -73,6 +73,9 @@ struct FarBodyDraw
     f64 projectedRadiusPixels{1.0};
     f32 opacity{1.0F};
     f32 radiometricIntensity{1.0F};
+    math::Float3 lightDirectionBody{
+        0.55F, 0.72F, -0.48F};
+    f32 incidentLightScale{1.0F};
     bool stellar{false};
 };
 
