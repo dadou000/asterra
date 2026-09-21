@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/EmissiveSampling.hpp>
 #include <orbit/lighting/LocalLightRegistry.hpp>
 #include <orbit/lighting/RadianceClipmapResidency.hpp>
 #include <orbit/lighting/Visibility.hpp>
@@ -56,5 +57,6 @@ EstimateRadianceCell(
     std::span<const ResolvedLocalLight> localLights,
     const VisibilityRegistry* visibility = nullptr,
     const RadianceEstimateSettings& settings = {},
-    std::span<const EmissiveVolumeSource> emissiveVolumes = {});
+    std::span<const EmissiveVolumeSource> emissiveVolumes = {},
+    std::span<const EmissiveSampledEmitter> emissiveSurfaces = {});
 } // namespace orbit::lighting
