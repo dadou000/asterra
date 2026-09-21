@@ -39,6 +39,7 @@ public:
         rhi::Texture& targetSceneColor,
         rhi::Texture& surfaceBaseRoughness,
         rhi::Texture& surfaceNormalMetallic,
+        rhi::Texture& depth,
         rhi::Buffer& results,
         rhi::Buffer& pixelMap,
         rhi::Buffer& radianceCells,
@@ -47,6 +48,7 @@ public:
         u32 maximumQueries,
         u32 width,
         u32 height,
+        const LightingView& view,
         math::Float3 sceneToCurrentOriginMeters,
         f32 cacheStrength = 1.0F);
 
