@@ -10,6 +10,7 @@
 #include <numbers>
 #include <span>
 #include <stdexcept>
+#include <variant>
 
 namespace orbit::editor_model
 {
@@ -473,6 +474,22 @@ void SystemViewModel::ApplyAnalyticOrbitEdit(
     {
         throw std::invalid_argument(
             "Orbit manipulation requires an Orbit / Ephemeris capability.");
+    }
+
+    const auto modelValue =
+        objects_.GetProperty(
+            capability,
+            world_model::kCapabilityModel);
+
+    if (!modelValue.has_value() ||
+        !std::holds_alternative<std::string>(
+            *modelValue) ||
+        std::get<std::string>(
+            *modelValue) !=
+            "Analytic Conic")
+    {
+        throw std::invalid_argument(
+            "Direct orbit manipulation requires the Analytic Conic model.");
     }
 
     const auto finite =
