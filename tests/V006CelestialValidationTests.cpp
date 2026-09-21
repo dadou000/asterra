@@ -152,7 +152,7 @@ int main()
                 shape.minimumRadiusScale) ||
             !std::isfinite(
                 shape.maximumRadiusScale) ||
-            shape.minimumRadiusScale <= 0.18 ||
+            shape.minimumRadiusScale < 0.18 ||
             shape.maximumRadiusScale <=
                 shape.minimumRadiusScale)
         {
