@@ -18,6 +18,8 @@ struct VSOutput
     // instead of localPosition/surfaceDirection for anything that must
     // stay fixed for a given physical point as the camera moves.
     float3 worldPosition : TEXCOORD8;
+    float3 bodyFixedNormal : TEXCOORD9;
+    float3 bodyFixedSurfaceDirection : TEXCOORD10;
     float horizonClip : SV_ClipDistance0;
 };
 
@@ -256,6 +258,12 @@ SurfaceOutputs main(VSOutput input)
             input.worldPosition,
             input.spacingMeters);
 
+    const float3 bodyFixedNormal =
+        ApplyDetailNormal(
+            normalize(input.bodyFixedNormal),
+            input.worldPosition,
+            input.spacingMeters);
+
     const float3 surfaceDirection =
         normalize(
             input.surfaceDirection);
@@ -307,7 +315,7 @@ SurfaceOutputs main(VSOutput input)
     // Depth gives a continuous shallow shoreline without a lifted overlay.
     // Use the sphere normal for standing water; bank slopes still shade land.
     const float waterCoverage = smoothstep(0.0, 0.25, input.waterDepth);
-    float3 surfaceNormal = terrainNormal;
+    float3 surfaceNormal = bodyFixedNormal;
     if (waterCoverage > 0.0)
     {
         const float3 viewDirection = normalize(-input.localPosition);
@@ -327,7 +335,11 @@ SurfaceOutputs main(VSOutput input)
         surfaceRoughness =
             lerp(surfaceRoughness, 0.08, waterCoverage);
         surfaceNormal =
-            normalize(lerp(terrainNormal, surfaceDirection, waterCoverage));
+            normalize(
+                lerp(
+                    bodyFixedNormal,
+                    normalize(input.bodyFixedSurfaceDirection),
+                    waterCoverage));
         if (waterCoverage >= 0.5)
         {
             surfaceClass = 2.0; // SurfaceClass::Water
