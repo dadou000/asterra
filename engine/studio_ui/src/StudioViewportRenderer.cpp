@@ -1284,26 +1284,42 @@ StudioViewportRenderer::Compose(
                 macroGlobePresentations_[
                     info.id];
 
-            const auto mesh =
-                celestial_globe::BuildMacroGlobe(
-                    *macroGlobeSurface->terrain,
-                    *shape,
-                    {
-                        .faceResolution = 33U,
-                        .footprintScale = 1.5
-                    });
+            const celestial_globe::MacroGlobeConfig
+                globeConfig{
+                    .faceResolution = 33U,
+                    .footprintScale = 1.5
+                };
+
+            const u64 fingerprint =
+                celestial_globe::
+                    MacroGlobeFingerprint(
+                        *macroGlobeSurface->terrain,
+                        *shape,
+                        globeConfig);
+
+            const u64 sourceRevision =
+                macroGlobeSurface->
+                    terrain->
+                    Revision();
 
             const bool recreate =
                 presentation.product == nullptr ||
                 presentation.body !=
                     logicalTarget->target->body ||
                 presentation.sourceRevision !=
-                    mesh.sourceRevision ||
+                    sourceRevision ||
                 presentation.fingerprint !=
-                    mesh.fingerprint;
+                    fingerprint;
 
             if (recreate)
             {
+                const auto mesh =
+                    celestial_globe::
+                        BuildMacroGlobe(
+                            *macroGlobeSurface->terrain,
+                            *shape,
+                            globeConfig);
+
                 presentation.product =
                     std::make_unique<
                         celestial_globe::
@@ -1313,9 +1329,9 @@ StudioViewportRenderer::Compose(
                 presentation.body =
                     logicalTarget->target->body;
                 presentation.sourceRevision =
-                    mesh.sourceRevision;
+                    sourceRevision;
                 presentation.fingerprint =
-                    mesh.fingerprint;
+                    fingerprint;
             }
 
             auto* globe =
