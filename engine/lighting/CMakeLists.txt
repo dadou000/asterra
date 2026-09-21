@@ -2,6 +2,7 @@ add_library(OrbitLighting STATIC
     src/SurfaceData.cpp
     src/SurfaceDebugRenderer.cpp
     src/LightingView.cpp
+    src/DirectLighting.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
