@@ -24,6 +24,7 @@ add_library(OrbitLighting STATIC
     src/RuntimeMaterialEmission.cpp
     src/RuntimeEmissiveSurface.cpp
     src/PlanetaryEmissionField.cpp
+    src/PlanetaryEmissionAppearance.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -36,6 +37,7 @@ target_include_directories(OrbitLighting
 target_link_libraries(OrbitLighting
     PUBLIC
         Orbit::Core
+        Orbit::CelestialAppearance
         Orbit::Content
         Orbit::Frames
         Orbit::Math
