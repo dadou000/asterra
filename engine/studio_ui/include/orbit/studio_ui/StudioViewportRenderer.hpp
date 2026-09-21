@@ -45,6 +45,11 @@
 #include <string_view>
 #include <vector>
 
+namespace orbit::content
+{
+class ContentService;
+}
+
 namespace orbit::studio_ui
 {
 struct StudioRenderedView
@@ -362,6 +367,9 @@ public:
     void SetDisplayResolveSettings(
         post_process::DisplayResolveSettings settings) noexcept;
 
+    void SetContentService(
+        content::ContentService* content) noexcept;
+
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -553,6 +561,7 @@ private:
 
     rhi::Device* device_{nullptr};
     const shader::Compiler* compiler_{nullptr};
+    content::ContentService* content_{nullptr};
     u32 framesInFlight_{1U};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
     celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
