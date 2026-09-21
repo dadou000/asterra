@@ -81,8 +81,13 @@ struct Constants
 {
     float exposureScale;
     float toneMapEnabled;
+    float headroomRatio;
+    float shoulderStart;
+
     float invWidth;
     float invHeight;
+    float shoulderStrength;
+    float tonePadding;
 
     float bloomEnabled;
     float bloomThreshold;
@@ -126,10 +131,61 @@ float3 Extract(float3 exposed, float amount)
     return exposed * (amount / lum);
 }
 
-float3 ToneMapReinhard(float3 sceneLinear)
+float3 ToneMapProduction(float3 sceneLinear)
 {
     sceneLinear = max(sceneLinear, 0.0);
-    return sceneLinear / (1.0 + sceneLinear);
+
+    if (g.toneMapEnabled <= 0.5)
+    {
+        return sceneLinear;
+    }
+
+    const float luminance =
+        max(Luminance(sceneLinear), 0.0);
+
+    if (luminance <= 1.0e-6)
+    {
+        return 0.0;
+    }
+
+    const float headroom =
+        max(g.headroomRatio, 1.0);
+    const float shoulderStart =
+        clamp(
+            g.shoulderStart,
+            0.0,
+            max(headroom - 1.0e-4, 0.0));
+
+    float mapped = luminance;
+
+    if (luminance > shoulderStart &&
+        headroom > shoulderStart + 1.0e-4)
+    {
+        const float remaining =
+            headroom - shoulderStart;
+        const float scale =
+            max(
+                remaining *
+                    max(g.shoulderStrength, 1.0e-3),
+                1.0e-4);
+
+        mapped =
+            shoulderStart +
+            remaining *
+                (1.0 -
+                 exp(
+                     -(luminance - shoulderStart) /
+                     scale));
+        mapped =
+            clamp(mapped, 0.0, headroom);
+    }
+    else
+    {
+        mapped =
+            min(mapped, headroom);
+    }
+
+    return sceneLinear * (mapped / luminance);
 }
 
 float3 SampleExposed(float2 uv)
@@ -291,7 +347,7 @@ float4 main(VSOutput input) : SV_Target0
     if (g.toneMapEnabled > 0.5)
     {
         result =
-            ToneMapReinhard(result);
+            ToneMapProduction(result);
     }
 
     return float4(result, 1.0);
@@ -384,7 +440,7 @@ HighlightEffectsRenderer::HighlightEffectsRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 20U,
+            .pushConstantDwords = 24U,
             .shaderResourceBuffers = 0U,
             .sampledTextures = 1U,
             .topology =
@@ -411,7 +467,7 @@ void HighlightEffectsRenderer::Draw(
     const u32 width,
     const u32 height,
     const f32 exposureScale,
-    const bool toneMapEnabled,
+    const ToneMappingConfig& toneMapping,
     const HighlightEffectsConfig& config)
 {
     if (width == 0U || height == 0U)
@@ -425,11 +481,24 @@ void HighlightEffectsRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 20> constants{
+    const f32 headroom =
+        DisplayHeadroomRatio(toneMapping);
+
+    const std::array<u32, 24> constants{
         bits(std::max(exposureScale, 0.0F)),
-        bits(toneMapEnabled ? 1.0F : 0.0F),
+        bits(toneMapping.enabled ? 1.0F : 0.0F),
+        bits(headroom),
+        bits(std::clamp(
+            toneMapping.shoulderStart,
+            0.0F,
+            headroom)),
+
         bits(1.0F / static_cast<f32>(width)),
         bits(1.0F / static_cast<f32>(height)),
+        bits(std::max(
+            toneMapping.shoulderStrength,
+            1.0e-3F)),
+        0U,
 
         bits(config.bloomEnabled ? 1.0F : 0.0F),
         bits(std::max(config.bloomThreshold, 0.0F)),
