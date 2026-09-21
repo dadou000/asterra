@@ -15,6 +15,7 @@
 #include <orbit/lighting/DirectLighting.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
+#include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/post_process/ColorLut.hpp>
@@ -318,6 +319,7 @@ public:
         time::SimulationTime atTime = {},
         bool drawPathDebug = true,
         u32 frameIndex = 0U,
+        const lighting::LightingWorkPlan& lightingPlan = {},
         lighting::LightingTimestampRecorder* lightingTimestamps = nullptr);
 
 private:
@@ -434,6 +436,21 @@ private:
         std::unique_ptr<celestial_globe::GpuMacroGlobeProduct> product;
     };
 
+    struct FinalGatherPresentation
+    {
+        u32 width{0U};
+        u32 height{0U};
+        bool writeA{true};
+        bool hasHistory{false};
+        lighting::LightingView previousView{};
+
+        std::unique_ptr<rhi::Texture> indirectA;
+        std::unique_ptr<rhi::Texture> indirectB;
+        std::unique_ptr<rhi::Texture> metaA;
+        std::unique_ptr<rhi::Texture> metaB;
+        std::unique_ptr<rhi::Texture> scratch;
+    };
+
     struct VisibilityProxyPresentation
     {
         universe::BodyId body{};
@@ -475,6 +492,7 @@ private:
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
+    lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
@@ -585,6 +603,12 @@ private:
         VisibilityProxyPresentation,
         std::less<>>
         visibilityProxyPresentations_;
+
+    std::map<
+        std::string,
+        FinalGatherPresentation,
+        std::less<>>
+        finalGatherPresentations_;
 
     std::map<
         std::string,
