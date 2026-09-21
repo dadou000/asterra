@@ -257,6 +257,18 @@ void RenderView::CreateTargets()
                     ShaderResource
         });
 
+    displayGraded_ =
+        device_.CreateTexture({
+            .width = width_,
+            .height = height_,
+            .format =
+                rhi::TextureFormat::
+                    RGBA16_Float,
+            .initialState =
+                rhi::ResourceState::
+                    ShaderResource
+        });
+
     displayColor_ =
         device_.CreateTexture({
             .width = width_,
@@ -388,6 +400,11 @@ rhi::Texture& RenderView::DisplayLinear() noexcept
     return *displayLinear_;
 }
 
+rhi::Texture& RenderView::DisplayGraded() noexcept
+{
+    return *displayGraded_;
+}
+
 rhi::Texture& RenderView::DisplayColor() noexcept
 {
     return *displayColor_;
@@ -446,6 +463,12 @@ ImportedTargets RenderView::Import(
             graph.ImportTexture(
                 prefix + ".DisplayLinear",
                 *displayLinear_,
+                rhi::ResourceState::
+                    ShaderResource),
+        .displayGraded =
+            graph.ImportTexture(
+                prefix + ".DisplayGraded",
+                *displayGraded_,
                 rhi::ResourceState::
                     ShaderResource),
         .display =
