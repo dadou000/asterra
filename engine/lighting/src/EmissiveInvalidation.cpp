@@ -94,6 +94,61 @@ namespace
 }
 } // namespace
 
+DynamicEmissiveSourceState
+BuildDynamicEmissiveSourceState(
+    const RuntimeEmissiveSurface& surface,
+    const f64 influenceRangeMeters)
+{
+    const auto& geometry =
+        surface.geometry;
+
+    if (!geometry.frame ||
+        !geometry.body ||
+        geometry.stableId == 0U ||
+        !std::isfinite(influenceRangeMeters) ||
+        influenceRangeMeters < 0.0)
+    {
+        throw std::invalid_argument(
+            "Runtime emissive invalidation source is invalid.");
+    }
+
+    const math::Double3 center =
+        geometry.originInFrameMeters +
+        geometry.axisUInFrameMeters * 0.5 +
+        geometry.axisVInFrameMeters * 0.5;
+
+    const f64 halfU =
+        math::Length(
+            geometry.axisUInFrameMeters) *
+        0.5;
+
+    const f64 halfV =
+        math::Length(
+            geometry.axisVInFrameMeters) *
+        0.5;
+
+    const f64 sourceRadius =
+        std::sqrt(
+            halfU * halfU +
+            halfV * halfV);
+
+    const u64 revision =
+        surface.contentRevision != 0U
+            ? surface.contentRevision
+            : (geometry.contentRevision != 0U
+                   ? geometry.contentRevision
+                   : 1U);
+
+    return {
+        .stableId = geometry.stableId,
+        .contentRevision = revision,
+        .centerInFrameMeters = center,
+        .sourceRadiusMeters = sourceRadius,
+        .influenceRangeMeters =
+            influenceRangeMeters
+    };
+}
+
 std::vector<EmissiveInvalidationEvent>
 EmissiveInvalidationTracker::Update(
     const std::span<const DynamicEmissiveSourceState> sources)
