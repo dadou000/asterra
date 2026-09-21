@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/math/Vector.hpp>
+#include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/time/SimulationTime.hpp>
@@ -110,6 +111,10 @@ struct CloudFieldProduct
     const std::vector<CloudLayerParameters>& layers,
     time::SimulationTime atTime,
     const CloudFieldConfig& config = {});
+
+void CompositeOrbitalCloudAppearance(
+    const CloudFieldProduct& field,
+    celestial_appearance::PlanetaryAppearanceProduct& appearance);
 
 [[nodiscard]] f64 CloudShadowTransmittanceAtSurface(
     const CloudFieldProduct& field,
