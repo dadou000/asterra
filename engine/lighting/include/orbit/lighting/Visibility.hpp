@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/frames/FrameGraph.hpp>
+#include <orbit/lighting/LightingView.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 
