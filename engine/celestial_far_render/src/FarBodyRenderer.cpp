@@ -632,9 +632,7 @@ SurfaceOutputs main(VSOutput input)
             max(g.emissionAndOpacity.xyz, 0.0),
             EncodeSurfaceMeta(
                 6.0,
-                mode == 0u ? 3.0 :
-                mode == 1u ? 4.0 :
-                5.0));
+                g.material.w));
     return output;
 }
 )";
@@ -1444,7 +1442,19 @@ void FarBodyRenderer::DrawSurfaceData(
         bits(draw.appearance.oceanFraction),
         bits(draw.appearance.iceFraction),
         bits(draw.stellar ? 1.0F : 0.0F),
-        0U,
+        bits(
+            draw.representation ==
+                    celestial_representation::Representation::SmoothGlobe
+                ? 3.0F
+                : draw.representation ==
+                          celestial_representation::Representation::
+                              CachedDiscImpostor
+                      ? 5.0F
+                      : draw.representation ==
+                                celestial_representation::Representation::
+                                    AnalyticDiscImpostor
+                            ? 4.0F
+                            : 7.0F),
 
         bits(draw.appearance.emissionLinear.x),
         bits(draw.appearance.emissionLinear.y),
