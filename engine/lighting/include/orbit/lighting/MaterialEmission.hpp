@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/lighting/SurfaceData.hpp>
 #include <orbit/math/Vector.hpp>
 
 namespace orbit::lighting
@@ -26,6 +27,11 @@ struct EvaluatedMaterialEmission
 
 [[nodiscard]] EvaluatedMaterialEmission
 EvaluateMaterialEmission(
+    const PhysicalMaterialEmission& emission,
+    f32 photopicLuminousEfficacy = 683.0F) noexcept;
+
+void ApplyMaterialEmission(
+    SurfaceData& surface,
     const PhysicalMaterialEmission& emission,
     f32 photopicLuminousEfficacy = 683.0F) noexcept;
 } // namespace orbit::lighting
