@@ -2072,6 +2072,9 @@ StudioViewportRenderer::Compose(
                      height,
                      transitionGlobe,
                      farPresentation,
+                     surfaceBaseRoughness,
+                     surfaceNormalMetallic,
+                     surfaceEmissionClass,
                      shape = *shape,
                      globeCamera,
                      studioDirectLight,
@@ -2093,9 +2096,12 @@ StudioViewportRenderer::Compose(
                                 Representation::
                                     MacroDisplacedGlobe)
                         {
-                            macroGlobeRenderer_.Draw(
+                            macroGlobeRenderer_.DrawSurface(
                                 commands,
                                 *color,
+                                *surfaceBaseRoughness,
+                                *surfaceNormalMetallic,
+                                *surfaceEmissionClass,
                                 width,
                                 height,
                                 *transitionGlobe,
@@ -2172,9 +2178,27 @@ StudioViewportRenderer::Compose(
                             .access =
                                 render_graph::Access::
                                     Write
+                        },
+                        {
+                            .texture = targets.surfaceBaseRoughness,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceNormalMetallic,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceEmissionClass,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
                         }
                     },
                     [color,
+                     surfaceBaseRoughness,
+                     surfaceNormalMetallic,
+                     surfaceEmissionClass,
                      clearForFarOnly,
                      richer,
                      lower,
@@ -2211,6 +2235,16 @@ StudioViewportRenderer::Compose(
                                     .blue = 0.018F,
                                     .alpha = 1.0F
                                 });
+                        
+                            commands.ClearColorTarget(
+                                *surfaceBaseRoughness,
+                                {0.0F, 0.0F, 0.0F, 1.0F});
+                            commands.ClearColorTarget(
+                                *surfaceNormalMetallic,
+                                {0.0F, 1.0F, 0.0F, 0.0F});
+                            commands.ClearColorTarget(
+                                *surfaceEmissionClass,
+                                {0.0F, 0.0F, 0.0F, 0.0F});
                         }
 
                         if (richer !=
@@ -2405,6 +2439,12 @@ StudioViewportRenderer::Compose(
 
             const auto camera =
                 view->Camera();
+            auto* macroSurfaceBaseRoughness =
+                &view->SurfaceBaseRoughness();
+            auto* macroSurfaceNormalMetallic =
+                &view->SurfaceNormalMetallic();
+            auto* macroSurfaceEmissionClass =
+                &view->SurfaceEmissionClass();
 
             graph.AddPass(
                 prefix + ".MacroGlobe",
@@ -2417,10 +2457,28 @@ StudioViewportRenderer::Compose(
                         .access =
                             render_graph::Access::
                                 Write
+                    },
+                    {
+                        .texture = targets.surfaceBaseRoughness,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.surfaceNormalMetallic,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.surfaceEmissionClass,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
                     }
                 },
                 [this,
                  color,
+                 macroSurfaceBaseRoughness,
+                 macroSurfaceNormalMetallic,
+                 macroSurfaceEmissionClass,
                  width,
                  height,
                  globe,
@@ -2437,10 +2495,22 @@ StudioViewportRenderer::Compose(
                             .blue = 0.018F,
                             .alpha = 1.0F
                         });
+                    commands.ClearColorTarget(
+                        *macroSurfaceBaseRoughness,
+                        {0.0F, 0.0F, 0.0F, 1.0F});
+                    commands.ClearColorTarget(
+                        *macroSurfaceNormalMetallic,
+                        {0.0F, 1.0F, 0.0F, 0.0F});
+                    commands.ClearColorTarget(
+                        *macroSurfaceEmissionClass,
+                        {0.0F, 0.0F, 0.0F, 0.0F});
 
-                    macroGlobeRenderer_.Draw(
+                    macroGlobeRenderer_.DrawSurface(
                         commands,
                         *color,
+                        *macroSurfaceBaseRoughness,
+                        *macroSurfaceNormalMetallic,
+                        *macroSurfaceEmissionClass,
                         width,
                         height,
                         *globe,
