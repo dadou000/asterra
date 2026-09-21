@@ -1170,12 +1170,6 @@ StudioViewportRenderer::Compose(
                     representationSubject,
                     representationInput);
 
-            const auto surfaceGlobeTransition =
-                celestial_representation::
-                    ResolveSurfaceGlobeTransition(
-                        representationInput,
-                        representationDecision);
-
             const auto representationBlend =
                 celestial_representation::
                     ResolveRepresentationBlend(
@@ -1613,13 +1607,6 @@ StudioViewportRenderer::Compose(
                     representationBlend.richer;
                 const auto lower =
                     representationBlend.lower;
-                const f32 richerOpacity =
-                    static_cast<f32>(
-                        std::clamp(
-                            representationBlend.
-                                richerWeight,
-                            0.0,
-                            1.0));
                 const f32 lowerOpacity =
                     static_cast<f32>(
                         std::clamp(
@@ -1646,7 +1633,6 @@ StudioViewportRenderer::Compose(
                      clearForFarOnly,
                      richer,
                      lower,
-                     richerOpacity,
                      lowerOpacity,
                      farPresentation,
                      drawRepresentation](
@@ -1690,7 +1676,7 @@ StudioViewportRenderer::Compose(
                             drawRepresentation(
                                 commands,
                                 richer,
-                                richerOpacity);
+                                1.0F);
                         }
 
                         if (lower != richer &&
@@ -1921,6 +1907,8 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::BodyPreview:
         {
+            macroGlobePresentations_.erase(
+                info.id);
             terrainPresentations_.erase(
                 info.id);
 
@@ -1958,8 +1946,22 @@ StudioViewportRenderer::Compose(
                             world_model::
                                 kRadiativeEmitterCapabilityType)
                         {
-                            radiativeEmitter = true;
-                            break;
+                            const auto enabled =
+                                session.World().
+                                    Objects().
+                                    GetProperty(
+                                        child.id,
+                                        world_model::
+                                            kCapabilityEnabled);
+
+                            if (!enabled.has_value() ||
+                                !std::holds_alternative<bool>(
+                                    *enabled) ||
+                                std::get<bool>(*enabled))
+                            {
+                                radiativeEmitter = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -2088,12 +2090,6 @@ StudioViewportRenderer::Compose(
                     blend.richer;
                 const auto lower =
                     blend.lower;
-                const f32 richerOpacity =
-                    static_cast<f32>(
-                        std::clamp(
-                            blend.richerWeight,
-                            0.0,
-                            1.0));
                 const f32 lowerOpacity =
                     static_cast<f32>(
                         std::clamp(
@@ -2127,7 +2123,6 @@ StudioViewportRenderer::Compose(
                      appearance,
                      richer,
                      lower,
-                     richerOpacity,
                      lowerOpacity,
                      projectedRadius,
                      radiativeEmitter](
@@ -2177,7 +2172,7 @@ StudioViewportRenderer::Compose(
 
                         draw(
                             richer,
-                            richerOpacity);
+                            1.0F);
 
                         if (lower != richer)
                         {
