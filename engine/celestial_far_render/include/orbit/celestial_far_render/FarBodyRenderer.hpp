@@ -99,6 +99,24 @@ struct FarBodyDraw
     f32 giantTurbulenceStrength{0.18F};
     u32 giantSeed{1U};
 
+    // M28 airless / irregular small-body controls. These parameters deform
+    // only the derived far representation; the semantic Reference Shape
+    // remains the physical scale authority.
+    bool smallBodyEnabled{false};
+    math::Float3 smallBodyAxisScale{1.0F, 0.82F, 0.68F};
+    f32 smallBodyIrregularity{0.18F};
+    f32 smallBodyLargeLobeStrength{0.12F};
+    f32 smallBodyCraterDensity{0.55F};
+    f32 smallBodyCraterDepth{0.12F};
+    f32 smallBodyCraterRimStrength{0.08F};
+    math::Float3 smallBodyFreshMaterialColorLinear{0.24F, 0.22F, 0.19F};
+    f32 smallBodyColorVariation{0.18F};
+    f32 smallBodyOppositionStrength{0.55F};
+    f32 smallBodyOppositionWidthRadians{0.055F};
+    f32 smallBodySingleScatteringAlbedo{0.16F};
+    f32 smallBodyMacroscopicRoughnessRadians{0.42F};
+    u32 smallBodySeed{1U};
+
     bool stellar{false};
 
     // M26 appearance-only stellar controls. They never alter M19 luminosity.
