@@ -3,10 +3,12 @@
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
+#include <utility>
 
 namespace orbit::celestial_magnetosphere
 {
