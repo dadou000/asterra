@@ -1,6 +1,7 @@
 #include <orbit/world_model/UniverseComposition.hpp>
 
 #include <orbit/celestial_orbits/ImportedEphemeris.hpp>
+#include <orbit/celestial_orbits/NBodyDomain.hpp>
 #include <orbit/celestial_orbits/OrbitState.hpp>
 #include <orbit/celestial_rotation/OrientationState.hpp>
 
@@ -355,6 +356,64 @@ OrbitProviderFor(
                         orbitEpochMicroseconds
                 }
             });
+}
+
+struct DynamicPromotionSettings
+{
+    f64 stepSeconds{60.0};
+    f64 softeningMeters{0.0};
+};
+
+[[nodiscard]] std::optional<DynamicPromotionSettings>
+DynamicPromotionSettingsFor(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId body)
+{
+    const auto orbitCapability =
+        FindOrbitCapability(objects, body);
+
+    if (!orbitCapability.has_value())
+    {
+        return std::nullopt;
+    }
+
+    if (!PropertyOr<bool>(
+            objects,
+            orbitCapability->id,
+            kOrbitDynamicPromotionEnabled,
+            false))
+    {
+        return std::nullopt;
+    }
+
+    return DynamicPromotionSettings{
+        .stepSeconds =
+            PropertyOr<f64>(
+                objects,
+                orbitCapability->id,
+                kOrbitDynamicStepSeconds,
+                60.0),
+        .softeningMeters =
+            PropertyOr<f64>(
+                objects,
+                orbitCapability->id,
+                kOrbitDynamicSofteningMeters,
+                0.0)
+    };
+}
+
+[[nodiscard]] celestial_orbits::NBodyMemberId
+NBodyMemberForObject(
+    const scene::ObjectId object) noexcept
+{
+    return {
+        .high =
+            object.high ^
+            0x4e424f44594d454dULL,
+        .low =
+            object.low ^
+            0x4f52424954563036ULL
+    };
 }
 
 [[nodiscard]] std::optional<scene::ObjectRecord>
