@@ -3,6 +3,7 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -130,8 +131,11 @@ ResolveAtmosphereBody(
             objects,
             atmosphere->id,
             kAtmosphereTopRadiusMeters,
-            parameters.
-                topRadiusMeters);
+            parameters.bottomRadiusMeters +
+                std::max(
+                    80'000.0,
+                    parameters.bottomRadiusMeters *
+                        0.012));
 
     parameters.rayleighScatteringPerMeter =
         PropertyOr<math::Double3>(
