@@ -1,4 +1,4 @@
-#include <orbit/celestial_magnetosphere/Magnetosphere.hpp>
+#include <orbit/celestial_magnetosphere_render/AuroraRenderer.hpp>
 
 #include <array>
 #include <bit>
@@ -6,8 +6,9 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace orbit::celestial_magnetosphere
+namespace orbit::celestial_magnetosphere_render
 {
+using celestial_magnetosphere::AuroraVertex;
 GpuAuroraMeshProduct::GpuAuroraMeshProduct(
     rhi::Device& device,
     const AuroraMeshProduct& product)
@@ -432,4 +433,4 @@ void AuroraRenderer::Draw(
     commands.DrawIndexed(
         mesh.IndexCount());
 }
-} // namespace orbit::celestial_magnetosphere
+} // namespace orbit::celestial_magnetosphere_render
