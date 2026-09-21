@@ -61,7 +61,11 @@ public:
         schema::TypeId capabilityType,
         std::string_view name);
 
+    [[nodiscard]] scene::ObjectId AddRingBand(
+        std::string_view name = "Ring Band");
+
     void RemoveSelectedCapability();
+    void RemoveSelectedRingBand();
 
     [[nodiscard]] std::vector<CelestialCapabilityDescriptor>
     AvailableCapabilities() const;
