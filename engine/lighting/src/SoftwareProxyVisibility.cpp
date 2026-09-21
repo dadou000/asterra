@@ -773,6 +773,20 @@ SoftwareProxyVisibilityProvider::Trace(
             node.right;
     }
 
+    // A provisional hit is not trustworthy when traversal stopped
+    // early: an unvisited node could still contain a closer proxy. Budget
+    // exhaustion therefore never produces an accepted hit or terminal miss.
+    if (budgetExhausted)
+    {
+        return {
+            .resolution =
+                VisibilityResolution::
+                    Unresolved,
+            .confidence = 0.0F,
+            .terminal = false
+        };
+    }
+
     if (closestProxy != nullptr)
     {
         const auto position =
@@ -816,18 +830,7 @@ SoftwareProxyVisibilityProvider::Trace(
                         instanceId
             },
             .confidence = confidence,
-            .terminal = !budgetExhausted
-        };
-    }
-
-    if (budgetExhausted)
-    {
-        return {
-            .resolution =
-                VisibilityResolution::
-                    Unresolved,
-            .confidence = 0.0F,
-            .terminal = false
+            .terminal = true
         };
     }
 
