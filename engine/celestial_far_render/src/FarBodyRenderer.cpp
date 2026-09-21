@@ -3064,6 +3064,22 @@ void FarBodyRenderer::DrawSurfaceData(
             draw.camera.verticalFovRadians *
             0.5F);
 
+    const u32 packedSmallBodyCrater =
+        packUnitPair(
+            std::clamp(
+                draw.smallBodyCraterDepth / 0.5F,
+                0.0F,
+                1.0F),
+            std::clamp(
+                draw.smallBodyCraterRimStrength / 0.5F,
+                0.0F,
+                1.0F));
+
+    const u32 packedSmallBodyMaterial =
+        packUnitPair(
+            draw.smallBodySingleScatteringAlbedo,
+            draw.smallBodyColorVariation);
+
     const std::array<u32, 40> constants{
         bits(static_cast<f32>(
             ellipsoid.radiiMeters.x / scale)),
@@ -3085,49 +3101,110 @@ void FarBodyRenderer::DrawSurfaceData(
         bits(draw.camera.forward.x),
         bits(draw.camera.forward.y),
         bits(draw.camera.forward.z),
-        0U,
+        draw.smallBodyEnabled
+            ? packedSmallBodyCrater
+            : draw.giantEnabled
+                ? bits(draw.giantDepthContrast)
+                : 0U,
 
         bits(draw.camera.up.x),
         bits(draw.camera.up.y),
         bits(draw.camera.up.z),
-        0U,
+        draw.smallBodyEnabled
+            ? packedSmallBodyMaterial
+            : draw.giantEnabled
+                ? bits(draw.giantTurbulenceStrength)
+                : 0U,
 
         bits(draw.stellar
             ? draw.stellarColorLinear.x
-            : draw.appearance.albedoLinear.x),
+            : draw.giantEnabled
+                ? draw.giantBaseColorLinear.x
+                : draw.appearance.albedoLinear.x),
         bits(draw.stellar
             ? draw.stellarColorLinear.y
-            : draw.appearance.albedoLinear.y),
+            : draw.giantEnabled
+                ? draw.giantBaseColorLinear.y
+                : draw.appearance.albedoLinear.y),
         bits(draw.stellar
             ? draw.stellarColorLinear.z
-            : draw.appearance.albedoLinear.z),
-        bits(draw.stellar
-            ? std::clamp(
-                  draw.stellarLimbDarkening,
-                  0.0F,
-                  1.0F)
-            : draw.appearance.roughness),
+            : draw.giantEnabled
+                ? draw.giantBaseColorLinear.z
+                : draw.appearance.albedoLinear.z),
+        bits(draw.smallBodyEnabled
+            ? std::max(
+                  draw.smallBodyMacroscopicRoughnessRadians,
+                  0.0F)
+            : draw.stellar
+                ? std::clamp(
+                      draw.stellarLimbDarkening,
+                      0.0F,
+                      1.0F)
+                : draw.giantEnabled
+                    ? std::max(
+                          draw.giantZonalShear,
+                          0.0F)
+                    : draw.appearance.roughness),
 
-        bits(draw.appearance.oceanFraction),
-        bits(draw.appearance.iceFraction),
-        bits(draw.stellar ? 1.0F : 0.0F),
-        bits(
-            draw.representation ==
-                    celestial_representation::Representation::SmoothGlobe
-                ? 3.0F
-                : draw.representation ==
-                          celestial_representation::Representation::
-                              CachedDiscImpostor
-                      ? 5.0F
-                      : draw.representation ==
-                                celestial_representation::Representation::
-                                    AnalyticDiscImpostor
-                            ? 4.0F
-                            : 7.0F),
+        bits(draw.smallBodyEnabled
+            ? std::max(
+                  draw.smallBodyAxisScale.x,
+                  0.05F)
+            : draw.giantEnabled
+                ? std::max(
+                      draw.giantBandFrequency,
+                      1.0F)
+                : draw.appearance.oceanFraction),
+        bits(draw.smallBodyEnabled
+            ? std::max(
+                  draw.smallBodyAxisScale.y,
+                  0.05F)
+            : draw.giantEnabled
+                ? std::clamp(
+                      draw.giantBandStrength,
+                      0.0F,
+                      1.0F)
+                : draw.appearance.iceFraction),
+        bits(draw.smallBodyEnabled
+            ? 3.0F
+            : draw.giantEnabled
+                ? 2.0F
+                : draw.stellar
+                    ? 1.0F
+                    : 0.0F),
+        draw.smallBodyEnabled
+            ? draw.smallBodySeed
+            : draw.giantEnabled
+                ? draw.giantSeed
+                : bits(
+                      draw.representation ==
+                              celestial_representation::Representation::SmoothGlobe
+                          ? 3.0F
+                          : draw.representation ==
+                                    celestial_representation::Representation::
+                                        CachedDiscImpostor
+                                ? 5.0F
+                                : draw.representation ==
+                                          celestial_representation::Representation::
+                                              AnalyticDiscImpostor
+                                      ? 4.0F
+                                      : 7.0F),
 
-        bits(draw.appearance.emissionLinear.x),
-        bits(draw.appearance.emissionLinear.y),
-        bits(draw.appearance.emissionLinear.z),
+        bits(draw.smallBodyEnabled
+            ? draw.smallBodyFreshMaterialColorLinear.x
+            : draw.giantEnabled
+                ? draw.giantBandColorLinear.x
+                : draw.appearance.emissionLinear.x),
+        bits(draw.smallBodyEnabled
+            ? draw.smallBodyFreshMaterialColorLinear.y
+            : draw.giantEnabled
+                ? draw.giantBandColorLinear.y
+                : draw.appearance.emissionLinear.y),
+        bits(draw.smallBodyEnabled
+            ? draw.smallBodyFreshMaterialColorLinear.z
+            : draw.giantEnabled
+                ? draw.giantBandColorLinear.z
+                : draw.appearance.emissionLinear.z),
         bits(std::clamp(
             draw.opacity,
             0.0F,
@@ -3135,17 +3212,62 @@ void FarBodyRenderer::DrawSurfaceData(
 
         bits(static_cast<f32>(mode)),
         bits(radiusNdc),
-        1U,
-        bits(std::max(
-            draw.radiometricIntensity,
-            0.0F)),
+        bits(draw.smallBodyEnabled &&
+                 mode <= 1U
+            ? std::max(
+                  draw.smallBodyAxisScale.z,
+                  0.05F)
+            : 1.0F),
+        bits(draw.smallBodyEnabled &&
+                 mode <= 1U
+            ? std::max(
+                  draw.smallBodyOppositionStrength,
+                  0.0F)
+            : std::max(
+                  draw.radiometricIntensity,
+                  0.0F)),
 
         bits(draw.lightDirectionBody.x),
         bits(draw.lightDirectionBody.y),
         bits(draw.lightDirectionBody.z),
         bits(std::max(
             draw.incidentLightScale,
-            0.0F))
+            0.0F)),
+
+        bits(draw.smallBodyEnabled
+            ? std::clamp(
+                  draw.smallBodyIrregularity,
+                  0.0F,
+                  1.0F)
+            : draw.giantEnabled
+                ? draw.giantPolarColorLinear.x
+                : 0.0F),
+        bits(draw.smallBodyEnabled
+            ? std::clamp(
+                  draw.smallBodyLargeLobeStrength,
+                  0.0F,
+                  1.0F)
+            : draw.giantEnabled
+                ? draw.giantPolarColorLinear.y
+                : 0.0F),
+        bits(draw.smallBodyEnabled
+            ? std::clamp(
+                  draw.smallBodyCraterDensity,
+                  0.0F,
+                  1.0F)
+            : draw.giantEnabled
+                ? draw.giantPolarColorLinear.z
+                : 0.0F),
+        bits(draw.smallBodyEnabled
+            ? std::max(
+                  draw.smallBodyOppositionWidthRadians,
+                  1.0e-6F)
+            : draw.giantEnabled
+                ? std::clamp(
+                      draw.giantPolarStrength,
+                      0.0F,
+                      1.0F)
+                : 0.0F)
     };
 
     std::array<rhi::Texture*, 3> targets{
