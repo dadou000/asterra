@@ -372,6 +372,103 @@ MarkAllResidentTilesValid()
     UpdateResidencyUpload();
 }
 
+u32 VolumeFieldStorage::InvalidateBounds(
+    const world_model::VolumeInvalidationBounds& bounds)
+{
+    if (!bounds.IsValid())
+    {
+        return 0U;
+    }
+
+    const math::Double3 cellSize{
+        halfExtentsMeters_.x * 2.0 /
+            static_cast<f64>(resolution_),
+        halfExtentsMeters_.y * 2.0 /
+            static_cast<f64>(resolution_),
+        halfExtentsMeters_.z * 2.0 /
+            static_cast<f64>(resolution_)
+    };
+
+    const math::Double3 tileSize{
+        cellSize.x * static_cast<f64>(tileEdge_),
+        cellSize.y * static_cast<f64>(tileEdge_),
+        cellSize.z * static_cast<f64>(tileEdge_)
+    };
+
+    const TileCoord minimum{
+        static_cast<i32>(
+            std::floor(
+                bounds.minimumMeters.x /
+                tileSize.x)),
+        static_cast<i32>(
+            std::floor(
+                bounds.minimumMeters.y /
+                tileSize.y)),
+        static_cast<i32>(
+            std::floor(
+                bounds.minimumMeters.z /
+                tileSize.z))
+    };
+
+    const TileCoord maximum{
+        static_cast<i32>(
+            std::floor(
+                bounds.maximumMeters.x /
+                tileSize.x)),
+        static_cast<i32>(
+            std::floor(
+                bounds.maximumMeters.y /
+                tileSize.y)),
+        static_cast<i32>(
+            std::floor(
+                bounds.maximumMeters.z /
+                tileSize.z))
+    };
+
+    u32 invalidated = 0U;
+
+    for (auto& tile : tiles_)
+    {
+        if (!tile.resident ||
+            !tile.valid)
+        {
+            continue;
+        }
+
+        const bool overlaps =
+            tile.coord.x >= minimum.x &&
+            tile.coord.x <= maximum.x &&
+            tile.coord.y >= minimum.y &&
+            tile.coord.y <= maximum.y &&
+            tile.coord.z >= minimum.z &&
+            tile.coord.z <= maximum.z;
+
+        if (overlaps)
+        {
+            tile.valid = false;
+            ++invalidated;
+        }
+    }
+
+    if (invalidated == 0U)
+    {
+        return 0U;
+    }
+
+    diagnostics_.validTiles -=
+        std::min(
+            diagnostics_.validTiles,
+            invalidated);
+    diagnostics_.pendingTiles =
+        diagnostics_.residentTiles -
+        diagnostics_.validTiles;
+
+    residencyDirty_ = true;
+    UpdateResidencyUpload();
+
+    return invalidated;
+}
+
 const VolumeFieldDiagnostics&
 VolumeFieldStorage::Diagnostics() const noexcept
 {
@@ -930,7 +1027,9 @@ VolumeFieldStorageService::Ensure(
                 std::make_unique<
                     VolumeFieldStorage>(
                         *device_,
-                        domain)
+                        domain),
+            .inputs = {},
+            .lastInvalidatedTiles = 0U
         });
 
         return
@@ -944,6 +1043,119 @@ VolumeFieldStorageService::Ensure(
 
     return
         *found->storage;
+}
+
+u32 VolumeFieldStorageService::SyncAuthoredInputs(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId volume)
+{
+    auto found =
+        std::find_if(
+            entries_.begin(),
+            entries_.end(),
+            [volume](const Entry& entry)
+            {
+                return entry.object == volume;
+            });
+
+    if (found == entries_.end() ||
+        found->storage == nullptr)
+    {
+        return 0U;
+    }
+
+    const auto current =
+        world_model::ResolveVolumeInputs(
+            objects,
+            volume);
+
+    u32 invalidated = 0U;
+
+    for (const auto& previous :
+         found->inputs)
+    {
+        const auto matching =
+            std::find_if(
+                current.begin(),
+                current.end(),
+                [&previous](
+                    const world_model::
+                        ResolvedVolumeInput& input)
+                {
+                    return input.object ==
+                        previous.object;
+                });
+
+        if (matching == current.end())
+        {
+            invalidated +=
+                found->storage->
+                    InvalidateBounds(
+                        previous.bounds);
+            continue;
+        }
+
+        if (matching->fingerprint !=
+            previous.fingerprint)
+        {
+            invalidated +=
+                found->storage->
+                    InvalidateBounds(
+                        world_model::
+                            UnionVolumeInvalidationBounds(
+                                previous.bounds,
+                                matching->bounds));
+        }
+    }
+
+    for (const auto& input :
+         current)
+    {
+        const auto previous =
+            std::find_if(
+                found->inputs.begin(),
+                found->inputs.end(),
+                [&input](
+                    const world_model::
+                        ResolvedVolumeInput& item)
+                {
+                    return item.object ==
+                        input.object;
+                });
+
+        if (previous ==
+            found->inputs.end())
+        {
+            invalidated +=
+                found->storage->
+                    InvalidateBounds(
+                        input.bounds);
+        }
+    }
+
+    found->inputs =
+        current;
+    found->lastInvalidatedTiles =
+        invalidated;
+
+    return invalidated;
+}
+
+u32 VolumeFieldStorageService::LastInvalidatedTiles(
+    const scene::ObjectId volume) const noexcept
+{
+    const auto found =
+        std::find_if(
+            entries_.begin(),
+            entries_.end(),
+            [volume](const Entry& entry)
+            {
+                return entry.object == volume;
+            });
+
+    return found != entries_.end()
+        ? found->lastInvalidatedTiles
+        : 0U;
 }
 
 VolumeFieldStorage*
