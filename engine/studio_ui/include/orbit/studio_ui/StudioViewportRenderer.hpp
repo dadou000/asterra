@@ -12,6 +12,7 @@
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/celestial_rings/RingSystem.hpp>
+#include <orbit/celestial_scheduler/CelestialWorkScheduler.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
@@ -349,6 +350,9 @@ public:
     SmallBodyDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] celestial_scheduler::SchedulerFrameStats
+    CelestialSchedulerStats() const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -569,6 +573,14 @@ private:
     post_process::DisplayResolveSettings displayResolveSettings_{};
     celestial_representation::RepresentationTracker
         representationTracker_;
+    celestial_scheduler::CelestialWorkScheduler
+        celestialScheduler_{{
+            .maxCpuJobsPerFrame = 3U,
+            .maxGpuJobsPerFrame = 2U,
+            .maxCpuCostUnitsPerFrame = 6U,
+            .maxGpuCostUnitsPerFrame = 6U,
+            .maxPendingRequests = 192U
+        }};
 
     std::map<
         std::string,
