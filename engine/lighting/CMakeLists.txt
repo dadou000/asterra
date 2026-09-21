@@ -22,6 +22,7 @@ add_library(OrbitLighting STATIC
     src/EmissiveSampling.cpp
     src/EmissiveInvalidation.cpp
     src/RuntimeMaterialEmission.cpp
+    src/RuntimeEmissiveSurface.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -126,6 +127,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingRuntimeMaterialEmissionTests
         tests/RuntimeMaterialEmissionTests.cpp
+    )
+
+    add_executable(OrbitLightingRuntimeEmissiveSurfaceTests
+        tests/RuntimeEmissiveSurfaceTests.cpp
     )
 
     add_executable(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
@@ -297,6 +302,14 @@ if(BUILD_TESTING)
         OrbitLightingRuntimeMaterialEmissionTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingRuntimeMaterialEmissionTests)
 
+    target_link_libraries(OrbitLightingRuntimeEmissiveSurfaceTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingRuntimeEmissiveSurfaceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingRuntimeEmissiveSurfaceTests)
+
     target_link_libraries(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
         PRIVATE
             Orbit::Commands
@@ -391,6 +404,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingRuntimeMaterialEmission
         COMMAND OrbitLightingRuntimeMaterialEmissionTests
+    )
+
+    add_test(
+        NAME Orbit.LightingRuntimeEmissiveSurface
+        COMMAND OrbitLightingRuntimeEmissiveSurfaceTests
     )
 
     add_test(
