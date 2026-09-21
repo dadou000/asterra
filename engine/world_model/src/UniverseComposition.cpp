@@ -7,6 +7,7 @@
 #include <orbit/celestial_rotation/OrientationState.hpp>
 
 #include <orbit/world_model/CelestialCompactObjectBinding.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cmath>
