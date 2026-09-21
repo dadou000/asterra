@@ -881,7 +881,7 @@ float4 main(VSOutput input) : SV_Target0
                 ? 1.0
                 : 0.0;
         const float giant =
-            g.material.z > 1.5
+            abs(g.material.z - 2.0) < 0.25
                 ? 1.0
                 : 0.0;
         const float radiometricIntensity =
@@ -1493,7 +1493,7 @@ SurfaceOutputs main(VSOutput input)
     float3 surfaceEmission =
         max(g.emissionAndOpacity.xyz, 0.0);
 
-    if (g.material.z > 0.5)
+    if (abs(g.material.z - 1.0) < 0.25)
     {
         // Radiative bodies are their own light source. Preserve the same
         // resolved scene-radiance scale used by the visual far-body path so
@@ -1992,6 +1992,26 @@ void FarBodyRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
+    const auto packUnitPair =
+        [](const f32 a, const f32 b)
+        {
+            const auto quantize =
+                [](const f32 value)
+                {
+                    return static_cast<u32>(
+                        std::lround(
+                            std::clamp(
+                                value,
+                                0.0F,
+                                1.0F) *
+                            65535.0F));
+                };
+
+            return
+                quantize(a) |
+                (quantize(b) << 16U);
+        };
+
     const f64 minimumRasterRadiusPixels =
         0.5;
 
@@ -2075,6 +2095,7 @@ void FarBodyRenderer::Draw(
                     CachedDiscImpostor &&
         cachedDisc != nullptr &&
         !draw.giantEnabled &&
+        !draw.smallBodyEnabled &&
         !(draw.oceanEnabled &&
           draw.appearance.oceanFraction > 0.0F &&
           draw.incidentLightScale > 0.0F))
@@ -2180,16 +2201,65 @@ void FarBodyRenderer::Draw(
                         -1.0,
                         1.0));
 
+            f64 phaseResponse =
+                celestial_lighting::
+                    LambertPhase(
+                        phaseAngle);
+
+            if (draw.smallBodyEnabled)
+            {
+                const f64 opposition =
+                    1.0 +
+                    std::max(
+                        static_cast<f64>(
+                            draw.smallBodyOppositionStrength),
+                        0.0) /
+                    (1.0 +
+                     std::tan(
+                         phaseAngle * 0.5) /
+                     std::max(
+                         static_cast<f64>(
+                             draw.smallBodyOppositionWidthRadians),
+                         1.0e-6));
+
+                const f64 roughnessAttenuation =
+                    std::exp(
+                        -0.35 *
+                        static_cast<f64>(
+                            draw.smallBodyMacroscopicRoughnessRadians) *
+                        static_cast<f64>(
+                            draw.smallBodyMacroscopicRoughnessRadians) *
+                        std::sin(phaseAngle));
+
+                phaseResponse *=
+                    opposition *
+                    roughnessAttenuation;
+            }
+
             proxyRadiometricIntensity =
                 static_cast<f32>(
                     std::max(
                         draw.incidentLightScale,
                         0.0F) *
-                    celestial_lighting::
-                        LambertPhase(
-                            phaseAngle));
+                    phaseResponse);
         }
     }
+
+    const u32 packedSmallBodyCrater =
+        packUnitPair(
+            std::clamp(
+                draw.smallBodyCraterDepth / 0.5F,
+                0.0F,
+                1.0F),
+            std::clamp(
+                draw.smallBodyCraterRimStrength / 0.5F,
+                0.0F,
+                1.0F));
+
+    const u32 packedSmallBodyMaterial =
+        packUnitPair(
+            draw.smallBodySingleScatteringAlbedo,
+            draw.smallBodyColorVariation);
 
     const std::array<u32, 40>
         constants{
@@ -2219,64 +2289,125 @@ void FarBodyRenderer::Draw(
             bits(draw.camera.forward.x),
             bits(draw.camera.forward.y),
             bits(draw.camera.forward.z),
-            0U,
+            draw.smallBodyEnabled
+                ? packedSmallBodyCrater
+                : draw.giantEnabled
+                    ? bits(draw.giantDepthContrast)
+                    : 0U,
 
             bits(draw.camera.up.x),
             bits(draw.camera.up.y),
             bits(draw.camera.up.z),
-            0U,
+            draw.smallBodyEnabled
+                ? packedSmallBodyMaterial
+                : draw.giantEnabled
+                    ? bits(draw.giantTurbulenceStrength)
+                    : 0U,
 
             bits(draw.stellar
                 ? draw.stellarColorLinear.x
-                : draw.appearance.albedoLinear.x),
+                : draw.giantEnabled
+                    ? draw.giantBaseColorLinear.x
+                    : draw.appearance.albedoLinear.x),
             bits(draw.stellar
                 ? draw.stellarColorLinear.y
-                : draw.appearance.albedoLinear.y),
+                : draw.giantEnabled
+                    ? draw.giantBaseColorLinear.y
+                    : draw.appearance.albedoLinear.y),
             bits(draw.stellar
                 ? draw.stellarColorLinear.z
-                : draw.appearance.albedoLinear.z),
+                : draw.giantEnabled
+                    ? draw.giantBaseColorLinear.z
+                    : draw.appearance.albedoLinear.z),
             bits(draw.stellar
                 ? std::clamp(
                       draw.stellarLimbDarkening,
                       0.0F,
                       1.0F)
-                : draw.appearance.roughness),
+                : draw.giantEnabled
+                    ? std::max(
+                          draw.giantZonalShear,
+                          0.0F)
+                    : draw.smallBodyEnabled
+                        ? std::max(
+                              draw.smallBodyMacroscopicRoughnessRadians,
+                              0.0F)
+                        : draw.appearance.roughness),
 
             bits(draw.stellar
                 ? std::clamp(
                       draw.stellarGranulationStrength,
                       0.0F,
                       1.0F)
-                : draw.appearance.oceanFraction),
+                : draw.giantEnabled
+                    ? std::max(
+                          draw.giantBandFrequency,
+                          1.0F)
+                    : draw.smallBodyEnabled
+                        ? std::max(
+                              draw.smallBodyAxisScale.x,
+                              0.05F)
+                        : draw.appearance.oceanFraction),
             bits(draw.stellar
                 ? std::clamp(
                       draw.stellarActivityLevel,
                       0.0F,
                       1.0F)
-                : draw.appearance.iceFraction),
-            bits(draw.stellar ? 1.0F : 0.0F),
-            draw.stellar
-                ? draw.stellarActivitySeed
-                : bits(std::clamp(
-                      draw.appearance.directLightTransmittance,
-                      0.0F,
-                      1.0F)),
+                : draw.giantEnabled
+                    ? std::clamp(
+                          draw.giantBandStrength,
+                          0.0F,
+                          1.0F)
+                    : draw.smallBodyEnabled
+                        ? std::max(
+                              draw.smallBodyAxisScale.y,
+                              0.05F)
+                        : draw.appearance.iceFraction),
+            bits(draw.smallBodyEnabled
+                ? 3.0F
+                : draw.giantEnabled
+                    ? 2.0F
+                    : draw.stellar
+                        ? 1.0F
+                        : 0.0F),
+            draw.smallBodyEnabled
+                ? draw.smallBodySeed
+                : draw.giantEnabled
+                    ? draw.giantSeed
+                    : draw.stellar
+                        ? draw.stellarActivitySeed
+                        : bits(std::clamp(
+                              draw.appearance.directLightTransmittance,
+                              0.0F,
+                              1.0F)),
 
             bits(draw.stellar
                 ? std::max(
                       draw.stellarGranulationScale,
                       1.0F)
-                : draw.appearance.emissionLinear.x),
+                : draw.giantEnabled
+                    ? draw.giantBandColorLinear.x
+                    : draw.smallBodyEnabled
+                        ? draw.smallBodyFreshMaterialColorLinear.x
+                        : draw.appearance.emissionLinear.x),
             bits(draw.stellar
                 ? std::max(
                       draw.stellarChromosphereStrength,
                       0.0F)
-                : draw.appearance.emissionLinear.y),
+                : draw.giantEnabled
+                    ? draw.giantBandColorLinear.y
+                    : draw.smallBodyEnabled
+                        ? draw.smallBodyFreshMaterialColorLinear.y
+                        : draw.appearance.emissionLinear.y),
             bits(draw.stellar
                 ? std::max(
                       draw.stellarChromosphereExtent,
                       0.0F)
-                : draw.appearance.emissionLinear.z),
+                : draw.giantEnabled
+                    ? draw.giantBandColorLinear.z
+                    : draw.smallBodyEnabled
+                        ? draw.smallBodyFreshMaterialColorLinear.z
+                        : draw.appearance.emissionLinear.z),
             bits(std::clamp(
                 draw.opacity,
                 0.0F,
@@ -2284,8 +2415,27 @@ void FarBodyRenderer::Draw(
 
             bits(static_cast<f32>(mode)),
             bits(radiusNdc),
-            bits(pointFluxScale),
-            bits(proxyRadiometricIntensity),
+            bits(draw.smallBodyEnabled &&
+                     mode <= 1U
+                ? std::max(
+                      draw.smallBodyAxisScale.z,
+                      0.05F)
+                : draw.giantEnabled
+                    ? std::clamp(
+                          draw.giantStormStrength,
+                          0.0F,
+                          1.0F)
+                    : pointFluxScale),
+            bits(draw.smallBodyEnabled &&
+                     mode <= 1U
+                ? std::max(
+                      draw.smallBodyOppositionStrength,
+                      0.0F)
+                : draw.giantEnabled
+                    ? std::max(
+                          draw.giantStormScale,
+                          0.25F)
+                    : proxyRadiometricIntensity),
 
             bits(draw.stellar
                 ? std::max(
@@ -2312,25 +2462,55 @@ void FarBodyRenderer::Draw(
 
             bits(draw.stellar
                 ? stellarCoreToGlare
-                : std::max(
-                      draw.oceanRefractiveIndex,
-                      1.0F)),
+                : draw.giantEnabled
+                    ? draw.giantPolarColorLinear.x
+                    : draw.smallBodyEnabled
+                        ? std::clamp(
+                              draw.smallBodyIrregularity,
+                              0.0F,
+                              1.0F)
+                        : std::max(
+                              draw.oceanRefractiveIndex,
+                              1.0F)),
             bits(draw.stellar
                 ? 0.0F
-                : std::clamp(
-                      draw.oceanRoughness,
-                      0.01F,
-                      1.0F)),
+                : draw.giantEnabled
+                    ? draw.giantPolarColorLinear.y
+                    : draw.smallBodyEnabled
+                        ? std::clamp(
+                              draw.smallBodyLargeLobeStrength,
+                              0.0F,
+                              1.0F)
+                        : std::clamp(
+                              draw.oceanRoughness,
+                              0.01F,
+                              1.0F)),
             bits(draw.stellar
                 ? 0.0F
-                : std::max(
-                      draw.oceanGlintStrength,
-                      0.0F)),
+                : draw.giantEnabled
+                    ? draw.giantPolarColorLinear.z
+                    : draw.smallBodyEnabled
+                        ? std::clamp(
+                              draw.smallBodyCraterDensity,
+                              0.0F,
+                              1.0F)
+                        : std::max(
+                              draw.oceanGlintStrength,
+                              0.0F)),
             bits(draw.stellar
                 ? 0.0F
-                : (draw.oceanEnabled
-                    ? 1.0F
-                    : 0.0F))
+                : draw.giantEnabled
+                    ? std::clamp(
+                          draw.giantPolarStrength,
+                          0.0F,
+                          1.0F)
+                    : draw.smallBodyEnabled
+                        ? std::max(
+                              draw.smallBodyOppositionWidthRadians,
+                              1.0e-6F)
+                        : (draw.oceanEnabled
+                            ? 1.0F
+                            : 0.0F))
         };
 
     commands.SetGraphicsPipeline(
@@ -2371,6 +2551,26 @@ void FarBodyRenderer::DrawSurfaceData(
         [](const f32 value)
         {
             return std::bit_cast<u32>(value);
+        };
+
+    const auto packUnitPair =
+        [](const f32 a, const f32 b)
+        {
+            const auto quantize =
+                [](const f32 value)
+                {
+                    return static_cast<u32>(
+                        std::lround(
+                            std::clamp(
+                                value,
+                                0.0F,
+                                1.0F) *
+                            65535.0F));
+                };
+
+            return
+                quantize(a) |
+                (quantize(b) << 16U);
         };
 
     const f64 minimumRasterRadiusPixels = 0.5;
