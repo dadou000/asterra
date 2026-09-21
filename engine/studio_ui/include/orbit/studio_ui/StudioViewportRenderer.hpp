@@ -3,6 +3,7 @@
 #include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_atmosphere/Atmosphere.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
+#include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
@@ -63,6 +64,16 @@ struct StudioAtmosphereDiagnostics
     u32 multiScatteringHeight{0};
     u32 skyViewWidth{0};
     u32 skyViewHeight{0};
+};
+
+struct StudioOceanDiagnostics
+{
+    universe::BodyId body{};
+    u64 opticalFingerprint{0};
+    f64 refractiveIndex{1.333};
+    f64 orbitalRoughness{0.12};
+    f64 glintStrength{1.0};
+    f32 oceanFraction{0.0F};
 };
 
 struct StudioCloudDiagnostics
@@ -185,6 +196,11 @@ public:
     CloudDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioOceanDiagnostics>
+    OceanDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -260,6 +276,7 @@ private:
         u64 baseAppearanceFingerprint{0};
         u64 appearanceFingerprint{0};
         u64 cloudFingerprint{0};
+        u64 oceanFingerprint{0};
         u64 cachedDiscFingerprint{0};
         u32 appearanceTexels{0};
         celestial_far_render::AppearanceSummary
@@ -312,6 +329,12 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioOceanDiagnostics,
+        std::less<>>
+        oceanDiagnostics_;
 
     std::map<
         std::string,
