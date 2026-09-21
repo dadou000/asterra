@@ -8,6 +8,7 @@ add_library(OrbitLighting STATIC
     src/AnalyticBodyVisibility.cpp
     src/TerrainHeightfieldVisibility.cpp
     src/ScreenSpaceVisibility.cpp
+    src/SoftwareProxyVisibility.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -63,6 +64,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingScreenSpaceVisibilityTests
         tests/ScreenSpaceVisibilityTests.cpp
+    )
+
+    add_executable(OrbitLightingSoftwareProxyVisibilityTests
+        tests/SoftwareProxyVisibilityTests.cpp
     )
 
     target_link_libraries(OrbitLightingSurfaceDataTests
@@ -133,6 +138,15 @@ if(BUILD_TESTING)
     orbit_enable_warnings(
         OrbitLightingScreenSpaceVisibilityTests)
 
+    target_link_libraries(OrbitLightingSoftwareProxyVisibilityTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingSoftwareProxyVisibilityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitLightingSoftwareProxyVisibilityTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -156,6 +170,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingScreenSpaceVisibility
         COMMAND OrbitLightingScreenSpaceVisibilityTests
+    )
+
+    add_test(
+        NAME Orbit.LightingSoftwareProxyVisibility
+        COMMAND OrbitLightingSoftwareProxyVisibilityTests
     )
 
     add_test(
