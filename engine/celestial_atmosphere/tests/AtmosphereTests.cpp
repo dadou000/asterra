@@ -117,6 +117,65 @@ int main()
         return 5;
     }
 
+    const auto orbitalSky =
+        BuildSkyView(
+            earth,
+            a,
+            {
+                .observerRadiusMeters =
+                    earth.topRadiusMeters +
+                    2.0e6,
+                .sunDirectionBody = {
+                    0.0, 0.0, 1.0},
+                .incidentIrradianceWattsPerSquareMeter = {
+                    1361.0, 1361.0, 1361.0}
+            },
+            config);
+
+    bool hasOrbitalLimb = false;
+
+    for (const auto value :
+         orbitalSky.skyView.texels)
+    {
+        if (value.x > 0.0F ||
+            value.y > 0.0F ||
+            value.z > 0.0F)
+        {
+            hasOrbitalLimb = true;
+            break;
+        }
+    }
+
+    if (!hasOrbitalLimb ||
+        orbitalSky.fingerprint ==
+            sky.fingerprint ||
+        a.fingerprint !=
+            b.fingerprint)
+    {
+        return 6;
+    }
+
+    const auto darkerSkyFingerprint =
+        AtmosphereSkyFingerprint(
+            earth,
+            a.fingerprint,
+            {
+                .observerRadiusMeters =
+                    earth.bottomRadiusMeters +
+                    2.0,
+                .sunDirectionBody = {
+                    0.0, 0.0, 1.0},
+                .incidentIrradianceWattsPerSquareMeter = {
+                    680.5, 680.5, 680.5}
+            },
+            config);
+
+    if (darkerSkyFingerprint ==
+        sky.fingerprint)
+    {
+        return 7;
+    }
+
     const auto revised =
         AtmosphereFingerprint(
             AtmosphereParameters{
@@ -130,7 +189,7 @@ int main()
 
     if (revised == a.fingerprint)
     {
-        return 6;
+        return 8;
     }
 
     return 0;
