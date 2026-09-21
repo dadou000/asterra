@@ -76,6 +76,14 @@ void ApplyMaterialEmission(
 
     surface.emissionRadianceSceneLinear =
         evaluated.visibleRadiance;
+
+    surface.emissionGiScale =
+        emission.contributesToGi &&
+        std::isfinite(emission.giScale)
+            ? std::max(
+                  emission.giScale,
+                  0.0F)
+            : 0.0F;
 }
 
 } // namespace orbit::lighting
