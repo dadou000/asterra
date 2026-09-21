@@ -2092,6 +2092,22 @@ VisibilityProxyDiagnostics(
 }
 
 std::optional<
+    StudioEmissiveGiDiagnostics>
+StudioViewportRenderer::
+EmissiveGiDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        emissiveGiDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            emissiveGiDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
     StudioCelestialLightingDiagnostics>
 StudioViewportRenderer::
 CelestialLightingDiagnostics(
@@ -6778,6 +6794,86 @@ StudioViewportRenderer::Compose(
                 });
             }
 
+            std::vector<
+                lighting::DynamicEmissiveSourceState>
+                dynamicEmissiveSources;
+            dynamicEmissiveSources.reserve(
+                emissiveVolumes.size());
+
+            for (const auto& volume :
+                 emissiveVolumes)
+            {
+                u64 revision =
+                    CombineFingerprint(
+                        volume.stableId,
+                        QuantizedLightingFingerprintValue(
+                            volume.intensityScale,
+                            0.0025F));
+
+                revision =
+                    CombineFingerprint(
+                        revision,
+                        QuantizedLightingFingerprintValue(
+                            volume.emissionLinear.x,
+                            0.0025F));
+                revision =
+                    CombineFingerprint(
+                        revision,
+                        QuantizedLightingFingerprintValue(
+                            volume.emissionLinear.y,
+                            0.0025F));
+                revision =
+                    CombineFingerprint(
+                        revision,
+                        QuantizedLightingFingerprintValue(
+                            volume.emissionLinear.z,
+                            0.0025F));
+                revision =
+                    CombineFingerprint(
+                        revision,
+                        QuantizedLightingFingerprintValue(
+                            volume.radiusMeters,
+                            0.05F));
+                revision =
+                    CombineFingerprint(
+                        revision,
+                        QuantizedLightingFingerprintValue(
+                            volume.influenceRangeMeters,
+                            0.05F));
+
+                dynamicEmissiveSources.push_back({
+                    .stableId =
+                        volume.stableId,
+                    .contentRevision =
+                        revision,
+                    .centerInFrameMeters =
+                        volume.centerInFrameMeters,
+                    .sourceRadiusMeters =
+                        std::max<f64>(
+                            volume.radiusMeters,
+                            0.0F),
+                    .influenceRangeMeters =
+                        std::max<f64>(
+                            volume.influenceRangeMeters,
+                            0.0F)
+                });
+            }
+
+            const auto emissiveInvalidations =
+                finalGather.
+                    emissiveInvalidationTracker.
+                    Update(
+                        dynamicEmissiveSources);
+
+            if (!emissiveInvalidations.empty())
+            {
+                lighting::ApplyEmissiveInvalidations(
+                    *finalGather.radianceResidency,
+                    emissiveInvalidations,
+                    radianceSourceRevision,
+                    8.0F);
+            }
+
             u64 lightingFingerprint =
                 0x4f52424954474931ULL;
 
@@ -6850,28 +6946,6 @@ StudioViewportRenderer::Compose(
                     5.0F);
             }
 
-            for (const auto& volume :
-                 emissiveVolumes)
-            {
-                lightingFingerprint =
-                    CombineFingerprint(
-                        lightingFingerprint,
-                        volume.stableId);
-
-                addLightingValue(
-                    volume.intensityScale,
-                    0.01F);
-                addLightingValue(
-                    volume.emissionLinear.x,
-                    0.01F);
-                addLightingValue(
-                    volume.emissionLinear.y,
-                    0.01F);
-                addLightingValue(
-                    volume.emissionLinear.z,
-                    0.01F);
-            }
-
             if (finalGather.lightingFingerprint != 0U &&
                 finalGather.lightingFingerprint !=
                     lightingFingerprint)
@@ -6887,6 +6961,27 @@ StudioViewportRenderer::Compose(
                 finalGather.radianceResidency->BuildUpdateList(
                     lightingView.cameraPositionInFrameMeters,
                     lightingPlan.radianceCacheUpdates);
+
+            const auto radianceStats =
+                finalGather.radianceResidency->Stats();
+
+            emissiveGiDiagnostics_.insert_or_assign(
+                info.id,
+                StudioEmissiveGiDiagnostics{
+                    .trackedSources =
+                        static_cast<u32>(
+                            finalGather.
+                                emissiveInvalidationTracker.
+                                SourceCount()),
+                    .invalidationEventsThisFrame =
+                        static_cast<u32>(
+                            emissiveInvalidations.size()),
+                    .dirtyRadianceCells =
+                        radianceStats.dirtyCells,
+                    .scheduledRadianceUpdates =
+                        static_cast<u32>(
+                            radianceUpdates.size())
+                });
 
             for (const auto& update : radianceUpdates)
             {
