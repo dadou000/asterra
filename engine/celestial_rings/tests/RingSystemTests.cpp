@@ -6,7 +6,7 @@ int main()
     RingSystem s;
     s.bands.push_back({
         .semanticIdHigh=1,.semanticIdLow=2,
-        .innerRadiusMeters=2.0,
+        .innerRadiusMeters=1.8,
         .outerRadiusMeters=3.0,
         .normalOpticalDepth=1.0,
         .singleScatteringAlbedo=0.7,
@@ -23,7 +23,8 @@ int main()
     const auto profile=BuildFarRingProfile(s,1.0,32U);
     if(profile.samples.size()!=32U) return 5;
     const double shadow=RingShadowTransmittanceAtSurface(
-        s,1.0,{1,0,0},{0,1,0});
+        s,1.0,{0.9950371902,-0.0995037190,0.0},
+        {0.9950371902,0.0995037190,0.0});
     if(!(shadow<1.0)) return 6;
     const double bodyShadow=BodyShadowTransmittanceAtRingPoint(
         s,1.0,{2.5,0,0},{-1,0,0});
