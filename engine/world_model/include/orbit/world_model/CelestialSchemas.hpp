@@ -180,6 +180,27 @@ inline constexpr schema::PropertyId kOceanGlintStrength{
 inline constexpr schema::PropertyId kOceanMinimumDepthForDeepColorMeters{
     .high = 0x4f524249544f434eULL, .low = 0x4445455044455001ULL};
 
+inline constexpr schema::PropertyId kRingPlaneNormalBody{
+    .high = 0x4f5242495452494eULL, .low = 0x504c414e454e4f01ULL};
+inline constexpr schema::PropertyId kRingShadowParticipation{
+    .high = 0x4f5242495452494eULL, .low = 0x5348445750415201ULL};
+inline constexpr schema::PropertyId kRingBodyShadowEnabled{
+    .high = 0x4f5242495452494eULL, .low = 0x424f445953484401ULL};
+inline constexpr schema::PropertyId kRingBandInnerRadiusMeters{
+    .high = 0x4f52424954524244ULL, .low = 0x494e4e4552524101ULL};
+inline constexpr schema::PropertyId kRingBandOuterRadiusMeters{
+    .high = 0x4f52424954524244ULL, .low = 0x4f55544552524101ULL};
+inline constexpr schema::PropertyId kRingBandOpticalDepth{
+    .high = 0x4f52424954524244ULL, .low = 0x4f50544445505401ULL};
+inline constexpr schema::PropertyId kRingBandSingleScatteringAlbedo{
+    .high = 0x4f52424954524244ULL, .low = 0x53434154414c4201ULL};
+inline constexpr schema::PropertyId kRingBandAnisotropy{
+    .high = 0x4f52424954524244ULL, .low = 0x414e49534f545201ULL};
+inline constexpr schema::PropertyId kRingBandColorLinear{
+    .high = 0x4f52424954524244ULL, .low = 0x434f4c4f524c4901ULL};
+inline constexpr schema::PropertyId kRingBandThicknessMeters{
+    .high = 0x4f52424954524244ULL, .low = 0x544849434b4e5301ULL};
+
 inline constexpr schema::PropertyId kCloudSourceModel{
     .high = 0x4f52424954434c44ULL, .low = 0x5352434d4f444501ULL};
 inline constexpr schema::PropertyId kCloudBaseAltitudeMeters{
