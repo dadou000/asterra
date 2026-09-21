@@ -208,6 +208,42 @@ void RenderView::CreateTargets()
                     ShaderResource
         });
 
+    surfaceBaseRoughness_ =
+        device_.CreateTexture({
+            .width = width_,
+            .height = height_,
+            .format =
+                rhi::TextureFormat::
+                    RGBA16_Float,
+            .initialState =
+                rhi::ResourceState::
+                    ShaderResource
+        });
+
+    surfaceNormalMetallic_ =
+        device_.CreateTexture({
+            .width = width_,
+            .height = height_,
+            .format =
+                rhi::TextureFormat::
+                    RGBA16_Float,
+            .initialState =
+                rhi::ResourceState::
+                    ShaderResource
+        });
+
+    surfaceEmissionClass_ =
+        device_.CreateTexture({
+            .width = width_,
+            .height = height_,
+            .format =
+                rhi::TextureFormat::
+                    RGBA16_Float,
+            .initialState =
+                rhi::ResourceState::
+                    ShaderResource
+        });
+
     displayLinear_ =
         device_.CreateTexture({
             .width = width_,
@@ -308,6 +344,21 @@ rhi::Texture& RenderView::Color() noexcept
     return *color_;
 }
 
+rhi::Texture& RenderView::SurfaceBaseRoughness() noexcept
+{
+    return *surfaceBaseRoughness_;
+}
+
+rhi::Texture& RenderView::SurfaceNormalMetallic() noexcept
+{
+    return *surfaceNormalMetallic_;
+}
+
+rhi::Texture& RenderView::SurfaceEmissionClass() noexcept
+{
+    return *surfaceEmissionClass_;
+}
+
 rhi::Texture& RenderView::DisplayLinear() noexcept
 {
     return *displayLinear_;
@@ -347,6 +398,24 @@ ImportedTargets RenderView::Import(
             graph.ImportTexture(
                 prefix + ".Color",
                 *color_,
+                rhi::ResourceState::
+                    ShaderResource),
+        .surfaceBaseRoughness =
+            graph.ImportTexture(
+                prefix + ".SurfaceBaseRoughness",
+                *surfaceBaseRoughness_,
+                rhi::ResourceState::
+                    ShaderResource),
+        .surfaceNormalMetallic =
+            graph.ImportTexture(
+                prefix + ".SurfaceNormalMetallic",
+                *surfaceNormalMetallic_,
+                rhi::ResourceState::
+                    ShaderResource),
+        .surfaceEmissionClass =
+            graph.ImportTexture(
+                prefix + ".SurfaceEmissionClass",
+                *surfaceEmissionClass_,
                 rhi::ResourceState::
                     ShaderResource),
         .displayLinear =
