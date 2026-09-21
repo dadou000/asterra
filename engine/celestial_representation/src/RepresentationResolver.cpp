@@ -138,12 +138,12 @@ void Validate(const ResolveInput& input)
             quality;
     case Representation::SmoothGlobe:
         return
-            input.policy.smoothGlobeMinimumRadiusPixels *
+            input.policy.smoothGlobeMinimumRadiusPixels /
             quality;
     case Representation::AnalyticDiscImpostor:
     case Representation::CachedDiscImpostor:
         return
-            input.policy.discImpostorMinimumRadiusPixels *
+            input.policy.discImpostorMinimumRadiusPixels /
             quality;
     default:
         return 0.0;
@@ -193,14 +193,14 @@ void Validate(const ResolveInput& input)
     }
 
     if (metrics.projectedRadiusPixels >=
-        input.policy.smoothGlobeMinimumRadiusPixels *
+        input.policy.smoothGlobeMinimumRadiusPixels /
             quality)
     {
         return Representation::SmoothGlobe;
     }
 
     if (metrics.projectedRadiusPixels >=
-        input.policy.discImpostorMinimumRadiusPixels *
+        input.policy.discImpostorMinimumRadiusPixels /
             quality)
     {
         return DiscChoice(input.features);
