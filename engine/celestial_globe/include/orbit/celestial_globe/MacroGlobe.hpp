@@ -95,7 +95,8 @@ public:
         u32 width,
         u32 height,
         GpuMacroGlobeProduct& globe,
-        const render_view::CameraState& camera);
+        const render_view::CameraState& camera,
+        f32 opacity = 1.0F);
 
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
