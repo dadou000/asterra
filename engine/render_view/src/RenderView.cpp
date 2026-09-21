@@ -208,6 +208,18 @@ void RenderView::CreateTargets()
                     ShaderResource
         });
 
+    displayColor_ =
+        device_.CreateTexture({
+            .width = width_,
+            .height = height_,
+            .format =
+                rhi::TextureFormat::
+                    RGBA8_UNorm,
+            .initialState =
+                rhi::ResourceState::
+                    ShaderResource
+        });
+
     depth_ =
         device_.CreateTexture({
             .width = width_,
@@ -284,6 +296,11 @@ rhi::Texture& RenderView::Color() noexcept
     return *color_;
 }
 
+rhi::Texture& RenderView::DisplayColor() noexcept
+{
+    return *displayColor_;
+}
+
 rhi::Texture& RenderView::Depth() noexcept
 {
     return *depth_;
@@ -313,6 +330,12 @@ ImportedTargets RenderView::Import(
             graph.ImportTexture(
                 prefix + ".Color",
                 *color_,
+                rhi::ResourceState::
+                    ShaderResource),
+        .display =
+            graph.ImportTexture(
+                prefix + ".Display",
+                *displayColor_,
                 rhi::ResourceState::
                     ShaderResource),
         .depth =
