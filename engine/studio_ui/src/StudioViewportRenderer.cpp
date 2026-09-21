@@ -2152,6 +2152,14 @@ StudioViewportRenderer::Compose(
                             draw,
                             farPresentation->
                                 cachedDisc.get());
+                        farBodyRenderer_.DrawSurfaceData(
+                            commands,
+                            *surfaceBaseRoughness,
+                            *surfaceNormalMetallic,
+                            *surfaceEmissionClass,
+                            width,
+                            height,
+                            draw);
                     };
 
                 const auto richer =
@@ -2541,6 +2549,12 @@ StudioViewportRenderer::Compose(
                 view->Camera();
             const auto bodyShape =
                 *shape;
+            auto* bodySurfaceBaseRoughness =
+                &view->SurfaceBaseRoughness();
+            auto* bodySurfaceNormalMetallic =
+                &view->SurfaceNormalMetallic();
+            auto* bodySurfaceEmissionClass =
+                &view->SurfaceEmissionClass();
 
             const bool perspective =
                 logicalTarget->mode ==
@@ -2763,10 +2777,28 @@ StudioViewportRenderer::Compose(
                             .access =
                                 render_graph::Access::
                                     Write
+                        },
+                        {
+                            .texture = targets.surfaceBaseRoughness,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceNormalMetallic,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceEmissionClass,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
                         }
                     },
                     [this,
                      color,
+                     bodySurfaceBaseRoughness,
+                     bodySurfaceNormalMetallic,
+                     bodySurfaceEmissionClass,
                      width,
                      height,
                      bodyShape,
@@ -2791,6 +2823,15 @@ StudioViewportRenderer::Compose(
                                 .blue = 0.018F,
                                 .alpha = 1.0F
                             });
+                        commands.ClearColorTarget(
+                            *bodySurfaceBaseRoughness,
+                            {0.0F, 0.0F, 0.0F, 1.0F});
+                        commands.ClearColorTarget(
+                            *bodySurfaceNormalMetallic,
+                            {0.0F, 1.0F, 0.0F, 0.0F});
+                        commands.ClearColorTarget(
+                            *bodySurfaceEmissionClass,
+                            {0.0F, 0.0F, 0.0F, 0.0F});
 
                         const auto draw =
                             [&](const celestial_representation::
@@ -2843,6 +2884,14 @@ StudioViewportRenderer::Compose(
                                     height,
                                     far,
                                     nullptr);
+                                farBodyRenderer_.DrawSurfaceData(
+                                    commands,
+                                    *bodySurfaceBaseRoughness,
+                                    *bodySurfaceNormalMetallic,
+                                    *bodySurfaceEmissionClass,
+                                    width,
+                                    height,
+                                    far);
                             };
 
                         draw(
