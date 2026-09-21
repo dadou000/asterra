@@ -729,11 +729,12 @@ SoftwareProxyVisibilityProvider::Trace(
     const math::Double3 origin =
         query.originInFrameMeters;
     const math::Double3 direction =
-        math::Normalize({
-            static_cast<f64>(query.direction.x),
-            static_cast<f64>(query.direction.y),
-            static_cast<f64>(query.direction.z)
-        });
+        math::Normalize(
+            math::Double3{
+                static_cast<f64>(query.direction.x),
+                static_cast<f64>(query.direction.y),
+                static_cast<f64>(query.direction.z)
+            });
 
     std::array<u32, 256> stack{};
     u32 stackSize = 1U;
