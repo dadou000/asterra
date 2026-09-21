@@ -1972,6 +1972,10 @@ int main(
                 compiler,
                 swapchain.BufferCount());
 
+        studioViewportRenderer.
+            SetContentService(
+                &content);
+
         orbit::lighting::LightingScheduler
             lightingScheduler;
 
