@@ -1,7 +1,10 @@
 #include "VulkanObjects.hpp"
 
+#include <array>
+#include <cstring>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace orbit::rhi::vulkan::detail
 {
@@ -344,6 +347,722 @@ bool VulkanTexture::EverUsed() const noexcept
 void VulkanTexture::MarkUsed() noexcept
 {
     everUsed_ = true;
+}
+
+VulkanAccelerationStructure::VulkanAccelerationStructure(
+    const VkDevice device,
+    const VmaAllocator allocator,
+    const DeviceFunctions& functions,
+    const VkAccelerationStructureKHR bottomLevel,
+    const VkAccelerationStructureKHR topLevel,
+    const VkBuffer bottomLevelBuffer,
+    const VmaAllocation bottomLevelAllocation,
+    const VkBuffer topLevelBuffer,
+    const VmaAllocation topLevelAllocation,
+    const VkBuffer aabbBuffer,
+    const VmaAllocation aabbAllocation,
+    const VkBuffer instanceBuffer,
+    const VmaAllocation instanceAllocation,
+    const u32 primitiveCount)
+    : device_(device),
+      allocator_(allocator),
+      functions_(&functions),
+      bottomLevel_(bottomLevel),
+      topLevel_(topLevel),
+      bottomLevelBuffer_(bottomLevelBuffer),
+      bottomLevelAllocation_(bottomLevelAllocation),
+      topLevelBuffer_(topLevelBuffer),
+      topLevelAllocation_(topLevelAllocation),
+      aabbBuffer_(aabbBuffer),
+      aabbAllocation_(aabbAllocation),
+      instanceBuffer_(instanceBuffer),
+      instanceAllocation_(instanceAllocation),
+      primitiveCount_(primitiveCount)
+{
+}
+
+VulkanAccelerationStructure::~VulkanAccelerationStructure()
+{
+    if (functions_ != nullptr &&
+        functions_->vkDestroyAccelerationStructureKHR != nullptr)
+    {
+        if (topLevel_ != VK_NULL_HANDLE)
+        {
+            functions_->vkDestroyAccelerationStructureKHR(
+                device_,
+                topLevel_,
+                nullptr);
+        }
+
+        if (bottomLevel_ != VK_NULL_HANDLE)
+        {
+            functions_->vkDestroyAccelerationStructureKHR(
+                device_,
+                bottomLevel_,
+                nullptr);
+        }
+    }
+
+    if (topLevelBuffer_ != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(
+            allocator_,
+            topLevelBuffer_,
+            topLevelAllocation_);
+    }
+
+    if (bottomLevelBuffer_ != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(
+            allocator_,
+            bottomLevelBuffer_,
+            bottomLevelAllocation_);
+    }
+
+    if (instanceBuffer_ != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(
+            allocator_,
+            instanceBuffer_,
+            instanceAllocation_);
+    }
+
+    if (aabbBuffer_ != VK_NULL_HANDLE)
+    {
+        vmaDestroyBuffer(
+            allocator_,
+            aabbBuffer_,
+            aabbAllocation_);
+    }
+}
+
+u32 VulkanAccelerationStructure::PrimitiveCount() const noexcept
+{
+    return primitiveCount_;
+}
+
+VkAccelerationStructureKHR
+VulkanAccelerationStructure::TopLevel() const noexcept
+{
+    return topLevel_;
+}
+
+std::unique_ptr<AccelerationStructure>
+VulkanDevice::CreateAabbAccelerationStructure(
+    const std::span<const AccelerationAabb> aabbs)
+{
+    if (!capabilities_.accelerationStructures)
+    {
+        throw std::runtime_error(
+            "Orbit cannot create an acceleration structure on this "
+            "device: acceleration structures are unsupported.");
+    }
+
+    if (aabbs.empty())
+    {
+        throw std::invalid_argument(
+            "Orbit cannot create an empty AABB acceleration structure.");
+    }
+
+    if (aabbs.size() >
+        static_cast<std::size_t>(
+            std::numeric_limits<u32>::max()))
+    {
+        throw std::overflow_error(
+            "Orbit AABB acceleration structure exceeds the 32-bit "
+            "primitive-count contract.");
+    }
+
+    const u32 primitiveCount =
+        static_cast<u32>(aabbs.size());
+
+    if (functions_.vkCreateAccelerationStructureKHR == nullptr ||
+        functions_.vkDestroyAccelerationStructureKHR == nullptr ||
+        functions_.vkGetAccelerationStructureBuildSizesKHR == nullptr ||
+        functions_.vkCmdBuildAccelerationStructuresKHR == nullptr ||
+        functions_.vkGetAccelerationStructureDeviceAddressKHR == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit acceleration-structure entry points are unavailable.");
+    }
+
+    struct OwnedBuffer
+    {
+        VkBuffer buffer{VK_NULL_HANDLE};
+        VmaAllocation allocation{nullptr};
+    };
+
+    const auto createBuffer =
+        [this](
+            const VkDeviceSize size,
+            const VkBufferUsageFlags usage,
+            const bool hostVisible)
+        {
+            VkBufferCreateInfo info{};
+            info.sType =
+                VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            info.size = size;
+            info.usage = usage;
+            info.sharingMode =
+                VK_SHARING_MODE_EXCLUSIVE;
+
+            VmaAllocationCreateInfo allocationInfo{};
+            allocationInfo.usage =
+                hostVisible
+                    ? VMA_MEMORY_USAGE_AUTO_PREFER_HOST
+                    : VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+
+            if (hostVisible)
+            {
+                allocationInfo.flags =
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+            }
+
+            OwnedBuffer result;
+
+            if (vmaCreateBuffer(
+                    allocator_,
+                    &info,
+                    &allocationInfo,
+                    &result.buffer,
+                    &result.allocation,
+                    nullptr) != VK_SUCCESS)
+            {
+                throw std::runtime_error(
+                    "Orbit failed to allocate an acceleration-structure "
+                    "support buffer.");
+            }
+
+            return result;
+        };
+
+    const auto deviceAddress =
+        [this](const VkBuffer buffer)
+        {
+            VkBufferDeviceAddressInfo info{};
+            info.sType =
+                VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+            info.buffer = buffer;
+            return vkGetBufferDeviceAddress(
+                nativeDevice_,
+                &info);
+        };
+
+    std::vector<VkAabbPositionsKHR>
+        nativeAabbs;
+    nativeAabbs.reserve(aabbs.size());
+
+    for (const auto& source : aabbs)
+    {
+        nativeAabbs.push_back({
+            .minX = source.minimum.x,
+            .minY = source.minimum.y,
+            .minZ = source.minimum.z,
+            .maxX = source.maximum.x,
+            .maxY = source.maximum.y,
+            .maxZ = source.maximum.z
+        });
+    }
+
+    OwnedBuffer aabbBuffer{};
+    OwnedBuffer bottomBuffer{};
+    OwnedBuffer instanceBuffer{};
+    OwnedBuffer topBuffer{};
+    OwnedBuffer scratchBuffer{};
+
+    VkAccelerationStructureKHR bottomLevel =
+        VK_NULL_HANDLE;
+    VkAccelerationStructureKHR topLevel =
+        VK_NULL_HANDLE;
+
+    const auto cleanup =
+        [&]()
+        {
+            if (topLevel != VK_NULL_HANDLE)
+            {
+                functions_.vkDestroyAccelerationStructureKHR(
+                    nativeDevice_,
+                    topLevel,
+                    nullptr);
+                topLevel = VK_NULL_HANDLE;
+            }
+
+            if (bottomLevel != VK_NULL_HANDLE)
+            {
+                functions_.vkDestroyAccelerationStructureKHR(
+                    nativeDevice_,
+                    bottomLevel,
+                    nullptr);
+                bottomLevel = VK_NULL_HANDLE;
+            }
+
+            for (auto* buffer : {
+                     &scratchBuffer,
+                     &topBuffer,
+                     &instanceBuffer,
+                     &bottomBuffer,
+                     &aabbBuffer})
+            {
+                if (buffer->buffer != VK_NULL_HANDLE)
+                {
+                    vmaDestroyBuffer(
+                        allocator_,
+                        buffer->buffer,
+                        buffer->allocation);
+                    buffer->buffer =
+                        VK_NULL_HANDLE;
+                    buffer->allocation =
+                        nullptr;
+                }
+            }
+        };
+
+    try
+    {
+        aabbBuffer =
+            createBuffer(
+                nativeAabbs.size() *
+                    sizeof(VkAabbPositionsKHR),
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                true);
+
+        void* mappedAabbs = nullptr;
+        if (vmaMapMemory(
+                allocator_,
+                aabbBuffer.allocation,
+                &mappedAabbs) != VK_SUCCESS)
+        {
+            throw std::runtime_error(
+                "Orbit failed to map AABB acceleration input.");
+        }
+
+        std::memcpy(
+            mappedAabbs,
+            nativeAabbs.data(),
+            nativeAabbs.size() *
+                sizeof(VkAabbPositionsKHR));
+
+        vmaFlushAllocation(
+            allocator_,
+            aabbBuffer.allocation,
+            0,
+            VK_WHOLE_SIZE);
+        vmaUnmapMemory(
+            allocator_,
+            aabbBuffer.allocation);
+
+        VkAccelerationStructureGeometryAabbsDataKHR
+            aabbData{};
+        aabbData.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+        aabbData.data.deviceAddress =
+            deviceAddress(
+                aabbBuffer.buffer);
+        aabbData.stride =
+            sizeof(VkAabbPositionsKHR);
+
+        VkAccelerationStructureGeometryKHR
+            bottomGeometry{};
+        bottomGeometry.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        bottomGeometry.geometryType =
+            VK_GEOMETRY_TYPE_AABBS_KHR;
+        bottomGeometry.flags =
+            VK_GEOMETRY_OPAQUE_BIT_KHR;
+        bottomGeometry.geometry.aabbs =
+            aabbData;
+
+        VkAccelerationStructureBuildGeometryInfoKHR
+            bottomBuild{};
+        bottomBuild.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+        bottomBuild.type =
+            VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+        bottomBuild.flags =
+            VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        bottomBuild.mode =
+            VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        bottomBuild.geometryCount = 1U;
+        bottomBuild.pGeometries =
+            &bottomGeometry;
+
+        VkAccelerationStructureBuildSizesInfoKHR
+            bottomSizes{};
+        bottomSizes.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+
+        functions_.vkGetAccelerationStructureBuildSizesKHR(
+            nativeDevice_,
+            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+            &bottomBuild,
+            &primitiveCount,
+            &bottomSizes);
+
+        bottomBuffer =
+            createBuffer(
+                bottomSizes.accelerationStructureSize,
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                false);
+
+        VkAccelerationStructureCreateInfoKHR
+            bottomCreate{};
+        bottomCreate.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+        bottomCreate.buffer =
+            bottomBuffer.buffer;
+        bottomCreate.size =
+            bottomSizes.accelerationStructureSize;
+        bottomCreate.type =
+            VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+
+        if (functions_.vkCreateAccelerationStructureKHR(
+                nativeDevice_,
+                &bottomCreate,
+                nullptr,
+                &bottomLevel) != VK_SUCCESS)
+        {
+            throw std::runtime_error(
+                "Orbit failed to create the proxy BLAS.");
+        }
+
+        VkAccelerationStructureDeviceAddressInfoKHR
+            bottomAddressInfo{};
+        bottomAddressInfo.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR;
+        bottomAddressInfo.accelerationStructure =
+            bottomLevel;
+
+        const VkDeviceAddress bottomAddress =
+            functions_.vkGetAccelerationStructureDeviceAddressKHR(
+                nativeDevice_,
+                &bottomAddressInfo);
+
+        VkAccelerationStructureInstanceKHR
+            instance{};
+        instance.transform.matrix[0][0] = 1.0F;
+        instance.transform.matrix[1][1] = 1.0F;
+        instance.transform.matrix[2][2] = 1.0F;
+        instance.instanceCustomIndex = 0U;
+        instance.mask = 0xFFU;
+        instance.instanceShaderBindingTableRecordOffset = 0U;
+        instance.flags =
+            VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+        instance.accelerationStructureReference =
+            bottomAddress;
+
+        instanceBuffer =
+            createBuffer(
+                sizeof(instance),
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                true);
+
+        void* mappedInstance = nullptr;
+        if (vmaMapMemory(
+                allocator_,
+                instanceBuffer.allocation,
+                &mappedInstance) != VK_SUCCESS)
+        {
+            throw std::runtime_error(
+                "Orbit failed to map TLAS instance input.");
+        }
+
+        std::memcpy(
+            mappedInstance,
+            &instance,
+            sizeof(instance));
+        vmaFlushAllocation(
+            allocator_,
+            instanceBuffer.allocation,
+            0,
+            VK_WHOLE_SIZE);
+        vmaUnmapMemory(
+            allocator_,
+            instanceBuffer.allocation);
+
+        VkAccelerationStructureGeometryInstancesDataKHR
+            instanceData{};
+        instanceData.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+        instanceData.arrayOfPointers =
+            VK_FALSE;
+        instanceData.data.deviceAddress =
+            deviceAddress(
+                instanceBuffer.buffer);
+
+        VkAccelerationStructureGeometryKHR
+            topGeometry{};
+        topGeometry.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        topGeometry.geometryType =
+            VK_GEOMETRY_TYPE_INSTANCES_KHR;
+        topGeometry.geometry.instances =
+            instanceData;
+
+        constexpr u32 oneInstance = 1U;
+
+        VkAccelerationStructureBuildGeometryInfoKHR
+            topBuild{};
+        topBuild.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+        topBuild.type =
+            VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+        topBuild.flags =
+            VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        topBuild.mode =
+            VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+        topBuild.geometryCount = 1U;
+        topBuild.pGeometries =
+            &topGeometry;
+
+        VkAccelerationStructureBuildSizesInfoKHR
+            topSizes{};
+        topSizes.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+
+        functions_.vkGetAccelerationStructureBuildSizesKHR(
+            nativeDevice_,
+            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+            &topBuild,
+            &oneInstance,
+            &topSizes);
+
+        topBuffer =
+            createBuffer(
+                topSizes.accelerationStructureSize,
+                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                false);
+
+        VkAccelerationStructureCreateInfoKHR
+            topCreate{};
+        topCreate.sType =
+            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
+        topCreate.buffer =
+            topBuffer.buffer;
+        topCreate.size =
+            topSizes.accelerationStructureSize;
+        topCreate.type =
+            VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+
+        if (functions_.vkCreateAccelerationStructureKHR(
+                nativeDevice_,
+                &topCreate,
+                nullptr,
+                &topLevel) != VK_SUCCESS)
+        {
+            throw std::runtime_error(
+                "Orbit failed to create the proxy TLAS.");
+        }
+
+        const VkDeviceSize scratchSize =
+            std::max(
+                bottomSizes.buildScratchSize,
+                topSizes.buildScratchSize);
+
+        scratchBuffer =
+            createBuffer(
+                scratchSize,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                false);
+
+        bottomBuild.dstAccelerationStructure =
+            bottomLevel;
+        bottomBuild.scratchData.deviceAddress =
+            deviceAddress(
+                scratchBuffer.buffer);
+
+        topBuild.dstAccelerationStructure =
+            topLevel;
+        topBuild.scratchData.deviceAddress =
+            deviceAddress(
+                scratchBuffer.buffer);
+
+        VkAccelerationStructureBuildRangeInfoKHR
+            bottomRange{};
+        bottomRange.primitiveCount =
+            primitiveCount;
+
+        VkAccelerationStructureBuildRangeInfoKHR
+            topRange{};
+        topRange.primitiveCount = 1U;
+
+        const VkAccelerationStructureBuildRangeInfoKHR*
+            bottomRanges[] = {
+                &bottomRange
+            };
+        const VkAccelerationStructureBuildRangeInfoKHR*
+            topRanges[] = {
+                &topRange
+            };
+
+        VkQueue queue = VK_NULL_HANDLE;
+        vkGetDeviceQueue(
+            nativeDevice_,
+            graphicsFamilyIndex_,
+            0U,
+            &queue);
+
+        VkCommandPoolCreateInfo poolInfo{};
+        poolInfo.sType =
+            VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        poolInfo.flags =
+            VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        poolInfo.queueFamilyIndex =
+            graphicsFamilyIndex_;
+
+        VkCommandPool pool =
+            VK_NULL_HANDLE;
+
+        if (vkCreateCommandPool(
+                nativeDevice_,
+                &poolInfo,
+                nullptr,
+                &pool) != VK_SUCCESS)
+        {
+            throw std::runtime_error(
+                "Orbit failed to create the proxy AS build command pool.");
+        }
+
+        VkCommandBufferAllocateInfo commandInfo{};
+        commandInfo.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        commandInfo.commandPool =
+            pool;
+        commandInfo.level =
+            VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        commandInfo.commandBufferCount =
+            1U;
+
+        VkCommandBuffer command =
+            VK_NULL_HANDLE;
+
+        if (vkAllocateCommandBuffers(
+                nativeDevice_,
+                &commandInfo,
+                &command) != VK_SUCCESS)
+        {
+            vkDestroyCommandPool(
+                nativeDevice_,
+                pool,
+                nullptr);
+            throw std::runtime_error(
+                "Orbit failed to allocate the proxy AS build command buffer.");
+        }
+
+        VkCommandBufferBeginInfo begin{};
+        begin.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin.flags =
+            VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+        vkBeginCommandBuffer(
+            command,
+            &begin);
+
+        functions_.vkCmdBuildAccelerationStructuresKHR(
+            command,
+            1U,
+            &bottomBuild,
+            bottomRanges);
+
+        VkMemoryBarrier2 barrier{};
+        barrier.sType =
+            VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        barrier.srcStageMask =
+            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        barrier.srcAccessMask =
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+        barrier.dstStageMask =
+            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+        barrier.dstAccessMask =
+            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+
+        VkDependencyInfo dependency{};
+        dependency.sType =
+            VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.memoryBarrierCount = 1U;
+        dependency.pMemoryBarriers =
+            &barrier;
+
+        vkCmdPipelineBarrier2(
+            command,
+            &dependency);
+
+        functions_.vkCmdBuildAccelerationStructuresKHR(
+            command,
+            1U,
+            &topBuild,
+            topRanges);
+
+        vkEndCommandBuffer(command);
+
+        VkCommandBufferSubmitInfo submitCommand{};
+        submitCommand.sType =
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+        submitCommand.commandBuffer =
+            command;
+
+        VkSubmitInfo2 submit{};
+        submit.sType =
+            VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+        submit.commandBufferInfoCount =
+            1U;
+        submit.pCommandBufferInfos =
+            &submitCommand;
+
+        if (vkQueueSubmit2(
+                queue,
+                1U,
+                &submit,
+                VK_NULL_HANDLE) != VK_SUCCESS)
+        {
+            vkDestroyCommandPool(
+                nativeDevice_,
+                pool,
+                nullptr);
+            throw std::runtime_error(
+                "Orbit failed to submit proxy AS build commands.");
+        }
+
+        vkQueueWaitIdle(queue);
+
+        vkDestroyCommandPool(
+            nativeDevice_,
+            pool,
+            nullptr);
+
+        vmaDestroyBuffer(
+            allocator_,
+            scratchBuffer.buffer,
+            scratchBuffer.allocation);
+        scratchBuffer = {};
+
+        return std::make_unique<
+            VulkanAccelerationStructure>(
+                nativeDevice_,
+                allocator_,
+                functions_,
+                bottomLevel,
+                topLevel,
+                bottomBuffer.buffer,
+                bottomBuffer.allocation,
+                topBuffer.buffer,
+                topBuffer.allocation,
+                aabbBuffer.buffer,
+                aabbBuffer.allocation,
+                instanceBuffer.buffer,
+                instanceBuffer.allocation,
+                primitiveCount);
+    }
+    catch (...)
+    {
+        cleanup();
+        throw;
+    }
 }
 
 std::unique_ptr<Buffer> VulkanDevice::CreateBuffer(const BufferDesc& desc)
