@@ -86,6 +86,38 @@ int main()
         return 4;
     }
 
+    const frames::FrameId otherFrame{
+        .high = 9U,
+        .low = 10U};
+
+    if (EvaluateRadianceRefresh(
+            500U,
+            500U,
+            frame,
+            otherFrame,
+            body,
+            body) !=
+        RadianceRefreshReason::FrameChanged)
+    {
+        return 5;
+    }
+
+    const universe::BodyId otherBody{
+        .high = 11U,
+        .low = 12U};
+
+    if (EvaluateRadianceRefresh(
+            500U,
+            500U,
+            frame,
+            frame,
+            body,
+            otherBody) !=
+        RadianceRefreshReason::BodyChanged)
+    {
+        return 6;
+    }
+
     LightingView view;
     view.frame = frame;
     view.body = body;
@@ -125,7 +157,7 @@ int main()
 
     if (surfaceKey != macroKey)
     {
-        return 5;
+        return 7;
     }
 
     return 0;
