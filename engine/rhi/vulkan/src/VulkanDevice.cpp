@@ -249,14 +249,76 @@ struct Candidate
     const auto extensions =
         EnumerateDeviceExtensions(physicalDevice);
 
+    VkPhysicalDeviceVulkan12Features features12{};
+    features12.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR
+        accelerationFeatures{};
+    accelerationFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+
+    VkPhysicalDeviceRayQueryFeaturesKHR
+        rayQueryFeatures{};
+    rayQueryFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR
+        rayPipelineFeatures{};
+    rayPipelineFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+
+    features12.pNext =
+        &accelerationFeatures;
+    accelerationFeatures.pNext =
+        &rayQueryFeatures;
+    rayQueryFeatures.pNext =
+        &rayPipelineFeatures;
+
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext =
+        &features12;
+
+    vkGetPhysicalDeviceFeatures2(
+        physicalDevice,
+        &features2);
+
+    const bool hasAccelerationExtensions =
+        SupportsExtension(
+            extensions,
+            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        SupportsExtension(
+            extensions,
+            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    capabilities.accelerationStructures =
+        hasAccelerationExtensions &&
+        features12.bufferDeviceAddress == VK_TRUE &&
+        accelerationFeatures.accelerationStructure == VK_TRUE;
+
+    capabilities.rayQuery =
+        capabilities.accelerationStructures &&
+        SupportsExtension(
+            extensions,
+            VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+        rayQueryFeatures.rayQuery == VK_TRUE;
+
+    capabilities.rayTracingPipeline =
+        capabilities.accelerationStructures &&
+        SupportsExtension(
+            extensions,
+            VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
+        rayPipelineFeatures.rayTracingPipeline == VK_TRUE;
+
     capabilities.rayTracing =
-        SupportsExtension(
-            extensions, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME) &&
-        SupportsExtension(
-            extensions, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+        capabilities.rayTracingPipeline;
 
     capabilities.meshShaders =
-        SupportsExtension(extensions, VK_EXT_MESH_SHADER_EXTENSION_NAME);
+        SupportsExtension(
+            extensions,
+            VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
     capabilities.variableRateShading =
         SupportsExtension(
@@ -463,7 +525,8 @@ struct ValidationFeatureRequest
 
 [[nodiscard]] VkDevice CreateLogicalDevice(
     const VkPhysicalDevice physicalDevice,
-    const u32 graphicsFamilyIndex)
+    const u32 graphicsFamilyIndex,
+    const DeviceCapabilities& capabilities)
 {
     constexpr f32 queuePriority = 1.0F;
 
@@ -493,15 +556,79 @@ struct ValidationFeatureRequest
     features2.features.shaderInt64 = VK_TRUE;
     features2.pNext = &features13;
 
+    std::vector<const char*> enabledExtensions(
+        kRequiredDeviceExtensions.begin(),
+        kRequiredDeviceExtensions.end());
+
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR
+        accelerationFeatures{};
+    accelerationFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+
+    VkPhysicalDeviceRayQueryFeaturesKHR
+        rayQueryFeatures{};
+    rayQueryFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
+
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR
+        rayPipelineFeatures{};
+    rayPipelineFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
+
+    if (capabilities.accelerationStructures)
+    {
+        features12.bufferDeviceAddress = VK_TRUE;
+
+        accelerationFeatures.accelerationStructure =
+            VK_TRUE;
+
+        enabledExtensions.push_back(
+            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        enabledExtensions.push_back(
+            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+
+        features12.pNext =
+            &accelerationFeatures;
+
+        void** tail =
+            reinterpret_cast<void**>(
+                &accelerationFeatures.pNext);
+
+        if (capabilities.rayQuery)
+        {
+            rayQueryFeatures.rayQuery =
+                VK_TRUE;
+            *tail =
+                &rayQueryFeatures;
+            tail =
+                reinterpret_cast<void**>(
+                    &rayQueryFeatures.pNext);
+
+            enabledExtensions.push_back(
+                VK_KHR_RAY_QUERY_EXTENSION_NAME);
+        }
+
+        if (capabilities.rayTracingPipeline)
+        {
+            rayPipelineFeatures.rayTracingPipeline =
+                VK_TRUE;
+            *tail =
+                &rayPipelineFeatures;
+
+            enabledExtensions.push_back(
+                VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+        }
+    }
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.pNext = &features2;
     createInfo.queueCreateInfoCount = 1;
     createInfo.pQueueCreateInfos = &queueCreateInfo;
     createInfo.enabledExtensionCount =
-        static_cast<u32>(kRequiredDeviceExtensions.size());
+        static_cast<u32>(enabledExtensions.size());
     createInfo.ppEnabledExtensionNames =
-        kRequiredDeviceExtensions.data();
+        enabledExtensions.data();
 
     VkDevice device = VK_NULL_HANDLE;
     if (vkCreateDevice(
@@ -795,9 +922,15 @@ std::unique_ptr<Device> CreateDevice(const DeviceDesc& desc)
 
     const auto candidate = detail::SelectPhysicalDevice(instance);
 
+    const auto capabilities =
+        detail::QueryCapabilities(
+            candidate.physicalDevice);
+
     const VkDevice nativeDevice =
         detail::CreateLogicalDevice(
-            candidate.physicalDevice, candidate.graphicsFamilyIndex);
+            candidate.physicalDevice,
+            candidate.graphicsFamilyIndex,
+            capabilities);
 
     const VmaAllocator allocator =
         detail::CreateAllocator(
@@ -815,10 +948,12 @@ std::unique_ptr<Device> CreateDevice(const DeviceDesc& desc)
             "Orbit failed to resolve vkCmdPushDescriptorSetKHR.");
     }
 
-    const auto capabilities =
-        detail::QueryCapabilities(candidate.physicalDevice);
-
-    log::Info("Vulkan device created.");
+    log::Info(
+        std::format(
+            "Vulkan device created. AS={} rayQuery={} rtPipeline={}",
+            capabilities.accelerationStructures,
+            capabilities.rayQuery,
+            capabilities.rayTracingPipeline));
 
     return std::make_unique<detail::VulkanDevice>(
         instance,
