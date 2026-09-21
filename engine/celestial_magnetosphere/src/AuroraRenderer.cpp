@@ -1,9 +1,11 @@
 #include <orbit/celestial_magnetosphere_render/AuroraRenderer.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
 #include <cstring>
+#include <cmath>
 #include <stdexcept>
 
 namespace orbit::celestial_magnetosphere_render
@@ -115,7 +117,7 @@ struct VSIn
 {
     float3 position : POSITION;
     float3 emission : COLOR0;
-    float opacity : TEXCOORD0;
+    float2 presentation : TEXCOORD0;
 };
 
 struct Constants
@@ -189,7 +191,7 @@ VSOut main(VSIn i)
         max(g.presentation.x,0.0);
     o.opacity=
         saturate(
-            i.opacity*
+            i.presentation.x*
             max(g.presentation.y,0.0));
     o.bodyPosition=
         i.position;
@@ -299,12 +301,12 @@ AuroraRenderer::AuroraRenderer(
             {
                 .location=2,
                 .format=
-                    rhi::VertexFormat::Float1,
+                    rhi::VertexFormat::Float2,
                 .offsetBytes=
                     static_cast<u32>(
                         offsetof(
                             AuroraVertex,
-                            opacity))
+                            presentation))
             }
         }};
 
