@@ -185,6 +185,9 @@ public:
         AssetId materialAsset,
         const MaterialEmission& emission);
 
+    [[nodiscard]] MaterialEmission ResolveMaterialEmission(
+        AssetId materialAsset) const;
+
     // Assigns or clears the emissive texture channel on a base material.
     // Material instances inherit the texture from their parent in V0.0.7.
     void SetMaterialEmissiveTexture(
