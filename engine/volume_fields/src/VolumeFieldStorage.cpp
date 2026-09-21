@@ -286,7 +286,7 @@ VolumeFieldStorage::Recenter(
     {
         const auto found =
             oldSlots.find(
-                TileKey(coord));
+                coord);
 
         if (found != oldSlots.end() &&
             tiles_[found->second].coord ==
