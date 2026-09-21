@@ -53,7 +53,16 @@ void Validate(
        p.auroralMaximumAltitudeMeters<
            p.auroralMinimumAltitudeMeters ||
        !finite(p.auroralIntensity) ||
-       p.auroralIntensity<0.0)
+       p.auroralIntensity<0.0 ||
+       !finite(p.auroralColorLinear.x) ||
+       !finite(p.auroralColorLinear.y) ||
+       !finite(p.auroralColorLinear.z) ||
+       p.auroralColorLinear.x<0.0 ||
+       p.auroralColorLinear.y<0.0 ||
+       p.auroralColorLinear.z<0.0 ||
+       !finite(p.auroralStructure) ||
+       p.auroralStructure<0.0 ||
+       p.auroralStructure>1.0)
     {
         throw std::invalid_argument(
             "Magnetosphere parameters are invalid.");
@@ -122,7 +131,11 @@ u64 MagnetosphereFingerprint(
         p.auroralOvalWidthDegrees,
         p.auroralMinimumAltitudeMeters,
         p.auroralMaximumAltitudeMeters,
-        p.auroralIntensity})
+        p.auroralIntensity,
+        p.auroralColorLinear.x,
+        p.auroralColorLinear.y,
+        p.auroralColorLinear.z,
+        p.auroralStructure})
         addf(v);
 
     add(p.auroralSeed);
@@ -330,6 +343,194 @@ MagnetosphereProduct BuildMagnetosphereProduct(
                 longitude)*
             ringRadius);
     }
+
+    return result;
+}
+
+AuroraMeshProduct BuildAuroraCurtainMesh(
+    const MagnetosphereParameters& p,
+    const f64 referenceRadiusMeters,
+    const u32 angularSegments)
+{
+    if(angularSegments<16U)
+        throw std::invalid_argument(
+            "Aurora curtain mesh requires at least 16 angular segments.");
+
+    Validate(
+        p,
+        referenceRadiusMeters,
+        {.ovalSamples=angularSegments});
+
+    const auto axis=
+        SafeNormalize(
+            p.dipoleAxis,
+            {0.0,0.0,1.0});
+
+    math::Double3 tangent{1.0,0.0,0.0};
+    if(std::abs(math::Dot(axis,tangent))>0.9)
+        tangent={0.0,1.0,0.0};
+
+    const auto u=
+        math::Normalize(
+            tangent-axis*math::Dot(axis,tangent));
+    const auto v=
+        math::Normalize(
+            math::Cross(axis,u));
+
+    const f64 centerLatitudeDegrees=
+        std::clamp(
+            p.auroralOvalLatitudeDegrees-
+            9.0*p.activity,
+            0.0,
+            90.0);
+    const f64 latitude=
+        centerLatitudeDegrees*
+        std::numbers::pi_v<f64>/
+        180.0;
+    const f64 polar=
+        std::numbers::pi_v<f64>*0.5-
+        latitude;
+
+    const f64 innerRadius=
+        referenceRadiusMeters+
+        p.auroralMinimumAltitudeMeters;
+    const f64 outerRadius=
+        referenceRadiusMeters+
+        p.auroralMaximumAltitudeMeters;
+
+    AuroraMeshProduct result;
+    result.referenceRadiusMeters=
+        referenceRadiusMeters;
+    result.angularSegments=
+        angularSegments;
+    result.fingerprint=
+        terrain::StableCombine64(
+            MagnetosphereFingerprint(
+                p,
+                referenceRadiusMeters,
+                {.ovalSamples=angularSegments}),
+            0x4155524f52414d53ULL);
+
+    result.vertices.reserve(
+        static_cast<std::size_t>(
+            angularSegments+1U)*
+        4U);
+    result.indices.reserve(
+        static_cast<std::size_t>(
+            angularSegments)*
+        12U);
+
+    const auto emitHemisphere=
+        [&](const f64 hemisphereSign)
+        {
+            const u32 base=
+                static_cast<u32>(
+                    result.vertices.size());
+
+            for(u32 i=0U;i<=angularSegments;++i)
+            {
+                const f64 t=
+                    static_cast<f64>(i)/
+                    static_cast<f64>(angularSegments);
+                const f64 longitude=
+                    2.0*
+                    std::numbers::pi_v<f64>*
+                    t;
+
+                const auto ringDirection=
+                    math::Normalize(
+                        axis*
+                            (hemisphereSign*
+                             std::cos(polar))+
+                        (u*std::cos(longitude)+
+                         v*std::sin(longitude))*
+                            std::sin(polar));
+
+                const f64 structurePhase=
+                    std::sin(
+                        longitude*
+                            (3.0+
+                             static_cast<f64>(
+                                 (p.auroralSeed%5U)))+
+                        static_cast<f64>(
+                            p.auroralSeed&0xffffU)*
+                            0.0017);
+
+                const f64 modulation=
+                    std::clamp(
+                        1.0+
+                        p.auroralStructure*
+                            0.45*
+                            structurePhase,
+                        0.15,
+                        1.75);
+
+                const math::Float3 emission{
+                    static_cast<f32>(
+                        p.auroralColorLinear.x*
+                        p.auroralIntensity*
+                        modulation),
+                    static_cast<f32>(
+                        p.auroralColorLinear.y*
+                        p.auroralIntensity*
+                        modulation),
+                    static_cast<f32>(
+                        p.auroralColorLinear.z*
+                        p.auroralIntensity*
+                        modulation)
+                };
+
+                const f32 bottomOpacity=
+                    static_cast<f32>(
+                        std::clamp(
+                            0.28+
+                            0.42*
+                            p.activity*
+                            modulation,
+                            0.04,
+                            0.92));
+
+                const f32 topOpacity=
+                    bottomOpacity*
+                    0.18F;
+
+                for(const auto [radius,opacity]:
+                    std::array<std::pair<f64,f32>,2>{
+                        std::pair{innerRadius,bottomOpacity},
+                        std::pair{outerRadius,topOpacity}})
+                {
+                    const auto position=
+                        ringDirection*
+                        (radius/
+                         referenceRadiusMeters);
+
+                    result.vertices.push_back({
+                        .positionNormalized={
+                            static_cast<f32>(position.x),
+                            static_cast<f32>(position.y),
+                            static_cast<f32>(position.z)},
+                        .emissionLinear=emission,
+                        .opacity=opacity
+                    });
+                }
+            }
+
+            for(u32 i=0U;i<angularSegments;++i)
+            {
+                const u32 i0=base+i*2U;
+                const u32 i1=i0+1U;
+                const u32 i2=i0+2U;
+                const u32 i3=i0+3U;
+
+                result.indices.insert(
+                    result.indices.end(),
+                    {i0,i2,i1,
+                     i1,i2,i3});
+            }
+        };
+
+    emitHemisphere(1.0);
+    emitHemisphere(-1.0);
 
     return result;
 }
