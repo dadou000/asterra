@@ -4923,14 +4923,31 @@ StudioViewportRenderer::Compose(
                     auto& giantPresentation =
                         giantPresentations_[info.id];
 
-                    if (giantPresentation.appearance ==
+                    const bool giantNeedsBuild =
+                        giantPresentation.appearance ==
                             nullptr ||
                         giantPresentation.body !=
                             logicalTarget->
                                 target->body ||
                         giantPresentation.fingerprint !=
                             resolvedGiantForView->
-                                fingerprint)
+                                fingerprint;
+
+                    if (giantNeedsBuild &&
+                        acquireCelestialGrant(
+                            info.id,
+                            logicalTarget->
+                                target->body,
+                            celestial_scheduler::
+                                WorkKind::
+                                    OrbitalAppearance,
+                            resolvedGiantForView->
+                                fingerprint,
+                            celestial_scheduler::
+                                WorkBackend::Cpu,
+                            3U,
+                            80,
+                            true))
                     {
                         auto giantAppearance =
                             celestial_giants::
@@ -4964,10 +4981,31 @@ StudioViewportRenderer::Compose(
                         giantPresentation.fingerprint =
                             resolvedGiantForView->
                                 fingerprint;
+
+                        static_cast<void>(
+                            completeCelestialGrant(
+                                info.id,
+                                logicalTarget->
+                                    target->body,
+                                celestial_scheduler::
+                                    WorkKind::
+                                        OrbitalAppearance,
+                                resolvedGiantForView->
+                                    fingerprint));
                     }
 
-                    giantAppearanceSummary =
-                        giantPresentation.summary;
+                    if (giantPresentation.appearance !=
+                            nullptr &&
+                        giantPresentation.body ==
+                            logicalTarget->
+                                target->body &&
+                        giantPresentation.fingerprint ==
+                            resolvedGiantForView->
+                                fingerprint)
+                    {
+                        giantAppearanceSummary =
+                            giantPresentation.summary;
+                    }
                 }
                 else
                 {
@@ -4982,14 +5020,31 @@ StudioViewportRenderer::Compose(
                     auto& smallPresentation =
                         smallBodyPresentations_[info.id];
 
-                    if (smallPresentation.appearance ==
+                    const bool smallBodyNeedsBuild =
+                        smallPresentation.appearance ==
                             nullptr ||
                         smallPresentation.body !=
                             logicalTarget->
                                 target->body ||
                         smallPresentation.fingerprint !=
                             resolvedSmallBodyForView->
-                                fingerprint)
+                                fingerprint;
+
+                    if (smallBodyNeedsBuild &&
+                        acquireCelestialGrant(
+                            info.id,
+                            logicalTarget->
+                                target->body,
+                            celestial_scheduler::
+                                WorkKind::
+                                    OrbitalAppearance,
+                            resolvedSmallBodyForView->
+                                fingerprint,
+                            celestial_scheduler::
+                                WorkBackend::Cpu,
+                            3U,
+                            80,
+                            true))
                     {
                         auto smallAppearance =
                             celestial_small_bodies::
@@ -5037,16 +5092,37 @@ StudioViewportRenderer::Compose(
                             smallShape.minimumRadiusScale;
                         smallPresentation.maximumRadiusScale =
                             smallShape.maximumRadiusScale;
+
+                        static_cast<void>(
+                            completeCelestialGrant(
+                                info.id,
+                                logicalTarget->
+                                    target->body,
+                                celestial_scheduler::
+                                    WorkKind::
+                                        OrbitalAppearance,
+                                resolvedSmallBodyForView->
+                                    fingerprint));
                     }
 
-                    smallBodyAppearanceSummary =
-                        smallPresentation.summary;
-                    smallBodyMinimumRadiusScale =
-                        smallPresentation.
-                            minimumRadiusScale;
-                    smallBodyMaximumRadiusScale =
-                        smallPresentation.
-                            maximumRadiusScale;
+                    if (smallPresentation.appearance !=
+                            nullptr &&
+                        smallPresentation.body ==
+                            logicalTarget->
+                                target->body &&
+                        smallPresentation.fingerprint ==
+                            resolvedSmallBodyForView->
+                                fingerprint)
+                    {
+                        smallBodyAppearanceSummary =
+                            smallPresentation.summary;
+                        smallBodyMinimumRadiusScale =
+                            smallPresentation.
+                                minimumRadiusScale;
+                        smallBodyMaximumRadiusScale =
+                            smallPresentation.
+                                maximumRadiusScale;
+                    }
                 }
                 else
                 {
