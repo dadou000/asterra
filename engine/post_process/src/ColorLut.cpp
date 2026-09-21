@@ -6,11 +6,102 @@
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
+#include <sstream>
+#include <iomanip>
+#include <string>
+#include <string_view>
 
 namespace orbit::post_process
 {
 namespace
 {
+[[nodiscard]] std::string Trim(
+    std::string value)
+{
+    const auto first =
+        value.find_first_not_of(" \t\r\n");
+
+    if (first == std::string::npos)
+    {
+        return {};
+    }
+
+    const auto last =
+        value.find_last_not_of(" \t\r\n");
+
+    return value.substr(
+        first,
+        last - first + 1U);
+}
+
+[[nodiscard]] bool StartsWith(
+    const std::string_view text,
+    const std::string_view prefix) noexcept
+{
+    return text.size() >= prefix.size() &&
+        text.substr(0U, prefix.size()) == prefix;
+}
+
+[[nodiscard]] std::string Unquote(
+    std::string value)
+{
+    value = Trim(std::move(value));
+
+    if (value.size() >= 2U &&
+        value.front() == '"' &&
+        value.back() == '"')
+    {
+        value =
+            value.substr(
+                1U,
+                value.size() - 2U);
+    }
+
+    return value;
+}
+
+[[nodiscard]] f32 ParseFiniteFloat(
+    const std::string& text,
+    const char* const label)
+{
+    std::size_t consumed = 0U;
+    const f32 value =
+        std::stof(
+            text,
+            &consumed);
+
+    if (consumed != text.size() ||
+        !std::isfinite(value))
+    {
+        throw std::invalid_argument(
+            std::string("Invalid ") +
+            label +
+            " value in .cube LUT.");
+    }
+
+    return value;
+}
+
+[[nodiscard]] u32 ParseSize(
+    const std::string& text)
+{
+    std::size_t consumed = 0U;
+    const unsigned long value =
+        std::stoul(
+            text,
+            &consumed);
+
+    if (consumed != text.size() ||
+        value < 2UL ||
+        value > 128UL)
+    {
+        throw std::invalid_argument(
+            "LUT_3D_SIZE must be in [2, 128].");
+    }
+
+    return static_cast<u32>(value);
+}
+
 constexpr const char* kFullscreenVertexShader = R"(
 struct VSOutput
 {
@@ -137,6 +228,439 @@ float4 main(VSOutput input) : SV_Target0
 )";
 } // namespace
 
+std::string_view
+ColorLutDomainName(
+    const ColorLutDomain domain) noexcept
+{
+    switch (domain)
+    {
+    case ColorLutDomain::DisplayLinear:
+        return "Display Linear";
+    case ColorLutDomain::ShapedSceneLinear:
+        return "Shaped Scene Linear";
+    }
+
+    return "Unknown";
+}
+
+std::string_view
+ColorLutShaperName(
+    const ColorLutShaper shaper) noexcept
+{
+    switch (shaper)
+    {
+    case ColorLutShaper::None:
+        return "None";
+    case ColorLutShaper::Log2:
+        return "Log2";
+    }
+
+    return "Unknown";
+}
+
+bool IsDisplayLutCompatible(
+    const ColorLutData& lut) noexcept
+{
+    return
+        lut.metadata.domain ==
+            ColorLutDomain::DisplayLinear &&
+        lut.metadata.shaper ==
+            ColorLutShaper::None &&
+        std::isfinite(
+            lut.metadata.domainMinimum) &&
+        std::isfinite(
+            lut.metadata.domainMaximum) &&
+        lut.metadata.domainMaximum >
+            lut.metadata.domainMinimum;
+}
+
+ColorLutImportResult
+ParseCubeColorLut(
+    const std::string_view text)
+{
+    ColorLutImportResult result{};
+    result.lut.metadata =
+        ColorLutMetadata{};
+
+    std::istringstream stream{
+        std::string(text)};
+
+    std::string line;
+    u32 declaredSize = 0U;
+    std::vector<std::array<f32, 3>>
+        samples;
+
+    while (std::getline(stream, line))
+    {
+        line = Trim(std::move(line));
+
+        if (line.empty())
+        {
+            continue;
+        }
+
+        if (StartsWith(
+                line,
+                "# ORBIT_DOMAIN "))
+        {
+            const std::string value =
+                Trim(
+                    line.substr(
+                        std::string(
+                            "# ORBIT_DOMAIN ").
+                            size()));
+
+            if (value == "DISPLAY_LINEAR")
+            {
+                result.lut.metadata.domain =
+                    ColorLutDomain::
+                        DisplayLinear;
+            }
+            else if (value ==
+                     "SHAPED_SCENE_LINEAR")
+            {
+                result.lut.metadata.domain =
+                    ColorLutDomain::
+                        ShapedSceneLinear;
+            }
+            else
+            {
+                throw std::invalid_argument(
+                    "Unsupported ORBIT_DOMAIN in .cube LUT.");
+            }
+
+            result.lut.metadata.
+                explicitOrbitMetadata = true;
+            continue;
+        }
+
+        if (StartsWith(
+                line,
+                "# ORBIT_SHAPER "))
+        {
+            const std::string value =
+                Trim(
+                    line.substr(
+                        std::string(
+                            "# ORBIT_SHAPER ").
+                            size()));
+
+            if (value == "NONE")
+            {
+                result.lut.metadata.shaper =
+                    ColorLutShaper::None;
+            }
+            else if (value == "LOG2")
+            {
+                result.lut.metadata.shaper =
+                    ColorLutShaper::Log2;
+            }
+            else
+            {
+                throw std::invalid_argument(
+                    "Unsupported ORBIT_SHAPER in .cube LUT.");
+            }
+
+            result.lut.metadata.
+                explicitOrbitMetadata = true;
+            continue;
+        }
+
+        if (line.front() == '#')
+        {
+            continue;
+        }
+
+        if (StartsWith(line, "TITLE "))
+        {
+            result.lut.metadata.title =
+                Unquote(
+                    line.substr(6U));
+            continue;
+        }
+
+        if (StartsWith(
+                line,
+                "LUT_3D_SIZE "))
+        {
+            declaredSize =
+                ParseSize(
+                    Trim(
+                        line.substr(12U)));
+            continue;
+        }
+
+        if (StartsWith(
+                line,
+                "DOMAIN_MIN "))
+        {
+            std::istringstream values{
+                line.substr(11U)};
+            std::string x;
+            std::string y;
+            std::string z;
+            values >> x >> y >> z;
+
+            if (x.empty() ||
+                y.empty() ||
+                z.empty())
+            {
+                throw std::invalid_argument(
+                    "DOMAIN_MIN requires three values.");
+            }
+
+            const f32 px =
+                ParseFiniteFloat(x, "DOMAIN_MIN");
+            const f32 py =
+                ParseFiniteFloat(y, "DOMAIN_MIN");
+            const f32 pz =
+                ParseFiniteFloat(z, "DOMAIN_MIN");
+
+            if (std::abs(px - py) > 1.0e-6F ||
+                std::abs(px - pz) > 1.0e-6F)
+            {
+                throw std::invalid_argument(
+                    "Orbit currently requires uniform .cube DOMAIN_MIN.");
+            }
+
+            result.lut.metadata.domainMinimum =
+                px;
+            continue;
+        }
+
+        if (StartsWith(
+                line,
+                "DOMAIN_MAX "))
+        {
+            std::istringstream values{
+                line.substr(11U)};
+            std::string x;
+            std::string y;
+            std::string z;
+            values >> x >> y >> z;
+
+            if (x.empty() ||
+                y.empty() ||
+                z.empty())
+            {
+                throw std::invalid_argument(
+                    "DOMAIN_MAX requires three values.");
+            }
+
+            const f32 px =
+                ParseFiniteFloat(x, "DOMAIN_MAX");
+            const f32 py =
+                ParseFiniteFloat(y, "DOMAIN_MAX");
+            const f32 pz =
+                ParseFiniteFloat(z, "DOMAIN_MAX");
+
+            if (std::abs(px - py) > 1.0e-6F ||
+                std::abs(px - pz) > 1.0e-6F)
+            {
+                throw std::invalid_argument(
+                    "Orbit currently requires uniform .cube DOMAIN_MAX.");
+            }
+
+            result.lut.metadata.domainMaximum =
+                px;
+            continue;
+        }
+
+        if (StartsWith(
+                line,
+                "LUT_1D_SIZE "))
+        {
+            throw std::invalid_argument(
+                "1D .cube LUTs are not supported by the M28 3D color pipeline.");
+        }
+
+        std::istringstream values{
+            line};
+        std::string r;
+        std::string g;
+        std::string b;
+        values >> r >> g >> b;
+
+        if (r.empty() ||
+            g.empty() ||
+            b.empty())
+        {
+            throw std::invalid_argument(
+                "Unrecognized .cube LUT statement.");
+        }
+
+        samples.push_back({
+            ParseFiniteFloat(r, "LUT sample"),
+            ParseFiniteFloat(g, "LUT sample"),
+            ParseFiniteFloat(b, "LUT sample")
+        });
+    }
+
+    if (declaredSize == 0U)
+    {
+        throw std::invalid_argument(
+            ".cube LUT is missing LUT_3D_SIZE.");
+    }
+
+    const std::size_t expectedSamples =
+        static_cast<std::size_t>(
+            declaredSize) *
+        declaredSize *
+        declaredSize;
+
+    if (samples.size() !=
+        expectedSamples)
+    {
+        throw std::invalid_argument(
+            ".cube LUT sample count does not match LUT_3D_SIZE.");
+    }
+
+    if (!(result.lut.metadata.
+              domainMaximum >
+          result.lut.metadata.
+              domainMinimum))
+    {
+        throw std::invalid_argument(
+            ".cube LUT DOMAIN_MAX must be greater than DOMAIN_MIN.");
+    }
+
+    result.lut.size =
+        declaredSize;
+    result.lut.rgba8.resize(
+        expectedSamples * 4U);
+
+    // .cube order is red-fastest, then green, then blue, which matches
+    // Orbit's packed horizontal blue-slice representation.
+    for (std::size_t index = 0U;
+         index < samples.size();
+         ++index)
+    {
+        for (u32 channel = 0U;
+             channel < 3U;
+             ++channel)
+        {
+            const f32 value =
+                std::clamp(
+                    samples[index][channel],
+                    0.0F,
+                    1.0F);
+
+            result.lut.rgba8[
+                index * 4U +
+                channel] =
+                static_cast<u8>(
+                    std::lround(
+                        value *
+                        255.0F));
+        }
+
+        result.lut.rgba8[
+            index * 4U + 3U] =
+                255U;
+    }
+
+    result.canonicalCube =
+        SerializeCubeColorLut(
+            result.lut);
+
+    return result;
+}
+
+std::string SerializeCubeColorLut(
+    const ColorLutData& lut)
+{
+    const std::size_t expectedBytes =
+        static_cast<std::size_t>(
+            lut.size) *
+        lut.size *
+        lut.size *
+        4U;
+
+    if (lut.size < 2U ||
+        lut.size > 128U ||
+        lut.rgba8.size() !=
+            expectedBytes)
+    {
+        throw std::invalid_argument(
+            "Cannot serialize invalid Orbit color LUT data.");
+    }
+
+    std::ostringstream output;
+    output.setf(
+        std::ios::fixed,
+        std::ios::floatfield);
+    output <<
+        std::setprecision(9);
+
+    output
+        << "# ORBIT_DOMAIN "
+        << (lut.metadata.domain ==
+                    ColorLutDomain::DisplayLinear
+                ? "DISPLAY_LINEAR"
+                : "SHAPED_SCENE_LINEAR")
+        << '\n';
+
+    output
+        << "# ORBIT_SHAPER "
+        << (lut.metadata.shaper ==
+                    ColorLutShaper::None
+                ? "NONE"
+                : "LOG2")
+        << '\n';
+
+    if (!lut.metadata.title.empty())
+    {
+        output
+            << "TITLE \""
+            << lut.metadata.title
+            << "\"\n";
+    }
+
+    output
+        << "LUT_3D_SIZE "
+        << lut.size
+        << '\n';
+
+    output
+        << "DOMAIN_MIN "
+        << lut.metadata.domainMinimum
+        << ' '
+        << lut.metadata.domainMinimum
+        << ' '
+        << lut.metadata.domainMinimum
+        << '\n';
+
+    output
+        << "DOMAIN_MAX "
+        << lut.metadata.domainMaximum
+        << ' '
+        << lut.metadata.domainMaximum
+        << ' '
+        << lut.metadata.domainMaximum
+        << '\n';
+
+    for (std::size_t index = 0U;
+         index < expectedBytes;
+         index += 4U)
+    {
+        output
+            << static_cast<f32>(
+                   lut.rgba8[index]) /
+                   255.0F
+            << ' '
+            << static_cast<f32>(
+                   lut.rgba8[index + 1U]) /
+                   255.0F
+            << ' '
+            << static_cast<f32>(
+                   lut.rgba8[index + 2U]) /
+                   255.0F
+            << '\n';
+    }
+
+    return output.str();
+}
+
 ColorLutData BuildIdentityColorLut(
     const u32 size)
 {
@@ -148,6 +672,16 @@ ColorLutData BuildIdentityColorLut(
 
     ColorLutData result;
     result.size = size;
+    result.metadata = {
+        .domain =
+            ColorLutDomain::DisplayLinear,
+        .shaper =
+            ColorLutShaper::None,
+        .domainMinimum = 0.0F,
+        .domainMaximum = 1.0F,
+        .title = "Orbit Identity",
+        .explicitOrbitMetadata = true
+    };
     result.rgba8.resize(
         static_cast<std::size_t>(size) *
         size * size * 4U);
@@ -209,6 +743,12 @@ GpuColorLut::GpuColorLut(
     {
         throw std::invalid_argument(
             "Orbit color LUT data is invalid.");
+    }
+
+    if (!IsDisplayLutCompatible(data))
+    {
+        throw std::invalid_argument(
+            "Display LUT requires DisplayLinear domain with no shaper.");
     }
 
     staging_ =
