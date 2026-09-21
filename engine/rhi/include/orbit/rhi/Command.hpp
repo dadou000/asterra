@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/rhi/AccelerationStructure.hpp>
 #include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Query.hpp>
 #include <orbit/rhi/Queue.hpp>
@@ -180,6 +181,10 @@ public:
     virtual void SetComputeTexture(
         u32 slot,
         Texture& texture) = 0;
+
+    virtual void SetComputeAccelerationStructure(
+        u32 slot,
+        AccelerationStructure& accelerationStructure) = 0;
 
     virtual void Dispatch(
         u32 groupCountX,
