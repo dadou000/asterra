@@ -1758,6 +1758,11 @@ void StudioViewportRenderer::SetColorLut(
                 lut);
     colorLutData_ =
         std::move(lut);
+    colorLutSourcePath_ =
+        colorLutData_.metadata.title ==
+                "Orbit Identity"
+            ? "<identity>"
+            : "<runtime>";
     colorLutDiagnostic_.clear();
 }
 
