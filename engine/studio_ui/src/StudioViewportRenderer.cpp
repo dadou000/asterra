@@ -5167,6 +5167,112 @@ StudioViewportRenderer::Compose(
                         lightIndices.size()) *
                     sizeof(u32));
 
+            auto& finalGather =
+                finalGatherPresentations_[info.id];
+
+            if (finalGather.radianceResidency == nullptr)
+            {
+                finalGather.radianceResidency =
+                    std::make_unique<
+                        lighting::RadianceClipmapResidency>(
+                            lighting::RadianceClipmapConfig{});
+            }
+
+            const u64 radianceSourceRevision =
+                session.World().Objects().Revision();
+
+            static_cast<void>(
+                finalGather.radianceResidency->ScrollTo(
+                    lightingView,
+                    lightingView.cameraPositionInFrameMeters,
+                    radianceSourceRevision,
+                    1.0F / 60.0F));
+
+            const auto radianceUpdates =
+                finalGather.radianceResidency->BuildUpdateList(
+                    lightingView.cameraPositionInFrameMeters,
+                    lightingPlan.radianceCacheUpdates);
+
+            for (const auto& update : radianceUpdates)
+            {
+                const auto estimate =
+                    lighting::EstimateRadianceCell(
+                        update.key,
+                        finalGather.radianceResidency->Config(),
+                        lightingView,
+                        directLight,
+                        localLightGrid.lights);
+
+                static_cast<void>(
+                    finalGather.radianceResidency->CommitUpdate(
+                        update.key,
+                        estimate,
+                        1U,
+                        radianceSourceRevision));
+            }
+
+            const auto radianceSnapshot =
+                finalGather.radianceResidency->BuildGpuSnapshot(
+                    lightingView);
+
+            const u64 radianceCellBytes =
+                std::max<u64>(
+                    sizeof(lighting::GpuRadianceCell),
+                    static_cast<u64>(
+                        radianceSnapshot.cells.size()) *
+                        sizeof(lighting::GpuRadianceCell));
+
+            const u64 radianceLevelBytes =
+                std::max<u64>(
+                    sizeof(lighting::GpuRadianceLevelInfo),
+                    static_cast<u64>(
+                        radianceSnapshot.levels.size()) *
+                        sizeof(lighting::GpuRadianceLevelInfo));
+
+            const auto radianceCellsHandle =
+                graph.CreateBuffer(
+                    prefix + ".RadianceCacheCells",
+                    {
+                        .sizeBytes = radianceCellBytes,
+                        .usage = rhi::BufferUsage::Structured,
+                        .memory = rhi::MemoryUsage::HostVisible,
+                        .initialState =
+                            rhi::ResourceState::ShaderResource
+                    });
+
+            const auto radianceLevelsHandle =
+                graph.CreateBuffer(
+                    prefix + ".RadianceCacheLevels",
+                    {
+                        .sizeBytes = radianceLevelBytes,
+                        .usage = rhi::BufferUsage::Structured,
+                        .memory = rhi::MemoryUsage::HostVisible,
+                        .initialState =
+                            rhi::ResourceState::ShaderResource
+                    });
+
+            uploadBuffer(
+                graph.Buffer(radianceCellsHandle),
+                radianceSnapshot.cells.empty()
+                    ? nullptr
+                    : radianceSnapshot.cells.data(),
+                static_cast<u64>(
+                    radianceSnapshot.cells.size()) *
+                    sizeof(lighting::GpuRadianceCell));
+
+            uploadBuffer(
+                graph.Buffer(radianceLevelsHandle),
+                radianceSnapshot.levels.empty()
+                    ? nullptr
+                    : radianceSnapshot.levels.data(),
+                static_cast<u64>(
+                    radianceSnapshot.levels.size()) *
+                    sizeof(lighting::GpuRadianceLevelInfo));
+
+            const u32 radianceLevelCount =
+                static_cast<u32>(
+                    radianceSnapshot.levels.size());
+
             graph.AddPass(
                 prefix + ".SharedDirectLighting",
                 {
@@ -5306,10 +5412,6 @@ StudioViewportRenderer::Compose(
                             lighting::LightingGpuSection::Direct);
                     }
                 });
-
-            auto& finalGather =
-                finalGatherPresentations_[
-                    info.id];
 
             if (finalGather.width != width ||
                 finalGather.height != height ||
