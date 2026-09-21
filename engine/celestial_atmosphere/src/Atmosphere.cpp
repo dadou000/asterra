@@ -1055,6 +1055,58 @@ AtmosphereStaticLuts BuildStaticLuts(
     return result;
 }
 
+u64 AtmosphereSkyFingerprint(
+    const AtmosphereParameters& p,
+    const u64 staticFingerprint,
+    const SkyViewInput& input,
+    const AtmosphereLutConfig& c)
+{
+    Validate(p, c);
+
+    if (staticFingerprint !=
+            AtmosphereFingerprint(
+                p,
+                c) ||
+        !std::isfinite(
+            input.observerRadiusMeters) ||
+        input.observerRadiusMeters <=
+            0.0 ||
+        !std::isfinite(
+            input.sunDirectionBody.x) ||
+        !std::isfinite(
+            input.sunDirectionBody.y) ||
+        !std::isfinite(
+            input.sunDirectionBody.z) ||
+        math::LengthSquared(
+            input.sunDirectionBody) <=
+            1.0e-20)
+    {
+        throw std::invalid_argument(
+            "Atmosphere sky fingerprint inputs are invalid.");
+    }
+
+    u64 fingerprint =
+        Combine(
+            staticFingerprint,
+            HashDouble(
+                input.observerRadiusMeters));
+    fingerprint =
+        Combine(
+            fingerprint,
+            HashDouble3(
+                math::Normalize(
+                    input.
+                        sunDirectionBody)));
+    fingerprint =
+        Combine(
+            fingerprint,
+            HashDouble3(
+                input.
+                    incidentIrradianceWattsPerSquareMeter));
+
+    return fingerprint;
+}
+
 AtmosphereSkyView BuildSkyView(
     const AtmosphereParameters& p,
     const AtmosphereStaticLuts& staticLuts,
@@ -1090,21 +1142,12 @@ AtmosphereSkyView BuildSkyView(
     const f64 sunMu =
         sun.z;
 
-    u64 fingerprint =
-        Combine(
+    const u64 fingerprint =
+        AtmosphereSkyFingerprint(
+            p,
             staticLuts.fingerprint,
-            HashDouble(
-                input.observerRadiusMeters));
-    fingerprint =
-        Combine(
-            fingerprint,
-            HashDouble3(sun));
-    fingerprint =
-        Combine(
-            fingerprint,
-            HashDouble3(
-                input.
-                    incidentIrradianceWattsPerSquareMeter));
+            input,
+            c);
 
     AtmosphereSkyView result;
     result.observerRadiusMeters =
