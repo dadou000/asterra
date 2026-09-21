@@ -5,6 +5,7 @@ add_library(OrbitLighting STATIC
     src/LightingView.cpp
     src/DirectLighting.cpp
     src/Visibility.cpp
+    src/AnalyticBodyVisibility.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -48,6 +49,10 @@ if(BUILD_TESTING)
         tests/VisibilityTests.cpp
     )
 
+    add_executable(OrbitLightingAnalyticBodyVisibilityTests
+        tests/AnalyticBodyVisibilityTests.cpp
+    )
+
     target_link_libraries(OrbitLightingSurfaceDataTests
         PRIVATE
             Orbit::Lighting
@@ -89,6 +94,15 @@ if(BUILD_TESTING)
         OrbitLightingVisibilityTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingVisibilityTests)
 
+    target_link_libraries(OrbitLightingAnalyticBodyVisibilityTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingAnalyticBodyVisibilityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitLightingAnalyticBodyVisibilityTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -97,6 +111,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingVisibility
         COMMAND OrbitLightingVisibilityTests
+    )
+
+    add_test(
+        NAME Orbit.LightingAnalyticBodyVisibility
+        COMMAND OrbitLightingAnalyticBodyVisibilityTests
     )
 
     add_test(
