@@ -374,6 +374,8 @@ void DisplayDiagnosticsUi::DrawViewport(
         eyeConfig.photopicDarkenSeconds;
     f64 photopicCeiling =
         eyeConfig.photopicCeilingLog2;
+    f64 ceilingRecoverySeconds =
+        eyeConfig.photopicCeilingRecoverySeconds;
     f64 exposureMiddleGray =
         eyeConfig.exposureMiddleGray;
     f64 minimumExposure =
@@ -426,6 +428,11 @@ void DisplayDiagnosticsUi::DrawViewport(
             ("Photopic Ceiling log2##eye-ceiling-" +
              std::string(viewportId)),
             photopicCeiling);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Ceiling Recovery Seconds##eye-ceiling-recovery-" +
+             std::string(viewportId)),
+            ceilingRecoverySeconds);
     eyeConfigChanged |=
         context.InputDouble(
             ("Exposure Middle Gray##eye-middle-gray-" +
@@ -499,6 +506,8 @@ void DisplayDiagnosticsUi::DrawViewport(
             static_cast<f32>(darkenSeconds);
         eyeConfig.photopicCeilingLog2 =
             static_cast<f32>(photopicCeiling);
+        eyeConfig.photopicCeilingRecoverySeconds =
+            static_cast<f32>(ceilingRecoverySeconds);
         eyeConfig.exposureMiddleGray =
             static_cast<f32>(exposureMiddleGray);
         eyeConfig.minimumExposureScale =
