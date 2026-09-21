@@ -10,6 +10,7 @@
 
 namespace orbit::celestial_magnetosphere_render
 {
+using celestial_magnetosphere::AuroraMeshProduct;
 using celestial_magnetosphere::AuroraVertex;
 GpuAuroraMeshProduct::GpuAuroraMeshProduct(
     rhi::Device& device,
