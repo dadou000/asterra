@@ -370,13 +370,20 @@ CelestialAuthoringModel::Validate() const
         if (object.type ==
             world_model::kCelestialSystemType)
         {
-            if (!object.parent.has_value())
+            const auto parent =
+                object.parent.has_value()
+                    ? objects_.Find(*object.parent)
+                    : std::nullopt;
+
+            if (!parent.has_value() ||
+                parent->type !=
+                    world_model::kWorldType)
             {
                 result.push_back({
                     .severity =
                         CelestialDiagnosticSeverity::Error,
                     .message =
-                        "Celestial System must be parented under World.",
+                        "Celestial System must be parented directly under World.",
                     .object = object.id
                 });
             }
