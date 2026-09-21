@@ -282,7 +282,11 @@ public:
                 .cullMode =
                     rhi::CullMode::None,
                 .depthTest = false,
-                .depthWrite = false
+                .depthWrite = false,
+                .colorAttachmentFormats = {
+                    rhi::TextureFormat::RGBA16_Float
+                },
+                .colorAttachmentCount = 1U
             });
     }
 
