@@ -7,6 +7,7 @@
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
+#include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/post_process/ColorLut.hpp>
 #include <orbit/post_process/DisplayResolve.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
@@ -263,6 +264,7 @@ private:
     celestial_far_render::FarBodyRenderer farBodyRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
+    lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
     post_process::ColorLutRenderer colorLutRenderer_;
     std::unique_ptr<post_process::GpuColorLut> colorLut_;
