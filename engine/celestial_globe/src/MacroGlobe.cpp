@@ -739,6 +739,77 @@ float4 main(VSOutput input) : SV_Target0
         saturate(input.opacity));
 }
 )";
+
+constexpr const char* kMacroGlobeSurfacePixelShader = R"(
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float3 normal : NORMAL;
+    float3 albedo : COLOR0;
+    float4 material : TEXCOORD0;
+    float3 emission : COLOR1;
+    float opacity : TEXCOORD1;
+    float3 lightDirection : TEXCOORD2;
+    float lightScale : TEXCOORD3;
+};
+
+struct SurfaceOutputs
+{
+    float4 previewColor : SV_Target0;
+    float4 baseRoughness : SV_Target1;
+    float4 normalMetallic : SV_Target2;
+    float4 emissionClass : SV_Target3;
+};
+
+float EncodeSurfaceMeta(float surfaceClass, float representation)
+{
+    return surfaceClass + representation / 16.0;
+}
+
+SurfaceOutputs main(VSOutput input)
+{
+    const float3 n = normalize(input.normal);
+    const float3 l = normalize(input.lightDirection);
+    const float ndl = saturate(dot(n, l));
+
+    const float roughness = saturate(input.material.x);
+    const float ocean = saturate(input.material.y);
+    const float ice = saturate(input.material.z);
+
+    const float diffuse =
+        (0.045 + 0.955 * ndl) *
+        input.lightScale;
+
+    const float grazing =
+        pow(1.0 - saturate(ndl), 5.0);
+
+    const float specularStrength =
+        lerp(0.08, 0.55, ocean) *
+        (1.0 - roughness * 0.75);
+
+    const float3 color =
+        input.albedo * diffuse +
+        specularStrength * grazing *
+            float3(0.45, 0.58, 0.68) +
+        ice * 0.03 +
+        input.emission;
+
+    SurfaceOutputs output;
+    output.previewColor =
+        float4(color, saturate(input.opacity));
+    output.baseRoughness =
+        float4(input.albedo, roughness);
+    output.normalMetallic =
+        float4(n, 0.0);
+    output.emissionClass =
+        float4(
+            max(input.emission, 0.0),
+            EncodeSurfaceMeta(
+                6.0, // SurfaceClass::CelestialSurface
+                2.0)); // SurfaceRepresentation::MacroGlobe
+    return output;
+}
+)";
 } // namespace
 
 MacroGlobeRenderer::MacroGlobeRenderer(
@@ -754,6 +825,13 @@ MacroGlobeRenderer::MacroGlobeRenderer(
 
     const auto ps = compiler.Compile({
         .source = kMacroGlobePixelShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false
+    });
+
+    const auto surfacePs = compiler.Compile({
+        .source = kMacroGlobeSurfacePixelShader,
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
         .debug = false
@@ -833,6 +911,33 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         },
         .colorAttachmentCount = 1U
     });
+
+    surfacePipeline_ = device.CreateGraphicsPipeline({
+        .vertexShader = {
+            .data = vs.bytecode.data(),
+            .size = vs.bytecode.size()
+        },
+        .pixelShader = {
+            .data = surfacePs.bytecode.data(),
+            .size = surfacePs.bytecode.size()
+        },
+        .vertexAttributes = attributes,
+        .vertexStrideBytes = sizeof(GpuMacroGlobeVertex),
+        .pushConstantDwords = 20,
+        .topology = rhi::PrimitiveTopology::TriangleList,
+        .fillMode = rhi::FillMode::Solid,
+        .cullMode = rhi::CullMode::Back,
+        .blendMode = rhi::BlendMode::Alpha,
+        .depthTest = false,
+        .depthWrite = false,
+        .colorAttachmentFormats = {
+            rhi::TextureFormat::RGBA16_Float,
+            rhi::TextureFormat::RGBA16_Float,
+            rhi::TextureFormat::RGBA16_Float,
+            rhi::TextureFormat::RGBA16_Float
+        },
+        .colorAttachmentCount = 4U
+    });
 }
 
 void MacroGlobeRenderer::Draw(
@@ -906,6 +1011,99 @@ void MacroGlobeRenderer::Draw(
         .bottom = static_cast<i32>(height)
     });
     commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsConstants(constants);
+    commands.SetVertexBuffer(
+        globe.VertexBuffer(),
+        sizeof(GpuMacroGlobeVertex));
+    commands.SetIndexBuffer(
+        globe.IndexBuffer(),
+        rhi::IndexFormat::UInt32);
+    commands.DrawIndexed(
+        globe.IndexCount());
+}
+
+void MacroGlobeRenderer::DrawSurface(
+    rhi::CommandList& commands,
+    rhi::Texture& previewColor,
+    rhi::Texture& surfaceBaseRoughness,
+    rhi::Texture& surfaceNormalMetallic,
+    rhi::Texture& surfaceEmissionClass,
+    const u32 width,
+    const u32 height,
+    GpuMacroGlobeProduct& globe,
+    const render_view::CameraState& camera,
+    const f32 opacity,
+    const MacroGlobeLighting& lighting)
+{
+    if (width == 0U || height == 0U)
+    {
+        return;
+    }
+
+    const f64 radius =
+        std::max(
+            globe.ReferenceRadiusMeters(),
+            1.0);
+
+    const auto bits =
+        [](const f32 value)
+        {
+            return std::bit_cast<u32>(value);
+        };
+
+    const std::array<u32, 20> constants{
+        bits(static_cast<f32>(camera.localPositionMeters.x / radius)),
+        bits(static_cast<f32>(camera.localPositionMeters.y / radius)),
+        bits(static_cast<f32>(camera.localPositionMeters.z / radius)),
+        bits(static_cast<f32>(width) / static_cast<f32>(height)),
+
+        bits(camera.forward.x),
+        bits(camera.forward.y),
+        bits(camera.forward.z),
+        bits(std::tan(camera.verticalFovRadians * 0.5F)),
+
+        bits(camera.up.x),
+        bits(camera.up.y),
+        bits(camera.up.z),
+        bits(1.0F),
+
+        bits(std::clamp(opacity, 0.0F, 1.0F)),
+        0U,
+        0U,
+        0U,
+
+        bits(lighting.directionBody.x),
+        bits(lighting.directionBody.y),
+        bits(lighting.directionBody.z),
+        bits(std::max(
+            lighting.irradianceScale,
+            0.0F))
+    };
+
+    std::array<rhi::Texture*, 4> targets{
+        &previewColor,
+        &surfaceBaseRoughness,
+        &surfaceNormalMetallic,
+        &surfaceEmissionClass
+    };
+    commands.SetRenderTargets(
+        targets,
+        nullptr);
+    commands.SetViewport({
+        .x = 0.0F,
+        .y = 0.0F,
+        .width = static_cast<f32>(width),
+        .height = static_cast<f32>(height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F
+    });
+    commands.SetScissor({
+        .left = 0,
+        .top = 0,
+        .right = static_cast<i32>(width),
+        .bottom = static_cast<i32>(height)
+    });
+    commands.SetGraphicsPipeline(*surfacePipeline_);
     commands.SetGraphicsConstants(constants);
     commands.SetVertexBuffer(
         globe.VertexBuffer(),
