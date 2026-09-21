@@ -81,6 +81,40 @@ struct EmissiveHierarchy
     u32 sourceHeight{0U};
 };
 
+struct GpuEmissiveHierarchyNode
+{
+    // camera-relative center.xyz, physical area m^2
+    math::Float4 centerArea{};
+
+    // average radiance.rgb, peak luminance
+    math::Float4 averagePeakLuminance{};
+
+    // peak radiance.rgb, radiant importance
+    math::Float4 peakRadianceImportance{};
+
+    // integrated radiance*area.rgb, reserved
+    math::Float4 integratedRadianceArea{};
+
+    // camera-relative energy centroid.xyz, hierarchy level
+    math::Float4 energyCentroidLevel{};
+
+    std::array<u32, 4> children{
+        ~0U, ~0U, ~0U, ~0U};
+
+    // texel bounds: minX, minY, maxX, maxY
+    std::array<u32, 4> texelBounds{};
+
+    // childCount, sourceWidth, sourceHeight, reserved
+    std::array<u32, 4> metadata{};
+};
+
+static_assert(sizeof(GpuEmissiveHierarchyNode) == 128U);
+
+[[nodiscard]] std::vector<GpuEmissiveHierarchyNode>
+EncodeGpuEmissiveHierarchy(
+    const EmissiveHierarchy& hierarchy,
+    const LightingView& view);
+
 struct EmissiveHierarchyBuildConfig
 {
     // A 4K surface with the default 8x8 leaves has ~130k leaf tiles rather
