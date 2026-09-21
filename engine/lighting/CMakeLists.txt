@@ -61,6 +61,10 @@ if(BUILD_TESTING)
         tests/TerrainHeightfieldVisibilityTests.cpp
     )
 
+    add_executable(OrbitLightingScreenSpaceVisibilityTests
+        tests/ScreenSpaceVisibilityTests.cpp
+    )
+
     target_link_libraries(OrbitLightingSurfaceDataTests
         PRIVATE
             Orbit::Lighting
@@ -120,6 +124,15 @@ if(BUILD_TESTING)
     orbit_enable_warnings(
         OrbitLightingTerrainHeightfieldVisibilityTests)
 
+    target_link_libraries(OrbitLightingScreenSpaceVisibilityTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingScreenSpaceVisibilityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitLightingScreenSpaceVisibilityTests)
+
     add_test(
         NAME Orbit.LightingView
         COMMAND OrbitLightingViewTests
@@ -138,6 +151,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingTerrainHeightfieldVisibility
         COMMAND OrbitLightingTerrainHeightfieldVisibilityTests
+    )
+
+    add_test(
+        NAME Orbit.LightingScreenSpaceVisibility
+        COMMAND OrbitLightingScreenSpaceVisibilityTests
     )
 
     add_test(
