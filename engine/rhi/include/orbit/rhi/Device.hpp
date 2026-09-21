@@ -20,7 +20,14 @@ enum class Backend : u8
 
 struct DeviceCapabilities
 {
+    // Kept for source compatibility with early Orbit callers. This mirrors
+    // rayTracingPipeline, not generic "RT capability".
     bool rayTracing{false};
+
+    bool accelerationStructures{false};
+    bool rayQuery{false};
+    bool rayTracingPipeline{false};
+
     bool meshShaders{false};
     bool variableRateShading{false};
     bool presentTearing{false};
