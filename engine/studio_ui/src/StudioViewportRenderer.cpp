@@ -9788,6 +9788,25 @@ StudioViewportRenderer::Compose(
                         return;
                     }
 
+                    auto highlightConfig =
+                        found->second.diagnostics.highlightConfig;
+
+                    // M25 supplies scene-level evidence that strong highlight
+                    // effects are warranted. Bloom remains a local soft-knee
+                    // optical response; glare requires upper-percentile
+                    // excess and flare requires an extreme peak.
+                    if (found->second.diagnostics.
+                            eyeState.p99ExcessStops <= 0.0F)
+                    {
+                        highlightConfig.glareEnabled = false;
+                    }
+
+                    if (found->second.diagnostics.
+                            eyeState.peakExcessStops <= 0.0F)
+                    {
+                        highlightConfig.flareEnabled = false;
+                    }
+
                     highlightEffectsRenderer_.Draw(
                         commands,
                         *color,
@@ -9796,7 +9815,7 @@ StudioViewportRenderer::Compose(
                         height,
                         displayResolveSettings.exposureScale,
                         displayResolveSettings.toneMapEnabled,
-                        found->second.diagnostics.highlightConfig);
+                        highlightConfig);
                 });
         }
         else
