@@ -1709,6 +1709,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       exactReflectionQueryRenderer_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
       luminanceHistogramRenderer_(device, compiler),
+      highlightEffectsRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
       colorLut_(
@@ -2172,6 +2173,41 @@ void StudioViewportRenderer::ResetHumanEyeAdaptation(
     post_process::ResetHumanEyeAdaptation(
         found->second.diagnostics.eyeState);
     found->second.hasEyeUpdateTime = false;
+}
+
+void StudioViewportRenderer::SetHighlightEffectsConfig(
+    const std::string_view viewportId,
+    post_process::HighlightEffectsConfig config)
+{
+    config.bloomThreshold =
+        std::max(config.bloomThreshold, 0.0F);
+    config.bloomKnee =
+        std::max(config.bloomKnee, 1.0e-5F);
+    config.bloomStrength =
+        std::max(config.bloomStrength, 0.0F);
+    config.bloomRadiusPixels =
+        std::max(config.bloomRadiusPixels, 0.5F);
+
+    config.glareThreshold =
+        std::max(config.glareThreshold, 0.0F);
+    config.glareStrength =
+        std::max(config.glareStrength, 0.0F);
+    config.glareRadiusPixels =
+        std::max(config.glareRadiusPixels, 1.0F);
+
+    config.flareThreshold =
+        std::max(config.flareThreshold, 0.0F);
+    config.flareStrength =
+        std::max(config.flareStrength, 0.0F);
+    config.flareCompactness =
+        std::max(config.flareCompactness, 1.0F);
+    config.flareGhostScale =
+        std::max(config.flareGhostScale, 0.0F);
+
+    luminanceHistogramPresentations_[
+        std::string(viewportId)].
+        diagnostics.highlightConfig =
+            config;
 }
 
 void StudioViewportRenderer::SetLuminanceMeteringOverlay(
@@ -9159,6 +9195,8 @@ StudioViewportRenderer::Compose(
                     histogram.diagnostics.eyeConfig;
                 const auto retainedEyeState =
                     histogram.diagnostics.eyeState;
+                const auto retainedHighlightConfig =
+                    histogram.diagnostics.highlightConfig;
                 const auto retainedEyeUpdate =
                     histogram.lastEyeUpdate;
                 const bool retainedHasEyeUpdateTime =
@@ -9173,6 +9211,8 @@ StudioViewportRenderer::Compose(
                     retainedEyeConfig;
                 histogram.diagnostics.eyeState =
                     retainedEyeState;
+                histogram.diagnostics.highlightConfig =
+                    retainedHighlightConfig;
                 histogram.lastEyeUpdate =
                     retainedEyeUpdate;
                 histogram.hasEyeUpdateTime =
@@ -9726,17 +9766,37 @@ StudioViewportRenderer::Compose(
                  displayLinear,
                  width,
                  height,
-                 displayResolveSettings](
+                 displayResolveSettings,
+                 infoId = info.id](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
-                    displayResolveRenderer_.Draw(
+                    const auto found =
+                        luminanceHistogramPresentations_.find(
+                            infoId);
+
+                    if (found ==
+                        luminanceHistogramPresentations_.end())
+                    {
+                        displayResolveRenderer_.Draw(
+                            commands,
+                            *color,
+                            *displayLinear,
+                            width,
+                            height,
+                            displayResolveSettings);
+                        return;
+                    }
+
+                    highlightEffectsRenderer_.Draw(
                         commands,
                         *color,
                         *displayLinear,
                         width,
                         height,
-                        displayResolveSettings);
+                        displayResolveSettings.exposureScale,
+                        displayResolveSettings.toneMapEnabled,
+                        found->second.diagnostics.highlightConfig);
                 });
         }
         else
