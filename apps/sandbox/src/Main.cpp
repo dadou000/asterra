@@ -2116,6 +2116,33 @@ int main()
                                 Write
                     },
                     {
+                        .texture = viewTargets.surfaceBaseRoughness,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            orbit::render_graph::Access::
+                                Write
+                    },
+                    {
+                        .texture = viewTargets.surfaceNormalMetallic,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            orbit::render_graph::Access::
+                                Write
+                    },
+                    {
+                        .texture = viewTargets.surfaceEmissionClass,
+                        .state =
+                            orbit::rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            orbit::render_graph::Access::
+                                Write
+                    },
+                    {
                         .texture = viewTargets.depth,
                         .state =
                             orbit::rhi::ResourceState::
@@ -2137,13 +2164,18 @@ int main()
                                         .alpha = 1.0F
                                     });
                     
+                                commandList->ClearColorTarget(
+                                    sceneView.SurfaceBaseRoughness(),
+                                    {0.0F, 0.0F, 0.0F, 1.0F});
+                                commandList->ClearColorTarget(
+                                    sceneView.SurfaceNormalMetallic(),
+                                    {0.0F, 1.0F, 0.0F, 0.0F});
+                                commandList->ClearColorTarget(
+                                    sceneView.SurfaceEmissionClass(),
+                                    {0.0F, 0.0F, 0.0F, 0.0F});
                                 commandList->ClearDepthTarget(
                                     sceneView.Depth(),
                                     0.0F);
-                    
-                                commandList->SetRenderTargets(
-                                    sceneView.Color(),
-                                    sceneView.Depth());
                     
                                 commandList->WriteTimestamp(
                                     *gpuTimestamps,
@@ -2151,6 +2183,9 @@ int main()
                     
                                 if (mapVisible)
                                 {
+                                    commandList->SetRenderTargets(
+                                        sceneView.Color(),
+                                        sceneView.Depth());
                                     planetMap.Draw(
                                         *commandList,
                                         sceneView.Color(),
@@ -2159,6 +2194,16 @@ int main()
                                 }
                                 else if (drawWholePlanetLod)
                                 {
+                                    const std::array<orbit::rhi::Texture*, 4>
+                                        surfaceTargets{
+                                            &sceneView.Color(),
+                                            &sceneView.SurfaceBaseRoughness(),
+                                            &sceneView.SurfaceNormalMetallic(),
+                                            &sceneView.SurfaceEmissionClass()
+                                        };
+                                    commandList->SetRenderTargets(
+                                        surfaceTargets,
+                                        &sceneView.Depth());
                                     uniformPlanet.Draw(
                                         *commandList,
                                         observer,
@@ -2171,6 +2216,16 @@ int main()
                                 }
                                 else
                                 {
+                                    const std::array<orbit::rhi::Texture*, 4>
+                                        surfaceTargets{
+                                            &sceneView.Color(),
+                                            &sceneView.SurfaceBaseRoughness(),
+                                            &sceneView.SurfaceNormalMetallic(),
+                                            &sceneView.SurfaceEmissionClass()
+                                        };
+                                    commandList->SetRenderTargets(
+                                        surfaceTargets,
+                                        &sceneView.Depth());
                                     terrainPreview.Draw(
                                         *commandList,
                                         frameIndex,
@@ -2178,6 +2233,10 @@ int main()
                                         sceneView.Height(),
                                         camera);
                     
+                                    commandList->SetRenderTargets(
+                                        sceneView.Color(),
+                                        sceneView.Depth());
+
                                     riverWater.Draw(
                                         *commandList,
                                         sceneView.Color(),
