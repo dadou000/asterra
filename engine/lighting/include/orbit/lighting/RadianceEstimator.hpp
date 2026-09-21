@@ -9,6 +9,26 @@
 
 namespace orbit::lighting
 {
+struct EmissiveVolumeSource
+{
+    // Stable source center in LightingView::frame coordinates.
+    math::Double3 centerInFrameMeters{};
+
+    // Conservative emitting bound. The estimator treats the source as a
+    // radiance-bearing volume, not as an opaque surface or point light.
+    f32 radiusMeters{1.0F};
+
+    // Scene-linear emitted radiance color and dimensionless transport scale.
+    math::Float3 emissionLinear{1.0F, 1.0F, 1.0F};
+    f32 intensityScale{1.0F};
+
+    // Maximum distance at which this low-frequency source contributes to the
+    // radiance cache. Zero means radius-derived automatic range.
+    f32 influenceRangeMeters{0.0F};
+
+    u64 stableId{0U};
+};
+
 struct RadianceEstimateSettings
 {
     // Fraction of incident direct energy retained as broad one-bounce
@@ -31,5 +51,6 @@ EstimateRadianceCell(
     const DirectionalLight& stellar,
     std::span<const ResolvedLocalLight> localLights,
     VisibilityProvider* visibility = nullptr,
-    const RadianceEstimateSettings& settings = {});
+    const RadianceEstimateSettings& settings = {},
+    std::span<const EmissiveVolumeSource> emissiveVolumes = {});
 } // namespace orbit::lighting
