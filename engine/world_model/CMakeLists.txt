@@ -184,4 +184,24 @@ if(BUILD_TESTING)
         NAME Orbit.RotationComposition
         COMMAND OrbitRotationCompositionTests
     )
+
+    add_executable(OrbitImportedEphemerisCompositionTests
+        tests/ImportedEphemerisCompositionTests.cpp
+    )
+
+    target_link_libraries(OrbitImportedEphemerisCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitImportedEphemerisCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitImportedEphemerisCompositionTests)
+
+    add_test(
+        NAME Orbit.ImportedEphemerisComposition
+        COMMAND OrbitImportedEphemerisCompositionTests
+    )
 endif()
