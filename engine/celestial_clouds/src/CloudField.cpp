@@ -769,14 +769,66 @@ void CompositeOrbitalCloudAppearance(
                     static_cast<f64>(
                         appearance.faceResolution - 1U);
 
-                const auto cloud =
-                    field.Sample(
+                const auto lookup =
+                    DirectionToCube(
                         FaceDirection(
                             face,
                             u,
-                            v));
+                            v),
+                        field.faceResolution);
 
-                if (cloud.coverage <= 0.0F)
+                f64 remaining = 1.0;
+                f64 optical = 0.0;
+                f64 scatteringWeight = 0.0;
+                f64 weightedScattering = 0.0;
+
+                for (const auto& layer :
+                     field.layers)
+                {
+                    if (!layer.parameters.
+                            orbitalRepresentation)
+                    {
+                        continue;
+                    }
+
+                    const auto& sample =
+                        layer.At(
+                            lookup.face,
+                            lookup.x,
+                            lookup.y,
+                            field.faceResolution);
+
+                    const f64 coverage =
+                        std::clamp(
+                            static_cast<f64>(
+                                sample.coverage),
+                            0.0,
+                            1.0);
+
+                    remaining *=
+                        1.0 - coverage;
+                    optical +=
+                        sample.opticalDepth;
+
+                    const f64 weight =
+                        coverage *
+                        std::max(
+                            static_cast<f64>(
+                                sample.opticalDepth),
+                            1.0e-6);
+
+                    weightedScattering +=
+                        sample.
+                            singleScatteringAlbedo *
+                        weight;
+                    scatteringWeight += weight;
+                }
+
+                const f32 coverage =
+                    static_cast<f32>(
+                        1.0 - remaining);
+
+                if (coverage <= 0.0F)
                 {
                     continue;
                 }
@@ -796,23 +848,25 @@ void CompositeOrbitalCloudAppearance(
                         std::exp(
                             -0.35 *
                             std::max(
-                                static_cast<f64>(
-                                    cloud.opticalDepth),
+                                optical,
                                 0.0)));
 
                 const f32 blend =
                     std::clamp(
-                        cloud.coverage *
+                        coverage *
                             opticalAlpha,
                         0.0F,
                         1.0F);
 
                 const f32 scattering =
-                    std::clamp(
-                        cloud.
-                            singleScatteringAlbedo,
-                        0.0F,
-                        1.0F);
+                    static_cast<f32>(
+                        std::clamp(
+                            scatteringWeight > 0.0
+                                ? weightedScattering /
+                                      scatteringWeight
+                                : 0.999,
+                            0.0,
+                            1.0));
 
                 const math::Float3 cloudAlbedo{
                     0.82F * scattering,
