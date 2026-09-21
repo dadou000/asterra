@@ -712,6 +712,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       framesInFlight_(framesInFlight),
       bodyRenderer_(device, compiler),
       macroGlobeRenderer_(device, compiler),
+      farBodyRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler)
 {
