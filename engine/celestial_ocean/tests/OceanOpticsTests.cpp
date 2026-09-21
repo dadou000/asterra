@@ -62,5 +62,45 @@ int main()
     if (OceanOpticalFingerprint(p) == 0U)
         return 6;
 
+    orbit::celestial_appearance::
+        PlanetaryAppearanceProduct appearance;
+    appearance.faceResolution = 1U;
+    appearance.fingerprint = 99U;
+    appearance.texels.resize(1U);
+    appearance.texels[0].albedoLinear = {
+        0.10F, 0.12F, 0.14F};
+    appearance.texels[0].roughness = 0.8F;
+    appearance.texels[0].oceanMask = 1.0F;
+    appearance.texels[0].waterDepthMeters = 100.0F;
+    appearance.texels[0].directLightTransmittance = 0.25F;
+
+    const auto beforeColor =
+        appearance.texels[0].albedoLinear;
+    const auto beforeFingerprint =
+        appearance.fingerprint;
+
+    ApplyOrbitalOceanAppearance(
+        appearance,
+        p);
+
+    if (appearance.fingerprint ==
+            beforeFingerprint ||
+        appearance.texels[0].
+            albedoLinear.z <=
+            beforeColor.z ||
+        std::abs(
+            appearance.texels[0].
+                roughness -
+            static_cast<float>(
+                p.orbitalRoughness)) >
+            1.0e-5F ||
+        appearance.texels[0].
+            directLightTransmittance !=
+            0.25F ||
+        appearance.texels[0].
+            oceanMask !=
+            1.0F)
+        return 7;
+
     return 0;
 }
