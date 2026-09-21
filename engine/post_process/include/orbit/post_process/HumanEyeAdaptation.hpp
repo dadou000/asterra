@@ -18,6 +18,7 @@ struct HumanEyeAdaptationConfig
     // bright-scene target above this scene-linear log2 luminance. Scene HDR
     // itself is never clamped; excess remains available for highlight FX.
     f32 photopicCeilingLog2{2.0F};
+    f32 photopicCeilingRecoverySeconds{0.12F};
 
     // Exposure is presentation-only and maps the adapted luminance to middle
     // gray. Bounds protect the display path from invalid/extreme values.
