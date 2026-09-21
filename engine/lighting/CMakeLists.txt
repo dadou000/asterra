@@ -30,6 +30,7 @@ add_library(OrbitLighting STATIC
     src/ReflectionPolicy.cpp
     src/HybridReflectionRenderer.cpp
     src/ExactReflectionQueryRenderer.cpp
+    src/RepresentationLightingContinuity.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -163,6 +164,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingReflectionPolicyTests
         tests/ReflectionPolicyTests.cpp
+    )
+
+    add_executable(OrbitLightingRepresentationLightingContinuityTests
+        tests/RepresentationLightingContinuityTests.cpp
     )
 
     add_executable(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
@@ -390,6 +395,15 @@ if(BUILD_TESTING)
         OrbitLightingReflectionPolicyTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingReflectionPolicyTests)
 
+    target_link_libraries(OrbitLightingRepresentationLightingContinuityTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingRepresentationLightingContinuityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitLightingRepresentationLightingContinuityTests)
+
     target_link_libraries(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
         PRIVATE
             Orbit::Commands
@@ -519,6 +533,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingReflectionPolicy
         COMMAND OrbitLightingReflectionPolicyTests
+    )
+
+    add_test(
+        NAME Orbit.LightingRepresentationLightingContinuity
+        COMMAND OrbitLightingRepresentationLightingContinuityTests
     )
 
     add_test(
