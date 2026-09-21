@@ -79,15 +79,37 @@ namespace
                         axis,
                         angle);
 
+                math::Double3 translation{};
+
+                if constexpr (
+                    std::is_same_v<
+                        Model,
+                        UniformRotationTransform>)
+                {
+                    translation =
+                        value.centerInParentMeters;
+                }
+                else
+                {
+                    if (!value.orbitState)
+                    {
+                        throw std::runtime_error(
+                            "Orbit-driven body transform has no orbit state provider.");
+                    }
+
+                    translation =
+                        value.orbitState->
+                            EvaluateState(atTime).
+                            positionMeters;
+                }
+
                 return {
                     .rotation = {
                         .xAxis = x,
                         .yAxis = y,
                         .zAxis = z
                     },
-                    .translation =
-                        value.
-                            centerInParentMeters
+                    .translation = translation
                 };
             }
         },
@@ -145,30 +167,46 @@ void ValidateShape(
 void ValidateTransform(
     const BodyTransformModel& model)
 {
-    if (const auto* rotation =
-            std::get_if<
-                UniformRotationTransform>(
-                &model))
-    {
-        if (math::Length(
-                rotation->axisInParent) <=
-            0.0)
+    std::visit(
+        [](const auto& value)
         {
-            throw std::invalid_argument(
-                "Uniform rotation axis must be non-zero.");
-        }
+            using Model =
+                std::decay_t<decltype(value)>;
 
-        if (!std::isfinite(
-                rotation->
-                    angularVelocityRadiansPerSecond) ||
-            !std::isfinite(
-                rotation->
-                    phaseRadiansAtEpoch))
-        {
-            throw std::invalid_argument(
-                "Uniform rotation parameters must be finite.");
-        }
-    }
+            if constexpr (
+                std::is_same_v<Model, UniformRotationTransform> ||
+                std::is_same_v<Model, OrbitDrivenUniformRotationTransform>)
+            {
+                if (math::Length(
+                        value.axisInParent) <= 0.0)
+                {
+                    throw std::invalid_argument(
+                        "Uniform rotation axis must be non-zero.");
+                }
+
+                if (!std::isfinite(
+                        value.angularVelocityRadiansPerSecond) ||
+                    !std::isfinite(
+                        value.phaseRadiansAtEpoch))
+                {
+                    throw std::invalid_argument(
+                        "Uniform rotation parameters must be finite.");
+                }
+
+                if constexpr (
+                    std::is_same_v<
+                        Model,
+                        OrbitDrivenUniformRotationTransform>)
+                {
+                    if (!value.orbitState)
+                    {
+                        throw std::invalid_argument(
+                            "Orbit-driven transform requires an orbit state provider.");
+                    }
+                }
+            }
+        },
+        model);
 }
 } // namespace
 
