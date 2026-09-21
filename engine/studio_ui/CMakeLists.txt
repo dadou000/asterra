@@ -1,5 +1,6 @@
 add_library(OrbitStudioUi STATIC
     src/CelestialAuthoringUi.cpp
+    src/DisplayDiagnosticsUi.cpp
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
     src/StudioRenderViewSet.cpp
