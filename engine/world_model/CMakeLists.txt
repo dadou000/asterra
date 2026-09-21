@@ -540,3 +540,29 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialSmallBodyBindingTests
     )
 endif()
+
+
+if(BUILD_TESTING)
+    add_executable(
+        OrbitCelestialMagnetosphereBindingTests
+        tests/CelestialMagnetosphereBindingTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitCelestialMagnetosphereBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitCelestialMagnetosphereBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialMagnetosphereBindingTests)
+
+    add_test(
+        NAME Orbit.CelestialMagnetosphereBinding
+        COMMAND OrbitCelestialMagnetosphereBindingTests
+    )
+endif()
