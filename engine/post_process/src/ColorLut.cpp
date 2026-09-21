@@ -75,7 +75,9 @@ struct Constants
     float lutSize;
     float strength;
     float enabled;
-    float padding;
+    float toneMapEnabled;
+    float exposureScale;
+    float3 padding;
 };
 
 [[vk::push_constant]]
@@ -111,17 +113,35 @@ float4 main(VSOutput input) : SV_Target0
     const float4 source =
         g_source.Sample(g_sourceSampler, input.uv);
 
+    float3 displayLinear =
+        max(source.rgb, 0.0) *
+        max(g.exposureScale, 0.0);
+
+    if (g.toneMapEnabled > 0.5)
+    {
+        displayLinear =
+            displayLinear /
+            (1.0 + displayLinear);
+    }
+
     const float active =
-        saturate(g.enabled) * saturate(g.strength);
+        saturate(g.enabled) *
+        saturate(g.strength);
 
-    if (active <= 0.0)
-        return source;
+    if (active > 0.0)
+    {
+        const float3 corrected =
+            SamplePackedLut(displayLinear);
 
-    const float3 corrected =
-        SamplePackedLut(source.rgb);
+        displayLinear =
+            lerp(
+                displayLinear,
+                corrected,
+                active);
+    }
 
     return float4(
-        lerp(source.rgb, corrected, active),
+        displayLinear,
         source.a);
 }
 )";
@@ -299,7 +319,7 @@ ColorLutRenderer::ColorLutRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 4U,
+            .pushConstantDwords = 8U,
             .shaderResourceBuffers = 0U,
             .sampledTextures = 2U,
             .topology =
@@ -337,13 +357,19 @@ void ColorLutRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 4> constants{
+    const std::array<u32, 8> constants{
         bits(static_cast<f32>(lut.Size())),
         bits(std::clamp(
             settings.strength,
             0.0F,
             1.0F)),
         bits(settings.enabled ? 1.0F : 0.0F),
+        bits(settings.toneMapEnabled ? 1.0F : 0.0F),
+        bits(std::max(
+            settings.exposureScale,
+            0.0F)),
+        0U,
+        0U,
         0U
     };
 
