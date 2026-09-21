@@ -1022,9 +1022,8 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             sourceRevision ||
         presentation.fingerprint !=
             geometryFingerprint ||
-        (presentation.appearanceFingerprint !=
-             appearanceFingerprint &&
-         presentation.cloudFingerprint == 0U) ||
+        presentation.baseAppearanceFingerprint !=
+            appearanceFingerprint ||
         presentation.cloudFingerprint !=
             activeCloudFingerprint;
 
@@ -1095,6 +1094,8 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             sourceRevision;
         presentation.fingerprint =
             geometryFingerprint;
+        presentation.baseAppearanceFingerprint =
+            appearanceFingerprint;
         presentation.appearanceFingerprint =
             appearance.fingerprint;
         presentation.cloudFingerprint =
