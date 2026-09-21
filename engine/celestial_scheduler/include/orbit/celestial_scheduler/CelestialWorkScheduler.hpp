@@ -12,6 +12,7 @@ enum class WorkKind : u8
 {
     OrbitalAppearance,
     AtmosphereLut,
+    AtmosphereSky,
     CloudField,
     FarImpostor,
     RingPresentation,
