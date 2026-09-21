@@ -94,16 +94,31 @@ EstimateRadianceCell(
             settings.diffuseTransportScale,
             0.0F);
 
-    const f32 ambient =
+    const bool hasSkySummary =
+        settings.skyIrradianceLinear.x > 0.0F ||
+        settings.skyIrradianceLinear.y > 0.0F ||
+        settings.skyIrradianceLinear.z > 0.0F;
+
+    const f32 fallbackAmbient =
         std::max(
             settings.ambientIrradianceScale,
-            0.0F) *
-        transport;
+            0.0F);
+
+    const math::Float3 ambientEnergy =
+        hasSkySummary
+            ? math::Float3{
+                  std::max(settings.skyIrradianceLinear.x, 0.0F),
+                  std::max(settings.skyIrradianceLinear.y, 0.0F),
+                  std::max(settings.skyIrradianceLinear.z, 0.0F)}
+            : math::Float3{
+                  fallbackAmbient,
+                  fallbackAmbient,
+                  fallbackAmbient};
 
     result.l0 = {
-        ambient,
-        ambient,
-        ambient
+        ambientEnergy.x * transport,
+        ambientEnergy.y * transport,
+        ambientEnergy.z * transport
     };
 
     const math::Float3 stellarEnergy{
