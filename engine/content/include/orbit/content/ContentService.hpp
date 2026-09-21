@@ -185,6 +185,12 @@ public:
         AssetId materialAsset,
         const MaterialEmission& emission);
 
+    // Assigns or clears the emissive texture channel on a base material.
+    // Material instances inherit the texture from their parent in V0.0.7.
+    void SetMaterialEmissiveTexture(
+        AssetId materialAsset,
+        std::filesystem::path texturePath);
+
     // Creates a persistent .orbitdecal authority asset from an indexed texture.
     // The decal owns semantic size/opacity metadata and references the texture
     // through the ordinary asset dependency graph/DDC pipeline.
