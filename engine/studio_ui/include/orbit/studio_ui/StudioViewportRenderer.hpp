@@ -480,6 +480,7 @@ private:
         bool writeA{true};
         bool hasHistory{false};
         lighting::LightingView previousView{};
+        u64 lightingFingerprint{0U};
         std::unique_ptr<
             lighting::RadianceClipmapResidency>
             radianceResidency;
