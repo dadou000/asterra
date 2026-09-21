@@ -1,6 +1,7 @@
 #include <orbit/lighting/Visibility.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <stdexcept>
 
@@ -108,6 +109,16 @@ GpuVisibilityQuery EncodeGpuVisibilityQuery(
             std::max(
                 query.maximumDistanceMeters,
                 query.minimumDistanceMeters)
+        },
+        .requirements = {
+            query.requirements.maximumNominalErrorMeters,
+            query.requirements.minimumConfidence,
+            query.importance,
+            std::bit_cast<f32>(
+                (query.requirements.requireOffscreenCoverage ? 1U : 0U) |
+                (query.requirements.requireExactGeometry ? 2U : 0U) |
+                (query.requirements.requirePlanetaryRange ? 4U : 0U) |
+                (query.requirements.requireSurfaceMaterial ? 8U : 0U))
         }
     };
 }
