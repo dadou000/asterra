@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <numbers>
 #include <string>
+#include <iostream>
 
 namespace
 {
@@ -24,6 +25,15 @@ bool Near(
         std::max({1.0, std::abs(a), std::abs(b)});
     return std::abs(a - b) <=
         relative * scale;
+}
+} // namespace
+
+namespace
+{
+int FailCode(const int code)
+{
+    std::cerr << "analytic-orbit failure code " << code << '\\n';
+    return code;
 }
 } // namespace
 
@@ -96,7 +106,7 @@ int main()
 
         if (stats.bodies != 1U)
         {
-            return 1;
+            return FailCode(1);
         }
 
         const auto bodyFrame =
@@ -107,7 +117,7 @@ int main()
         if (!bodyFrame.has_value() ||
             !systemFrame.has_value())
         {
-            return 2;
+            return FailCode(2);
         }
 
         const auto atEpoch =
@@ -120,7 +130,7 @@ int main()
             !Near(atEpoch->translation.x, axis) ||
             !Near(atEpoch->translation.y, 0.0))
         {
-            return 3;
+            return FailCode(3);
         }
 
         const double period =
@@ -144,7 +154,7 @@ int main()
             !Near(atQuarter->translation.x, 0.0) ||
             !Near(atQuarter->translation.y, axis))
         {
-            return 4;
+            return FailCode(4);
         }
 
         // A disabled orbit capability must fall back to the legacy fixed
@@ -160,7 +170,7 @@ int main()
 
         if (!composition.RebuildIfChanged(objects))
         {
-            return 5;
+            return FailCode(5);
         }
 
         const auto fixedBodyFrame =
@@ -178,12 +188,12 @@ int main()
             fixed->translation.y != 22.0 ||
             fixed->translation.z != 33.0)
         {
-            return 6;
+            return FailCode(6);
         }
 
         world.Checkpoint();
     }
 
     std::filesystem::remove_all(root);
-    return 0;
+    return FailCode(0);
 }
