@@ -176,11 +176,10 @@ struct GpuVisibilityQuery
 
 struct GpuVisibilityResult
 {
-    // x = VisibilityResolution enum as uint bits
-    // y = VisibilityBackendKind enum as uint bits
-    // z = confidence bits
-    // w = hit distance bits
-    math::UInt4 state{};
+    u32 resolution{0U};
+    u32 backend{0U};
+    f32 confidence{0.0F};
+    f32 distanceMeters{0.0F};
 
     // xyz = camera-relative hit position, w = reserved
     math::Float4 position{};
