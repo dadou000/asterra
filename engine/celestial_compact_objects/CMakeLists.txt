@@ -28,7 +28,8 @@ if(BUILD_TESTING)
         tests/CompactObjectTests.cpp)
     target_link_libraries(
         OrbitCelestialCompactObjectTests PRIVATE
-        Orbit::CelestialCompactObjects)
+        Orbit::CelestialCompactObjects
+        Orbit::CelestialRepresentation)
     target_compile_features(
         OrbitCelestialCompactObjectTests PRIVATE cxx_std_23)
     orbit_enable_warnings(
