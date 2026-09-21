@@ -167,6 +167,19 @@ inline constexpr schema::PropertyId kAtmosphereAerosolScaleHeightMeters{
 inline constexpr schema::PropertyId kAtmosphereAbsorberScale{
     .high = 0x4f5242495441544dULL, .low = 0x4142535343414c01ULL};
 
+inline constexpr schema::PropertyId kOceanRefractiveIndex{
+    .high = 0x4f524249544f434eULL, .low = 0x52454652494e4401ULL};
+inline constexpr schema::PropertyId kOceanOrbitalRoughness{
+    .high = 0x4f524249544f434eULL, .low = 0x524f5547484e5301ULL};
+inline constexpr schema::PropertyId kOceanAbsorptionPerMeter{
+    .high = 0x4f524249544f434eULL, .low = 0x4142534f52505401ULL};
+inline constexpr schema::PropertyId kOceanDeepWaterColor{
+    .high = 0x4f524249544f434eULL, .low = 0x44454550434f4c01ULL};
+inline constexpr schema::PropertyId kOceanGlintStrength{
+    .high = 0x4f524249544f434eULL, .low = 0x474c494e54535401ULL};
+inline constexpr schema::PropertyId kOceanMinimumDepthForDeepColorMeters{
+    .high = 0x4f524249544f434eULL, .low = 0x4445455044455001ULL};
+
 inline constexpr schema::PropertyId kCloudSourceModel{
     .high = 0x4f52424954434c44ULL, .low = 0x5352434d4f444501ULL};
 inline constexpr schema::PropertyId kCloudBaseAltitudeMeters{
