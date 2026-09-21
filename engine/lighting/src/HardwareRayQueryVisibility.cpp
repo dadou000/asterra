@@ -1,6 +1,7 @@
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <stdexcept>
 
