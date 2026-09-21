@@ -719,11 +719,171 @@ UniverseCompositionStats UniverseComposition::Rebuild(
 
         std::function<void(
             const scene::ObjectRecord&,
-            frames::FrameId)> composeNode;
+            frames::FrameId,
+            std::shared_ptr<
+                const celestial_orbits::OrbitStateProvider>)>
+            composeNode;
+
+        std::function<void(
+            const scene::ObjectRecord&,
+            frames::FrameId)>
+            composeChildren;
+
+        composeChildren =
+            [&](const scene::ObjectRecord& parentObject,
+                const frames::FrameId parentFrame)
+            {
+                const auto children =
+                    objects.Children(parentObject.id);
+
+                std::unordered_map<
+                    scene::ObjectId,
+                    std::shared_ptr<
+                        const celestial_orbits::OrbitStateProvider>>
+                    promotedProviders;
+
+                std::vector<
+                    celestial_orbits::NBodyMemberSeed>
+                    seeds;
+
+                std::optional<DynamicPromotionSettings>
+                    sharedSettings;
+
+                for (const auto& child : children)
+                {
+                    if (child.type !=
+                        kCelestialBodyType)
+                    {
+                        continue;
+                    }
+
+                    const auto promotion =
+                        DynamicPromotionSettingsFor(
+                            objects,
+                            child.id);
+
+                    if (!promotion.has_value())
+                    {
+                        continue;
+                    }
+
+                    if (parentObject.type ==
+                        kCelestialBodyType)
+                    {
+                        throw std::runtime_error(
+                            "Dynamic N-body promotion is not permitted directly under a rotating body-fixed frame. Use a system or reference/barycenter node.");
+                    }
+
+                    if (!sharedSettings.has_value())
+                    {
+                        sharedSettings =
+                            *promotion;
+                    }
+                    else if (
+                        sharedSettings->stepSeconds !=
+                            promotion->stepSeconds ||
+                        sharedSettings->softeningMeters !=
+                            promotion->softeningMeters)
+                    {
+                        throw std::runtime_error(
+                            "Sibling N-body promoted bodies must use identical step and softening settings.");
+                    }
+
+                    seeds.push_back({
+                        .id =
+                            NBodyMemberForObject(
+                                child.id),
+                        .massKilograms =
+                            PropertyOr<f64>(
+                                objects,
+                                child.id,
+                                kBodyMass,
+                                5.0e24),
+                        .sourceProvider =
+                            OrbitProviderFor(
+                                objects,
+                                child.id,
+                                epoch)
+                    });
+                }
+
+                if (!seeds.empty())
+                {
+                    if (seeds.size() < 2U)
+                    {
+                        throw std::runtime_error(
+                            "Dynamic N-body promotion requires at least two promoted sibling bodies in the same inertial/reference frame.");
+                    }
+
+                    auto domain =
+                        std::make_shared<
+                            celestial_orbits::NBodyDomain>(
+                                epoch,
+                                std::move(seeds),
+                                celestial_orbits::
+                                    NBodyIntegrationSettings{
+                                        .stepSeconds =
+                                            sharedSettings->
+                                                stepSeconds,
+                                        .softeningMeters =
+                                            sharedSettings->
+                                                softeningMeters
+                                    });
+
+                    for (const auto& child : children)
+                    {
+                        if (child.type !=
+                            kCelestialBodyType)
+                        {
+                            continue;
+                        }
+
+                        if (!DynamicPromotionSettingsFor(
+                                objects,
+                                child.id).
+                                has_value())
+                        {
+                            continue;
+                        }
+
+                        promotedProviders.emplace(
+                            child.id,
+                            domain->ProviderFor(
+                                NBodyMemberForObject(
+                                    child.id)));
+                    }
+                }
+
+                for (const auto& child : children)
+                {
+                    if (child.type !=
+                            kCelestialBodyType &&
+                        child.type !=
+                            kCelestialReferenceNodeType)
+                    {
+                        continue;
+                    }
+
+                    const auto promoted =
+                        promotedProviders.find(
+                            child.id);
+
+                    composeNode(
+                        child,
+                        parentFrame,
+                        promoted ==
+                                promotedProviders.end()
+                            ? nullptr
+                            : promoted->second);
+                }
+            };
 
         composeNode =
             [&](const scene::ObjectRecord& object,
-                const frames::FrameId parentFrame)
+                const frames::FrameId parentFrame,
+                std::shared_ptr<
+                    const celestial_orbits::OrbitStateProvider>
+                    orbitOverride)
             {
                 frames::FrameId childParentFrame =
                     parentFrame;
@@ -801,7 +961,9 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                                 TransformFor(
                                     objects,
                                     object.id,
-                                    epoch),
+                                    epoch,
+                                    std::move(
+                                        orbitOverride)),
                             .id = bodyId,
                             .frame = bodyFrame
                         }));
@@ -824,34 +986,14 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                     return;
                 }
 
-                for (const auto& child :
-                     objects.Children(object.id))
-                {
-                    if (child.type ==
-                            kCelestialBodyType ||
-                        child.type ==
-                            kCelestialReferenceNodeType)
-                    {
-                        composeNode(
-                            child,
-                            childParentFrame);
-                    }
-                }
+                composeChildren(
+                    object,
+                    childParentFrame);
             };
 
-        for (const auto& child :
-             objects.Children(systemObject.id))
-        {
-            if (child.type ==
-                    kCelestialBodyType ||
-                child.type ==
-                    kCelestialReferenceNodeType)
-            {
-                composeNode(
-                    child,
-                    systemFrame);
-            }
-        }
+        composeChildren(
+            systemObject,
+            systemFrame);
     }
 
     frames_ = std::move(candidateFrames);
