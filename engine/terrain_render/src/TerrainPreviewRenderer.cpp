@@ -1333,7 +1333,14 @@ private:
                     .depthCompare =
                         rhi::DepthCompare::GreaterEqual,
                     .depthTest = true,
-                    .depthWrite = true
+                    .depthWrite = true,
+                    .colorAttachmentFormats = {
+                        rhi::TextureFormat::RGBA16_Float,
+                        rhi::TextureFormat::RGBA16_Float,
+                        rhi::TextureFormat::RGBA16_Float,
+                        rhi::TextureFormat::RGBA16_Float
+                    },
+                    .colorAttachmentCount = 4U
                 });
     }
 
