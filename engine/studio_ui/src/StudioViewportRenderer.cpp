@@ -13,6 +13,7 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/LocalLightBinding.hpp>
+#include <orbit/world_model/VisibilityProxyBinding.hpp>
 #include <orbit/lighting/LocalLightRegistry.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
@@ -44,6 +45,99 @@ namespace
         a.baseSpacingMeters == b.baseSpacingMeters &&
         a.levelScale == b.levelScale &&
         a.overlapCells == b.overlapCells;
+}
+
+[[nodiscard]] math::Double3x3 EulerDegreesToRotation(
+    const math::Double3& eulerDegrees) noexcept
+{
+    constexpr f64 kDegreesToRadians =
+        0.017453292519943295769;
+
+    const f64 rx =
+        eulerDegrees.x * kDegreesToRadians;
+    const f64 ry =
+        eulerDegrees.y * kDegreesToRadians;
+    const f64 rz =
+        eulerDegrees.z * kDegreesToRadians;
+
+    const f64 cx = std::cos(rx);
+    const f64 sx = std::sin(rx);
+    const f64 cy = std::cos(ry);
+    const f64 sy = std::sin(ry);
+    const f64 cz = std::cos(rz);
+    const f64 sz = std::sin(rz);
+
+    // Intrinsic XYZ (equivalent parent-space Rz * Ry * Rx).
+    return {
+        .xAxis = {
+            cz * cy,
+            sz * cy,
+            -sy
+        },
+        .yAxis = {
+            cz * sy * sx - sz * cx,
+            sz * sy * sx + cz * cx,
+            cy * sx
+        },
+        .zAxis = {
+            cz * sy * cx + sz * sx,
+            sz * sy * cx - cz * sx,
+            cy * cx
+        }
+    };
+}
+
+[[nodiscard]] std::vector<lighting::VisibilityProxy>
+BuildVisibilityProxies(
+    const std::vector<
+        world_model::ResolvedVisibilityProxy>& resolved,
+    const universe::BodyId body,
+    const frames::FrameId bodyFrame)
+{
+    std::vector<lighting::VisibilityProxy> proxies;
+    proxies.reserve(resolved.size());
+
+    for (const auto& source : resolved)
+    {
+        proxies.push_back({
+            .stableId =
+                source.object.high ^
+                source.object.low,
+            .body = body,
+            .frame = bodyFrame,
+            .frameFromProxy = {
+                .rotation =
+                    EulerDegreesToRotation(
+                        source.eulerDegrees),
+                .translation =
+                    source.positionMeters
+            },
+            .shape =
+                source.shape ==
+                        world_model::
+                            ResolvedVisibilityProxyShape::
+                                Box
+                    ? lighting::
+                        VisibilityProxyShape::Box
+                    : lighting::
+                        VisibilityProxyShape::Sphere,
+            .sphereRadiusMeters =
+                source.radiusMeters,
+            .boxHalfExtentsMeters =
+                source.halfExtentsMeters,
+            .materialId =
+                source.materialId,
+            .instanceId =
+                source.instanceId,
+            .nominalErrorMeters =
+                source.
+                    maximumApproximationErrorMeters,
+            .dynamic =
+                source.dynamic
+        });
+    }
+
+    return proxies;
 }
 
 [[nodiscard]] std::vector<editor_ui::PreviewLine>
