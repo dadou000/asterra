@@ -20,6 +20,7 @@ add_library(OrbitLighting STATIC
     src/MaterialEmissionSurfaceOverride.cpp
     src/EmissiveHierarchy.cpp
     src/EmissiveSampling.cpp
+    src/EmissiveInvalidation.cpp
     src/RuntimeMaterialEmission.cpp
 )
 
@@ -117,6 +118,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingEmissiveEstimatorIntegrationTests
         tests/EmissiveEstimatorIntegrationTests.cpp
+    )
+
+    add_executable(OrbitLightingEmissiveInvalidationTests
+        tests/EmissiveInvalidationTests.cpp
     )
 
     add_executable(OrbitLightingRuntimeMaterialEmissionTests
@@ -276,6 +281,14 @@ if(BUILD_TESTING)
         OrbitLightingEmissiveEstimatorIntegrationTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingEmissiveEstimatorIntegrationTests)
 
+    target_link_libraries(OrbitLightingEmissiveInvalidationTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingEmissiveInvalidationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingEmissiveInvalidationTests)
+
     target_link_libraries(OrbitLightingRuntimeMaterialEmissionTests
         PRIVATE
             Orbit::Lighting
@@ -368,6 +381,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingEmissiveEstimatorIntegration
         COMMAND OrbitLightingEmissiveEstimatorIntegrationTests
+    )
+
+    add_test(
+        NAME Orbit.LightingEmissiveInvalidation
+        COMMAND OrbitLightingEmissiveInvalidationTests
     )
 
     add_test(
