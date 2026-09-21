@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 
 #include <orbit/editor_model/CelestialRecipeService.hpp>
+#include <orbit/world_model/AtmospherePropertySolver.hpp>
 
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -213,6 +214,198 @@ void CelestialAuthoringUi::Draw(
             catch (const std::exception& exception)
             {
                 status_ = exception.what();
+            }
+        }
+    }
+
+    std::optional<scene::ObjectRecord>
+        atmosphereCapability;
+
+    if (selected.has_value() &&
+        selected->type ==
+            world_model::
+                kAtmosphereCapabilityType)
+    {
+        atmosphereCapability =
+            selected;
+    }
+    else if (body.has_value())
+    {
+        for (const auto& child :
+             world.Objects().
+                 Children(body->id))
+        {
+            if (child.type ==
+                world_model::
+                    kAtmosphereCapabilityType)
+            {
+                atmosphereCapability =
+                    child;
+                break;
+            }
+        }
+    }
+
+    if (atmosphereCapability.has_value())
+    {
+        context.Separator();
+        context.Heading("Atmosphere Solver");
+        context.MutedText(
+            "Presets and derived controls write the same Atmosphere capability inspected in Properties. Enable Advanced Properties for exact coefficients and provenance metadata.");
+
+        world_model::AtmospherePropertySolver
+            atmosphereSolver(
+                world.Objects(),
+                world.Commands());
+
+        const auto presets =
+            world_model::
+                AtmospherePropertySolver::
+                    Presets();
+
+        for (std::size_t index = 0;
+             index < presets.size();
+             ++index)
+        {
+            const std::string label =
+                std::string(presets[index]) +
+                "##atmosphere-preset-" +
+                std::to_string(index);
+
+            if (context.Button(label))
+            {
+                try
+                {
+                    const auto report =
+                        atmosphereSolver.
+                            ApplyPreset(
+                                atmosphereCapability->
+                                    id,
+                                presets[index]);
+
+                    status_ =
+                        std::format(
+                            "Applied atmosphere preset '{}': {} derived field{}, {} conflict{}.",
+                            presets[index],
+                            report.DerivedCount(),
+                            report.DerivedCount() == 1U
+                                ? ""
+                                : "s",
+                            report.HasConflict()
+                                ? 1
+                                : 0,
+                            report.HasConflict()
+                                ? ""
+                                : "s");
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ =
+                        exception.what();
+                }
+            }
+
+            if (index + 1U <
+                presets.size())
+            {
+                context.SameLine();
+            }
+        }
+
+        if (context.Button(
+                "Derived Composition##atmosphere-mode-derived"))
+        {
+            try
+            {
+                world.Commands().
+                    SetProperty(
+                        atmosphereCapability->id,
+                        world_model::
+                            kAtmosphereAuthoringMode,
+                        std::string{
+                            "Derived Composition"});
+                status_ =
+                    "Atmosphere mode: Derived Composition.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ =
+                    exception.what();
+            }
+        }
+
+        context.SameLine();
+
+        if (context.Button(
+                "Expert Coefficients##atmosphere-mode-expert"))
+        {
+            try
+            {
+                world.Commands().
+                    SetProperty(
+                        atmosphereCapability->id,
+                        world_model::
+                            kAtmosphereAuthoringMode,
+                        std::string{
+                            "Expert Coefficients"});
+                status_ =
+                    "Atmosphere mode: Expert Coefficients. Exact runtime fields remain under direct author authority.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ =
+                    exception.what();
+            }
+        }
+
+        if (context.PrimaryButton(
+                "Solve Derived Coefficients##atmosphere-solve"))
+        {
+            try
+            {
+                const auto report =
+                    atmosphereSolver.Solve(
+                        atmosphereCapability->id);
+
+                u32 conflicts = 0U;
+                u32 invalid = 0U;
+
+                for (const auto& event :
+                     report.events)
+                {
+                    conflicts +=
+                        event.outcome ==
+                                world_model::
+                                    AtmosphereSolveOutcome::
+                                        Conflict
+                            ? 1U
+                            : 0U;
+                    invalid +=
+                        event.outcome ==
+                                world_model::
+                                    AtmosphereSolveOutcome::
+                                        InvalidInput
+                            ? 1U
+                            : 0U;
+                }
+
+                status_ =
+                    std::format(
+                        "Atmosphere solve: {} derived, {} conflict{}, {} invalid input{}.",
+                        report.DerivedCount(),
+                        conflicts,
+                        conflicts == 1U
+                            ? ""
+                            : "s",
+                        invalid,
+                        invalid == 1U
+                            ? ""
+                            : "s");
+            }
+            catch (const std::exception& exception)
+            {
+                status_ =
+                    exception.what();
             }
         }
     }
