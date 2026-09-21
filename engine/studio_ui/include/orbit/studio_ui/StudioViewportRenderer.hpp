@@ -31,6 +31,7 @@
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/post_process/ColorLut.hpp>
 #include <orbit/post_process/DisplayResolve.hpp>
+#include <orbit/post_process/HumanEyeAdaptation.hpp>
 #include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
@@ -44,6 +45,7 @@
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/world_model/CelestialLightingService.hpp>
 
+#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -221,6 +223,8 @@ struct StudioLuminanceHistogramDiagnostics
     post_process::LuminanceHistogramStatistics statistics{};
     std::array<u32, post_process::kLuminanceHistogramBins> bins{};
     post_process::LuminanceHistogramConfig config{};
+    post_process::HumanEyeAdaptationState eyeState{};
+    post_process::HumanEyeAdaptationConfig eyeConfig{};
     bool meteringMaskAvailable{false};
 };
 
@@ -354,6 +358,13 @@ public:
     void SetLuminanceHistogramConfig(
         std::string_view viewportId,
         post_process::LuminanceHistogramConfig config);
+
+    void SetHumanEyeAdaptationConfig(
+        std::string_view viewportId,
+        post_process::HumanEyeAdaptationConfig config);
+
+    void ResetHumanEyeAdaptation(
+        std::string_view viewportId) noexcept;
 
     void SetLuminanceMeteringOverlay(
         std::string_view viewportId,
@@ -594,6 +605,8 @@ private:
             statisticsReadback;
         std::vector<bool> submitted;
         StudioLuminanceHistogramDiagnostics diagnostics{};
+        std::chrono::steady_clock::time_point lastEyeUpdate{};
+        bool hasEyeUpdateTime{false};
         bool showMeteringOverlay{false};
     };
 
