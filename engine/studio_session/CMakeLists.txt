@@ -35,6 +35,7 @@ target_include_directories(OrbitStudioSession
 target_link_libraries(OrbitStudioSession
     PUBLIC
         Orbit::Core
+        Orbit::CelestialAppearance
         Orbit::CelestialCompactObjects
         Orbit::CelestialGiants
         Orbit::CelestialLighting
