@@ -11,7 +11,7 @@ int main()
     view.frame = frames::FrameId{
         .high = 1U,
         .low = 2U};
-    view.originInFrameMeters = {
+    view.gpuOriginInFrameMeters = {
         100.0,
         200.0,
         300.0
@@ -36,7 +36,12 @@ int main()
         },
         .minimumDistanceMeters = 0.25F,
         .maximumDistanceMeters = 125.0F,
-        .importance = 1.0F
+        .importance = 0.75F,
+        .requirements = {
+            .requireOffscreenCoverage = true,
+            .maximumNominalErrorMeters = 0.25F,
+            .minimumConfidence = 0.6F
+        }
     };
 
     const auto encoded =
@@ -82,6 +87,13 @@ int main()
         sizeof(GpuVisibilityResult) != 48U)
     {
         return 3;
+    }
+
+    if (encoded.requirements.x != 0.25F ||
+        encoded.requirements.y != 0.6F ||
+        encoded.requirements.z != 0.75F)
+    {
+        return 4;
     }
 
     return 0;
