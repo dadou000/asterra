@@ -5434,12 +5434,15 @@ StudioViewportRenderer::Compose(
         }
 
         const bool usesPhysicalSurfaceLighting =
-            presentation ==
-                StudioViewportPresentation::ProductionTerrain ||
-            presentation ==
-                StudioViewportPresentation::MacroGlobe ||
-            presentation ==
-                StudioViewportPresentation::BodyPreview;
+            compactObjectDiagnostics_.find(
+                info.id) ==
+                compactObjectDiagnostics_.end() &&
+            (presentation ==
+                 StudioViewportPresentation::ProductionTerrain ||
+             presentation ==
+                 StudioViewportPresentation::MacroGlobe ||
+             presentation ==
+                 StudioViewportPresentation::BodyPreview);
 
         if (usesPhysicalSurfaceLighting)
         {
