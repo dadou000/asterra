@@ -326,7 +326,7 @@ int main()
     if (smoothDiscBlend.richer !=
             Representation::SmoothGlobe ||
         smoothDiscBlend.lower !=
-            Representation::CachedDiscImpostor ||
+            Representation::AnalyticDiscImpostor ||
         !smoothDiscBlend.overlapping)
     {
         return 20;
@@ -341,7 +341,7 @@ int main()
             farDecision);
 
     if (discPointBlend.richer !=
-            Representation::CachedDiscImpostor ||
+            Representation::AnalyticDiscImpostor ||
         discPointBlend.lower !=
             Representation::PointProxy ||
         !discPointBlend.overlapping)
