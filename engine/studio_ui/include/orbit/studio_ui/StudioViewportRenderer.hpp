@@ -257,6 +257,7 @@ private:
         universe::BodyId body{};
         u64 sourceRevision{0};
         u64 fingerprint{0};
+        u64 baseAppearanceFingerprint{0};
         u64 appearanceFingerprint{0};
         u64 cloudFingerprint{0};
         u64 cachedDiscFingerprint{0};
