@@ -1,5 +1,7 @@
 #include <orbit/editor_model/InspectorModel.hpp>
 
+#include <orbit/world_model/PropertyProvenanceStore.hpp>
+
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -188,6 +190,35 @@ void InspectorModel::SetForSelection(
                 object.id,
                 property,
                 value);
+
+            if (world_model::
+                    FindPropertyProvenanceRecord(
+                        objects_,
+                        object.id,
+                        property).
+                    has_value())
+            {
+                static_cast<void>(
+                    world_model::
+                        WritePropertyProvenance(
+                            objects_,
+                            commands_,
+                            object.id,
+                            property,
+                            world_model::
+                                PropertyProvenance{
+                                    .sourceMode =
+                                        world_model::
+                                            PropertySourceMode::
+                                                Explicit,
+                                    .solveState =
+                                        world_model::
+                                            PropertySolveState::
+                                                Locked,
+                                    .sourceProperty =
+                                        "Manual Inspector edit"
+                                }));
+            }
         }
 
         commands_.CommitTransaction();
