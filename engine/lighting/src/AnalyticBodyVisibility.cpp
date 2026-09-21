@@ -286,14 +286,15 @@ AnalyticBodyVisibilityProvider::Trace(
             distance;
 
     const math::Double3 normalBody =
-        math::Normalize({
-            hitBody.x /
-                (radii.x * radii.x),
-            hitBody.y /
-                (radii.y * radii.y),
-            hitBody.z /
-                (radii.z * radii.z)
-        });
+        math::Normalize(
+            math::Double3{
+                hitBody.x /
+                    (radii.x * radii.x),
+                hitBody.y /
+                    (radii.y * radii.y),
+                hitBody.z /
+                    (radii.z * radii.z)
+            });
 
     const math::Double3 hitQuery =
         math::TransformPoint(
