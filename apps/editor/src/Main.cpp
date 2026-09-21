@@ -2169,6 +2169,7 @@ int main(
             materialEmissionEditAsset;
         orbit::content::MaterialEmission
             materialEmissionEdit{};
+        std::string materialEmissiveTextureEdit;
         std::string materialEmissionStatus;
         std::string renameBuffer;
         bool showAdvancedProperties = false;
@@ -5645,6 +5646,21 @@ int main(
                                             selectedAsset->id);
                                     materialEmissionEditAsset =
                                         selectedAsset->id;
+
+                                    materialEmissiveTextureEdit.clear();
+
+                                    if (selectedAsset->kind ==
+                                            orbit::content::AssetKind::
+                                                Material &&
+                                        selectedAsset->material.
+                                            has_value())
+                                    {
+                                        materialEmissiveTextureEdit =
+                                            selectedAsset->material->
+                                                emissive.
+                                                generic_string();
+                                    }
+
                                     materialEmissionStatus.clear();
                                 }
                                 catch (const std::exception& exception)
@@ -5693,32 +5709,41 @@ int main(
                                         parentPath);
                             }
 
-                            if (baseMaterial != nullptr &&
-                                baseMaterial->material.
-                                    has_value() &&
-                                !baseMaterial->material->
-                                    emissive.empty())
+                            if (selectedAsset->kind ==
+                                orbit::content::AssetKind::Material)
                             {
-                                context.Text(
-                                    "Emission Texture: " +
-                                    (baseMaterial->sourcePath.
-                                         parent_path() /
-                                     baseMaterial->material->
-                                         emissive).
-                                        generic_string());
+                                static_cast<void>(
+                                    context.InputText(
+                                        "Emission Texture##m15-emission-texture",
+                                        materialEmissiveTextureEdit));
+
+                                context.MutedText(
+                                    "Project-relative path from this material folder. Leave empty for no emission texture.");
                             }
                             else
                             {
-                                context.MutedText(
-                                    "Emission Texture: none");
-                            }
+                                if (baseMaterial != nullptr &&
+                                    baseMaterial->material.
+                                        has_value() &&
+                                    !baseMaterial->material->
+                                        emissive.empty())
+                                {
+                                    context.Text(
+                                        "Inherited Emission Texture: " +
+                                        (baseMaterial->sourcePath.
+                                             parent_path() /
+                                         baseMaterial->material->
+                                             emissive).
+                                            generic_string());
+                                }
+                                else
+                                {
+                                    context.MutedText(
+                                        "Inherited Emission Texture: none");
+                                }
 
-                            if (selectedAsset->kind ==
-                                orbit::content::AssetKind::
-                                    MaterialInstance)
-                            {
                                 context.MutedText(
-                                    "Instance values start from inherited emission; Save writes explicit overrides.");
+                                    "Instance values start from inherited emission; Save writes explicit overrides. Texture remains inherited from the base material.");
                             }
 
                             bool changed = false;
@@ -5830,13 +5855,29 @@ int main(
                             {
                                 try
                                 {
+                                    // Content edits rescan the registry, so never
+                                    // retain AssetRecord pointers across a save.
+                                    const auto editedAssetId =
+                                        selectedAsset->id;
+                                    const auto editedAssetKind =
+                                        selectedAsset->kind;
+
+                                    if (editedAssetKind ==
+                                        orbit::content::AssetKind::Material)
+                                    {
+                                        content.SetMaterialEmissiveTexture(
+                                            editedAssetId,
+                                            std::filesystem::path(
+                                                materialEmissiveTextureEdit));
+                                    }
+
                                     content.SetMaterialEmission(
-                                        selectedAsset->id,
+                                        editedAssetId,
                                         materialEmissionEdit);
 
                                     const auto* refreshed =
                                         content.Find(
-                                            selectedAsset->id);
+                                            editedAssetId);
 
                                     materialPreviewMaterial =
                                         PreviewMaterialForAsset(
@@ -5908,6 +5949,7 @@ int main(
                                         content,
                                         &asset);
                                 materialEmissionEditAsset.reset();
+                                materialEmissiveTextureEdit.clear();
                                 materialEmissionStatus.clear();
                             }
                         }
