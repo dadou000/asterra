@@ -7,11 +7,12 @@ on:
       - '.github/workflows/orbit-v006-celestial.yml'
       - 'tests/V006CelestialValidationTests.cpp'
       - 'engine/celestial_*/**'
-      - 'engine/world_model/**'
-      - 'engine/studio_session/**'
-      - 'engine/studio_ui/**'
-      - 'engine/lighting/**'
+      - 'engine/world_model/**/Celestial*'
+      - 'engine/world_model/**/PropertyProvenance*'
+      - 'engine/studio_session/**/StudioCelestial*'
+      - 'engine/studio_ui/**/Celestial*'
       - 'docs/V0.0.6_*'
+      - 'docs/research/V006_*'
   pull_request:
     branches: [orbit]
   workflow_dispatch:
