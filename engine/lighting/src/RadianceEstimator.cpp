@@ -85,7 +85,8 @@ EstimateRadianceCell(
     const std::span<const ResolvedLocalLight> localLights,
     const VisibilityRegistry* const visibility,
     const RadianceEstimateSettings& settings,
-    const std::span<const EmissiveVolumeSource> emissiveVolumes)
+    const std::span<const EmissiveVolumeSource> emissiveVolumes,
+    const std::span<const EmissiveSampledEmitter> emissiveSurfaces)
 {
     DirectionalIrradianceL1 result;
 
@@ -349,6 +350,122 @@ EstimateRadianceCell(
                 source.emissionLinear.z,
                 0.0F) *
                 sourceScale
+        };
+
+        AddDirectionalLobe(
+            result,
+            direction,
+            energy);
+    }
+
+    for (const auto& emitter :
+         emissiveSurfaces)
+    {
+        const math::Double3 deltaD =
+            emitter.positionInFrameMeters -
+            cellCenterFrame;
+
+        const f64 distanceD =
+            math::Length(deltaD);
+
+        if (!std::isfinite(distanceD) ||
+            distanceD <= 1.0e-5)
+        {
+            continue;
+        }
+
+        const auto directionD =
+            deltaD /
+            distanceD;
+
+        const math::Float3 direction{
+            static_cast<f32>(directionD.x),
+            static_cast<f32>(directionD.y),
+            static_cast<f32>(directionD.z)
+        };
+
+        const f64 emitterFacing =
+            std::max(
+                math::Dot(
+                    emitter.normalInFrame,
+                    directionD * -1.0),
+                0.0);
+
+        if (emitterFacing <= 0.0 ||
+            emitter.areaMetersSquared <= 0.0)
+        {
+            continue;
+        }
+
+        bool visible = true;
+
+        if (visibility != nullptr)
+        {
+            VisibilityQuery query{
+                .purpose =
+                    VisibilityPurpose::DiffuseGi,
+                .frame = view.frame,
+                .body = view.body,
+                .originInFrameMeters =
+                    cellCenterFrame,
+                .direction = direction,
+                .minimumDistanceMeters = 0.05F,
+                .maximumDistanceMeters =
+                    static_cast<f32>(
+                        std::max(
+                            distanceD - 0.05,
+                            0.05)),
+                .importance =
+                    static_cast<f32>(
+                        std::clamp(
+                            emitter.samplingProbability,
+                            0.0F,
+                            1.0F)),
+                .requirements = {
+                    .requireOffscreenCoverage = true
+                }
+            };
+
+            const auto result =
+                visibility->TraceNearest(query);
+
+            visible =
+                result.resolution !=
+                    VisibilityResolution::Hit;
+        }
+
+        if (!visible)
+        {
+            continue;
+        }
+
+        // Far-field area-emitter irradiance approximation:
+        // E ~= L * A * cos(theta_emitter) / r^2.
+        const f64 geometry =
+            emitter.areaMetersSquared *
+            emitterFacing /
+            std::max(
+                distanceD * distanceD,
+                1.0e-6);
+
+        const f32 scale =
+            static_cast<f32>(
+                geometry) *
+            transport;
+
+        const math::Float3 energy{
+            std::max(
+                emitter.averageRadiance.x,
+                0.0F) *
+                scale,
+            std::max(
+                emitter.averageRadiance.y,
+                0.0F) *
+                scale,
+            std::max(
+                emitter.averageRadiance.z,
+                0.0F) *
+                scale
         };
 
         AddDirectionalLobe(
