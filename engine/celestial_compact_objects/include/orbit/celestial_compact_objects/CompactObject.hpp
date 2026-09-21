@@ -72,6 +72,8 @@ struct CompactObjectPresentation
     CompactObjectScales scales{};
     f64 shadowRadiusMeters{0.0};
     f64 photonRingRadiusMeters{0.0};
+    f64 photonRingIntensity{1.0};
+    f64 lensingStrength{1.0};
 };
 
 struct AccretionSample
