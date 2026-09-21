@@ -274,12 +274,58 @@ void RegisterCelestialCapabilitySchemas(
     RegisterCapability(
         schemas, kRingBandType,
         "Ring Band", "Physical Band");
-    RegisterCapability(
-        schemas, kRadiativeEmitterCapabilityType,
-        "Radiative Emitter", "Blackbody");
-    RegisterCapability(
-        schemas, kPhotosphereCapabilityType,
-        "Photosphere", "Procedural");
+    schemas.RegisterType({
+        .id = kRadiativeEmitterCapabilityType,
+        .displayName = "Radiative Emitter",
+        .category = "Celestial/Capability",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Blackbody"),
+            {.id = kEmitterLuminosityWatts,
+             .name = "Bolometric Luminosity",
+             .kind = schema::PropertyKind::Float,
+             .unit = "W",
+             .defaultValue = 3.828e26,
+             .range = {.minimum = 0.0}},
+            {.id = kEmitterEffectiveTemperatureKelvin,
+             .name = "Effective Temperature",
+             .kind = schema::PropertyKind::Float,
+             .unit = "K",
+             .defaultValue = 5772.0,
+             .range = {.minimum = 0.000001}},
+            {.id = kEmitterEmissivity,
+             .name = "Emissivity",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 1.0,
+             .range = {.minimum = 0.0, .maximum = 1.0}},
+            {.id = kEmitterDeriveLuminosity,
+             .name = "Derive Luminosity From Photosphere",
+             .kind = schema::PropertyKind::Boolean,
+             .defaultValue = true}
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kPhotosphereCapabilityType,
+        .displayName = "Photosphere",
+        .category = "Celestial/Capability",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Blackbody"),
+            {.id = kPhotosphereRadiusMeters,
+             .name = "Photosphere Radius",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 6.957e8,
+             .range = {.minimum = 0.000001}},
+            {.id = kPhotosphereTemperatureKelvin,
+             .name = "Effective Temperature",
+             .kind = schema::PropertyKind::Float,
+             .unit = "K",
+             .defaultValue = 5772.0,
+             .range = {.minimum = 0.000001}}
+        }
+    });
     RegisterCapability(
         schemas, kMagnetosphereCapabilityType,
         "Magnetosphere / Aurora", "Parameterized");
