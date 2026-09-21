@@ -63,4 +63,19 @@ EvaluateMaterialEmission(
         }
     };
 }
+
+void ApplyMaterialEmission(
+    SurfaceData& surface,
+    const PhysicalMaterialEmission& emission,
+    const f32 photopicLuminousEfficacy) noexcept
+{
+    const auto evaluated =
+        EvaluateMaterialEmission(
+            emission,
+            photopicLuminousEfficacy);
+
+    surface.emissionRadianceSceneLinear =
+        evaluated.visibleRadiance;
+}
+
 } // namespace orbit::lighting
