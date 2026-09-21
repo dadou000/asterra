@@ -66,6 +66,21 @@ int main()
         return 1;
     }
 
+    const auto& rootNode =
+        hierarchy.nodes[
+            hierarchy.root];
+
+    if (rootNode.integratedRadianceArea.x <= 0.0F ||
+        rootNode.integratedRadianceArea.z <= 0.0F ||
+        rootNode.peakLuminance <= 0.0 ||
+        rootNode.energyWeightedUv.x <= 0.0 ||
+        rootNode.energyWeightedUv.x >= 1.0 ||
+        rootNode.energyWeightedUv.y <= 0.0 ||
+        rootNode.energyWeightedUv.y >= 1.0)
+    {
+        return 5;
+    }
+
     LightingView view;
     view.frame = frame;
     view.body = body;
