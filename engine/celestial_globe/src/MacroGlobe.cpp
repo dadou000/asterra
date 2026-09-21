@@ -819,24 +819,57 @@ SurfaceOutputs main(VSOutput input)
     const float ndl = saturate(dot(n, l));
 
     const float roughness = saturate(input.material.x);
-    const float ocean = saturate(input.material.y);
+    const float oceanMask = saturate(input.material.y);
     const float ice = saturate(input.material.z);
+    const float cloudTransmission = saturate(input.material.w);
 
-    const float diffuse =
-        (0.045 + 0.955 * ndl) *
-        input.lightScale;
+    const float3 v = normalize(input.viewDirection);
+    const float3 h = normalize(l + v);
+    const float ndv = saturate(dot(n, v));
+    const float ndh = saturate(dot(n, h));
+    const float vdh = saturate(dot(v, h));
 
-    const float grazing =
-        pow(1.0 - saturate(ndl), 5.0);
+    const float eta = max(g_pc.ocean.x, 1.0);
+    const float f0 =
+        pow((eta - 1.0) / (eta + 1.0), 2.0);
+    const float oceanRoughness =
+        clamp(g_pc.ocean.y, 0.01, 1.0);
+    const float alpha =
+        max(oceanRoughness * oceanRoughness, 0.0001);
+    const float a2 = alpha * alpha;
+    const float denom =
+        ndh * ndh * (a2 - 1.0) + 1.0;
+    const float D =
+        a2 / max(3.14159265 * denom * denom, 1e-6);
+    const float k =
+        (oceanRoughness + 1.0) *
+        (oceanRoughness + 1.0) / 8.0;
+    const float Gl =
+        ndl / max(ndl * (1.0 - k) + k, 1e-5);
+    const float Gv =
+        ndv / max(ndv * (1.0 - k) + k, 1e-5);
+    const float F =
+        f0 + (1.0 - f0) *
+        pow(1.0 - vdh, 5.0);
 
-    const float specularStrength =
-        lerp(0.08, 0.55, ocean) *
-        (1.0 - roughness * 0.75);
+    const float glint =
+        saturate(g_pc.ocean.w) *
+        oceanMask *
+        (1.0 - ice) *
+        max(g_pc.ocean.z, 0.0) *
+        D * Gl * Gv * F /
+        max(4.0 * ndl * ndv, 1e-5);
 
     const float3 color =
-        input.albedo * diffuse +
-        specularStrength * grazing *
-            float3(0.45, 0.58, 0.68) +
+        input.albedo *
+            (0.045 * input.lightScale +
+             0.955 * ndl *
+                 input.lightScale *
+                 cloudTransmission) +
+        glint *
+            input.lightScale *
+            cloudTransmission *
+            float3(1.0, 0.98, 0.94) +
         ice * 0.03 +
         input.emission;
 
