@@ -241,5 +241,48 @@ int main()
         return 15;
     }
 
+    if (std::abs(
+            midpoint.productionSurfaceWeight +
+            midpoint.macroGlobeWeight -
+            1.0) >
+        1.0e-12)
+    {
+        return 16;
+    }
+
+    ResolveInput missingMacro = transitionInput;
+    missingMacro.features.macroDisplacementAvailable =
+        false;
+
+    const auto noMacroDecision =
+        Resolve(missingMacro);
+    const auto noMacro =
+        ResolveSurfaceGlobeTransition(
+            missingMacro,
+            noMacroDecision);
+
+    if (noMacro.productionSurfaceWeight != 1.0 ||
+        noMacro.macroGlobeWeight != 0.0)
+    {
+        return 17;
+    }
+
+    ResolveInput missingSurface = transitionInput;
+    missingSurface.features.productionSurfaceAvailable =
+        false;
+
+    const auto noSurfaceDecision =
+        Resolve(missingSurface);
+    const auto noSurface =
+        ResolveSurfaceGlobeTransition(
+            missingSurface,
+            noSurfaceDecision);
+
+    if (noSurface.productionSurfaceWeight != 0.0 ||
+        noSurface.macroGlobeWeight != 1.0)
+    {
+        return 18;
+    }
+
     return 0;
 }
