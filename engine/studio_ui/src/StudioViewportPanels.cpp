@@ -520,6 +520,151 @@ void StudioViewportPanels::DrawView(
             lighting::SurfaceDebugMode::EmissionMetadata);
     }
 
+    context.Separator();
+    context.Text("Lighting");
+
+    const auto createLocalLight =
+        [this, renderView, target](
+            const bool spot)
+        {
+            if (!session_->World().HasWorld() ||
+                !target->target.has_value())
+            {
+                throw std::runtime_error(
+                    "A targeted world/body viewport is required to add a local light.");
+            }
+
+            auto& world =
+                session_->World();
+
+            const auto bodyObject =
+                world.Universe().
+                    ObjectForBody(
+                        target->target->body);
+
+            if (!bodyObject.has_value())
+            {
+                throw std::runtime_error(
+                    "Target body has no semantic object for local-light parenting.");
+            }
+
+            auto& commands =
+                world.Commands();
+
+            commands.BeginTransaction(
+                spot
+                    ? "Add Spot Light"
+                    : "Add Point Light");
+
+            scene::ObjectId created{};
+
+            try
+            {
+                created =
+                    commands.CreateObject(
+                        spot
+                            ? world_model::
+                                kSpotLightType
+                            : world_model::
+                                kPointLightType,
+                        spot
+                            ? "Spot Light"
+                            : "Point Light",
+                        *bodyObject);
+
+                const auto& camera =
+                    renderView->Camera();
+
+                const math::Double3 position{
+                    camera.localPositionMeters.x +
+                        static_cast<f64>(
+                            camera.forward.x) *
+                            5.0,
+                    camera.localPositionMeters.y +
+                        static_cast<f64>(
+                            camera.forward.y) *
+                            5.0,
+                    camera.localPositionMeters.z +
+                        static_cast<f64>(
+                            camera.forward.z) *
+                            5.0
+                };
+
+                commands.SetProperty(
+                    created,
+                    world_model::
+                        kLightPositionMeters,
+                    position);
+
+                if (spot)
+                {
+                    commands.SetProperty(
+                        created,
+                        world_model::
+                            kLightDirection,
+                        math::Double3{
+                            camera.forward.x,
+                            camera.forward.y,
+                            camera.forward.z
+                        });
+                }
+
+                commands.CommitTransaction();
+            }
+            catch (...)
+            {
+                if (commands.HasActiveTransaction())
+                {
+                    commands.RollbackTransaction();
+                }
+                throw;
+            }
+
+            const std::array selected{
+                created
+            };
+
+            world.Selection().Set(
+                std::span(selected));
+        };
+
+    const std::string addPointLight =
+        "Add Point Light##lighting-add-point:" +
+        std::string(id);
+    const std::string addSpotLight =
+        "Add Spot Light##lighting-add-spot:" +
+        std::string(id);
+
+    if (context.Button(addPointLight))
+    {
+        try
+        {
+            createLocalLight(false);
+            status_ =
+                "Point light created and selected.";
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+        }
+    }
+
+    context.SameLine();
+
+    if (context.Button(addSpotLight))
+    {
+        try
+        {
+            createLocalLight(true);
+            status_ =
+                "Spot light created and selected.";
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+        }
+    }
+
     if (target->mode !=
         studio_session::ViewportMode::Debug)
     {
