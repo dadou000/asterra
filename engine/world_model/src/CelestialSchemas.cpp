@@ -559,12 +559,75 @@ void RegisterCelestialCapabilitySchemas(
              .defaultValue = true}
         }
     });
-    RegisterCapability(
-        schemas, kRingSystemCapabilityType,
-        "Ring System", "Particle Distribution");
-    RegisterCapability(
-        schemas, kRingBandType,
-        "Ring Band", "Physical Band");
+    schemas.RegisterType({
+        .id = kRingSystemCapabilityType,
+        .displayName = "Ring System",
+        .category = "Celestial/Capability",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Particle Distribution"),
+            {.id = kRingPlaneNormalBody,
+             .name = "Ring Plane Normal",
+             .kind = schema::PropertyKind::Vector3,
+             .defaultValue = math::Double3{0.0, 1.0, 0.0}},
+            {.id = kRingShadowParticipation,
+             .name = "Cast Ring Shadows",
+             .kind = schema::PropertyKind::Boolean,
+             .defaultValue = true},
+            {.id = kRingBodyShadowEnabled,
+             .name = "Receive Body Shadow",
+             .kind = schema::PropertyKind::Boolean,
+             .defaultValue = true}
+        }
+    });
+    schemas.RegisterType({
+        .id = kRingBandType,
+        .displayName = "Ring Band",
+        .category = "Celestial/Ring",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Physical Band"),
+            {.id = kRingBandInnerRadiusMeters,
+             .name = "Inner Radius",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 8.0e7,
+             .range = {.minimum = 0.0}},
+            {.id = kRingBandOuterRadiusMeters,
+             .name = "Outer Radius",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 1.4e8,
+             .range = {.minimum = 0.000001}},
+            {.id = kRingBandOpticalDepth,
+             .name = "Normal Optical Depth",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 0.7,
+             .range = {.minimum = 0.0}},
+            {.id = kRingBandSingleScatteringAlbedo,
+             .name = "Single Scattering Albedo",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 0.65,
+             .range = {.minimum = 0.0, .maximum = 1.0}},
+            {.id = kRingBandAnisotropy,
+             .name = "Phase Anisotropy",
+             .kind = schema::PropertyKind::Float,
+             .defaultValue = 0.35,
+             .range = {.minimum = -0.999, .maximum = 0.999},
+             .advanced = true},
+            {.id = kRingBandColorLinear,
+             .name = "Ring Color",
+             .kind = schema::PropertyKind::Vector3,
+             .defaultValue = math::Double3{0.72, 0.66, 0.56}},
+            {.id = kRingBandThicknessMeters,
+             .name = "Physical Thickness",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 100.0,
+             .range = {.minimum = 0.0},
+             .advanced = true}
+        }
+    });
     schemas.RegisterType({
         .id = kRadiativeEmitterCapabilityType,
         .displayName = "Radiative Emitter",
