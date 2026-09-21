@@ -404,6 +404,102 @@ float StellarSurfaceModulation(float3 n)
     return max(granular * activityModulation, 0.0);
 }
 
+float3 GiantSurfaceColor(float3 n)
+{
+    const float frequency = max(g.material.x, 1.0);
+    const float bandStrength = saturate(g.material.y);
+    const uint seed = asuint(g.material.w);
+    const float zonalShear = max(g.albedoAndRoughness.w, 0.0);
+    const float stormStrength = saturate(g.proxy.z);
+    const float stormScale = max(g.proxy.w, 0.25);
+    const float polarStrength = saturate(g.ocean.w);
+    const float depthContrast = saturate(g.forward.w);
+    const float turbulenceStrength = saturate(g.up.w);
+
+    const float latitude = asin(clamp(n.y, -1.0, 1.0));
+    const float longitude = atan2(n.z, n.x);
+
+    const float broad =
+        StellarFractal(n, 3.2, seed ^ 0x42524f41u) - 0.5;
+    const float fine =
+        StellarFractal(
+            n,
+            max(frequency * 1.7, 4.0),
+            seed ^ 0x54555242u) - 0.5;
+
+    const float shear =
+        zonalShear *
+        (0.55 * broad + 0.45 * fine) *
+        cos(latitude);
+
+    const float wave =
+        sin(
+            latitude * frequency * 3.14159265 +
+            longitude * 0.18 +
+            shear * 4.0);
+
+    const float narrow =
+        sin(
+            latitude * frequency * 2.07 * 3.14159265 -
+            longitude * 0.11 +
+            fine * 1.7);
+
+    float band =
+        saturate(
+            0.5 +
+            (0.5 + 0.5 * (0.72 * wave + 0.28 * narrow) - 0.5) *
+            (0.35 + 1.3 * bandStrength));
+
+    float3 color =
+        lerp(
+            g.albedoAndRoughness.xyz,
+            g.emissionAndOpacity.xyz,
+            band);
+
+    const float depth =
+        1.0 +
+        depthContrast *
+        (0.65 * broad + 0.35 * fine) *
+        0.55;
+    color *= max(depth, 0.2);
+
+    const float stormNoise =
+        StellarFractal(
+            n,
+            stormScale,
+            seed ^ 0x53544f52u);
+
+    const float stormMask =
+        smoothstep(
+            0.82 - 0.18 * stormStrength,
+            0.985,
+            stormNoise);
+
+    color *=
+        1.0 +
+        stormMask *
+        stormStrength *
+        (0.22 + 0.18 * sin(longitude * 5.0));
+
+    color *=
+        1.0 +
+        fine *
+        turbulenceStrength *
+        0.20;
+
+    const float polar =
+        pow(abs(n.y), 2.7) *
+        polarStrength;
+
+    color =
+        lerp(
+            color,
+            g.ocean.xyz,
+            saturate(polar));
+
+    return max(color, 0.0);
+}
+
 float4 main(VSOutput input) : SV_Target0
 {
     const uint mode = (uint)round(g.proxy.x);
@@ -421,7 +517,13 @@ float4 main(VSOutput input) : SV_Target0
         const float r =
             sqrt(max(r2, 0.0));
         const float stellar =
-            saturate(g.material.z);
+            abs(g.material.z - 1.0) < 0.25
+                ? 1.0
+                : 0.0;
+        const float giant =
+            g.material.z > 1.5
+                ? 1.0
+                : 0.0;
         const float radiometricIntensity =
             max(g.proxy.w, 0.0);
 
@@ -561,8 +663,13 @@ float4 main(VSOutput input) : SV_Target0
                 g.ocean.x,
                 g.ocean.z);
 
+        const float3 surfaceColor =
+            giant > 0.5
+                ? GiantSurfaceColor(n)
+                : g.albedoAndRoughness.xyz;
+
         const float3 color =
-            g.albedoAndRoughness.xyz *
+            surfaceColor *
                 (0.05 +
                  0.95 * ndl *
                  cloudTransmission) *
@@ -572,7 +679,9 @@ float4 main(VSOutput input) : SV_Target0
                 cloudTransmission *
                 float3(1.0, 0.98, 0.94) +
             ice * 0.025 +
-            g.emissionAndOpacity.xyz;
+            (giant > 0.5
+                ? float3(0.0, 0.0, 0.0)
+                : g.emissionAndOpacity.xyz);
 
         return float4(
             color,
@@ -750,8 +859,17 @@ float4 main(VSOutput input) : SV_Target0
             g.ocean.x,
             g.ocean.z);
 
+    const float giant =
+        g.material.z > 1.5
+            ? 1.0
+            : 0.0;
+    const float3 surfaceColor =
+        giant > 0.5
+            ? GiantSurfaceColor(n)
+            : g.albedoAndRoughness.xyz;
+
     float3 color =
-        g.albedoAndRoughness.xyz *
+        surfaceColor *
             (0.045 +
              0.955 * ndl *
              cloudTransmission) *
@@ -761,9 +879,11 @@ float4 main(VSOutput input) : SV_Target0
             cloudTransmission *
             float3(1.0, 0.98, 0.94) +
         ice * 0.025 +
-        g.emissionAndOpacity.xyz;
+        (giant > 0.5
+            ? float3(0.0, 0.0, 0.0)
+            : g.emissionAndOpacity.xyz);
 
-    if (g.material.z > 0.5)
+    if (abs(g.material.z - 1.0) < 0.25)
     {
         const float radiometricIntensity =
             max(g.proxy.w, 0.0);
@@ -1480,6 +1600,7 @@ void FarBodyRenderer::Draw(
                 Representation::
                     CachedDiscImpostor &&
         cachedDisc != nullptr &&
+        !draw.giantEnabled &&
         !(draw.oceanEnabled &&
           draw.appearance.oceanFraction > 0.0F &&
           draw.incidentLightScale > 0.0F))
@@ -1836,28 +1957,40 @@ void FarBodyRenderer::DrawSurfaceData(
         bits(draw.camera.forward.x),
         bits(draw.camera.forward.y),
         bits(draw.camera.forward.z),
-        0U,
+        bits(draw.giantEnabled
+            ? std::clamp(draw.giantDepthContrast, 0.0F, 1.0F)
+            : 0.0F),
 
         bits(draw.camera.up.x),
         bits(draw.camera.up.y),
         bits(draw.camera.up.z),
-        0U,
+        bits(draw.giantEnabled
+            ? std::clamp(draw.giantTurbulenceStrength, 0.0F, 1.0F)
+            : 0.0F),
 
         bits(draw.stellar
             ? draw.stellarColorLinear.x
-            : draw.appearance.albedoLinear.x),
+            : draw.giantEnabled
+                ? draw.giantBaseColorLinear.x
+                : draw.appearance.albedoLinear.x),
         bits(draw.stellar
             ? draw.stellarColorLinear.y
-            : draw.appearance.albedoLinear.y),
+            : draw.giantEnabled
+                ? draw.giantBaseColorLinear.y
+                : draw.appearance.albedoLinear.y),
         bits(draw.stellar
             ? draw.stellarColorLinear.z
-            : draw.appearance.albedoLinear.z),
+            : draw.giantEnabled
+                ? draw.giantBaseColorLinear.z
+                : draw.appearance.albedoLinear.z),
         bits(draw.stellar
             ? std::clamp(
                   draw.stellarLimbDarkening,
                   0.0F,
                   1.0F)
-            : draw.appearance.roughness),
+            : draw.giantEnabled
+                ? std::max(draw.giantZonalShear, 0.0F)
+                : draw.appearance.roughness),
 
         bits(draw.appearance.oceanFraction),
         bits(draw.appearance.iceFraction),
