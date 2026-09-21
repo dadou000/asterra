@@ -53,6 +53,8 @@ struct CanvasInteraction
     bool doubleClicked{false};
     bool rightClicked{false};
     bool dragging{false};
+    bool leftDown{false};
+    bool leftReleased{false};
     f32 u{0.0F};
     f32 v{0.0F};
 };
