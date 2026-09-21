@@ -59,6 +59,8 @@
 #include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
+#include <orbit/world_model/MaterialAssignmentBinding.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
 #include <array>
@@ -5510,6 +5512,7 @@ int main(
                  &materialEmissionEditAsset,
                  &materialEmissionEdit,
                  &materialEmissionStatus,
+                 &studioSession,
                  &window](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -5896,6 +5899,145 @@ int main(
                                     materialEmissionStatus =
                                         exception.what();
                                 }
+                            }
+
+                            const auto& selection =
+                                studioSession.World().
+                                    Selection().
+                                    Ordered();
+
+                            if (selection.size() == 1U)
+                            {
+                                if (context.Button(
+                                        "Assign to Selected Object##m15-assign-runtime"))
+                                {
+                                    try
+                                    {
+                                        auto& world =
+                                            studioSession.World();
+                                        auto& commands =
+                                            world.Commands();
+                                        const auto owner =
+                                            selection.front();
+
+                                        std::optional<
+                                            orbit::scene::ObjectId>
+                                            existing;
+
+                                        for (const auto& child :
+                                             world.Objects().
+                                                 Children(owner))
+                                        {
+                                            if (child.type !=
+                                                orbit::world_model::
+                                                    kMaterialAssignmentType)
+                                            {
+                                                continue;
+                                            }
+
+                                            std::string slot =
+                                                "default";
+
+                                            const auto slotValue =
+                                                world.Objects().
+                                                    GetProperty(
+                                                        child.id,
+                                                        orbit::world_model::
+                                                            kMaterialAssignmentSlot);
+
+                                            if (slotValue.has_value())
+                                            {
+                                                if (const auto* text =
+                                                        std::get_if<std::string>(
+                                                            &*slotValue))
+                                                {
+                                                    slot =
+                                                        text->empty()
+                                                            ? "default"
+                                                            : *text;
+                                                }
+                                            }
+
+                                            if (slot == "default")
+                                            {
+                                                existing =
+                                                    child.id;
+                                                break;
+                                            }
+                                        }
+
+                                        commands.BeginTransaction(
+                                            "Assign Material");
+
+                                        orbit::scene::ObjectId
+                                            assignment{};
+
+                                        if (existing.has_value())
+                                        {
+                                            assignment =
+                                                *existing;
+                                        }
+                                        else
+                                        {
+                                            assignment =
+                                                commands.CreateObject(
+                                                    orbit::world_model::
+                                                        kMaterialAssignmentType,
+                                                    "Material Assignment",
+                                                    owner);
+
+                                            commands.SetProperty(
+                                                assignment,
+                                                orbit::world_model::
+                                                    kMaterialAssignmentSlot,
+                                                std::string{
+                                                    "default"});
+                                        }
+
+                                        commands.SetProperty(
+                                            assignment,
+                                            orbit::world_model::
+                                                kMaterialAssignmentAsset,
+                                            selectedAsset->id.
+                                                ToString());
+
+                                        commands.SetProperty(
+                                            assignment,
+                                            orbit::world_model::
+                                                kMaterialAssignmentEnabled,
+                                            true);
+
+                                        commands.CommitTransaction();
+
+                                        materialEmissionStatus =
+                                            std::format(
+                                                "Assigned '{}' to selected object.",
+                                                selectedAsset->name);
+                                    }
+                                    catch (const std::exception&
+                                               exception)
+                                    {
+                                        if (studioSession.World().
+                                                Commands().
+                                                HasActiveTransaction())
+                                        {
+                                            studioSession.World().
+                                                Commands().
+                                                RollbackTransaction();
+                                        }
+
+                                        materialEmissionStatus =
+                                            exception.what();
+                                    }
+                                }
+
+                                context.MutedText(
+                                    "Assignment is persistent/undoable and resolves Material Instance emission at runtime.");
+                            }
+                            else
+                            {
+                                context.MutedText(
+                                    "Select exactly one world object to assign this material.");
                             }
 
                             if (!materialEmissionStatus.empty())
