@@ -67,6 +67,19 @@ struct StudioAtmosphereDiagnostics
     u32 skyViewHeight{0};
 };
 
+struct StudioStellarDiagnostics
+{
+    universe::BodyId body{};
+    u64 appearanceFingerprint{0};
+    f64 effectiveTemperatureKelvin{0.0};
+    math::Float3 colorLinear{1.0F, 1.0F, 1.0F};
+    f64 projectedRadiusPixels{0.0};
+    celestial_representation::Representation representation{
+        celestial_representation::Representation::SmoothGlobe};
+    f32 resolvedSceneIntensity{0.0F};
+    f32 pointSceneIntensity{0.0F};
+};
+
 struct StudioRingDiagnostics
 {
     universe::BodyId body{};
@@ -220,6 +233,11 @@ public:
     RingDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioStellarDiagnostics>
+    StellarDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -364,6 +382,12 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioStellarDiagnostics,
+        std::less<>>
+        stellarDiagnostics_;
 
     std::map<
         std::string,
