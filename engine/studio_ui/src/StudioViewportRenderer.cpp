@@ -2944,14 +2944,17 @@ StudioViewportRenderer::Compose(
                                     height,
                                     far,
                                     nullptr);
-                                farBodyRenderer_.DrawSurfaceData(
-                                    commands,
-                                    *bodySurfaceBaseRoughness,
-                                    *bodySurfaceNormalMetallic,
-                                    *bodySurfaceEmissionClass,
-                                    width,
-                                    height,
-                                    far);
+                                if (opacity >= 0.5F)
+                                {
+                                    farBodyRenderer_.DrawSurfaceData(
+                                        commands,
+                                        *bodySurfaceBaseRoughness,
+                                        *bodySurfaceNormalMetallic,
+                                        *bodySurfaceEmissionClass,
+                                        width,
+                                        height,
+                                        far);
+                                }
                             };
 
                         draw(
