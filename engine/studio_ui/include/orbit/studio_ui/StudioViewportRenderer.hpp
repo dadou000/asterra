@@ -351,6 +351,18 @@ public:
     LuminanceMeteringMask(
         std::string_view viewportId) noexcept;
 
+    void SetLuminanceHistogramConfig(
+        std::string_view viewportId,
+        post_process::LuminanceHistogramConfig config);
+
+    void SetLuminanceMeteringOverlay(
+        std::string_view viewportId,
+        bool enabled);
+
+    [[nodiscard]] bool
+    LuminanceMeteringOverlay(
+        std::string_view viewportId) const noexcept;
+
     [[nodiscard]] std::optional<
         StudioEmissiveGiDiagnostics>
     EmissiveGiDiagnostics(
@@ -582,6 +594,7 @@ private:
             statisticsReadback;
         std::vector<bool> submitted;
         StudioLuminanceHistogramDiagnostics diagnostics{};
+        bool showMeteringOverlay{false};
     };
 
     struct FinalGatherPresentation
