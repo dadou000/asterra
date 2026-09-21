@@ -2,6 +2,7 @@
 
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/lighting/LightingView.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/rhi/Device.hpp>
@@ -86,6 +87,9 @@ public:
     [[nodiscard]] lighting::SurfaceDebugMode
     SurfaceDebugMode() const noexcept;
 
+    [[nodiscard]] lighting::LightingView& Lighting() noexcept;
+    [[nodiscard]] const lighting::LightingView& Lighting() const noexcept;
+
     [[nodiscard]] rhi::Texture& Color() noexcept;
     [[nodiscard]] rhi::Texture& SurfaceBaseRoughness() noexcept;
     [[nodiscard]] rhi::Texture& SurfaceNormalMetallic() noexcept;
@@ -110,6 +114,7 @@ private:
     CameraState camera_{};
     lighting::SurfaceDebugMode surfaceDebugMode_{
         lighting::SurfaceDebugMode::Lit};
+    lighting::LightingView lightingView_{};
     std::unique_ptr<rhi::Texture> color_;
     std::unique_ptr<rhi::Texture> surfaceBaseRoughness_;
     std::unique_ptr<rhi::Texture> surfaceNormalMetallic_;
