@@ -4189,7 +4189,31 @@ StudioViewportRenderer::Compose(
                         session,
                         terrainRuntime->body,
                         *shape,
-                        *macroGlobeSurface->terrain);
+                        *macroGlobeSurface->terrain,
+                        [&](const u64 revision)
+                        {
+                            return acquireCelestialGrant(
+                                info.id,
+                                terrainRuntime->body,
+                                celestial_scheduler::
+                                    WorkKind::FarImpostor,
+                                revision,
+                                celestial_scheduler::
+                                    WorkBackend::Gpu,
+                                5U,
+                                75,
+                                true);
+                        },
+                        [&](const u64 revision)
+                        {
+                            static_cast<void>(
+                                completeCelestialGrant(
+                                    info.id,
+                                    terrainRuntime->body,
+                                    celestial_scheduler::
+                                        WorkKind::FarImpostor,
+                                    revision));
+                        });
 
                 auto* farPresentation =
                     &macroGlobePresentations_[
@@ -4233,6 +4257,11 @@ StudioViewportRenderer::Compose(
                                 Representation::
                                     MacroDisplacedGlobe)
                         {
+                            if (transitionGlobe == nullptr)
+                            {
+                                return;
+                            }
+
                             const auto macroLighting =
                                 celestial_globe::MacroGlobeLighting{
                                     .directionBody =
@@ -4632,7 +4661,31 @@ StudioViewportRenderer::Compose(
                     session,
                     logicalTarget->target->body,
                     *shape,
-                    *macroGlobeSurface->terrain);
+                    *macroGlobeSurface->terrain,
+                    [&](const u64 revision)
+                    {
+                        return acquireCelestialGrant(
+                            info.id,
+                            logicalTarget->target->body,
+                            celestial_scheduler::
+                                WorkKind::FarImpostor,
+                            revision,
+                            celestial_scheduler::
+                                WorkBackend::Gpu,
+                            5U,
+                            75,
+                            true);
+                    },
+                    [&](const u64 revision)
+                    {
+                        static_cast<void>(
+                            completeCelestialGrant(
+                                info.id,
+                                logicalTarget->target->body,
+                                celestial_scheduler::
+                                    WorkKind::FarImpostor,
+                                revision));
+                    });
 
             const auto camera =
                 view->Camera();
@@ -4702,6 +4755,11 @@ StudioViewportRenderer::Compose(
                     commands.ClearColorTarget(
                         *macroSurfaceEmissionClass,
                         {0.0F, 0.0F, 0.0F, 0.0F});
+
+                    if (globe == nullptr)
+                    {
+                        return;
+                    }
 
                     macroGlobeRenderer_.DrawSurface(
                         commands,
