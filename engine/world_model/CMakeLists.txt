@@ -122,4 +122,24 @@ if(BUILD_TESTING)
         NAME Orbit.PhysicalPropertySolver
         COMMAND OrbitPhysicalPropertySolverTests
     )
+
+    add_executable(OrbitReferenceNodeCompositionTests
+        tests/ReferenceNodeCompositionTests.cpp
+    )
+
+    target_link_libraries(OrbitReferenceNodeCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitReferenceNodeCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitReferenceNodeCompositionTests)
+
+    add_test(
+        NAME Orbit.ReferenceNodeComposition
+        COMMAND OrbitReferenceNodeCompositionTests
+    )
 endif()
