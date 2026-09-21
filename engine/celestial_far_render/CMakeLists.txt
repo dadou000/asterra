@@ -22,7 +22,7 @@ target_link_libraries(
         Orbit::Core
         Orbit::Math
         Orbit::RenderView
-        Orbit::Rhi
+        Orbit::RHI
         Orbit::Shader
         Orbit::Terrain
         Orbit::Universe
