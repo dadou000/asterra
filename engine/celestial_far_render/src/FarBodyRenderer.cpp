@@ -1409,11 +1409,367 @@ float EncodeSurfaceMeta(float surfaceClass, float representation)
     return surfaceClass + representation / 16.0;
 }
 
+uint SmallBodySurfaceHash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float SmallBodySurfaceHash01(uint value)
+{
+    return
+        (float)(SmallBodySurfaceHash(value) & 0x00ffffffu) /
+        16777215.0;
+}
+
+float SmallBodySurfaceNoise(
+    float3 p,
+    float scale,
+    uint seed)
+{
+    int3 q =
+        (int3)floor(
+            p *
+            max(scale, 1.0) *
+            4096.0);
+
+    uint h =
+        SmallBodySurfaceHash(
+            seed ^ asuint(q.x));
+    h =
+        SmallBodySurfaceHash(
+            h ^ asuint(q.y));
+    h =
+        SmallBodySurfaceHash(
+            h ^ asuint(q.z));
+
+    return
+        (float)(h & 0x00ffffffu) /
+        16777215.0;
+}
+
+float SmallBodySurfaceFractal(
+    float3 p,
+    float scale,
+    uint seed)
+{
+    float sum = 0.0;
+    float weight = 0.0;
+    float amplitude = 1.0;
+    float frequency = scale;
+
+    [unroll]
+    for (uint octave = 0u; octave < 4u; ++octave)
+    {
+        sum +=
+            SmallBodySurfaceNoise(
+                p,
+                frequency,
+                seed + octave * 0x9e3779b9u) *
+            amplitude;
+        weight += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.07;
+    }
+
+    return sum / max(weight, 1e-6);
+}
+
+float2 SmallBodySurfaceUnpack01(uint packed)
+{
+    return float2(
+        (float)(packed & 0xffffu) / 65535.0,
+        (float)((packed >> 16u) & 0xffffu) / 65535.0);
+}
+
+float SmallBodySurfaceCraterRelief(float3 d)
+{
+    const float density = saturate(g.ocean.z);
+    const float2 craterShape =
+        SmallBodySurfaceUnpack01(
+            asuint(g.forward.w));
+    const float craterDepth =
+        craterShape.x * 0.5;
+    const float craterRimStrength =
+        craterShape.y * 0.5;
+    const uint seed =
+        asuint(g.material.w);
+    const uint count =
+        2u + (uint)round(density * 10.0);
+
+    float relief = 0.0;
+
+    [unroll]
+    for (uint i = 0u; i < 12u; ++i)
+    {
+        if (i >= count)
+            continue;
+
+        const float z =
+            SmallBodySurfaceHash01(
+                seed + i * 41u + 7u) *
+            2.0 - 1.0;
+        const float azimuth =
+            SmallBodySurfaceHash01(
+                seed + i * 73u + 19u) *
+            6.28318530718;
+        const float radial =
+            sqrt(max(1.0 - z * z, 0.0));
+        const float3 center =
+            float3(
+                radial * cos(azimuth),
+                z,
+                radial * sin(azimuth));
+
+        const float angle =
+            acos(
+                clamp(
+                    dot(d, center),
+                    -1.0,
+                    1.0));
+        const float radius =
+            0.035 +
+            0.11 *
+            SmallBodySurfaceHash01(
+                seed + i * 137u + 29u);
+        const float q =
+            angle /
+            max(radius, 1e-5);
+
+        const float bowl =
+            q < 1.0
+                ? -(1.0 - q * q)
+                : 0.0;
+        const float rim =
+            smoothstep(1.35, 1.0, q) -
+            smoothstep(1.0, 0.86, q);
+
+        relief +=
+            bowl * craterDepth +
+            rim * craterRimStrength;
+    }
+
+    return relief;
+}
+
+float SmallBodySurfaceRadiusScale(
+    float3 direction)
+{
+    const float3 d =
+        normalize(direction);
+    const float3 axes =
+        max(
+            float3(
+                g.material.x,
+                g.material.y,
+                g.proxy.z),
+            float3(0.05, 0.05, 0.05));
+
+    const float ellipsoid =
+        rsqrt(
+            dot(
+                d * d,
+                1.0 / (axes * axes)));
+
+    const uint seed =
+        asuint(g.material.w);
+    const float irregularity =
+        saturate(g.ocean.x);
+    const float lobeStrength =
+        saturate(g.ocean.y);
+
+    const float broad =
+        (SmallBodySurfaceFractal(
+            d,
+            2.1,
+            seed ^ 0x53484142u) -
+         0.5) *
+        2.0;
+    const float medium =
+        (SmallBodySurfaceFractal(
+            d,
+            5.7,
+            seed ^ 0x5348414du) -
+         0.5) *
+        2.0;
+    const float lobe =
+        sin(
+            atan2(d.z, d.x) * 2.0 +
+            d.y * 2.7 +
+            SmallBodySurfaceHash01(seed) * 6.0) *
+        lobeStrength;
+
+    return max(
+        0.18,
+        ellipsoid *
+        (1.0 +
+         irregularity *
+             (0.68 * broad +
+              0.32 * medium) +
+         lobe +
+         SmallBodySurfaceCraterRelief(d)));
+}
+
+float SmallBodySurfaceField(
+    float3 q)
+{
+    const float radial =
+        length(q);
+
+    if (radial <= 1e-6)
+        return -1.0;
+
+    return
+        radial -
+        SmallBodySurfaceRadiusScale(
+            q / radial);
+}
+
+float3 SmallBodySurfaceNormal(
+    float3 q,
+    float3 radii)
+{
+    const float e = 0.0025;
+    const float3 dx = float3(e, 0.0, 0.0);
+    const float3 dy = float3(0.0, e, 0.0);
+    const float3 dz = float3(0.0, 0.0, e);
+
+    const float3 gradient =
+        float3(
+            SmallBodySurfaceField(q + dx) -
+                SmallBodySurfaceField(q - dx),
+            SmallBodySurfaceField(q + dy) -
+                SmallBodySurfaceField(q - dy),
+            SmallBodySurfaceField(q + dz) -
+                SmallBodySurfaceField(q - dz));
+
+    return normalize(
+        gradient /
+        max(
+            radii,
+            float3(0.001, 0.001, 0.001)));
+}
+
+bool SmallBodySurfaceIntersect(
+    float3 ro,
+    float3 rd,
+    float3 radii,
+    out float tHit,
+    out float3 normal)
+{
+    const float3 axes =
+        max(
+            float3(
+                g.material.x,
+                g.material.y,
+                g.proxy.z),
+            float3(0.05, 0.05, 0.05));
+
+    const float bound =
+        max(
+            axes.x,
+            max(axes.y, axes.z)) *
+        (1.0 +
+         saturate(g.ocean.x) +
+         saturate(g.ocean.y) +
+         0.55);
+
+    const float a = dot(rd, rd);
+    const float b = 2.0 * dot(ro, rd);
+    const float cc =
+        dot(ro, ro) -
+        bound * bound;
+    const float discriminant =
+        b * b - 4.0 * a * cc;
+
+    if (discriminant < 0.0)
+        return false;
+
+    const float root =
+        sqrt(discriminant);
+    const float enter =
+        max(
+            (-b - root) /
+                max(2.0 * a, 1e-6),
+            0.0);
+    const float exit =
+        (-b + root) /
+        max(2.0 * a, 1e-6);
+
+    if (exit <= enter)
+        return false;
+
+    float previousT = enter;
+    float previousField =
+        SmallBodySurfaceField(
+            ro + rd * previousT);
+
+    [loop]
+    for (uint step = 1u; step <= 28u; ++step)
+    {
+        const float currentT =
+            lerp(
+                enter,
+                exit,
+                (float)step / 28.0);
+        const float currentField =
+            SmallBodySurfaceField(
+                ro + rd * currentT);
+
+        if (currentField <= 0.0 &&
+            previousField > 0.0)
+        {
+            float low = previousT;
+            float high = currentT;
+
+            [unroll]
+            for (uint refine = 0u;
+                 refine < 8u;
+                 ++refine)
+            {
+                const float mid =
+                    0.5 * (low + high);
+                const float midField =
+                    SmallBodySurfaceField(
+                        ro + rd * mid);
+
+                if (midField > 0.0)
+                    low = mid;
+                else
+                    high = mid;
+            }
+
+            tHit = high;
+            const float3 q =
+                ro + rd * tHit;
+            normal =
+                SmallBodySurfaceNormal(
+                    q,
+                    radii);
+            return true;
+        }
+
+        previousT = currentT;
+        previousField = currentField;
+    }
+
+    return false;
+}
+
 SurfaceOutputs main(VSOutput input)
 {
     const uint mode = (uint)round(g.proxy.x);
     const float2 p = input.uv;
     float3 n = float3(0.0, 0.0, 1.0);
+
+    const float smallBody =
+        g.material.z > 2.5
+            ? 1.0
+            : 0.0;
 
     if (mode == 1u || mode >= 2u)
     {
@@ -1421,13 +1777,68 @@ SurfaceOutputs main(VSOutput input)
             max(g.proxy.y, 0.00025);
         const float2 q =
             p / radiusNdc;
-        const float r2 = dot(q, q);
-        if (r2 > 1.0)
-            discard;
+        const float r2 =
+            dot(q, q);
 
-        const float z =
-            sqrt(max(1.0 - r2, 0.0));
-        n = normalize(float3(q.x, -q.y, z));
+        if (smallBody > 0.5 &&
+            mode == 1u)
+        {
+            const float r =
+                sqrt(max(r2, 0.0));
+            const float3 edgeDirection =
+                normalize(
+                    float3(
+                        q.x,
+                        -q.y,
+                        sqrt(
+                            max(
+                                1.0 -
+                                min(r2, 1.0),
+                                0.0))));
+
+            const float radiusScale =
+                SmallBodySurfaceRadiusScale(
+                    edgeDirection);
+
+            if (r > radiusScale)
+                discard;
+
+            const float2 sq =
+                q /
+                max(radiusScale, 0.05);
+            const float sr2 =
+                dot(sq, sq);
+
+            if (sr2 > 1.0)
+                discard;
+
+            n =
+                normalize(
+                    float3(
+                        sq.x,
+                        -sq.y,
+                        sqrt(
+                            max(
+                                1.0 - sr2,
+                                0.0))));
+        }
+        else
+        {
+            if (r2 > 1.0)
+                discard;
+
+            const float z =
+                sqrt(
+                    max(
+                        1.0 - r2,
+                        0.0));
+            n =
+                normalize(
+                    float3(
+                        q.x,
+                        -q.y,
+                        z));
+        }
     }
     else
     {
@@ -1442,11 +1853,19 @@ SurfaceOutputs main(VSOutput input)
         const float3 requestedUp =
             normalize(g.up.xyz);
         const float3 right =
-            normalize(cross(forward, requestedUp));
+            normalize(
+                cross(
+                    forward,
+                    requestedUp));
         const float3 cameraUp =
-            normalize(cross(right, forward));
+            normalize(
+                cross(
+                    right,
+                    forward));
         const float tanHalf =
-            max(g.cameraAndTanHalfFov.w, 0.001);
+            max(
+                g.cameraAndTanHalfFov.w,
+                0.001);
 
         const float3 ray =
             normalize(
@@ -1458,27 +1877,58 @@ SurfaceOutputs main(VSOutput input)
                 cameraUp *
                     (p.y * tanHalf));
 
-        const float3 ro = camera / radii;
-        const float3 rd = ray / radii;
-        const float a = dot(rd, rd);
-        const float b = 2.0 * dot(ro, rd);
-        const float c = dot(ro, ro) - 1.0;
-        const float disc = b * b - 4.0 * a * c;
-        if (disc < 0.0)
-            discard;
+        const float3 ro =
+            camera / radii;
+        const float3 rd =
+            ray / radii;
 
-        const float t =
-            (-b - sqrt(disc)) / (2.0 * a);
-        if (t < 0.0)
-            discard;
+        if (smallBody > 0.5)
+        {
+            float t = 0.0;
 
-        const float3 hit =
-            camera + ray * t;
-        n =
-            normalize(float3(
-                hit.x / (radii.x * radii.x),
-                hit.y / (radii.y * radii.y),
-                hit.z / (radii.z * radii.z)));
+            if (!SmallBodySurfaceIntersect(
+                    ro,
+                    rd,
+                    radii,
+                    t,
+                    n))
+                discard;
+        }
+        else
+        {
+            const float a =
+                dot(rd, rd);
+            const float b =
+                2.0 * dot(ro, rd);
+            const float cc =
+                dot(ro, ro) - 1.0;
+            const float disc =
+                b * b -
+                4.0 * a * cc;
+
+            if (disc < 0.0)
+                discard;
+
+            const float t =
+                (-b - sqrt(disc)) /
+                (2.0 * a);
+
+            if (t < 0.0)
+                discard;
+
+            const float3 hit =
+                camera + ray * t;
+
+            n =
+                normalize(
+                    float3(
+                        hit.x /
+                            (radii.x * radii.x),
+                        hit.y /
+                            (radii.y * radii.y),
+                        hit.z /
+                            (radii.z * radii.z)));
+        }
     }
 
     SurfaceOutputs output;
@@ -1491,7 +1941,11 @@ SurfaceOutputs main(VSOutput input)
             n,
             0.0);
     float3 surfaceEmission =
-        max(g.emissionAndOpacity.xyz, 0.0);
+        smallBody > 0.5
+            ? float3(0.0, 0.0, 0.0)
+            : max(
+                  g.emissionAndOpacity.xyz,
+                  0.0);
 
     if (abs(g.material.z - 1.0) < 0.25)
     {
