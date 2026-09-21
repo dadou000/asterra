@@ -1,6 +1,7 @@
 add_library(OrbitLighting STATIC
     src/SurfaceData.cpp
     src/SurfaceDebugRenderer.cpp
+    src/LightingView.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -13,9 +14,11 @@ target_include_directories(OrbitLighting
 target_link_libraries(OrbitLighting
     PUBLIC
         Orbit::Core
+        Orbit::Frames
         Orbit::Math
         Orbit::RHI
         Orbit::Shader
+        Orbit::Universe
 )
 
 target_compile_features(OrbitLighting PUBLIC cxx_std_23)
@@ -28,6 +31,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingSurfaceBufferTests
         tests/SurfaceBufferTests.cpp
+    )
+
+    add_executable(OrbitLightingViewTests
+        tests/LightingViewTests.cpp
     )
 
     target_link_libraries(OrbitLightingSurfaceDataTests
@@ -46,6 +53,19 @@ if(BUILD_TESTING)
     target_compile_features(
         OrbitLightingSurfaceBufferTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingSurfaceBufferTests)
+
+    target_link_libraries(OrbitLightingViewTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingViewTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingViewTests)
+
+    add_test(
+        NAME Orbit.LightingView
+        COMMAND OrbitLightingViewTests
+    )
 
     add_test(
         NAME Orbit.LightingSurfaceData
