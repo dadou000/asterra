@@ -4,6 +4,7 @@
 #include <orbit/lighting/LightingView.hpp>
 #include <orbit/math/Vector.hpp>
 
+#include <array>
 #include <span>
 #include <vector>
 
@@ -30,7 +31,8 @@ struct EmissiveSurfaceGrid
 
 struct EmissiveHierarchyNode
 {
-    u32 firstChild{~0U};
+    std::array<u32, 4> children{
+        ~0U, ~0U, ~0U, ~0U};
     u32 childCount{0U};
 
     u32 texelMinX{0U};
@@ -66,6 +68,15 @@ struct EmissiveHierarchy
     u32 sourceHeight{0U};
 };
 
+struct EmissiveHierarchyBuildConfig
+{
+    // A 4K surface with the default 8x8 leaves has ~130k leaf tiles rather
+    // than one runtime object/node per pixel. Near-field color detail is
+    // preserved at tile resolution; source appearance remains full-res.
+    u32 leafTileWidth{8U};
+    u32 leafTileHeight{8U};
+};
+
 struct EmissiveHierarchySelectionConfig
 {
     // Descend while a node contributes at least this many projected pixels.
@@ -86,7 +97,8 @@ struct EmissiveSelectedNode
 
 [[nodiscard]] EmissiveHierarchy
 BuildEmissiveHierarchy(
-    const EmissiveSurfaceGrid& surface);
+    const EmissiveSurfaceGrid& surface,
+    const EmissiveHierarchyBuildConfig& config = {});
 
 [[nodiscard]] std::vector<EmissiveSelectedNode>
 SelectEmissiveHierarchy(
