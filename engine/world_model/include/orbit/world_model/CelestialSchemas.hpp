@@ -115,6 +115,29 @@ inline constexpr schema::PropertyId kPhotosphereRadiusMeters{
 inline constexpr schema::PropertyId kPhotosphereTemperatureKelvin{
     .high = 0x4f5242495450484fULL, .low = 0x54454d504b000001ULL};
 
+inline constexpr schema::PropertyId kAtmosphereTopRadiusMeters{
+    .high = 0x4f5242495441544dULL, .low = 0x544f505241440001ULL};
+inline constexpr schema::PropertyId kAtmosphereRayleighScatteringPerMeter{
+    .high = 0x4f5242495441544dULL, .low = 0x5241594c53434101ULL};
+inline constexpr schema::PropertyId kAtmosphereRayleighScaleHeightMeters{
+    .high = 0x4f5242495441544dULL, .low = 0x5241594c53434801ULL};
+inline constexpr schema::PropertyId kAtmosphereMieScatteringPerMeter{
+    .high = 0x4f5242495441544dULL, .low = 0x4d49455343415401ULL};
+inline constexpr schema::PropertyId kAtmosphereMieExtinctionPerMeter{
+    .high = 0x4f5242495441544dULL, .low = 0x4d49454558544901ULL};
+inline constexpr schema::PropertyId kAtmosphereMieScaleHeightMeters{
+    .high = 0x4f5242495441544dULL, .low = 0x4d49455343484801ULL};
+inline constexpr schema::PropertyId kAtmosphereMieAnisotropy{
+    .high = 0x4f5242495441544dULL, .low = 0x4d4945414e495301ULL};
+inline constexpr schema::PropertyId kAtmosphereAbsorptionExtinctionPerMeter{
+    .high = 0x4f5242495441544dULL, .low = 0x4142534558544901ULL};
+inline constexpr schema::PropertyId kAtmosphereAbsorptionCenterHeightMeters{
+    .high = 0x4f5242495441544dULL, .low = 0x41425343454e5401ULL};
+inline constexpr schema::PropertyId kAtmosphereAbsorptionHalfWidthMeters{
+    .high = 0x4f5242495441544dULL, .low = 0x41425348414c4601ULL};
+inline constexpr schema::PropertyId kAtmosphereGroundAlbedo{
+    .high = 0x4f5242495441544dULL, .low = 0x47524e44414c4201ULL};
+
 inline constexpr schema::PropertyId kEphemerisSourceLabel{
     .high = 0x4f52424954455048ULL, .low = 0x534f555243450001ULL};
 inline constexpr schema::PropertyId kEphemerisSampleTimeMicroseconds{
