@@ -54,6 +54,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::TerrainGpu
         Orbit::TerrainRender
         Orbit::TerrainView
+        Orbit::VolumeFields
 )
 
 target_compile_features(OrbitStudioUi PUBLIC cxx_std_23)
