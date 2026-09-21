@@ -2138,26 +2138,41 @@ StudioViewportRenderer::Compose(
                                 Representation::
                                     MacroDisplacedGlobe)
                         {
-                            macroGlobeRenderer_.DrawSurface(
-                                commands,
-                                *color,
-                                *surfaceBaseRoughness,
-                                *surfaceNormalMetallic,
-                                *surfaceEmissionClass,
-                                width,
-                                height,
-                                *transitionGlobe,
-                                globeCamera,
-                                opacity,
-                                celestial_globe::
-                                    MacroGlobeLighting{
-                                        .directionBody =
-                                            studioDirectLight.
-                                                directionBody,
-                                        .irradianceScale =
-                                            studioDirectLight.
-                                                irradianceScale
-                                    });
+                            const auto macroLighting =
+                                celestial_globe::MacroGlobeLighting{
+                                    .directionBody =
+                                        studioDirectLight.directionBody,
+                                    .irradianceScale =
+                                        studioDirectLight.irradianceScale
+                                };
+
+                            if (opacity >= 0.5F)
+                            {
+                                macroGlobeRenderer_.DrawSurface(
+                                    commands,
+                                    *color,
+                                    *surfaceBaseRoughness,
+                                    *surfaceNormalMetallic,
+                                    *surfaceEmissionClass,
+                                    width,
+                                    height,
+                                    *transitionGlobe,
+                                    globeCamera,
+                                    opacity,
+                                    macroLighting);
+                            }
+                            else
+                            {
+                                macroGlobeRenderer_.Draw(
+                                    commands,
+                                    *color,
+                                    width,
+                                    height,
+                                    *transitionGlobe,
+                                    globeCamera,
+                                    opacity,
+                                    macroLighting);
+                            }
                             return;
                         }
 
@@ -2194,14 +2209,17 @@ StudioViewportRenderer::Compose(
                             draw,
                             farPresentation->
                                 cachedDisc.get());
-                        farBodyRenderer_.DrawSurfaceData(
-                            commands,
-                            *surfaceBaseRoughness,
-                            *surfaceNormalMetallic,
-                            *surfaceEmissionClass,
-                            width,
-                            height,
-                            draw);
+                        if (opacity >= 0.5F)
+                        {
+                            farBodyRenderer_.DrawSurfaceData(
+                                commands,
+                                *surfaceBaseRoughness,
+                                *surfaceNormalMetallic,
+                                *surfaceEmissionClass,
+                                width,
+                                height,
+                                draw);
+                        }
                     };
 
                 const auto richer =
