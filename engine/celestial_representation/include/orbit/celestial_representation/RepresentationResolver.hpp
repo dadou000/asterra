@@ -77,11 +77,25 @@ struct SurfaceGlobeTransition
     bool overlapping{false};
 };
 
+struct RepresentationBlend
+{
+    Representation richer{Representation::PointProxy};
+    Representation lower{Representation::PointProxy};
+    f64 richerWeight{1.0};
+    f64 lowerWeight{0.0};
+    bool overlapping{false};
+};
+
 [[nodiscard]] Decision Resolve(
     const ResolveInput& input);
 
 [[nodiscard]] SurfaceGlobeTransition
 ResolveSurfaceGlobeTransition(
+    const ResolveInput& input,
+    const Decision& decision);
+
+[[nodiscard]] RepresentationBlend
+ResolveRepresentationBlend(
     const ResolveInput& input,
     const Decision& decision);
 
