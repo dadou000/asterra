@@ -7,6 +7,7 @@ target_include_directories(OrbitCelestialOcean PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(OrbitCelestialOcean PUBLIC
+    Orbit::CelestialAppearance
     Orbit::Core
     Orbit::Math
     Orbit::Terrain)
