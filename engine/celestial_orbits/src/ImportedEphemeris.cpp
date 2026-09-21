@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
@@ -143,7 +144,14 @@ OrbitState ImportedEphemerisProvider::EvaluateState(
     if (!ContainsTime(atTime))
     {
         throw std::out_of_range(
-            "Imported ephemeris query is outside its valid time range.");
+            "Imported ephemeris query " +
+            std::to_string(atTime.microsecondsFromEpoch) +
+            " us is outside valid range [" +
+            std::to_string(range_.first.microsecondsFromEpoch) +
+            ", " +
+            std::to_string(range_.last.microsecondsFromEpoch) +
+            "] us for source '" +
+            sourceName_ + "'.");
     }
 
     const auto lower =
