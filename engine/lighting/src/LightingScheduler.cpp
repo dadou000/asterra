@@ -446,30 +446,29 @@ LightingTimestampRecorder::ResolveCompletedFrame(
             "Lighting timestamp frame slot is out of range.");
     }
 
-    std::array<
-        u64,
-        kLightingGpuSectionCount * 2U>
-        ticks{};
-
-    if (!pools_[frameSlot]->TryGetResults(
-            0U,
-            static_cast<u32>(
-                ticks.size()),
-            ticks.data()))
-    {
-        return std::nullopt;
-    }
-
     LightingGpuTimings result;
+    bool anyResolved = false;
 
     for (u32 section = 0U;
          section < kLightingGpuSectionCount;
          ++section)
     {
+        std::array<u64, 2U> ticks{};
+
+        if (!pools_[frameSlot]->TryGetResults(
+                section * 2U,
+                2U,
+                ticks.data()))
+        {
+            continue;
+        }
+
+        anyResolved = true;
+
         const u64 begin =
-            ticks[section * 2U];
+            ticks[0U];
         const u64 end =
-            ticks[section * 2U + 1U];
+            ticks[1U];
 
         if (end < begin)
         {
@@ -489,7 +488,10 @@ LightingTimestampRecorder::ResolveCompletedFrame(
                 1'000'000.0);
     }
 
-    return result;
+    return
+        anyResolved
+            ? std::optional(result)
+            : std::nullopt;
 }
 
 u32 LightingTimestampRecorder::FramesInFlight() const noexcept
