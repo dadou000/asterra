@@ -16,6 +16,7 @@ target_include_directories(
 target_link_libraries(
     OrbitCelestialClouds
     PUBLIC
+        Orbit::CelestialAppearance
         Orbit::Core
         Orbit::Math
         Orbit::Rhi
