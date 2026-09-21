@@ -290,6 +290,193 @@ StudioUiBundle::StudioUiBundle(
                 drawRepresentationDiagnostics(
                     "studio.map",
                     "Body Map");
+
+                const auto drawPhysicalDiagnostics =
+                    [this, &context](
+                        const std::string_view viewportId,
+                        const std::string_view label)
+                    {
+                        const auto atmosphere =
+                            viewportRenderer_.
+                                AtmosphereDiagnostics(
+                                    viewportId);
+                        const auto clouds =
+                            viewportRenderer_.
+                                CloudDiagnostics(
+                                    viewportId);
+                        const auto rings =
+                            viewportRenderer_.
+                                RingDiagnostics(
+                                    viewportId);
+                        const auto magnetosphere =
+                            viewportRenderer_.
+                                MagnetosphereDiagnostics(
+                                    viewportId);
+                        const auto compact =
+                            viewportRenderer_.
+                                CompactObjectDiagnostics(
+                                    viewportId);
+                        const auto lighting =
+                            viewportRenderer_.
+                                CelestialLightingDiagnostics(
+                                    viewportId);
+
+                        if (!atmosphere.has_value() &&
+                            !clouds.has_value() &&
+                            !rings.has_value() &&
+                            !magnetosphere.has_value() &&
+                            !compact.has_value() &&
+                            !lighting.has_value())
+                        {
+                            return;
+                        }
+
+                        context.Separator();
+                        context.Text(
+                            std::format(
+                                "{} Physical Telemetry",
+                                label));
+
+                        if (lighting.has_value())
+                        {
+                            context.Text(
+                                std::format(
+                                    "Lighting: visible {:.3f} | {:.3f} W/m2 | {} occluders",
+                                    lighting->
+                                        visibleFraction,
+                                    lighting->
+                                        irradianceWattsPerSquareMeter,
+                                    lighting->
+                                        contributingOccluders));
+                        }
+
+                        if (atmosphere.has_value())
+                        {
+                            context.Text(
+                                std::format(
+                                    "Atmosphere LUT: static {} | sky {}",
+                                    atmosphere->
+                                        staticFingerprint,
+                                    atmosphere->
+                                        skyFingerprint));
+
+                            context.Text(
+                                std::format(
+                                    "  T {}x{} | MS {}x{} | Sky {}x{}",
+                                    atmosphere->
+                                        transmittanceWidth,
+                                    atmosphere->
+                                        transmittanceHeight,
+                                    atmosphere->
+                                        multiScatteringWidth,
+                                    atmosphere->
+                                        multiScatteringHeight,
+                                    atmosphere->
+                                        skyViewWidth,
+                                    atmosphere->
+                                        skyViewHeight));
+                        }
+
+                        if (clouds.has_value())
+                        {
+                            context.Text(
+                                std::format(
+                                    "Clouds: {} layers | fingerprint {} | GPU {}",
+                                    clouds->
+                                        layerCount,
+                                    clouds->
+                                        fingerprint,
+                                    clouds->
+                                            gpuResident
+                                        ? "resident"
+                                        : "pending"));
+
+                            context.Text(
+                                std::format(
+                                    "  coverage {:.3f} | optical depth {:.3f}",
+                                    clouds->
+                                        meanCoverage,
+                                    clouds->
+                                        meanOpticalDepth));
+                        }
+
+                        if (rings.has_value())
+                        {
+                            context.Text(
+                                std::format(
+                                    "Rings: {} bands | {} seg | far samples {}",
+                                    rings->
+                                        bandCount,
+                                    rings->
+                                        angularSegments,
+                                    rings->
+                                        farProfileSamples));
+                        }
+
+                        if (magnetosphere.has_value())
+                        {
+                            context.Text(
+                                std::format(
+                                    "Aurora: activity {:.3f} | {} seg | {}",
+                                    magnetosphere->
+                                        activity,
+                                    magnetosphere->
+                                        angularSegments,
+                                    magnetosphere->
+                                            nearRepresentation
+                                        ? "near"
+                                        : "far"));
+
+                            context.Text(
+                                std::format(
+                                    "  magnetopause {:.3f} km | tail {:.3f} km",
+                                    magnetosphere->
+                                        subsolarStandoffMeters /
+                                        1000.0,
+                                    magnetosphere->
+                                        tailExtentMeters /
+                                        1000.0));
+                        }
+
+                        if (compact.has_value())
+                        {
+                            context.Text(
+                                std::format(
+                                    "Compact: {} | shadow {:.3f} px | optical {:.3f} px",
+                                    celestial_representation::
+                                        Name(
+                                            compact->
+                                                representation),
+                                    compact->
+                                        projectedShadowRadiusPixels,
+                                    compact->
+                                        projectedOpticalRadiusPixels));
+
+                            context.Text(
+                                std::format(
+                                    "  rg {:.3f} km | Rs {:.3f} km | photon {:.3f} km | ISCO {:.3f} km",
+                                    compact->
+                                        gravitationalRadiusMeters /
+                                        1000.0,
+                                    compact->
+                                        schwarzschildRadiusMeters /
+                                        1000.0,
+                                    compact->
+                                        photonSphereRadiusMeters /
+                                        1000.0,
+                                    compact->
+                                        iscoRadiusMeters /
+                                        1000.0));
+                        }
+                    };
+
+                drawPhysicalDiagnostics(
+                    "studio.primary",
+                    "Primary View");
+
+                drawPhysicalDiagnostics(
+                    "studio.map",
+                    "Body Map");
             }
     });
 
