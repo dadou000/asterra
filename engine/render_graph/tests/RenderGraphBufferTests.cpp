@@ -450,7 +450,7 @@ int main()
         return 4;
     }
 
-    if (&graph.Buffer(buffer) == nullptr)
+    if (graph.Buffer(buffer).SizeBytes() != 4096U)
     {
         return 5;
     }
