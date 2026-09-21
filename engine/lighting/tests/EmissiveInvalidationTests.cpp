@@ -9,6 +9,45 @@ int main()
 
     EmissiveInvalidationTracker tracker;
 
+    const RuntimeEmissiveSurface liveSurface{
+        .geometry = {
+            .frame = frames::FrameId{
+                .high = 1U,
+                .low = 2U},
+            .body = universe::BodyId{
+                .high = 3U,
+                .low = 4U},
+            .stableId = 55U,
+            .contentRevision = 9U,
+            .originInFrameMeters =
+                {-1.0, -0.5, 2.0},
+            .axisUInFrameMeters =
+                {2.0, 0.0, 0.0},
+            .axisVInFrameMeters =
+                {0.0, 1.0, 0.0}
+        },
+        .contentRevision = 12U,
+        .width = 1U,
+        .height = 1U,
+        .giRadiance = {
+            {1.0F, 2.0F, 3.0F}
+        }
+    };
+
+    const auto liveState =
+        BuildDynamicEmissiveSourceState(
+            liveSurface,
+            6.0);
+
+    if (liveState.stableId != 55U ||
+        liveState.contentRevision != 12U ||
+        liveState.centerInFrameMeters.z != 2.0 ||
+        liveState.sourceRadiusMeters <= 1.0 ||
+        liveState.influenceRangeMeters != 6.0)
+    {
+        return 1;
+    }
+
     const DynamicEmissiveSourceState screen{
         .stableId = 10U,
         .contentRevision = 1U,
@@ -29,7 +68,7 @@ int main()
             EmissiveInvalidationReason::Added ||
         events.front().radiusMeters != 8.0)
     {
-        return 1;
+        return 2;
     }
 
     events =
@@ -40,7 +79,7 @@ int main()
 
     if (!events.empty())
     {
-        return 2;
+        return 3;
     }
 
     auto animated = screen;
@@ -56,7 +95,7 @@ int main()
         events.front().reason !=
             EmissiveInvalidationReason::Changed)
     {
-        return 3;
+        return 4;
     }
 
     auto moved = animated;
@@ -74,7 +113,7 @@ int main()
         events.front().radiusMeters <=
             moved.influenceRangeMeters)
     {
-        return 4;
+        return 5;
     }
 
     events = tracker.Update(
@@ -85,7 +124,7 @@ int main()
             EmissiveInvalidationReason::Removed ||
         tracker.SourceCount() != 0U)
     {
-        return 5;
+        return 6;
     }
 
     LightingView view;
@@ -129,7 +168,7 @@ int main()
                     1U,
                     1U))
             {
-                return 6;
+                return 7;
             }
         }
     }
@@ -158,7 +197,7 @@ int main()
         stats.dirtyCells >=
             stats.residentCells)
     {
-        return 7;
+        return 8;
     }
 
     const auto prioritized =
@@ -168,7 +207,7 @@ int main()
 
     if (prioritized.empty())
     {
-        return 8;
+        return 9;
     }
 
     return 0;
