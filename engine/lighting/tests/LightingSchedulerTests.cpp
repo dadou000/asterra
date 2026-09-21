@@ -4,6 +4,7 @@
 
 int main()
 {
+    using namespace orbit;
     using namespace orbit::lighting;
 
     LightingScheduler scheduler({
@@ -74,6 +75,19 @@ int main()
             LightingGpuSection::Emissive)] =
         2.0F;
 
+    overloaded.valid[
+        static_cast<u32>(
+            LightingGpuSection::Visibility)] = true;
+    overloaded.valid[
+        static_cast<u32>(
+            LightingGpuSection::Gi)] = true;
+    overloaded.valid[
+        static_cast<u32>(
+            LightingGpuSection::Reflections)] = true;
+    overloaded.valid[
+        static_cast<u32>(
+            LightingGpuSection::Emissive)] = true;
+
     scheduler.RecordGpuTimings(
         overloaded);
 
@@ -117,6 +131,12 @@ int main()
 
     // Recovery is deliberately gradual.
     LightingGpuTimings cool;
+    cool.valid[
+        static_cast<u32>(
+            LightingGpuSection::Visibility)] = true;
+    cool.milliseconds[
+        static_cast<u32>(
+            LightingGpuSection::Visibility)] = 0.0F;
     scheduler.RecordGpuTimings(cool);
 
     const auto recovering =
