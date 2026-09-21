@@ -23,6 +23,7 @@ add_library(OrbitLighting STATIC
     src/EmissiveInvalidation.cpp
     src/RuntimeMaterialEmission.cpp
     src/RuntimeEmissiveSurface.cpp
+    src/PlanetaryEmissionField.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -131,6 +132,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingRuntimeEmissiveSurfaceTests
         tests/RuntimeEmissiveSurfaceTests.cpp
+    )
+
+    add_executable(OrbitLightingPlanetaryEmissionFieldTests
+        tests/PlanetaryEmissionFieldTests.cpp
     )
 
     add_executable(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
@@ -310,6 +315,14 @@ if(BUILD_TESTING)
         OrbitLightingRuntimeEmissiveSurfaceTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingRuntimeEmissiveSurfaceTests)
 
+    target_link_libraries(OrbitLightingPlanetaryEmissionFieldTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingPlanetaryEmissionFieldTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingPlanetaryEmissionFieldTests)
+
     target_link_libraries(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
         PRIVATE
             Orbit::Commands
@@ -409,6 +422,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingRuntimeEmissiveSurface
         COMMAND OrbitLightingRuntimeEmissiveSurfaceTests
+    )
+
+    add_test(
+        NAME Orbit.LightingPlanetaryEmissionField
+        COMMAND OrbitLightingPlanetaryEmissionFieldTests
     )
 
     add_test(
