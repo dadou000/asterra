@@ -83,6 +83,7 @@ EstimateRadianceCell(
     const LightingView& view,
     const DirectionalLight& stellar,
     const std::span<const ResolvedLocalLight> localLights,
+    VisibilityProvider* const visibility,
     const RadianceEstimateSettings& settings)
 {
     DirectionalIrradianceL1 result;
@@ -128,10 +129,50 @@ EstimateRadianceCell(
             transport
     };
 
-    AddDirectionalLobe(
-        result,
-        stellar.directionToLight,
-        stellarEnergy);
+    const auto cellCenterFrame =
+        RadianceCellCenterInFrame(
+            key,
+            config);
+
+    bool stellarVisible = true;
+
+    if (visibility != nullptr)
+    {
+        VisibilityQuery query{
+            .purpose =
+                VisibilityPurpose::DiffuseGi,
+            .frame = view.frame,
+            .body = view.body,
+            .originInFrameMeters =
+                cellCenterFrame,
+            .direction =
+                stellar.directionToLight,
+            .minimumDistanceMeters = 0.05F,
+            .maximumDistanceMeters =
+                std::max(
+                    view.farPlaneMeters,
+                    10'000.0F),
+            .importance = 1.0F,
+            .requirements = {
+                .requireOffscreenCoverage = true
+            }
+        };
+
+        const auto visibilityResult =
+            visibility->Trace(query);
+
+        stellarVisible =
+            visibilityResult.resolution !=
+                VisibilityResolution::Hit;
+    }
+
+    if (stellarVisible)
+    {
+        AddDirectionalLobe(
+            result,
+            stellar.directionToLight,
+            stellarEnergy);
+    }
 
     const auto cellCenter =
         RadianceCellGpuCenter(
@@ -249,6 +290,42 @@ EstimateRadianceCell(
             angular /
             referenceIrradiance *
             transport;
+
+        bool visible = true;
+
+        if (visibility != nullptr)
+        {
+            VisibilityQuery query{
+                .purpose =
+                    VisibilityPurpose::DiffuseGi,
+                .frame = view.frame,
+                .body = view.body,
+                .originInFrameMeters =
+                    cellCenterFrame,
+                .direction = direction,
+                .minimumDistanceMeters = 0.05F,
+                .maximumDistanceMeters =
+                    std::max(
+                        distance - 0.05F,
+                        0.05F),
+                .importance = 1.0F,
+                .requirements = {
+                    .requireOffscreenCoverage = true
+                }
+            };
+
+            const auto visibilityResult =
+                visibility->Trace(query);
+
+            visible =
+                visibilityResult.resolution !=
+                    VisibilityResolution::Hit;
+        }
+
+        if (!visible)
+        {
+            continue;
+        }
 
         const math::Float3 energy{
             std::max(light.colorLinear.x, 0.0F) *
