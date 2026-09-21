@@ -721,6 +721,130 @@ StudioViewportRenderer::StudioViewportRenderer(
     }
 }
 
+celestial_globe::GpuMacroGlobeProduct*
+StudioViewportRenderer::EnsureMacroGlobePresentation(
+    const std::string_view viewportId,
+    studio_session::StudioSession& session,
+    const universe::BodyId body,
+    const universe::BodyShape& shape,
+    const terrain::TerrainSource& terrainSource)
+{
+    if (device_ == nullptr)
+    {
+        throw std::logic_error(
+            "Macro-globe presentation requires a render device.");
+    }
+
+    auto& presentation =
+        macroGlobePresentations_[
+            std::string(viewportId)];
+
+    const celestial_globe::MacroGlobeConfig
+        globeConfig{
+            .faceResolution = 33U,
+            .footprintScale = 1.5
+        };
+
+    const u64 geometryFingerprint =
+        celestial_globe::
+            MacroGlobeFingerprint(
+                terrainSource,
+                shape,
+                globeConfig);
+
+    const u64 sourceRevision =
+        terrainSource.Revision();
+
+    const auto sphericalPlanet =
+        session.World().
+            Surfaces().
+            Registry().
+            SphericalPlanetDefinition(
+                body);
+
+    if (!sphericalPlanet.has_value())
+    {
+        throw std::logic_error(
+            "Planetary appearance currently requires the spherical terrain body contract.");
+    }
+
+    const celestial_appearance::
+        AppearanceConfig
+        appearanceConfig{
+            .faceResolution =
+                globeConfig.faceResolution,
+            .footprintScale =
+                globeConfig.footprintScale
+        };
+
+    const u64 appearanceFingerprint =
+        celestial_appearance::
+            PlanetaryAppearanceFingerprint(
+                terrainSource,
+                sphericalPlanet->
+                    radiusMeters,
+                appearanceConfig);
+
+    const bool recreate =
+        presentation.product == nullptr ||
+        presentation.appearanceProduct ==
+            nullptr ||
+        presentation.body != body ||
+        presentation.sourceRevision !=
+            sourceRevision ||
+        presentation.fingerprint !=
+            geometryFingerprint ||
+        presentation.appearanceFingerprint !=
+            appearanceFingerprint;
+
+    if (recreate)
+    {
+        const auto mesh =
+            celestial_globe::
+                BuildMacroGlobe(
+                    terrainSource,
+                    shape,
+                    globeConfig);
+
+        const auto appearance =
+            celestial_appearance::
+                BuildPlanetaryAppearance(
+                    terrainSource,
+                    sphericalPlanet->
+                        radiusMeters,
+                    appearanceConfig);
+
+        presentation.appearanceProduct =
+            std::make_unique<
+                celestial_appearance::
+                    GpuPlanetaryAppearanceProduct>(
+                        *device_,
+                        appearance);
+
+        presentation.product =
+            std::make_unique<
+                celestial_globe::
+                    GpuMacroGlobeProduct>(
+                        *device_,
+                        mesh,
+                        &appearance);
+
+        presentation.body =
+            body;
+        presentation.sourceRevision =
+            sourceRevision;
+        presentation.fingerprint =
+            geometryFingerprint;
+        presentation.appearanceFingerprint =
+            appearanceFingerprint;
+        presentation.appearanceTexels =
+            static_cast<u32>(
+                appearance.texels.size());
+    }
+
+    return presentation.product.get();
+}
+
 std::optional<StudioMacroGlobeDiagnostics>
 StudioViewportRenderer::MacroGlobeDiagnostics(
     const std::string_view viewportId) const noexcept
@@ -749,6 +873,22 @@ StudioViewportRenderer::MacroGlobeDiagnostics(
         .appearanceTexels =
             presentation.appearanceTexels
     };
+}
+
+std::optional<
+    StudioSurfaceGlobeTransitionDiagnostics>
+StudioViewportRenderer::
+SurfaceGlobeTransitionDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        transitionDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            transitionDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
 }
 
 std::vector<StudioRenderedView>
