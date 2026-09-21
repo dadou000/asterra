@@ -204,4 +204,24 @@ if(BUILD_TESTING)
         NAME Orbit.ImportedEphemerisComposition
         COMMAND OrbitImportedEphemerisCompositionTests
     )
+
+    add_executable(OrbitNBodyPromotionCompositionTests
+        tests/NBodyPromotionCompositionTests.cpp
+    )
+
+    target_link_libraries(OrbitNBodyPromotionCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitNBodyPromotionCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitNBodyPromotionCompositionTests)
+
+    add_test(
+        NAME Orbit.NBodyPromotionComposition
+        COMMAND OrbitNBodyPromotionCompositionTests
+    )
 endif()
