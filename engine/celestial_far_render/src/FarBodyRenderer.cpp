@@ -658,18 +658,12 @@ CachedDiscProduct BuildCachedDisc(
                  x) *
                 4U;
 
-            const math::Float3 mapped{
-                color.x / (1.0F + color.x),
-                color.y / (1.0F + color.y),
-                color.z / (1.0F + color.z)
-            };
-
             result.rgba8[offset] =
-                ToLinearUnorm8(mapped.x);
+                ToLinearUnorm8(color.x);
             result.rgba8[offset + 1U] =
-                ToLinearUnorm8(mapped.y);
+                ToLinearUnorm8(color.y);
             result.rgba8[offset + 2U] =
-                ToLinearUnorm8(mapped.z);
+                ToLinearUnorm8(color.z);
 
             const f64 edge =
                 std::clamp(
