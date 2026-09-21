@@ -94,10 +94,39 @@ UpdateHumanEyeAdaptation(
             p50Weight + p95Weight,
             1.0e-4F);
 
-    state.photopicTargetLog2 =
+    state.rawPhotopicTargetLog2 =
         (p50 * p50Weight +
          p95 * p95Weight) /
         normalization;
+
+    const f32 photopicCeiling =
+        FiniteOr(
+            config.photopicCeilingLog2,
+            2.0F);
+
+    state.photopicTargetLog2 =
+        std::min(
+            state.rawPhotopicTargetLog2,
+            photopicCeiling);
+
+    state.photopicCeilingExcessStops =
+        std::max(
+            state.rawPhotopicTargetLog2 -
+                photopicCeiling,
+            0.0F);
+
+    state.p95ExcessStops =
+        std::max(
+            p95 - photopicCeiling,
+            0.0F);
+    state.p99ExcessStops =
+        std::max(
+            p99 - photopicCeiling,
+            0.0F);
+    state.peakExcessStops =
+        std::max(
+            peak - photopicCeiling,
+            0.0F);
 
     const f32 darkThreshold =
         FiniteOr(
@@ -154,6 +183,38 @@ UpdateHumanEyeAdaptation(
             state.darkTarget;
         state.overload =
             state.overloadTarget;
+
+        const f32 middleGray =
+            std::max(
+                FiniteOr(
+                    config.exposureMiddleGray,
+                    0.18F),
+                1.0e-6F);
+        const f32 minimumExposure =
+            std::max(
+                FiniteOr(
+                    config.minimumExposureScale,
+                    1.0F / 4096.0F),
+                1.0e-8F);
+        const f32 maximumExposure =
+            std::max(
+                FiniteOr(
+                    config.maximumExposureScale,
+                    4096.0F),
+                minimumExposure);
+
+        state.exposureScale =
+            std::clamp(
+                middleGray /
+                    std::exp2(state.photopicLog2),
+                minimumExposure,
+                maximumExposure);
+        state.targetExposureScale =
+            std::clamp(
+                middleGray /
+                    std::exp2(state.photopicTargetLog2),
+                minimumExposure,
+                maximumExposure);
         return state;
     }
 
@@ -191,6 +252,39 @@ UpdateHumanEyeAdaptation(
         Saturate(state.darkAdaptation);
     state.overload =
         Saturate(state.overload);
+
+    const f32 middleGray =
+        std::max(
+            FiniteOr(
+                config.exposureMiddleGray,
+                0.18F),
+            1.0e-6F);
+
+    const f32 minimumExposure =
+        std::max(
+            FiniteOr(
+                config.minimumExposureScale,
+                1.0F / 4096.0F),
+            1.0e-8F);
+    const f32 maximumExposure =
+        std::max(
+            FiniteOr(
+                config.maximumExposureScale,
+                4096.0F),
+            minimumExposure);
+
+    state.exposureScale =
+        std::clamp(
+            middleGray /
+                std::exp2(state.photopicLog2),
+            minimumExposure,
+            maximumExposure);
+    state.targetExposureScale =
+        std::clamp(
+            middleGray /
+                std::exp2(state.photopicTargetLog2),
+            minimumExposure,
+            maximumExposure);
 
     return state;
 }
