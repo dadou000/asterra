@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <numbers>
 
 namespace
@@ -38,6 +39,25 @@ int main()
         !Near(oneSecond.parentFromBodyRotation.xAxis.y, 1.0))
     {
         return 1;
+    }
+
+    const auto tilted =
+        EvaluateUniformSpin(
+            UniformSpinOrientation{
+                .axisInParent = {0.0, 1.0, 1.0},
+                .angularVelocityRadiansPerSecond = 0.0,
+                .phaseRadiansAtEpoch = 0.0,
+                .epoch = epoch
+            },
+            epoch);
+
+    const double invSqrt2 =
+        1.0 / std::sqrt(2.0);
+
+    if (!Near(tilted.parentFromBodyRotation.zAxis.y, invSqrt2) ||
+        !Near(tilted.parentFromBodyRotation.zAxis.z, invSqrt2))
+    {
+        return 4;
     }
 
     auto orbit =
