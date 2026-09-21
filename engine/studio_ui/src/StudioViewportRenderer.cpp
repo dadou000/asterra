@@ -7064,10 +7064,17 @@ StudioViewportRenderer::Compose(
 
             u64 radianceSourceRevision =
                 session.World().Objects().Revision();
-            radianceSourceRevision =
-                CombineFingerprint(
-                    radianceSourceRevision,
-                    source.Revision());
+            if (terrainRuntime.has_value())
+            {
+                const auto& radianceTerrainSource =
+                    session.TerrainRuntime().TerrainSource(
+                        *terrainRuntime);
+
+                radianceSourceRevision =
+                    CombineFingerprint(
+                        radianceSourceRevision,
+                        radianceTerrainSource.Revision());
+            }
 
             static_cast<void>(
                 finalGather.radianceResidency->ScrollTo(
@@ -7113,21 +7120,28 @@ StudioViewportRenderer::Compose(
                 radianceVisibility.Register(
                     *analyticVisibility);
 
-                terrainVisibility =
-                    std::make_unique<
-                        lighting::
-                            TerrainHeightfieldVisibilityProvider>(
-                                terrainRuntime->body,
-                                terrainRuntime->planet,
-                                source,
-                                *bodies,
-                                *frames,
-                                lighting::
-                                    TerrainVisibilityConfig{},
-                                atTime);
+                if (terrainRuntime.has_value())
+                {
+                    const auto& radianceTerrainSource =
+                        session.TerrainRuntime().TerrainSource(
+                            *terrainRuntime);
 
-                radianceVisibility.Register(
-                    *terrainVisibility);
+                    terrainVisibility =
+                        std::make_unique<
+                            lighting::
+                                TerrainHeightfieldVisibilityProvider>(
+                                    terrainRuntime->body,
+                                    terrainRuntime->planet,
+                                    radianceTerrainSource,
+                                    *bodies,
+                                    *frames,
+                                    lighting::
+                                        TerrainVisibilityConfig{},
+                                    atTime);
+
+                    radianceVisibility.Register(
+                        *terrainVisibility);
+                }
             }
 
             lighting::RadianceEstimateSettings
@@ -9196,8 +9210,8 @@ StudioViewportRenderer::Compose(
                         height,
                         camera,
                         *frameGraph,
-                        pathProducts,
-                        atTime);
+                        atTime,
+                        pathProducts);
                 });
         }
 
@@ -9971,6 +9985,10 @@ StudioViewportRenderer::Compose(
                 histogramFrameSlot] =
                     true;
         }
+
+        auto& histogram =
+            luminanceHistogramPresentations_[
+                info.id];
 
         if (colorLut_ == nullptr)
         {
