@@ -1,7 +1,10 @@
 #pragma once
 
 #include <orbit/math/Vector.hpp>
+#include <orbit/render_view/RenderView.hpp>
+#include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
+#include <orbit/shader/ShaderCompiler.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 
@@ -65,5 +68,24 @@ private:
     u32 indexCount_{0};
     f64 referenceRadiusMeters_{1.0};
     u64 fingerprint_{0};
+};
+
+class MacroGlobeRenderer
+{
+public:
+    MacroGlobeRenderer(
+        rhi::Device& device,
+        const shader::Compiler& compiler);
+
+    void Draw(
+        rhi::CommandList& commands,
+        rhi::Texture& target,
+        u32 width,
+        u32 height,
+        GpuMacroGlobeProduct& globe,
+        const render_view::CameraState& camera);
+
+private:
+    std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
 };
 } // namespace orbit::celestial_globe
