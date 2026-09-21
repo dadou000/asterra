@@ -38,6 +38,7 @@
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/world_model/CelestialLightingService.hpp>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -389,7 +390,9 @@ private:
         studio_session::StudioSession& session,
         universe::BodyId body,
         const universe::BodyShape& shape,
-        const terrain::TerrainSource& terrainSource);
+        const terrain::TerrainSource& terrainSource,
+        const std::function<bool(u64)>& acquireGrant,
+        const std::function<void(u64)>& completeGrant);
 
     struct DebugPresentation
     {
