@@ -1623,7 +1623,8 @@ StudioViewportRenderer::Compose(
     const studio_session::StudioRuntimeSnapshot& snapshot,
     const time::SimulationTime atTime,
     const bool drawPathDebug,
-    const u32 frameIndex)
+    const u32 frameIndex,
+    lighting::LightingTimestampRecorder* const lightingTimestamps)
 {
     static_cast<void>(views.Refresh(snapshot));
 
@@ -4861,11 +4862,21 @@ StudioViewportRenderer::Compose(
                  localLightGrid,
                  localLightsHandle,
                  localOffsetsHandle,
-                 localIndicesHandle](
+                 localIndicesHandle,
+                 lightingTimestamps,
+                 frameIndex](
                     rhi::CommandList& commands,
                     const render_graph::Resources&
                         resources)
                 {
+                    if (lightingTimestamps != nullptr)
+                    {
+                        lightingTimestamps->BeginSection(
+                            commands,
+                            frameIndex,
+                            lighting::LightingGpuSection::Direct);
+                    }
+
                     directLightingRenderer_.Draw(
                         commands,
                         *lightingBaseRoughness,
@@ -4884,6 +4895,14 @@ StudioViewportRenderer::Compose(
                         lightingView,
                         directLight,
                         localLightGrid);
+
+                    if (lightingTimestamps != nullptr)
+                    {
+                        lightingTimestamps->EndSection(
+                            commands,
+                            frameIndex,
+                            lighting::LightingGpuSection::Direct);
+                    }
                 });
 
             // RenderView imports depth as DepthWrite on the next frame.
