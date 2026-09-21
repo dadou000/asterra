@@ -25,6 +25,14 @@ The release keeps one semantic body authority while allowing independent simulat
 
 Read [docs/V0.0.6_SPEC.md](docs/V0.0.6_SPEC.md) before implementing celestial systems. Progress is tracked in [docs/V0.0.6_PROGRESS.md](docs/V0.0.6_PROGRESS.md), and the initial research contract is in [docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
 
+## V0.0.7 — Dynamic Lighting, GI & HDR Presentation
+
+V0.0.7 is the lighting/presentation scaffold built on the V0.0.6 representation and radiometry foundation. It defines one dynamic lighting model from ground to orbit, cache-driven GI, physical emissive materials, LED/video emissive sampling, regional/planetary emission LOD, hybrid screen/software/Vulkan-ray-query visibility, reflections, histogram exposure, human-eye adaptation with a bright-response ceiling, bloom/glare/flare, centralized tone mapping, LUT correction and SDR/HDR output.
+
+Hardware ray tracing is an optional visibility accelerator rather than a separate lighting mode: the default Auto/Balanced policy keeps an explicit lighting budget and uses RT hardware to improve difficult visibility work inside that budget.
+
+Read [docs/V0.0.7_SPEC.md](docs/V0.0.7_SPEC.md) before adding lighting/GI/exposure/post-processing systems. Progress is tracked in [docs/V0.0.7_PROGRESS.md](docs/V0.0.7_PROGRESS.md), and the research baseline is [docs/research/V007_DYNAMIC_LIGHTING_BASELINE.md](docs/research/V007_DYNAMIC_LIGHTING_BASELINE.md).
+
 ## Build
 
 ### One-click Windows build
