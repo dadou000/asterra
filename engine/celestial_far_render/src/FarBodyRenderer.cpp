@@ -627,9 +627,23 @@ SurfaceOutputs main(VSOutput input)
         float4(
             n,
             0.0);
+    float3 surfaceEmission =
+        max(g.emissionAndOpacity.xyz, 0.0);
+
+    if (g.material.z > 0.5)
+    {
+        // Radiative bodies are their own light source. Preserve the same
+        // resolved scene-radiance scale used by the visual far-body path so
+        // the shared lighting/GI pipeline sees the source instead of a dim
+        // material proxy.
+        surfaceEmission =
+            max(g.albedoAndRoughness.xyz, 0.0) *
+            max(g.proxy.w, 0.0);
+    }
+
     output.emissionClass =
         float4(
-            max(g.emissionAndOpacity.xyz, 0.0),
+            surfaceEmission,
             EncodeSurfaceMeta(
                 6.0,
                 g.material.w));
