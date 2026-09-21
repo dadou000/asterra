@@ -161,3 +161,28 @@ if(BUILD_TESTING)
         COMMAND OrbitCelestialRecipeServiceTests
     )
 endif()
+
+
+if(BUILD_TESTING)
+    add_executable(
+        OrbitInspectorProvenanceTests
+        tests/InspectorProvenanceTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitInspectorProvenanceTests
+        PRIVATE
+            Orbit::Documents
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitInspectorProvenanceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitInspectorProvenanceTests)
+
+    add_test(
+        NAME Orbit.InspectorProvenance
+        COMMAND OrbitInspectorProvenanceTests
+    )
+endif()
