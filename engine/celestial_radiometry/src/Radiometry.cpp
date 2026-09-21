@@ -115,6 +115,53 @@ f64 IrradianceWattsPerSquareMeter(
         denominator;
 }
 
+f64 CentralPixelSolidAngleSteradians(
+    const f64 verticalFieldOfViewRadians,
+    const u32 viewportHeightPixels)
+{
+    if (!std::isfinite(verticalFieldOfViewRadians) ||
+        verticalFieldOfViewRadians <= 0.0 ||
+        verticalFieldOfViewRadians >=
+            std::numbers::pi_v<f64> ||
+        viewportHeightPixels == 0U)
+    {
+        throw std::invalid_argument(
+            "Pixel solid-angle inputs are invalid.");
+    }
+
+    const f64 angularPixelScale =
+        2.0 *
+        std::tan(
+            verticalFieldOfViewRadians *
+            0.5) /
+        static_cast<f64>(
+            viewportHeightPixels);
+
+    return
+        angularPixelScale *
+        angularPixelScale;
+}
+
+f64 ResolvedPixelIrradianceWattsPerSquareMeter(
+    const f64 radianceWattsPerSquareMeterSteradian,
+    const f64 verticalFieldOfViewRadians,
+    const u32 viewportHeightPixels)
+{
+    if (!std::isfinite(
+            radianceWattsPerSquareMeterSteradian) ||
+        radianceWattsPerSquareMeterSteradian < 0.0)
+    {
+        throw std::invalid_argument(
+            "Radiance must be finite and non-negative.");
+    }
+
+    return
+        radianceWattsPerSquareMeterSteradian *
+        CentralPixelSolidAngleSteradians(
+            verticalFieldOfViewRadians,
+            viewportHeightPixels);
+}
+
 ExposureState ResolveExposure(
     const ExposureSettings& settings)
 {
