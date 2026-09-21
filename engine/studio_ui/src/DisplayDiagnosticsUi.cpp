@@ -562,6 +562,93 @@ void DisplayDiagnosticsUi::DrawViewport(
     }
 
     context.Separator();
+    context.Text("Tone Mapping / Display Headroom");
+
+    auto toneMapping =
+        diagnostics->toneMapping;
+
+    const auto toneDiagnostics =
+        post_process::
+            EvaluateToneMappingDiagnostics(
+                toneMapping);
+
+    context.Text(
+        std::format(
+            "Reference white {:7.1f} nits  | peak {:7.1f} nits",
+            toneMapping.referenceWhiteNits,
+            toneMapping.peakNits));
+    context.Text(
+        std::format(
+            "Linear headroom x{:6.3f}  | mapped white {:6.3f}",
+            toneDiagnostics.headroomRatio,
+            toneDiagnostics.mappedReferenceWhite));
+
+    bool toneEnabled =
+        toneMapping.enabled;
+    bool toneChanged =
+        context.Checkbox(
+            "Production Tone Map##tone-enabled-" +
+                std::string(viewportId),
+            toneEnabled);
+
+    f64 referenceWhite =
+        toneMapping.referenceWhiteNits;
+    f64 peakNits =
+        toneMapping.peakNits;
+    f64 shoulderStart =
+        toneMapping.shoulderStart;
+    f64 shoulderStrength =
+        toneMapping.shoulderStrength;
+
+    toneChanged |=
+        context.InputDouble(
+            ("Reference White nits##tone-white-" +
+             std::string(viewportId)),
+            referenceWhite);
+    toneChanged |=
+        context.InputDouble(
+            ("Display Peak nits##tone-peak-" +
+             std::string(viewportId)),
+            peakNits);
+    toneChanged |=
+        context.InputDouble(
+            ("Shoulder Start##tone-shoulder-start-" +
+             std::string(viewportId)),
+            shoulderStart);
+    toneChanged |=
+        context.InputDouble(
+            ("Shoulder Strength##tone-shoulder-strength-" +
+             std::string(viewportId)),
+            shoulderStrength);
+
+    toneMapping.enabled =
+        toneEnabled;
+    toneMapping.referenceWhiteNits =
+        static_cast<f32>(referenceWhite);
+    toneMapping.peakNits =
+        static_cast<f32>(peakNits);
+    toneMapping.shoulderStart =
+        static_cast<f32>(shoulderStart);
+    toneMapping.shoulderStrength =
+        static_cast<f32>(shoulderStrength);
+
+    if (context.Button(
+            "Reset Tone Defaults##tone-reset-" +
+            std::string(viewportId)))
+    {
+        toneMapping = {};
+        toneChanged = true;
+    }
+
+    if (toneChanged)
+    {
+        renderer_->
+            SetToneMappingConfig(
+                viewportId,
+                toneMapping);
+    }
+
+    context.Separator();
     context.Text("Bloom / Glare / Flare");
 
     auto highlightConfig =
