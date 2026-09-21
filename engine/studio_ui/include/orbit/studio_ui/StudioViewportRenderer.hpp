@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
+#include <orbit/celestial_atmosphere/Atmosphere.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
@@ -42,6 +43,22 @@ struct StudioMacroGlobeDiagnostics
     u64 geometryFingerprint{0};
     u64 appearanceFingerprint{0};
     u32 appearanceTexels{0};
+};
+
+struct StudioAtmosphereDiagnostics
+{
+    universe::BodyId body{};
+    u64 staticFingerprint{0};
+    u64 skyFingerprint{0};
+    f64 observerRadiusMeters{0.0};
+    f64 observerAltitudeMeters{0.0};
+    f64 directIrradianceWattsPerSquareMeter{0.0};
+    u32 transmittanceWidth{0};
+    u32 transmittanceHeight{0};
+    u32 multiScatteringWidth{0};
+    u32 multiScatteringHeight{0};
+    u32 skyViewWidth{0};
+    u32 skyViewHeight{0};
 };
 
 struct StudioCelestialLightingDiagnostics
@@ -142,6 +159,11 @@ public:
     CelestialLightingDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioAtmosphereDiagnostics>
+    AtmosphereDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -174,6 +196,24 @@ private:
         terrain_debug::TerrainDebugField field{
             terrain_debug::TerrainDebugField::Uplift};
         u64 seamFingerprint{0};
+    };
+
+    struct AtmospherePresentation
+    {
+        universe::BodyId body{};
+        u64 staticFingerprint{0};
+        u64 skyFingerprint{0};
+        celestial_atmosphere::AtmosphereParameters
+            parameters{};
+        std::unique_ptr<
+            celestial_atmosphere::AtmosphereStaticLuts>
+            staticLuts;
+        std::unique_ptr<
+            celestial_atmosphere::AtmosphereSkyView>
+            skyView;
+        std::unique_ptr<
+            celestial_atmosphere::GpuAtmosphereLuts>
+            gpu;
     };
 
     struct MacroGlobePresentation
@@ -230,6 +270,18 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioAtmosphereDiagnostics,
+        std::less<>>
+        atmosphereDiagnostics_;
+
+    std::map<
+        std::string,
+        AtmospherePresentation,
+        std::less<>>
+        atmospherePresentations_;
 
     std::map<
         std::string,
