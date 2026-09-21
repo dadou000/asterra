@@ -47,7 +47,7 @@ namespace
     };
 }
 
-[[nodiscard]] std::array<u32, 44> BuildDrawConstants(
+[[nodiscard]] std::array<u32, 56> BuildDrawConstants(
     const math::Mat4& matrix,
     const f32 planetRadiusMeters,
     const f32 observerRadiusMeters,
@@ -61,7 +61,7 @@ namespace
     const bool debugLodColorEnabled,
     const bool debugSideCutEnabled) noexcept
 {
-    std::array<u32, 44> result{};
+    std::array<u32, 56> result{};
 
     static_assert(
         sizeof(matrix.values) ==
@@ -186,6 +186,21 @@ namespace
         static_cast<f32>(
             motion.centerOffsetMeters.y));
 
+    // Body-fixed basis for lighting-facing SurfaceData. Geometry remains in
+    // observer-local coordinates for precision, but cache/lighting normals
+    // must not change coordinate systems when representation changes.
+    store(44, static_cast<f32>(observerFrame.east.x));
+    store(45, static_cast<f32>(observerFrame.east.y));
+    store(46, static_cast<f32>(observerFrame.east.z));
+
+    store(48, static_cast<f32>(observerFrame.up.x));
+    store(49, static_cast<f32>(observerFrame.up.y));
+    store(50, static_cast<f32>(observerFrame.up.z));
+
+    store(52, static_cast<f32>(observerFrame.north.x));
+    store(53, static_cast<f32>(observerFrame.north.y));
+    store(54, static_cast<f32>(observerFrame.north.z));
+
     return result;
 }
 
@@ -209,6 +224,9 @@ struct DrawConstants
     // Kept as a full float4 so the push-constant block remains naturally
     // 16-byte aligned across D3D-style HLSL packing and Vulkan.
     float4 g_centerOffsetMeters;
+    float4 g_observerEastBody;
+    float4 g_observerUpBody;
+    float4 g_observerNorthBody;
 };
 [[vk::push_constant]] DrawConstants g_pc;
 
@@ -232,6 +250,8 @@ struct VSOutput
     // need or want the shared fake-bump fallback.
     float spacingMeters : TEXCOORD7;
     float3 worldPosition : TEXCOORD8;
+    float3 bodyFixedNormal : TEXCOORD9;
+    float3 bodyFixedSurfaceDirection : TEXCOORD10;
     float horizonClip : SV_ClipDistance0;
 };
 
@@ -692,6 +712,18 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     output.surfaceDirection =
         surfaceDirection;
+
+    output.bodyFixedNormal =
+        normalize(
+            g_pc.g_observerEastBody.xyz * terrainNormal.x +
+            g_pc.g_observerUpBody.xyz * terrainNormal.y +
+            g_pc.g_observerNorthBody.xyz * terrainNormal.z);
+
+    output.bodyFixedSurfaceDirection =
+        normalize(
+            g_pc.g_observerEastBody.xyz * surfaceDirection.x +
+            g_pc.g_observerUpBody.xyz * surfaceDirection.y +
+            g_pc.g_observerNorthBody.xyz * surfaceDirection.z);
 
     const float horizonCosine =
         saturate(
@@ -1313,7 +1345,7 @@ private:
                     },
                     .vertexAttributes = {},
                     .vertexStrideBytes = 0,
-                    .pushConstantDwords = 44,
+                    .pushConstantDwords = 56,
                     .shaderResourceBuffers = 1,
                     .topology =
                         rhi::
