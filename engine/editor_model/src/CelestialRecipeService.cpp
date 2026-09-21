@@ -368,6 +368,12 @@ CelestialRecipeService::CreateStarInternal(
         photosphere,
         world_model::kPhotosphereTemperatureKelvin,
         recipe.effectiveTemperatureKelvin);
+    commands_.SetProperty(
+        photosphere,
+        world_model::kPhotosphereActivitySeed,
+        static_cast<i64>(
+            recipe.seed &
+            0x7fffffffffffffffULL));
 
     return body;
 }
