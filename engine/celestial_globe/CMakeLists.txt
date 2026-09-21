@@ -18,7 +18,9 @@ target_link_libraries(
     PUBLIC
         Orbit::Core
         Orbit::Math
+        Orbit::RenderView
         Orbit::Rhi
+        Orbit::Shader
         Orbit::Terrain
         Orbit::Universe
 )
