@@ -20,6 +20,7 @@ struct AppearanceSummary
     f32 roughness{0.8F};
     f32 oceanFraction{0.0F};
     f32 iceFraction{0.0F};
+    f32 directLightTransmittance{1.0F};
     math::Float3 emissionLinear{};
 };
 
