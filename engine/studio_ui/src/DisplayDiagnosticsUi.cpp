@@ -106,6 +106,38 @@ void DisplayDiagnosticsUi::DrawViewport(
                 stats.sampleCount,
                 stats.weightedSampleCount));
 
+        const auto& eye =
+            diagnostics->eyeState;
+
+        context.Separator();
+        context.Text("Human Eye State");
+
+        if (!eye.initialized)
+        {
+            context.MutedText(
+                "Waiting for the first valid adaptation sample.");
+        }
+        else
+        {
+            context.Text(
+                std::format(
+                    "Photopic {:7.3f} stops  | target {:7.3f}",
+                    eye.photopicLog2,
+                    eye.photopicTargetLog2));
+
+            context.Text(
+                std::format(
+                    "Dark adaptation {:6.1f}%  | target {:6.1f}%",
+                    eye.darkAdaptation * 100.0F,
+                    eye.darkTarget * 100.0F));
+
+            context.Text(
+                std::format(
+                    "Overload {:6.1f}%  | target {:6.1f}%",
+                    eye.overload * 100.0F,
+                    eye.overloadTarget * 100.0F));
+        }
+
         const auto available =
             context.ContentAvailable();
 
@@ -307,6 +339,151 @@ void DisplayDiagnosticsUi::DrawViewport(
             SetLuminanceHistogramConfig(
                 viewportId,
                 {});
+    }
+
+    context.Separator();
+    context.Text("Eye Adaptation");
+
+    auto eyeConfig =
+        diagnostics->eyeConfig;
+
+    f64 p50Weight =
+        eyeConfig.photopicP50Weight;
+    f64 p95Weight =
+        eyeConfig.photopicP95Weight;
+    f64 brightenSeconds =
+        eyeConfig.photopicBrightenSeconds;
+    f64 darkenSeconds =
+        eyeConfig.photopicDarkenSeconds;
+    f64 darkThreshold =
+        eyeConfig.darkThresholdLog2;
+    f64 darkFull =
+        eyeConfig.darkFullLog2;
+    f64 darkAdaptSeconds =
+        eyeConfig.darkAdaptSeconds;
+    f64 darkResetSeconds =
+        eyeConfig.darkResetSeconds;
+    f64 overloadP99 =
+        eyeConfig.overloadP99StartStops;
+    f64 overloadPeak =
+        eyeConfig.overloadPeakStartStops;
+    f64 overloadRange =
+        eyeConfig.overloadSoftRangeStops;
+    f64 overloadAttack =
+        eyeConfig.overloadAttackSeconds;
+    f64 overloadRecovery =
+        eyeConfig.overloadRecoverySeconds;
+
+    bool eyeConfigChanged = false;
+
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Photopic P50 Weight##eye-p50-" +
+             std::string(viewportId)),
+            p50Weight);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Photopic P95 Weight##eye-p95-" +
+             std::string(viewportId)),
+            p95Weight);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Bright Adapt Seconds##eye-bright-" +
+             std::string(viewportId)),
+            brightenSeconds);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Darken Seconds##eye-darken-" +
+             std::string(viewportId)),
+            darkenSeconds);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Dark Threshold log2##eye-dark-threshold-" +
+             std::string(viewportId)),
+            darkThreshold);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Full Dark log2##eye-dark-full-" +
+             std::string(viewportId)),
+            darkFull);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Dark Adapt Seconds##eye-dark-adapt-" +
+             std::string(viewportId)),
+            darkAdaptSeconds);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Dark Reset Seconds##eye-dark-reset-" +
+             std::string(viewportId)),
+            darkResetSeconds);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("P99 Overload Start##eye-overload-p99-" +
+             std::string(viewportId)),
+            overloadP99);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Peak Overload Start##eye-overload-peak-" +
+             std::string(viewportId)),
+            overloadPeak);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Overload Soft Range##eye-overload-range-" +
+             std::string(viewportId)),
+            overloadRange);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Overload Attack Seconds##eye-overload-attack-" +
+             std::string(viewportId)),
+            overloadAttack);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Overload Recovery Seconds##eye-overload-recovery-" +
+             std::string(viewportId)),
+            overloadRecovery);
+
+    if (eyeConfigChanged)
+    {
+        eyeConfig.photopicP50Weight =
+            static_cast<f32>(p50Weight);
+        eyeConfig.photopicP95Weight =
+            static_cast<f32>(p95Weight);
+        eyeConfig.photopicBrightenSeconds =
+            static_cast<f32>(brightenSeconds);
+        eyeConfig.photopicDarkenSeconds =
+            static_cast<f32>(darkenSeconds);
+        eyeConfig.darkThresholdLog2 =
+            static_cast<f32>(darkThreshold);
+        eyeConfig.darkFullLog2 =
+            static_cast<f32>(darkFull);
+        eyeConfig.darkAdaptSeconds =
+            static_cast<f32>(darkAdaptSeconds);
+        eyeConfig.darkResetSeconds =
+            static_cast<f32>(darkResetSeconds);
+        eyeConfig.overloadP99StartStops =
+            static_cast<f32>(overloadP99);
+        eyeConfig.overloadPeakStartStops =
+            static_cast<f32>(overloadPeak);
+        eyeConfig.overloadSoftRangeStops =
+            static_cast<f32>(overloadRange);
+        eyeConfig.overloadAttackSeconds =
+            static_cast<f32>(overloadAttack);
+        eyeConfig.overloadRecoverySeconds =
+            static_cast<f32>(overloadRecovery);
+
+        renderer_->
+            SetHumanEyeAdaptationConfig(
+                viewportId,
+                eyeConfig);
+    }
+
+    if (context.Button(
+            "Reset Eye State##reset-eye-" +
+            std::string(viewportId)))
+    {
+        renderer_->
+            ResetHumanEyeAdaptation(
+                viewportId);
     }
 
     bool overlay =
