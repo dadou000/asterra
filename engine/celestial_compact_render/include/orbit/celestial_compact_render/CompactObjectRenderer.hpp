@@ -23,6 +23,7 @@ struct CompactObjectDraw
     render_view::CameraState camera{};
 
     f64 projectedShadowRadiusPixels{0.0};
+    f64 projectedOpticalRadiusPixels{0.0};
 
     // Point-proxy transition is expressed as a continuous weight so the same
     // analytic optical model survives into the subpixel regime.
