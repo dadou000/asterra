@@ -528,7 +528,8 @@ VulkanComputePipeline::VulkanComputePipeline(
     const u32 pushConstantDwords,
     const u32 shaderResourceBuffers,
     const u32 storageTextures,
-    const u32 sampledTextures)
+    const u32 sampledTextures,
+    const u32 accelerationStructures)
     : device_(device),
       pipeline_(pipeline),
       layout_(layout),
@@ -536,7 +537,8 @@ VulkanComputePipeline::VulkanComputePipeline(
       pushConstantDwords_(pushConstantDwords),
       shaderResourceBuffers_(shaderResourceBuffers),
       storageTextures_(storageTextures),
-      sampledTextures_(sampledTextures)
+      sampledTextures_(sampledTextures),
+      accelerationStructures_(accelerationStructures)
 {
 }
 
@@ -579,6 +581,11 @@ u32 VulkanComputePipeline::SampledTextures() const noexcept
     return sampledTextures_;
 }
 
+u32 VulkanComputePipeline::AccelerationStructures() const noexcept
+{
+    return accelerationStructures_;
+}
+
 VkPipeline VulkanComputePipeline::Native() const noexcept
 {
     return pipeline_;
@@ -602,12 +609,15 @@ std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
     const u32 storageTextureBase = desc.shaderResourceBuffers;
     const u32 sampledTextureBase =
         storageTextureBase + desc.storageTextures;
+    const u32 accelerationStructureBase =
+        sampledTextureBase + desc.sampledTextures;
 
     VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
     std::vector<VkDescriptorSetLayoutBinding> bindings(
         desc.shaderResourceBuffers +
         desc.storageTextures +
-        desc.sampledTextures);
+        desc.sampledTextures +
+        desc.accelerationStructures);
 
     for (u32 slot = 0; slot < desc.shaderResourceBuffers; ++slot)
     {
@@ -637,6 +647,18 @@ std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
         binding.binding = sampledTextureBase + slot;
         binding.descriptorType =
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+
+    for (u32 slot = 0; slot < desc.accelerationStructures; ++slot)
+    {
+        auto& binding =
+            bindings[accelerationStructureBase + slot];
+        binding.binding =
+            accelerationStructureBase + slot;
+        binding.descriptorType =
+            VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         binding.descriptorCount = 1;
         binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
@@ -752,6 +774,7 @@ std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
         desc.pushConstantDwords,
         desc.shaderResourceBuffers,
         desc.storageTextures,
-        desc.sampledTextures);
+        desc.sampledTextures,
+        desc.accelerationStructures);
 }
 } // namespace orbit::rhi::vulkan::detail
