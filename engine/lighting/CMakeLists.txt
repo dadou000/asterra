@@ -26,6 +26,7 @@ add_library(OrbitLighting STATIC
     src/PlanetaryEmissionField.cpp
     src/PlanetaryEmissionAppearance.cpp
     src/PlanetaryEmissionService.cpp
+    src/ReflectionPolicy.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -151,6 +152,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingPlanetaryEmissionContinuityTests
         tests/PlanetaryEmissionContinuityTests.cpp
+    )
+
+    add_executable(OrbitLightingReflectionPolicyTests
+        tests/ReflectionPolicyTests.cpp
     )
 
     add_executable(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
@@ -362,6 +367,14 @@ if(BUILD_TESTING)
         OrbitLightingPlanetaryEmissionContinuityTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingPlanetaryEmissionContinuityTests)
 
+    target_link_libraries(OrbitLightingReflectionPolicyTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingReflectionPolicyTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingReflectionPolicyTests)
+
     target_link_libraries(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
         PRIVATE
             Orbit::Commands
@@ -481,6 +494,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingPlanetaryEmissionContinuity
         COMMAND OrbitLightingPlanetaryEmissionContinuityTests
+    )
+
+    add_test(
+        NAME Orbit.LightingReflectionPolicy
+        COMMAND OrbitLightingReflectionPolicyTests
     )
 
     add_test(
