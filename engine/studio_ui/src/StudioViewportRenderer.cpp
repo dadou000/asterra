@@ -8,6 +8,7 @@
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialCloudBinding.hpp>
 #include <orbit/world_model/CelestialGiantBinding.hpp>
+#include <orbit/world_model/CelestialSmallBodyBinding.hpp>
 #include <orbit/world_model/CelestialOceanBinding.hpp>
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialRingBinding.hpp>
@@ -1614,6 +1615,21 @@ StudioViewportRenderer::GiantDiagnostics(
         : std::optional(found->second);
 }
 
+std::optional<
+    StudioSmallBodyDiagnostics>
+StudioViewportRenderer::SmallBodyDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        smallBodyDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            smallBodyDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
 std::vector<StudioRenderedView>
 StudioViewportRenderer::Compose(
     render_graph::RenderGraph& graph,
@@ -1671,6 +1687,8 @@ StudioViewportRenderer::Compose(
 
         // Per-view diagnostics are rebuilt from the current target every frame.
         stellarDiagnostics_.erase(
+            info.id);
+        smallBodyDiagnostics_.erase(
             info.id);
 
         std::optional<universe::BodyShape> shape;
@@ -3732,6 +3750,9 @@ StudioViewportRenderer::Compose(
                 std::optional<
                     world_model::ResolvedGiantAppearance>
                     resolvedGiantForView;
+                std::optional<
+                    world_model::ResolvedSmallBodyAppearance>
+                    resolvedSmallBodyForView;
 
                 if (bodyObject.has_value())
                 {
@@ -3748,6 +3769,20 @@ StudioViewportRenderer::Compose(
                                 session.World().
                                     Objects(),
                                 *bodyObject);
+
+                    resolvedSmallBodyForView =
+                        world_model::
+                            ResolveSmallBodyAppearance(
+                                session.World().
+                                    Objects(),
+                                *bodyObject);
+
+                    if (resolvedGiantForView.has_value() &&
+                        resolvedSmallBodyForView.has_value())
+                    {
+                        throw std::runtime_error(
+                            "A body cannot enable Giant Appearance and Small Body Appearance simultaneously.");
+                    }
 
                     if (resolvedRadiativeForView.has_value())
                     {
@@ -3909,6 +3944,11 @@ StudioViewportRenderer::Compose(
                 std::optional<
                     celestial_far_render::AppearanceSummary>
                     giantAppearanceSummary;
+                std::optional<
+                    celestial_far_render::AppearanceSummary>
+                    smallBodyAppearanceSummary;
+                f64 smallBodyMinimumRadiusScale = 1.0;
+                f64 smallBodyMaximumRadiusScale = 1.0;
 
                 if (resolvedGiantForView.has_value())
                 {
@@ -3969,6 +4009,85 @@ StudioViewportRenderer::Compose(
                         info.id);
                 }
 
+                if (resolvedSmallBodyForView.has_value())
+                {
+                    auto& smallPresentation =
+                        smallBodyPresentations_[info.id];
+
+                    if (smallPresentation.appearance ==
+                            nullptr ||
+                        smallPresentation.body !=
+                            logicalTarget->
+                                target->body ||
+                        smallPresentation.fingerprint !=
+                            resolvedSmallBodyForView->
+                                fingerprint)
+                    {
+                        auto smallAppearance =
+                            celestial_small_bodies::
+                                BuildSmallBodyAppearance(
+                                    resolvedSmallBodyForView->
+                                        parameters,
+                                    {
+                                        .faceResolution =
+                                            65U
+                                    });
+
+                        const auto smallShape =
+                            celestial_small_bodies::
+                                BuildSmallBodyShape(
+                                    resolvedSmallBodyForView->
+                                        parameters,
+                                    {
+                                        .faceResolution =
+                                            65U
+                                    });
+
+                        smallPresentation.summary =
+                            celestial_far_render::
+                                SummarizeAppearance(
+                                    smallAppearance);
+                        smallPresentation.gpuAppearance =
+                            std::make_unique<
+                                celestial_appearance::
+                                    GpuPlanetaryAppearanceProduct>(
+                                        *device_,
+                                        smallAppearance);
+                        smallPresentation.appearance =
+                            std::make_unique<
+                                celestial_appearance::
+                                    PlanetaryAppearanceProduct>(
+                                        std::move(
+                                            smallAppearance));
+                        smallPresentation.body =
+                            logicalTarget->
+                                target->body;
+                        smallPresentation.fingerprint =
+                            resolvedSmallBodyForView->
+                                fingerprint;
+                        smallPresentation.minimumRadiusScale =
+                            smallShape.minimumRadiusScale;
+                        smallPresentation.maximumRadiusScale =
+                            smallShape.maximumRadiusScale;
+                    }
+
+                    smallBodyAppearanceSummary =
+                        smallPresentation.summary;
+                    smallBodyMinimumRadiusScale =
+                        smallPresentation.
+                            minimumRadiusScale;
+                    smallBodyMaximumRadiusScale =
+                        smallPresentation.
+                            maximumRadiusScale;
+                }
+                else
+                {
+                    smallBodyPresentations_.erase(
+                        info.id);
+                    smallBodyDiagnostics_.erase(
+                        info.id);
+                }
+
                 celestial_far_render::
                     AppearanceSummary appearance{
                         .albedoLinear =
@@ -3977,17 +4096,23 @@ StudioViewportRenderer::Compose(
                                 : giantAppearanceSummary.has_value()
                                     ? giantAppearanceSummary->
                                           albedoLinear
-                                    : math::Float3{
-                                          0.18F,
-                                          0.21F,
-                                          0.23F},
+                                    : smallBodyAppearanceSummary.has_value()
+                                        ? smallBodyAppearanceSummary->
+                                              albedoLinear
+                                        : math::Float3{
+                                              0.18F,
+                                              0.21F,
+                                              0.23F},
                         .roughness =
                             radiativeEmitter
                                 ? 0.0F
                                 : giantAppearanceSummary.has_value()
                                     ? giantAppearanceSummary->
                                           roughness
-                                    : 0.82F,
+                                    : smallBodyAppearanceSummary.has_value()
+                                        ? smallBodyAppearanceSummary->
+                                              roughness
+                                        : 0.82F,
                         .oceanFraction = 0.0F,
                         .iceFraction = 0.0F,
                         .emissionLinear = {}
@@ -4072,6 +4197,37 @@ StudioViewportRenderer::Compose(
                         });
                 }
 
+                if (resolvedSmallBodyForView.has_value())
+                {
+                    smallBodyDiagnostics_.insert_or_assign(
+                        info.id,
+                        StudioSmallBodyDiagnostics{
+                            .body =
+                                logicalTarget->
+                                    target->body,
+                            .appearanceFingerprint =
+                                resolvedSmallBodyForView->
+                                    fingerprint,
+                            .minimumRadiusScale =
+                                smallBodyMinimumRadiusScale,
+                            .maximumRadiusScale =
+                                smallBodyMaximumRadiusScale,
+                            .irregularity =
+                                resolvedSmallBodyForView->
+                                    parameters.irregularity,
+                            .craterDensity =
+                                resolvedSmallBodyForView->
+                                    parameters.craterDensity,
+                            .oppositionStrength =
+                                resolvedSmallBodyForView->
+                                    parameters.oppositionStrength,
+                            .projectedRadiusPixels =
+                                projectedRadius,
+                            .representation =
+                                decision.representation
+                        });
+                }
+
                 graph.AddPass(
                     prefix +
                         ".FarBody",
@@ -4120,6 +4276,7 @@ StudioViewportRenderer::Compose(
                      pointRadiometricIntensity,
                      resolvedRadiativeForView,
                      resolvedGiantForView,
+                     resolvedSmallBodyForView,
                      studioDirectLight,
                      resolvedOceanForView](
                         rhi::CommandList& commands,
@@ -4241,6 +4398,44 @@ StudioViewportRenderer::Compose(
                                             static_cast<f32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.turbulenceStrength:0.18),
                                         .giantSeed =
                                             static_cast<u32>(resolvedGiantForView.has_value()?resolvedGiantForView->parameters.seed&0xffffffffULL:1ULL),
+                                        .smallBodyEnabled =
+                                            resolvedSmallBodyForView.has_value(),
+                                        .smallBodyAxisScale =
+                                            resolvedSmallBodyForView.has_value()
+                                                ? math::Float3{
+                                                      static_cast<f32>(resolvedSmallBodyForView->parameters.axisScale.x),
+                                                      static_cast<f32>(resolvedSmallBodyForView->parameters.axisScale.y),
+                                                      static_cast<f32>(resolvedSmallBodyForView->parameters.axisScale.z)}
+                                                : math::Float3{1.0F,0.82F,0.68F},
+                                        .smallBodyIrregularity =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.irregularity:0.18),
+                                        .smallBodyLargeLobeStrength =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.largeLobeStrength:0.12),
+                                        .smallBodyCraterDensity =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.craterDensity:0.55),
+                                        .smallBodyCraterDepth =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.craterDepth:0.12),
+                                        .smallBodyCraterRimStrength =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.craterRimStrength:0.08),
+                                        .smallBodyFreshMaterialColorLinear =
+                                            resolvedSmallBodyForView.has_value()
+                                                ? math::Float3{
+                                                      static_cast<f32>(resolvedSmallBodyForView->parameters.freshMaterialColorLinear.x),
+                                                      static_cast<f32>(resolvedSmallBodyForView->parameters.freshMaterialColorLinear.y),
+                                                      static_cast<f32>(resolvedSmallBodyForView->parameters.freshMaterialColorLinear.z)}
+                                                : math::Float3{0.24F,0.22F,0.19F},
+                                        .smallBodyColorVariation =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.colorVariation:0.18),
+                                        .smallBodyOppositionStrength =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.oppositionStrength:0.55),
+                                        .smallBodyOppositionWidthRadians =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.oppositionWidthRadians:0.055),
+                                        .smallBodySingleScatteringAlbedo =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.singleScatteringAlbedo:0.16),
+                                        .smallBodyMacroscopicRoughnessRadians =
+                                            static_cast<f32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.macroscopicRoughnessRadians:0.42),
+                                        .smallBodySeed =
+                                            static_cast<u32>(resolvedSmallBodyForView.has_value()?resolvedSmallBodyForView->parameters.seed&0xffffffffULL:1ULL),
                                         .stellar =
                                             radiativeEmitter,
                                         .stellarColorLinear =
