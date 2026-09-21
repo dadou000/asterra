@@ -3,6 +3,7 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 
+#include <optional>
 #include <vector>
 
 namespace orbit::world_model
@@ -28,5 +29,6 @@ struct AuthoredLocalLight
 
 [[nodiscard]] std::vector<AuthoredLocalLight>
 ResolveAuthoredLocalLights(
-    const scene::ObjectStore& objects);
+    const scene::ObjectStore& objects,
+    std::optional<scene::ObjectId> root = std::nullopt);
 } // namespace orbit::world_model
