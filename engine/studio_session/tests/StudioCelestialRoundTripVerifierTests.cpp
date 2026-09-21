@@ -5,6 +5,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <filesystem>
+#include <iostream>
 #include <string>
 
 int main()
@@ -106,7 +107,15 @@ int main()
                 body);
 
     if (!report.success)
+    {
+        std::cerr
+            << "round-trip failure stage="
+            << report.failureStage
+            << " diagnostic="
+            << report.diagnostic
+            << '\n';
         return 2;
+    }
 
     if (!report.semanticIdsPreserved ||
         !report.provenancePreserved ||
