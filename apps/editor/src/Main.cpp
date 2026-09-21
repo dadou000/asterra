@@ -7138,6 +7138,11 @@ int main(
             const auto studioSnapshot =
                 studioRuntime.Capture();
 
+            const auto lightingPlan =
+                lightingScheduler.BuildPlan(
+                    {},
+                    device.Capabilities().rayQuery);
+
             const auto renderedStudioViews =
                 studioViewportRenderer.Compose(
                     graph,
@@ -7148,6 +7153,7 @@ int main(
                     studioSession.Clock().Time(),
                     pathDebugVisualization,
                     lightingFrameSlot,
+                    lightingPlan,
                     &lightingTimestamps);
 
             graph.AddPass(
