@@ -2,6 +2,7 @@ add_library(OrbitStudioSession STATIC
     src/BezierHandleEditor.cpp
     src/StudioAuthoringBinding.cpp
     src/StudioCelestialRoundTripVerifier.cpp
+    src/StudioCelestialValidationScenario.cpp
     src/StudioSession.cpp
     src/SimulationClock.cpp
     src/StudioRuntimeBinding.cpp
@@ -36,6 +37,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::Core
         Orbit::CelestialCompactObjects
         Orbit::CelestialGiants
+        Orbit::CelestialLighting
         Orbit::CelestialMagnetosphere
         Orbit::CelestialRepresentation
         Orbit::CelestialSmallBodies
@@ -470,5 +472,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioCelestialRoundTripVerifier
         COMMAND OrbitStudioCelestialRoundTripVerifierTests
+    )
+
+
+    add_executable(OrbitStudioCelestialValidationScenarioTests
+        tests/StudioCelestialValidationScenarioTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioCelestialValidationScenarioTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioCelestialValidationScenarioTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitStudioCelestialValidationScenarioTests)
+
+    add_test(
+        NAME Orbit.StudioCelestialValidationScenario
+        COMMAND OrbitStudioCelestialValidationScenarioTests
     )
 endif()
