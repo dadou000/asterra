@@ -724,7 +724,7 @@ float4 main(VSOutput input) : SV_Target0
         input.emission;
 
     return float4(
-        color / (1.0 + color),
+        color,
         saturate(input.opacity));
 }
 )";
