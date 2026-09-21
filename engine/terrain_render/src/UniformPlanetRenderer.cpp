@@ -154,7 +154,15 @@ public:
             .pixelShader = {ps.bytecode.data(), ps.bytecode.size()},
             .pushConstantDwords = 32, .shaderResourceBuffers = 1,
             .cullMode = rhi::CullMode::Back, .depthCompare = rhi::DepthCompare::GreaterEqual,
-            .depthTest = true, .depthWrite = true});
+            .depthTest = true,
+            .depthWrite = true,
+            .colorAttachmentFormats = {
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float
+            },
+            .colorAttachmentCount = 4U});
     }
     void Poll()
     {
