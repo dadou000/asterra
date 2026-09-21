@@ -617,6 +617,57 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 )";
 } // namespace
 
+bool CanReuseFinalGatherHistory(
+    const LightingView& previous,
+    const LightingView& current) noexcept
+{
+    if (!previous.frame ||
+        !previous.body ||
+        previous.frame != current.frame ||
+        previous.body != current.body ||
+        HasChange(
+            current.change,
+            LightingViewChange::CameraCut) ||
+        HasChange(
+            current.change,
+            LightingViewChange::FrameChanged) ||
+        HasChange(
+            current.change,
+            LightingViewChange::BodyChanged) ||
+        HasChange(
+            current.change,
+            LightingViewChange::ProjectionChanged))
+    {
+        return false;
+    }
+
+    const math::Double3 cameraDelta =
+        current.cameraPositionInFrameMeters -
+        previous.cameraPositionInFrameMeters;
+
+    if (math::LengthSquared(cameraDelta) >
+        1.0e-10)
+    {
+        return false;
+    }
+
+    const f32 forwardAgreement =
+        math::Dot(
+            math::Normalize(previous.forward),
+            math::Normalize(current.forward));
+
+    const f32 upAgreement =
+        math::Dot(
+            math::Normalize(previous.up),
+            math::Normalize(current.up));
+
+    return
+        std::isfinite(forwardAgreement) &&
+        std::isfinite(upAgreement) &&
+        forwardAgreement >= 0.999999F &&
+        upAgreement >= 0.999999F;
+}
+
 ScreenSpaceFinalGatherRenderer::
 ScreenSpaceFinalGatherRenderer(
     rhi::Device& device,
