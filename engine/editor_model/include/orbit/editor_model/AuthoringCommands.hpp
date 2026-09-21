@@ -87,6 +87,36 @@ inline constexpr commands::CommandId kRemoveVolume{
     .low = 0x52454d4f56564f4cULL
 };
 
+inline constexpr commands::CommandId kAddVolumeSource{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x564f4c5352430001ULL
+};
+
+inline constexpr commands::CommandId kAddVolumeEffector{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x564f4c4546460001ULL
+};
+
+inline constexpr commands::CommandId kRemoveVolumeInput{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x564f4c494e505201ULL
+};
+
+inline constexpr commands::CommandId kMoveVolumeInputUp{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x564f4c494e505501ULL
+};
+
+inline constexpr commands::CommandId kMoveVolumeInputDown{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x564f4c494e504401ULL
+};
+
+inline constexpr commands::CommandId kPaintVolumeTerrainSource{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x564f4c5041494e54ULL
+};
+
 void Register(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
