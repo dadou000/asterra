@@ -7,6 +7,7 @@ add_library(OrbitLighting STATIC
     src/Visibility.cpp
     src/AnalyticBodyVisibility.cpp
     src/TerrainHeightfieldVisibility.cpp
+    src/ScreenSpaceVisibility.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
