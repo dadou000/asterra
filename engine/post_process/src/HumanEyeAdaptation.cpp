@@ -61,9 +61,6 @@ UpdateHumanEyeAdaptation(
         return state;
     }
 
-    const f32 previousCeilingExcess =
-        state.photopicCeilingExcessStops;
-
     const f32 p50 =
         FiniteOr(
             statistics.medianLog2,
@@ -117,6 +114,11 @@ UpdateHumanEyeAdaptation(
             state.rawPhotopicTargetLog2 -
                 photopicCeiling,
             0.0F);
+
+    if (state.photopicCeilingExcessStops > 0.0F)
+    {
+        state.ceilingRecoveryActive = true;
+    }
 
     state.p95ExcessStops =
         std::max(
@@ -222,7 +224,7 @@ UpdateHumanEyeAdaptation(
     }
 
     const bool releasingCeilingOverload =
-        previousCeilingExcess > 0.0F &&
+        state.ceilingRecoveryActive &&
         state.photopicCeilingExcessStops <= 0.0F &&
         state.photopicTargetLog2 <
             state.photopicLog2;
@@ -238,6 +240,15 @@ UpdateHumanEyeAdaptation(
                 : (releasingCeilingOverload
                     ? config.photopicCeilingRecoverySeconds
                     : config.photopicDarkenSeconds));
+
+    if (state.ceilingRecoveryActive &&
+        state.photopicCeilingExcessStops <= 0.0F &&
+        std::abs(
+            state.photopicLog2 -
+            state.photopicTargetLog2) <= 0.05F)
+    {
+        state.ceilingRecoveryActive = false;
+    }
 
     state.darkAdaptation =
         ExpApproach(
