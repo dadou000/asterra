@@ -167,6 +167,37 @@ inline constexpr schema::PropertyId kAtmosphereAerosolScaleHeightMeters{
 inline constexpr schema::PropertyId kAtmosphereAbsorberScale{
     .high = 0x4f5242495441544dULL, .low = 0x4142535343414c01ULL};
 
+inline constexpr schema::PropertyId kCloudSourceModel{
+    .high = 0x4f52424954434c44ULL, .low = 0x5352434d4f444501ULL};
+inline constexpr schema::PropertyId kCloudBaseAltitudeMeters{
+    .high = 0x4f52424954434c44ULL, .low = 0x42415345414c5401ULL};
+inline constexpr schema::PropertyId kCloudTopAltitudeMeters{
+    .high = 0x4f52424954434c44ULL, .low = 0x544f50414c540001ULL};
+inline constexpr schema::PropertyId kCloudCoverageBias{
+    .high = 0x4f52424954434c44ULL, .low = 0x434f564249415301ULL};
+inline constexpr schema::PropertyId kCloudOpticalDepth{
+    .high = 0x4f52424954434c44ULL, .low = 0x4f50544445505401ULL};
+inline constexpr schema::PropertyId kCloudSingleScatteringAlbedo{
+    .high = 0x4f52424954434c44ULL, .low = 0x5353414c42454401ULL};
+inline constexpr schema::PropertyId kCloudAnisotropy{
+    .high = 0x4f52424954434c44ULL, .low = 0x414e49534f545201ULL};
+inline constexpr schema::PropertyId kCloudDensityExponent{
+    .high = 0x4f52424954434c44ULL, .low = 0x44454e5345585001ULL};
+inline constexpr schema::PropertyId kCloudWeatherScale{
+    .high = 0x4f52424954434c44ULL, .low = 0x5745415448534301ULL};
+inline constexpr schema::PropertyId kCloudDetailScale{
+    .high = 0x4f52424954434c44ULL, .low = 0x44455441494c5301ULL};
+inline constexpr schema::PropertyId kCloudSeed{
+    .high = 0x4f52424954434c44ULL, .low = 0x5345454400000001ULL};
+inline constexpr schema::PropertyId kCloudWindAngularRadiansPerSecond{
+    .high = 0x4f52424954434c44ULL, .low = 0x57494e44414e4701ULL};
+inline constexpr schema::PropertyId kCloudPrecipitationPhase{
+    .high = 0x4f52424954434c44ULL, .low = 0x5052454350485301ULL};
+inline constexpr schema::PropertyId kCloudShadowParticipation{
+    .high = 0x4f52424954434c44ULL, .low = 0x534841444f570001ULL};
+inline constexpr schema::PropertyId kCloudOrbitalRepresentation{
+    .high = 0x4f52424954434c44ULL, .low = 0x4f52424954414c01ULL};
+
 inline constexpr schema::PropertyId kEphemerisSourceLabel{
     .high = 0x4f52424954455048ULL, .low = 0x534f555243450001ULL};
 inline constexpr schema::PropertyId kEphemerisSampleTimeMicroseconds{
