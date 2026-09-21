@@ -106,7 +106,21 @@ public:
         f32 opacity = 1.0F,
         const MacroGlobeLighting& lighting = {});
 
+    void DrawSurface(
+        rhi::CommandList& commands,
+        rhi::Texture& previewColor,
+        rhi::Texture& surfaceBaseRoughness,
+        rhi::Texture& surfaceNormalMetallic,
+        rhi::Texture& surfaceEmissionClass,
+        u32 width,
+        u32 height,
+        GpuMacroGlobeProduct& globe,
+        const render_view::CameraState& camera,
+        f32 opacity = 1.0F,
+        const MacroGlobeLighting& lighting = {});
+
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::unique_ptr<rhi::GraphicsPipeline> surfacePipeline_;
 };
 } // namespace orbit::celestial_globe
