@@ -34,6 +34,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialGlobe
         Orbit::CelestialGiants
         Orbit::CelestialMagnetosphereRender
+        Orbit::CelestialCompactRender
         Orbit::CelestialSmallBodies
         Orbit::CelestialFarRender
         Orbit::CelestialRepresentation
