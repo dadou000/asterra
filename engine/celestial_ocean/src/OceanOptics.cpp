@@ -190,6 +190,72 @@ math::Double3 DeepWaterColor(
     };
 }
 
+void ApplyOrbitalOceanAppearance(
+    celestial_appearance::PlanetaryAppearanceProduct& appearance,
+    const OceanOpticalParameters& p)
+{
+    Validate(p);
+
+    for (auto& texel : appearance.texels)
+    {
+        const f32 ocean =
+            std::clamp(
+                texel.oceanMask,
+                0.0F,
+                1.0F);
+
+        if (ocean <= 0.0F)
+            continue;
+
+        const auto deep =
+            DeepWaterColor(
+                p,
+                std::max(
+                    static_cast<f64>(
+                        texel.waterDepthMeters),
+                    0.0));
+
+        const f32 depthBlend =
+            static_cast<f32>(
+                std::clamp(
+                    static_cast<f64>(
+                        texel.waterDepthMeters) /
+                        p.deepColorDepthMeters,
+                    0.0,
+                    1.0));
+
+        const math::Float3 deepColor{
+            static_cast<f32>(deep.x),
+            static_cast<f32>(deep.y),
+            static_cast<f32>(deep.z)
+        };
+
+        const f32 blend =
+            ocean * depthBlend *
+            (1.0F - texel.iceMask);
+
+        texel.albedoLinear =
+            texel.albedoLinear *
+                (1.0F - blend) +
+            deepColor * blend;
+
+        texel.roughness =
+            std::clamp(
+                texel.roughness *
+                    (1.0F - ocean) +
+                static_cast<f32>(
+                    p.orbitalRoughness) *
+                    ocean,
+                0.01F,
+                1.0F);
+    }
+
+    appearance.fingerprint =
+        terrain::StableCombine64(
+            appearance.fingerprint,
+            OceanOpticalFingerprint(p));
+}
+
 u64 OceanOpticalFingerprint(
     const OceanOpticalParameters& p)
 {
