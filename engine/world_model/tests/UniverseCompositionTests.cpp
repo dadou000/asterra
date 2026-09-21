@@ -142,15 +142,32 @@ int main()
         }
 
         const auto* transform =
-            std::get_if<orbit::universe::UniformRotationTransform>(
-                &planet->transformModel);
+            std::get_if<
+                orbit::universe::OrbitDrivenUniformRotationTransform>(
+                    &planet->transformModel);
+
+        const auto systemFrame =
+            composition.FrameForObject(systemObject);
+        const auto planetFrame =
+            composition.FrameForObject(planetObject);
+        const auto parentFromPlanet =
+            systemFrame.has_value() &&
+                    planetFrame.has_value()
+                ? composition.Frames().ResolveTransform(
+                      *planetFrame,
+                      *systemFrame,
+                      orbit::time::SimulationTime{
+                          .microsecondsFromEpoch = 123456})
+                : std::nullopt;
 
         if (transform == nullptr ||
-            transform->centerInParentMeters.x != 10'000.0 ||
-            transform->centerInParentMeters.y != 20'000.0 ||
-            transform->centerInParentMeters.z != 30'000.0 ||
+            !transform->orbitState ||
             transform->epoch.microsecondsFromEpoch != 123456 ||
-            transform->angularVelocityRadiansPerSecond <= 0.0)
+            transform->angularVelocityRadiansPerSecond <= 0.0 ||
+            !parentFromPlanet.has_value() ||
+            parentFromPlanet->translation.x != 10'000.0 ||
+            parentFromPlanet->translation.y != 20'000.0 ||
+            parentFromPlanet->translation.z != 30'000.0)
         {
             return 5;
         }
