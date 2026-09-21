@@ -17,6 +17,7 @@
 #include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/time/SimulationTime.hpp>
+#include <orbit/world_model/CelestialLightingService.hpp>
 
 #include <map>
 #include <memory>
@@ -41,6 +42,15 @@ struct StudioMacroGlobeDiagnostics
     u64 geometryFingerprint{0};
     u64 appearanceFingerprint{0};
     u32 appearanceTexels{0};
+};
+
+struct StudioCelestialLightingDiagnostics
+{
+    universe::BodyId receiver{};
+    universe::BodyId emitter{};
+    f64 visibleFraction{1.0};
+    f64 irradianceWattsPerSquareMeter{0.0};
+    u32 contributingOccluders{0};
 };
 
 struct StudioSurfaceGlobeTransitionDiagnostics
@@ -125,6 +135,11 @@ public:
     [[nodiscard]] std::optional<
         StudioSurfaceGlobeTransitionDiagnostics>
     SurfaceGlobeTransitionDiagnostics(
+        std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] std::optional<
+        StudioCelestialLightingDiagnostics>
+    CelestialLightingDiagnostics(
         std::string_view viewportId) const noexcept;
 
     void SetColorLut(
@@ -215,6 +230,12 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioCelestialLightingDiagnostics,
+        std::less<>>
+        lightingDiagnostics_;
 
     std::map<
         std::string,
