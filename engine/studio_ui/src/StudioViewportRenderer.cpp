@@ -3119,6 +3119,107 @@ StudioViewportRenderer::Compose(
         }
         }
 
+        const bool usesPhysicalSurfaceLighting =
+            presentation ==
+                StudioViewportPresentation::ProductionTerrain ||
+            presentation ==
+                StudioViewportPresentation::MacroGlobe ||
+            presentation ==
+                StudioViewportPresentation::BodyPreview;
+
+        if (usesPhysicalSurfaceLighting)
+        {
+            auto* lightingBaseRoughness =
+                &view->SurfaceBaseRoughness();
+            auto* lightingNormalMetallic =
+                &view->SurfaceNormalMetallic();
+            auto* lightingEmissionClass =
+                &view->SurfaceEmissionClass();
+
+            const auto lightingView =
+                view->Lighting();
+
+            const lighting::DirectionalLight
+                directLight{
+                    .directionToLight =
+                        studioDirectLight.directionBody,
+                    .colorLinear = {
+                        1.0F,
+                        1.0F,
+                        1.0F
+                    },
+                    .irradianceScale =
+                        studioDirectLight.irradianceScale
+                };
+
+            graph.AddPass(
+                prefix + ".SharedDirectLighting",
+                {
+                    {
+                        .texture =
+                            targets.surfaceBaseRoughness,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            targets.surfaceNormalMetallic,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            targets.surfaceEmissionClass,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 lightingBaseRoughness,
+                 lightingNormalMetallic,
+                 lightingEmissionClass,
+                 color,
+                 width,
+                 height,
+                 lightingView,
+                 directLight](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    directLightingRenderer_.Draw(
+                        commands,
+                        *lightingBaseRoughness,
+                        *lightingNormalMetallic,
+                        *lightingEmissionClass,
+                        *color,
+                        width,
+                        height,
+                        lightingView,
+                        directLight);
+                });
+        }
+
         if (terrainRuntime.has_value() &&
             logicalTarget->mode !=
                 studio_session::ViewportMode::Debug)
