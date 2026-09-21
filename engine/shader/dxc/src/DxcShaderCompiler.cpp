@@ -115,6 +115,12 @@ Binary DxcShaderCompiler::Compile(const CompileRequest& request) const
         L"-HV", L"2021"
     };
 
+    if (request.enableSpirvRayQuery)
+    {
+        arguments.push_back(
+            L"-fspv-extension=SPV_KHR_ray_query");
+    }
+
     if (request.debug)
     {
         arguments.push_back(L"-Zi");
