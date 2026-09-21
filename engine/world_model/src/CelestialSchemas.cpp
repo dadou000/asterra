@@ -193,6 +193,33 @@ void RegisterCelestialCapabilitySchemas(
         }
     });
     schemas.RegisterType({
+        .id = kGravityCapabilityType,
+        .displayName = "Gravity",
+        .category = "Celestial/Capability",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Point Mass"),
+            {.id = kGravityDeriveMuFromMass,
+             .name = "Derive Mu From Body Mass",
+             .kind = schema::PropertyKind::Boolean,
+             .defaultValue = true},
+            {.id = kGravityMuM3PerS2,
+             .name = "Gravitational Parameter",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m3/s2",
+             .defaultValue = 1.0,
+             .range = {.minimum = 0.0}},
+            {.id = kGravitySofteningMeters,
+             .name = "Softening",
+             .kind = schema::PropertyKind::Float,
+             .unit = "m",
+             .defaultValue = 0.0,
+             .range = {.minimum = 0.0},
+             .advanced = true}
+        }
+    });
+
+    schemas.RegisterType({
         .id = kRotationCapabilityType,
         .displayName = "Rotation / Orientation",
         .category = "Celestial/Capability",
