@@ -2922,10 +2922,28 @@ StudioViewportRenderer::Compose(
                             .access =
                                 render_graph::Access::
                                     Write
+                        },
+                        {
+                            .texture = targets.surfaceBaseRoughness,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceNormalMetallic,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.surfaceEmissionClass,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
                         }
                     },
                     [this,
                      color,
+                     bodySurfaceBaseRoughness,
+                     bodySurfaceNormalMetallic,
+                     bodySurfaceEmissionClass,
                      width,
                      height,
                      camera,
@@ -2933,9 +2951,28 @@ StudioViewportRenderer::Compose(
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
+                        commands.ClearColorTarget(
+                            *bodySurfaceBaseRoughness,
+                            {0.0F, 0.0F, 0.0F, 1.0F});
+                        commands.ClearColorTarget(
+                            *bodySurfaceNormalMetallic,
+                            {0.0F, 1.0F, 0.0F, 0.0F});
+                        commands.ClearColorTarget(
+                            *bodySurfaceEmissionClass,
+                            {0.0F, 0.0F, 0.0F, 0.0F});
+
                         bodyRenderer_.Draw(
                             commands,
                             *color,
+                            width,
+                            height,
+                            bodyShape,
+                            camera);
+                        bodyRenderer_.DrawSurfaceData(
+                            commands,
+                            *bodySurfaceBaseRoughness,
+                            *bodySurfaceNormalMetallic,
+                            *bodySurfaceEmissionClass,
                             width,
                             height,
                             bodyShape,
