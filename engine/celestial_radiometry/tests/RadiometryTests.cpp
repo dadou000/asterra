@@ -40,6 +40,23 @@ int main()
         return 2;
     }
 
+    const double pixelOmega =
+        CentralPixelSolidAngleSteradians(
+            1.0,
+            1000U);
+
+    if (!(pixelOmega > 0.0) ||
+        std::abs(
+            ResolvedPixelIrradianceWattsPerSquareMeter(
+                2.0,
+                1.0,
+                1000U) -
+            2.0 * pixelOmega) >
+            1.0e-15)
+    {
+        return 6;
+    }
+
     const auto exposure =
         ResolveExposure({});
 
