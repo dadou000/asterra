@@ -1,5 +1,7 @@
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 
+#include <orbit/celestial_lighting/CelestialLighting.hpp>
+
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
@@ -988,6 +990,53 @@ void FarBodyRenderer::Draw(
             draw.camera.verticalFovRadians *
             0.5F);
 
+    f32 proxyRadiometricIntensity =
+        std::max(
+            draw.radiometricIntensity,
+            0.0F);
+
+    if (!draw.stellar &&
+        (mode == 2U || mode == 3U) &&
+        math::LengthSquared(
+            draw.camera.localPositionMeters) >
+            1.0e-20)
+    {
+        const auto observerDirection =
+            math::Normalize(
+                draw.camera.
+                    localPositionMeters);
+
+        const math::Double3 lightDirection{
+            draw.lightDirectionBody.x,
+            draw.lightDirectionBody.y,
+            draw.lightDirectionBody.z
+        };
+
+        if (math::LengthSquared(
+                lightDirection) >
+            1.0e-20)
+        {
+            const f64 phaseAngle =
+                std::acos(
+                    std::clamp(
+                        math::Dot(
+                            observerDirection,
+                            math::Normalize(
+                                lightDirection)),
+                        -1.0,
+                        1.0));
+
+            proxyRadiometricIntensity =
+                static_cast<f32>(
+                    std::max(
+                        draw.incidentLightScale,
+                        0.0F) *
+                    celestial_lighting::
+                        LambertPhase(
+                            phaseAngle));
+        }
+    }
+
     const std::array<u32, 36>
         constants{
             bits(static_cast<f32>(
@@ -1044,9 +1093,7 @@ void FarBodyRenderer::Draw(
             bits(static_cast<f32>(mode)),
             bits(radiusNdc),
             bits(pointFluxScale),
-            bits(std::max(
-                draw.radiometricIntensity,
-                0.0F)),
+            bits(proxyRadiometricIntensity),
 
             bits(draw.lightDirectionBody.x),
             bits(draw.lightDirectionBody.y),
