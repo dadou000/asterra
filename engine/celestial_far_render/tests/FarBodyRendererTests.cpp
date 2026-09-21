@@ -61,7 +61,7 @@ int main()
                 {.resolution = 32U});
 
     if (disc.resolution != 32U ||
-        disc.rgba8.size() !=
+        disc.rgba16.size() !=
             32U * 32U * 4U ||
         disc.appearanceFingerprint !=
             appearance.fingerprint ||
@@ -73,12 +73,12 @@ int main()
     const std::size_t center =
         (16U * 32U + 16U) * 4U;
 
-    if (disc.rgba8[center + 3U] == 0U)
+    if (disc.rgba16[center + 3U] == 0U)
     {
         return 3;
     }
 
-    if (disc.rgba8[3U] != 0U)
+    if (disc.rgba16[3U] != 0U)
     {
         return 4;
     }
