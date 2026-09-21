@@ -1714,6 +1714,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       highlightEffectsRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
+      outputTransformRenderer_(device, compiler),
       colorLut_(
           std::make_unique<
               post_process::GpuColorLut>(
@@ -1955,6 +1956,50 @@ void StudioViewportRenderer::SetColorLutSettings(
             0.0F,
             1.0F);
     colorLutSettings_ = settings;
+}
+
+StudioOutputTransformDiagnostics
+StudioViewportRenderer::OutputTransformDiagnostics() const noexcept
+{
+    return {
+        .settings =
+            outputTransformSettings_,
+        .capabilities =
+            outputDisplayCapabilities_,
+        .resolved =
+            post_process::
+                ResolveOutputTransform(
+                    outputTransformSettings_,
+                    outputDisplayCapabilities_)
+    };
+}
+
+void StudioViewportRenderer::SetOutputTransformSettings(
+    post_process::OutputTransformSettings settings) noexcept
+{
+    settings.referenceWhiteNits =
+        std::max(
+            settings.referenceWhiteNits,
+            1.0F);
+    settings.requestedPeakNits =
+        std::max(
+            settings.requestedPeakNits,
+            settings.referenceWhiteNits);
+
+    outputTransformSettings_ =
+        settings;
+}
+
+void StudioViewportRenderer::SetOutputDisplayCapabilities(
+    post_process::OutputDisplayCapabilities capabilities) noexcept
+{
+    capabilities.reportedPeakNits =
+        std::max(
+            capabilities.reportedPeakNits,
+            0.0F);
+
+    outputDisplayCapabilities_ =
+        capabilities;
 }
 
 void StudioViewportRenderer::SetDisplayResolveSettings(
@@ -9935,6 +9980,8 @@ StudioViewportRenderer::Compose(
 
         auto* displayLinear =
             &view->DisplayLinear();
+        auto* displayGraded =
+            &view->DisplayGraded();
         auto* displayColor =
             &view->DisplayColor();
         auto* colorLut =
@@ -10139,7 +10186,7 @@ StudioViewportRenderer::Compose(
                             Read
                 },
                 {
-                    .texture = targets.display,
+                    .texture = targets.displayGraded,
                     .state =
                         rhi::ResourceState::
                             RenderTarget,
@@ -10150,7 +10197,7 @@ StudioViewportRenderer::Compose(
             },
             [this,
              displayLinear,
-             displayColor,
+             displayGraded,
              width,
              height,
              colorLut,
@@ -10161,11 +10208,61 @@ StudioViewportRenderer::Compose(
                 colorLutRenderer_.Draw(
                     commands,
                     *displayLinear,
-                    *displayColor,
+                    *displayGraded,
                     width,
                     height,
                     *colorLut,
                     colorLutSettings);
+            });
+
+        const auto outputDiagnostics =
+            post_process::
+                ResolveOutputTransform(
+                    outputTransformSettings_,
+                    outputDisplayCapabilities_);
+
+        graph.AddPass(
+            prefix + ".OutputTransform",
+            {
+                {
+                    .texture = targets.displayGraded,
+                    .state =
+                        rhi::ResourceState::
+                            ShaderResource,
+                    .access =
+                        render_graph::Access::
+                            Read
+                },
+                {
+                    .texture = targets.display,
+                    .state =
+                        rhi::ResourceState::
+                            RenderTarget,
+                    .access =
+                        render_graph::Access::
+                            Write
+                }
+            },
+            [this,
+             displayGraded,
+             displayColor,
+             width,
+             height,
+             outputDiagnostics,
+             outputPattern =
+                 outputTransformSettings_.
+                     testPattern](
+                rhi::CommandList& commands,
+                const render_graph::Resources&)
+            {
+                outputTransformRenderer_.Draw(
+                    commands,
+                    *displayGraded,
+                    *displayColor,
+                    width,
+                    height,
+                    outputDiagnostics,
+                    outputPattern);
             });
 
         if (histogram.showMeteringOverlay &&
