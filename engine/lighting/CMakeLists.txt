@@ -25,6 +25,7 @@ add_library(OrbitLighting STATIC
     src/RuntimeEmissiveSurface.cpp
     src/PlanetaryEmissionField.cpp
     src/PlanetaryEmissionAppearance.cpp
+    src/PlanetaryEmissionService.cpp
 )
 
 add_library(Orbit::Lighting ALIAS OrbitLighting)
@@ -142,6 +143,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingPlanetaryEmissionAppearanceTests
         tests/PlanetaryEmissionAppearanceTests.cpp
+    )
+
+    add_executable(OrbitLightingPlanetaryEmissionServiceTests
+        tests/PlanetaryEmissionServiceTests.cpp
     )
 
     add_executable(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
@@ -337,6 +342,14 @@ if(BUILD_TESTING)
         OrbitLightingPlanetaryEmissionAppearanceTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingPlanetaryEmissionAppearanceTests)
 
+    target_link_libraries(OrbitLightingPlanetaryEmissionServiceTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingPlanetaryEmissionServiceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingPlanetaryEmissionServiceTests)
+
     target_link_libraries(OrbitLightingRuntimeMaterialAssignmentIntegrationTests
         PRIVATE
             Orbit::Commands
@@ -446,6 +459,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingPlanetaryEmissionAppearance
         COMMAND OrbitLightingPlanetaryEmissionAppearanceTests
+    )
+
+    add_test(
+        NAME Orbit.LightingPlanetaryEmissionService
+        COMMAND OrbitLightingPlanetaryEmissionServiceTests
     )
 
     add_test(
