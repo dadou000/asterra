@@ -225,4 +225,24 @@ if(BUILD_TESTING)
         NAME Orbit.NBodyPromotionComposition
         COMMAND OrbitNBodyPromotionCompositionTests
     )
+
+    add_executable(OrbitGravityCompositionTests
+        tests/GravityCompositionTests.cpp
+    )
+
+    target_link_libraries(OrbitGravityCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitGravityCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitGravityCompositionTests)
+
+    add_test(
+        NAME Orbit.GravityComposition
+        COMMAND OrbitGravityCompositionTests
+    )
 endif()
