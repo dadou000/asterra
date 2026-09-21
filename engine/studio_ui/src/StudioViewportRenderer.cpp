@@ -3223,45 +3223,130 @@ StudioViewportRenderer::Compose(
         const auto colorLutSettings =
             colorLutSettings_;
 
-        graph.AddPass(
-            prefix + ".DisplayResolve",
-            {
+        const auto surfaceDebugMode =
+            view->SurfaceDebugMode();
+
+        if (surfaceDebugMode ==
+            lighting::SurfaceDebugMode::Lit)
+        {
+            graph.AddPass(
+                prefix + ".DisplayResolve",
                 {
-                    .texture = targets.color,
-                    .state =
-                        rhi::ResourceState::
-                            ShaderResource,
-                    .access =
-                        render_graph::Access::
-                            Read
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture = targets.displayLinear,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
                 },
+                [this,
+                 color,
+                 displayLinear,
+                 width,
+                 height,
+                 displayResolveSettings](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
                 {
-                    .texture = targets.displayLinear,
-                    .state =
-                        rhi::ResourceState::
-                            RenderTarget,
-                    .access =
-                        render_graph::Access::
-                            Write
-                }
-            },
-            [this,
-             color,
-             displayLinear,
-             width,
-             height,
-             displayResolveSettings](
-                rhi::CommandList& commands,
-                const render_graph::Resources&)
+                    displayResolveRenderer_.Draw(
+                        commands,
+                        *color,
+                        *displayLinear,
+                        width,
+                        height,
+                        displayResolveSettings);
+                });
+        }
+        else
+        {
+            rhi::Texture* surfaceDebugSource = nullptr;
+            render_graph::TextureHandle surfaceDebugHandle{};
+
+            switch (surfaceDebugMode)
             {
-                displayResolveRenderer_.Draw(
-                    commands,
-                    *color,
-                    *displayLinear,
-                    width,
-                    height,
-                    displayResolveSettings);
-            });
+            case lighting::SurfaceDebugMode::BaseColorRoughness:
+                surfaceDebugSource =
+                    &view->SurfaceBaseRoughness();
+                surfaceDebugHandle =
+                    targets.surfaceBaseRoughness;
+                break;
+
+            case lighting::SurfaceDebugMode::NormalMetallic:
+                surfaceDebugSource =
+                    &view->SurfaceNormalMetallic();
+                surfaceDebugHandle =
+                    targets.surfaceNormalMetallic;
+                break;
+
+            case lighting::SurfaceDebugMode::EmissionMetadata:
+                surfaceDebugSource =
+                    &view->SurfaceEmissionClass();
+                surfaceDebugHandle =
+                    targets.surfaceEmissionClass;
+                break;
+
+            case lighting::SurfaceDebugMode::Lit:
+                break;
+            }
+
+            if (surfaceDebugSource == nullptr)
+            {
+                throw std::logic_error(
+                    "Studio surface debug mode has no source attachment.");
+            }
+
+            graph.AddPass(
+                prefix + ".SurfaceDebugResolve",
+                {
+                    {
+                        .texture = surfaceDebugHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture = targets.displayLinear,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 surfaceDebugSource,
+                 displayLinear,
+                 width,
+                 height,
+                 surfaceDebugMode](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    surfaceDebugRenderer_.Draw(
+                        commands,
+                        *surfaceDebugSource,
+                        *displayLinear,
+                        width,
+                        height,
+                        surfaceDebugMode);
+                });
+        }
 
         graph.AddPass(
             prefix + ".ColorLutCorrection",
