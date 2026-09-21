@@ -2,6 +2,13 @@ name: Orbit Studio Real Device Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches: [orbit-v006-closure]
+    paths:
+      - '.github/workflows/orbit-studio-real-device.yml'
+      - 'engine/**'
+      - 'apps/editor/**'
+      - 'run_terrain_ui_smoke.bat'
 
 concurrency:
   group: orbit-studio-real-device-${{ github.ref }}
