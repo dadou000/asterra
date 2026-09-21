@@ -1,5 +1,6 @@
 #include <orbit/world_model/UniverseComposition.hpp>
 
+#include <orbit/celestial_orbits/ImportedEphemeris.hpp>
 #include <orbit/celestial_orbits/OrbitState.hpp>
 #include <orbit/celestial_rotation/OrientationState.hpp>
 
@@ -188,6 +189,84 @@ OrbitProviderFor(
                             kBodyParentPositionMeters,
                             {})
                 });
+    }
+
+    if (model == "Imported Ephemeris")
+    {
+        const auto sourceReference =
+            PropertyOr<schema::ObjectReferenceValue>(
+                objects,
+                orbitCapability->id,
+                kCapabilitySourceObject,
+                schema::ObjectReferenceValue{});
+
+        const scene::ObjectId sourceObject{
+            .high = sourceReference.high,
+            .low = sourceReference.low
+        };
+
+        if (!sourceObject)
+        {
+            throw std::runtime_error(
+                "Imported Ephemeris orbit requires a Source Object.");
+        }
+
+        const auto sourceRecord =
+            objects.Find(sourceObject);
+
+        if (!sourceRecord.has_value() ||
+            sourceRecord->type != kEphemerisAssetType)
+        {
+            throw std::runtime_error(
+                "Imported Ephemeris Source Object must reference an Ephemeris Asset.");
+        }
+
+        std::vector<
+            celestial_orbits::EphemerisSample> samples;
+
+        for (const auto& sample :
+             objects.Children(sourceObject))
+        {
+            if (sample.type != kEphemerisSampleType)
+            {
+                continue;
+            }
+
+            samples.push_back({
+                .time = {
+                    .microsecondsFromEpoch =
+                        PropertyOr<i64>(
+                            objects,
+                            sample.id,
+                            kEphemerisSampleTimeMicroseconds,
+                            i64{0})
+                },
+                .positionMeters =
+                    PropertyOr<math::Double3>(
+                        objects,
+                        sample.id,
+                        kEphemerisSamplePositionMeters,
+                        {}),
+                .velocityMetersPerSecond =
+                    PropertyOr<math::Double3>(
+                        objects,
+                        sample.id,
+                        kEphemerisSampleVelocityMetersPerSecond,
+                        {})
+            });
+        }
+
+        const std::string sourceLabel =
+            PropertyOr<std::string>(
+                objects,
+                sourceObject,
+                kEphemerisSourceLabel,
+                sourceRecord->name);
+
+        return std::make_shared<
+            celestial_orbits::ImportedEphemerisProvider>(
+                std::move(samples),
+                sourceLabel);
     }
 
     if (model != "Analytic Conic")
