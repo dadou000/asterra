@@ -760,7 +760,8 @@ GpuCachedDiscProduct::GpuCachedDiscProduct(
         device.CreateBuffer({
             .sizeBytes =
                 static_cast<u64>(
-                    product.rgba16.size()),
+                    product.rgba16.size() *
+                    sizeof(u16)),
             .usage =
                 rhi::BufferUsage::Generic,
             .memory =
@@ -789,7 +790,8 @@ GpuCachedDiscProduct::GpuCachedDiscProduct(
     std::memcpy(
         staging_->Map(),
         product.rgba16.data(),
-        product.rgba16.size());
+        product.rgba16.size() *
+            sizeof(u16));
     staging_->Unmap();
 }
 
