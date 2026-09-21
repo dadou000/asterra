@@ -317,10 +317,37 @@ MacroGlobeMesh BuildMacroGlobe(
                 const u32 i3 =
                     i2 + 1U;
 
-                result.indices.insert(
-                    result.indices.end(),
-                    {i0, i2, i1,
-                     i1, i2, i3});
+                const math::Double3 p0 =
+                    result.vertices[i0].
+                        positionMeters;
+                const math::Double3 p1 =
+                    result.vertices[i1].
+                        positionMeters;
+                const math::Double3 p2 =
+                    result.vertices[i2].
+                        positionMeters;
+
+                const bool outward =
+                    math::Dot(
+                        math::Cross(
+                            p2 - p0,
+                            p1 - p0),
+                        p0) > 0.0;
+
+                if (outward)
+                {
+                    result.indices.insert(
+                        result.indices.end(),
+                        {i0, i2, i1,
+                         i1, i2, i3});
+                }
+                else
+                {
+                    result.indices.insert(
+                        result.indices.end(),
+                        {i0, i1, i2,
+                         i1, i3, i2});
+                }
             }
         }
     }
