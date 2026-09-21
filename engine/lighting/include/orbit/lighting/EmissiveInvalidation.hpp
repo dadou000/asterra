@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/lighting/RadianceClipmapResidency.hpp>
+#include <orbit/lighting/RuntimeEmissiveSurface.hpp>
 #include <orbit/math/Vector.hpp>
 
 #include <span>
@@ -19,6 +20,11 @@ struct DynamicEmissiveSourceState
     f64 sourceRadiusMeters{0.0};
     f64 influenceRangeMeters{0.0};
 };
+
+[[nodiscard]] DynamicEmissiveSourceState
+BuildDynamicEmissiveSourceState(
+    const RuntimeEmissiveSurface& surface,
+    f64 influenceRangeMeters = 0.0);
 
 enum class EmissiveInvalidationReason : u8
 {
