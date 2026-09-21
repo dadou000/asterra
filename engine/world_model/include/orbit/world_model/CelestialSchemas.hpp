@@ -37,6 +37,8 @@ inline constexpr schema::TypeId kPhotosphereCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x50484f4341500001ULL};
 inline constexpr schema::TypeId kGiantAppearanceCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x4749414e54415001ULL};
+inline constexpr schema::TypeId kSmallBodyAppearanceCapabilityType{
+    .high = 0x4f5242495443454cULL, .low = 0x534d414c4c415001ULL};
 inline constexpr schema::TypeId kMagnetosphereCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x4d41474341500001ULL};
 inline constexpr schema::TypeId kCometTailCapabilityType{
@@ -168,6 +170,39 @@ inline constexpr schema::PropertyId kGiantTurbulenceStrength{
     .high = 0x4f52424954474941ULL, .low = 0x5455524253545201ULL};
 inline constexpr schema::PropertyId kGiantTurbulenceScale{
     .high = 0x4f52424954474941ULL, .low = 0x5455524253434c01ULL};
+
+inline constexpr schema::PropertyId kSmallBodyClass{
+    .high = 0x4f52424954534d42ULL, .low = 0x434c415353000001ULL};
+inline constexpr schema::PropertyId kSmallBodySeed{
+    .high = 0x4f52424954534d42ULL, .low = 0x5345454400000001ULL};
+inline constexpr schema::PropertyId kSmallBodyAxisScale{
+    .high = 0x4f52424954534d42ULL, .low = 0x4158495353434c01ULL};
+inline constexpr schema::PropertyId kSmallBodyIrregularity{
+    .high = 0x4f52424954534d42ULL, .low = 0x4952524547554c01ULL};
+inline constexpr schema::PropertyId kSmallBodyLargeLobeStrength{
+    .high = 0x4f52424954534d42ULL, .low = 0x4c4f424553545201ULL};
+inline constexpr schema::PropertyId kSmallBodySurfaceRoughness{
+    .high = 0x4f52424954534d42ULL, .low = 0x5355524652474801ULL};
+inline constexpr schema::PropertyId kSmallBodyRegolithColorLinear{
+    .high = 0x4f52424954534d42ULL, .low = 0x524547434f4c0001ULL};
+inline constexpr schema::PropertyId kSmallBodyFreshMaterialColorLinear{
+    .high = 0x4f52424954534d42ULL, .low = 0x465245434f4c0001ULL};
+inline constexpr schema::PropertyId kSmallBodyColorVariation{
+    .high = 0x4f52424954534d42ULL, .low = 0x434f4c5641520001ULL};
+inline constexpr schema::PropertyId kSmallBodyCraterDensity{
+    .high = 0x4f52424954534d42ULL, .low = 0x435244454e530001ULL};
+inline constexpr schema::PropertyId kSmallBodyCraterDepth{
+    .high = 0x4f52424954534d42ULL, .low = 0x4352444550540001ULL};
+inline constexpr schema::PropertyId kSmallBodyCraterRimStrength{
+    .high = 0x4f52424954534d42ULL, .low = 0x435252494d530001ULL};
+inline constexpr schema::PropertyId kSmallBodyOppositionStrength{
+    .high = 0x4f52424954534d42ULL, .low = 0x4f50505354520001ULL};
+inline constexpr schema::PropertyId kSmallBodyOppositionWidthRadians{
+    .high = 0x4f52424954534d42ULL, .low = 0x4f50505749440001ULL};
+inline constexpr schema::PropertyId kSmallBodySingleScatteringAlbedo{
+    .high = 0x4f52424954534d42ULL, .low = 0x535343414c420001ULL};
+inline constexpr schema::PropertyId kSmallBodyMacroscopicRoughnessRadians{
+    .high = 0x4f52424954534d42ULL, .low = 0x4d4143524f550001ULL};
 
 inline constexpr schema::PropertyId kAtmosphereTopRadiusMeters{
     .high = 0x4f5242495441544dULL, .low = 0x544f505241440001ULL};
