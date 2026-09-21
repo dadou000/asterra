@@ -512,7 +512,7 @@ AuroraMeshProduct BuildAuroraCurtainMesh(
                             static_cast<f32>(position.y),
                             static_cast<f32>(position.z)},
                         .emissionLinear=emission,
-                        .opacity=opacity
+                        .presentation={opacity,0.0F}
                     });
                 }
             }
