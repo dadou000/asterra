@@ -137,6 +137,57 @@ void LowerDockOrderComesFirstAndTiesKeepRegistrationOrder()
         "default-order panels (plugins) come after explicit ones");
 }
 
+void PanelMenuMirrorsTheLayoutAndReportsOpenState()
+{
+    // Registered in a scrambled order on purpose: the menu must still read
+    // centre, left, right, bottom, and by tab order inside each group.
+    const std::array panels{
+        Panel(1, DockRegion::Bottom, false, 0),
+        Panel(2, DockRegion::Right, false, 10),
+        Panel(3, DockRegion::Center, false, 10),
+        Panel(4, DockRegion::Left, false, 0),
+        Panel(5, DockRegion::Center, false, 0),
+        Panel(6, DockRegion::Right, false, 0),
+        Panel(7, DockRegion::Center, true)};
+    const std::array<orbit::u8, 7> open{1, 0, 1, 1, 0, 1, 1};
+
+    const auto menu =
+        orbit::editor_ui::BuildPanelMenu(panels, open);
+
+    Check(menu.size() == 6, "pinned shell panel is not listed");
+
+    const std::array expected{
+        orbit::u64{5}, orbit::u64{3}, orbit::u64{4},
+        orbit::u64{6}, orbit::u64{2}, orbit::u64{1}};
+
+    for (std::size_t index = 0; index < expected.size(); ++index)
+    {
+        Check(
+            menu[index].panel == Id(expected[index]),
+            "menu order is region then tab order");
+    }
+
+    Check(!menu[0].open, "closed panel reports closed");
+    Check(menu[1].open, "open panel reports open");
+    Check(!menu[4].open, "second closed panel reports closed");
+}
+
+void PanelMenuTreatsUnknownPanelsAsRightGroup()
+{
+    const std::array panels{
+        Panel(1, DockRegion::Bottom, false, 0),
+        Panel(2, DockRegion::Auto)};
+    const std::array<orbit::u8, 2> open{1, 1};
+
+    const auto menu =
+        orbit::editor_ui::BuildPanelMenu(panels, open);
+
+    Check(menu.size() == 2, "both listed");
+    Check(menu[0].panel == Id(2), "plugin panel sorts with the right group");
+    Check(menu[0].region == DockRegion::Right, "Auto resolves to Right");
+    Check(menu[1].panel == Id(1), "bottom group last");
+}
+
 void SplitPlanOnlySplitsRegionsThatHavePanels()
 {
     const std::vector<DockAssignment> onlyCenter{
@@ -258,6 +309,8 @@ int main()
     EveryParticipatingPanelGetsAConcreteRegion();
     PinnedShellPanelsAreLeftAlone();
     RegistrationOrderIsPreserved();
+    PanelMenuMirrorsTheLayoutAndReportsOpenState();
+    PanelMenuTreatsUnknownPanelsAsRightGroup();
     LowerDockOrderComesFirstAndTiesKeepRegistrationOrder();
     SplitPlanOnlySplitsRegionsThatHavePanels();
     SplitFractionsAreOfTheWholeDockSpace();

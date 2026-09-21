@@ -185,7 +185,26 @@ struct MenuAction
     std::string label;
     std::function<void()> invoke;
     std::function<bool()> enabled;
+    // Display-only hint (for example "Ctrl+Z"); the binding itself lives in
+    // the shortcut registry.
+    std::string shortcut;
 };
+
+// One row of the View menu: a panel and whether it is currently open. Rows are
+// ordered by dock region and then tab order so the menu mirrors the layout.
+struct PanelMenuEntry
+{
+    PanelId panel{};
+    std::string title;
+    DockRegion region{DockRegion::Center};
+    bool open{false};
+};
+
+// panelOpen is parallel to panels. Panels pinned to the main viewport (shell
+// panels such as the project browser) are not user-toggleable and are skipped.
+[[nodiscard]] std::vector<PanelMenuEntry> BuildPanelMenu(
+    std::span<const PanelDefinition> panels,
+    std::span<const u8> panelOpen);
 
 class EditorUi
 {
@@ -212,6 +231,8 @@ public:
     [[nodiscard]] bool HasPanel(PanelId id) const noexcept;
     [[nodiscard]] bool SetPanelOpen(PanelId id, bool open) noexcept;
     [[nodiscard]] bool PanelOpen(PanelId id) const noexcept;
+    // Opens the panel if needed and brings it to the front of its tab group.
+    [[nodiscard]] bool FocusPanel(PanelId id) noexcept;
 
     // Deterministic real-UI validation seam. Normal Studio leaves this off.
     // Smoke mode can expand tree nodes and record controls that actually pass
@@ -227,6 +248,11 @@ public:
     // Work area available to docked panels (below the main menu bar), in the
     // same logical pixels as AutomationPanelLayout.
     [[nodiscard]] UiSize AutomationWorkArea() const;
+
+    // Deterministic validation seam: keeps the named main-menu dropdown open
+    // (empty string clears it) so its contents can be captured or inspected
+    // without real mouse input. Normal Studio never sets this.
+    void SetAutomationOpenMenu(std::string menu);
 
     // Discards the current arrangement and re-applies the default dock layout
     // on the next DrawStudioShell.

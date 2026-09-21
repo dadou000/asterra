@@ -1869,6 +1869,29 @@ int main(
             compiler,
             layoutPath);
 
+        // Validation seam: `--automation-open-menu=View` holds that dropdown
+        // open so screenshots/inspection need no real mouse input.
+        for (int index = 1;
+             index < argc;
+             ++index)
+        {
+            constexpr std::string_view kOpenMenu =
+                "--automation-open-menu=";
+
+            const std::string_view argument =
+                argv[index] != nullptr
+                    ? std::string_view(argv[index])
+                    : std::string_view();
+
+            if (argument.starts_with(kOpenMenu))
+            {
+                ui.SetAutomationOpenMenu(
+                    std::string(
+                        argument.substr(
+                            kOpenMenu.size())));
+            }
+        }
+
         orbit::studio_session::StudioRuntimeBinding
             studioRuntime(
                 studioSession);
@@ -6184,67 +6207,161 @@ int main(
                 }
         });
 
-        ui.RegisterMenuAction({
-            .menu = "Home",
-            .label = "Undo",
-            .invoke =
-                [&authoringCommands, &worldSession]
-                {
-                    if (!worldSession.HasWorld())
-                    {
-                        return;
-                    }
-                    authoringCommands().Invoke(
-                        orbit::editor_model::
-                            authoring_commands::
-                                kUndo);
-                },
-            .enabled =
-                [&authoringCommands, &worldSession]
-                {
-                    if (!worldSession.HasWorld())
-                    {
-                        return false;
-                    }
-                    return authoringCommands().
-                        Enablement(
-                            orbit::editor_model::
-                                authoring_commands::
-                                    kUndo).
-                        enabled;
-                }
-        });
+        // Menu items for shared commands go through the same registry,
+        // enablement and error handling as the toolbars and context menus, so
+        // a menu can never offer something the toolbar would refuse.
+        const auto registerCommandMenu =
+            [&ui,
+             &authoringCommands,
+             &worldSession](
+                std::string menu,
+                std::string label,
+                const orbit::commands::CommandId id,
+                std::string shortcut = {})
+            {
+                ui.RegisterMenuAction({
+                    .menu = std::move(menu),
+                    .label = std::move(label),
+                    .invoke =
+                        [&authoringCommands,
+                         &worldSession,
+                         id]
+                        {
+                            if (!worldSession.HasWorld())
+                            {
+                                return;
+                            }
 
-        ui.RegisterMenuAction({
-            .menu = "Home",
-            .label = "Redo",
-            .invoke =
-                [&authoringCommands, &worldSession]
-                {
-                    if (!worldSession.HasWorld())
-                    {
-                        return;
-                    }
-                    authoringCommands().Invoke(
-                        orbit::editor_model::
-                            authoring_commands::
-                                kRedo);
-                },
-            .enabled =
-                [&authoringCommands, &worldSession]
-                {
-                    if (!worldSession.HasWorld())
-                    {
-                        return false;
-                    }
-                    return authoringCommands().
-                        Enablement(
-                            orbit::editor_model::
-                                authoring_commands::
-                                    kRedo).
-                        enabled;
-                }
-        });
+                            try
+                            {
+                                authoringCommands().Invoke(id);
+                            }
+                            catch (
+                                const std::exception&
+                                    exception)
+                            {
+                                orbit::log::Warning(
+                                    exception.what());
+                            }
+                        },
+                    .enabled =
+                        [&authoringCommands,
+                         &worldSession,
+                         id]
+                        {
+                            return worldSession.HasWorld() &&
+                                authoringCommands().
+                                    Enablement(id).
+                                    enabled;
+                        },
+                    .shortcut = std::move(shortcut)
+                });
+            };
+
+        // Opens a panel and brings it to the front of its tab group.
+        const auto registerPanelMenu =
+            [&ui](
+                std::string menu,
+                std::string label,
+                const orbit::editor_ui::PanelId panel)
+            {
+                ui.RegisterMenuAction({
+                    .menu = std::move(menu),
+                    .label = std::move(label),
+                    .invoke =
+                        [&ui, panel]
+                        {
+                            static_cast<void>(
+                                ui.FocusPanel(panel));
+                        }
+                });
+            };
+
+        namespace commands_ns =
+            orbit::editor_model::authoring_commands;
+
+        registerPanelMenu(
+            "File",
+            "Project Settings",
+            orbit::studio_ui::ProjectSettingsUi::
+                kPanelId);
+
+        registerCommandMenu(
+            "Home", "Undo", commands_ns::kUndo, "Ctrl+Z");
+        registerCommandMenu(
+            "Home", "Redo", commands_ns::kRedo, "Ctrl+Y");
+        registerCommandMenu(
+            "Home",
+            "Clear Selection",
+            commands_ns::kClearSelection);
+
+        registerCommandMenu(
+            "Model",
+            "Add Terrain Surface",
+            commands_ns::kCreateTerrainSurface);
+        registerCommandMenu(
+            "Model",
+            "Remove Terrain Surface",
+            commands_ns::kRemoveTerrainSurface);
+        registerCommandMenu(
+            "Model",
+            "Move To Root",
+            commands_ns::kMoveToRoot);
+        registerPanelMenu(
+            "Model",
+            "Surface Authoring",
+            orbit::studio_ui::SurfaceAuthoringUi::
+                kPanel);
+
+        registerCommandMenu(
+            "World",
+            "Create Celestial System",
+            commands_ns::kCreateCelestialSystem);
+        registerCommandMenu(
+            "World",
+            "Create Celestial Body",
+            commands_ns::kCreateCelestialBody);
+        registerCommandMenu(
+            "World",
+            "Create Rocky Planet",
+            commands_ns::kCreateRockyPlanet);
+        registerPanelMenu(
+            "World",
+            "World Documents",
+            orbit::studio_ui::WorldDocumentsUi::
+                kPanelId);
+
+        registerCommandMenu(
+            "Path",
+            "Connect Direct",
+            commands_ns::kConnectPathDirect);
+        registerCommandMenu(
+            "Path",
+            "Connect Bezier",
+            commands_ns::kConnectPathBezier);
+        registerCommandMenu(
+            "Path",
+            "Connect Routed",
+            commands_ns::kConnectPathRouted);
+
+        registerPanelMenu(
+            "Material",
+            "Material Service",
+            kContentPanel);
+
+        registerPanelMenu(
+            "Build",
+            "Build Settings",
+            kBuildPanel);
+        registerPanelMenu(
+            "Build",
+            "Platform Services",
+            kPlatformServicesPanel);
+
+        registerPanelMenu(
+            "Plugins",
+            "Plugin Manager",
+            kPluginsPanel);
 
         if (worldSession.HasWorld())
         {

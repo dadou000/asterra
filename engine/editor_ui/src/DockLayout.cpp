@@ -119,6 +119,74 @@ DockSplitPlan PlanDockSplits(
     return plan;
 }
 
+std::vector<PanelMenuEntry> BuildPanelMenu(
+    const std::span<const PanelDefinition> panels,
+    const std::span<const u8> panelOpen)
+{
+    std::vector<PanelMenuEntry> entries;
+    entries.reserve(
+        panels.size());
+
+    for (std::size_t index = 0;
+         index < panels.size();
+         ++index)
+    {
+        const PanelDefinition& panel =
+            panels[index];
+
+        if (panel.dockToMainViewport)
+        {
+            continue;
+        }
+
+        entries.push_back({
+            .panel = panel.id,
+            .title = panel.title,
+            .region = Resolve(
+                panel.defaultDock),
+            .open =
+                index < panelOpen.size() &&
+                panelOpen[index] != 0U
+        });
+    }
+
+    // Region order matches the on-screen arrangement (centre first, then the
+    // side and bottom groups); within a region the dock order decides. The sort
+    // is stable so registration order breaks ties, exactly as in the layout.
+    const auto orderOf =
+        [&panels](const PanelMenuEntry& entry)
+        {
+            const auto found =
+                std::ranges::find_if(
+                    panels,
+                    [&entry](const PanelDefinition& panel)
+                    {
+                        return panel.id == entry.panel;
+                    });
+            return found == panels.end()
+                ? 100
+                : found->dockOrder;
+        };
+
+    std::ranges::stable_sort(
+        entries,
+        [&orderOf](
+            const PanelMenuEntry& left,
+            const PanelMenuEntry& right)
+        {
+            if (left.region != right.region)
+            {
+                return static_cast<int>(left.region) <
+                    static_cast<int>(right.region);
+            }
+
+            return orderOf(left) <
+                orderOf(right);
+        });
+
+    return entries;
+}
+
 bool LayoutTextHasDockedPanels(
     const std::string_view layoutText) noexcept
 {

@@ -198,37 +198,84 @@ void FeedKey(
 }
 
 
-void ApplyOrbitProTheme()
+// Studio's look follows the Wavelength lighting controller: a deep navy
+// canvas, translucent glass-like panels, pill tabs, rounded controls and a
+// single royal-blue accent. Every colour below comes from that app's design
+// tokens (public/styles.css) so the two stay recognisably one family.
+[[nodiscard]] constexpr ImVec4 Rgb(
+    const int red,
+    const int green,
+    const int blue,
+    const f32 alpha = 1.0F) noexcept
 {
+    return ImVec4(
+        static_cast<f32>(red) / 255.0F,
+        static_cast<f32>(green) / 255.0F,
+        static_cast<f32>(blue) / 255.0F,
+        alpha);
+}
+
+[[nodiscard]] constexpr ImVec4 White(
+    const f32 alpha) noexcept
+{
+    return ImVec4(1.0F, 1.0F, 1.0F, alpha);
+}
+
+namespace wavelength
+{
+// Canvas: radial-gradient(circle at top, #11172c, #06070f 65%).
+constexpr ImVec4 kCanvasTop = Rgb(0x11, 0x17, 0x2c);
+constexpr ImVec4 kCanvasBase = Rgb(0x06, 0x07, 0x0f);
+
+constexpr ImVec4 kText = Rgb(0xf2, 0xf5, 0xff);
+constexpr ImVec4 kTextHeading = Rgb(0xf8, 0xfa, 0xfc);
+constexpr ImVec4 kTextMuted = Rgb(0x9e, 0xa7, 0xc3);
+constexpr ImVec4 kTextSoft = Rgb(0x7d, 0x84, 0xa8);
+
+constexpr ImVec4 kAccent = Rgb(0x4b, 0x7b, 0xec);
+constexpr ImVec4 kAccentHover = Rgb(0x6b, 0x93, 0xf2);
+constexpr ImVec4 kAccentPressed = Rgb(0x3c, 0x5a, 0xdc);
+constexpr ImVec4 kAccentLight = Rgb(0x8e, 0xa2, 0xff);
+
+constexpr ImVec4 kPanel = Rgb(14, 18, 33, 0.88F);
+constexpr ImVec4 kCard = Rgb(17, 22, 39, 0.92F);
+constexpr ImVec4 kModal = Rgb(11, 15, 27, 0.98F);
+constexpr ImVec4 kBorder = White(0.08F);
+constexpr ImVec4 kBorderStrong = White(0.14F);
+} // namespace wavelength
+
+void ApplyWavelengthTheme()
+{
+    using namespace wavelength;
+
     ImGuiStyle& style = ImGui::GetStyle();
 
-    // Orbit Studio deliberately avoids the stock Dear ImGui look.  The
-    // palette is neutral graphite with a restrained VFD-blue accent so tools
-    // remain readable for long authoring sessions without turning the editor
-    // into a decorative skin.
-    style.WindowPadding = ImVec2(10.0F, 9.0F);
-    style.FramePadding = ImVec2(9.0F, 5.0F);
-    style.CellPadding = ImVec2(7.0F, 4.0F);
-    style.ItemSpacing = ImVec2(8.0F, 6.0F);
-    style.ItemInnerSpacing = ImVec2(6.0F, 4.0F);
+    style.WindowPadding = ImVec2(14.0F, 12.0F);
+    style.FramePadding = ImVec2(12.0F, 6.0F);
+    style.CellPadding = ImVec2(8.0F, 5.0F);
+    style.ItemSpacing = ImVec2(10.0F, 8.0F);
+    style.ItemInnerSpacing = ImVec2(8.0F, 5.0F);
     style.TouchExtraPadding = ImVec2(0.0F, 0.0F);
-    style.IndentSpacing = 18.0F;
-    style.ScrollbarSize = 13.0F;
-    style.GrabMinSize = 10.0F;
+    style.IndentSpacing = 20.0F;
+    style.ScrollbarSize = 12.0F;
+    style.GrabMinSize = 14.0F;
+    // A visible gap between docked panels lets the canvas show through, so
+    // panels read as separate rounded cards as they do in Wavelength.
+    style.DockingSeparatorSize = 6.0F;
 
     style.WindowBorderSize = 1.0F;
     style.ChildBorderSize = 1.0F;
     style.PopupBorderSize = 1.0F;
-    style.FrameBorderSize = 0.0F;
+    style.FrameBorderSize = 1.0F;
     style.TabBorderSize = 0.0F;
 
-    style.WindowRounding = 5.0F;
-    style.ChildRounding = 4.0F;
-    style.FrameRounding = 4.0F;
-    style.PopupRounding = 5.0F;
-    style.ScrollbarRounding = 7.0F;
-    style.GrabRounding = 4.0F;
-    style.TabRounding = 4.0F;
+    style.WindowRounding = 14.0F;
+    style.ChildRounding = 12.0F;
+    style.FrameRounding = 10.0F;
+    style.PopupRounding = 14.0F;
+    style.ScrollbarRounding = 12.0F;
+    style.GrabRounding = 10.0F;
+    style.TabRounding = 12.0F;
 
     style.WindowMenuButtonPosition = ImGuiDir_Right;
     style.ColorButtonPosition = ImGuiDir_Right;
@@ -236,61 +283,184 @@ void ApplyOrbitProTheme()
     style.SelectableTextAlign = ImVec2(0.0F, 0.5F);
 
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_Text]                 = ImVec4(0.90F, 0.92F, 0.95F, 1.00F);
-    colors[ImGuiCol_TextDisabled]         = ImVec4(0.43F, 0.48F, 0.54F, 1.00F);
-    colors[ImGuiCol_WindowBg]             = ImVec4(0.055F, 0.064F, 0.078F, 1.00F);
-    colors[ImGuiCol_ChildBg]              = ImVec4(0.047F, 0.055F, 0.068F, 1.00F);
-    colors[ImGuiCol_PopupBg]              = ImVec4(0.060F, 0.070F, 0.086F, 0.99F);
-    colors[ImGuiCol_Border]               = ImVec4(0.15F, 0.18F, 0.22F, 1.00F);
-    colors[ImGuiCol_BorderShadow]         = ImVec4(0.00F, 0.00F, 0.00F, 0.00F);
-    colors[ImGuiCol_FrameBg]              = ImVec4(0.090F, 0.105F, 0.125F, 1.00F);
-    colors[ImGuiCol_FrameBgHovered]       = ImVec4(0.125F, 0.155F, 0.185F, 1.00F);
-    colors[ImGuiCol_FrameBgActive]        = ImVec4(0.145F, 0.190F, 0.225F, 1.00F);
-    colors[ImGuiCol_TitleBg]              = ImVec4(0.043F, 0.050F, 0.061F, 1.00F);
-    colors[ImGuiCol_TitleBgActive]        = ImVec4(0.060F, 0.073F, 0.089F, 1.00F);
-    colors[ImGuiCol_TitleBgCollapsed]     = ImVec4(0.043F, 0.050F, 0.061F, 1.00F);
-    colors[ImGuiCol_MenuBarBg]            = ImVec4(0.038F, 0.045F, 0.055F, 1.00F);
-    colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.038F, 0.045F, 0.055F, 1.00F);
-    colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.18F, 0.21F, 0.25F, 1.00F);
-    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.24F, 0.29F, 0.34F, 1.00F);
-    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.20F, 0.48F, 0.67F, 1.00F);
-    colors[ImGuiCol_CheckMark]            = ImVec4(0.25F, 0.68F, 0.96F, 1.00F);
-    colors[ImGuiCol_SliderGrab]           = ImVec4(0.20F, 0.55F, 0.78F, 1.00F);
-    colors[ImGuiCol_SliderGrabActive]     = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
-    colors[ImGuiCol_Button]               = ImVec4(0.100F, 0.122F, 0.145F, 1.00F);
-    colors[ImGuiCol_ButtonHovered]        = ImVec4(0.145F, 0.250F, 0.325F, 1.00F);
-    colors[ImGuiCol_ButtonActive]         = ImVec4(0.170F, 0.390F, 0.535F, 1.00F);
-    colors[ImGuiCol_Header]               = ImVec4(0.105F, 0.145F, 0.180F, 1.00F);
-    colors[ImGuiCol_HeaderHovered]        = ImVec4(0.135F, 0.285F, 0.390F, 1.00F);
-    colors[ImGuiCol_HeaderActive]         = ImVec4(0.160F, 0.385F, 0.535F, 1.00F);
-    colors[ImGuiCol_Separator]            = ImVec4(0.14F, 0.17F, 0.20F, 1.00F);
-    colors[ImGuiCol_SeparatorHovered]     = ImVec4(0.24F, 0.55F, 0.74F, 1.00F);
-    colors[ImGuiCol_SeparatorActive]      = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
-    colors[ImGuiCol_ResizeGrip]           = ImVec4(0.18F, 0.40F, 0.55F, 0.20F);
-    colors[ImGuiCol_ResizeGripHovered]    = ImVec4(0.24F, 0.60F, 0.82F, 0.55F);
-    colors[ImGuiCol_ResizeGripActive]     = ImVec4(0.31F, 0.73F, 1.00F, 0.85F);
-    colors[ImGuiCol_Tab]                  = ImVec4(0.060F, 0.071F, 0.086F, 1.00F);
-    colors[ImGuiCol_TabHovered]           = ImVec4(0.125F, 0.260F, 0.350F, 1.00F);
-    colors[ImGuiCol_TabActive]            = ImVec4(0.095F, 0.185F, 0.245F, 1.00F);
-    colors[ImGuiCol_TabUnfocused]         = ImVec4(0.048F, 0.057F, 0.069F, 1.00F);
-    colors[ImGuiCol_TabUnfocusedActive]   = ImVec4(0.072F, 0.110F, 0.140F, 1.00F);
-    colors[ImGuiCol_DockingPreview]       = ImVec4(0.20F, 0.62F, 0.90F, 0.55F);
-    colors[ImGuiCol_DockingEmptyBg]       = ImVec4(0.030F, 0.036F, 0.045F, 1.00F);
-    colors[ImGuiCol_PlotLines]            = ImVec4(0.44F, 0.66F, 0.82F, 1.00F);
-    colors[ImGuiCol_PlotLinesHovered]     = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
-    colors[ImGuiCol_PlotHistogram]        = ImVec4(0.22F, 0.58F, 0.78F, 1.00F);
-    colors[ImGuiCol_PlotHistogramHovered] = ImVec4(0.31F, 0.73F, 1.00F, 1.00F);
-    colors[ImGuiCol_TableHeaderBg]        = ImVec4(0.070F, 0.083F, 0.100F, 1.00F);
-    colors[ImGuiCol_TableBorderStrong]    = ImVec4(0.15F, 0.18F, 0.22F, 1.00F);
-    colors[ImGuiCol_TableBorderLight]     = ImVec4(0.10F, 0.12F, 0.15F, 1.00F);
-    colors[ImGuiCol_TableRowBg]           = ImVec4(0.00F, 0.00F, 0.00F, 0.00F);
-    colors[ImGuiCol_TableRowBgAlt]        = ImVec4(1.00F, 1.00F, 1.00F, 0.018F);
-    colors[ImGuiCol_TextSelectedBg]       = ImVec4(0.16F, 0.47F, 0.68F, 0.45F);
-    colors[ImGuiCol_DragDropTarget]       = ImVec4(0.31F, 0.73F, 1.00F, 0.95F);
-    colors[ImGuiCol_NavHighlight]         = ImVec4(0.31F, 0.73F, 1.00F, 0.85F);
-    colors[ImGuiCol_NavWindowingHighlight]= ImVec4(0.80F, 0.88F, 0.94F, 0.70F);
-    colors[ImGuiCol_NavWindowingDimBg]    = ImVec4(0.02F, 0.03F, 0.04F, 0.65F);
-    colors[ImGuiCol_ModalWindowDimBg]     = ImVec4(0.01F, 0.015F, 0.02F, 0.72F);
+    colors[ImGuiCol_Text]                 = kText;
+    colors[ImGuiCol_TextDisabled]         = kTextSoft;
+    colors[ImGuiCol_WindowBg]             = kPanel;
+    colors[ImGuiCol_ChildBg]              = Rgb(0, 0, 0, 0.30F);
+    colors[ImGuiCol_PopupBg]              = kModal;
+    colors[ImGuiCol_Border]               = kBorder;
+    colors[ImGuiCol_BorderShadow]         = Rgb(0, 0, 0, 0.0F);
+    colors[ImGuiCol_FrameBg]              = White(0.05F);
+    colors[ImGuiCol_FrameBgHovered]       = White(0.09F);
+    colors[ImGuiCol_FrameBgActive]        = Rgb(0x4b, 0x7b, 0xec, 0.22F);
+    colors[ImGuiCol_TitleBg]              = kCard;
+    colors[ImGuiCol_TitleBgActive]        = kCard;
+    colors[ImGuiCol_TitleBgCollapsed]     = kCard;
+    colors[ImGuiCol_MenuBarBg]            = kPanel;
+    colors[ImGuiCol_ScrollbarBg]          = Rgb(5, 7, 15, 0.80F);
+    colors[ImGuiCol_ScrollbarGrab]        = Rgb(0x8e, 0xa2, 0xff, 0.55F);
+    colors[ImGuiCol_ScrollbarGrabHovered] = Rgb(0x8e, 0xa2, 0xff, 0.80F);
+    colors[ImGuiCol_ScrollbarGrabActive]  = kAccentLight;
+    colors[ImGuiCol_CheckMark]            = kAccentLight;
+    colors[ImGuiCol_SliderGrab]           = Rgb(255, 255, 255, 0.95F);
+    colors[ImGuiCol_SliderGrabActive]     = kAccentLight;
+    colors[ImGuiCol_Button]               = White(0.12F);
+    colors[ImGuiCol_ButtonHovered]        = Rgb(0x4b, 0x7b, 0xec, 0.45F);
+    colors[ImGuiCol_ButtonActive]         = kAccent;
+    colors[ImGuiCol_Header]               = Rgb(0x4b, 0x7b, 0xec, 0.35F);
+    colors[ImGuiCol_HeaderHovered]        = Rgb(0x4b, 0x7b, 0xec, 0.22F);
+    colors[ImGuiCol_HeaderActive]         = Rgb(0x4b, 0x7b, 0xec, 0.50F);
+    colors[ImGuiCol_Separator]            = kBorder;
+    colors[ImGuiCol_SeparatorHovered]     = kAccentLight;
+    colors[ImGuiCol_SeparatorActive]      = kAccent;
+    colors[ImGuiCol_ResizeGrip]           = Rgb(0x4b, 0x7b, 0xec, 0.20F);
+    colors[ImGuiCol_ResizeGripHovered]    = Rgb(0x4b, 0x7b, 0xec, 0.55F);
+    colors[ImGuiCol_ResizeGripActive]     = kAccent;
+    colors[ImGuiCol_Tab]                  = White(0.08F);
+    colors[ImGuiCol_TabHovered]           = Rgb(0x4b, 0x7b, 0xec, 0.55F);
+    colors[ImGuiCol_TabActive]            = kAccent;
+    colors[ImGuiCol_TabUnfocused]         = White(0.05F);
+    colors[ImGuiCol_TabUnfocusedActive]   = Rgb(0x4b, 0x7b, 0xec, 0.55F);
+    colors[ImGuiCol_DockingPreview]       = Rgb(0x4b, 0x7b, 0xec, 0.55F);
+    colors[ImGuiCol_DockingEmptyBg]       = Rgb(0x06, 0x07, 0x0f, 0.0F);
+    colors[ImGuiCol_PlotLines]            = kAccentLight;
+    colors[ImGuiCol_PlotLinesHovered]     = kAccentHover;
+    colors[ImGuiCol_PlotHistogram]        = kAccent;
+    colors[ImGuiCol_PlotHistogramHovered] = kAccentHover;
+    colors[ImGuiCol_TableHeaderBg]        = White(0.05F);
+    colors[ImGuiCol_TableBorderStrong]    = kBorderStrong;
+    colors[ImGuiCol_TableBorderLight]     = kBorder;
+    colors[ImGuiCol_TableRowBg]           = Rgb(0, 0, 0, 0.0F);
+    colors[ImGuiCol_TableRowBgAlt]        = White(0.025F);
+    colors[ImGuiCol_TextSelectedBg]       = Rgb(0x4b, 0x7b, 0xec, 0.45F);
+    colors[ImGuiCol_DragDropTarget]       = kAccentLight;
+    colors[ImGuiCol_NavHighlight]         = kAccentLight;
+    colors[ImGuiCol_NavWindowingHighlight]= White(0.70F);
+    colors[ImGuiCol_NavWindowingDimBg]    = Rgb(0, 0, 0, 0.55F);
+    colors[ImGuiCol_ModalWindowDimBg]     = Rgb(0, 0, 0, 0.65F);
+}
+
+// Wavelength uses Segoe UI; ImGui's built-in pixel font is what made the
+// stock editor look like a debug overlay. Falls back to the built-in font
+// when Segoe UI is not installed (non-Windows or stripped images).
+void LoadStudioFont(
+    ImGuiIO& io)
+{
+    constexpr f32 kFontPixels = 16.0F;
+
+    // The stock Windows install location; anything else falls back below.
+    const std::filesystem::path candidate =
+        "C:/Windows/Fonts/segoeui.ttf";
+
+    std::error_code ignored;
+
+    if (std::filesystem::exists(
+            candidate,
+            ignored))
+    {
+        ImFontConfig config;
+        config.OversampleH = 3;
+        config.OversampleV = 2;
+
+        if (io.Fonts->AddFontFromFileTTF(
+                candidate.string().c_str(),
+                kFontPixels,
+                &config) != nullptr)
+        {
+            return;
+        }
+    }
+
+    io.Fonts->AddFontDefault();
+}
+
+// radial-gradient(circle at top, #11172c, #06070f 65%) painted behind the
+// dockspace. Drawn as a triangle fan so no texture is needed; the disc is
+// centred on the top edge with the CSS "farthest-corner" radius.
+void DrawWavelengthCanvas(
+    const ImGuiViewport& viewport)
+{
+    ImDrawList* list =
+        ImGui::GetBackgroundDrawList();
+
+    const ImVec2 origin = viewport.Pos;
+    const ImVec2 size = viewport.Size;
+
+    list->AddRectFilled(
+        origin,
+        ImVec2(
+            origin.x + size.x,
+            origin.y + size.y),
+        ImGui::GetColorU32(
+            wavelength::kCanvasBase));
+
+    const ImVec2 center(
+        origin.x + size.x * 0.5F,
+        origin.y);
+    const f32 radius =
+        0.65F *
+        std::sqrt(
+            (size.x * 0.5F) *
+                (size.x * 0.5F) +
+            size.y * size.y);
+
+    constexpr int kSegments = 64;
+    const ImU32 inner =
+        ImGui::GetColorU32(
+            wavelength::kCanvasTop);
+    const ImU32 outer =
+        ImGui::GetColorU32(
+            wavelength::kCanvasBase);
+    const ImVec2 white =
+        ImGui::GetDrawListSharedData()->
+            TexUvWhitePixel;
+
+    list->PrimReserve(
+        kSegments * 3,
+        kSegments + 2);
+
+    const ImDrawIdx base =
+        static_cast<ImDrawIdx>(
+            list->_VtxCurrentIdx);
+
+    list->PrimWriteVtx(
+        center,
+        white,
+        inner);
+
+    for (int index = 0;
+         index <= kSegments;
+         ++index)
+    {
+        const f32 angle =
+            3.14159265F *
+            static_cast<f32>(index) /
+            static_cast<f32>(kSegments);
+
+        list->PrimWriteVtx(
+            ImVec2(
+                center.x +
+                    std::cos(angle) *
+                        radius,
+                center.y +
+                    std::sin(angle) *
+                        radius),
+            white,
+            outer);
+    }
+
+    for (int index = 0;
+         index < kSegments;
+         ++index)
+    {
+        list->PrimWriteIdx(base);
+        list->PrimWriteIdx(
+            static_cast<ImDrawIdx>(
+                base + 1 + index));
+        list->PrimWriteIdx(
+            static_cast<ImDrawIdx>(
+                base + 2 + index));
+    }
 }
 } // namespace
 
@@ -342,7 +512,8 @@ public:
                     this->layoutPath));
 
         ImGui::StyleColorsDark();
-        ApplyOrbitProTheme();
+        ApplyWavelengthTheme();
+        LoadStudioFont(io);
 
         const shader::Binary vertex =
             compiler.Compile({
@@ -762,6 +933,8 @@ public:
     bool automationTraceWidgets{false};
     std::vector<std::string> automationTrace;
     bool layoutBuildPending{false};
+    std::string pendingFocusTitle;
+    std::string automationOpenMenu;
 
     std::unique_ptr<rhi::GraphicsPipeline>
         pipeline;
@@ -808,8 +981,7 @@ void PanelContext::MutedText(
 {
     ImGui::PushStyleColor(
         ImGuiCol_Text,
-        ImGui::GetStyleColorVec4(
-            ImGuiCol_TextDisabled));
+        wavelength::kTextMuted);
     ImGui::TextWrapped(
         "%.*s",
         static_cast<int>(text.size()),
@@ -823,7 +995,7 @@ void PanelContext::Heading(
     ImGui::Dummy(ImVec2(0.0F, 3.0F));
     ImGui::PushStyleColor(
         ImGuiCol_Text,
-        ImVec4(0.74F, 0.87F, 0.96F, 1.0F));
+        wavelength::kTextHeading);
     ImGui::TextUnformatted(
         text.data(),
         text.data() + text.size());
@@ -839,7 +1011,7 @@ void PanelContext::Heading(
             minimum.x + width,
             minimum.y + 1.0F),
         ImGui::GetColorU32(
-            ImVec4(0.20F, 0.58F, 0.82F, 0.55F)));
+            Rgb(0x4b, 0x7b, 0xec, 0.60F)));
     ImGui::Dummy(ImVec2(0.0F, 5.0F));
 }
 
@@ -865,13 +1037,13 @@ bool PanelContext::PrimaryButton(
 
     ImGui::PushStyleColor(
         ImGuiCol_Button,
-        ImVec4(0.105F, 0.390F, 0.560F, 1.00F));
+        wavelength::kAccent);
     ImGui::PushStyleColor(
         ImGuiCol_ButtonHovered,
-        ImVec4(0.135F, 0.505F, 0.710F, 1.00F));
+        wavelength::kAccentHover);
     ImGui::PushStyleColor(
         ImGuiCol_ButtonActive,
-        ImVec4(0.095F, 0.330F, 0.475F, 1.00F));
+        wavelength::kAccentPressed);
 
     const bool pressed =
         ImGui::Button(
@@ -1574,6 +1746,27 @@ bool EditorUi::PanelOpen(
     return false;
 }
 
+bool EditorUi::FocusPanel(
+    const PanelId id) noexcept
+{
+    for (std::size_t index = 0;
+         index < impl_->panels.size();
+         ++index)
+    {
+        if (impl_->panels[index].id != id)
+        {
+            continue;
+        }
+
+        impl_->panelOpen[index] = 1U;
+        impl_->pendingFocusTitle =
+            impl_->panels[index].title;
+        return true;
+    }
+
+    return false;
+}
+
 void EditorUi::SetAutomationUiProbe(
     const bool expandTrees,
     const bool traceWidgets) noexcept
@@ -1658,6 +1851,13 @@ UiSize EditorUi::AutomationWorkArea() const
         .width = viewport->WorkSize.x,
         .height = viewport->WorkSize.y
     };
+}
+
+void EditorUi::SetAutomationOpenMenu(
+    std::string menu)
+{
+    impl_->automationOpenMenu =
+        std::move(menu);
 }
 
 void EditorUi::ResetLayout() noexcept
@@ -1808,16 +2008,10 @@ void EditorUi::DrawStudioShell()
     const ImGuiViewport* mainViewport =
         ImGui::GetMainViewport();
 
-    // Give the whole application a deliberate editor-canvas background. The
-    // dockspace still owns the full viewport; this only removes the stock
-    // flat-window impression when panes are rearranged or temporarily empty.
-    ImGui::GetBackgroundDrawList()->AddRectFilled(
-        mainViewport->Pos,
-        ImVec2(
-            mainViewport->Pos.x + mainViewport->Size.x,
-            mainViewport->Pos.y + mainViewport->Size.y),
-        ImGui::GetColorU32(
-            ImVec4(0.025F, 0.030F, 0.038F, 1.00F)));
+    // Wavelength-style navy radial canvas. The dockspace is pass-through, so
+    // it shows in the gaps between panels and behind translucent panel glass.
+    DrawWavelengthCanvas(
+        *mainViewport);
 
     const ImGuiID mainDockspace =
         ImGui::DockSpaceOverViewport(
@@ -1839,9 +2033,10 @@ void EditorUi::DrawStudioShell()
 
     static constexpr std::array<
         const char*,
-        10> menus{
+        11> menus{
             "File",
             "Home",
+            "View",
             "Model",
             "World",
             "Path",
@@ -1852,16 +2047,49 @@ void EditorUi::DrawStudioShell()
             "Help"
         };
 
+    const std::vector<PanelMenuEntry> panelMenu =
+        BuildPanelMenu(
+            impl_->panels,
+            impl_->panelOpen);
+
     if (ImGui::BeginMainMenuBar())
     {
         for (const char* menu : menus)
         {
-            if (!ImGui::BeginMenu(menu))
+            const bool isView =
+                std::string_view(menu) == "View";
+
+            const bool hasActions =
+                std::ranges::any_of(
+                    impl_->menuActions,
+                    [menu](const MenuAction& action)
+                    {
+                        return action.menu == menu;
+                    });
+
+            // A menu with nothing behind it is hidden rather than shown as
+            // an empty "No actions" dropdown. View is built from the panel
+            // list, so it exists whenever there is a panel to toggle.
+            if (isView
+                    ? panelMenu.empty()
+                    : !hasActions)
             {
                 continue;
             }
 
-            bool emitted = false;
+            if (!impl_->automationOpenMenu.empty() &&
+                impl_->automationOpenMenu == menu &&
+                !ImGui::IsPopupOpen(
+                    menu))
+            {
+                ImGui::OpenPopup(
+                    menu);
+            }
+
+            if (!ImGui::BeginMenu(menu))
+            {
+                continue;
+            }
 
             for (const MenuAction& action :
                  impl_->menuActions)
@@ -1871,15 +2099,15 @@ void EditorUi::DrawStudioShell()
                     continue;
                 }
 
-                emitted = true;
-
                 const bool enabled =
                     !action.enabled ||
                     action.enabled();
 
                 if (ImGui::MenuItem(
                         action.label.c_str(),
-                        nullptr,
+                        action.shortcut.empty()
+                            ? nullptr
+                            : action.shortcut.c_str(),
                         false,
                         enabled))
                 {
@@ -1887,28 +2115,69 @@ void EditorUi::DrawStudioShell()
                 }
             }
 
-            if (std::string_view(menu) == "Home" &&
-                hasLayoutPanels)
+            if (isView)
             {
-                if (emitted)
+                bool first = true;
+                DockRegion lastRegion =
+                    DockRegion::Auto;
+
+                for (const PanelMenuEntry& entry :
+                     panelMenu)
+                {
+                    if (!first &&
+                        entry.region != lastRegion)
+                    {
+                        ImGui::Separator();
+                    }
+
+                    first = false;
+                    lastRegion = entry.region;
+
+                    if (ImGui::MenuItem(
+                            entry.title.c_str(),
+                            nullptr,
+                            entry.open))
+                    {
+                        // Clicking an open panel that is hidden behind
+                        // another tab brings it forward; clicking a visible
+                        // one closes it; clicking a closed one opens it.
+                        const ImGuiWindow* window =
+                            ImGui::FindWindowByName(
+                                entry.title.c_str());
+                        const bool hiddenTab =
+                            entry.open &&
+                            window != nullptr &&
+                            window->DockNode != nullptr &&
+                            !window->DockTabIsVisible;
+
+                        if (entry.open &&
+                            !hiddenTab)
+                        {
+                            static_cast<void>(
+                                SetPanelOpen(
+                                    entry.panel,
+                                    false));
+                        }
+                        else
+                        {
+                            static_cast<void>(
+                                FocusPanel(
+                                    entry.panel));
+                        }
+                    }
+                }
+
+                if (hasLayoutPanels)
                 {
                     ImGui::Separator();
+
+                    if (ImGui::MenuItem(
+                            "Reset Layout"))
+                    {
+                        impl_->layoutBuildPending =
+                            true;
+                    }
                 }
-
-                emitted = true;
-
-                if (ImGui::MenuItem(
-                        "Reset Layout"))
-                {
-                    impl_->layoutBuildPending =
-                        true;
-                }
-            }
-
-            if (!emitted)
-            {
-                ImGui::TextDisabled(
-                    "No actions");
             }
 
             ImGui::EndMenu();
@@ -1937,6 +2206,13 @@ void EditorUi::DrawStudioShell()
 
         bool open =
             impl_->panelOpen[index] != 0U;
+
+        if (!impl_->pendingFocusTitle.empty() &&
+            panel.title == impl_->pendingFocusTitle)
+        {
+            ImGui::SetNextWindowFocus();
+            impl_->pendingFocusTitle.clear();
+        }
 
         if (panel.minSize.width > 0.0F ||
             panel.minSize.height > 0.0F)
