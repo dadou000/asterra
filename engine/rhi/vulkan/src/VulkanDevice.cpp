@@ -669,13 +669,20 @@ struct ValidationFeatureRequest
 [[nodiscard]] VmaAllocator CreateAllocator(
     const VkInstance instance,
     const VkPhysicalDevice physicalDevice,
-    const VkDevice device)
+    const VkDevice device,
+    const DeviceCapabilities& capabilities)
 {
     VmaAllocatorCreateInfo createInfo{};
     createInfo.vulkanApiVersion = VK_API_VERSION_1_3;
     createInfo.instance = instance;
     createInfo.physicalDevice = physicalDevice;
     createInfo.device = device;
+
+    if (capabilities.accelerationStructures)
+    {
+        createInfo.flags |=
+            VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+    }
 
     VmaAllocator allocator = nullptr;
     if (vmaCreateAllocator(&createInfo, &allocator) != VK_SUCCESS)
@@ -958,13 +965,61 @@ std::unique_ptr<Device> CreateDevice(const DeviceDesc& desc)
 
     const VmaAllocator allocator =
         detail::CreateAllocator(
-            instance, candidate.physicalDevice, nativeDevice);
+            instance,
+            candidate.physicalDevice,
+            nativeDevice,
+            capabilities);
 
     detail::DeviceFunctions functions{};
     functions.vkCmdPushDescriptorSetKHR =
         reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
             vkGetDeviceProcAddr(
                 nativeDevice, "vkCmdPushDescriptorSetKHR"));
+
+    if (capabilities.accelerationStructures)
+    {
+        functions.vkCreateAccelerationStructureKHR =
+            reinterpret_cast<
+                PFN_vkCreateAccelerationStructureKHR>(
+                    vkGetDeviceProcAddr(
+                        nativeDevice,
+                        "vkCreateAccelerationStructureKHR"));
+        functions.vkDestroyAccelerationStructureKHR =
+            reinterpret_cast<
+                PFN_vkDestroyAccelerationStructureKHR>(
+                    vkGetDeviceProcAddr(
+                        nativeDevice,
+                        "vkDestroyAccelerationStructureKHR"));
+        functions.vkGetAccelerationStructureBuildSizesKHR =
+            reinterpret_cast<
+                PFN_vkGetAccelerationStructureBuildSizesKHR>(
+                    vkGetDeviceProcAddr(
+                        nativeDevice,
+                        "vkGetAccelerationStructureBuildSizesKHR"));
+        functions.vkCmdBuildAccelerationStructuresKHR =
+            reinterpret_cast<
+                PFN_vkCmdBuildAccelerationStructuresKHR>(
+                    vkGetDeviceProcAddr(
+                        nativeDevice,
+                        "vkCmdBuildAccelerationStructuresKHR"));
+        functions.vkGetAccelerationStructureDeviceAddressKHR =
+            reinterpret_cast<
+                PFN_vkGetAccelerationStructureDeviceAddressKHR>(
+                    vkGetDeviceProcAddr(
+                        nativeDevice,
+                        "vkGetAccelerationStructureDeviceAddressKHR"));
+
+        if (functions.vkCreateAccelerationStructureKHR == nullptr ||
+            functions.vkDestroyAccelerationStructureKHR == nullptr ||
+            functions.vkGetAccelerationStructureBuildSizesKHR == nullptr ||
+            functions.vkCmdBuildAccelerationStructuresKHR == nullptr ||
+            functions.vkGetAccelerationStructureDeviceAddressKHR == nullptr)
+        {
+            throw std::runtime_error(
+                "Orbit detected Vulkan acceleration structures but failed "
+                "to resolve one or more required device entry points.");
+        }
+    }
 
     if (functions.vkCmdPushDescriptorSetKHR == nullptr)
     {
