@@ -72,7 +72,8 @@ bool IsFinite(
         Finite3(surface.baseColorLinear) &&
         std::isfinite(surface.roughness) &&
         std::isfinite(surface.metallic) &&
-        Finite3(surface.emissionRadianceSceneLinear);
+        Finite3(surface.emissionRadianceSceneLinear) &&
+        std::isfinite(surface.emissionGiScale);
 }
 
 SurfaceData Canonicalize(
@@ -121,6 +122,10 @@ SurfaceData Canonicalize(
         NonNegativeFinite(
             surface.emissionRadianceSceneLinear.z)
     };
+
+    result.emissionGiScale =
+        NonNegativeFinite(
+            surface.emissionGiScale);
 
     return result;
 }
