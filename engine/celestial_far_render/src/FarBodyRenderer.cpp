@@ -288,6 +288,11 @@ float4 main(VSOutput input) : SV_Target0
                 1.0 - saturate(z),
                 3.0);
 
+        const float stellar =
+            saturate(g.material.z);
+        const float radiometricIntensity =
+            max(g.proxy.w, 0.0);
+
         float3 color =
             g.albedoAndRoughness.xyz *
                 (0.05 + 0.95 * ndl) +
@@ -301,8 +306,18 @@ float4 main(VSOutput input) : SV_Target0
             ice * 0.025 +
             g.emissionAndOpacity.xyz;
 
+        if (stellar > 0.5)
+        {
+            const float limbDarkening =
+                0.58 + 0.42 * z;
+            color =
+                g.albedoAndRoughness.xyz *
+                radiometricIntensity *
+                limbDarkening;
+        }
+
         return float4(
-            color / (1.0 + color),
+            color,
             opacity);
     }
 
@@ -322,11 +337,14 @@ float4 main(VSOutput input) : SV_Target0
 
         const float fluxScale =
             saturate(g.proxy.z);
+        const float radiometricIntensity =
+            max(g.proxy.w, 0.0);
 
         float3 color =
             (g.albedoAndRoughness.xyz +
              g.emissionAndOpacity.xyz) *
-            fluxScale;
+            fluxScale *
+            radiometricIntensity;
 
         if (mode == 3u)
         {
@@ -337,7 +355,7 @@ float4 main(VSOutput input) : SV_Target0
         }
 
         return float4(
-            color / (1.0 + color),
+            color,
             opacity * edge);
     }
 
@@ -420,8 +438,20 @@ float4 main(VSOutput input) : SV_Target0
         ice * 0.025 +
         g.emissionAndOpacity.xyz;
 
+    if (g.material.z > 0.5)
+    {
+        const float radiometricIntensity =
+            max(g.proxy.w, 0.0);
+        const float centerToLimb =
+            saturate(abs(dot(n, -ray)));
+        color =
+            g.albedoAndRoughness.xyz *
+            radiometricIntensity *
+            (0.58 + 0.42 * centerToLimb);
+    }
+
     return float4(
-        color / (1.0 + color),
+        color,
         opacity);
 }
 )";
@@ -1006,7 +1036,7 @@ void FarBodyRenderer::Draw(
 
             bits(draw.appearance.oceanFraction),
             bits(draw.appearance.iceFraction),
-            0U,
+            bits(draw.stellar ? 1.0F : 0.0F),
             0U,
 
             bits(draw.appearance.emissionLinear.x),
@@ -1020,7 +1050,9 @@ void FarBodyRenderer::Draw(
             bits(static_cast<f32>(mode)),
             bits(radiusNdc),
             bits(pointFluxScale),
-            bits(draw.stellar ? 1.0F : 0.0F)
+            bits(std::max(
+                draw.radiometricIntensity,
+                0.0F))
         };
 
     commands.SetGraphicsPipeline(
