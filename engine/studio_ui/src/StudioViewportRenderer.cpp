@@ -4289,7 +4289,9 @@ StudioViewportRenderer::Compose(
         }
 
         if (activeRingMesh != nullptr &&
-            resolvedRingSystemForView.has_value())
+            resolvedRingSystemForView.has_value() &&
+            logicalTarget->mode !=
+                studio_session::ViewportMode::Debug)
         {
             auto* ringMesh =
                 activeRingMesh;
