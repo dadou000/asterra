@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: orbit-v006-celestial-${{ github.ref }}
+  group: orbit-v006-celestial-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
