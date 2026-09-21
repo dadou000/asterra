@@ -10,6 +10,7 @@ add_library(OrbitWorldModel STATIC
     src/PropertyProvenance.cpp
     src/PhysicalPropertySolver.cpp
     src/WorldSchemas.cpp
+    src/LocalLightBinding.cpp
     src/UniverseComposition.cpp
 )
 
