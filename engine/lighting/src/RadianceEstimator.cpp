@@ -83,7 +83,7 @@ EstimateRadianceCell(
     const LightingView& view,
     const DirectionalLight& stellar,
     const std::span<const ResolvedLocalLight> localLights,
-    VisibilityProvider* const visibility,
+    const VisibilityRegistry* const visibility,
     const RadianceEstimateSettings& settings,
     const std::span<const EmissiveVolumeSource> emissiveVolumes)
 {
@@ -160,7 +160,7 @@ EstimateRadianceCell(
         };
 
         const auto visibilityResult =
-            visibility->Trace(query);
+            visibility->TraceNearest(query);
 
         stellarVisible =
             visibilityResult.resolution !=
@@ -275,7 +275,7 @@ EstimateRadianceCell(
             };
 
             const auto visibilityResult =
-                visibility->Trace(query);
+                visibility->TraceNearest(query);
 
             visible =
                 visibilityResult.resolution !=
@@ -467,7 +467,7 @@ EstimateRadianceCell(
             };
 
             const auto visibilityResult =
-                visibility->Trace(query);
+                visibility->TraceNearest(query);
 
             visible =
                 visibilityResult.resolution !=
