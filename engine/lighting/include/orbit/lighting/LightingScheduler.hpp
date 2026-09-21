@@ -43,7 +43,11 @@ struct LightingGpuTimings
 {
     std::array<f32, kLightingGpuSectionCount>
         milliseconds{};
+    std::array<bool, kLightingGpuSectionCount>
+        valid{};
 
+    [[nodiscard]] bool HasSection(
+        LightingGpuSection section) const noexcept;
     [[nodiscard]] f32 SectionMs(
         LightingGpuSection section) const noexcept;
     [[nodiscard]] f32 TotalMs() const noexcept;
@@ -179,5 +183,15 @@ private:
     std::vector<
         std::unique_ptr<rhi::TimestampQueryPool>>
         pools_;
+
+    struct FrameState
+    {
+        std::array<bool, kLightingGpuSectionCount>
+            begun{};
+        std::array<bool, kLightingGpuSectionCount>
+            ended{};
+    };
+
+    std::vector<FrameState> frameStates_;
 };
 } // namespace orbit::lighting
