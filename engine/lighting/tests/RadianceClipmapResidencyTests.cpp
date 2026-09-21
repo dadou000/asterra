@@ -79,6 +79,40 @@ int main()
         return 3;
     }
 
+    residency.RequestGlobalRefresh();
+
+    if (residency.Stats().dirtyCells == 0U)
+    {
+        return 4;
+    }
+
+    const auto refreshSnapshot =
+        residency.BuildGpuSnapshot(view);
+
+    const auto refreshCandidates =
+        residency.BuildUpdateList(
+            {0.0, 0.0, 0.0},
+            4U);
+
+    if (refreshCandidates.empty())
+    {
+        return 5;
+    }
+
+    const bool hasUsableDirtyCell =
+        std::any_of(
+            refreshSnapshot.cells.begin(),
+            refreshSnapshot.cells.end(),
+            [](const auto& cell)
+            {
+                return cell.irradiance0.w > 0.5F;
+            });
+
+    if (!hasUsableDirtyCell)
+    {
+        return 6;
+    }
+
     const auto oldKey =
         RadianceCellForPoint(
             {0.25, 0.25, 0.25},
@@ -90,7 +124,7 @@ int main()
             oldKey,
             10U) == nullptr)
     {
-        return 4;
+        return 6;
     }
 
     // One-cell motion reuses most toroidal slots instead of full-clearing.
@@ -106,7 +140,7 @@ int main()
         scrolled.replacedCells >=
             scrolled.residentCells)
     {
-        return 5;
+        return 7;
     }
 
     // Revision change rejects stale cells immediately.
@@ -122,7 +156,7 @@ int main()
             11U) != nullptr ||
         residency.Stats().dirtyCells == 0U)
     {
-        return 6;
+        return 8;
     }
 
     const auto updates =
@@ -132,7 +166,7 @@ int main()
 
     if (updates.empty())
     {
-        return 7;
+        return 9;
     }
 
     // A local invalidation marks nearby cells dirty without affecting the
@@ -146,7 +180,7 @@ int main()
             4U,
             11U))
     {
-        return 8;
+        return 10;
     }
 
     const auto targetCenter =
@@ -163,7 +197,7 @@ int main()
             targetKey,
             12U) != nullptr)
     {
-        return 9;
+        return 11;
     }
 
     const auto snapshot =
@@ -173,7 +207,7 @@ int main()
         snapshot.levels.size() != 2U ||
         snapshot.cells.size() != 128U)
     {
-        return 10;
+        return 12;
     }
 
     if (snapshot.levels[0].cellOffset != 0U ||
@@ -181,7 +215,7 @@ int main()
         snapshot.levels[1].cellOffset != 64U ||
         snapshot.levels[1].cellCount != 64U)
     {
-        return 11;
+        return 13;
     }
 
     const auto invalidIndex =
@@ -193,7 +227,7 @@ int main()
                 irradiance0.w !=
             0.0F)
     {
-        return 12;
+        return 14;
     }
 
     return 0;
