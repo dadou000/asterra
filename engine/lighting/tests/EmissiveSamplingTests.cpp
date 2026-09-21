@@ -132,5 +132,118 @@ int main()
         return 3;
     }
 
+    const auto budgetedA =
+        SelectEmissiveSamplesForBudget(
+            samples,
+            {
+                .maximumSamples = 4U,
+                .sequence = 1234U,
+                .preservePromotedEmitters = true
+            });
+
+    const auto budgetedB =
+        SelectEmissiveSamplesForBudget(
+            samples,
+            {
+                .maximumSamples = 4U,
+                .sequence = 1234U,
+                .preservePromotedEmitters = true
+            });
+
+    if (budgetedA.size() != 4U ||
+        budgetedB.size() !=
+            budgetedA.size())
+    {
+        return 4;
+    }
+
+    bool retainedPromoted = false;
+
+    for (std::size_t index = 0U;
+         index < budgetedA.size();
+         ++index)
+    {
+        const auto& a =
+            budgetedA[index];
+        const auto& b =
+            budgetedB[index];
+
+        retainedPromoted |=
+            a.promotedSmallEmitter;
+
+        if (a.sourceStableId !=
+                b.sourceStableId ||
+            a.nodeIndex !=
+                b.nodeIndex ||
+            a.estimatorWeight !=
+                b.estimatorWeight ||
+            !std::isfinite(
+                a.estimatorWeight) ||
+            a.estimatorWeight <= 0.0F)
+        {
+            return 5;
+        }
+    }
+
+    if (!retainedPromoted)
+    {
+        return 6;
+    }
+
+    // Across deterministic sequence salts the weighted stochastic draws must
+    // converge to the residual hierarchy importance rather than systematically
+    // losing energy when the scheduler caps the sample count.
+    f64 estimatedImportanceSum = 0.0;
+    constexpr u32 sequenceCount = 2048U;
+
+    for (u32 sequence = 0U;
+         sequence < sequenceCount;
+         ++sequence)
+    {
+        const auto budgeted =
+            SelectEmissiveSamplesForBudget(
+                samples,
+                {
+                    .maximumSamples = 4U,
+                    .sequence = sequence,
+                    .preservePromotedEmitters = true
+                });
+
+        f64 estimate = 0.0;
+
+        for (const auto& emitter :
+             budgeted)
+        {
+            estimate +=
+                emitter.radiantImportance *
+                static_cast<f64>(
+                    emitter.estimatorWeight);
+        }
+
+        estimatedImportanceSum +=
+            estimate;
+    }
+
+    const f64 estimatedAverage =
+        estimatedImportanceSum /
+        static_cast<f64>(
+            sequenceCount);
+
+    const f64 expected =
+        hierarchy.nodes[
+            hierarchy.root].
+            radiantImportance;
+
+    if (std::abs(
+            estimatedAverage -
+            expected) >
+        0.08 *
+            std::max(
+                expected,
+                1.0))
+    {
+        return 7;
+    }
+
     return 0;
 }
