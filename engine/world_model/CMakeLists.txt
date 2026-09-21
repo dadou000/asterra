@@ -64,8 +64,27 @@ if(BUILD_TESTING)
         COMMAND OrbitUniverseCompositionTests
     )
 
+    add_executable(OrbitLocalLightBindingTests
+        tests/LocalLightBindingTests.cpp
+    )
+
     add_executable(OrbitSurfaceAuthorityContractTests
         tests/SurfaceAuthorityContractTests.cpp
+    )
+
+    target_link_libraries(OrbitLocalLightBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+    target_compile_features(
+        OrbitLocalLightBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLocalLightBindingTests)
+
+    add_test(
+        NAME Orbit.LocalLightBinding
+        COMMAND OrbitLocalLightBindingTests
     )
 
     target_link_libraries(OrbitSurfaceAuthorityContractTests
