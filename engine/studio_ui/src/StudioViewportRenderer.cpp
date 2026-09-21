@@ -33,6 +33,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <numbers>
 #include <optional>
 #include <stdexcept>
@@ -1741,11 +1743,158 @@ void StudioViewportRenderer::SetColorLut(
             "Studio viewport renderer has no device for LUT replacement.");
     }
 
+    if (!post_process::
+            IsDisplayLutCompatible(
+                lut))
+    {
+        throw std::invalid_argument(
+            "Selected LUT is not compatible with the display-linear correction stage.");
+    }
+
     colorLut_ =
         std::make_unique<
             post_process::GpuColorLut>(
                 *device_,
                 lut);
+    colorLutData_ =
+        std::move(lut);
+    colorLutDiagnostic_.clear();
+}
+
+std::vector<std::string>
+StudioViewportRenderer::ColorLutAssetPaths() const
+{
+    std::vector<std::string> result;
+
+    if (content_ == nullptr)
+    {
+        return result;
+    }
+
+    for (const auto& asset :
+         content_->Search(
+             {},
+             content::AssetKind::ColorLut))
+    {
+        result.push_back(
+            asset.sourcePath.
+                generic_string());
+    }
+
+    return result;
+}
+
+bool StudioViewportRenderer::SelectColorLutAsset(
+    const std::string_view projectRelativePath)
+{
+    colorLutDiagnostic_.clear();
+
+    if (content_ == nullptr)
+    {
+        colorLutDiagnostic_ =
+            "Content service is unavailable.";
+        return false;
+    }
+
+    const auto* asset =
+        content_->FindByPath(
+            std::filesystem::path(
+                projectRelativePath));
+
+    if (asset == nullptr ||
+        asset->kind !=
+            content::AssetKind::ColorLut)
+    {
+        colorLutDiagnostic_ =
+            "Selected path is not an indexed .cube LUT asset.";
+        return false;
+    }
+
+    try
+    {
+        std::ifstream stream{
+            content_->AbsolutePath(
+                asset->id),
+            std::ios::binary};
+
+        if (!stream)
+        {
+            throw std::runtime_error(
+                "Unable to open LUT asset.");
+        }
+
+        std::ostringstream text;
+        text << stream.rdbuf();
+
+        auto imported =
+            post_process::
+                ParseCubeColorLut(
+                    text.str());
+
+        if (!post_process::
+                IsDisplayLutCompatible(
+                    imported.lut))
+        {
+            colorLutDiagnostic_ =
+                "Rejected LUT: Display correction accepts only DisplayLinear / None-shaper assets. Imported metadata is " +
+                std::string(
+                    post_process::
+                        ColorLutDomainName(
+                            imported.lut.metadata.domain)) +
+                " / " +
+                std::string(
+                    post_process::
+                        ColorLutShaperName(
+                            imported.lut.metadata.shaper)) +
+                ".";
+            return false;
+        }
+
+        SetColorLut(
+            std::move(imported.lut));
+        colorLutSourcePath_ =
+            asset->sourcePath.
+                generic_string();
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        colorLutDiagnostic_ =
+            exception.what();
+        return false;
+    }
+}
+
+StudioColorLutDiagnostics
+StudioViewportRenderer::ColorLutDiagnostics() const
+{
+    return {
+        .sourcePath =
+            colorLutSourcePath_,
+        .title =
+            colorLutData_.metadata.title,
+        .size =
+            colorLutData_.size,
+        .domain =
+            colorLutData_.metadata.domain,
+        .shaper =
+            colorLutData_.metadata.shaper,
+        .compatible =
+            post_process::
+                IsDisplayLutCompatible(
+                    colorLutData_),
+        .explicitMetadata =
+            colorLutData_.metadata.
+                explicitOrbitMetadata,
+        .diagnostic =
+            colorLutDiagnostic_
+    };
+}
+
+post_process::ColorLutSettings
+StudioViewportRenderer::ColorLutSettings() const noexcept
+{
+    return colorLutSettings_;
 }
 
 void StudioViewportRenderer::SetColorLutSettings(
