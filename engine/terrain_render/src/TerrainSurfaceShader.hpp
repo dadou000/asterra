@@ -135,7 +135,20 @@ float3 ApplyDetailNormal(
     return normalize(lerp(baseNormal, perturbed, fade));
 }
 
-float4 main(VSOutput input) : SV_Target0
+struct SurfaceOutputs
+{
+    float4 previewColor : SV_Target0;
+    float4 baseRoughness : SV_Target1;
+    float4 normalMetallic : SV_Target2;
+    float4 emissionClass : SV_Target3;
+};
+
+float EncodeSurfaceMeta(float surfaceClass, float representation)
+{
+    return surfaceClass + representation / 16.0;
+}
+
+SurfaceOutputs main(VSOutput input)
 {
     float4 biome0 =
         max(
@@ -232,6 +245,11 @@ float4 main(VSOutput input) : SV_Target0
         wetlandColor *
             biome1.w;
 
+    float3 surfaceBaseColor = color;
+    float surfaceRoughness = 0.82;
+    float surfaceMetallic = 0.0;
+    float surfaceClass = 1.0; // SurfaceClass::Terrain
+
     const float3 terrainNormal =
         ApplyDetailNormal(
             normalize(input.terrainNormal),
@@ -289,17 +307,46 @@ float4 main(VSOutput input) : SV_Target0
     // Depth gives a continuous shallow shoreline without a lifted overlay.
     // Use the sphere normal for standing water; bank slopes still shade land.
     const float waterCoverage = smoothstep(0.0, 0.25, input.waterDepth);
+    float3 surfaceNormal = terrainNormal;
     if (waterCoverage > 0.0)
     {
         const float3 viewDirection = normalize(-input.localPosition);
         const float fresnel = pow(1.0 - saturate(dot(surfaceDirection, viewDirection)), 5.0);
         const float shallow = exp2(-max(input.waterDepth, 0.0) / 12.0);
-        float3 waterColor = lerp(float3(0.012, 0.075, 0.13),
-            float3(0.055, 0.23, 0.25), shallow);
-        waterColor = lerp(waterColor, float3(0.16, 0.34, 0.42), fresnel * 0.72);
+        const float3 waterBaseColor = lerp(
+            float3(0.012, 0.075, 0.13),
+            float3(0.055, 0.23, 0.25),
+            shallow);
+        const float3 waterColor = lerp(
+            waterBaseColor,
+            float3(0.16, 0.34, 0.42),
+            fresnel * 0.72);
         color = lerp(color, waterColor, waterCoverage);
+        surfaceBaseColor =
+            lerp(surfaceBaseColor, waterBaseColor, waterCoverage);
+        surfaceRoughness =
+            lerp(surfaceRoughness, 0.08, waterCoverage);
+        surfaceNormal =
+            normalize(lerp(terrainNormal, surfaceDirection, waterCoverage));
+        if (waterCoverage >= 0.5)
+        {
+            surfaceClass = 2.0; // SurfaceClass::Water
+        }
     }
-    return float4(color, 1.0);
+
+    SurfaceOutputs output;
+    output.previewColor = float4(color, 1.0);
+    output.baseRoughness =
+        float4(surfaceBaseColor, surfaceRoughness);
+    output.normalMetallic =
+        float4(surfaceNormal, surfaceMetallic);
+    output.emissionClass =
+        float4(
+            0.0,
+            0.0,
+            0.0,
+            EncodeSurfaceMeta(surfaceClass, 1.0));
+    return output;
 }
 )";
 }
