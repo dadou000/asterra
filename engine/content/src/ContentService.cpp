@@ -45,6 +45,7 @@ namespace
     if (extension == ".gltf" || extension == ".glb" || extension == ".fbx" ||
         extension == ".obj") return AssetKind::Mesh;
     if (extension == ".hlsl") return AssetKind::Shader;
+    if (extension == ".cube") return AssetKind::ColorLut;
     return AssetKind::Unknown;
 }
 
@@ -348,6 +349,22 @@ const AssetRecord* ContentService::FindByPath(const std::filesystem::path& path)
     {
         return nullptr;
     }
+}
+
+std::filesystem::path ContentService::AbsolutePath(
+    const AssetId id) const
+{
+    const AssetRecord* asset =
+        Find(id);
+
+    if (asset == nullptr)
+    {
+        throw std::invalid_argument(
+            "Cannot resolve the path of an unknown asset.");
+    }
+
+    return projectRoot_ /
+        asset->sourcePath;
 }
 
 std::vector<AssetRecord> ContentService::Search(
@@ -951,6 +968,7 @@ std::string_view AssetKindName(const AssetKind kind) noexcept
     case AssetKind::Mesh: return "Mesh";
     case AssetKind::PathProfile: return "Path Profile";
     case AssetKind::Shader: return "Shader";
+    case AssetKind::ColorLut: return "Color LUT";
     case AssetKind::Unknown: return "Unknown";
     }
     return "Unknown";
