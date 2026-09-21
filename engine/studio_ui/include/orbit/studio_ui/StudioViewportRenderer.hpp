@@ -258,6 +258,7 @@ private:
         u64 sourceRevision{0};
         u64 fingerprint{0};
         u64 appearanceFingerprint{0};
+        u64 cloudFingerprint{0};
         u64 cachedDiscFingerprint{0};
         u32 appearanceTexels{0};
         celestial_far_render::AppearanceSummary
