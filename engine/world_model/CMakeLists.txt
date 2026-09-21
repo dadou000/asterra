@@ -143,4 +143,24 @@ if(BUILD_TESTING)
         NAME Orbit.ReferenceNodeComposition
         COMMAND OrbitReferenceNodeCompositionTests
     )
+
+    add_executable(OrbitAnalyticOrbitCompositionTests
+        tests/AnalyticOrbitCompositionTests.cpp
+    )
+
+    target_link_libraries(OrbitAnalyticOrbitCompositionTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitAnalyticOrbitCompositionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitAnalyticOrbitCompositionTests)
+
+    add_test(
+        NAME Orbit.AnalyticOrbitComposition
+        COMMAND OrbitAnalyticOrbitCompositionTests
+    )
 endif()
