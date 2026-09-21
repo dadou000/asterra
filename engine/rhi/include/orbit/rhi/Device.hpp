@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/rhi/AccelerationStructure.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Fence.hpp>
 #include <orbit/rhi/Pipeline.hpp>
@@ -59,6 +60,10 @@ public:
 
     [[nodiscard]] virtual std::unique_ptr<Texture> CreateTexture(
         const TextureDesc& desc) = 0;
+
+    [[nodiscard]] virtual std::unique_ptr<AccelerationStructure>
+    CreateAabbAccelerationStructure(
+        std::span<const AccelerationAabb> aabbs) = 0;
 
     [[nodiscard]] virtual std::unique_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         const GraphicsPipelineDesc& desc) = 0;
