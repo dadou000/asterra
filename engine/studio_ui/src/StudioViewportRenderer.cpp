@@ -710,6 +710,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       compiler_(&compiler),
       framesInFlight_(framesInFlight),
       bodyRenderer_(device, compiler),
+      macroGlobeRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler)
 {
@@ -813,6 +814,23 @@ StudioViewportRenderer::Compose(
                 "Studio terrain viewport runtime is stale for the current session generation.");
         }
 
+        const surface::TerrainSurfaceCapability* macroGlobeSurface = nullptr;
+
+        if (logicalTarget->target.has_value() &&
+            snapshot.hasWorld)
+        {
+            macroGlobeSurface =
+                session.World().
+                    Surfaces().
+                    Registry().
+                    FindTerrainSurface(
+                        logicalTarget->target->body);
+        }
+
+        const bool hasMacroGlobe =
+            macroGlobeSurface != nullptr &&
+            macroGlobeSurface->terrain != nullptr;
+
         const auto liveDebugPage =
             views.LiveDebugPage(info.id);
         const bool hasDebugField =
@@ -825,6 +843,7 @@ StudioViewportRenderer::Compose(
                 logicalTarget->mode,
                 shape.has_value(),
                 terrainRuntime.has_value(),
+                hasMacroGlobe,
                 liveDebugPage != nullptr,
                 hasDebugField);
 
@@ -836,6 +855,9 @@ StudioViewportRenderer::Compose(
         {
         case StudioViewportPresentation::ProductionTerrain:
         {
+            macroGlobePresentations_.erase(
+                info.id);
+
             if (device_ == nullptr ||
                 compiler_ == nullptr ||
                 !terrainRuntime.has_value())
@@ -1115,6 +1137,9 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::TerrainDebug:
         {
+            macroGlobePresentations_.erase(
+                info.id);
+
             terrainPresentations_.erase(
                 info.id);
 
@@ -1217,6 +1242,9 @@ StudioViewportRenderer::Compose(
             graph.AddPass(
                 prefix + ".TerrainDebugUnavailable",
                 {
+            macroGlobePresentations_.erase(
+                info.id);
+
                     {
                         .texture = targets.color,
                         .state = rhi::ResourceState::RenderTarget,
@@ -1238,8 +1266,107 @@ StudioViewportRenderer::Compose(
                 });
             break;
 
+        case StudioViewportPresentation::MacroGlobe:
+        {
+            terrainPresentations_.erase(
+                info.id);
+
+            if (device_ == nullptr ||
+                macroGlobeSurface == nullptr ||
+                macroGlobeSurface->terrain == nullptr ||
+                !logicalTarget->target.has_value())
+            {
+                throw std::logic_error(
+                    "Studio macro-globe presentation lost its terrain authority, device, or target body.");
+            }
+
+            auto& presentation =
+                macroGlobePresentations_[
+                    info.id];
+
+            const auto mesh =
+                celestial_globe::BuildMacroGlobe(
+                    *macroGlobeSurface->terrain,
+                    *shape,
+                    {
+                        .faceResolution = 33U,
+                        .footprintScale = 1.5
+                    });
+
+            const bool recreate =
+                presentation.product == nullptr ||
+                presentation.body !=
+                    logicalTarget->target->body ||
+                presentation.sourceRevision !=
+                    mesh.sourceRevision ||
+                presentation.fingerprint !=
+                    mesh.fingerprint;
+
+            if (recreate)
+            {
+                presentation.product =
+                    std::make_unique<
+                        celestial_globe::
+                            GpuMacroGlobeProduct>(
+                                *device_,
+                                mesh);
+                presentation.body =
+                    logicalTarget->target->body;
+                presentation.sourceRevision =
+                    mesh.sourceRevision;
+                presentation.fingerprint =
+                    mesh.fingerprint;
+            }
+
+            auto* globe =
+                presentation.product.get();
+            const auto camera =
+                view->Camera();
+
+            graph.AddPass(
+                prefix + ".MacroGlobe",
+                {
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [this,
+                 color,
+                 width,
+                 height,
+                 globe,
+                 camera](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    commands.ClearColorTarget(
+                        *color,
+                        {
+                            .red = 0.006F,
+                            .green = 0.010F,
+                            .blue = 0.018F,
+                            .alpha = 1.0F
+                        });
+
+                    macroGlobeRenderer_.Draw(
+                        commands,
+                        *color,
+                        width,
+                        height,
+                        *globe,
+                        camera);
+                });
+
+            break;
+        }
+
         case StudioViewportPresentation::BodyPreview:
         {
+            macroGlobePresentations_.erase(
+                info.id);
+
             terrainPresentations_.erase(
                 info.id);
 
@@ -1325,6 +1452,9 @@ StudioViewportRenderer::Compose(
             graph.AddPass(
                 prefix + ".Blank",
                 {
+            macroGlobePresentations_.erase(
+                info.id);
+
                     {
                         .texture = targets.color,
                         .state = rhi::ResourceState::RenderTarget,
