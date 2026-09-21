@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 
 namespace orbit::celestial_ocean
 {
@@ -38,6 +39,10 @@ struct OceanOpticalParameters
 [[nodiscard]] math::Double3 DeepWaterColor(
     const OceanOpticalParameters& parameters,
     f64 waterDepthMeters);
+
+void ApplyOrbitalOceanAppearance(
+    celestial_appearance::PlanetaryAppearanceProduct& appearance,
+    const OceanOpticalParameters& parameters);
 
 [[nodiscard]] u64 OceanOpticalFingerprint(
     const OceanOpticalParameters& parameters);
