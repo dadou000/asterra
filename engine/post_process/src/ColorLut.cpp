@@ -166,7 +166,9 @@ struct Constants
     float lutSize;
     float strength;
     float enabled;
-    float padding;
+    float domainMinimum;
+    float domainMaximum;
+    float3 padding;
 };
 
 [[vk::push_constant]]
@@ -175,7 +177,19 @@ Constants g;
 float3 SamplePackedLut(float3 value)
 {
     const float size = max(g.lutSize, 2.0);
-    const float3 p = saturate(value) * (size - 1.0);
+    const float domainRange =
+        max(
+            g.domainMaximum -
+                g.domainMinimum,
+            1.0e-6);
+    const float3 normalized =
+        saturate(
+            (value -
+             g.domainMinimum) /
+            domainRange);
+    const float3 p =
+        normalized *
+        (size - 1.0);
 
     const float blue0 = floor(p.b);
     const float blue1 = min(blue0 + 1.0, size - 1.0);
@@ -209,7 +223,16 @@ float4 main(VSOutput input) : SV_Target0
         saturate(g.enabled) *
         saturate(g.strength);
 
-    if (active > 0.0)
+    const bool inDomain =
+        all(
+            displayLinear >=
+                g.domainMinimum.xxx) &&
+        all(
+            displayLinear <=
+                g.domainMaximum.xxx);
+
+    if (active > 0.0 &&
+        inDomain)
     {
         const float3 corrected =
             SamplePackedLut(displayLinear);
@@ -256,6 +279,23 @@ ColorLutShaperName(
     }
 
     return "Unknown";
+}
+
+f32 BlendColorLutChannel(
+    const f32 source,
+    const f32 corrected,
+    const f32 strength) noexcept
+{
+    const f32 active =
+        std::clamp(
+            strength,
+            0.0F,
+            1.0F);
+
+    return
+        source +
+        (corrected - source) *
+            active;
 }
 
 bool IsDisplayLutCompatible(
@@ -785,7 +825,11 @@ ColorLutData BuildIdentityColorLut(
 GpuColorLut::GpuColorLut(
     rhi::Device& device,
     const ColorLutData& data)
-    : size_(data.size)
+    : size_(data.size),
+      domainMinimum_(
+          data.metadata.domainMinimum),
+      domainMaximum_(
+          data.metadata.domainMaximum)
 {
     const std::size_t expectedBytes =
         static_cast<std::size_t>(size_) *
@@ -870,6 +914,16 @@ u32 GpuColorLut::Size() const noexcept
     return size_;
 }
 
+f32 GpuColorLut::DomainMinimum() const noexcept
+{
+    return domainMinimum_;
+}
+
+f32 GpuColorLut::DomainMaximum() const noexcept
+{
+    return domainMaximum_;
+}
+
 ColorLutRenderer::ColorLutRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
@@ -902,7 +956,7 @@ ColorLutRenderer::ColorLutRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 4U,
+            .pushConstantDwords = 8U,
             .shaderResourceBuffers = 0U,
             .sampledTextures = 2U,
             .topology =
@@ -940,13 +994,17 @@ void ColorLutRenderer::Draw(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 4> constants{
+    const std::array<u32, 8> constants{
         bits(static_cast<f32>(lut.Size())),
         bits(std::clamp(
             settings.strength,
             0.0F,
             1.0F)),
         bits(settings.enabled ? 1.0F : 0.0F),
+        bits(lut.DomainMinimum()),
+        bits(lut.DomainMaximum()),
+        0U,
+        0U,
         0U
     };
 
