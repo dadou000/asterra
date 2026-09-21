@@ -38,6 +38,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialSmallBodies
         Orbit::CelestialFarRender
         Orbit::CelestialRepresentation
+        Orbit::CelestialScheduler
         Orbit::CelestialRadiometry
         Orbit::EditorModel
         Orbit::EditorUi
