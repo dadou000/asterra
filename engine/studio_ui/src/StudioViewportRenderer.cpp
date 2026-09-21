@@ -5,6 +5,7 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
+#include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -1123,6 +1124,21 @@ CelestialLightingDiagnostics(
         : std::optional(found->second);
 }
 
+std::optional<
+    StudioAtmosphereDiagnostics>
+StudioViewportRenderer::AtmosphereDiagnostics(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found =
+        atmosphereDiagnostics_.find(
+            viewportId);
+
+    return found ==
+            atmosphereDiagnostics_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
 std::vector<StudioRenderedView>
 StudioViewportRenderer::Compose(
     render_graph::RenderGraph& graph,
@@ -1265,6 +1281,231 @@ StudioViewportRenderer::Compose(
         else
         {
             lightingDiagnostics_.erase(
+                info.id);
+        }
+
+        const auto atmosphereBody =
+            logicalTarget->target.has_value() &&
+                    snapshot.hasWorld
+                ? session.World().
+                      Universe().
+                      ObjectForBody(
+                          logicalTarget->target->body)
+                : std::nullopt;
+
+        std::optional<
+            world_model::ResolvedAtmosphereBody>
+            resolvedAtmosphere;
+
+        if (atmosphereBody.has_value())
+        {
+            resolvedAtmosphere =
+                world_model::
+                    ResolveAtmosphereBody(
+                        session.World().
+                            Objects(),
+                        *atmosphereBody);
+        }
+
+        if (resolvedAtmosphere.has_value() &&
+            logicalTarget->target.has_value())
+        {
+            const celestial_atmosphere::
+                AtmosphereLutConfig
+                atmosphereConfig{};
+
+            auto& presentation =
+                atmospherePresentations_[
+                    info.id];
+
+            const u64 staticFingerprint =
+                celestial_atmosphere::
+                    AtmosphereFingerprint(
+                        resolvedAtmosphere->
+                            parameters,
+                        atmosphereConfig);
+
+            const bool staticChanged =
+                presentation.staticLuts ==
+                    nullptr ||
+                presentation.body !=
+                    logicalTarget->
+                        target->body ||
+                presentation.staticFingerprint !=
+                    staticFingerprint;
+
+            if (staticChanged)
+            {
+                presentation.staticLuts =
+                    std::make_unique<
+                        celestial_atmosphere::
+                            AtmosphereStaticLuts>(
+                                celestial_atmosphere::
+                                    BuildStaticLuts(
+                                        resolvedAtmosphere->
+                                            parameters,
+                                        atmosphereConfig));
+
+                presentation.body =
+                    logicalTarget->
+                        target->body;
+                presentation.staticFingerprint =
+                    staticFingerprint;
+                presentation.parameters =
+                    resolvedAtmosphere->
+                        parameters;
+                presentation.skyView.reset();
+                presentation.gpu.reset();
+                presentation.skyFingerprint = 0U;
+            }
+
+            const f64 rawObserverRadius =
+                math::Length(
+                    view->Camera().
+                        localPositionMeters);
+
+            const f64 observerRadius =
+                std::max(
+                    rawObserverRadius,
+                    resolvedAtmosphere->
+                        parameters.
+                        bottomRadiusMeters +
+                        1.0e-3);
+
+            const f64 irradiance =
+                studioDirectLight.
+                        direct.has_value()
+                    ? studioDirectLight.
+                          direct->
+                          irradianceWattsPerSquareMeter
+                    : 0.0;
+
+            const celestial_atmosphere::
+                SkyViewInput
+                skyInput{
+                    .observerRadiusMeters =
+                        observerRadius,
+                    .sunDirectionBody = {
+                        studioDirectLight.
+                            directionBody.x,
+                        studioDirectLight.
+                            directionBody.y,
+                        studioDirectLight.
+                            directionBody.z
+                    },
+                    .incidentIrradianceWattsPerSquareMeter = {
+                        irradiance,
+                        irradiance,
+                        irradiance
+                    }
+                };
+
+            const u64 skyFingerprint =
+                celestial_atmosphere::
+                    AtmosphereSkyFingerprint(
+                        resolvedAtmosphere->
+                            parameters,
+                        presentation.
+                            staticFingerprint,
+                        skyInput,
+                        atmosphereConfig);
+
+            if (presentation.skyView ==
+                    nullptr ||
+                presentation.skyFingerprint !=
+                    skyFingerprint)
+            {
+                presentation.skyView =
+                    std::make_unique<
+                        celestial_atmosphere::
+                            AtmosphereSkyView>(
+                                celestial_atmosphere::
+                                    BuildSkyView(
+                                        resolvedAtmosphere->
+                                            parameters,
+                                        *presentation.
+                                            staticLuts,
+                                        skyInput,
+                                        atmosphereConfig));
+
+                presentation.skyFingerprint =
+                    skyFingerprint;
+
+                if (presentation.gpu ==
+                    nullptr)
+                {
+                    presentation.gpu =
+                        std::make_unique<
+                            celestial_atmosphere::
+                                GpuAtmosphereLuts>(
+                                    *device_,
+                                    *presentation.
+                                        staticLuts,
+                                    *presentation.
+                                        skyView);
+                }
+                else
+                {
+                    presentation.gpu->
+                        ReplaceSkyView(
+                            *presentation.
+                                skyView);
+                }
+            }
+
+            atmosphereDiagnostics_.
+                insert_or_assign(
+                    info.id,
+                    StudioAtmosphereDiagnostics{
+                        .body =
+                            logicalTarget->
+                                target->body,
+                        .staticFingerprint =
+                            presentation.
+                                staticFingerprint,
+                        .skyFingerprint =
+                            presentation.
+                                skyFingerprint,
+                        .observerRadiusMeters =
+                            rawObserverRadius,
+                        .observerAltitudeMeters =
+                            rawObserverRadius -
+                            resolvedAtmosphere->
+                                parameters.
+                                bottomRadiusMeters,
+                        .directIrradianceWattsPerSquareMeter =
+                            irradiance,
+                        .transmittanceWidth =
+                            presentation.
+                                staticLuts->
+                                transmittance.width,
+                        .transmittanceHeight =
+                            presentation.
+                                staticLuts->
+                                transmittance.height,
+                        .multiScatteringWidth =
+                            presentation.
+                                staticLuts->
+                                multiScattering.width,
+                        .multiScatteringHeight =
+                            presentation.
+                                staticLuts->
+                                multiScattering.height,
+                        .skyViewWidth =
+                            presentation.
+                                skyView->
+                                skyView.width,
+                        .skyViewHeight =
+                            presentation.
+                                skyView->
+                                skyView.height
+                    });
+        }
+        else
+        {
+            atmospherePresentations_.erase(
+                info.id);
+            atmosphereDiagnostics_.erase(
                 info.id);
         }
 
