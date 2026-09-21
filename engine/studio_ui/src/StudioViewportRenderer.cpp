@@ -3937,6 +3937,12 @@ StudioViewportRenderer::Compose(
                             celestial_far_render::
                                 SummarizeAppearance(
                                     giantAppearance);
+                        giantPresentation.gpuAppearance =
+                            std::make_unique<
+                                celestial_appearance::
+                                    GpuPlanetaryAppearanceProduct>(
+                                        *device_,
+                                        giantAppearance);
                         giantPresentation.appearance =
                             std::make_unique<
                                 celestial_appearance::
