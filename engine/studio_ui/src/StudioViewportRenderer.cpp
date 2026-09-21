@@ -1152,6 +1152,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       pathRenderer_(device, compiler),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
+      finalGatherRenderer_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
       colorLutRenderer_(device, compiler),
@@ -1640,6 +1641,7 @@ StudioViewportRenderer::Compose(
     const time::SimulationTime atTime,
     const bool drawPathDebug,
     const u32 frameIndex,
+    const lighting::LightingWorkPlan& lightingPlan,
     lighting::LightingTimestampRecorder* const lightingTimestamps)
 {
     static_cast<void>(views.Refresh(snapshot));
