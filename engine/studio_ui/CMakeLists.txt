@@ -28,6 +28,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::Camera
         Orbit::CelestialAppearance
         Orbit::CelestialGlobe
+        Orbit::CelestialFarRender
         Orbit::CelestialRepresentation
         Orbit::EditorModel
         Orbit::EditorUi
