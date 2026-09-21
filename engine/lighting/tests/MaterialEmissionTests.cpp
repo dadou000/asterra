@@ -57,6 +57,40 @@ int main()
         return 3;
     }
 
+    SurfaceData surface;
+    ApplyMaterialEmission(
+        surface,
+        {
+            .colorLinear = {0.5F, 1.0F, 0.25F},
+            .luminanceNits = 1366.0F,
+            .contributesToGi = true,
+            .giScale = 0.3F
+        });
+
+    if (surface.emissionRadianceSceneLinear.y <= 0.0F ||
+        std::abs(
+            surface.emissionGiScale -
+            0.3F) >
+            1.0e-6F)
+    {
+        return 3;
+    }
+
+    ApplyMaterialEmission(
+        surface,
+        {
+            .colorLinear = {1.0F, 1.0F, 1.0F},
+            .luminanceNits = 1000.0F,
+            .contributesToGi = false,
+            .giScale = 50.0F
+        });
+
+    if (surface.emissionRadianceSceneLinear.x <= 0.0F ||
+        surface.emissionGiScale != 0.0F)
+    {
+        return 4;
+    }
+
     const auto invalid =
         EvaluateMaterialEmission({
             .colorLinear = {-1.0F, 1.0F, 1.0F},
