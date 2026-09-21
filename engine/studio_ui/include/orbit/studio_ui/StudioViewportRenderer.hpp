@@ -5,6 +5,7 @@
 #include <orbit/celestial_clouds/CloudField.hpp>
 #include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
+#include <orbit/celestial_magnetosphere_render/AuroraRenderer.hpp>
 #include <orbit/celestial_giants/GiantAppearance.hpp>
 #include <orbit/celestial_small_bodies/SmallBodyAppearance.hpp>
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
@@ -114,6 +115,21 @@ struct StudioStellarDiagnostics
         celestial_representation::Representation::SmoothGlobe};
     f32 resolvedSceneIntensity{0.0F};
     f32 pointSceneIntensity{0.0F};
+};
+
+struct StudioMagnetosphereDiagnostics
+{
+    universe::BodyId body{};
+    u64 fingerprint{0};
+    f64 subsolarStandoffMeters{0.0};
+    f64 tailExtentMeters{0.0};
+    f64 auroralCenterLatitudeDegrees{0.0};
+    f64 auroralMinimumAltitudeMeters{0.0};
+    f64 auroralMaximumAltitudeMeters{0.0};
+    f64 projectedAuroraRadiusPixels{0.0};
+    f64 activity{0.0};
+    bool nearRepresentation{false};
+    u32 angularSegments{0};
 };
 
 struct StudioRingDiagnostics
@@ -290,6 +306,11 @@ public:
         std::string_view viewportId) const noexcept;
 
     [[nodiscard]] std::optional<
+        StudioMagnetosphereDiagnostics>
+    MagnetosphereDiagnostics(
+        std::string_view viewportId) const noexcept;
+
+    [[nodiscard]] std::optional<
         StudioStellarDiagnostics>
     StellarDiagnostics(
         std::string_view viewportId) const noexcept;
@@ -382,6 +403,19 @@ private:
         std::unique_ptr<
             celestial_appearance::GpuPlanetaryAppearanceProduct>
             gpuAppearance;
+    };
+
+    struct MagnetospherePresentation
+    {
+        universe::BodyId body{};
+        u64 fingerprint{0};
+        f64 referenceRadiusMeters{1.0};
+        std::unique_ptr<
+            celestial_magnetosphere_render::GpuAuroraMeshProduct>
+            nearAurora;
+        std::unique_ptr<
+            celestial_magnetosphere_render::GpuAuroraMeshProduct>
+            farAurora;
     };
 
     struct RingPresentation
@@ -495,6 +529,7 @@ private:
     celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
     celestial_far_render::FarBodyRenderer farBodyRenderer_;
     celestial_rings::RingRenderer ringRenderer_;
+    celestial_magnetosphere_render::AuroraRenderer auroraRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
@@ -553,9 +588,21 @@ private:
 
     std::map<
         std::string,
+        StudioMagnetosphereDiagnostics,
+        std::less<>>
+        magnetosphereDiagnostics_;
+
+    std::map<
+        std::string,
         RingPresentation,
         std::less<>>
         ringPresentations_;
+
+    std::map<
+        std::string,
+        MagnetospherePresentation,
+        std::less<>>
+        magnetospherePresentations_;
 
     std::map<
         std::string,
