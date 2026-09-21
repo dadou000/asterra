@@ -374,39 +374,61 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
     depthStencilState.depthCompareOp =
         ToNativeDepthCompare(desc.depthCompare);
 
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-
-    switch (desc.blendMode)
+    if (desc.colorAttachmentCount == 0U ||
+        desc.colorAttachmentCount >
+            desc.colorAttachmentFormats.size())
     {
-    case BlendMode::Opaque:
-        colorBlendAttachment.blendEnable = VK_FALSE;
-        break;
+        throw std::invalid_argument(
+            "Orbit graphics pipeline color attachment count is invalid.");
+    }
 
-    case BlendMode::Alpha:
-        colorBlendAttachment.blendEnable = VK_TRUE;
-        colorBlendAttachment.srcColorBlendFactor =
-            VK_BLEND_FACTOR_SRC_ALPHA;
-        colorBlendAttachment.dstColorBlendFactor =
-            VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        colorBlendAttachment.colorBlendOp =
-            VK_BLEND_OP_ADD;
-        colorBlendAttachment.srcAlphaBlendFactor =
-            VK_BLEND_FACTOR_ONE;
-        colorBlendAttachment.dstAlphaBlendFactor =
-            VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        colorBlendAttachment.alphaBlendOp =
-            VK_BLEND_OP_ADD;
-        break;
+    std::array<VkPipelineColorBlendAttachmentState, 4>
+        colorBlendAttachments{};
+
+    for (u32 attachment = 0U;
+         attachment < desc.colorAttachmentCount;
+         ++attachment)
+    {
+        auto& colorBlendAttachment =
+            colorBlendAttachments[attachment];
+
+        colorBlendAttachment.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT |
+            VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT |
+            VK_COLOR_COMPONENT_A_BIT;
+
+        switch (desc.blendMode)
+        {
+        case BlendMode::Opaque:
+            colorBlendAttachment.blendEnable = VK_FALSE;
+            break;
+
+        case BlendMode::Alpha:
+            colorBlendAttachment.blendEnable = VK_TRUE;
+            colorBlendAttachment.srcColorBlendFactor =
+                VK_BLEND_FACTOR_SRC_ALPHA;
+            colorBlendAttachment.dstColorBlendFactor =
+                VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.colorBlendOp =
+                VK_BLEND_OP_ADD;
+            colorBlendAttachment.srcAlphaBlendFactor =
+                VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstAlphaBlendFactor =
+                VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            colorBlendAttachment.alphaBlendOp =
+                VK_BLEND_OP_ADD;
+            break;
+        }
     }
 
     VkPipelineColorBlendStateCreateInfo colorBlendState{};
     colorBlendState.sType =
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlendState.attachmentCount = 1;
-    colorBlendState.pAttachments = &colorBlendAttachment;
+    colorBlendState.attachmentCount =
+        desc.colorAttachmentCount;
+    colorBlendState.pAttachments =
+        colorBlendAttachments.data();
 
     const std::array dynamicStates{
         VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR
@@ -419,20 +441,30 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
         static_cast<u32>(dynamicStates.size());
     dynamicState.pDynamicStates = dynamicStates.data();
 
-    // Every pipeline in this codebase always renders to one color
-    // target; a depth target is only attached when the pipeline
-    // actually tests/writes depth -- mirrors the D3D12 backend's
-    // DSVFormat = (depthTest || depthWrite) ? D32_FLOAT : UNKNOWN.
-    constexpr VkFormat kColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
-    const bool usesDepth = desc.depthTest || desc.depthWrite;
+    std::array<VkFormat, 4> colorFormats{};
+    for (u32 attachment = 0U;
+         attachment < desc.colorAttachmentCount;
+         ++attachment)
+    {
+        colorFormats[attachment] =
+            ToNativeTextureFormat(
+                desc.colorAttachmentFormats[attachment]);
+    }
+
+    const bool usesDepth =
+        desc.depthTest || desc.depthWrite;
 
     VkPipelineRenderingCreateInfo renderingCreateInfo{};
     renderingCreateInfo.sType =
         VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingCreateInfo.colorAttachmentCount = 1;
-    renderingCreateInfo.pColorAttachmentFormats = &kColorFormat;
+    renderingCreateInfo.colorAttachmentCount =
+        desc.colorAttachmentCount;
+    renderingCreateInfo.pColorAttachmentFormats =
+        colorFormats.data();
     renderingCreateInfo.depthAttachmentFormat =
-        usesDepth ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_UNDEFINED;
+        usesDepth
+            ? VK_FORMAT_D32_SFLOAT
+            : VK_FORMAT_UNDEFINED;
 
     VkGraphicsPipelineCreateInfo pipelineCreateInfo{};
     pipelineCreateInfo.sType =
