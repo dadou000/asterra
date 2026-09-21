@@ -1,5 +1,6 @@
 add_library(OrbitCelestialMagnetosphere STATIC
     src/Magnetosphere.cpp
+    src/AuroraRenderer.cpp
 )
 add_library(Orbit::CelestialMagnetosphere ALIAS OrbitCelestialMagnetosphere)
 
@@ -9,6 +10,9 @@ target_include_directories(OrbitCelestialMagnetosphere PUBLIC
 target_link_libraries(OrbitCelestialMagnetosphere PUBLIC
     Orbit::Core
     Orbit::Math
+    Orbit::RenderView
+    Orbit::RHI
+    Orbit::Shader
     Orbit::Terrain
 )
 
