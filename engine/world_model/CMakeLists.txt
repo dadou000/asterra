@@ -253,6 +253,30 @@ if(BUILD_TESTING)
         NAME Orbit.GravityComposition
         COMMAND OrbitGravityCompositionTests
     )
+
+    add_executable(
+        OrbitAtmospherePropertySolverTests
+        tests/AtmospherePropertySolverTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitAtmospherePropertySolverTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitAtmospherePropertySolverTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitAtmospherePropertySolverTests)
+
+    add_test(
+        NAME Orbit.AtmospherePropertySolver
+        COMMAND OrbitAtmospherePropertySolverTests
+    )
+
 endif()
 
 
