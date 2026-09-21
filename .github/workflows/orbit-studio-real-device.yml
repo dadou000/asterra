@@ -2,6 +2,18 @@ name: Orbit Studio Real Device Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/orbit-studio-real-device.yml'
+      - '.github/workflows/orbit-v006-celestial.yml'
+      - 'engine/celestial_*/**'
+      - 'engine/world_model/**'
+      - 'engine/studio_session/**'
+      - 'engine/studio_ui/**'
+      - 'engine/lighting/**'
+      - 'tests/V006CelestialValidationTests.cpp'
+      - 'docs/V0.0.6_*'
 
 concurrency:
   group: orbit-studio-real-device-${{ github.ref }}
