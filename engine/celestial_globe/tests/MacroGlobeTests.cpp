@@ -54,6 +54,23 @@ int main()
                     .footprintScale = 1.5
                 });
 
+    const auto fingerprint =
+        orbit::celestial_globe::
+            MacroGlobeFingerprint(
+                terrain,
+                orbit::universe::SphereShape{
+                    .radiusMeters = 1.0e6
+                },
+                {
+                    .faceResolution = 9,
+                    .footprintScale = 1.5
+                });
+
+    if (fingerprint != mesh.fingerprint)
+    {
+        return 1;
+    }
+
     if (mesh.vertices.size() !=
             6U * 9U * 9U ||
         mesh.indices.size() !=
@@ -61,7 +78,7 @@ int main()
         mesh.sourceRevision != 42 ||
         mesh.sampleFootprintMeters <= 0.0)
     {
-        return 1;
+        return 2;
     }
 
     if (mesh.minimumRadiusMeters >=
@@ -69,7 +86,7 @@ int main()
         mesh.maximumRadiusMeters <=
             1.0e6)
     {
-        return 2;
+        return 3;
     }
 
     for (const auto& vertex :
@@ -84,7 +101,7 @@ int main()
                 normalLength - 1.0) >
                 1.0e-9)
         {
-            return 3;
+            return 4;
         }
     }
 
@@ -105,7 +122,7 @@ int main()
     if (revisedMesh.fingerprint ==
         mesh.fingerprint)
     {
-        return 4;
+        return 5;
     }
 
     const auto ellipsoid =
@@ -129,7 +146,7 @@ int main()
         ellipsoid.maximumRadiusMeters <=
             ellipsoid.minimumRadiusMeters)
     {
-        return 5;
+        return 6;
     }
 
     return 0;
