@@ -70,6 +70,29 @@ int main()
         return 1;
     }
 
+    const auto hardwareAabbs =
+        scene.AccelerationAabbs(
+            {0.0, 0.0, 4.0});
+
+    const auto hardwarePrimitives =
+        scene.GpuPrimitives(
+            {0.0, 0.0, 4.0});
+
+    if (hardwareAabbs.size() != 2U ||
+        hardwarePrimitives.size() != 2U ||
+        std::abs(
+            hardwarePrimitives[0].
+                centerType.z -
+            1.0F) >
+            1.0e-6F ||
+        hardwarePrimitives[0].
+                materialId != 7U ||
+        hardwarePrimitives[1].
+                instanceId != 13U)
+    {
+        return 6;
+    }
+
     SoftwareProxyVisibilityProvider
         provider(
             scene,
