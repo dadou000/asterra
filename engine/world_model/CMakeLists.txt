@@ -6,6 +6,7 @@ add_library(OrbitWorldModel STATIC
     src/CelestialCloudBinding.cpp
     src/CelestialOceanBinding.cpp
     src/CelestialRingBinding.cpp
+    src/CelestialGiantBinding.cpp
     src/AtmospherePropertySolver.cpp
     src/PropertyProvenanceSchema.cpp
     src/PropertyProvenanceStore.cpp
@@ -33,6 +34,7 @@ target_link_libraries(OrbitWorldModel
         Orbit::CelestialClouds
         Orbit::CelestialOcean
         Orbit::CelestialRings
+        Orbit::CelestialGiants
         Orbit::CelestialStellar
         Orbit::CelestialOrbits
         Orbit::CelestialRadiometry
