@@ -15,7 +15,6 @@ namespace
 {
 constexpr f64 kG = 6.67430e-11;
 constexpr f64 kEarthRadius = 6.371e6;
-constexpr f64 kEarthDensity = 5514.0;
 constexpr f64 kAstronomicalUnit = 1.495978707e11;
 
 class SplitMix64
