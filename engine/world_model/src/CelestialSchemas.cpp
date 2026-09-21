@@ -138,9 +138,43 @@ void RegisterCelestialCapabilitySchemas(
              .advanced = true}
         }
     });
-    RegisterCapability(
-        schemas, kRotationCapabilityType,
-        "Rotation / Orientation", "Uniform Spin", true);
+    schemas.RegisterType({
+        .id = kRotationCapabilityType,
+        .displayName = "Rotation / Orientation",
+        .category = "Celestial/Capability",
+        .properties = {
+            EnabledProperty(),
+            ModelProperty("Uniform Spin"),
+            SourceObjectProperty(),
+            {.id = kRotationAxis,
+             .name = "Pole Axis",
+             .kind = schema::PropertyKind::Vector3,
+             .defaultValue = math::Double3{0.0, 0.0, 1.0}},
+            {.id = kRotationPeriodSeconds,
+             .name = "Rotation Period",
+             .kind = schema::PropertyKind::Float,
+             .unit = "s",
+             .defaultValue = 86'400.0,
+             .range = {.minimum = 0.000001}},
+            {.id = kRotationPhaseDegrees,
+             .name = "Phase At Epoch",
+             .kind = schema::PropertyKind::Float,
+             .unit = "deg",
+             .defaultValue = 0.0},
+            {.id = kRotationEpochMicroseconds,
+             .name = "Rotation Epoch",
+             .kind = schema::PropertyKind::Integer,
+             .unit = "us",
+             .defaultValue = i64{0},
+             .advanced = true},
+            {.id = kRotationSynchronousPhaseOffsetDegrees,
+             .name = "Synchronous Phase Offset",
+             .kind = schema::PropertyKind::Float,
+             .unit = "deg",
+             .defaultValue = 0.0,
+             .advanced = true}
+        }
+    });
     RegisterCapability(
         schemas, kSurfaceCapabilityType,
         "Surface", "Terrain Authority", true);
