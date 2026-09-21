@@ -412,6 +412,125 @@ SoftwareProxyScene::Stats() const noexcept
     return stats_;
 }
 
+std::vector<rhi::AccelerationAabb>
+SoftwareProxyScene::AccelerationAabbs() const
+{
+    std::vector<rhi::AccelerationAabb> result;
+    result.reserve(proxies_.size());
+
+    for (u32 index = 0U;
+         index < proxies_.size();
+         ++index)
+    {
+        const auto& proxy =
+            proxies_[index];
+
+        result.push_back({
+            .minimum = {
+                static_cast<f32>(
+                    proxy.boundsMinimum.x),
+                static_cast<f32>(
+                    proxy.boundsMinimum.y),
+                static_cast<f32>(
+                    proxy.boundsMinimum.z)
+            },
+            .maximum = {
+                static_cast<f32>(
+                    proxy.boundsMaximum.x),
+                static_cast<f32>(
+                    proxy.boundsMaximum.y),
+                static_cast<f32>(
+                    proxy.boundsMaximum.z)
+            },
+            .primitiveId = index
+        });
+    }
+
+    return result;
+}
+
+std::vector<GpuVisibilityProxyPrimitive>
+SoftwareProxyScene::GpuPrimitives() const
+{
+    std::vector<GpuVisibilityProxyPrimitive> result;
+    result.reserve(proxies_.size());
+
+    for (const auto& proxy :
+         proxies_)
+    {
+        const auto& transform =
+            proxy.frameFromProxy;
+
+        const auto axisX =
+            math::Normalize(
+                transform.rotation.xAxis);
+        const auto axisY =
+            math::Normalize(
+                transform.rotation.yAxis);
+        const auto axisZ =
+            math::Normalize(
+                transform.rotation.zAxis);
+
+        const bool box =
+            proxy.source.shape ==
+            VisibilityProxyShape::Box;
+
+        result.push_back({
+            .centerType = {
+                static_cast<f32>(
+                    transform.translation.x),
+                static_cast<f32>(
+                    transform.translation.y),
+                static_cast<f32>(
+                    transform.translation.z),
+                box ? 1.0F : 0.0F
+            },
+            .axisXExtent = {
+                static_cast<f32>(axisX.x),
+                static_cast<f32>(axisX.y),
+                static_cast<f32>(axisX.z),
+                static_cast<f32>(
+                    box
+                        ? proxy.source.
+                            boxHalfExtentsMeters.x
+                        : proxy.source.
+                            sphereRadiusMeters)
+            },
+            .axisYExtent = {
+                static_cast<f32>(axisY.x),
+                static_cast<f32>(axisY.y),
+                static_cast<f32>(axisY.z),
+                static_cast<f32>(
+                    box
+                        ? proxy.source.
+                            boxHalfExtentsMeters.y
+                        : 0.0)
+            },
+            .axisZExtent = {
+                static_cast<f32>(axisZ.x),
+                static_cast<f32>(axisZ.y),
+                static_cast<f32>(axisZ.z),
+                static_cast<f32>(
+                    box
+                        ? proxy.source.
+                            boxHalfExtentsMeters.z
+                        : 0.0)
+            },
+            .materialId =
+                proxy.source.materialId,
+            .instanceId =
+                proxy.source.instanceId,
+            .nominalErrorMeters =
+                std::max(
+                    proxy.source.
+                        nominalErrorMeters,
+                    0.0F)
+        });
+    }
+
+    return result;
+}
+
 u32 SoftwareProxyScene::BuildNode(
     const u32 first,
     const u32 count)
