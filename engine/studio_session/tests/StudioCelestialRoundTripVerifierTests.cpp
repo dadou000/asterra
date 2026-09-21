@@ -122,6 +122,13 @@ int main()
         !report.freshWorkspaceRecomposition ||
         !report.derivedProductsRegenerated)
     {
+        std::cerr
+            << "round-trip invariant failure"
+            << " ids=" << report.semanticIdsPreserved
+            << " provenance=" << report.provenancePreserved
+            << " fresh=" << report.freshWorkspaceRecomposition
+            << " regenerated=" << report.derivedProductsRegenerated
+            << '\n';
         return 3;
     }
 
@@ -138,6 +145,21 @@ int main()
             report.
                 representationFingerprintAfter)
     {
+        std::cerr
+            << "round-trip fingerprint mismatch"
+            << " semantic="
+            << report.semanticFingerprintBefore << '/'
+            << report.semanticFingerprintAfter
+            << " orbit="
+            << report.runtimeOrbitFingerprintBefore << '/'
+            << report.runtimeOrbitFingerprintAfter
+            << " appearance="
+            << report.derivedAppearanceFingerprintBefore << '/'
+            << report.derivedAppearanceFingerprintAfter
+            << " representation="
+            << report.representationFingerprintBefore << '/'
+            << report.representationFingerprintAfter
+            << '\n';
         return 4;
     }
 
