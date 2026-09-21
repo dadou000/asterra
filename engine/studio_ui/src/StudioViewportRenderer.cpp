@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <numbers>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
