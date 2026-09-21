@@ -35,6 +35,8 @@ inline constexpr schema::TypeId kRadiativeEmitterCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x454d544341500001ULL};
 inline constexpr schema::TypeId kPhotosphereCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x50484f4341500001ULL};
+inline constexpr schema::TypeId kGiantAppearanceCapabilityType{
+    .high = 0x4f5242495443454cULL, .low = 0x4749414e54415001ULL};
 inline constexpr schema::TypeId kMagnetosphereCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x4d41474341500001ULL};
 inline constexpr schema::TypeId kCometTailCapabilityType{
@@ -137,6 +139,35 @@ inline constexpr schema::PropertyId kPhotosphereGlareStrength{
     .high = 0x4f5242495450484fULL, .low = 0x474c415245535401ULL};
 inline constexpr schema::PropertyId kPhotosphereGlareRadiusPixels{
     .high = 0x4f5242495450484fULL, .low = 0x474c415245525001ULL};
+
+inline constexpr schema::PropertyId kGiantClass{
+    .high = 0x4f52424954474941ULL, .low = 0x434c415353000001ULL};
+inline constexpr schema::PropertyId kGiantSeed{
+    .high = 0x4f52424954474941ULL, .low = 0x5345454400000001ULL};
+inline constexpr schema::PropertyId kGiantBaseColorLinear{
+    .high = 0x4f52424954474941ULL, .low = 0x42415345434f4c01ULL};
+inline constexpr schema::PropertyId kGiantBandColorLinear{
+    .high = 0x4f52424954474941ULL, .low = 0x42414e44434f4c01ULL};
+inline constexpr schema::PropertyId kGiantPolarColorLinear{
+    .high = 0x4f52424954474941ULL, .low = 0x504f4c45434f4c01ULL};
+inline constexpr schema::PropertyId kGiantBandFrequency{
+    .high = 0x4f52424954474941ULL, .low = 0x42414e4446524501ULL};
+inline constexpr schema::PropertyId kGiantBandStrength{
+    .high = 0x4f52424954474941ULL, .low = 0x42414e4453545201ULL};
+inline constexpr schema::PropertyId kGiantZonalShear{
+    .high = 0x4f52424954474941ULL, .low = 0x5a4f4e414c534801ULL};
+inline constexpr schema::PropertyId kGiantStormStrength{
+    .high = 0x4f52424954474941ULL, .low = 0x53544f524d535401ULL};
+inline constexpr schema::PropertyId kGiantStormScale{
+    .high = 0x4f52424954474941ULL, .low = 0x53544f524d534301ULL};
+inline constexpr schema::PropertyId kGiantPolarStrength{
+    .high = 0x4f52424954474941ULL, .low = 0x504f4c4152535401ULL};
+inline constexpr schema::PropertyId kGiantDepthContrast{
+    .high = 0x4f52424954474941ULL, .low = 0x4445505448434f01ULL};
+inline constexpr schema::PropertyId kGiantTurbulenceStrength{
+    .high = 0x4f52424954474941ULL, .low = 0x5455524253545201ULL};
+inline constexpr schema::PropertyId kGiantTurbulenceScale{
+    .high = 0x4f52424954474941ULL, .low = 0x5455524253434c01ULL};
 
 inline constexpr schema::PropertyId kAtmosphereTopRadiusMeters{
     .high = 0x4f5242495441544dULL, .low = 0x544f505241440001ULL};
