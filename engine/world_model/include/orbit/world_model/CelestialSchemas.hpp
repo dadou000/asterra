@@ -74,6 +74,12 @@ inline constexpr schema::PropertyId kOrbitGravitationalParameter{
     .high = 0x4f524249544f5242ULL, .low = 0x4752415650415201ULL};
 inline constexpr schema::PropertyId kOrbitEpochMicroseconds{
     .high = 0x4f524249544f5242ULL, .low = 0x45504f4348555301ULL};
+inline constexpr schema::PropertyId kOrbitDynamicPromotionEnabled{
+    .high = 0x4f524249544f5242ULL, .low = 0x4e424f4459454e01ULL};
+inline constexpr schema::PropertyId kOrbitDynamicStepSeconds{
+    .high = 0x4f524249544f5242ULL, .low = 0x4e42535445500001ULL};
+inline constexpr schema::PropertyId kOrbitDynamicSofteningMeters{
+    .high = 0x4f524249544f5242ULL, .low = 0x4e42534f46540001ULL};
 
 inline constexpr schema::PropertyId kRotationAxis{
     .high = 0x4f52424954524f54ULL, .low = 0x4158495300000001ULL};
