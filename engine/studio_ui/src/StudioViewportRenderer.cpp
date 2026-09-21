@@ -1233,6 +1233,41 @@ StudioViewportRenderer::Compose(
             macroGlobeSurface != nullptr &&
             macroGlobeSurface->terrain != nullptr;
 
+        const auto studioDirectLight =
+            logicalTarget->target.has_value() &&
+                    snapshot.hasWorld
+                ? ResolveStudioDirectLight(
+                      session,
+                      logicalTarget->target->body,
+                      atTime)
+                : ResolvedStudioDirectLight{};
+
+        if (studioDirectLight.direct.has_value())
+        {
+            lightingDiagnostics_.insert_or_assign(
+                info.id,
+                StudioCelestialLightingDiagnostics{
+                    .receiver =
+                        studioDirectLight.direct->receiver,
+                    .emitter =
+                        studioDirectLight.direct->emitter,
+                    .visibleFraction =
+                        studioDirectLight.direct->visibleFraction,
+                    .irradianceWattsPerSquareMeter =
+                        studioDirectLight.direct->
+                            irradianceWattsPerSquareMeter,
+                    .contributingOccluders =
+                        static_cast<u32>(
+                            studioDirectLight.direct->
+                                contributingOccluders.size())
+                });
+        }
+        else
+        {
+            lightingDiagnostics_.erase(
+                info.id);
+        }
+
         const auto liveDebugPage =
             views.LiveDebugPage(info.id);
         const bool hasDebugField =
