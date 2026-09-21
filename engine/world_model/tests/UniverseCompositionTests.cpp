@@ -143,7 +143,7 @@ int main()
 
         const auto* transform =
             std::get_if<
-                orbit::universe::OrbitDrivenUniformRotationTransform>(
+                orbit::universe::ProviderDrivenBodyTransform>(
                     &planet->transformModel);
 
         const auto systemFrame =
@@ -162,8 +162,7 @@ int main()
 
         if (transform == nullptr ||
             !transform->orbitState ||
-            transform->epoch.microsecondsFromEpoch != 123456 ||
-            transform->angularVelocityRadiansPerSecond <= 0.0 ||
+            !transform->orientation ||
             !parentFromPlanet.has_value() ||
             parentFromPlanet->translation.x != 10'000.0 ||
             parentFromPlanet->translation.y != 20'000.0 ||
