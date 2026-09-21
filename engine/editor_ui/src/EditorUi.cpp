@@ -1137,6 +1137,13 @@ CanvasInteraction PanelContext::Canvas(
             ImGui::IsMouseDragging(
                 ImGuiMouseButton_Left,
                 1.0F),
+        .leftDown =
+            hovered &&
+            ImGui::IsMouseDown(
+                ImGuiMouseButton_Left),
+        .leftReleased =
+            ImGui::IsMouseReleased(
+                ImGuiMouseButton_Left),
         .u = u,
         .v = v
     };
