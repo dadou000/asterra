@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/Command.hpp>
@@ -52,6 +53,10 @@ struct GpuMacroGlobeVertex
 {
     math::Float3 positionNormalized{};
     math::Float3 normal{};
+    math::Float3 albedoLinear{0.18F, 0.18F, 0.18F};
+    math::Float3 appearanceNormal{0.0F, 1.0F, 0.0F};
+    math::Float4 materialChannels{0.8F, 0.0F, 0.0F, 0.0F};
+    math::Float3 emissionLinear{};
 };
 
 class GpuMacroGlobeProduct
@@ -59,7 +64,9 @@ class GpuMacroGlobeProduct
 public:
     GpuMacroGlobeProduct(
         rhi::Device& device,
-        const MacroGlobeMesh& mesh);
+        const MacroGlobeMesh& mesh,
+        const celestial_appearance::PlanetaryAppearanceProduct*
+            appearance = nullptr);
 
     [[nodiscard]] rhi::Buffer& VertexBuffer() noexcept;
     [[nodiscard]] rhi::Buffer& IndexBuffer() noexcept;
