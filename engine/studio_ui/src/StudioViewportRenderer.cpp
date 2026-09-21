@@ -2143,6 +2143,37 @@ void StudioViewportRenderer::SetLuminanceHistogramConfig(
             config;
 }
 
+void StudioViewportRenderer::SetHumanEyeAdaptationConfig(
+    const std::string_view viewportId,
+    post_process::HumanEyeAdaptationConfig config)
+{
+    auto& diagnostics =
+        luminanceHistogramPresentations_[
+            std::string(viewportId)].
+            diagnostics;
+
+    diagnostics.eyeConfig =
+        config;
+}
+
+void StudioViewportRenderer::ResetHumanEyeAdaptation(
+    const std::string_view viewportId) noexcept
+{
+    const auto found =
+        luminanceHistogramPresentations_.find(
+            viewportId);
+
+    if (found ==
+        luminanceHistogramPresentations_.end())
+    {
+        return;
+    }
+
+    post_process::ResetHumanEyeAdaptation(
+        found->second.diagnostics.eyeState);
+    found->second.hasEyeUpdateTime = false;
+}
+
 void StudioViewportRenderer::SetLuminanceMeteringOverlay(
     const std::string_view viewportId,
     const bool enabled)
@@ -9124,12 +9155,28 @@ StudioViewportRenderer::Compose(
             {
                 const auto retainedConfig =
                     histogram.diagnostics.config;
+                const auto retainedEyeConfig =
+                    histogram.diagnostics.eyeConfig;
+                const auto retainedEyeState =
+                    histogram.diagnostics.eyeState;
+                const auto retainedEyeUpdate =
+                    histogram.lastEyeUpdate;
+                const bool retainedHasEyeUpdateTime =
+                    histogram.hasEyeUpdateTime;
                 const bool retainedOverlay =
                     histogram.showMeteringOverlay;
 
                 histogram = {};
                 histogram.diagnostics.config =
                     retainedConfig;
+                histogram.diagnostics.eyeConfig =
+                    retainedEyeConfig;
+                histogram.diagnostics.eyeState =
+                    retainedEyeState;
+                histogram.lastEyeUpdate =
+                    retainedEyeUpdate;
+                histogram.hasEyeUpdateTime =
+                    retainedHasEyeUpdateTime;
                 histogram.showMeteringOverlay =
                     retainedOverlay;
                 histogram.width = width;
@@ -9240,6 +9287,38 @@ StudioViewportRenderer::Compose(
                     post_process::
                         DecodeLuminanceHistogramStatistics(
                             gpuStatistics);
+
+                const auto eyeNow =
+                    std::chrono::steady_clock::now();
+
+                f32 eyeDeltaSeconds =
+                    1.0F / 60.0F;
+
+                if (histogram.hasEyeUpdateTime)
+                {
+                    eyeDeltaSeconds =
+                        std::clamp(
+                            std::chrono::duration<f32>(
+                                eyeNow -
+                                histogram.lastEyeUpdate).
+                                count(),
+                            1.0F / 240.0F,
+                            0.25F);
+                }
+
+                histogram.diagnostics.eyeState =
+                    post_process::
+                        UpdateHumanEyeAdaptation(
+                            histogram.diagnostics.eyeState,
+                            histogram.diagnostics.statistics,
+                            eyeDeltaSeconds,
+                            histogram.diagnostics.eyeConfig);
+
+                histogram.lastEyeUpdate =
+                    eyeNow;
+                histogram.hasEyeUpdateTime =
+                    true;
+
                 histogram.diagnostics.
                     meteringMaskAvailable =
                         true;
