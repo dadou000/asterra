@@ -395,11 +395,22 @@ void RadianceClipmapResidency::InvalidateSphere(
             "Radiance invalidation radius must be finite and non-negative.");
     }
 
-    sourceRevision_ =
-        std::max(
-            sourceRevision_,
-            sourceRevision);
+    const u64 previousRevision =
+        sourceRevision_;
 
+    if (sourceRevision < previousRevision)
+    {
+        throw std::invalid_argument(
+            "Radiance invalidation revision cannot move backwards.");
+    }
+
+    sourceRevision_ =
+        sourceRevision;
+
+    // A dependency-aware localized change advances the authority revision,
+    // but cells proven outside the invalidation region remain physically
+    // valid. Promote those cells to the new revision rather than turning a
+    // local terrain/emissive edit into a global cache flush.
     for (auto& level : levels_)
     {
         const f64 cellSize =
@@ -441,6 +452,18 @@ void RadianceClipmapResidency::InvalidateSphere(
                 slot.dirty = true;
                 slot.cell.valid = false;
                 slot.sourceRevision =
+                    sourceRevision;
+                slot.cell.revision =
+                    sourceRevision;
+            }
+            else if (slot.sourceRevision ==
+                         previousRevision &&
+                     slot.cell.revision ==
+                         previousRevision)
+            {
+                slot.sourceRevision =
+                    sourceRevision;
+                slot.cell.revision =
                     sourceRevision;
             }
         }
