@@ -3977,6 +3977,10 @@ StudioViewportRenderer::Compose(
                     .lowerFidelityNeighbor =
                         representationDecision.
                             lowerFidelityNeighbor,
+                    .richerWeight =
+                        representationBlend.richerWeight,
+                    .lowerWeight =
+                        representationBlend.lowerWeight,
                     .productionSurfaceWeight =
                         productionWeight,
                     .macroGlobeWeight =
@@ -5467,6 +5471,10 @@ StudioViewportRenderer::Compose(
                             .lowerFidelityNeighbor =
                                 decision.
                                     lowerFidelityNeighbor,
+                            .richerWeight =
+                                blend.richerWeight,
+                            .lowerWeight =
+                                blend.lowerWeight,
                             .productionSurfaceWeight =
                                 0.0,
                             .macroGlobeWeight =
@@ -6861,6 +6869,47 @@ StudioViewportRenderer::Compose(
                 });
             }
 
+            u64 emissionAuthorityFingerprint =
+                0x4f52424954454d31ULL;
+
+            for (const auto& sourceState :
+                 dynamicEmissiveSources)
+            {
+                emissionAuthorityFingerprint =
+                    CombineFingerprint(
+                        emissionAuthorityFingerprint,
+                        sourceState.stableId);
+                emissionAuthorityFingerprint =
+                    CombineFingerprint(
+                        emissionAuthorityFingerprint,
+                        sourceState.contentRevision);
+            }
+
+            if (runtimeMaterialOverride.has_value())
+            {
+                const auto runtimeEmission =
+                    runtimeMaterialOverride->emissionRadiance;
+
+                emissionAuthorityFingerprint =
+                    CombineFingerprint(
+                        emissionAuthorityFingerprint,
+                        QuantizedLightingFingerprintValue(
+                            runtimeEmission.x,
+                            0.0025F));
+                emissionAuthorityFingerprint =
+                    CombineFingerprint(
+                        emissionAuthorityFingerprint,
+                        QuantizedLightingFingerprintValue(
+                            runtimeEmission.y,
+                            0.0025F));
+                emissionAuthorityFingerprint =
+                    CombineFingerprint(
+                        emissionAuthorityFingerprint,
+                        QuantizedLightingFingerprintValue(
+                            runtimeEmission.z,
+                            0.0025F));
+            }
+
             const auto emissiveInvalidations =
                 finalGather.
                     emissiveInvalidationTracker.
@@ -6948,9 +6997,20 @@ StudioViewportRenderer::Compose(
                     5.0F);
             }
 
-            if (finalGather.lightingFingerprint != 0U &&
-                finalGather.lightingFingerprint !=
-                    lightingFingerprint)
+            const auto radianceRefreshReason =
+                lighting::EvaluateRadianceRefresh(
+                    finalGather.lightingFingerprint,
+                    lightingFingerprint,
+                    finalGather.previousView.frame,
+                    lightingView.frame,
+                    finalGather.previousView.body,
+                    lightingView.body);
+
+            const bool radianceCacheRefreshRequested =
+                radianceRefreshReason !=
+                    lighting::RadianceRefreshReason::None;
+
+            if (radianceCacheRefreshRequested)
             {
                 finalGather.radianceResidency->
                     RequestGlobalRefresh();
@@ -6958,6 +7018,68 @@ StudioViewportRenderer::Compose(
 
             finalGather.lightingFingerprint =
                 lightingFingerprint;
+
+            if (auto transitionFound =
+                    transitionDiagnostics_.find(info.id);
+                transitionFound !=
+                    transitionDiagnostics_.end())
+            {
+                auto& diagnostic =
+                    transitionFound->second;
+
+                const std::array<
+                    lighting::RepresentationLightingAuthority,
+                    2U>
+                    authorities{{
+                        {
+                            .representation =
+                                diagnostic.representation,
+                            .weight =
+                                diagnostic.richerWeight,
+                            .directLightingFingerprint =
+                                lightingFingerprint,
+                            .emissionAuthorityFingerprint =
+                                emissionAuthorityFingerprint,
+                            .radianceFrame =
+                                lightingView.frame,
+                            .radianceBody =
+                                lightingView.body
+                        },
+                        {
+                            .representation =
+                                diagnostic.lowerFidelityNeighbor,
+                            .weight =
+                                diagnostic.lowerWeight,
+                            .directLightingFingerprint =
+                                lightingFingerprint,
+                            .emissionAuthorityFingerprint =
+                                emissionAuthorityFingerprint,
+                            .radianceFrame =
+                                lightingView.frame,
+                            .radianceBody =
+                                lightingView.body
+                        }
+                    }};
+
+                const auto continuity =
+                    lighting::EvaluateLightingContinuity(
+                        authorities);
+
+                diagnostic.directLightingFingerprint =
+                    lightingFingerprint;
+                diagnostic.emissionAuthorityFingerprint =
+                    emissionAuthorityFingerprint;
+                diagnostic.directLightingCoherent =
+                    continuity.directLightingCoherent;
+                diagnostic.emissionAuthorityCoherent =
+                    continuity.emissionAuthorityCoherent;
+                diagnostic.broadIndirectCoherent =
+                    continuity.radianceIdentityCoherent;
+                diagnostic.continuityPassed =
+                    continuity.Passed();
+                diagnostic.radianceCacheRefreshRequested =
+                    radianceCacheRefreshRequested;
+            }
 
             const auto radianceUpdates =
                 finalGather.radianceResidency->BuildUpdateList(
