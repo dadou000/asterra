@@ -371,17 +371,10 @@ void CompactObjectRenderer::Draw(
             bits(static_cast<f32>(
                 std::max(
                     draw.compact.
-                        scales.
-                        criticalImpactParameterMeters>
-                            0.0
-                        ? draw.compact.
-                              photonRingRadiusMeters/
-                              draw.compact.
-                                  scales.
-                                  criticalImpactParameterMeters
-                        : 1.0,
-                    0.0)*
-                1.0F)),
+                        photonRingIntensity *
+                    draw.compact.
+                        lensingStrength,
+                    0.0))),
             bits(std::clamp(
                 draw.opacity,
                 0.0F,
