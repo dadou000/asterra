@@ -49,6 +49,7 @@ struct Constants
     float4 upTanHalfFov;
     float4 depthTrace;
     float4 tuning;
+    float4 currentToSceneOrigin;
 };
 
 [[vk::push_constant]]
@@ -282,7 +283,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         queryBase + 0u,
         asuint(
             float4(
-                position,
+                position +
+                    g.currentToSceneOrigin.xyz,
                 0.03)));
 
     g_queries.Store4(
@@ -364,9 +366,9 @@ struct Constants
     uint height;
     uint levelCount;
     float cacheStrength;
-    uint reserved0;
-    uint reserved1;
-    uint reserved2;
+    float sceneToCurrentX;
+    float sceneToCurrentY;
+    float sceneToCurrentZ;
 };
 
 [[vk::push_constant]]
@@ -533,7 +535,11 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
     const float3 hitPosition =
         asfloat(
             g_results.Load3(
-                base + 16u));
+                base + 16u)) +
+        float3(
+            g.sceneToCurrentX,
+            g.sceneToCurrentY,
+            g.sceneToCurrentZ);
 
     const float3 hitNormal =
         normalize(
@@ -617,7 +623,7 @@ ExactReflectionQueryRenderer(
                 .data = build.bytecode.data(),
                 .size = build.bytecode.size()
             },
-            .pushConstantDwords = 20U,
+            .pushConstantDwords = 24U,
             .shaderResourceBuffers = 3U,
             .storageTextures = 0U,
             .sampledTextures = 3U
@@ -656,6 +662,7 @@ void ExactReflectionQueryRenderer::BuildQueries(
     const u32 width,
     const u32 height,
     const LightingView& view,
+    const math::Float3 currentToSceneOriginMeters,
     const f32 mirrorRoughness,
     const f32 traceRadiusMeters,
     const f32 thicknessMeters,
@@ -674,7 +681,7 @@ void ExactReflectionQueryRenderer::BuildQueries(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 20> constants{
+    const std::array<u32, 24> constants{
         width,
         height,
         maximumQueries,
@@ -703,6 +710,11 @@ void ExactReflectionQueryRenderer::BuildQueries(
         bits(std::clamp(mirrorRoughness, 0.0F, 1.0F)),
         bits(0.25F),
         bits(0.50F),
+        0U,
+
+        bits(currentToSceneOriginMeters.x),
+        bits(currentToSceneOriginMeters.y),
+        bits(currentToSceneOriginMeters.z),
         0U
     };
 
@@ -736,6 +748,7 @@ void ExactReflectionQueryRenderer::ResolveResults(
     const u32 maximumQueries,
     const u32 width,
     const u32 height,
+    const math::Float3 sceneToCurrentOriginMeters,
     const f32 cacheStrength)
 {
     if (maximumQueries == 0U ||
@@ -753,9 +766,12 @@ void ExactReflectionQueryRenderer::ResolveResults(
         radianceLevelCount,
         std::bit_cast<u32>(
             std::max(cacheStrength, 0.0F)),
-        0U,
-        0U,
-        0U
+        std::bit_cast<u32>(
+            sceneToCurrentOriginMeters.x),
+        std::bit_cast<u32>(
+            sceneToCurrentOriginMeters.y),
+        std::bit_cast<u32>(
+            sceneToCurrentOriginMeters.z)
     };
 
     commands.SetComputePipeline(*resolvePipeline_);
