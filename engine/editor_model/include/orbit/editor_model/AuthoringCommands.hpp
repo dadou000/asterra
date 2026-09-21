@@ -77,6 +77,16 @@ inline constexpr commands::CommandId kConnectPathRouted{
     .low = 0x50415448524f5554ULL
 };
 
+inline constexpr commands::CommandId kCreateVolume{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x4352454154564f4cULL
+};
+
+inline constexpr commands::CommandId kRemoveVolume{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x52454d4f56564f4cULL
+};
+
 void Register(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
@@ -96,6 +106,12 @@ void RegisterMaterialCommands(
 // the core hierarchy commands because it is valid only for capabilities with
 // an actual runtime composition path.
 void RegisterTerrainCommands(
+    commands::CommandRegistry& registry,
+    commands::CommandService& commandService,
+    scene::ObjectStore& objects,
+    selection::SelectionService& selection);
+
+void RegisterVolumeCommands(
     commands::CommandRegistry& registry,
     commands::CommandService& commandService,
     scene::ObjectStore& objects,
