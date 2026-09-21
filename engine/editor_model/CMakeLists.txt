@@ -141,3 +141,23 @@ if(BUILD_TESTING)
         COMMAND OrbitSystemViewModelTests
     )
 endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitCelestialRecipeServiceTests
+        tests/CelestialRecipeServiceTests.cpp
+    )
+
+    target_link_libraries(OrbitCelestialRecipeServiceTests
+        PRIVATE
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitCelestialRecipeServiceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCelestialRecipeServiceTests)
+
+    add_test(
+        NAME Orbit.CelestialRecipeService
+        COMMAND OrbitCelestialRecipeServiceTests
+    )
+endif()
