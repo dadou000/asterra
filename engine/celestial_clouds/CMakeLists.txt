@@ -19,7 +19,7 @@ target_link_libraries(
         Orbit::CelestialAppearance
         Orbit::Core
         Orbit::Math
-        Orbit::Rhi
+        Orbit::RHI
         Orbit::Terrain
         Orbit::Time
 )
