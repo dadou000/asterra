@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_orbits/ImportedEphemeris.hpp>
 #include <orbit/celestial_orbits/NBodyDomain.hpp>
+#include <orbit/celestial_gravity/GravityService.hpp>
 #include <orbit/celestial_orbits/OrbitState.hpp>
 #include <orbit/celestial_rotation/OrientationState.hpp>
 
@@ -423,6 +424,114 @@ NBodyMemberForObject(
     return result;
 }
 
+struct GravityConfiguration
+{
+    f64 gravitationalParameterM3PerS2{0.0};
+    f64 softeningMeters{0.0};
+};
+
+[[nodiscard]] std::optional<GravityConfiguration>
+GravityConfigurationFor(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId body,
+    const f64 bodyMassKilograms)
+{
+    std::optional<scene::ObjectRecord> capability;
+
+    for (const auto& child : objects.Children(body))
+    {
+        if (child.type != kGravityCapabilityType)
+        {
+            continue;
+        }
+
+        if (!PropertyOr<bool>(
+                objects,
+                child.id,
+                kCapabilityEnabled,
+                true))
+        {
+            continue;
+        }
+
+        if (capability.has_value())
+        {
+            throw std::runtime_error(
+                "Celestial body has multiple enabled gravity capabilities.");
+        }
+
+        capability = child;
+    }
+
+    if (!capability.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const std::string model =
+        PropertyOr<std::string>(
+            objects,
+            capability->id,
+            kCapabilityModel,
+            std::string{"Point Mass"});
+
+    if (model != "Point Mass")
+    {
+        throw std::runtime_error(
+            "Unsupported gravity capability model: " +
+            model);
+    }
+
+    const bool deriveFromMass =
+        PropertyOr<bool>(
+            objects,
+            capability->id,
+            kGravityDeriveMuFromMass,
+            true);
+
+    const f64 mu =
+        deriveFromMass
+            ? celestial_gravity::
+                GravitationalParameterFromMass(
+                    bodyMassKilograms)
+            : PropertyOr<f64>(
+                objects,
+                capability->id,
+                kGravityMuM3PerS2,
+                0.0);
+
+    return GravityConfiguration{
+        .gravitationalParameterM3PerS2 = mu,
+        .softeningMeters =
+            PropertyOr<f64>(
+                objects,
+                capability->id,
+                kGravitySofteningMeters,
+                0.0)
+    };
+}
+
+[[nodiscard]] celestial_gravity::GravitySourceId
+GravitySourceForBodyObject(
+    const scene::ObjectId object) noexcept
+{
+    celestial_gravity::GravitySourceId result{
+        .high =
+            object.high ^
+            0x4752415649545953ULL,
+        .low =
+            object.low ^
+            0x4f52424954563036ULL
+    };
+
+    if (!result)
+    {
+        result.low = 1;
+    }
+
+    return result;
+}
+
 [[nodiscard]] std::optional<scene::ObjectRecord>
 FindRotationCapability(
     const scene::ObjectStore& objects,
@@ -634,7 +743,11 @@ UniverseComposition::UniverseComposition()
           std::make_unique<frames::FrameGraph>()),
       bodies_(
           std::make_unique<universe::BodyRegistry>(
-              *frames_))
+              *frames_)),
+      gravity_(
+          std::make_unique<
+              celestial_gravity::GravityService>(
+                  *frames_))
 {
 }
 
@@ -652,6 +765,10 @@ UniverseCompositionStats UniverseComposition::Rebuild(
     auto candidateBodies =
         std::make_unique<universe::BodyRegistry>(
             *candidateFrames);
+    auto candidateGravity =
+        std::make_unique<
+            celestial_gravity::GravityService>(
+                *candidateFrames);
 
     std::unordered_map<scene::ObjectId, universe::SystemId>
         candidateSystems;
@@ -659,6 +776,10 @@ UniverseCompositionStats UniverseComposition::Rebuild(
         candidateBodyIds;
     std::unordered_map<scene::ObjectId, frames::FrameId>
         candidateFrameIds;
+    std::unordered_map<
+        scene::ObjectId,
+        celestial_gravity::GravitySourceId>
+        candidateGravitySources;
     std::unordered_map<universe::BodyId, scene::ObjectId>
         candidateObjects;
 
@@ -990,6 +1111,35 @@ UniverseCompositionStats UniverseComposition::Rebuild(
                     candidateObjects.emplace(
                         bodyId,
                         object.id);
+
+                    if (const auto gravity =
+                            GravityConfigurationFor(
+                                objects,
+                                object.id,
+                                massKilograms);
+                        gravity.has_value())
+                    {
+                        const auto sourceId =
+                            GravitySourceForBodyObject(
+                                object.id);
+
+                        candidateGravity->RegisterSource({
+                            .id = sourceId,
+                            .frame = bodyFrame,
+                            .model = std::make_shared<
+                                celestial_gravity::
+                                    PointMassGravityModel>(
+                                        gravity->
+                                            gravitationalParameterM3PerS2,
+                                        gravity->
+                                            softeningMeters)
+                        });
+
+                        candidateGravitySources.emplace(
+                            object.id,
+                            sourceId);
+                    }
+
                     childParentFrame =
                         bodyFrame;
                     childFrameInertial = false;
@@ -1014,12 +1164,15 @@ UniverseCompositionStats UniverseComposition::Rebuild(
 
     frames_ = std::move(candidateFrames);
     bodies_ = std::move(candidateBodies);
+    gravity_ = std::move(candidateGravity);
     systemByObject_ =
         std::move(candidateSystems);
     bodyByObject_ =
         std::move(candidateBodyIds);
     frameByObject_ =
         std::move(candidateFrameIds);
+    gravitySourceByObject_ =
+        std::move(candidateGravitySources);
     objectByBody_ =
         std::move(candidateObjects);
     sourceRevision_ = objects.Revision();
@@ -1029,6 +1182,9 @@ UniverseCompositionStats UniverseComposition::Rebuild(
             static_cast<u32>(systemByObject_.size()),
         .referenceNodes = referenceNodeCount,
         .bodies = bodyCount,
+        .gravitySources =
+            static_cast<u32>(
+                gravitySourceByObject_.size()),
         .sourceRevision = sourceRevision_
     };
 }
@@ -1065,6 +1221,18 @@ const universe::BodyRegistry& UniverseComposition::Bodies() const noexcept
     return *bodies_;
 }
 
+celestial_gravity::GravityService&
+UniverseComposition::Gravity() noexcept
+{
+    return *gravity_;
+}
+
+const celestial_gravity::GravityService&
+UniverseComposition::Gravity() const noexcept
+{
+    return *gravity_;
+}
+
 std::optional<universe::SystemId>
 UniverseComposition::SystemForObject(
     const scene::ObjectId object) const noexcept
@@ -1091,6 +1259,20 @@ UniverseComposition::FrameForObject(
 {
     const auto found = frameByObject_.find(object);
     return found == frameByObject_.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
+
+std::optional<
+    celestial_gravity::GravitySourceId>
+UniverseComposition::GravitySourceForObject(
+    const scene::ObjectId object) const noexcept
+{
+    const auto found =
+        gravitySourceByObject_.find(object);
+
+    return found ==
+            gravitySourceByObject_.end()
         ? std::nullopt
         : std::optional(found->second);
 }
