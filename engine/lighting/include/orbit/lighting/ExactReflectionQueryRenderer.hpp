@@ -28,6 +28,7 @@ public:
         u32 width,
         u32 height,
         const LightingView& view,
+        math::Float3 currentToSceneOriginMeters,
         f32 mirrorRoughness,
         f32 traceRadiusMeters,
         f32 thicknessMeters,
@@ -46,6 +47,7 @@ public:
         u32 maximumQueries,
         u32 width,
         u32 height,
+        math::Float3 sceneToCurrentOriginMeters,
         f32 cacheStrength = 1.0F);
 
 private:
