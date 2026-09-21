@@ -1286,7 +1286,7 @@ void StudioViewportPanels::DrawView(
 
     const auto imageInteraction =
         context.Image(
-            renderView->Color(),
+            renderView->DisplayColor(),
             {
                 .width = static_cast<f32>(
                     renderView->Width()),
