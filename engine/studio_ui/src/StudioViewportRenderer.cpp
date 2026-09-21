@@ -5102,6 +5102,423 @@ StudioViewportRenderer::Compose(
                     }
                 });
 
+            auto& finalGather =
+                finalGatherPresentations_[
+                    info.id];
+
+            if (finalGather.width != width ||
+                finalGather.height != height ||
+                finalGather.indirectA == nullptr ||
+                finalGather.indirectB == nullptr ||
+                finalGather.metaA == nullptr ||
+                finalGather.metaB == nullptr ||
+                finalGather.scratch == nullptr)
+            {
+                const auto createGatherTexture =
+                    [this, width, height]()
+                    {
+                        return device_->CreateTexture({
+                            .width = width,
+                            .height = height,
+                            .format =
+                                rhi::TextureFormat::
+                                    RGBA16_Float,
+                            .initialState =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .allowUnorderedAccess =
+                                true
+                        });
+                    };
+
+                finalGather.width = width;
+                finalGather.height = height;
+                finalGather.writeA = true;
+                finalGather.hasHistory = false;
+                finalGather.previousView = {};
+
+                finalGather.indirectA =
+                    createGatherTexture();
+                finalGather.indirectB =
+                    createGatherTexture();
+                finalGather.metaA =
+                    createGatherTexture();
+                finalGather.metaB =
+                    createGatherTexture();
+                finalGather.scratch =
+                    createGatherTexture();
+            }
+
+            auto* currentIndirect =
+                finalGather.writeA
+                    ? finalGather.indirectA.get()
+                    : finalGather.indirectB.get();
+
+            auto* previousIndirect =
+                finalGather.writeA
+                    ? finalGather.indirectB.get()
+                    : finalGather.indirectA.get();
+
+            auto* currentMeta =
+                finalGather.writeA
+                    ? finalGather.metaA.get()
+                    : finalGather.metaB.get();
+
+            auto* previousMeta =
+                finalGather.writeA
+                    ? finalGather.metaB.get()
+                    : finalGather.metaA.get();
+
+            auto* gatherScratch =
+                finalGather.scratch.get();
+
+            const bool historyCompatible =
+                finalGather.hasHistory &&
+                lighting::
+                    CanReuseFinalGatherHistory(
+                        finalGather.previousView,
+                        lightingView);
+
+            const auto currentIndirectHandle =
+                graph.ImportTexture(
+                    prefix +
+                        ".FinalGather.CurrentIndirect",
+                    *currentIndirect,
+                    rhi::ResourceState::
+                        ShaderResource);
+
+            const auto previousIndirectHandle =
+                graph.ImportTexture(
+                    prefix +
+                        ".FinalGather.PreviousIndirect",
+                    *previousIndirect,
+                    rhi::ResourceState::
+                        ShaderResource);
+
+            const auto currentMetaHandle =
+                graph.ImportTexture(
+                    prefix +
+                        ".FinalGather.CurrentMeta",
+                    *currentMeta,
+                    rhi::ResourceState::
+                        ShaderResource);
+
+            const auto previousMetaHandle =
+                graph.ImportTexture(
+                    prefix +
+                        ".FinalGather.PreviousMeta",
+                    *previousMeta,
+                    rhi::ResourceState::
+                        ShaderResource);
+
+            const auto gatherScratchHandle =
+                graph.ImportTexture(
+                    prefix +
+                        ".FinalGather.Scratch",
+                    *gatherScratch,
+                    rhi::ResourceState::
+                        ShaderResource);
+
+            lighting::
+                ScreenSpaceFinalGatherSettings
+                    gatherSettings;
+
+            gatherSettings.stepsPerRay =
+                std::clamp(
+                    static_cast<u32>(
+                        std::lround(
+                            2.0F +
+                            8.0F *
+                                std::clamp(
+                                    lightingPlan.giScale,
+                                    0.0F,
+                                    1.0F))),
+                    2U,
+                    10U);
+
+            graph.AddPass(
+                prefix + ".ScreenSpaceFinalGather",
+                {
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            targets.
+                                surfaceBaseRoughness,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            targets.
+                                surfaceNormalMetallic,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            targets.
+                                surfaceEmissionClass,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state =
+                            rhi::ResourceState::
+                                DepthRead,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            previousIndirectHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            previousMetaHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            currentIndirectHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    },
+                    {
+                        .texture =
+                            currentMetaHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 color,
+                 lightingBaseRoughness,
+                 lightingNormalMetallic,
+                 lightingEmissionClass,
+                 lightingDepth,
+                 previousIndirect,
+                 previousMeta,
+                 currentIndirect,
+                 currentMeta,
+                 width,
+                 height,
+                 lightingView,
+                 historyCompatible,
+                 gatherSettings,
+                 lightingTimestamps,
+                 frameIndex](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    if (lightingTimestamps != nullptr)
+                    {
+                        lightingTimestamps->
+                            BeginSection(
+                                commands,
+                                frameIndex,
+                                lighting::
+                                    LightingGpuSection::
+                                        Gi);
+                    }
+
+                    finalGatherRenderer_.Gather(
+                        commands,
+                        *color,
+                        *lightingBaseRoughness,
+                        *lightingNormalMetallic,
+                        *lightingEmissionClass,
+                        *lightingDepth,
+                        *previousIndirect,
+                        *previousMeta,
+                        *currentIndirect,
+                        *currentMeta,
+                        width,
+                        height,
+                        lightingView,
+                        historyCompatible,
+                        gatherSettings);
+                });
+
+            graph.AddPass(
+                prefix + ".FinalGatherCombine",
+                {
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            currentIndirectHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            gatherScratchHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 color,
+                 currentIndirect,
+                 gatherScratch,
+                 width,
+                 height](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    finalGatherRenderer_.Combine(
+                        commands,
+                        *color,
+                        *currentIndirect,
+                        *gatherScratch,
+                        width,
+                        height);
+                });
+
+            graph.AddPass(
+                prefix + ".FinalGatherCopyBack",
+                {
+                    {
+                        .texture =
+                            gatherScratchHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 gatherScratch,
+                 color,
+                 width,
+                 height,
+                 lightingTimestamps,
+                 frameIndex](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    debugComposite_.Draw(
+                        commands,
+                        *gatherScratch,
+                        *color,
+                        width,
+                        height);
+
+                    if (lightingTimestamps != nullptr)
+                    {
+                        lightingTimestamps->
+                            EndSection(
+                                commands,
+                                frameIndex,
+                                lighting::
+                                    LightingGpuSection::
+                                        Gi);
+                    }
+                });
+
+            graph.AddPass(
+                prefix + ".FinalGatherRestoreHistory",
+                {
+                    {
+                        .texture =
+                            currentIndirectHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            currentMetaHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    }
+                },
+                [](
+                    rhi::CommandList&,
+                    const render_graph::Resources&)
+                {
+                });
+
+            finalGather.previousView =
+                lightingView;
+            finalGather.hasHistory = true;
+            finalGather.writeA =
+                !finalGather.writeA;
+
             // RenderView imports depth as DepthWrite on the next frame.
             // Shared direct lighting samples it read-only, so close this frame
             // by returning the actual Vulkan image to that persistent state.
