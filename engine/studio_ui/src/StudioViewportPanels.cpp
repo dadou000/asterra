@@ -484,6 +484,42 @@ void StudioViewportPanels::DrawView(
             studio_session::ViewportMode::Debug);
     }
 
+    context.Separator();
+    context.Text("Surface View");
+
+    const std::string litSurface =
+        "Lit##surface-view-lit:" + std::string(id);
+    const std::string baseSurface =
+        "Albedo / Roughness##surface-view-base:" + std::string(id);
+    const std::string normalSurface =
+        "Normal / Metallic##surface-view-normal:" + std::string(id);
+    const std::string emissionSurface =
+        "Emission / Meta##surface-view-emission:" + std::string(id);
+
+    if (context.Button(litSurface))
+    {
+        renderView->SetSurfaceDebugMode(
+            lighting::SurfaceDebugMode::Lit);
+    }
+    context.SameLine();
+    if (context.Button(baseSurface))
+    {
+        renderView->SetSurfaceDebugMode(
+            lighting::SurfaceDebugMode::BaseColorRoughness);
+    }
+    context.SameLine();
+    if (context.Button(normalSurface))
+    {
+        renderView->SetSurfaceDebugMode(
+            lighting::SurfaceDebugMode::NormalMetallic);
+    }
+    context.SameLine();
+    if (context.Button(emissionSurface))
+    {
+        renderView->SetSurfaceDebugMode(
+            lighting::SurfaceDebugMode::EmissionMetadata);
+    }
+
     if (target->mode !=
         studio_session::ViewportMode::Debug)
     {
