@@ -201,9 +201,10 @@ RingMeshProduct BuildRingMesh(
                         static_cast<f32>(band.colorLinear.x),
                         static_cast<f32>(band.colorLinear.y),
                         static_cast<f32>(band.colorLinear.z)},
-                    .opticalDepth=static_cast<f32>(band.normalOpticalDepth),
-                    .singleScatteringAlbedo=static_cast<f32>(band.singleScatteringAlbedo),
-                    .anisotropy=static_cast<f32>(band.anisotropy)
+                    .optical={
+                        static_cast<f32>(band.normalOpticalDepth),
+                        static_cast<f32>(band.singleScatteringAlbedo),
+                        static_cast<f32>(band.anisotropy)}
                 });
             }
         }
