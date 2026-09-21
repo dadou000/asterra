@@ -166,5 +166,80 @@ int main()
         return 12;
     }
 
+    ResolveInput transitionInput{
+        .bodyRadiusMeters = 1.0e6,
+        .maximumProductionDetailMeters = 2'000.0,
+        .maximumMacroDisplacementMeters = 10'000.0,
+        .cameraDistanceToCenterMeters = 1.0e6,
+        .verticalFieldOfViewRadians = 1.0,
+        .viewportHeightPixels = 1'000.0,
+        .features = {
+            .productionSurfaceAvailable = true,
+            .macroDisplacementAvailable = true
+        },
+        .policy = {
+            .productionSurfaceErrorPixels = 2.0,
+            .macroDisplacementErrorPixels = 0.45,
+            .smoothGlobeMinimumRadiusPixels = 10.0,
+            .discImpostorMinimumRadiusPixels = 0.55,
+            .qualityScale = 1.0,
+            .hysteresisFraction = 0.15
+        }
+    };
+
+    Decision transitionDecision =
+        Resolve(transitionInput);
+
+    transitionDecision.productionDetailErrorPixels =
+        2.3;
+
+    const auto surfaceOnly =
+        ResolveSurfaceGlobeTransition(
+            transitionInput,
+            transitionDecision);
+
+    if (surfaceOnly.productionSurfaceWeight != 1.0 ||
+        surfaceOnly.macroGlobeWeight != 0.0 ||
+        surfaceOnly.overlapping)
+    {
+        return 13;
+    }
+
+    transitionDecision.productionDetailErrorPixels =
+        2.0;
+
+    const auto midpoint =
+        ResolveSurfaceGlobeTransition(
+            transitionInput,
+            transitionDecision);
+
+    if (std::abs(
+            midpoint.productionSurfaceWeight -
+            0.5) >
+            1.0e-12 ||
+        std::abs(
+            midpoint.macroGlobeWeight -
+            0.5) >
+            1.0e-12 ||
+        !midpoint.overlapping)
+    {
+        return 14;
+    }
+
+    transitionDecision.productionDetailErrorPixels =
+        1.7;
+
+    const auto globeOnly =
+        ResolveSurfaceGlobeTransition(
+            transitionInput,
+            transitionDecision);
+
+    if (globeOnly.productionSurfaceWeight != 0.0 ||
+        globeOnly.macroGlobeWeight != 1.0 ||
+        globeOnly.overlapping)
+    {
+        return 15;
+    }
+
     return 0;
 }
