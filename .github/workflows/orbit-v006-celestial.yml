@@ -86,6 +86,7 @@ jobs:
           OrbitCelestialCompactObjectBindingTests
           OrbitCelestialCompactCompositionTests
           OrbitStudioCelestialRoundTripVerifierTests
+          OrbitStudioCelestialValidationScenarioTests
 
       - name: Run deterministic celestial suite
         shell: pwsh
