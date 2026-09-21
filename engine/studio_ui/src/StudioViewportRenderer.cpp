@@ -1025,9 +1025,6 @@ StudioViewportRenderer::Compose(
         {
         case StudioViewportPresentation::ProductionTerrain:
         {
-            macroGlobePresentations_.erase(
-                info.id);
-
             if (device_ == nullptr ||
                 compiler_ == nullptr ||
                 !terrainRuntime.has_value())
@@ -1052,6 +1049,109 @@ StudioViewportRenderer::Compose(
                 throw std::logic_error(
                     "Studio production terrain currently requires the composed AnalyticTerrainSource used by the shared GPU field generator.");
             }
+
+            const auto& terrainDescription =
+                analytic->Description();
+
+            const f64 maximumProductionDetailMeters =
+                std::max(
+                    terrainDescription.detailAmplitudeMeters *
+                        2.0,
+                    terrainDescription.mountains.reliefMeters);
+
+            const f64 maximumMacroDisplacementMeters =
+                std::max(
+                    terrainDescription.
+                        maximumElevationAboveSeaLevelMeters,
+                    std::abs(
+                        terrainDescription.
+                            global.
+                            seaLevelMeters));
+
+            celestial_representation::ResolveInput
+                representationInput{
+                    .bodyRadiusMeters =
+                        terrainRuntime->planet.radiusMeters,
+                    .maximumProductionDetailMeters =
+                        maximumProductionDetailMeters,
+                    .maximumMacroDisplacementMeters =
+                        maximumMacroDisplacementMeters,
+                    .cameraDistanceToCenterMeters =
+                        math::Length(
+                            terrainRuntime->
+                                observer.meters),
+                    .verticalFieldOfViewRadians =
+                        static_cast<f64>(
+                            view->Camera().
+                                verticalFovRadians),
+                    .viewportHeightPixels =
+                        static_cast<f64>(
+                            std::max(
+                                height,
+                                1U)),
+                    .features = {
+                        .productionSurfaceAvailable = true,
+                        .macroDisplacementAvailable =
+                            hasMacroGlobe,
+                        .complexFarAppearance =
+                            hasMacroGlobe,
+                        .radiativeEmitter = false
+                    }
+                };
+
+            const celestial_representation::
+                RepresentationSubjectId
+                representationSubject{
+                    .high =
+                        terrainRuntime->body.high,
+                    .low =
+                        terrainRuntime->body.low
+                };
+
+            const auto representationDecision =
+                representationTracker_.ResolveFor(
+                    representationSubject,
+                    representationInput);
+
+            const auto surfaceGlobeTransition =
+                celestial_representation::
+                    ResolveSurfaceGlobeTransition(
+                        representationInput,
+                        representationDecision);
+
+            transitionDiagnostics_.insert_or_assign(
+                info.id,
+                StudioSurfaceGlobeTransitionDiagnostics{
+                    .body =
+                        terrainRuntime->body,
+                    .representation =
+                        representationDecision.
+                            representation,
+                    .lowerFidelityNeighbor =
+                        representationDecision.
+                            lowerFidelityNeighbor,
+                    .productionSurfaceWeight =
+                        surfaceGlobeTransition.
+                            productionSurfaceWeight,
+                    .macroGlobeWeight =
+                        surfaceGlobeTransition.
+                            macroGlobeWeight,
+                    .projectedRadiusPixels =
+                        representationDecision.
+                            projectedRadiusPixels,
+                    .productionDetailErrorPixels =
+                        representationDecision.
+                            productionDetailErrorPixels,
+                    .macroDisplacementErrorPixels =
+                        representationDecision.
+                            macroDisplacementErrorPixels,
+                    .hysteresisHeld =
+                        representationDecision.
+                            hysteresisHeld,
+                    .overlapping =
+                        surfaceGlobeTransition.
+                            overlapping
+                });
 
             auto& terrain =
                 terrainPresentations_[
@@ -1197,116 +1297,204 @@ StudioViewportRenderer::Compose(
                         device_->
                             AdapterName());
 
-            graph.AddPass(
-                prefix + ".ProductionTerrain",
-                {
+            if (surfaceGlobeTransition.
+                    productionSurfaceWeight >
+                0.0)
+            {
+                graph.AddPass(
+                    prefix + ".ProductionTerrain",
                     {
-                        .texture = targets.color,
-                        .state = rhi::ResourceState::RenderTarget,
-                        .access = render_graph::Access::Write
-                    },
-                    {
-                        .texture = targets.depth,
-                        .state = rhi::ResourceState::DepthWrite,
-                        .access = render_graph::Access::Write
-                    }
-                },
-                [color,
-                 depth,
-                 width,
-                 height,
-                 terrainRenderer,
-                 camera,
-                 frameIndex,
-                 performance,
-                 performanceViewportId,
-                 performanceObserver,
-                 performanceCacheStats,
-                 performanceAdapter,
-                 framesInFlight =
-                    framesInFlight_](
-                    rhi::CommandList& commands,
-                    const render_graph::Resources&)
-                {
-                    commands.ClearColorTarget(
-                        *color,
                         {
-                            .red = 0.008F,
-                            .green = 0.012F,
-                            .blue = 0.020F,
-                            .alpha = 1.0F
-                        });
-
-                    commands.ClearDepthTarget(
-                        *depth,
-                        0.0F);
-
-                    commands.SetRenderTargets(
-                        *color,
-                        *depth);
-
-                    terrainRenderer->Draw(
-                        commands,
-                        frameIndex %
-                            framesInFlight,
-                        width,
-                        height,
-                        camera);
-
-                    const auto& stats =
-                        terrainRenderer->
-                            StreamingStats();
-
-                    performance->
-                        RecordViewportStreaming(
-                            performanceViewportId,
-                            performanceObserver,
-                            performanceCacheStats,
+                            .texture = targets.color,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.depth,
+                            .state = rhi::ResourceState::DepthWrite,
+                            .access = render_graph::Access::Write
+                        }
+                    },
+                    [color,
+                     depth,
+                     width,
+                     height,
+                     terrainRenderer,
+                     camera,
+                     frameIndex,
+                     performance,
+                     performanceViewportId,
+                     performanceObserver,
+                     performanceCacheStats,
+                     performanceAdapter,
+                     framesInFlight =
+                        framesInFlight_](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        commands.ClearColorTarget(
+                            *color,
                             {
-                                .generatedSamplesLastUpdate =
-                                    stats.generatedSamplesLastUpdate,
-                                .refreshedRegionsLastUpdate =
-                                    stats.refreshedRegionsLastUpdate,
-                                .levelsTouchedLastUpdate =
-                                    stats.levelsTouchedLastUpdate,
-                                .uploadedBytesLastFrame =
-                                    stats.uploadedBytesLastFrame,
-                                .drawCallsLastFrame =
-                                    stats.drawCallsLastFrame,
-                                .cumulativeGeneratedSamples =
-                                    stats.cumulativeGeneratedSamples,
-                                .cumulativeUploadedBytes =
-                                    stats.cumulativeUploadedBytes,
-                                .submittedBatches =
-                                    stats.submittedBatches,
-                                .committedBatches =
-                                    stats.committedBatches,
-                                .supersededBatches =
-                                    stats.supersededBatches,
-                                .revisionInvalidations =
-                                    stats.revisionInvalidations,
-                                .staleRevisionBatches =
-                                    stats.staleRevisionBatches,
-                                .coverageTierChanges =
-                                    stats.coverageTierChanges,
-                                .rebaseCount =
-                                    stats.rebaseCount,
-                                .adaptiveCoverageTier =
-                                    stats.adaptiveCoverageTier,
-                                .activeBaseSpacingMeters =
-                                    stats.activeBaseSpacingMeters,
-                                .activeOuterHalfExtentMeters =
-                                    stats.activeOuterHalfExtentMeters,
-                                .updatePending =
-                                    stats.updatePending
-                            },
-                            performanceAdapter);
-                });
+                                .red = 0.008F,
+                                .green = 0.012F,
+                                .blue = 0.020F,
+                                .alpha = 1.0F
+                            });
+    
+                        commands.ClearDepthTarget(
+                            *depth,
+                            0.0F);
+    
+                        commands.SetRenderTargets(
+                            *color,
+                            *depth);
+    
+                        terrainRenderer->Draw(
+                            commands,
+                            frameIndex %
+                                framesInFlight,
+                            width,
+                            height,
+                            camera);
+    
+                        const auto& stats =
+                            terrainRenderer->
+                                StreamingStats();
+    
+                        performance->
+                            RecordViewportStreaming(
+                                performanceViewportId,
+                                performanceObserver,
+                                performanceCacheStats,
+                                {
+                                    .generatedSamplesLastUpdate =
+                                        stats.generatedSamplesLastUpdate,
+                                    .refreshedRegionsLastUpdate =
+                                        stats.refreshedRegionsLastUpdate,
+                                    .levelsTouchedLastUpdate =
+                                        stats.levelsTouchedLastUpdate,
+                                    .uploadedBytesLastFrame =
+                                        stats.uploadedBytesLastFrame,
+                                    .drawCallsLastFrame =
+                                        stats.drawCallsLastFrame,
+                                    .cumulativeGeneratedSamples =
+                                        stats.cumulativeGeneratedSamples,
+                                    .cumulativeUploadedBytes =
+                                        stats.cumulativeUploadedBytes,
+                                    .submittedBatches =
+                                        stats.submittedBatches,
+                                    .committedBatches =
+                                        stats.committedBatches,
+                                    .supersededBatches =
+                                        stats.supersededBatches,
+                                    .revisionInvalidations =
+                                        stats.revisionInvalidations,
+                                    .staleRevisionBatches =
+                                        stats.staleRevisionBatches,
+                                    .coverageTierChanges =
+                                        stats.coverageTierChanges,
+                                    .rebaseCount =
+                                        stats.rebaseCount,
+                                    .adaptiveCoverageTier =
+                                        stats.adaptiveCoverageTier,
+                                    .activeBaseSpacingMeters =
+                                        stats.activeBaseSpacingMeters,
+                                    .activeOuterHalfExtentMeters =
+                                        stats.activeOuterHalfExtentMeters,
+                                    .updatePending =
+                                        stats.updatePending
+                                },
+                                performanceAdapter);
+                    });
+            }
+
+            if (surfaceGlobeTransition.
+                    macroGlobeWeight >
+                    0.0 &&
+                hasMacroGlobe &&
+                macroGlobeSurface != nullptr &&
+                macroGlobeSurface->terrain != nullptr &&
+                shape.has_value())
+            {
+                auto* transitionGlobe =
+                    EnsureMacroGlobePresentation(
+                        info.id,
+                        session,
+                        terrainRuntime->body,
+                        *shape,
+                        *macroGlobeSurface->terrain);
+
+                const auto globeCamera =
+                    view->Camera();
+
+                const f32 globeOpacity =
+                    static_cast<f32>(
+                        std::clamp(
+                            surfaceGlobeTransition.
+                                macroGlobeWeight,
+                            0.0,
+                            1.0));
+
+                const bool clearForGlobeOnly =
+                    surfaceGlobeTransition.
+                        productionSurfaceWeight <=
+                    0.0;
+
+                graph.AddPass(
+                    prefix +
+                        ".SurfaceGlobeTransition",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     width,
+                     height,
+                     transitionGlobe,
+                     globeCamera,
+                     globeOpacity,
+                     clearForGlobeOnly](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        if (clearForGlobeOnly)
+                        {
+                            commands.ClearColorTarget(
+                                *color,
+                                {
+                                    .red = 0.006F,
+                                    .green = 0.010F,
+                                    .blue = 0.018F,
+                                    .alpha = 1.0F
+                                });
+                        }
+
+                        macroGlobeRenderer_.Draw(
+                            commands,
+                            *color,
+                            width,
+                            height,
+                            *transitionGlobe,
+                            globeCamera,
+                            globeOpacity);
+                    });
+            }
             break;
         }
 
         case StudioViewportPresentation::TerrainDebug:
         {
+            transitionDiagnostics_.erase(
+                info.id);
+
             macroGlobePresentations_.erase(
                 info.id);
 
@@ -1407,6 +1595,9 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::TerrainDebugUnavailable:
         {
+            transitionDiagnostics_.erase(
+                info.id);
+
             macroGlobePresentations_.erase(
                 info.id);
             terrainPresentations_.erase(
@@ -1439,130 +1630,29 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::MacroGlobe:
         {
+            transitionDiagnostics_.erase(
+                info.id);
             terrainPresentations_.erase(
                 info.id);
 
             if (device_ == nullptr ||
                 macroGlobeSurface == nullptr ||
                 macroGlobeSurface->terrain == nullptr ||
-                !logicalTarget->target.has_value())
+                !logicalTarget->target.has_value() ||
+                !shape.has_value())
             {
                 throw std::logic_error(
-                    "Studio macro-globe presentation lost its terrain authority, device, or target body.");
-            }
-
-            auto& presentation =
-                macroGlobePresentations_[
-                    info.id];
-
-            const celestial_globe::MacroGlobeConfig
-                globeConfig{
-                    .faceResolution = 33U,
-                    .footprintScale = 1.5
-                };
-
-            const u64 fingerprint =
-                celestial_globe::
-                    MacroGlobeFingerprint(
-                        *macroGlobeSurface->terrain,
-                        *shape,
-                        globeConfig);
-
-            const u64 sourceRevision =
-                macroGlobeSurface->
-                    terrain->
-                    Revision();
-
-            const auto sphericalPlanet =
-                session.World().
-                    Surfaces().
-                    Registry().
-                    SphericalPlanetDefinition(
-                        logicalTarget->target->body);
-
-            if (!sphericalPlanet.has_value())
-            {
-                throw std::logic_error(
-                    "Studio planetary appearance currently requires the spherical terrain body contract.");
-            }
-
-            const celestial_appearance::
-                AppearanceConfig
-                appearanceConfig{
-                    .faceResolution =
-                        globeConfig.faceResolution,
-                    .footprintScale =
-                        globeConfig.footprintScale
-                };
-
-            const u64 appearanceFingerprint =
-                celestial_appearance::
-                    PlanetaryAppearanceFingerprint(
-                        *macroGlobeSurface->terrain,
-                        sphericalPlanet->
-                            radiusMeters,
-                        appearanceConfig);
-
-            const bool recreate =
-                presentation.product == nullptr ||
-                presentation.appearanceProduct ==
-                    nullptr ||
-                presentation.body !=
-                    logicalTarget->target->body ||
-                presentation.sourceRevision !=
-                    sourceRevision ||
-                presentation.fingerprint !=
-                    fingerprint ||
-                presentation.appearanceFingerprint !=
-                    appearanceFingerprint;
-
-            if (recreate)
-            {
-                const auto mesh =
-                    celestial_globe::
-                        BuildMacroGlobe(
-                            *macroGlobeSurface->terrain,
-                            *shape,
-                            globeConfig);
-
-                const auto appearance =
-                    celestial_appearance::
-                        BuildPlanetaryAppearance(
-                            *macroGlobeSurface->terrain,
-                            sphericalPlanet->
-                                radiusMeters,
-                            appearanceConfig);
-
-                presentation.appearanceProduct =
-                    std::make_unique<
-                        celestial_appearance::
-                            GpuPlanetaryAppearanceProduct>(
-                                *device_,
-                                appearance);
-
-                presentation.product =
-                    std::make_unique<
-                        celestial_globe::
-                            GpuMacroGlobeProduct>(
-                                *device_,
-                                mesh,
-                                &appearance);
-
-                presentation.body =
-                    logicalTarget->target->body;
-                presentation.sourceRevision =
-                    sourceRevision;
-                presentation.fingerprint =
-                    fingerprint;
-                presentation.appearanceFingerprint =
-                    appearanceFingerprint;
-                presentation.appearanceTexels =
-                    static_cast<u32>(
-                        appearance.texels.size());
+                    "Studio macro-globe presentation lost its terrain authority, device, shape, or target body.");
             }
 
             auto* globe =
-                presentation.product.get();
+                EnsureMacroGlobePresentation(
+                    info.id,
+                    session,
+                    logicalTarget->target->body,
+                    *shape,
+                    *macroGlobeSurface->terrain);
+
             const auto camera =
                 view->Camera();
 
@@ -1571,8 +1661,12 @@ StudioViewportRenderer::Compose(
                 {
                     {
                         .texture = targets.color,
-                        .state = rhi::ResourceState::RenderTarget,
-                        .access = render_graph::Access::Write
+                        .state =
+                            rhi::ResourceState::
+                                RenderTarget,
+                        .access =
+                            render_graph::Access::
+                                Write
                     }
                 },
                 [this,
@@ -1599,7 +1693,8 @@ StudioViewportRenderer::Compose(
                         width,
                         height,
                         *globe,
-                        camera);
+                        camera,
+                        1.0F);
                 });
 
             break;
@@ -1607,6 +1702,9 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::BodyPreview:
         {
+            transitionDiagnostics_.erase(
+                info.id);
+
             macroGlobePresentations_.erase(
                 info.id);
 
@@ -1690,6 +1788,9 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::Blank:
         {
+            transitionDiagnostics_.erase(
+                info.id);
+
             macroGlobePresentations_.erase(
                 info.id);
             terrainPresentations_.erase(
