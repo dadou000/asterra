@@ -42,6 +42,11 @@ inline constexpr schema::TypeId kCompactObjectCapabilityType{
 inline constexpr schema::TypeId kAccretionFlowCapabilityType{
     .high = 0x4f5242495443454cULL, .low = 0x4143434341500001ULL};
 
+inline constexpr schema::TypeId kEphemerisAssetType{
+    .high = 0x4f52424954455048ULL, .low = 0x4153534554000001ULL};
+inline constexpr schema::TypeId kEphemerisSampleType{
+    .high = 0x4f52424954455048ULL, .low = 0x53414d504c450001ULL};
+
 inline constexpr schema::PropertyId kCapabilityEnabled{
     .high = 0x4f5242495443454cULL, .low = 0x50524f50454e0001ULL};
 inline constexpr schema::PropertyId kCapabilityModel{
@@ -80,6 +85,15 @@ inline constexpr schema::PropertyId kRotationEpochMicroseconds{
     .high = 0x4f52424954524f54ULL, .low = 0x45504f4348000001ULL};
 inline constexpr schema::PropertyId kRotationSynchronousPhaseOffsetDegrees{
     .high = 0x4f52424954524f54ULL, .low = 0x53594e434f464601ULL};
+
+inline constexpr schema::PropertyId kEphemerisSourceLabel{
+    .high = 0x4f52424954455048ULL, .low = 0x534f555243450001ULL};
+inline constexpr schema::PropertyId kEphemerisSampleTimeMicroseconds{
+    .high = 0x4f52424954455048ULL, .low = 0x54494d4555530001ULL};
+inline constexpr schema::PropertyId kEphemerisSamplePositionMeters{
+    .high = 0x4f52424954455048ULL, .low = 0x504f534954494f01ULL};
+inline constexpr schema::PropertyId kEphemerisSampleVelocityMetersPerSecond{
+    .high = 0x4f52424954455048ULL, .low = 0x56454c4f43495401ULL};
 
 void RegisterCelestialCapabilitySchemas(schema::SchemaRegistry& schemas);
 } // namespace orbit::world_model
