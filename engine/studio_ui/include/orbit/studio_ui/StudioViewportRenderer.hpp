@@ -5,6 +5,7 @@
 #include <orbit/celestial_clouds/CloudField.hpp>
 #include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
+#include <orbit/celestial_giants/GiantAppearance.hpp>
 #include <orbit/celestial_far_render/FarBodyRenderer.hpp>
 #include <orbit/celestial_representation/RepresentationTracker.hpp>
 #include <orbit/celestial_rings/RingSystem.hpp>
@@ -66,6 +67,19 @@ struct StudioAtmosphereDiagnostics
     u32 multiScatteringHeight{0};
     u32 skyViewWidth{0};
     u32 skyViewHeight{0};
+};
+
+struct StudioGiantDiagnostics
+{
+    universe::BodyId body{};
+    u64 appearanceFingerprint{0};
+    bool iceGiant{false};
+    f64 bandFrequency{0.0};
+    f64 bandStrength{0.0};
+    f64 stormStrength{0.0};
+    f64 projectedRadiusPixels{0.0};
+    celestial_representation::Representation representation{
+        celestial_representation::Representation::SmoothGlobe};
 };
 
 struct StudioStellarDiagnostics
@@ -256,6 +270,11 @@ public:
     StellarDiagnostics(
         std::string_view viewportId) const noexcept;
 
+    [[nodiscard]] std::optional<
+        StudioGiantDiagnostics>
+    GiantDiagnostics(
+        std::string_view viewportId) const noexcept;
+
     void SetColorLut(
         post_process::ColorLutData lut);
 
@@ -303,6 +322,17 @@ private:
         std::unique_ptr<
             celestial_clouds::GpuCloudFieldProduct>
             gpu;
+    };
+
+    struct GiantPresentation
+    {
+        universe::BodyId body{};
+        u64 fingerprint{0};
+        celestial_far_render::AppearanceSummary
+            summary{};
+        std::unique_ptr<
+            celestial_appearance::PlanetaryAppearanceProduct>
+            appearance;
     };
 
     struct RingPresentation
@@ -412,6 +442,18 @@ private:
         DebugPresentation,
         std::less<>>
         debugPresentations_;
+
+    std::map<
+        std::string,
+        StudioGiantDiagnostics,
+        std::less<>>
+        giantDiagnostics_;
+
+    std::map<
+        std::string,
+        GiantPresentation,
+        std::less<>>
+        giantPresentations_;
 
     std::map<
         std::string,
