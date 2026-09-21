@@ -1230,6 +1230,46 @@ StudioViewportRenderer::Compose(
             shape = body->shape;
         }
 
+        {
+            const auto previousLightingView =
+                view->Lighting();
+
+            lighting::LightingView currentLightingView =
+                previousLightingView;
+
+            currentLightingView.frame =
+                view->Camera().frame;
+            currentLightingView.body =
+                logicalTarget->target.has_value()
+                    ? logicalTarget->target->body
+                    : universe::BodyId{};
+            currentLightingView.cameraPositionInFrameMeters =
+                view->Camera().localPositionMeters;
+
+            // Orbit's current renderers are camera-relative. Moving this
+            // presentation origin with the camera must never alter stable GI
+            // cache identity; gpuOriginRevision is reserved for a discrete
+            // floating-origin rebase event when that service is introduced.
+            currentLightingView.gpuOriginInFrameMeters =
+                view->Camera().localPositionMeters;
+            currentLightingView.forward =
+                view->Camera().forward;
+            currentLightingView.up =
+                view->Camera().up;
+            currentLightingView.verticalFovRadians =
+                view->Camera().verticalFovRadians;
+
+            currentLightingView.change =
+                lighting::ClassifyLightingViewChange(
+                    previousLightingView,
+                    currentLightingView,
+                    snapshot.viewportTargetsChanged,
+                    false);
+
+            view->Lighting() =
+                currentLightingView;
+        }
+
         const auto terrainRuntime =
             session.TerrainRuntime().
                 Capture(
