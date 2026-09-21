@@ -406,6 +406,7 @@ CloudTexel CloudFieldProduct::Sample(
 
 u64 CloudFieldFingerprint(
     const terrain::TerrainSource* climateSource,
+    const CloudCoverageSource* externalSource,
     const f64 referenceRadiusMeters,
     const std::vector<CloudLayerParameters>& layers,
     const time::SimulationTime atTime,
@@ -453,6 +454,14 @@ u64 CloudFieldFingerprint(
                     climate);
     }
 
+    if (externalSource != nullptr)
+    {
+        value =
+            terrain::StableCombine64(
+                value,
+                externalSource->Revision());
+    }
+
     for (const auto& layer : layers)
     {
         value =
@@ -466,6 +475,7 @@ u64 CloudFieldFingerprint(
 
 CloudFieldProduct BuildCloudField(
     const terrain::TerrainSource* climateSource,
+    const CloudCoverageSource* externalSource,
     const f64 referenceRadiusMeters,
     const std::vector<CloudLayerParameters>& layers,
     const time::SimulationTime atTime,
@@ -474,6 +484,7 @@ CloudFieldProduct BuildCloudField(
     const u64 fingerprint =
         CloudFieldFingerprint(
             climateSource,
+            externalSource,
             referenceRadiusMeters,
             layers,
             atTime,
@@ -628,8 +639,20 @@ CloudFieldProduct BuildCloudField(
                             CloudSourceModel::
                                 Imported)
                     {
-                        throw std::invalid_argument(
-                            "Authored/Imported cloud source requires an external coverage adapter; none is bound.");
+                        if (externalSource == nullptr)
+                        {
+                            throw std::invalid_argument(
+                                "Authored/Imported cloud source requires an external coverage adapter.");
+                        }
+
+                        climateCoverage =
+                            std::clamp(
+                                externalSource->
+                                    SampleCoverage(
+                                        advected,
+                                        atTime),
+                                0.0,
+                                1.0);
                     }
 
                     const f64 noise =
