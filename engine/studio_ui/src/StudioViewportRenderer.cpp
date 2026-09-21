@@ -2152,6 +2152,46 @@ StudioViewportRenderer::CelestialSchedulerBudget() const noexcept
     return celestialScheduler_.Budget();
 }
 
+void StudioViewportRenderer::SetCelestialQualityPolicy(
+    celestial_representation::QualityPolicy policy) noexcept
+{
+    policy.productionSurfaceErrorPixels =
+        std::max(
+            policy.productionSurfaceErrorPixels,
+            1.0e-4);
+    policy.macroDisplacementErrorPixels =
+        std::max(
+            policy.macroDisplacementErrorPixels,
+            1.0e-4);
+    policy.smoothGlobeMinimumRadiusPixels =
+        std::max(
+            policy.smoothGlobeMinimumRadiusPixels,
+            1.0e-4);
+    policy.discImpostorMinimumRadiusPixels =
+        std::max(
+            policy.discImpostorMinimumRadiusPixels,
+            1.0e-4);
+    policy.qualityScale =
+        std::clamp(
+            policy.qualityScale,
+            0.1,
+            8.0);
+    policy.hysteresisFraction =
+        std::clamp(
+            policy.hysteresisFraction,
+            0.0,
+            0.49);
+
+    celestialQualityPolicy_ =
+        policy;
+}
+
+celestial_representation::QualityPolicy
+StudioViewportRenderer::CelestialQualityPolicy() const noexcept
+{
+    return celestialQualityPolicy_;
+}
+
 std::optional<
     StudioStellarDiagnostics>
 StudioViewportRenderer::StellarDiagnostics(
@@ -3785,7 +3825,9 @@ StudioViewportRenderer::Compose(
                             !studioDirectLight.
                                 direct.has_value(),
                         .radiativeEmitter = false
-                    }
+                    },
+                    .policy =
+                        celestialQualityPolicy_
                 };
 
             const celestial_representation::
@@ -4940,7 +4982,9 @@ StudioViewportRenderer::Compose(
                                 false,
                             .radiativeEmitter =
                                 false
-                        }
+                        },
+                        .policy =
+                            celestialQualityPolicy_
                     };
 
                 const celestial_representation::
@@ -5307,7 +5351,9 @@ StudioViewportRenderer::Compose(
                                 false,
                             .radiativeEmitter =
                                 radiativeEmitter
-                        }
+                        },
+                        .policy =
+                            celestialQualityPolicy_
                     };
 
                 const celestial_representation::
