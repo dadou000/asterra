@@ -1,6 +1,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/PropertyProvenanceSchema.hpp>
+#include <orbit/world_model/VolumeSchemas.hpp>
 
 #include <string>
 #include <utility>
@@ -12,6 +13,7 @@ void RegisterSchemas(
 {
     RegisterCelestialCapabilitySchemas(schemas);
     RegisterPropertyProvenanceSchema(schemas);
+    RegisterVolumeSchemas(schemas);
 
     schemas.RegisterType({
         .id = kWorldType,
