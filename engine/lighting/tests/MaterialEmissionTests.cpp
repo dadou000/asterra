@@ -40,6 +40,23 @@ int main()
         return 2;
     }
 
+    orbit::lighting::SurfaceData surface;
+    ApplyMaterialEmission(
+        surface,
+        {
+            .colorLinear = {0.2F, 0.4F, 1.0F},
+            .luminanceNits = 1366.0F,
+            .contributesToGi = false,
+            .giScale = 0.0F
+        });
+
+    if (surface.emissionRadianceSceneLinear.x <= 0.0F ||
+        surface.emissionRadianceSceneLinear.z <=
+            surface.emissionRadianceSceneLinear.x)
+    {
+        return 3;
+    }
+
     const auto invalid =
         EvaluateMaterialEmission({
             .colorLinear = {-1.0F, 1.0F, 1.0F},
@@ -52,7 +69,7 @@ int main()
         invalid.visibleRadiance.y != 0.0F ||
         invalid.giRadiance.y != 0.0F)
     {
-        return 3;
+        return 4;
     }
 
     return 0;
