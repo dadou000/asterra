@@ -13,6 +13,7 @@ namespace orbit::world_model
 struct UniverseCompositionStats
 {
     u32 systems{0};
+    u32 referenceNodes{0};
     u32 bodies{0};
     u64 sourceRevision{0};
 };
@@ -59,6 +60,9 @@ public:
     [[nodiscard]] std::optional<universe::BodyId>
     BodyForObject(scene::ObjectId object) const noexcept;
 
+    [[nodiscard]] std::optional<frames::FrameId>
+    FrameForObject(scene::ObjectId object) const noexcept;
+
     [[nodiscard]] std::optional<scene::ObjectId>
     ObjectForBody(universe::BodyId body) const noexcept;
 
@@ -71,6 +75,8 @@ private:
         systemByObject_;
     std::unordered_map<scene::ObjectId, universe::BodyId>
         bodyByObject_;
+    std::unordered_map<scene::ObjectId, frames::FrameId>
+        frameByObject_;
     std::unordered_map<universe::BodyId, scene::ObjectId>
         objectByBody_;
     u64 sourceRevision_{~u64{0}};
