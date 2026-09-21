@@ -5410,6 +5410,78 @@ StudioViewportRenderer::Compose(
                     proxyFound->second.provider.get();
             }
 
+            std::vector<
+                lighting::EmissiveVolumeSource>
+                emissiveVolumes;
+
+            if (resolvedMagnetosphereForView.has_value() &&
+                shape.has_value())
+            {
+                const f64 referenceRadius =
+                    ReferenceRadiusForShape(
+                        *shape);
+
+                const f64 outerRadius =
+                    referenceRadius +
+                    resolvedMagnetosphereForView->
+                        parameters.
+                        auroralMaximumAltitudeMeters;
+
+                const f64 shellThickness =
+                    std::max(
+                        resolvedMagnetosphereForView->
+                            parameters.
+                            auroralMaximumAltitudeMeters -
+                        resolvedMagnetosphereForView->
+                            parameters.
+                            auroralMinimumAltitudeMeters,
+                        1.0);
+
+                const auto& p =
+                    resolvedMagnetosphereForView->
+                        parameters;
+
+                emissiveVolumes.push_back({
+                    .centerInFrameMeters =
+                        {0.0, 0.0, 0.0},
+                    .radiusMeters =
+                        static_cast<f32>(
+                            outerRadius),
+                    .emissionLinear = {
+                        static_cast<f32>(
+                            p.auroralColorLinear.x),
+                        static_cast<f32>(
+                            p.auroralColorLinear.y),
+                        static_cast<f32>(
+                            p.auroralColorLinear.z)
+                    },
+                    .intensityScale =
+                        static_cast<f32>(
+                            p.auroralIntensity *
+                            (0.22 +
+                             0.78 * p.activity) *
+                            std::clamp(
+                                shellThickness /
+                                    std::max(
+                                        referenceRadius,
+                                        1.0),
+                                0.002,
+                                0.08)),
+                    .influenceRangeMeters =
+                        static_cast<f32>(
+                            std::max(
+                                referenceRadius *
+                                    0.45,
+                                shellThickness *
+                                    18.0)),
+                    .stableId =
+                        resolvedMagnetosphereForView->
+                            capability.high ^
+                        resolvedMagnetosphereForView->
+                            capability.low
+                });
+            }
+
             const auto radianceUpdates =
                 finalGather.radianceResidency->BuildUpdateList(
                     lightingView.cameraPositionInFrameMeters,
@@ -5424,7 +5496,9 @@ StudioViewportRenderer::Compose(
                         lightingView,
                         directLight,
                         localLightGrid.lights,
-                        radianceVisibility);
+                        radianceVisibility,
+                        {},
+                        emissiveVolumes);
 
                 static_cast<void>(
                     finalGather.radianceResidency->CommitUpdate(
