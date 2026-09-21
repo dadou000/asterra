@@ -1958,17 +1958,26 @@ int main(
                         SurfaceAuthoringUi::kPanel) ||
                 !ui.HasPanel(
                     orbit::studio_ui::
+                        CelestialAuthoringUi::kPanel) ||
+                !ui.HasPanel(
+                    orbit::studio_ui::
                         ProjectSettingsUi::
                             kPanelId))
             {
                 throw std::runtime_error(
-                    "Terrain UI smoke preflight failed: active authoring/validation panels are not registered.");
+                    "Studio UI smoke preflight failed: active authoring/validation panels are not registered.");
             }
 
             static_cast<void>(
                 ui.SetPanelOpen(
                     orbit::studio_ui::
                         SurfaceAuthoringUi::kPanel,
+                    true));
+
+            static_cast<void>(
+                ui.SetPanelOpen(
+                    orbit::studio_ui::
+                        CelestialAuthoringUi::kPanel,
                     true));
 
             static_cast<void>(
