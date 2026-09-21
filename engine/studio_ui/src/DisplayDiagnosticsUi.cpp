@@ -136,6 +136,19 @@ void DisplayDiagnosticsUi::DrawViewport(
                     "Overload {:6.1f}%  | target {:6.1f}%",
                     eye.overload * 100.0F,
                     eye.overloadTarget * 100.0F));
+
+            context.Text(
+                std::format(
+                    "Exposure x{:8.4f}  | target x{:8.4f}",
+                    eye.exposureScale,
+                    eye.targetExposureScale));
+
+            context.Text(
+                std::format(
+                    "Ceiling excess {:6.2f} stops  | P99 {:6.2f} | Peak {:6.2f}",
+                    eye.photopicCeilingExcessStops,
+                    eye.p99ExcessStops,
+                    eye.peakExcessStops));
         }
 
         const auto available =
@@ -270,6 +283,10 @@ void DisplayDiagnosticsUi::DrawViewport(
             stats.peakLog2,
             "Peak",
             {0.95F, 0.28F, 0.25F, 1.0F});
+        marker(
+            diagnostics->eyeConfig.photopicCeilingLog2,
+            "Ceiling",
+            {0.72F, 0.38F, 0.96F, 1.0F});
     }
 
     context.Separator();
@@ -355,6 +372,14 @@ void DisplayDiagnosticsUi::DrawViewport(
         eyeConfig.photopicBrightenSeconds;
     f64 darkenSeconds =
         eyeConfig.photopicDarkenSeconds;
+    f64 photopicCeiling =
+        eyeConfig.photopicCeilingLog2;
+    f64 exposureMiddleGray =
+        eyeConfig.exposureMiddleGray;
+    f64 minimumExposure =
+        eyeConfig.minimumExposureScale;
+    f64 maximumExposure =
+        eyeConfig.maximumExposureScale;
     f64 darkThreshold =
         eyeConfig.darkThresholdLog2;
     f64 darkFull =
@@ -396,6 +421,26 @@ void DisplayDiagnosticsUi::DrawViewport(
             ("Darken Seconds##eye-darken-" +
              std::string(viewportId)),
             darkenSeconds);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Photopic Ceiling log2##eye-ceiling-" +
+             std::string(viewportId)),
+            photopicCeiling);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Exposure Middle Gray##eye-middle-gray-" +
+             std::string(viewportId)),
+            exposureMiddleGray);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Minimum Exposure Scale##eye-min-exposure-" +
+             std::string(viewportId)),
+            minimumExposure);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Maximum Exposure Scale##eye-max-exposure-" +
+             std::string(viewportId)),
+            maximumExposure);
     eyeConfigChanged |=
         context.InputDouble(
             ("Dark Threshold log2##eye-dark-threshold-" +
@@ -452,6 +497,14 @@ void DisplayDiagnosticsUi::DrawViewport(
             static_cast<f32>(brightenSeconds);
         eyeConfig.photopicDarkenSeconds =
             static_cast<f32>(darkenSeconds);
+        eyeConfig.photopicCeilingLog2 =
+            static_cast<f32>(photopicCeiling);
+        eyeConfig.exposureMiddleGray =
+            static_cast<f32>(exposureMiddleGray);
+        eyeConfig.minimumExposureScale =
+            static_cast<f32>(minimumExposure);
+        eyeConfig.maximumExposureScale =
+            static_cast<f32>(maximumExposure);
         eyeConfig.darkThresholdLog2 =
             static_cast<f32>(darkThreshold);
         eyeConfig.darkFullLog2 =
