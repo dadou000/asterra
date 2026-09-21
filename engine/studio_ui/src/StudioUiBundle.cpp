@@ -3,6 +3,7 @@
 #include <orbit/world_model/PropertyProvenanceSchema.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <filesystem>
 #include <format>
 #include <stdexcept>
 #include <utility>
@@ -817,6 +818,105 @@ StudioUiBundle::StudioUiBundle(
                             celestialRoundTripReport_ =
                                 std::move(report);
                         }
+                    }
+                }
+
+                context.Separator();
+                context.Text("V0.0.6 Final Celestial Scenario");
+                context.Text(
+                    "Runs Helion/Asterra/Luma/Umbra, ground-to-orbit, eclipse, "
+                    "binary-star, ringed-giant, airless-body and save/reopen acceptance "
+                    "in an isolated scratch Studio project.");
+
+                if (context.Button(
+                        "Run V0.0.6 Celestial Scenario##v006-celestial-scenario"))
+                {
+                    const auto validationRoot =
+                        std::filesystem::temp_directory_path() /
+                        ("orbit-v006-celestial-ui-" +
+                         documents::ProjectId::Random().
+                             ToString());
+
+                    std::filesystem::remove_all(
+                        validationRoot);
+
+                    celestialValidationScenarioReport_ =
+                        studio_session::
+                            RunStudioCelestialValidationScenario(
+                                validationRoot);
+                }
+
+                if (celestialValidationScenarioReport_.has_value())
+                {
+                    const auto& scenario =
+                        *celestialValidationScenarioReport_;
+
+                    context.Text(
+                        std::format(
+                            "Scenario: {} | {} steps",
+                            scenario.success
+                                ? "PASS"
+                                : "FAIL",
+                            scenario.steps.size()));
+
+                    context.Text(
+                        std::format(
+                            "Ground {} | Orbit {} | Eclipse {} | LOD {}",
+                            scenario.terrainGroundRuntimeAvailable
+                                ? "yes"
+                                : "no",
+                            scenario.terrainOrbitRuntimeAvailable
+                                ? "yes"
+                                : "no",
+                            scenario.eclipseDetected
+                                ? "yes"
+                                : "no",
+                            scenario.fullRepresentationLadderObserved
+                                ? "yes"
+                                : "no"));
+
+                    context.Text(
+                        std::format(
+                            "Binary star {} | Ringed giant {} | Airless {} | Reopen {}",
+                            scenario.binaryStarStressPassed
+                                ? "pass"
+                                : "fail",
+                            scenario.ringedGiantStressPassed
+                                ? "pass"
+                                : "fail",
+                            scenario.airlessBodyStressPassed
+                                ? "pass"
+                                : "fail",
+                            scenario.roundTrip.success
+                                ? "pass"
+                                : "fail"));
+
+                    for (const auto& step :
+                         scenario.steps)
+                    {
+                        context.Text(
+                            std::format(
+                                "{} {}{}{}",
+                                step.passed
+                                    ? "[PASS]"
+                                    : "[FAIL]",
+                                step.name,
+                                step.diagnostic.empty()
+                                    ? ""
+                                    : " | ",
+                                step.diagnostic));
+                    }
+
+                    if (scenario.realDeviceVisualSmokeRequired)
+                    {
+                        context.Text(
+                            "Final pixel/device acceptance still requires Orbit Studio Real Device Smoke.");
+                    }
+
+                    if (!scenario.diagnostic.empty())
+                    {
+                        context.Text(
+                            scenario.diagnostic);
                     }
                 }
 
