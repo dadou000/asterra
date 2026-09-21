@@ -486,6 +486,19 @@ void DisplayDiagnosticsUi::DrawViewport(
                 viewportId);
     }
 
+    if (context.Button(
+            "Reset Eye Defaults##reset-eye-defaults-" +
+            std::string(viewportId)))
+    {
+        renderer_->
+            SetHumanEyeAdaptationConfig(
+                viewportId,
+                {});
+        renderer_->
+            ResetHumanEyeAdaptation(
+                viewportId);
+    }
+
     bool overlay =
         renderer_->
             LuminanceMeteringOverlay(
