@@ -1236,15 +1236,15 @@ StudioViewportRenderer::Compose(
         }
 
         case StudioViewportPresentation::TerrainDebugUnavailable:
+        {
+            macroGlobePresentations_.erase(
+                info.id);
             terrainPresentations_.erase(
                 info.id);
 
             graph.AddPass(
                 prefix + ".TerrainDebugUnavailable",
                 {
-            macroGlobePresentations_.erase(
-                info.id);
-
                     {
                         .texture = targets.color,
                         .state = rhi::ResourceState::RenderTarget,
@@ -1265,6 +1265,7 @@ StudioViewportRenderer::Compose(
                         });
                 });
             break;
+        }
 
         case StudioViewportPresentation::MacroGlobe:
         {
@@ -1462,15 +1463,15 @@ StudioViewportRenderer::Compose(
         }
 
         case StudioViewportPresentation::Blank:
+        {
+            macroGlobePresentations_.erase(
+                info.id);
             terrainPresentations_.erase(
                 info.id);
 
             graph.AddPass(
                 prefix + ".Blank",
                 {
-            macroGlobePresentations_.erase(
-                info.id);
-
                     {
                         .texture = targets.color,
                         .state = rhi::ResourceState::RenderTarget,
@@ -1491,6 +1492,7 @@ StudioViewportRenderer::Compose(
                         });
                 });
             break;
+        }
         }
 
         if (terrainRuntime.has_value() &&
