@@ -47,7 +47,13 @@ ResolveEmissiveTexturePath(
             content::AssetKind::Material &&
         record.material.has_value())
     {
+        if (record.material->emissive.empty())
+        {
+            return {};
+        }
+
         return
+            record.sourcePath.parent_path() /
             record.material->emissive;
     }
 
@@ -57,6 +63,7 @@ ResolveEmissiveTexturePath(
     {
         const auto* parent =
             content.FindByPath(
+                record.sourcePath.parent_path() /
                 record.materialInstance->
                     parent);
 
