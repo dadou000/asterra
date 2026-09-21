@@ -9048,6 +9048,470 @@ StudioViewportRenderer::Compose(
             }
         }
 
+        {
+            auto& histogram =
+                luminanceHistogramPresentations_[
+                    info.id];
+
+            const bool recreateHistogram =
+                histogram.width != width ||
+                histogram.height != height ||
+                histogram.meteringMask == nullptr ||
+                histogram.histogramReadback.size() !=
+                    framesInFlight_ ||
+                histogram.statisticsReadback.size() !=
+                    framesInFlight_;
+
+            if (recreateHistogram)
+            {
+                histogram = {};
+                histogram.width = width;
+                histogram.height = height;
+
+                histogram.meteringMask =
+                    device_->CreateTexture({
+                        .width = width,
+                        .height = height,
+                        .format =
+                            rhi::TextureFormat::
+                                RGBA16_Float,
+                        .initialState =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .allowUnorderedAccess =
+                            true
+                    });
+
+                histogram.histogramReadback.reserve(
+                    framesInFlight_);
+                histogram.statisticsReadback.reserve(
+                    framesInFlight_);
+                histogram.submitted.assign(
+                    framesInFlight_,
+                    false);
+
+                for (u32 slot = 0U;
+                     slot < framesInFlight_;
+                     ++slot)
+                {
+                    histogram.histogramReadback.push_back(
+                        device_->CreateBuffer({
+                            .sizeBytes =
+                                static_cast<u64>(
+                                    post_process::
+                                        kLuminanceHistogramBins) *
+                                sizeof(u32),
+                            .usage =
+                                rhi::BufferUsage::
+                                    Structured,
+                            .memory =
+                                rhi::MemoryUsage::
+                                    HostReadback,
+                            .initialState =
+                                rhi::ResourceState::
+                                    CopyDestination
+                        }));
+
+                    histogram.statisticsReadback.push_back(
+                        device_->CreateBuffer({
+                            .sizeBytes =
+                                sizeof(
+                                    post_process::
+                                        GpuLuminanceHistogramStatistics),
+                            .usage =
+                                rhi::BufferUsage::
+                                    Structured,
+                            .memory =
+                                rhi::MemoryUsage::
+                                    HostReadback,
+                            .initialState =
+                                rhi::ResourceState::
+                                    CopyDestination
+                        }));
+                }
+            }
+
+            const u32 histogramFrameSlot =
+                frameIndex %
+                framesInFlight_;
+
+            if (histogram.submitted[
+                    histogramFrameSlot])
+            {
+                auto* statisticsBytes =
+                    histogram.statisticsReadback[
+                        histogramFrameSlot]->Map();
+
+                post_process::
+                    GpuLuminanceHistogramStatistics
+                        gpuStatistics{};
+
+                std::memcpy(
+                    &gpuStatistics,
+                    statisticsBytes,
+                    sizeof(gpuStatistics));
+
+                histogram.statisticsReadback[
+                    histogramFrameSlot]->Unmap();
+
+                auto* histogramBytes =
+                    histogram.histogramReadback[
+                        histogramFrameSlot]->Map();
+
+                std::memcpy(
+                    histogram.diagnostics.bins.data(),
+                    histogramBytes,
+                    static_cast<std::size_t>(
+                        post_process::
+                            kLuminanceHistogramBins) *
+                        sizeof(u32));
+
+                histogram.histogramReadback[
+                    histogramFrameSlot]->Unmap();
+
+                histogram.diagnostics.statistics =
+                    post_process::
+                        DecodeLuminanceHistogramStatistics(
+                            gpuStatistics);
+                histogram.diagnostics.
+                    meteringMaskAvailable =
+                        true;
+            }
+
+            const auto histogramHandle =
+                graph.CreateBuffer(
+                    prefix +
+                        ".LuminanceHistogram",
+                    {
+                        .sizeBytes =
+                            static_cast<u64>(
+                                post_process::
+                                    kLuminanceHistogramBins) *
+                            sizeof(u32),
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                GpuOnly,
+                        .initialState =
+                            rhi::ResourceState::
+                                UnorderedAccess
+                    });
+
+            const auto histogramStatisticsHandle =
+                graph.CreateBuffer(
+                    prefix +
+                        ".LuminanceStatistics",
+                    {
+                        .sizeBytes =
+                            sizeof(
+                                post_process::
+                                    GpuLuminanceHistogramStatistics),
+                        .usage =
+                            rhi::BufferUsage::
+                                Structured,
+                        .memory =
+                            rhi::MemoryUsage::
+                                GpuOnly,
+                        .initialState =
+                            rhi::ResourceState::
+                                UnorderedAccess
+                    });
+
+            const auto histogramMaskHandle =
+                graph.ImportTexture(
+                    prefix +
+                        ".LuminanceMeteringMask",
+                    *histogram.meteringMask,
+                    rhi::ResourceState::
+                        ShaderResource);
+
+            const auto histogramReadbackHandle =
+                graph.ImportBuffer(
+                    prefix +
+                        ".LuminanceHistogramReadback",
+                    *histogram.histogramReadback[
+                        histogramFrameSlot],
+                    rhi::ResourceState::
+                        CopyDestination);
+
+            const auto statisticsReadbackHandle =
+                graph.ImportBuffer(
+                    prefix +
+                        ".LuminanceStatisticsReadback",
+                    *histogram.statisticsReadback[
+                        histogramFrameSlot],
+                    rhi::ResourceState::
+                        CopyDestination);
+
+            const auto histogramConfig =
+                histogram.diagnostics.config;
+
+            graph.AddPass(
+                prefix +
+                    ".LuminanceHistogramReset",
+                {},
+                {
+                    {
+                        .buffer =
+                            histogramHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    },
+                    {
+                        .buffer =
+                            histogramStatisticsHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 histogramHandle,
+                 histogramStatisticsHandle](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&
+                        resources)
+                {
+                    luminanceHistogramRenderer_.
+                        Reset(
+                            commands,
+                            resources.Buffer(
+                                histogramHandle),
+                            resources.Buffer(
+                                histogramStatisticsHandle));
+                });
+
+            graph.AddPass(
+                prefix +
+                    ".LuminanceHistogramBuild",
+                {
+                    {
+                        .texture =
+                            targets.color,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .texture =
+                            histogramMaskHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                {
+                    {
+                        .buffer =
+                            histogramHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    },
+                    {
+                        .buffer =
+                            histogramStatisticsHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 color,
+                 histogramMask =
+                    histogram.meteringMask.get(),
+                 histogramHandle,
+                 histogramStatisticsHandle,
+                 width,
+                 height,
+                 histogramConfig](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&
+                        resources)
+                {
+                    luminanceHistogramRenderer_.
+                        Build(
+                            commands,
+                            *color,
+                            *histogramMask,
+                            resources.Buffer(
+                                histogramHandle),
+                            resources.Buffer(
+                                histogramStatisticsHandle),
+                            width,
+                            height,
+                            histogramConfig);
+                });
+
+            graph.AddPass(
+                prefix +
+                    ".LuminanceHistogramReduce",
+                {},
+                {
+                    {
+                        .buffer =
+                            histogramHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .buffer =
+                            histogramStatisticsHandle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [this,
+                 histogramHandle,
+                 histogramStatisticsHandle,
+                 histogramConfig](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&
+                        resources)
+                {
+                    luminanceHistogramRenderer_.
+                        Reduce(
+                            commands,
+                            resources.Buffer(
+                                histogramHandle),
+                            resources.Buffer(
+                                histogramStatisticsHandle),
+                            histogramConfig);
+                });
+
+            graph.AddPass(
+                prefix +
+                    ".LuminanceHistogramReadback",
+                {},
+                {
+                    {
+                        .buffer =
+                            histogramHandle,
+                        .state =
+                            rhi::ResourceState::
+                                CopySource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .buffer =
+                            histogramStatisticsHandle,
+                        .state =
+                            rhi::ResourceState::
+                                CopySource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    },
+                    {
+                        .buffer =
+                            histogramReadbackHandle,
+                        .state =
+                            rhi::ResourceState::
+                                CopyDestination,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    },
+                    {
+                        .buffer =
+                            statisticsReadbackHandle,
+                        .state =
+                            rhi::ResourceState::
+                                CopyDestination,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    }
+                },
+                [histogramHandle,
+                 histogramStatisticsHandle,
+                 histogramReadbackHandle,
+                 statisticsReadbackHandle](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&
+                        resources)
+                {
+                    commands.CopyBuffer(
+                        resources.Buffer(
+                            histogramHandle),
+                        0U,
+                        resources.Buffer(
+                            histogramReadbackHandle),
+                        0U,
+                        static_cast<u64>(
+                            post_process::
+                                kLuminanceHistogramBins) *
+                            sizeof(u32));
+
+                    commands.CopyBuffer(
+                        resources.Buffer(
+                            histogramStatisticsHandle),
+                        0U,
+                        resources.Buffer(
+                            statisticsReadbackHandle),
+                        0U,
+                        sizeof(
+                            post_process::
+                                GpuLuminanceHistogramStatistics));
+                });
+
+            graph.AddPass(
+                prefix +
+                    ".LuminanceMeteringMaskRestore",
+                {
+                    {
+                        .texture =
+                            histogramMaskHandle,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    }
+                },
+                [](
+                    rhi::CommandList&,
+                    const render_graph::Resources&)
+                {
+                });
+
+            histogram.submitted[
+                histogramFrameSlot] =
+                    true;
+        }
+
         if (colorLut_ == nullptr)
         {
             throw std::logic_error(
