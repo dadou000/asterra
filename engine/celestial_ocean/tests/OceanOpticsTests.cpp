@@ -86,7 +86,7 @@ int main()
     if (appearance.fingerprint ==
             beforeFingerprint ||
         appearance.texels[0].
-            albedoLinear.z <=
+            albedoLinear.z >=
             beforeColor.z ||
         std::abs(
             appearance.texels[0].
