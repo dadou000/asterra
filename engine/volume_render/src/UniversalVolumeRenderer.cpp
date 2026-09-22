@@ -1568,6 +1568,64 @@ IntegrateHomogeneousVolume(
     return result;
 }
 
+std::optional<
+    lighting::EmissiveVolumeSource>
+BuildEmissiveVolumeSource(
+    const world_model::ResolvedVolumeDomain& domain,
+    const f32 emissionAuthorityScalar) noexcept
+{
+    constexpr u64 kEmissionBit =
+        static_cast<u64>(
+            world_model::
+                VolumeField::Emission);
+
+    if (!domain.enabled ||
+        !domain.renderEnabled ||
+        (domain.fieldMask &
+         kEmissionBit) == 0U ||
+        emissionAuthorityScalar <= 0.0F ||
+        domain.emissionScale <= 0.0F ||
+        domain.giEmissionScale <= 0.0F)
+    {
+        return std::nullopt;
+    }
+
+    const f64 radius =
+        std::sqrt(
+            domain.halfExtentsMeters.x *
+                domain.halfExtentsMeters.x +
+            domain.halfExtentsMeters.y *
+                domain.halfExtentsMeters.y +
+            domain.halfExtentsMeters.z *
+                domain.halfExtentsMeters.z);
+
+    const f32 boundedRadius =
+        static_cast<f32>(
+            std::max(
+                radius,
+                0.05));
+
+    return lighting::EmissiveVolumeSource{
+        .centerInFrameMeters =
+            domain.centerMeters,
+        .radiusMeters =
+            boundedRadius,
+        .emissionLinear =
+            domain.emissionColor,
+        .intensityScale =
+            emissionAuthorityScalar *
+            domain.emissionScale *
+            domain.giEmissionScale,
+        .influenceRangeMeters =
+            std::max(
+                boundedRadius * 12.0F,
+                1.0F),
+        .stableId =
+            domain.object.high ^
+            domain.object.low
+    };
+}
+
 class UniversalVolumeRenderer::Impl
 {
 public:
