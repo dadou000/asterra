@@ -2099,6 +2099,12 @@ void StudioViewportRenderer::SetVolumeFieldStorageService(
     volumeFields_ = fields;
 }
 
+void StudioViewportRenderer::SetSurfaceVolumeSolverService(
+    volume_solver::SurfaceVolumeSolverService* const solver) noexcept
+{
+    surfaceVolumeSolver_ = solver;
+}
+
 void StudioViewportRenderer::SetVolumeSourceDebugVisualization(
     const bool enabled) noexcept
 {
@@ -9861,6 +9867,22 @@ StudioViewportRenderer::Compose(
                     fieldStorage.Import(
                         graph,
                         prefix + ".VolumeFields");
+
+                if (surfaceVolumeSolver_ != nullptr)
+                {
+                    surfaceVolumeSolver_->
+                        RemoveMissing(
+                            session.World().Objects());
+
+                    surfaceVolumeSolver_->
+                        AddPasses(
+                            graph,
+                            prefix + ".SurfaceVolumeSolver",
+                            session.World().Objects(),
+                            *selectedVolume,
+                            fieldStorage,
+                            importedFields);
+                }
 
                 std::vector<render_graph::BufferUse>
                     fieldReads;
