@@ -1981,7 +1981,8 @@ int main(
             SurfaceVolumeSolverService
                 surfaceVolumeSolver(
                     device,
-                    compiler);
+                    compiler,
+                    swapchain.BufferCount());
 
         orbit::studio_ui::StudioViewportRenderer
             studioViewportRenderer(
@@ -7076,6 +7077,10 @@ int main(
                             RecordGpuTimings(
                                 *timings);
                     }
+
+                    surfaceVolumeSolver.
+                        ResolveGpuTimingFrame(
+                            *completedLightingFrameSlot);
                 }
             }
 
@@ -7460,6 +7465,11 @@ int main(
             lightingTimestamps.BeginFrame(
                 *commands,
                 lightingFrameSlot);
+
+            surfaceVolumeSolver.
+                BeginGpuTimingFrame(
+                    *commands,
+                    lightingFrameSlot);
 
             orbit::render_graph::
                 RenderGraph graph(device);
