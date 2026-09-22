@@ -151,6 +151,46 @@ int main()
     }
 
     {
+        world_model::ResolvedVolumeDomain fire{
+            .object = scene::ObjectId{
+                .high = 0x1234U,
+                .low = 0x5678U},
+            .enabled = true,
+            .fieldMask =
+                static_cast<u64>(
+                    world_model::
+                        VolumeField::Emission),
+            .renderEnabled = true,
+            .emissionColor = {
+                1.0F, 0.25F, 0.05F},
+            .emissionScale = 4.0F,
+            .giEmissionScale = 0.5F
+        };
+
+        const auto source =
+            BuildEmissiveVolumeSource(
+                fire,
+                2.0F);
+
+        Check(source.has_value());
+        Check(
+            Near(
+                source->intensityScale,
+                4.0F));
+        Check(
+            source->stableId ==
+                (fire.object.high ^
+                 fire.object.low));
+
+        fire.giEmissionScale = 0.0F;
+        Check(
+            !BuildEmissiveVolumeSource(
+                 fire,
+                 2.0F).
+                 has_value());
+    }
+
+    {
         const float isotropic =
             HenyeyGreensteinPhase(
                 0.0F,
