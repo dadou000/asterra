@@ -37,6 +37,7 @@
 #include <orbit/post_process/OutputTransform.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
+#include <orbit/volume_render/UniversalVolumeRenderer.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -518,6 +519,14 @@ public:
     void SetSurfaceVolumeSolverService(
         volume_solver::SurfaceVolumeSolverService* solver) noexcept;
 
+    [[nodiscard]] volume_render::VolumeRenderRuntimeSettings&
+    VolumeRenderSettings(
+        scene::ObjectId volume);
+
+    [[nodiscard]] volume_render::VolumeRenderDiagnostics
+    VolumeRenderDiagnostics(
+        scene::ObjectId volume) const noexcept;
+
     void SetVolumeSourceDebugVisualization(
         bool enabled) noexcept;
 
@@ -748,6 +757,7 @@ private:
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
+    volume_render::UniversalVolumeRenderer universalVolumeRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
     lighting::MaterialEmissionSurfaceOverrideRenderer
