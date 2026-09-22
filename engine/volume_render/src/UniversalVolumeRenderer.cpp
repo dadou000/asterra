@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -770,145 +771,6 @@ float4 main(VSOutput input) : SV_Target0
                     tileEdge),
                 0.0);
 
-        if (density <= 1.0e-6)
-        {
-            continue;
-        }
-
-        const float sigmaT =
-            density *
-            max(
-                p.domainCenterExtinction.w,
-                0.0);
-
-        if (sigmaT <= 1.0e-8)
-        {
-            continue;
-        }
-
-        const float stellarShadow =
-            ShadowTransmittance(
-                worldPosition +
-                    stellarDirection *
-                        0.01,
-                stellarDirection,
-                1.0e20,
-                p,
-                cellSize,
-                tileEdge);
-
-        const float phaseStellar =
-            HenyeyGreenstein(
-                dot(
-                    stellarDirection,
-                    -rayDirection),
-                p.scatteringColorAnisotropy.w);
-
-        float3 incident =
-            stellarColor *
-            stellarScale *
-            stellarShadow *
-            phaseStellar;
-
-        incident +=
-            ambient *
-            0.07957747154594767;
-
-        const float3 sampleRelative =
-            worldPosition -
-            rayOrigin;
-
-        const uint localCount =
-            min(
-                p.tileLayout.w,
-                16u);
-
-        float weightedShadow =
-            stellarShadow;
-        float shadowSamples =
-            1.0;
-
-        [loop]
-        for (uint lightIndex = 0u;
-             lightIndex < localCount;
-             ++lightIndex)
-        {
-            const GpuLocalLight light =
-                g_localLights[
-                    lightIndex];
-
-            const float3 delta =
-                light.positionType.xyz -
-                sampleRelative;
-            const float lightDistance =
-                length(delta);
-
-            if (lightDistance <= 1.0e-4 ||
-                lightDistance >=
-                    light.directionRange.w)
-            {
-                continue;
-            }
-
-            const float3 sampleToLight =
-                delta /
-                lightDistance;
-
-            const float scale =
-                LocalLightScale(
-                    light,
-                    lightDistance,
-                    sampleToLight);
-
-            if (scale <= 0.0)
-            {
-                continue;
-            }
-
-            const float shadow =
-                ShadowTransmittance(
-                    worldPosition +
-                        sampleToLight *
-                            0.01,
-                    sampleToLight,
-                    lightDistance,
-                    p,
-                    cellSize,
-                    tileEdge);
-
-            const float phase =
-                HenyeyGreenstein(
-                    dot(
-                        sampleToLight,
-                        -rayDirection),
-                    p.scatteringColorAnisotropy.w);
-
-            incident +=
-                max(
-                    light.colorFlux.rgb,
-                    0.0) *
-                scale *
-                shadow *
-                phase;
-
-            weightedShadow +=
-                shadow;
-            shadowSamples +=
-                1.0;
-        }
-
-        const float3 sigmaS =
-            sigmaT *
-            saturate(
-                p.domainHalfAlbedo.w) *
-            max(
-                p.scatteringColorAnisotropy.rgb,
-                0.0);
-
-        const float3 scattering =
-            sigmaS *
-            incident;
-
         float emissionScalar =
             0.0;
 
@@ -925,6 +787,149 @@ float4 main(VSOutput input) : SV_Target0
                     0.0);
         }
 
+        const float sigmaT =
+            density *
+            max(
+                p.domainCenterExtinction.w,
+                0.0);
+
+        if (sigmaT <= 1.0e-8 &&
+            emissionScalar <= 1.0e-8)
+        {
+            continue;
+        }
+
+        float3 scattering =
+            0.0;
+        float weightedShadow =
+            1.0;
+        float shadowSamples =
+            1.0;
+
+        if (sigmaT > 1.0e-8)
+        {
+            const float stellarShadow =
+                ShadowTransmittance(
+                    worldPosition +
+                        stellarDirection *
+                            0.01,
+                    stellarDirection,
+                    1.0e20,
+                    p,
+                    cellSize,
+                    tileEdge);
+
+            const float phaseStellar =
+                HenyeyGreenstein(
+                    dot(
+                        stellarDirection,
+                        -rayDirection),
+                    p.scatteringColorAnisotropy.w);
+
+            float3 incident =
+                stellarColor *
+                stellarScale *
+                stellarShadow *
+                phaseStellar;
+
+            incident +=
+                ambient *
+                0.07957747154594767;
+
+            const float3 sampleRelative =
+                worldPosition -
+                rayOrigin;
+
+            const uint localCount =
+                min(
+                    p.tileLayout.w,
+                    16u);
+
+            weightedShadow =
+                stellarShadow;
+
+            [loop]
+            for (uint lightIndex = 0u;
+                 lightIndex < localCount;
+                 ++lightIndex)
+            {
+                const GpuLocalLight light =
+                    g_localLights[
+                        lightIndex];
+
+                const float3 delta =
+                    light.positionType.xyz -
+                    sampleRelative;
+                const float lightDistance =
+                    length(delta);
+
+                if (lightDistance <= 1.0e-4 ||
+                    lightDistance >=
+                        light.directionRange.w)
+                {
+                    continue;
+                }
+
+                const float3 sampleToLight =
+                    delta /
+                    lightDistance;
+
+                const float scale =
+                    LocalLightScale(
+                        light,
+                        lightDistance,
+                        sampleToLight);
+
+                if (scale <= 0.0)
+                {
+                    continue;
+                }
+
+                const float shadow =
+                    ShadowTransmittance(
+                        worldPosition +
+                            sampleToLight *
+                                0.01,
+                        sampleToLight,
+                        lightDistance,
+                        p,
+                        cellSize,
+                        tileEdge);
+
+                const float phase =
+                    HenyeyGreenstein(
+                        dot(
+                            sampleToLight,
+                            -rayDirection),
+                        p.scatteringColorAnisotropy.w);
+
+                incident +=
+                    max(
+                        light.colorFlux.rgb,
+                        0.0) *
+                    scale *
+                    shadow *
+                    phase;
+
+                weightedShadow +=
+                    shadow;
+                shadowSamples +=
+                    1.0;
+            }
+
+            const float3 sigmaS =
+                sigmaT *
+                saturate(
+                    p.domainHalfAlbedo.w) *
+                max(
+                    p.scatteringColorAnisotropy.rgb,
+                    0.0);
+
+            scattering =
+                sigmaS *
+                incident;
+        }
+
         const float3 emission =
             emissionScalar *
             max(
@@ -935,16 +940,18 @@ float4 main(VSOutput input) : SV_Target0
                 0.0);
 
         const float segmentT =
-            exp(
-                -sigmaT *
-                stepLength);
+            sigmaT > 1.0e-8
+                ? exp(
+                      -sigmaT *
+                      stepLength)
+                : 1.0;
 
         const float integral =
-            (1.0 -
-             segmentT) /
-            max(
-                sigmaT,
-                1.0e-6);
+            sigmaT > 1.0e-8
+                ? (1.0 -
+                   segmentT) /
+                      sigmaT
+                : stepLength;
 
         scatteringAccum +=
             transmittance *
@@ -1235,20 +1242,23 @@ IntegrateHomogeneousVolume(
             extinctionScale,
             0.0F);
 
-    if (sigmaT <= 1.0e-8F ||
-        length <= 0.0F)
+    if (length <= 0.0F)
     {
         return {};
     }
 
     const f32 transmittance =
-        std::exp(
-            -sigmaT *
-            length);
+        sigmaT > 1.0e-8F
+            ? std::exp(
+                  -sigmaT *
+                  length)
+            : 1.0F;
     const f32 integral =
-        (1.0F -
-         transmittance) /
-        sigmaT;
+        sigmaT > 1.0e-8F
+            ? (1.0F -
+               transmittance) /
+                  sigmaT
+            : length;
     const f32 albedo =
         std::clamp(
             singleScatteringAlbedo,
