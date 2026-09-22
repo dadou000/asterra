@@ -911,6 +911,137 @@ VolumeInputGizmoLines(
 }
 
 [[nodiscard]] std::vector<editor_ui::PreviewLine>
+VolumeSlicePlaneLines(
+    const world_model::ResolvedVolumeDomain& volume,
+    const render_view::CameraState& camera,
+    const volume_solver::VolumeSliceAxis axis,
+    const u32 sliceIndex)
+{
+    std::vector<editor_ui::PreviewLine> lines;
+
+    if (volume.solverPolicy !=
+        world_model::VolumeSolverPolicy::Local3D ||
+        volume.resolution == 0U)
+    {
+        return lines;
+    }
+
+    const auto relative =
+        [&](const math::Double3 point)
+        {
+            return math::Float3{
+                static_cast<f32>(
+                    point.x -
+                    camera.localPositionMeters.x),
+                static_cast<f32>(
+                    point.y -
+                    camera.localPositionMeters.y),
+                static_cast<f32>(
+                    point.z -
+                    camera.localPositionMeters.z)
+            };
+        };
+
+    const u32 clamped =
+        std::min(
+            sliceIndex,
+            volume.resolution - 1U);
+
+    const f64 fraction =
+        (static_cast<f64>(clamped) +
+         0.5) /
+        static_cast<f64>(
+            volume.resolution);
+
+    const auto minimum =
+        math::Double3{
+            volume.centerMeters.x -
+                volume.halfExtentsMeters.x,
+            volume.centerMeters.y -
+                volume.halfExtentsMeters.y,
+            volume.centerMeters.z -
+                volume.halfExtentsMeters.z
+        };
+
+    const auto maximum =
+        math::Double3{
+            volume.centerMeters.x +
+                volume.halfExtentsMeters.x,
+            volume.centerMeters.y +
+                volume.halfExtentsMeters.y,
+            volume.centerMeters.z +
+                volume.halfExtentsMeters.z
+        };
+
+    std::array<math::Double3,4>
+        points{};
+
+    if (axis ==
+        volume_solver::VolumeSliceAxis::X)
+    {
+        const f64 x =
+            minimum.x +
+            (maximum.x - minimum.x) *
+                fraction;
+        points = {{
+            {x,minimum.y,minimum.z},
+            {x,maximum.y,minimum.z},
+            {x,maximum.y,maximum.z},
+            {x,minimum.y,maximum.z}
+        }};
+    }
+    else if (axis ==
+             volume_solver::VolumeSliceAxis::Y)
+    {
+        const f64 y =
+            minimum.y +
+            (maximum.y - minimum.y) *
+                fraction;
+        points = {{
+            {minimum.x,y,minimum.z},
+            {maximum.x,y,minimum.z},
+            {maximum.x,y,maximum.z},
+            {minimum.x,y,maximum.z}
+        }};
+    }
+    else
+    {
+        const f64 z =
+            minimum.z +
+            (maximum.z - minimum.z) *
+                fraction;
+        points = {{
+            {minimum.x,minimum.y,z},
+            {maximum.x,minimum.y,z},
+            {maximum.x,maximum.y,z},
+            {minimum.x,maximum.y,z}
+        }};
+    }
+
+    const math::Float4 color{
+        0.95F, 0.35F, 0.85F, 0.95F};
+
+    for (u32 index = 0U;
+         index < 4U;
+         ++index)
+    {
+        lines.push_back({
+            .start =
+                relative(
+                    points[index]),
+            .end =
+                relative(
+                    points[
+                        (index + 1U) %
+                        4U]),
+            .color = color
+        });
+    }
+
+    return lines;
+}
+
+[[nodiscard]] std::vector<editor_ui::PreviewLine>
 SelectedVolumeDomainLines(
     studio_session::StudioSession& session,
     const render_view::CameraState& camera)
@@ -10146,6 +10277,66 @@ StudioViewportRenderer::Compose(
                                                 Buffer(
                                                     residency));
                                 });
+                        }
+
+                        if (runtimeVolume.solverPolicy ==
+                                world_model::
+                                    VolumeSolverPolicy::
+                                        Local3D &&
+                            solverSettings.debugView ==
+                                volume_solver::
+                                    SurfaceVolumeDebugView::
+                                        FieldSlice)
+                        {
+                            auto sliceLines =
+                                VolumeSlicePlaneLines(
+                                    runtimeVolume,
+                                    view->Camera(),
+                                    solverSettings.sliceAxis,
+                                    solverSettings.debugLayer);
+
+                            if (!sliceLines.empty())
+                            {
+                                const auto camera =
+                                    view->Camera();
+
+                                graph.AddPass(
+                                    prefix +
+                                        ".Local3DSlicePlane",
+                                    {
+                                        {
+                                            .texture =
+                                                targets.color,
+                                            .state =
+                                                rhi::ResourceState::
+                                                    RenderTarget,
+                                            .access =
+                                                render_graph::Access::
+                                                    Write
+                                        }
+                                    },
+                                    [this,
+                                     color,
+                                     width,
+                                     height,
+                                     camera,
+                                     sliceLines =
+                                         std::move(
+                                             sliceLines)](
+                                        rhi::CommandList& commands,
+                                        const render_graph::
+                                            Resources&)
+                                    {
+                                        pathRenderer_.
+                                            DrawCameraRelativeLines(
+                                                commands,
+                                                *color,
+                                                width,
+                                                height,
+                                                camera,
+                                                sliceLines);
+                                    });
+                            }
                         }
                     }
                 }
