@@ -32,15 +32,18 @@ struct alignas(16) GpuVolumeParams
     math::Float4 stellarDirectionScale{};
     math::Float4 stellarColorAmbient{};
     math::Float4 depthRangeHistory{};
+    math::Float4 previousForwardAspect{};
+    math::Float4 previousUpTanHalfFov{};
+    math::Float4 previousCameraPosition{};
 
-    std::array<i32,4> minimumTile{};
+    std::array<i32,4> minimumTile{}
     std::array<u32,4> tileLayout{};
     std::array<u32,4> logicalResolution{};
     std::array<u32,4> renderParams{};
 };
 
 static_assert(
-    sizeof(GpuVolumeParams) == 224U);
+    sizeof(GpuVolumeParams) == 272U);
 
 [[nodiscard]] render_graph::BufferHandle
 FindField(
@@ -190,6 +193,9 @@ struct GpuVolumeParams
     float4 stellarDirectionScale;
     float4 stellarColorAmbient;
     float4 depthRangeHistory;
+    float4 previousForwardAspect;
+    float4 previousUpTanHalfFov;
+    float4 previousCameraPosition;
 
     int4 minimumTile;
     uint4 tileLayout;
@@ -697,6 +703,80 @@ float ShadowTransmittance(
         exp(-opticalDepth);
 }
 
+bool ReprojectToPrevious(
+    float3 worldPosition,
+    GpuVolumeParams p,
+    out float2 historyUv)
+{
+    const float3 previousForward =
+        normalize(
+            p.previousForwardAspect.xyz);
+    const float3 previousRequestedUp =
+        normalize(
+            p.previousUpTanHalfFov.xyz);
+    const float3 previousRight =
+        normalize(
+            cross(
+                previousForward,
+                previousRequestedUp));
+    const float3 previousUp =
+        normalize(
+            cross(
+                previousRight,
+                previousForward));
+
+    const float3 relative =
+        worldPosition -
+        p.previousCameraPosition.xyz;
+    const float z =
+        dot(
+            relative,
+            previousForward);
+
+    if (z <=
+        max(
+            p.depthRangeHistory.x,
+            1.0e-4))
+    {
+        historyUv = 0.0;
+        return false;
+    }
+
+    const float ndcX =
+        dot(
+            relative,
+            previousRight) /
+        max(
+            z *
+                max(
+                    p.previousForwardAspect.w,
+                    0.001) *
+                max(
+                    p.previousUpTanHalfFov.w,
+                    0.001),
+            1.0e-5);
+
+    const float ndcY =
+        dot(
+            relative,
+            previousUp) /
+        max(
+            z *
+                max(
+                    p.previousUpTanHalfFov.w,
+                    0.001),
+            1.0e-5);
+
+    historyUv =
+        float2(
+            ndcX * 0.5 + 0.5,
+            0.5 - ndcY * 0.5);
+
+    return
+        all(historyUv >= 0.0) &&
+        all(historyUv <= 1.0);
+}
+
 float4 main(VSOutput input) : SV_Target0
 {
     const GpuVolumeParams p =
@@ -1164,36 +1244,53 @@ float4 main(VSOutput input) : SV_Target0
     if (historyValid &&
         temporalEnabled)
     {
-        const float4 history =
-            g_history.Sample(
-                g_historySampler,
-                input.uv);
+        const float representativeDistance =
+            (nearDistance +
+             farDistance) *
+            0.5;
+        const float3 representativePosition =
+            rayOrigin +
+            rayDirection *
+                representativeDistance;
 
-        const float radianceDelta =
-            length(
-                current.rgb -
-                history.rgb);
-        const float transmittanceDelta =
-            abs(
-                current.a -
-                history.a);
+        float2 historyUv;
 
-        const float rejection =
-            saturate(
-                radianceDelta * 2.5 +
-                transmittanceDelta * 6.0);
+        if (ReprojectToPrevious(
+                representativePosition,
+                p,
+                historyUv))
+        {
+            const float4 history =
+                g_history.Sample(
+                    g_historySampler,
+                    historyUv);
 
-        const float historyWeight =
-            saturate(
-                p.cameraPositionTemporal.w) *
-            (1.0 -
-             rejection);
+            const float radianceDelta =
+                length(
+                    current.rgb -
+                    history.rgb);
+            const float transmittanceDelta =
+                abs(
+                    current.a -
+                    history.a);
 
-        current =
-            lerp(
-                current,
-                history,
-                historyWeight);
+            const float rejection =
+                saturate(
+                    radianceDelta * 2.5 +
+                    transmittanceDelta * 6.0);
+
+            const float historyWeight =
+                saturate(
+                    p.cameraPositionTemporal.w) *
+                (1.0 -
+                 rejection);
+
+            current =
+                lerp(
+                    current,
+                    history,
+                    historyWeight);
+        }
     }
 
     return current;
@@ -1502,6 +1599,9 @@ public:
         u32 slotCapacity{0U};
         u32 lightCapacity{0U};
         bool historyValid{false};
+        render_view::CameraState
+            previousCamera{};
+        bool hasPreviousCamera{false};
     };
 
     struct Entry
@@ -2231,11 +2331,60 @@ void UniversalVolumeRenderer::AddPasses(
         .depthRangeHistory = {
             camera.nearPlaneMeters,
             camera.farPlaneMeters,
-            presentation.historyValid
+            presentation.historyValid &&
+                    presentation.
+                        hasPreviousCamera
                 ? 1.0F
                 : 0.0F,
             static_cast<f32>(
                 runtimeSettings.debugMode)
+        },
+        .previousForwardAspect = {
+            presentation.hasPreviousCamera
+                ? presentation.previousCamera.forward.x
+                : camera.forward.x,
+            presentation.hasPreviousCamera
+                ? presentation.previousCamera.forward.y
+                : camera.forward.y,
+            presentation.hasPreviousCamera
+                ? presentation.previousCamera.forward.z
+                : camera.forward.z,
+            aspect
+        },
+        .previousUpTanHalfFov = {
+            presentation.hasPreviousCamera
+                ? presentation.previousCamera.up.x
+                : camera.up.x,
+            presentation.hasPreviousCamera
+                ? presentation.previousCamera.up.y
+                : camera.up.y,
+            presentation.hasPreviousCamera
+                ? presentation.previousCamera.up.z
+                : camera.up.z,
+            presentation.hasPreviousCamera
+                ? std::tan(
+                      presentation.previousCamera.
+                          verticalFovRadians *
+                      0.5F)
+                : tanHalfFov
+        },
+        .previousCameraPosition = {
+            static_cast<f32>(
+                presentation.hasPreviousCamera
+                    ? presentation.previousCamera.
+                          localPositionMeters.x
+                    : camera.localPositionMeters.x),
+            static_cast<f32>(
+                presentation.hasPreviousCamera
+                    ? presentation.previousCamera.
+                          localPositionMeters.y
+                    : camera.localPositionMeters.y),
+            static_cast<f32>(
+                presentation.hasPreviousCamera
+                    ? presentation.previousCamera.
+                          localPositionMeters.z
+                    : camera.localPositionMeters.z),
+            0.0F
         },
         .minimumTile = {
             minimumX,
@@ -2654,6 +2803,10 @@ void UniversalVolumeRenderer::AddPasses(
         });
 
     presentation.historyValid =
+        true;
+    presentation.previousCamera =
+        camera;
+    presentation.hasPreviousCamera =
         true;
 
     entry.diagnostics = {
