@@ -37,6 +37,7 @@ target_link_libraries(OrbitStudio
         Orbit::Universe
         Orbit::WorldModel
         Orbit::VolumeFields
+        Orbit::VolumeSolver
 )
 
 target_compile_features(OrbitStudio PRIVATE cxx_std_23)
