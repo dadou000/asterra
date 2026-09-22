@@ -9941,11 +9941,16 @@ StudioViewportRenderer::Compose(
                             solverSettings.debugView ==
                                     volume_solver::
                                         SurfaceVolumeDebugView::
-                                            Velocity
-                                ? world_model::
-                                      VolumeField::Velocity
-                                : world_model::
-                                      VolumeField::Density;
+                                            FieldSlice
+                                ? solverSettings.debugField
+                                : solverSettings.debugView ==
+                                          volume_solver::
+                                              SurfaceVolumeDebugView::
+                                                  Velocity
+                                    ? world_model::
+                                          VolumeField::Velocity
+                                    : world_model::
+                                          VolumeField::Density;
 
                         for (const auto& channel :
                              importedFields.channels)
@@ -9969,6 +9974,10 @@ StudioViewportRenderer::Compose(
                                 solverSettings.debugView;
                             const auto debugLayer =
                                 solverSettings.debugLayer;
+                            const auto sliceAxis =
+                                solverSettings.sliceAxis;
+                            const auto fieldChannel =
+                                desiredField;
 
                             graph.AddPass(
                                 prefix +
@@ -10017,6 +10026,8 @@ StudioViewportRenderer::Compose(
                                      runtimeVolume,
                                  fieldDiagnostics,
                                  debugView,
+                                 sliceAxis,
+                                 fieldChannel,
                                  debugLayer,
                                  debugField,
                                  residency =
@@ -10036,6 +10047,8 @@ StudioViewportRenderer::Compose(
                                             domain,
                                             fieldDiagnostics,
                                             debugView,
+                                            sliceAxis,
+                                            fieldChannel,
                                             debugLayer,
                                             resources.
                                                 Buffer(
