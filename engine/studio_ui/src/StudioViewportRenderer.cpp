@@ -7598,6 +7598,13 @@ StudioViewportRenderer::Compose(
              presentation ==
                  StudioViewportPresentation::BodyPreview);
 
+        render_graph::BufferHandle
+            sharedRadianceCellsHandle{};
+        render_graph::BufferHandle
+            sharedRadianceLevelsHandle{};
+        u32 sharedRadianceLevelCount =
+            0U;
+
         if (usesPhysicalSurfaceLighting)
         {
             const auto physicalBodyObject =
@@ -8476,6 +8483,13 @@ StudioViewportRenderer::Compose(
             const u32 radianceLevelCount =
                 static_cast<u32>(
                     radianceSnapshot.levels.size());
+
+            sharedRadianceCellsHandle =
+                radianceCellsHandle;
+            sharedRadianceLevelsHandle =
+                radianceLevelsHandle;
+            sharedRadianceLevelCount =
+                radianceLevelCount;
 
             if (runtimeMaterialOverride.has_value() &&
                 presentation !=
@@ -10445,6 +10459,9 @@ StudioViewportRenderer::Compose(
                             importedFields,
                             volumeStellarLight,
                             volumeLocalLights,
+                            sharedRadianceCellsHandle,
+                            sharedRadianceLevelsHandle,
+                            sharedRadianceLevelCount,
                             view->Lighting().change !=
                                 lighting::
                                     LightingViewChange::
