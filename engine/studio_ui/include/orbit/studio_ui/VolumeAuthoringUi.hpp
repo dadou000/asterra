@@ -3,6 +3,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
+#include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 
 #include <string>
 
@@ -16,6 +17,7 @@ public:
     VolumeAuthoringUi(
         studio_session::StudioSession& session,
         volume_fields::VolumeFieldStorageService& fields,
+        volume_solver::SurfaceVolumeSolverService& solver,
         StudioViewportRenderer& renderer) noexcept;
 
     void Register(
@@ -32,6 +34,7 @@ private:
 
     studio_session::StudioSession* session_{nullptr};
     volume_fields::VolumeFieldStorageService* fields_{nullptr};
+    volume_solver::SurfaceVolumeSolverService* solver_{nullptr};
     StudioViewportRenderer* renderer_{nullptr};
     math::Double3 paintPosition_{};
     f64 paintRadius_{2.0};
