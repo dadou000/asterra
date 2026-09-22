@@ -233,6 +233,252 @@ void VolumeAuthoringUi::Draw(
                         invalidated == 1U ? "" : "s"));
             }
 
+            if (solver_ != nullptr &&
+                volume->solverPolicy ==
+                    world_model::
+                        VolumeSolverPolicy::
+                            Surface2D5D)
+            {
+                context.Separator();
+                context.Heading("Surface Live Solver");
+
+                auto& settings =
+                    solver_->Settings(
+                        *volumeId);
+                const auto diagnostics =
+                    solver_->Diagnostics(
+                        *volumeId);
+
+                bool live =
+                    settings.live;
+
+                if (context.Checkbox(
+                        "Live##volume-surface-live",
+                        live))
+                {
+                    settings.live =
+                        live;
+                }
+
+                bool paused =
+                    settings.paused;
+
+                if (context.Checkbox(
+                        "Pause##volume-surface-pause",
+                        paused))
+                {
+                    settings.paused =
+                        paused;
+                }
+
+                if (context.Button(
+                        "Step##volume-surface-step"))
+                {
+                    settings.live = true;
+                    settings.paused = true;
+                    settings.singleStepRequested =
+                        true;
+                }
+
+                context.SameLine();
+
+                if (context.Button(
+                        "Reset##volume-surface-reset"))
+                {
+                    settings.resetRequested =
+                        true;
+                }
+
+                f64 dt =
+                    settings.timeStepSeconds;
+                f64 scalarDissipation =
+                    settings.
+                        scalarDissipationPerSecond;
+                f64 velocityDissipation =
+                    settings.
+                        velocityDissipationPerSecond;
+                f64 sourceScale =
+                    settings.sourceScale;
+                i64 iterations =
+                    settings.iterationsPerFrame;
+
+                bool settingsChanged =
+                    context.InputDouble(
+                        "Time Step s##volume-surface-dt",
+                        dt);
+                settingsChanged |=
+                    context.InputDouble(
+                        "Scalar Dissipation /s##volume-surface-scalar-diss",
+                        scalarDissipation);
+                settingsChanged |=
+                    context.InputDouble(
+                        "Velocity Dissipation /s##volume-surface-velocity-diss",
+                        velocityDissipation);
+                settingsChanged |=
+                    context.InputDouble(
+                        "Source Scale##volume-surface-source-scale",
+                        sourceScale);
+                settingsChanged |=
+                    context.InputInteger(
+                        "Iterations / Frame##volume-surface-iterations",
+                        iterations);
+
+                if (settingsChanged)
+                {
+                    settings.timeStepSeconds =
+                        static_cast<f32>(
+                            std::clamp(
+                                dt,
+                                0.001,
+                                0.1));
+                    settings.
+                        scalarDissipationPerSecond =
+                            static_cast<f32>(
+                                std::max(
+                                    scalarDissipation,
+                                    0.0));
+                    settings.
+                        velocityDissipationPerSecond =
+                            static_cast<f32>(
+                                std::max(
+                                    velocityDissipation,
+                                    0.0));
+                    settings.sourceScale =
+                        static_cast<f32>(
+                            std::max(
+                                sourceScale,
+                                0.0));
+                    settings.iterationsPerFrame =
+                        static_cast<u32>(
+                            std::clamp<i64>(
+                                iterations,
+                                1,
+                                16));
+                }
+
+                i64 resolution =
+                    volume->resolution;
+                i64 surfaceLayers =
+                    volume->surfaceLayers;
+
+                bool layoutChanged =
+                    context.InputInteger(
+                        "Surface Resolution##volume-surface-resolution",
+                        resolution);
+                layoutChanged |=
+                    context.InputInteger(
+                        "Surface Layers##volume-surface-layers",
+                        surfaceLayers);
+
+                if (layoutChanged)
+                {
+                    world.Commands().SetProperty(
+                        *volumeId,
+                        world_model::
+                            kVolumeResolution,
+                        std::clamp<i64>(
+                            resolution,
+                            8,
+                            1024));
+                    world.Commands().SetProperty(
+                        *volumeId,
+                        world_model::
+                            kVolumeSurfaceLayers,
+                        std::clamp<i64>(
+                            surfaceLayers,
+                            1,
+                            32));
+
+                    settings.resetRequested =
+                        true;
+                }
+
+                context.Text(
+                    std::format(
+                        "GPU live: {} | {} | iterations {} | simulated {:.3f}s",
+                        diagnostics.eligible
+                            ? "eligible"
+                            : "inactive",
+                        diagnostics.paused
+                            ? "paused"
+                            : "running",
+                        diagnostics.iterationsThisFrame,
+                        diagnostics.simulatedSeconds));
+
+                context.MutedText(
+                    std::format(
+                        "Scratch {:.2f} MiB | metadata {:.1f} KiB | scalar channels {}",
+                        static_cast<double>(
+                            diagnostics.scratchBytes) /
+                            (1024.0 * 1024.0),
+                        static_cast<double>(
+                            diagnostics.metadataBytes) /
+                            1024.0,
+                        diagnostics.
+                            scalarChannelsSolved));
+
+                context.Text("Field Debug View");
+
+                if (context.Selectable(
+                        "Off##volume-debug-off",
+                        settings.debugView ==
+                            volume_solver::
+                                SurfaceVolumeDebugView::
+                                    Off))
+                {
+                    settings.debugView =
+                        volume_solver::
+                            SurfaceVolumeDebugView::
+                                Off;
+                }
+
+                if (context.Selectable(
+                        "Density Slice##volume-debug-density",
+                        settings.debugView ==
+                            volume_solver::
+                                SurfaceVolumeDebugView::
+                                    Density))
+                {
+                    settings.debugView =
+                        volume_solver::
+                            SurfaceVolumeDebugView::
+                                Density;
+                }
+
+                if (context.Selectable(
+                        "Velocity Overlay##volume-debug-velocity",
+                        settings.debugView ==
+                            volume_solver::
+                                SurfaceVolumeDebugView::
+                                    Velocity))
+                {
+                    settings.debugView =
+                        volume_solver::
+                            SurfaceVolumeDebugView::
+                                Velocity;
+                }
+
+                i64 debugLayer =
+                    settings.debugLayer;
+
+                if (context.InputInteger(
+                        "Debug Layer##volume-debug-layer",
+                        debugLayer))
+                {
+                    settings.debugLayer =
+                        static_cast<u32>(
+                            std::clamp<i64>(
+                                debugLayer,
+                                0,
+                                std::max<i64>(
+                                    static_cast<i64>(
+                                        volume->
+                                            surfaceLayers) -
+                                        1,
+                                    0)));
+                }
+            }
+
             context.Separator();
             context.Heading("Sources");
 
