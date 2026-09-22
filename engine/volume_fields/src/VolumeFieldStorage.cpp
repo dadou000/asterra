@@ -392,9 +392,9 @@ u32 VolumeFieldStorage::InvalidateBounds(
         halfExtentsMeters_.x * 2.0 /
             static_cast<f64>(resolutionX_),
         halfExtentsMeters_.y * 2.0 /
-            static_cast<f64>(resolutionX_),
+            static_cast<f64>(resolutionY_),
         halfExtentsMeters_.z * 2.0 /
-            static_cast<f64>(resolutionX_)
+            static_cast<f64>(resolutionZ_)
     };
 
     const math::Double3 tileSize{
