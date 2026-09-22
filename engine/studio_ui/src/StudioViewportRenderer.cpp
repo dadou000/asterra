@@ -8082,6 +8082,15 @@ StudioViewportRenderer::Compose(
                 });
             }
 
+            const auto authoredVolumeEmission =
+                ResolveAuthoredEmissiveVolumes(
+                    session.World().Objects());
+
+            emissiveVolumes.insert(
+                emissiveVolumes.end(),
+                authoredVolumeEmission.begin(),
+                authoredVolumeEmission.end());
+
             std::vector<
                 lighting::DynamicEmissiveSourceState>
                 dynamicEmissiveSources;
@@ -10378,6 +10387,68 @@ StudioViewportRenderer::Compose(
                             importedFields,
                             frameIndex %
                                 framesInFlight_);
+
+                    universalVolumeRenderer_.
+                        RemoveMissing(
+                            session.World().Objects());
+
+                    std::optional<scene::ObjectId>
+                        volumeLightRoot;
+
+                    if (logicalTarget->
+                            target.has_value() &&
+                        snapshot.hasWorld)
+                    {
+                        volumeLightRoot =
+                            session.World().
+                                Universe().
+                                ObjectForBody(
+                                    logicalTarget->
+                                        target->body);
+                    }
+
+                    const auto volumeLocalLights =
+                        ResolveStudioLocalLights(
+                            session,
+                            view->Lighting(),
+                            volumeLightRoot);
+
+                    const lighting::DirectionalLight
+                        volumeStellarLight{
+                            .directionToLight =
+                                studioDirectLight.
+                                    directionBody,
+                            .colorLinear = {
+                                1.0F,
+                                1.0F,
+                                1.0F
+                            },
+                            .irradianceScale =
+                                studioDirectLight.
+                                    irradianceScale
+                        };
+
+                    universalVolumeRenderer_.
+                        AddPasses(
+                            graph,
+                            prefix +
+                                ".UniversalVolume",
+                            info.id,
+                            targets.color,
+                            targets.depth,
+                            width,
+                            height,
+                            view->Camera(),
+                            view->Lighting(),
+                            runtimeVolume,
+                            fieldStorage,
+                            importedFields,
+                            volumeStellarLight,
+                            volumeLocalLights,
+                            view->Lighting().change !=
+                                lighting::
+                                    LightingViewChange::
+                                        None);
 
                     const auto solverSettings =
                         surfaceVolumeSolver_->
