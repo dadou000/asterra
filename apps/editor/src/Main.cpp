@@ -2066,7 +2066,8 @@ int main(
         orbit::studio_ui::VolumeAuthoringUi
             volumeAuthoringUi(
                 studioSession,
-                volumeFieldStorage);
+                volumeFieldStorage,
+                studioViewportRenderer);
         volumeAuthoringUi.Register(ui);
 
         if (terrainUiSmoke)
