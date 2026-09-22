@@ -260,6 +260,17 @@ void VolumeAuthoringUi::Draw(
                         live;
                 }
 
+                bool followCamera =
+                    settings.followCamera;
+
+                if (context.Checkbox(
+                        "Follow Camera##volume-surface-follow-camera",
+                        followCamera))
+                {
+                    settings.followCamera =
+                        followCamera;
+                }
+
                 bool paused =
                     settings.paused;
 
