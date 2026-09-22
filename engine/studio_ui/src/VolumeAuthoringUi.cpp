@@ -609,10 +609,18 @@ void VolumeAuthoringUi::Draw(
 
                 if (context.Selectable(
                         "Density Slice##volume-debug-density",
-                        settings.debugView ==
-                            volume_solver::
-                                SurfaceVolumeDebugView::
-                                    Density))
+                        local3D
+                            ? settings.debugView ==
+                                  volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          FieldSlice &&
+                              settings.debugField ==
+                                  world_model::
+                                      VolumeField::Density
+                            : settings.debugView ==
+                                  volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          Density))
                 {
                     settings.debugView =
                         local3D
@@ -626,10 +634,18 @@ void VolumeAuthoringUi::Draw(
 
                 if (context.Selectable(
                         "Velocity Overlay##volume-debug-velocity",
-                        settings.debugView ==
-                            volume_solver::
-                                SurfaceVolumeDebugView::
-                                    Velocity))
+                        local3D
+                            ? settings.debugView ==
+                                  volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          FieldSlice &&
+                              settings.debugField ==
+                                  world_model::
+                                      VolumeField::Velocity
+                            : settings.debugView ==
+                                  volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          Velocity))
                 {
                     settings.debugView =
                         local3D
