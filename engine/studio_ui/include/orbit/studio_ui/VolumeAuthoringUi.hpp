@@ -8,12 +8,15 @@
 
 namespace orbit::studio_ui
 {
+class StudioViewportRenderer;
+
 class VolumeAuthoringUi
 {
 public:
     VolumeAuthoringUi(
         studio_session::StudioSession& session,
-        volume_fields::VolumeFieldStorageService& fields) noexcept;
+        volume_fields::VolumeFieldStorageService& fields,
+        StudioViewportRenderer& renderer) noexcept;
 
     void Register(
         editor_ui::EditorUi& ui);
@@ -29,6 +32,10 @@ private:
 
     studio_session::StudioSession* session_{nullptr};
     volume_fields::VolumeFieldStorageService* fields_{nullptr};
+    StudioViewportRenderer* renderer_{nullptr};
+    math::Double3 paintPosition_{};
+    f64 paintRadius_{2.0};
+    f64 paintStrength_{1.0};
     std::string status_;
 };
 } // namespace orbit::studio_ui
