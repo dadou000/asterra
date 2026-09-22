@@ -2,6 +2,7 @@
 
 #include <orbit/lighting/DirectLighting.hpp>
 #include <orbit/lighting/LocalLightRegistry.hpp>
+#include <orbit/lighting/RadianceEstimator.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/Device.hpp>
@@ -67,6 +68,12 @@ IntegrateHomogeneousVolume(
 HenyeyGreensteinPhase(
     f32 cosineTheta,
     f32 anisotropy) noexcept;
+
+[[nodiscard]] std::optional<
+    lighting::EmissiveVolumeSource>
+BuildEmissiveVolumeSource(
+    const world_model::ResolvedVolumeDomain& domain,
+    f32 emissionAuthorityScalar) noexcept;
 
 class UniversalVolumeRenderer
 {
