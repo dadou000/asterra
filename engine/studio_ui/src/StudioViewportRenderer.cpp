@@ -739,26 +739,6 @@ VolumeInputGizmoLines(
                 : math::Float4{
                       1.0F, 0.48F, 0.18F, 0.95F};
 
-        const auto add =
-            [&lines, color](
-                const math::Double3 a,
-                const math::Double3 b)
-            {
-                lines.push_back({
-                    .start = {
-                        static_cast<f32>(a.x),
-                        static_cast<f32>(a.y),
-                        static_cast<f32>(a.z)
-                    },
-                    .end = {
-                        static_cast<f32>(b.x),
-                        static_cast<f32>(b.y),
-                        static_cast<f32>(b.z)
-                    },
-                    .color = color
-                });
-            };
-
         const auto center =
             relative(
                 input.positionMeters);
