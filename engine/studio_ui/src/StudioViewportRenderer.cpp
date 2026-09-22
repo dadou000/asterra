@@ -2060,6 +2060,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       auroraRenderer_(device, compiler),
       compactObjectRenderer_(device, compiler),
       pathRenderer_(device, compiler),
+      surfaceVolumeDebugRenderer_(device, compiler),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
       materialEmissionSurfaceOverride_(device, compiler),
@@ -9882,6 +9883,128 @@ StudioViewportRenderer::Compose(
                             *selectedVolume,
                             fieldStorage,
                             importedFields);
+
+                    const auto solverSettings =
+                        surfaceVolumeSolver_->
+                            Settings(
+                                selectedVolume->object);
+
+                    if (solverSettings.debugView !=
+                        volume_solver::
+                            SurfaceVolumeDebugView::Off)
+                    {
+                        render_graph::BufferHandle
+                            debugField{};
+
+                        const auto desiredField =
+                            solverSettings.debugView ==
+                                    volume_solver::
+                                        SurfaceVolumeDebugView::
+                                            Velocity
+                                ? world_model::
+                                      VolumeField::Velocity
+                                : world_model::
+                                      VolumeField::Density;
+
+                        for (const auto& channel :
+                             importedFields.channels)
+                        {
+                            if (channel.field ==
+                                desiredField)
+                            {
+                                debugField =
+                                    channel.buffer;
+                                break;
+                            }
+                        }
+
+                        if (debugField.IsValid())
+                        {
+                            const auto fieldDiagnostics =
+                                fieldStorage.Diagnostics();
+                            const auto camera =
+                                view->Camera();
+                            const auto debugView =
+                                solverSettings.debugView;
+                            const auto debugLayer =
+                                solverSettings.debugLayer;
+
+                            graph.AddPass(
+                                prefix +
+                                    ".SurfaceVolumeDebug",
+                                {
+                                    {
+                                        .texture =
+                                            targets.color,
+                                        .state =
+                                            rhi::ResourceState::
+                                                RenderTarget,
+                                        .access =
+                                            render_graph::Access::
+                                                Write
+                                    }
+                                },
+                                {
+                                    {
+                                        .buffer =
+                                            debugField,
+                                        .state =
+                                            rhi::ResourceState::
+                                                ShaderResource,
+                                        .access =
+                                            render_graph::Access::
+                                                Read
+                                    },
+                                    {
+                                        .buffer =
+                                            importedFields.
+                                                residency,
+                                        .state =
+                                            rhi::ResourceState::
+                                                ShaderResource,
+                                        .access =
+                                            render_graph::Access::
+                                                Read
+                                    }
+                                },
+                                [this,
+                                 color,
+                                 width,
+                                 height,
+                                 camera,
+                                 domain =
+                                     *selectedVolume,
+                                 fieldDiagnostics,
+                                 debugView,
+                                 debugLayer,
+                                 debugField,
+                                 residency =
+                                     importedFields.
+                                         residency](
+                                    rhi::CommandList& commands,
+                                    const render_graph::
+                                        Resources& resources)
+                                {
+                                    surfaceVolumeDebugRenderer_.
+                                        Draw(
+                                            commands,
+                                            *color,
+                                            width,
+                                            height,
+                                            camera,
+                                            domain,
+                                            fieldDiagnostics,
+                                            debugView,
+                                            debugLayer,
+                                            resources.
+                                                Buffer(
+                                                    debugField),
+                                            resources.
+                                                Buffer(
+                                                    residency));
+                                });
+                        }
+                    }
                 }
 
                 std::vector<render_graph::BufferUse>
