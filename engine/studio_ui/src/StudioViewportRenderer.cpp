@@ -9921,7 +9921,9 @@ StudioViewportRenderer::Compose(
                             session.World().Objects(),
                             runtimeVolume,
                             fieldStorage,
-                            importedFields);
+                            importedFields,
+                            frameIndex %
+                                framesInFlight_);
 
                     const auto solverSettings =
                         surfaceVolumeSolver_->
