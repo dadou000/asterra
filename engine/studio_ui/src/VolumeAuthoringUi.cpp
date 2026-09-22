@@ -233,6 +233,329 @@ void VolumeAuthoringUi::Draw(
                         invalidated == 1U ? "" : "s"));
             }
 
+            context.Separator();
+            context.Heading("Rendering / Lighting");
+
+            bool renderEnabled =
+                volume->renderEnabled;
+
+            if (context.Checkbox(
+                    "Render Enabled##volume-render-enabled",
+                    renderEnabled))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeRenderEnabled,
+                    renderEnabled);
+            }
+
+            f64 extinction =
+                volume->extinctionScale;
+            f64 albedo =
+                volume->
+                    singleScatteringAlbedo;
+            f64 anisotropy =
+                volume->anisotropy;
+            f64 emissionScale =
+                volume->emissionScale;
+            f64 giEmissionScale =
+                volume->giEmissionScale;
+            f64 temporalWeight =
+                volume->temporalWeight;
+            i64 renderSteps =
+                volume->renderSteps;
+            i64 shadowSteps =
+                volume->shadowSteps;
+
+            auto scatteringColor =
+                math::Double3{
+                    volume->scatteringColor.x,
+                    volume->scatteringColor.y,
+                    volume->scatteringColor.z
+                };
+            auto emissionColor =
+                math::Double3{
+                    volume->emissionColor.x,
+                    volume->emissionColor.y,
+                    volume->emissionColor.z
+                };
+
+            if (context.InputDouble(
+                    "Extinction Scale##volume-render-extinction",
+                    extinction))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeExtinctionScale,
+                    std::max(
+                        extinction,
+                        0.0));
+            }
+
+            if (context.InputDouble(
+                    "Single Scattering Albedo##volume-render-albedo",
+                    albedo))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeSingleScatteringAlbedo,
+                    std::clamp(
+                        albedo,
+                        0.0,
+                        1.0));
+            }
+
+            if (context.InputDouble3(
+                    "Scattering Color##volume-render-scatter-color",
+                    scatteringColor))
+            {
+                scatteringColor.x =
+                    std::max(
+                        scatteringColor.x,
+                        0.0);
+                scatteringColor.y =
+                    std::max(
+                        scatteringColor.y,
+                        0.0);
+                scatteringColor.z =
+                    std::max(
+                        scatteringColor.z,
+                        0.0);
+
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeScatteringColor,
+                    scatteringColor);
+            }
+
+            if (context.InputDouble(
+                    "Phase Anisotropy##volume-render-anisotropy",
+                    anisotropy))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeAnisotropy,
+                    std::clamp(
+                        anisotropy,
+                        -0.95,
+                        0.95));
+            }
+
+            if (context.InputDouble3(
+                    "Emission Color##volume-render-emission-color",
+                    emissionColor))
+            {
+                emissionColor.x =
+                    std::max(
+                        emissionColor.x,
+                        0.0);
+                emissionColor.y =
+                    std::max(
+                        emissionColor.y,
+                        0.0);
+                emissionColor.z =
+                    std::max(
+                        emissionColor.z,
+                        0.0);
+
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeEmissionColor,
+                    emissionColor);
+            }
+
+            if (context.InputDouble(
+                    "Emission Scale##volume-render-emission-scale",
+                    emissionScale))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeEmissionScale,
+                    std::max(
+                        emissionScale,
+                        0.0));
+            }
+
+            if (context.InputDouble(
+                    "GI Emission Scale##volume-render-gi-emission-scale",
+                    giEmissionScale))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeGiEmissionScale,
+                    std::max(
+                        giEmissionScale,
+                        0.0));
+            }
+
+            if (context.InputInteger(
+                    "Raymarch Steps##volume-render-steps",
+                    renderSteps))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeRenderSteps,
+                    std::clamp<i64>(
+                        renderSteps,
+                        8,
+                        256));
+            }
+
+            if (context.InputInteger(
+                    "Shadow Steps##volume-render-shadow-steps",
+                    shadowSteps))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeShadowSteps,
+                    std::clamp<i64>(
+                        shadowSteps,
+                        0,
+                        32));
+            }
+
+            if (context.InputDouble(
+                    "Temporal Weight##volume-render-temporal-weight",
+                    temporalWeight))
+            {
+                world.Commands().SetProperty(
+                    *volumeId,
+                    world_model::
+                        kVolumeTemporalWeight,
+                    std::clamp(
+                        temporalWeight,
+                        0.0,
+                        0.98));
+            }
+
+            if (renderer_ != nullptr)
+            {
+                auto& renderSettings =
+                    renderer_->
+                        VolumeRenderSettings(
+                            *volumeId);
+
+                bool temporalEnabled =
+                    renderSettings.
+                        temporalEnabled;
+
+                if (context.Checkbox(
+                        "Temporal Stabilization##volume-render-temporal",
+                        temporalEnabled))
+                {
+                    renderSettings.
+                        temporalEnabled =
+                            temporalEnabled;
+                }
+
+                context.Text(
+                    "Render Debug");
+
+                constexpr std::array<
+                    std::pair<
+                        const char*,
+                        volume_render::
+                            VolumeRenderDebugMode>,
+                    5>
+                    debugModes{{
+                        {
+                            "Composite",
+                            volume_render::
+                                VolumeRenderDebugMode::
+                                    Composite
+                        },
+                        {
+                            "Scattering",
+                            volume_render::
+                                VolumeRenderDebugMode::
+                                    Scattering
+                        },
+                        {
+                            "Extinction",
+                            volume_render::
+                                VolumeRenderDebugMode::
+                                    Extinction
+                        },
+                        {
+                            "Emission",
+                            volume_render::
+                                VolumeRenderDebugMode::
+                                    Emission
+                        },
+                        {
+                            "Shadow",
+                            volume_render::
+                                VolumeRenderDebugMode::
+                                    Shadow
+                        }
+                    }};
+
+                for (const auto&
+                     [label, mode] :
+                     debugModes)
+                {
+                    const std::string widget =
+                        std::string(label) +
+                        "##volume-render-debug-" +
+                        std::to_string(
+                            static_cast<u32>(
+                                mode));
+
+                    if (context.Selectable(
+                            widget,
+                            renderSettings.
+                                    debugMode ==
+                                mode))
+                    {
+                        renderSettings.debugMode =
+                            mode;
+                    }
+                }
+
+                const auto renderDiagnostics =
+                    renderer_->
+                        VolumeRenderDiagnostics(
+                            *volumeId);
+
+                context.MutedText(
+                    std::format(
+                        "Raymarch {} steps | shadows {} | local lights {} | resident tiles {}",
+                        renderDiagnostics.
+                            raymarchSteps,
+                        renderDiagnostics.
+                            shadowSteps,
+                        renderDiagnostics.
+                            localLightCount,
+                        renderDiagnostics.
+                            residentTiles));
+
+                context.MutedText(
+                    std::format(
+                        "Temporal history {:.2f} MiB | scratch {:.2f} MiB | {}",
+                        static_cast<double>(
+                            renderDiagnostics.
+                                historyBytes) /
+                            (1024.0 * 1024.0),
+                        static_cast<double>(
+                            renderDiagnostics.
+                                scratchBytes) /
+                            (1024.0 * 1024.0),
+                        renderDiagnostics.
+                                historyValid
+                            ? "history valid"
+                            : "history warming"));
+            }
+
             if (solver_ != nullptr &&
                 (volume->solverPolicy ==
                      world_model::
