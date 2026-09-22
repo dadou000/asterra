@@ -747,6 +747,7 @@ private:
     celestial_magnetosphere_render::AuroraRenderer auroraRenderer_;
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
+    SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
     lighting::MaterialEmissionSurfaceOverrideRenderer
