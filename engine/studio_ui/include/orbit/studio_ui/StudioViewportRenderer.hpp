@@ -514,6 +514,12 @@ public:
     void SetVolumeFieldStorageService(
         volume_fields::VolumeFieldStorageService* fields) noexcept;
 
+    void SetVolumeSourceDebugVisualization(
+        bool enabled) noexcept;
+
+    [[nodiscard]] bool
+    VolumeSourceDebugVisualization() const noexcept;
+
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,
@@ -727,6 +733,7 @@ private:
     const shader::Compiler* compiler_{nullptr};
     content::ContentService* content_{nullptr};
     volume_fields::VolumeFieldStorageService* volumeFields_{nullptr};
+    bool volumeSourceDebugVisualization_{false};
     u32 framesInFlight_{1U};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
     celestial_globe::MacroGlobeRenderer macroGlobeRenderer_;
