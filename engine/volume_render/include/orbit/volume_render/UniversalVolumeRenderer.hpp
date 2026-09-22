@@ -101,6 +101,9 @@ public:
         const volume_fields::ImportedVolumeFields& fields,
         const lighting::DirectionalLight& stellar,
         std::span<const lighting::ResolvedLocalLight> localLights,
+        render_graph::BufferHandle radianceCells,
+        render_graph::BufferHandle radianceLevels,
+        u32 radianceLevelCount,
         bool resetHistory);
 
 private:
