@@ -54,7 +54,8 @@ void RegisterVolumeSchemas(
             {.id=kVolumeSolverPolicy,.name="Solver Policy",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=3.0}},
             {.id=kVolumeRepresentationMode,.name="Representation Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=4.0}},
             {.id=kVolumeFieldMask,.name="Field Mask",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0}},
-            {.id=kVolumeResolution,.name="Base Resolution",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=8.0,.maximum=1024.0},.advanced=true}
+            {.id=kVolumeResolution,.name="Base Resolution",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=8.0,.maximum=1024.0},.advanced=true},
+            {.id=kVolumeSurfaceLayers,.name="Surface Layers",.kind=schema::PropertyKind::Integer,.defaultValue=i64{4},.range={.minimum=1.0,.maximum=32.0},.advanced=true}
         }
     });
 
@@ -125,7 +126,11 @@ ResolveVolumeDomain(
         .resolution = static_cast<u32>(
             std::clamp<i64>(
                 Read<i64>(objects, volume, kVolumeResolution, 64),
-                8, 1024))
+                8, 1024)),
+        .surfaceLayers = static_cast<u32>(
+            std::clamp<i64>(
+                Read<i64>(objects, volume, kVolumeSurfaceLayers, 4),
+                1, 32))
     };
 
     for (const auto& child :
