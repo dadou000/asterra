@@ -234,13 +234,26 @@ void VolumeAuthoringUi::Draw(
             }
 
             if (solver_ != nullptr &&
-                volume->solverPolicy ==
-                    world_model::
-                        VolumeSolverPolicy::
-                            Surface2D5D)
+                (volume->solverPolicy ==
+                     world_model::
+                         VolumeSolverPolicy::
+                             Surface2D5D ||
+                 volume->solverPolicy ==
+                     world_model::
+                         VolumeSolverPolicy::
+                             Local3D))
             {
+                const bool local3D =
+                    volume->solverPolicy ==
+                        world_model::
+                            VolumeSolverPolicy::
+                                Local3D;
+
                 context.Separator();
-                context.Heading("Surface Live Solver");
+                context.Heading(
+                    local3D
+                        ? "Local 3D Live Solver"
+                        : "Surface Live Solver");
 
                 auto& settings =
                     solver_->Settings(
@@ -312,6 +325,8 @@ void VolumeAuthoringUi::Draw(
                     settings.sourceScale;
                 i64 iterations =
                     settings.iterationsPerFrame;
+                f64 gpuBudgetMilliseconds =
+                    settings.gpuBudgetMilliseconds;
 
                 bool settingsChanged =
                     context.InputDouble(
@@ -333,6 +348,10 @@ void VolumeAuthoringUi::Draw(
                     context.InputInteger(
                         "Iterations / Frame##volume-surface-iterations",
                         iterations);
+                settingsChanged |=
+                    context.InputDouble(
+                        "GPU Budget ms##volume-solver-budget",
+                        gpuBudgetMilliseconds);
 
                 if (settingsChanged)
                 {
@@ -365,6 +384,12 @@ void VolumeAuthoringUi::Draw(
                                 iterations,
                                 1,
                                 16));
+                    settings.gpuBudgetMilliseconds =
+                        static_cast<f32>(
+                            std::clamp(
+                                gpuBudgetMilliseconds,
+                                0.05,
+                                20.0));
                 }
 
                 i64 resolution =
@@ -374,12 +399,18 @@ void VolumeAuthoringUi::Draw(
 
                 bool layoutChanged =
                     context.InputInteger(
-                        "Surface Resolution##volume-surface-resolution",
+                        local3D
+                            ? "3D Resolution##volume-local3d-resolution"
+                            : "Surface Resolution##volume-surface-resolution",
                         resolution);
-                layoutChanged |=
-                    context.InputInteger(
-                        "Surface Layers##volume-surface-layers",
-                        surfaceLayers);
+
+                if (!local3D)
+                {
+                    layoutChanged |=
+                        context.InputInteger(
+                            "Surface Layers##volume-surface-layers",
+                            surfaceLayers);
+                }
 
                 if (layoutChanged)
                 {
@@ -391,22 +422,76 @@ void VolumeAuthoringUi::Draw(
                             resolution,
                             8,
                             1024));
-                    world.Commands().SetProperty(
-                        *volumeId,
-                        world_model::
-                            kVolumeSurfaceLayers,
-                        std::clamp<i64>(
-                            surfaceLayers,
-                            1,
-                            32));
+
+                    if (!local3D)
+                    {
+                        world.Commands().SetProperty(
+                            *volumeId,
+                            world_model::
+                                kVolumeSurfaceLayers,
+                            std::clamp<i64>(
+                                surfaceLayers,
+                                1,
+                                32));
+                    }
 
                     settings.resetRequested =
                         true;
                 }
 
+                if (local3D)
+                {
+                    auto center =
+                        volume->centerMeters;
+                    auto halfExtents =
+                        volume->halfExtentsMeters;
+
+                    bool boundsChanged =
+                        context.InputDouble3(
+                            "Domain Center##volume-local3d-center",
+                            center);
+                    boundsChanged |=
+                        context.InputDouble3(
+                            "Half Extents##volume-local3d-half-extents",
+                            halfExtents);
+
+                    if (boundsChanged)
+                    {
+                        halfExtents.x =
+                            std::max(
+                                std::abs(
+                                    halfExtents.x),
+                                0.01);
+                        halfExtents.y =
+                            std::max(
+                                std::abs(
+                                    halfExtents.y),
+                                0.01);
+                        halfExtents.z =
+                            std::max(
+                                std::abs(
+                                    halfExtents.z),
+                                0.01);
+
+                        world.Commands().SetProperty(
+                            *volumeId,
+                            world_model::
+                                kVolumeCenterMeters,
+                            center);
+                        world.Commands().SetProperty(
+                            *volumeId,
+                            world_model::
+                                kVolumeHalfExtentsMeters,
+                            halfExtents);
+
+                        settings.resetRequested =
+                            true;
+                    }
+                }
+
                 context.Text(
                     std::format(
-                        "GPU live: {} | {} | iterations {} | simulated {:.3f}s",
+                        "GPU live: {} | {} | iterations {}/{} | simulated {:.3f}s",
                         diagnostics.eligible
                             ? "eligible"
                             : "inactive",
@@ -414,7 +499,21 @@ void VolumeAuthoringUi::Draw(
                             ? "paused"
                             : "running",
                         diagnostics.iterationsThisFrame,
+                        diagnostics.requestedIterations,
                         diagnostics.simulatedSeconds));
+
+                if (local3D)
+                {
+                    context.Text(
+                        diagnostics.gpuTimingValid
+                            ? std::format(
+                                  "Local3D GPU {:.3f} ms / {:.3f} ms budget",
+                                  diagnostics.gpuMilliseconds,
+                                  diagnostics.gpuBudgetMilliseconds)
+                            : std::format(
+                                  "Local3D GPU timing pending / {:.3f} ms budget",
+                                  diagnostics.gpuBudgetMilliseconds));
+                }
 
                 context.MutedText(
                     std::format(
@@ -429,6 +528,71 @@ void VolumeAuthoringUi::Draw(
                             scalarChannelsSolved));
 
                 context.Text("Field Debug View");
+
+                if (local3D)
+                {
+                    if (context.Selectable(
+                            "Density##volume-local3d-field-density",
+                            settings.debugField ==
+                                world_model::
+                                    VolumeField::Density))
+                    {
+                        settings.debugField =
+                            world_model::
+                                VolumeField::Density;
+                    }
+                    if (context.Selectable(
+                            "Velocity##volume-local3d-field-velocity",
+                            settings.debugField ==
+                                world_model::
+                                    VolumeField::Velocity))
+                    {
+                        settings.debugField =
+                            world_model::
+                                VolumeField::Velocity;
+                    }
+                    if (context.Selectable(
+                            "Temperature##volume-local3d-field-temperature",
+                            settings.debugField ==
+                                world_model::
+                                    VolumeField::Temperature))
+                    {
+                        settings.debugField =
+                            world_model::
+                                VolumeField::Temperature;
+                    }
+
+                    if (context.Selectable(
+                            "Slice X##volume-local3d-slice-x",
+                            settings.sliceAxis ==
+                                volume_solver::
+                                    VolumeSliceAxis::X))
+                    {
+                        settings.sliceAxis =
+                            volume_solver::
+                                VolumeSliceAxis::X;
+                    }
+                    if (context.Selectable(
+                            "Slice Y##volume-local3d-slice-y",
+                            settings.sliceAxis ==
+                                volume_solver::
+                                    VolumeSliceAxis::Y))
+                    {
+                        settings.sliceAxis =
+                            volume_solver::
+                                VolumeSliceAxis::Y;
+                    }
+                    if (context.Selectable(
+                            "Slice Z##volume-local3d-slice-z",
+                            settings.sliceAxis ==
+                                volume_solver::
+                                    VolumeSliceAxis::Z))
+                    {
+                        settings.sliceAxis =
+                            volume_solver::
+                                VolumeSliceAxis::Z;
+                    }
+                }
 
                 if (context.Selectable(
                         "Off##volume-debug-off",
@@ -451,9 +615,13 @@ void VolumeAuthoringUi::Draw(
                                     Density))
                 {
                     settings.debugView =
-                        volume_solver::
-                            SurfaceVolumeDebugView::
-                                Density;
+                        local3D
+                            ? volume_solver::
+                                  SurfaceVolumeDebugView::
+                                      FieldSlice
+                            : volume_solver::
+                                  SurfaceVolumeDebugView::
+                                      Density;
                 }
 
                 if (context.Selectable(
@@ -464,28 +632,41 @@ void VolumeAuthoringUi::Draw(
                                     Velocity))
                 {
                     settings.debugView =
-                        volume_solver::
-                            SurfaceVolumeDebugView::
-                                Velocity;
+                        local3D
+                            ? volume_solver::
+                                  SurfaceVolumeDebugView::
+                                      FieldSlice
+                            : volume_solver::
+                                  SurfaceVolumeDebugView::
+                                      Velocity;
                 }
 
                 i64 debugLayer =
                     settings.debugLayer;
 
                 if (context.InputInteger(
-                        "Debug Layer##volume-debug-layer",
+                        local3D
+                            ? "Slice Index##volume-local3d-slice-index"
+                            : "Debug Layer##volume-debug-layer",
                         debugLayer))
                 {
+                    const i64 maximumSlice =
+                        local3D
+                            ? static_cast<i64>(
+                                  volume->resolution) -
+                                  1
+                            : static_cast<i64>(
+                                  volume->
+                                      surfaceLayers) -
+                                  1;
+
                     settings.debugLayer =
                         static_cast<u32>(
                             std::clamp<i64>(
                                 debugLayer,
                                 0,
                                 std::max<i64>(
-                                    static_cast<i64>(
-                                        volume->
-                                            surfaceLayers) -
-                                        1,
+                                    maximumSlice,
                                     0)));
                 }
             }
