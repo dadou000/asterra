@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -1305,6 +1306,60 @@ void StepSurfaceVolumeReference(
     }
 }
 
+void StepLocalVolumeReference(
+    const std::span<const LocalVolumeReferenceCell> input,
+    const std::span<LocalVolumeReferenceCell> output,
+    const SurfaceVolumeReferenceConfig& config,
+    const math::Float3 uniformWind)
+{
+    if (input.size() != output.size())
+    {
+        throw std::invalid_argument(
+            "M34 Local3D reference input/output sizes differ.");
+    }
+
+    std::vector<SurfaceVolumeCell> densityInput(input.size());
+    std::vector<SurfaceVolumeCell> densityOutput(input.size());
+    std::vector<SurfaceVolumeCell> temperatureInput(input.size());
+    std::vector<SurfaceVolumeCell> temperatureOutput(input.size());
+
+    for (std::size_t index = 0U;
+         index < input.size();
+         ++index)
+    {
+        densityInput[index] = {
+            .scalar = input[index].density,
+            .velocity = input[index].velocity
+        };
+        temperatureInput[index] = {
+            .scalar = input[index].temperature,
+            .velocity = input[index].velocity
+        };
+    }
+
+    StepSurfaceVolumeReference(
+        densityInput,
+        densityOutput,
+        config,
+        uniformWind);
+    StepSurfaceVolumeReference(
+        temperatureInput,
+        temperatureOutput,
+        config,
+        uniformWind);
+
+    for (std::size_t index = 0U;
+         index < output.size();
+         ++index)
+    {
+        output[index] = {
+            .density = densityOutput[index].scalar,
+            .temperature = temperatureOutput[index].scalar,
+            .velocity = densityOutput[index].velocity
+        };
+    }
+}
+
 class SurfaceVolumeSolverService::Impl
 {
 public:
@@ -1314,6 +1369,14 @@ public:
             world_model::VolumeField::Density};
         u64 bytes{0U};
         std::unique_ptr<rhi::Buffer> buffer;
+    };
+
+    struct TimingFrame
+    {
+        bool reset{false};
+        bool begun{false};
+        bool ended{false};
+        std::optional<scene::ObjectId> volume;
     };
 
     struct Entry
@@ -1331,9 +1394,28 @@ public:
 
     Impl(
         rhi::Device& device,
-        const shader::Compiler& compiler)
-        : device(&device)
+        const shader::Compiler& compiler,
+        const u32 framesInFlight)
+        : device(&device),
+          timestampPeriodNanoseconds(
+              device.TimestampPeriodNanoseconds())
     {
+        if (framesInFlight == 0U)
+        {
+            throw std::invalid_argument(
+                "M34 volume solver requires at least one GPU timing frame slot.");
+        }
+
+        timingPools.reserve(framesInFlight);
+        timingFrames.resize(framesInFlight);
+
+        for (u32 frame = 0U;
+             frame < framesInFlight;
+             ++frame)
+        {
+            timingPools.push_back(
+                device.CreateTimestampQueryPool(2U));
+        }
         clearPipeline =
             CompileCompute(
                 device,
@@ -1712,6 +1794,9 @@ public:
     }
 
     rhi::Device* device{nullptr};
+    f64 timestampPeriodNanoseconds{0.0};
+    std::vector<std::unique_ptr<rhi::TimestampQueryPool>> timingPools;
+    std::vector<TimingFrame> timingFrames;
     std::unique_ptr<rhi::ComputePipeline>
         clearPipeline;
     std::unique_ptr<rhi::ComputePipeline>
@@ -1725,11 +1810,13 @@ public:
 
 SurfaceVolumeSolverService::SurfaceVolumeSolverService(
     rhi::Device& device,
-    const shader::Compiler& compiler)
+    const shader::Compiler& compiler,
+    const u32 framesInFlight)
     : impl_(
           std::make_unique<Impl>(
               device,
-              compiler))
+              compiler,
+              framesInFlight))
 {
 }
 
@@ -1765,6 +1852,85 @@ SurfaceVolumeSolverService::Diagnostics(
         : SurfaceVolumeSolverDiagnostics{};
 }
 
+void SurfaceVolumeSolverService::BeginGpuTimingFrame(
+    rhi::CommandList& commands,
+    const u32 frameSlot)
+{
+    if (frameSlot >= impl_->timingPools.size())
+    {
+        throw std::out_of_range(
+            "M34 volume timing frame slot is out of range.");
+    }
+
+    commands.ResetTimestampQueryPool(
+        *impl_->timingPools[frameSlot],
+        0U,
+        2U);
+
+    impl_->timingFrames[frameSlot] = {
+        .reset = true
+    };
+}
+
+void SurfaceVolumeSolverService::ResolveGpuTimingFrame(
+    const u32 frameSlot)
+{
+    if (frameSlot >= impl_->timingPools.size())
+    {
+        throw std::out_of_range(
+            "M34 volume timing frame slot is out of range.");
+    }
+
+    const auto& frame =
+        impl_->timingFrames[frameSlot];
+
+    if (!frame.reset ||
+        !frame.begun ||
+        !frame.ended ||
+        !frame.volume.has_value())
+    {
+        return;
+    }
+
+    std::array<u64,2> ticks{};
+
+    if (!impl_->timingPools[frameSlot]->
+            TryGetResults(
+                0U,
+                2U,
+                ticks.data()) ||
+        ticks[1] < ticks[0])
+    {
+        return;
+    }
+
+    auto found =
+        std::find_if(
+            impl_->entries.begin(),
+            impl_->entries.end(),
+            [&frame](const Impl::Entry& entry)
+            {
+                return entry.volume ==
+                    *frame.volume;
+            });
+
+    if (found ==
+        impl_->entries.end())
+    {
+        return;
+    }
+
+    found->diagnostics.gpuMilliseconds =
+        static_cast<f32>(
+            static_cast<f64>(
+                ticks[1] -
+                ticks[0]) *
+            impl_->timestampPeriodNanoseconds /
+            1'000'000.0);
+    found->diagnostics.gpuTimingValid =
+        true;
+}
+
 void SurfaceVolumeSolverService::RemoveMissing(
     const scene::ObjectStore& objects)
 {
@@ -1788,24 +1954,42 @@ void SurfaceVolumeSolverService::AddPasses(
     const scene::ObjectStore& objects,
     const world_model::ResolvedVolumeDomain& domain,
     volume_fields::VolumeFieldStorage& storage,
-    const volume_fields::ImportedVolumeFields& fields)
+    const volume_fields::ImportedVolumeFields& fields,
+    const u32 frameSlot)
 {
     auto& entry =
         impl_->EnsureEntry(
             domain.object);
 
+    const f32 previousSimulatedSeconds =
+        entry.diagnostics.simulatedSeconds;
+    const f32 previousGpuMilliseconds =
+        entry.diagnostics.gpuMilliseconds;
+    const bool previousGpuTimingValid =
+        entry.diagnostics.gpuTimingValid;
+
+    const bool local3D =
+        domain.solverPolicy ==
+            world_model::
+                VolumeSolverPolicy::Local3D;
+
     entry.diagnostics = {
         .eligible =
             domain.enabled &&
-            domain.solverPolicy ==
-                world_model::
-                    VolumeSolverPolicy::Surface2D5D,
-        .live =
-            entry.settings.live,
-        .paused =
-            entry.settings.paused,
+            (domain.solverPolicy ==
+                 world_model::
+                     VolumeSolverPolicy::Surface2D5D ||
+             local3D),
+        .live = entry.settings.live,
+        .paused = entry.settings.paused,
         .simulatedSeconds =
-            entry.diagnostics.simulatedSeconds
+            previousSimulatedSeconds,
+        .gpuMilliseconds =
+            previousGpuMilliseconds,
+        .gpuBudgetMilliseconds =
+            entry.settings.gpuBudgetMilliseconds,
+        .gpuTimingValid =
+            previousGpuTimingValid
     };
 
     if (!entry.diagnostics.eligible)
@@ -2160,17 +2344,93 @@ void SurfaceVolumeSolverService::AddPasses(
                 inputs.size()),
             kMaximumInputs);
 
-    const u32 iterations =
+    const u32 requestedIterations =
         std::clamp(
             entry.settings.iterationsPerFrame,
             1U,
             16U);
+
+    u32 iterations =
+        requestedIterations;
+
+    if (local3D &&
+        entry.diagnostics.gpuTimingValid &&
+        entry.diagnostics.gpuMilliseconds >
+            0.0F)
+    {
+        const f32 budget =
+            std::max(
+                entry.settings.gpuBudgetMilliseconds,
+                0.05F);
+        const f32 scale =
+            std::clamp(
+                budget /
+                    entry.diagnostics.gpuMilliseconds,
+                0.05F,
+                1.0F);
+
+        iterations =
+            std::clamp(
+                static_cast<u32>(
+                    std::floor(
+                        static_cast<f32>(
+                            requestedIterations) *
+                        scale)),
+                1U,
+                requestedIterations);
+    }
+
+    entry.diagnostics.requestedIterations =
+        requestedIterations;
 
     const f32 dt =
         std::clamp(
             entry.settings.timeStepSeconds,
             1.0F / 1000.0F,
             0.1F);
+
+    const bool recordLocalTiming =
+        local3D &&
+        frameSlot <
+            impl_->timingFrames.size() &&
+        impl_->timingFrames[frameSlot].reset &&
+        !impl_->timingFrames[frameSlot].begun;
+
+    if (recordLocalTiming)
+    {
+        graph.AddPass(
+            std::string(prefix) +
+                ".GpuTimingBegin",
+            {},
+            {
+                {
+                    .buffer =
+                        velocityHandle,
+                    .state =
+                        rhi::ResourceState::
+                            UnorderedAccess,
+                    .access =
+                        render_graph::Access::
+                            Write
+                }
+            },
+            [this,
+             frameSlot](
+                rhi::CommandList& commands,
+                const render_graph::Resources&)
+            {
+                commands.WriteTimestamp(
+                    *impl_->timingPools[
+                        frameSlot],
+                    0U);
+            });
+
+        impl_->timingFrames[
+            frameSlot].begun = true;
+        impl_->timingFrames[
+            frameSlot].volume =
+                domain.object;
+    }
 
     for (u32 iteration = 0U;
          iteration < iterations;
@@ -2457,6 +2717,39 @@ void SurfaceVolumeSolverService::AddPasses(
         }
     }
 
+    if (recordLocalTiming)
+    {
+        graph.AddPass(
+            std::string(prefix) +
+                ".GpuTimingEnd",
+            {},
+            {
+                {
+                    .buffer =
+                        velocityHandle,
+                    .state =
+                        rhi::ResourceState::
+                            ShaderResource,
+                    .access =
+                        render_graph::Access::
+                            Read
+                }
+            },
+            [this,
+             frameSlot](
+                rhi::CommandList& commands,
+                const render_graph::Resources&)
+            {
+                commands.WriteTimestamp(
+                    *impl_->timingPools[
+                        frameSlot],
+                    1U);
+            });
+
+        impl_->timingFrames[
+            frameSlot].ended = true;
+    }
+
     storage.MarkAllResidentTilesValid();
 
     entry.settings.singleStepRequested =
@@ -2483,8 +2776,24 @@ SurfaceVolumeDebugViewName(
         return "Density";
     case SurfaceVolumeDebugView::Velocity:
         return "Velocity";
+    case SurfaceVolumeDebugView::FieldSlice:
+        return "Field Slice";
     }
 
     return "Unknown";
 }
+std::string_view
+VolumeSliceAxisName(
+    const VolumeSliceAxis axis) noexcept
+{
+    switch (axis)
+    {
+    case VolumeSliceAxis::X: return "X";
+    case VolumeSliceAxis::Y: return "Y";
+    case VolumeSliceAxis::Z: return "Z";
+    }
+
+    return "Unknown";
+}
+
 } // namespace orbit::volume_solver
