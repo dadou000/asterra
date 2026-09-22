@@ -1,4 +1,5 @@
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
+#include <orbit/lighting/RadianceClipmapResidency.hpp>
 
 #include <algorithm>
 #include <array>
