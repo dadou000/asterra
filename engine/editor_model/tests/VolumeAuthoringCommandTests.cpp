@@ -9,7 +9,9 @@
 #include <orbit/world_model/VolumeSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <algorithm>
 #include <filesystem>
+#include <span>
 #include <variant>
 
 int main()
