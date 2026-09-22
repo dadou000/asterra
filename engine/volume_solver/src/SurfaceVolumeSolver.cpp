@@ -2084,6 +2084,14 @@ void SurfaceVolumeSolverService::AddPasses(
 
     if (!shouldStep)
     {
+        if (shouldReset ||
+            fieldDiagnostics.pendingTiles >
+                0U)
+        {
+            storage.
+                MarkAllResidentTilesValid();
+        }
+
         entry.settings.singleStepRequested =
             false;
         return;
