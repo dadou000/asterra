@@ -1856,7 +1856,7 @@ void SurfaceVolumeSolverService::AddPasses(
             if (!handle.IsValid())
                 return;
 
-            const auto* channel =
+            const auto channel =
                 std::find_if(
                     fieldDiagnostics.channels.begin(),
                     fieldDiagnostics.channels.end(),
