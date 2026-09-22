@@ -162,6 +162,21 @@ struct GpuLocalLight
     float4 cone;
 };
 
+struct GpuRadianceCell
+{
+    float4 irradiance0;
+    float4 irradianceX;
+    float4 irradianceY;
+    float4 irradianceZ;
+};
+
+struct GpuRadianceLevelInfo
+{
+    float4 centerCellSize;
+    uint4 moduloAxis;
+    uint4 offsetCountLevel;
+};
+
 struct GpuVolumeParams
 {
     float4 cameraForwardAspect;
@@ -191,18 +206,22 @@ StructuredBuffer<uint> g_slotMap : register(t2);
 StructuredBuffer<GpuLocalLight> g_localLights : register(t3);
 [[vk::binding(4, 0)]]
 StructuredBuffer<GpuVolumeParams> g_params : register(t4);
-
 [[vk::binding(5, 0)]]
+StructuredBuffer<GpuRadianceCell> g_radianceCells : register(t5);
+[[vk::binding(6, 0)]]
+StructuredBuffer<GpuRadianceLevelInfo> g_radianceLevels : register(t6);
+
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(5, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
-[[vk::binding(6, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_history;
-[[vk::binding(6, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_historySampler;
 
@@ -362,6 +381,108 @@ float SampleField(
                      tileCellCount +
                  localIndex) *
                     4u));
+}
+
+int PositiveModulo(
+    int value,
+    int modulus)
+{
+    const int result =
+        value % modulus;
+    return
+        result < 0
+            ? result + modulus
+            : result;
+}
+
+float3 SampleRadianceCache(
+    float3 cameraRelativePosition,
+    uint levelCount)
+{
+    [loop]
+    for (uint levelIndex = 0u;
+         levelIndex < levelCount;
+         ++levelIndex)
+    {
+        const GpuRadianceLevelInfo level =
+            g_radianceLevels[levelIndex];
+
+        const float cellSize =
+            max(
+                level.centerCellSize.w,
+                1.0e-5);
+        const int axis =
+            int(level.moduloAxis.w);
+
+        if (axis <= 0)
+        {
+            continue;
+        }
+
+        const float3 relative =
+            (cameraRelativePosition -
+             level.centerCellSize.xyz) /
+            cellSize;
+
+        const int3 delta =
+            int3(round(relative));
+        const int halfAxis =
+            axis / 2;
+
+        if (any(abs(delta) >
+                halfAxis))
+        {
+            continue;
+        }
+
+        const int px =
+            PositiveModulo(
+                int(level.moduloAxis.x) +
+                    delta.x,
+                axis);
+        const int py =
+            PositiveModulo(
+                int(level.moduloAxis.y) +
+                    delta.y,
+                axis);
+        const int pz =
+            PositiveModulo(
+                int(level.moduloAxis.z) +
+                    delta.z,
+                axis);
+
+        const uint localIndex =
+            uint(px) +
+            uint(axis) *
+                (uint(py) +
+                 uint(axis) *
+                     uint(pz));
+
+        if (localIndex >=
+            level.offsetCountLevel.y)
+        {
+            continue;
+        }
+
+        const GpuRadianceCell cell =
+            g_radianceCells[
+                level.offsetCountLevel.x +
+                localIndex];
+
+        if (cell.irradiance0.w <= 0.5)
+        {
+            continue;
+        }
+
+        // The cache L0 coefficient is the stable low-frequency incident
+        // authority. Directional direct lights are evaluated separately.
+        return
+            max(
+                cell.irradiance0.rgb,
+                0.0);
+    }
+
+    return 0.0;
 }
 
 float HenyeyGreenstein(
@@ -1372,6 +1493,10 @@ public:
             localLights;
         std::unique_ptr<rhi::Buffer>
             params;
+        std::unique_ptr<rhi::Buffer>
+            dummyRadianceCells;
+        std::unique_ptr<rhi::Buffer>
+            dummyRadianceLevels;
 
         u32 slotCapacity{0U};
         u32 lightCapacity{0U};
@@ -1396,7 +1521,7 @@ public:
                 compiler,
                 kRaymarchPs,
                 0U,
-                5U,
+                7U,
                 2U);
         compositePipeline =
             CompileFullscreen(
@@ -1622,6 +1747,9 @@ void UniversalVolumeRenderer::AddPasses(
     const volume_fields::ImportedVolumeFields& fields,
     const lighting::DirectionalLight& stellar,
     const std::span<const lighting::ResolvedLocalLight> localLights,
+    const render_graph::BufferHandle radianceCells,
+    const render_graph::BufferHandle radianceLevels,
+    const u32 radianceLevelCount,
     const bool resetHistory)
 {
     auto& entry =
@@ -1957,6 +2085,65 @@ void UniversalVolumeRenderer::AddPasses(
                 });
     }
 
+    if (presentation.dummyRadianceCells == nullptr)
+    {
+        presentation.dummyRadianceCells =
+            impl_->device->CreateBuffer({
+                .sizeBytes =
+                    sizeof(
+                        lighting::GpuRadianceCell),
+                .usage =
+                    rhi::BufferUsage::
+                        Structured,
+                .memory =
+                    rhi::MemoryUsage::
+                        HostVisible,
+                .initialState =
+                    rhi::ResourceState::
+                        ShaderResource
+            });
+        std::memset(
+            presentation.
+                dummyRadianceCells->Map(),
+            0,
+            static_cast<std::size_t>(
+                presentation.
+                    dummyRadianceCells->
+                        SizeBytes()));
+        presentation.
+            dummyRadianceCells->Unmap();
+    }
+
+    if (presentation.dummyRadianceLevels == nullptr)
+    {
+        presentation.dummyRadianceLevels =
+            impl_->device->CreateBuffer({
+                .sizeBytes =
+                    sizeof(
+                        lighting::
+                            GpuRadianceLevelInfo),
+                .usage =
+                    rhi::BufferUsage::
+                        Structured,
+                .memory =
+                    rhi::MemoryUsage::
+                        HostVisible,
+                .initialState =
+                    rhi::ResourceState::
+                        ShaderResource
+            });
+        std::memset(
+            presentation.
+                dummyRadianceLevels->Map(),
+            0,
+            static_cast<std::size_t>(
+                presentation.
+                    dummyRadianceLevels->
+                        SizeBytes()));
+        presentation.
+            dummyRadianceLevels->Unmap();
+    }
+
     const f32 aspect =
         static_cast<f32>(width) /
         static_cast<f32>(height);
@@ -2065,7 +2252,10 @@ void UniversalVolumeRenderer::AddPasses(
             fieldDiagnostics.resolutionX,
             fieldDiagnostics.resolutionY,
             fieldDiagnostics.resolutionZ,
-            0U
+            radianceCells.IsValid() &&
+                    radianceLevels.IsValid()
+                ? radianceLevelCount
+                : 0U
         },
         .renderParams = {
             domain.renderSteps,
@@ -2135,6 +2325,32 @@ void UniversalVolumeRenderer::AddPasses(
             rhi::ResourceState::
                 ShaderResource);
 
+    const auto dummyRadianceCells =
+        graph.ImportBuffer(
+            std::string(prefix) +
+                ".DummyRadianceCells",
+            *presentation.
+                dummyRadianceCells,
+            rhi::ResourceState::
+                ShaderResource);
+    const auto dummyRadianceLevels =
+        graph.ImportBuffer(
+            std::string(prefix) +
+                ".DummyRadianceLevels",
+            *presentation.
+                dummyRadianceLevels,
+            rhi::ResourceState::
+                ShaderResource);
+
+    const auto effectiveRadianceCells =
+        radianceCells.IsValid()
+            ? radianceCells
+            : dummyRadianceCells;
+    const auto effectiveRadianceLevels =
+        radianceLevels.IsValid()
+            ? radianceLevels
+            : dummyRadianceLevels;
+
     auto emission =
         FindField(
             fields,
@@ -2186,7 +2402,9 @@ void UniversalVolumeRenderer::AddPasses(
             {emission,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
             {slotMapHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
             {localLightsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {paramsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read}
+            {paramsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+            {effectiveRadianceCells,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+            {effectiveRadianceLevels,rhi::ResourceState::ShaderResource,render_graph::Access::Read}
         },
         [this,
          currentHandle,
@@ -2197,6 +2415,8 @@ void UniversalVolumeRenderer::AddPasses(
          slotMapHandle,
          localLightsHandle,
          paramsHandle,
+         effectiveRadianceCells,
+         effectiveRadianceLevels,
          width,
          height](
             rhi::CommandList& commands,
@@ -2228,6 +2448,14 @@ void UniversalVolumeRenderer::AddPasses(
                 4U,
                 resources.Buffer(
                     paramsHandle));
+            commands.SetGraphicsBuffer(
+                5U,
+                resources.Buffer(
+                    effectiveRadianceCells));
+            commands.SetGraphicsBuffer(
+                6U,
+                resources.Buffer(
+                    effectiveRadianceLevels));
             commands.SetGraphicsTexture(
                 0U,
                 resources.Texture(depth));
