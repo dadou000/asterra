@@ -28,6 +28,7 @@ struct SurfaceVolumeSolverSettings
     bool paused{false};
     bool singleStepRequested{false};
     bool resetRequested{false};
+    bool followCamera{false};
 
     f32 timeStepSeconds{1.0F / 60.0F};
     f32 scalarDissipationPerSecond{0.08F};
