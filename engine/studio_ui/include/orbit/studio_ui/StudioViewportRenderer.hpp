@@ -36,6 +36,7 @@
 #include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/post_process/OutputTransform.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
+#include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -514,6 +515,9 @@ public:
     void SetVolumeFieldStorageService(
         volume_fields::VolumeFieldStorageService* fields) noexcept;
 
+    void SetSurfaceVolumeSolverService(
+        volume_solver::SurfaceVolumeSolverService* solver) noexcept;
+
     void SetVolumeSourceDebugVisualization(
         bool enabled) noexcept;
 
@@ -733,6 +737,7 @@ private:
     const shader::Compiler* compiler_{nullptr};
     content::ContentService* content_{nullptr};
     volume_fields::VolumeFieldStorageService* volumeFields_{nullptr};
+    volume_solver::SurfaceVolumeSolverService* surfaceVolumeSolver_{nullptr};
     bool volumeSourceDebugVisualization_{false};
     u32 framesInFlight_{1U};
     editor_ui::BodyPreviewRenderer bodyRenderer_;
