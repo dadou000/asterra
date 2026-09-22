@@ -141,8 +141,16 @@ VolumeFieldStorage::VolumeFieldStorage(
 void VolumeFieldStorage::Reconfigure(
     const world_model::ResolvedVolumeDomain& domain)
 {
+    const u32 desiredY =
+        domain.solverPolicy ==
+                world_model::VolumeSolverPolicy::Surface2D5D
+            ? domain.surfaceLayers
+            : domain.resolution;
+
     const bool layoutChanged =
-        resolution_ != domain.resolution ||
+        resolutionX_ != domain.resolution ||
+        resolutionY_ != desiredY ||
+        resolutionZ_ != domain.resolution ||
         !SameLayout(
             halfExtentsMeters_,
             domain.halfExtentsMeters);
@@ -210,13 +218,13 @@ VolumeFieldStorage::Recenter(
     const auto tileWorld =
         math::Double3{
             (halfExtentsMeters_.x * 2.0 /
-             static_cast<f64>(resolution_)) *
+             static_cast<f64>(resolutionX_)) *
                 static_cast<f64>(tileEdge_),
             (halfExtentsMeters_.y * 2.0 /
-             static_cast<f64>(resolution_)) *
+             static_cast<f64>(resolutionY_)) *
                 static_cast<f64>(tileEdge_),
             (halfExtentsMeters_.z * 2.0 /
-             static_cast<f64>(resolution_)) *
+             static_cast<f64>(resolutionZ_)) *
                 static_cast<f64>(tileEdge_)
         };
 
@@ -382,11 +390,11 @@ u32 VolumeFieldStorage::InvalidateBounds(
 
     const math::Double3 cellSize{
         halfExtentsMeters_.x * 2.0 /
-            static_cast<f64>(resolution_),
+            static_cast<f64>(resolutionX_),
         halfExtentsMeters_.y * 2.0 /
-            static_cast<f64>(resolution_),
+            static_cast<f64>(resolutionX_),
         halfExtentsMeters_.z * 2.0 /
-            static_cast<f64>(resolution_)
+            static_cast<f64>(resolutionX_)
     };
 
     const math::Double3 tileSize{
@@ -629,13 +637,21 @@ void VolumeFieldStorage::RebuildLayout(
     const world_model::ResolvedVolumeDomain& domain,
     const bool)
 {
-    if (domain.resolution == 0U)
+    if (domain.resolution == 0U ||
+        domain.surfaceLayers == 0U)
     {
         throw std::invalid_argument(
             "Volume field resolution must be non-zero.");
     }
 
-    resolution_ =
+    resolutionX_ =
+        domain.resolution;
+    resolutionY_ =
+        domain.solverPolicy ==
+                world_model::VolumeSolverPolicy::Surface2D5D
+            ? domain.surfaceLayers
+            : domain.resolution;
+    resolutionZ_ =
         domain.resolution;
     centerMeters_ =
         domain.centerMeters;
@@ -653,15 +669,15 @@ void VolumeFieldStorage::RebuildLayout(
 
     tilesX_ =
         CeilDiv(
-            resolution_,
+            resolutionX_,
             tileEdge_);
     tilesY_ =
         CeilDiv(
-            resolution_,
+            resolutionY_,
             tileEdge_);
     tilesZ_ =
         CeilDiv(
-            resolution_,
+            resolutionZ_,
             tileEdge_);
 
     const u64 totalTiles =
@@ -737,7 +753,9 @@ void VolumeFieldStorage::RebuildLayout(
         });
 
     diagnostics_ = {
-        .resolution = resolution_,
+        .resolutionX = resolutionX_,
+        .resolutionY = resolutionY_,
+        .resolutionZ = resolutionZ_,
         .tileEdge = tileEdge_,
         .tilesX = tilesX_,
         .tilesY = tilesY_,
@@ -917,13 +935,13 @@ VolumeFieldStorage::DesiredTileCoords(
     const math::Double3 cellSize{
         halfExtentsMeters_.x * 2.0 /
             static_cast<f64>(
-                resolution_),
+                resolutionX_),
         halfExtentsMeters_.y * 2.0 /
             static_cast<f64>(
-                resolution_),
+                resolutionY_),
         halfExtentsMeters_.z * 2.0 /
             static_cast<f64>(
-                resolution_)
+                resolutionZ_)
     };
 
     const math::Double3 tileSize{
