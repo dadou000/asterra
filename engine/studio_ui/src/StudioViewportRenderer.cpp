@@ -926,10 +926,28 @@ SelectedVolumeDomainLines(
     const auto selected =
         session.World().Selection().Ordered().front();
 
+    scene::ObjectId volumeObject =
+        selected;
+
+    const auto selectedRecord =
+        session.World().Objects().Find(
+            selected);
+
+    if (selectedRecord.has_value() &&
+        (selectedRecord->type ==
+             world_model::kVolumeSourceType ||
+         selectedRecord->type ==
+             world_model::kVolumeEffectorType) &&
+        selectedRecord->parent.has_value())
+    {
+        volumeObject =
+            *selectedRecord->parent;
+    }
+
     const auto volume =
         world_model::ResolveVolumeDomain(
             session.World().Objects(),
-            selected);
+            volumeObject);
 
     if (!volume.has_value())
     {
