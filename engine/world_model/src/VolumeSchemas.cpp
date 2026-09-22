@@ -55,7 +55,18 @@ void RegisterVolumeSchemas(
             {.id=kVolumeRepresentationMode,.name="Representation Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=4.0}},
             {.id=kVolumeFieldMask,.name="Field Mask",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0}},
             {.id=kVolumeResolution,.name="Base Resolution",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=8.0,.maximum=1024.0},.advanced=true},
-            {.id=kVolumeSurfaceLayers,.name="Surface Layers",.kind=schema::PropertyKind::Integer,.defaultValue=i64{4},.range={.minimum=1.0,.maximum=32.0},.advanced=true}
+            {.id=kVolumeSurfaceLayers,.name="Surface Layers",.kind=schema::PropertyKind::Integer,.defaultValue=i64{4},.range={.minimum=1.0,.maximum=32.0},.advanced=true},
+            {.id=kVolumeRenderEnabled,.name="Render Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kVolumeExtinctionScale,.name="Extinction Scale",.kind=schema::PropertyKind::Float,.defaultValue=0.8,.range={.minimum=0.0,.maximum=64.0}},
+            {.id=kVolumeSingleScatteringAlbedo,.name="Single Scattering Albedo",.kind=schema::PropertyKind::Float,.defaultValue=0.9,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kVolumeScatteringColor,.name="Scattering Color",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{1.0,1.0,1.0}},
+            {.id=kVolumeAnisotropy,.name="Phase Anisotropy",.kind=schema::PropertyKind::Float,.defaultValue=0.2,.range={.minimum=-0.95,.maximum=0.95}},
+            {.id=kVolumeEmissionColor,.name="Emission Color",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{1.0,0.32,0.06}},
+            {.id=kVolumeEmissionScale,.name="Emission Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=1024.0}},
+            {.id=kVolumeGiEmissionScale,.name="GI Emission Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=64.0},.advanced=true},
+            {.id=kVolumeRenderSteps,.name="Raymarch Steps",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=8.0,.maximum=256.0},.advanced=true},
+            {.id=kVolumeShadowSteps,.name="Shadow Steps",.kind=schema::PropertyKind::Integer,.defaultValue=i64{6},.range={.minimum=0.0,.maximum=32.0},.advanced=true},
+            {.id=kVolumeTemporalWeight,.name="Temporal Weight",.kind=schema::PropertyKind::Float,.defaultValue=0.85,.range={.minimum=0.0,.maximum=0.98},.advanced=true}
         }
     });
 
@@ -130,7 +141,114 @@ ResolveVolumeDomain(
         .surfaceLayers = static_cast<u32>(
             std::clamp<i64>(
                 Read<i64>(objects, volume, kVolumeSurfaceLayers, 4),
-                1, 32))
+                1, 32)),
+        .renderEnabled =
+            Read<bool>(
+                objects,
+                volume,
+                kVolumeRenderEnabled,
+                true),
+        .extinctionScale =
+            static_cast<f32>(
+                std::max(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeExtinctionScale,
+                        0.8),
+                    0.0)),
+        .singleScatteringAlbedo =
+            static_cast<f32>(
+                std::clamp(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeSingleScatteringAlbedo,
+                        0.9),
+                    0.0,
+                    1.0)),
+        .scatteringColor = [&]()
+            {
+                const auto value =
+                    Read<math::Double3>(
+                        objects,
+                        volume,
+                        kVolumeScatteringColor,
+                        {1.0,1.0,1.0});
+                return math::Float3{
+                    static_cast<f32>(std::max(value.x,0.0)),
+                    static_cast<f32>(std::max(value.y,0.0)),
+                    static_cast<f32>(std::max(value.z,0.0))};
+            }(),
+        .anisotropy =
+            static_cast<f32>(
+                std::clamp(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeAnisotropy,
+                        0.2),
+                    -0.95,
+                    0.95)),
+        .emissionColor = [&]()
+            {
+                const auto value =
+                    Read<math::Double3>(
+                        objects,
+                        volume,
+                        kVolumeEmissionColor,
+                        {1.0,0.32,0.06});
+                return math::Float3{
+                    static_cast<f32>(std::max(value.x,0.0)),
+                    static_cast<f32>(std::max(value.y,0.0)),
+                    static_cast<f32>(std::max(value.z,0.0))};
+            }(),
+        .emissionScale =
+            static_cast<f32>(
+                std::max(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeEmissionScale,
+                        1.0),
+                    0.0)),
+        .giEmissionScale =
+            static_cast<f32>(
+                std::max(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeGiEmissionScale,
+                        1.0),
+                    0.0)),
+        .renderSteps = static_cast<u32>(
+            std::clamp<i64>(
+                Read<i64>(
+                    objects,
+                    volume,
+                    kVolumeRenderSteps,
+                    64),
+                8,
+                256)),
+        .shadowSteps = static_cast<u32>(
+            std::clamp<i64>(
+                Read<i64>(
+                    objects,
+                    volume,
+                    kVolumeShadowSteps,
+                    6),
+                0,
+                32)),
+        .temporalWeight =
+            static_cast<f32>(
+                std::clamp(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeTemporalWeight,
+                        0.85),
+                    0.0,
+                    0.98))
     };
 
     for (const auto& child :
