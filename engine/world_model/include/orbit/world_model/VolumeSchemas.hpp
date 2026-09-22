@@ -43,6 +43,28 @@ inline constexpr schema::PropertyId kVolumeResolution{
     .high = 0x4f52424954564f4cULL, .low = 0x5245534f4c555401ULL};
 inline constexpr schema::PropertyId kVolumeSurfaceLayers{
     .high = 0x4f52424954564f4cULL, .low = 0x535552464c415901ULL};
+inline constexpr schema::PropertyId kVolumeRenderEnabled{
+    .high = 0x4f52424954564f4cULL, .low = 0x52454e44454e0001ULL};
+inline constexpr schema::PropertyId kVolumeExtinctionScale{
+    .high = 0x4f52424954564f4cULL, .low = 0x455854494e435401ULL};
+inline constexpr schema::PropertyId kVolumeSingleScatteringAlbedo{
+    .high = 0x4f52424954564f4cULL, .low = 0x53434154414c4201ULL};
+inline constexpr schema::PropertyId kVolumeScatteringColor{
+    .high = 0x4f52424954564f4cULL, .low = 0x53434154434f4c01ULL};
+inline constexpr schema::PropertyId kVolumeAnisotropy{
+    .high = 0x4f52424954564f4cULL, .low = 0x414e49534f545201ULL};
+inline constexpr schema::PropertyId kVolumeEmissionColor{
+    .high = 0x4f52424954564f4cULL, .low = 0x454d4954434f4c01ULL};
+inline constexpr schema::PropertyId kVolumeEmissionScale{
+    .high = 0x4f52424954564f4cULL, .low = 0x454d495453434101ULL};
+inline constexpr schema::PropertyId kVolumeGiEmissionScale{
+    .high = 0x4f52424954564f4cULL, .low = 0x4749454d49545301ULL};
+inline constexpr schema::PropertyId kVolumeRenderSteps{
+    .high = 0x4f52424954564f4cULL, .low = 0x5241595354455001ULL};
+inline constexpr schema::PropertyId kVolumeShadowSteps{
+    .high = 0x4f52424954564f4cULL, .low = 0x5348445354455001ULL};
+inline constexpr schema::PropertyId kVolumeTemporalWeight{
+    .high = 0x4f52424954564f4cULL, .low = 0x54454d5057454901ULL};
 
 inline constexpr schema::PropertyId kVolumeChildEnabled{
     .high = 0x4f52424954564f4cULL, .low = 0x4348454e41424c01ULL};
@@ -180,6 +202,19 @@ struct ResolvedVolumeDomain
     u64 fieldMask{0U};
     u32 resolution{64U};
     u32 surfaceLayers{4U};
+
+    bool renderEnabled{true};
+    f32 extinctionScale{0.8F};
+    f32 singleScatteringAlbedo{0.9F};
+    math::Float3 scatteringColor{1.0F, 1.0F, 1.0F};
+    f32 anisotropy{0.2F};
+    math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
+    f32 emissionScale{1.0F};
+    f32 giEmissionScale{1.0F};
+    u32 renderSteps{64U};
+    u32 shadowSteps{6U};
+    f32 temporalWeight{0.85F};
+
     u32 sourceCount{0U};
     u32 effectorCount{0U};
 };
