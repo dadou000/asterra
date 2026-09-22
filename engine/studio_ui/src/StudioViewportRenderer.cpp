@@ -9844,25 +9844,64 @@ StudioViewportRenderer::Compose(
             session.World().HasWorld() &&
             session.World().Selection().Ordered().size() == 1U)
         {
-            const auto selectedVolume =
+            scene::ObjectId volumeObject =
+                session.World().Selection().Ordered().front();
+
+            if (const auto selectedRecord =
+                    session.World().Objects().Find(
+                        volumeObject);
+                selectedRecord.has_value() &&
+                (selectedRecord->type ==
+                     world_model::kVolumeSourceType ||
+                 selectedRecord->type ==
+                     world_model::kVolumeEffectorType) &&
+                selectedRecord->parent.has_value())
+            {
+                volumeObject =
+                    *selectedRecord->parent;
+            }
+
+            const auto authoredVolume =
                 world_model::ResolveVolumeDomain(
                     session.World().Objects(),
-                    session.World().Selection().Ordered().front());
+                    volumeObject);
 
-            if (selectedVolume.has_value())
+            if (authoredVolume.has_value())
             {
+                auto runtimeVolume =
+                    *authoredVolume;
+
+                if (surfaceVolumeSolver_ != nullptr)
+                {
+                    const auto& runtimeSettings =
+                        surfaceVolumeSolver_->
+                            Settings(
+                                runtimeVolume.object);
+
+                    if (runtimeSettings.followCamera &&
+                        runtimeVolume.solverPolicy ==
+                            world_model::
+                                VolumeSolverPolicy::
+                                    Surface2D5D)
+                    {
+                        runtimeVolume.centerMeters =
+                            view->Camera().
+                                localPositionMeters;
+                    }
+                }
+
                 volumeFields_->RemoveMissing(
                     session.World().Objects());
 
                 auto& fieldStorage =
                     volumeFields_->Ensure(
-                        *selectedVolume);
+                        runtimeVolume);
 
                 static_cast<void>(
                     volumeFields_->
                         SyncAuthoredInputs(
                             session.World().Objects(),
-                            selectedVolume->object));
+                            runtimeVolume.object));
 
                 auto importedFields =
                     fieldStorage.Import(
@@ -9880,14 +9919,14 @@ StudioViewportRenderer::Compose(
                             graph,
                             prefix + ".SurfaceVolumeSolver",
                             session.World().Objects(),
-                            *selectedVolume,
+                            runtimeVolume,
                             fieldStorage,
                             importedFields);
 
                     const auto solverSettings =
                         surfaceVolumeSolver_->
                             Settings(
-                                selectedVolume->object);
+                                runtimeVolume.object);
 
                     if (solverSettings.debugView !=
                         volume_solver::
@@ -9973,7 +10012,7 @@ StudioViewportRenderer::Compose(
                                  height,
                                  camera,
                                  domain =
-                                     *selectedVolume,
+                                     runtimeVolume,
                                  fieldDiagnostics,
                                  debugView,
                                  debugLayer,
