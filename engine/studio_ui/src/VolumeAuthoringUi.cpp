@@ -209,11 +209,13 @@ void VolumeAuthoringUi::Draw(
 
                 context.Text(
                     std::format(
-                        "GPU fields {:.2f} MiB | {}^3 cells | tiles {}x{}x{} @ {}^3",
+                        "GPU fields {:.2f} MiB | cells {}x{}x{} | tiles {}x{}x{} @ {}^3",
                         static_cast<double>(
                             diagnostics.totalBytes) /
                             (1024.0 * 1024.0),
-                        diagnostics.resolution,
+                        diagnostics.resolutionX,
+                        diagnostics.resolutionY,
+                        diagnostics.resolutionZ,
                         diagnostics.tilesX,
                         diagnostics.tilesY,
                         diagnostics.tilesZ,
