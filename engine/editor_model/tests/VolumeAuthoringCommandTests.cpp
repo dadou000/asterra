@@ -102,6 +102,246 @@ int main()
             schema->properties.size() < 8U)
             return 3;
 
+        {
+            orbit::commands::CommandArguments sourceArgs;
+            sourceArgs.emplace(
+                "kind",
+                std::string{"Brush"});
+
+            registry.Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kAddVolumeSource,
+                sourceArgs);
+
+            if (selection.Ordered().size() != 1U)
+                return 20;
+
+            const auto brush =
+                selection.Ordered().front();
+
+            const auto firstInputs =
+                orbit::world_model::
+                    ResolveVolumeInputs(
+                        objects,
+                        volume);
+
+            if (firstInputs.size() != 1U ||
+                firstInputs.front().object != brush ||
+                firstInputs.front().kind !=
+                    static_cast<orbit::i64>(
+                        orbit::world_model::
+                            VolumeSourceKind::Brush))
+                return 21;
+
+            selection.Set(
+                std::span(
+                    &volume,
+                    1U));
+
+            orbit::commands::CommandArguments splineArgs;
+            splineArgs.emplace(
+                "kind",
+                std::string{"Spline"});
+
+            registry.Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kAddVolumeSource,
+                splineArgs);
+
+            const auto spline =
+                selection.Ordered().front();
+
+            auto ordered =
+                orbit::world_model::
+                    ResolveVolumeInputs(
+                        objects,
+                        volume);
+
+            if (ordered.size() != 2U ||
+                ordered[0].object != brush ||
+                ordered[1].object != spline)
+                return 22;
+
+            registry.Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kMoveVolumeInputUp);
+
+            ordered =
+                orbit::world_model::
+                    ResolveVolumeInputs(
+                        objects,
+                        volume);
+
+            if (ordered[0].object != spline ||
+                ordered[1].object != brush)
+                return 23;
+
+            const auto oldFingerprint =
+                ordered[0].fingerprint;
+            const auto oldBounds =
+                ordered[0].bounds;
+
+            commands.SetProperty(
+                spline,
+                orbit::world_model::
+                    kVolumeChildPositionMeters,
+                orbit::math::Double3{
+                    5.0, 2.0, -3.0});
+
+            const auto moved =
+                orbit::world_model::
+                    ResolveVolumeInputs(
+                        objects,
+                        volume);
+
+            const auto movedSpline =
+                std::find_if(
+                    moved.begin(),
+                    moved.end(),
+                    [spline](const auto& input)
+                    {
+                        return input.object ==
+                            spline;
+                    });
+
+            if (movedSpline == moved.end() ||
+                movedSpline->fingerprint ==
+                    oldFingerprint ||
+                movedSpline->bounds.minimumMeters ==
+                    oldBounds.minimumMeters)
+                return 24;
+
+            selection.Set(
+                std::span(
+                    &volume,
+                    1U));
+
+            orbit::commands::CommandArguments paintArgs;
+            paintArgs.emplace(
+                "position",
+                orbit::math::Double3{
+                    10.0, 0.0, 12.0});
+            paintArgs.emplace(
+                "radius",
+                3.0);
+            paintArgs.emplace(
+                "strength",
+                0.75);
+
+            registry.Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kPaintVolumeTerrainSource,
+                paintArgs);
+
+            const auto terrainStroke =
+                selection.Ordered().front();
+
+            const auto withStroke =
+                orbit::world_model::
+                    ResolveVolumeInputs(
+                        objects,
+                        volume);
+
+            const auto stroke =
+                std::find_if(
+                    withStroke.begin(),
+                    withStroke.end(),
+                    [terrainStroke](const auto& input)
+                    {
+                        return input.object ==
+                            terrainStroke;
+                    });
+
+            if (stroke == withStroke.end() ||
+                stroke->kind !=
+                    static_cast<orbit::i64>(
+                        orbit::world_model::
+                            VolumeSourceKind::Terrain) ||
+                !stroke->paintEnabled ||
+                stroke->shape !=
+                    orbit::world_model::
+                        VolumeSourceShape::
+                            TerrainPatch ||
+                stroke->radiusMeters != 3.0 ||
+                stroke->scalarValue != 0.75)
+                return 25;
+
+            registry.Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kRemoveVolumeInput);
+
+            if (objects.Find(
+                    terrainStroke).
+                    has_value())
+                return 26;
+
+            commands.Undo();
+
+            if (!objects.Find(
+                    terrainStroke).
+                    has_value())
+                return 27;
+
+            const auto restoredInputs =
+                orbit::world_model::
+                    ResolveVolumeInputs(
+                        objects,
+                        volume);
+
+            const auto restoredStroke =
+                std::find_if(
+                    restoredInputs.begin(),
+                    restoredInputs.end(),
+                    [terrainStroke](const auto& input)
+                    {
+                        return input.object ==
+                            terrainStroke;
+                    });
+
+            if (restoredStroke ==
+                    restoredInputs.end() ||
+                restoredStroke->scalarValue != 0.75)
+                return 28;
+
+            // Remove the input children again so the existing Volume-remove
+            // regression remains valid for a leaf-only CommandService delete.
+            selection.Set(
+                std::span(
+                    &terrainStroke,
+                    1U));
+            registry.Invoke(
+                orbit::editor_model::
+                    authoring_commands::
+                        kRemoveVolumeInput);
+
+            const scene::ObjectId sourceIds[]{
+                spline,
+                brush
+            };
+
+            for (const auto source :
+                 sourceIds)
+            {
+                const scene::ObjectId selectedSource[]{
+                    source};
+                selection.Set(selectedSource);
+                registry.Invoke(
+                    orbit::editor_model::
+                        authoring_commands::
+                            kRemoveVolumeInput);
+            }
+
+            selection.Set(
+                std::span(
+                    &volume,
+                    1U));
+        }
+
         if (!registry.Enablement(
                 orbit::editor_model::
                     authoring_commands::
