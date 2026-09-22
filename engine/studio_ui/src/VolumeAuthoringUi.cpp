@@ -594,6 +594,20 @@ void VolumeAuthoringUi::Draw(
                     }
                 }
 
+                if (local3D &&
+                    context.Selectable(
+                        "Show Selected Field Slice##volume-local3d-show-slice",
+                        settings.debugView ==
+                            volume_solver::
+                                SurfaceVolumeDebugView::
+                                    FieldSlice))
+                {
+                    settings.debugView =
+                        volume_solver::
+                            SurfaceVolumeDebugView::
+                                FieldSlice;
+                }
+
                 if (context.Selectable(
                         "Off##volume-debug-off",
                         settings.debugView ==
@@ -607,54 +621,59 @@ void VolumeAuthoringUi::Draw(
                                 Off;
                 }
 
-                if (context.Selectable(
-                        "Density Slice##volume-debug-density",
-                        local3D
-                            ? settings.debugView ==
-                                  volume_solver::
-                                      SurfaceVolumeDebugView::
-                                          FieldSlice &&
-                              settings.debugField ==
-                                  world_model::
-                                      VolumeField::Density
-                            : settings.debugView ==
-                                  volume_solver::
-                                      SurfaceVolumeDebugView::
-                                          Density))
+                if (!local3D)
                 {
-                    settings.debugView =
-                        local3D
-                            ? volume_solver::
-                                  SurfaceVolumeDebugView::
-                                      FieldSlice
-                            : volume_solver::
-                                  SurfaceVolumeDebugView::
-                                      Density;
+                    if (context.Selectable(
+                            "Density Slice##volume-debug-density",
+                            local3D
+                                ? settings.debugView ==
+                                      volume_solver::
+                                          SurfaceVolumeDebugView::
+                                              FieldSlice &&
+                                  settings.debugField ==
+                                      world_model::
+                                          VolumeField::Density
+                                : settings.debugView ==
+                                      volume_solver::
+                                          SurfaceVolumeDebugView::
+                                              Density))
+                    {
+                        settings.debugView =
+                            local3D
+                                ? volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          FieldSlice
+                                : volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          Density;
+                    }
+    
+                    if (context.Selectable(
+                            "Velocity Overlay##volume-debug-velocity",
+                            local3D
+                                ? settings.debugView ==
+                                      volume_solver::
+                                          SurfaceVolumeDebugView::
+                                              FieldSlice &&
+                                  settings.debugField ==
+                                      world_model::
+                                          VolumeField::Velocity
+                                : settings.debugView ==
+                                      volume_solver::
+                                          SurfaceVolumeDebugView::
+                                              Velocity))
+                    {
+                        settings.debugView =
+                            local3D
+                                ? volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          FieldSlice
+                                : volume_solver::
+                                      SurfaceVolumeDebugView::
+                                          Velocity;
+    
                 }
 
-                if (context.Selectable(
-                        "Velocity Overlay##volume-debug-velocity",
-                        local3D
-                            ? settings.debugView ==
-                                  volume_solver::
-                                      SurfaceVolumeDebugView::
-                                          FieldSlice &&
-                              settings.debugField ==
-                                  world_model::
-                                      VolumeField::Velocity
-                            : settings.debugView ==
-                                  volume_solver::
-                                      SurfaceVolumeDebugView::
-                                          Velocity))
-                {
-                    settings.debugView =
-                        local3D
-                            ? volume_solver::
-                                  SurfaceVolumeDebugView::
-                                      FieldSlice
-                            : volume_solver::
-                                  SurfaceVolumeDebugView::
-                                      Velocity;
                 }
 
                 i64 debugLayer =
