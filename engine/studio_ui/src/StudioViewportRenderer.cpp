@@ -2281,6 +2281,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       compactObjectRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       surfaceVolumeDebugRenderer_(device, compiler),
+      universalVolumeRenderer_(device, compiler),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
       materialEmissionSurfaceOverride_(device, compiler),
@@ -2324,6 +2325,24 @@ void StudioViewportRenderer::SetSurfaceVolumeSolverService(
     volume_solver::SurfaceVolumeSolverService* const solver) noexcept
 {
     surfaceVolumeSolver_ = solver;
+}
+
+volume_render::VolumeRenderRuntimeSettings&
+StudioViewportRenderer::VolumeRenderSettings(
+    const scene::ObjectId volume)
+{
+    return
+        universalVolumeRenderer_.
+            Settings(volume);
+}
+
+volume_render::VolumeRenderDiagnostics
+StudioViewportRenderer::VolumeRenderDiagnostics(
+    const scene::ObjectId volume) const noexcept
+{
+    return
+        universalVolumeRenderer_.
+            Diagnostics(volume);
 }
 
 void StudioViewportRenderer::SetVolumeSourceDebugVisualization(
