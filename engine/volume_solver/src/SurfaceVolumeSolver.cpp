@@ -152,6 +152,58 @@ void main(uint3 id : SV_DispatchThreadID)
 }
 )";
 
+constexpr const char* kInitializeInvalidShader = R"(
+[[vk::binding(0, 0)]]
+RWByteAddressBuffer g_field : register(u0);
+[[vk::binding(1, 0)]]
+ByteAddressBuffer g_residency : register(t1);
+
+struct PushConstants
+{
+    uint totalCells;
+    uint tileCellCount;
+    uint dwordsPerCell;
+    uint padding;
+};
+
+[[vk::push_constant]]
+PushConstants g_pc;
+
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= g_pc.totalCells)
+        return;
+
+    const uint slot =
+        id.x /
+        g_pc.tileCellCount;
+
+    const uint valid =
+        g_residency.Load(
+            slot * 32u + 20u);
+
+    if (valid != 0u)
+        return;
+
+    const uint base =
+        id.x *
+        g_pc.dwordsPerCell *
+        4u;
+
+    [loop]
+    for (uint dword = 0u;
+         dword <
+             g_pc.dwordsPerCell;
+         ++dword)
+    {
+        g_field.Store(
+            base + dword * 4u,
+            0u);
+    }
+}
+)";
+
 constexpr const char* kVelocityShader = R"(
 [[vk::binding(0, 0)]]
 ByteAddressBuffer g_velocityIn : register(t0);
@@ -1289,6 +1341,13 @@ public:
                 kClearShader,
                 1U,
                 1U);
+        initializeInvalidPipeline =
+            CompileCompute(
+                device,
+                compiler,
+                kInitializeInvalidShader,
+                4U,
+                2U);
         velocityPipeline =
             CompileCompute(
                 device,
@@ -1656,6 +1715,8 @@ public:
     std::unique_ptr<rhi::ComputePipeline>
         clearPipeline;
     std::unique_ptr<rhi::ComputePipeline>
+        initializeInvalidPipeline;
+    std::unique_ptr<rhi::ComputePipeline>
         velocityPipeline;
     std::unique_ptr<rhi::ComputePipeline>
         scalarPipeline;
@@ -1932,6 +1993,93 @@ void SurfaceVolumeSolverService::AddPasses(
             true;
         entry.diagnostics.resetThisFrame =
             true;
+    }
+    else if (fieldDiagnostics.pendingTiles >
+             0U)
+    {
+        for (const auto& channel :
+             fieldDiagnostics.channels)
+        {
+            const auto handle =
+                FindFieldHandle(
+                    fields,
+                    channel.field);
+
+            if (!handle.IsValid())
+            {
+                continue;
+            }
+
+            graph.AddPass(
+                std::string(prefix) +
+                    ".InitializeInvalid." +
+                    std::to_string(
+                        static_cast<u64>(
+                            channel.field)),
+                {},
+                {
+                    {
+                        .buffer = handle,
+                        .state =
+                            rhi::ResourceState::
+                                UnorderedAccess,
+                        .access =
+                            render_graph::Access::
+                                Write
+                    },
+                    {
+                        .buffer =
+                            fields.residency,
+                        .state =
+                            rhi::ResourceState::
+                                ShaderResource,
+                        .access =
+                            render_graph::Access::
+                                Read
+                    }
+                },
+                [this,
+                 handle,
+                 residency =
+                     fields.residency,
+                 totalCells,
+                 tileCellCount,
+                 dwordsPerCell =
+                     channel.bytesPerCell /
+                     4U](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources& resources)
+                {
+                    const std::array<u32,4>
+                        constants{
+                            totalCells,
+                            tileCellCount,
+                            dwordsPerCell,
+                            0U
+                        };
+
+                    commands.SetComputePipeline(
+                        *impl_->
+                            initializeInvalidPipeline);
+                    commands.SetComputeBuffer(
+                        0U,
+                        resources.Buffer(
+                            handle));
+                    commands.SetComputeBuffer(
+                        1U,
+                        resources.Buffer(
+                            residency));
+                    commands.SetComputeConstants(
+                        constants);
+                    commands.Dispatch(
+                        (totalCells +
+                         kThreadGroupSize -
+                         1U) /
+                            kThreadGroupSize,
+                        1U,
+                        1U);
+                });
+        }
     }
 
     if (!shouldStep)
