@@ -2224,39 +2224,18 @@ ResolveAuthoredEmissiveVolumes(
             continue;
         }
 
-        const f64 radius =
-            std::sqrt(
-                domain->halfExtentsMeters.x *
-                    domain->halfExtentsMeters.x +
-                domain->halfExtentsMeters.y *
-                    domain->halfExtentsMeters.y +
-                domain->halfExtentsMeters.z *
-                    domain->halfExtentsMeters.z);
+        const auto source =
+            volume_render::
+                BuildEmissiveVolumeSource(
+                    *domain,
+                    static_cast<f32>(
+                        authoredEmission));
 
-        result.push_back({
-            .centerInFrameMeters =
-                domain->centerMeters,
-            .radiusMeters =
-                static_cast<f32>(
-                    std::max(
-                        radius,
-                        0.05)),
-            .emissionLinear =
-                domain->emissionColor,
-            .intensityScale =
-                static_cast<f32>(
-                    authoredEmission) *
-                domain->emissionScale *
-                domain->giEmissionScale,
-            .influenceRangeMeters =
-                static_cast<f32>(
-                    std::max(
-                        radius * 12.0,
-                        1.0)),
-            .stableId =
-                volumeId.high ^
-                volumeId.low
-        });
+        if (source.has_value())
+        {
+            result.push_back(
+                *source);
+        }
     }
 
     return result;
