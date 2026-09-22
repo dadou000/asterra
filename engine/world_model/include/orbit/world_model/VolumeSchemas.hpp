@@ -41,6 +41,8 @@ inline constexpr schema::PropertyId kVolumeFieldMask{
     .high = 0x4f52424954564f4cULL, .low = 0x4649454c444d534bULL};
 inline constexpr schema::PropertyId kVolumeResolution{
     .high = 0x4f52424954564f4cULL, .low = 0x5245534f4c555401ULL};
+inline constexpr schema::PropertyId kVolumeSurfaceLayers{
+    .high = 0x4f52424954564f4cULL, .low = 0x535552464c415901ULL};
 
 inline constexpr schema::PropertyId kVolumeChildEnabled{
     .high = 0x4f52424954564f4cULL, .low = 0x4348454e41424c01ULL};
@@ -177,6 +179,7 @@ struct ResolvedVolumeDomain
         VolumeRepresentationMode::Auto};
     u64 fieldMask{0U};
     u32 resolution{64U};
+    u32 surfaceLayers{4U};
     u32 sourceCount{0U};
     u32 effectorCount{0U};
 };
