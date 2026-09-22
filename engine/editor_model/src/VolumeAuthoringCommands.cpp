@@ -627,6 +627,7 @@ void RegisterVolumeCommands(
                     commandService.SetProperty(volume, world_model::kVolumeRepresentationMode, static_cast<i64>(preset.representation));
                     commandService.SetProperty(volume, world_model::kVolumeFieldMask, static_cast<i64>(preset.fields));
                     commandService.SetProperty(volume, world_model::kVolumeResolution, i64{64});
+                    commandService.SetProperty(volume, world_model::kVolumeSurfaceLayers, i64{4});
 
                     if (owns)
                         commandService.CommitTransaction();
