@@ -59,7 +59,9 @@ struct ResidencyUpdate
 
 struct VolumeFieldDiagnostics
 {
-    u32 resolution{0U};
+    u32 resolutionX{0U};
+    u32 resolutionY{0U};
+    u32 resolutionZ{0U};
     u32 tileEdge{0U};
     u32 tilesX{0U};
     u32 tilesY{0U};
@@ -156,7 +158,9 @@ private:
         math::Double3 centerMeters) const;
 
     rhi::Device* device_{nullptr};
-    u32 resolution_{64U};
+    u32 resolutionX_{64U};
+    u32 resolutionY_{64U};
+    u32 resolutionZ_{64U};
     u32 tileEdge_{8U};
     u32 tilesX_{0U};
     u32 tilesY_{0U};
