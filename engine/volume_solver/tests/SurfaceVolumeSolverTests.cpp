@@ -142,5 +142,70 @@ int main()
         Check(std::isfinite(cell.velocity.z));
     }
 
+    SurfaceVolumeReferenceConfig local3DConfig{
+        .width = 3U,
+        .height = 3U,
+        .layers = 3U,
+        .cellSizeX = 1.0F,
+        .cellSizeY = 1.0F,
+        .cellSizeZ = 1.0F,
+        .deltaSeconds = 0.2F
+    };
+
+    std::vector<LocalVolumeReferenceCell>
+        localInput(27U);
+    std::vector<LocalVolumeReferenceCell>
+        localOutput(27U);
+
+    const auto localIndex =
+        [&](const u32 x,
+            const u32 y,
+            const u32 z)
+        {
+            return
+                (static_cast<std::size_t>(z) *
+                     local3DConfig.layers +
+                 y) *
+                    local3DConfig.width +
+                x;
+        };
+
+    const auto center =
+        localIndex(1U,1U,1U);
+    const auto above =
+        localIndex(1U,2U,1U);
+
+    localInput[center].density = 1.0F;
+    localInput[center].temperature = 10.0F;
+
+    for (auto& cell :
+         localInput)
+    {
+        cell.velocity = {
+            0.0F, 1.0F, 0.0F};
+    }
+
+    StepLocalVolumeReference(
+        localInput,
+        localOutput,
+        local3DConfig);
+
+    // True vertical transport: both independent scalar channels move along Y.
+    Check(localOutput[center].density <
+        localInput[center].density);
+    Check(localOutput[above].density > 0.0F);
+    Check(localOutput[center].temperature <
+        localInput[center].temperature);
+    Check(localOutput[above].temperature > 0.0F);
+
+    // Velocity remains a full 3-component transported field.
+    Check(std::isfinite(
+        localOutput[center].velocity.x));
+    Check(std::isfinite(
+        localOutput[center].velocity.y));
+    Check(std::isfinite(
+        localOutput[center].velocity.z));
+    Check(localOutput[center].velocity.y > 0.0F);
+
     return 0;
 }
