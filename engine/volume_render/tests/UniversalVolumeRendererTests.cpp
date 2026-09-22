@@ -120,6 +120,37 @@ int main()
     }
 
     {
+        const auto result =
+            IntegrateHomogeneousVolume(
+                0.0F,
+                2.0F,
+                0.0F,
+                0.0F,
+                {1.0F,1.0F,1.0F},
+                {0.0F,0.0F,0.0F},
+                {2.0F,1.0F,0.5F},
+                3.0F,
+                0.25F);
+
+        Check(
+            Near(
+                result.transmittance,
+                1.0F));
+        Check(
+            Near(
+                result.emittedRadiance.x,
+                3.0F));
+        Check(
+            Near(
+                result.emittedRadiance.y,
+                1.5F));
+        Check(
+            Near(
+                result.emittedRadiance.z,
+                0.75F));
+    }
+
+    {
         const float isotropic =
             HenyeyGreensteinPhase(
                 0.0F,
