@@ -210,8 +210,12 @@ int main()
             if (movedSpline == moved.end() ||
                 movedSpline->fingerprint ==
                     oldFingerprint ||
-                movedSpline->bounds.minimumMeters ==
-                    oldBounds.minimumMeters)
+                (movedSpline->bounds.minimumMeters.x ==
+                     oldBounds.minimumMeters.x &&
+                 movedSpline->bounds.minimumMeters.y ==
+                     oldBounds.minimumMeters.y &&
+                 movedSpline->bounds.minimumMeters.z ==
+                     oldBounds.minimumMeters.z))
                 return 24;
 
             selection.Set(
@@ -319,7 +323,7 @@ int main()
                     authoring_commands::
                         kRemoveVolumeInput);
 
-            const scene::ObjectId sourceIds[]{
+            const orbit::scene::ObjectId sourceIds[]{
                 spline,
                 brush
             };
@@ -327,7 +331,7 @@ int main()
             for (const auto source :
                  sourceIds)
             {
-                const scene::ObjectId selectedSource[]{
+                const orbit::scene::ObjectId selectedSource[]{
                     source};
                 selection.Set(selectedSource);
                 registry.Invoke(
