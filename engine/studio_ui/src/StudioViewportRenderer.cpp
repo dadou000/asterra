@@ -1006,6 +1006,95 @@ SelectedVolumeDomainLines(
         });
     }
 
+    if (volume->solverPolicy ==
+        world_model::
+            VolumeSolverPolicy::Local3D)
+    {
+        const f32 handleSize =
+            static_cast<f32>(
+                std::max({
+                    half.x,
+                    half.y,
+                    half.z,
+                    1.0}) *
+                0.035);
+
+        const math::Float4 handleColor{
+            1.0F, 0.72F, 0.18F, 1.0F};
+
+        const auto addHandle =
+            [&](const math::Float3 point)
+            {
+                lines.push_back({
+                    .start =
+                        point +
+                        math::Float3{
+                            -handleSize,
+                            0.0F,
+                            0.0F},
+                    .end =
+                        point +
+                        math::Float3{
+                            handleSize,
+                            0.0F,
+                            0.0F},
+                    .color = handleColor
+                });
+                lines.push_back({
+                    .start =
+                        point +
+                        math::Float3{
+                            0.0F,
+                            -handleSize,
+                            0.0F},
+                    .end =
+                        point +
+                        math::Float3{
+                            0.0F,
+                            handleSize,
+                            0.0F},
+                    .color = handleColor
+                });
+                lines.push_back({
+                    .start =
+                        point +
+                        math::Float3{
+                            0.0F,
+                            0.0F,
+                            -handleSize},
+                    .end =
+                        point +
+                        math::Float3{
+                            0.0F,
+                            0.0F,
+                            handleSize},
+                    .color = handleColor
+                });
+            };
+
+        for (const auto& point :
+             p)
+        {
+            addHandle(point);
+        }
+
+        const std::array<math::Float3,6>
+            faceHandles{
+                relative( half.x,0.0,0.0),
+                relative(-half.x,0.0,0.0),
+                relative(0.0, half.y,0.0),
+                relative(0.0,-half.y,0.0),
+                relative(0.0,0.0, half.z),
+                relative(0.0,0.0,-half.z)
+            };
+
+        for (const auto& point :
+             faceHandles)
+        {
+            addHandle(point);
+        }
+    }
+
     return lines;
 }
 
