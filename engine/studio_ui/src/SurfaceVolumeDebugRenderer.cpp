@@ -21,11 +21,10 @@ struct Push
     float4 projection;
     float4 forward;
     float4 up;
-
-    float4 cameraAndMode;
+    float4 camera;
     float4 cellSizeAndScale;
-
     uint4 layout;
+    int4 sliceMeta;
 };
 
 [[vk::push_constant]]
@@ -37,7 +36,7 @@ struct VSOutput
     float4 color : COLOR0;
 };
 
-float4 Project(float3 relative, float4 color)
+float4 Project(float3 relative)
 {
     const float3 forward =
         normalize(g.forward.xyz);
@@ -60,12 +59,8 @@ float4 Project(float3 relative, float4 color)
     if (z <= g.projection.z ||
         z >= g.projection.w)
     {
-        return
-            float4(
-                2.0,
-                2.0,
-                1.0,
-                1.0);
+        return float4(
+            2.0, 2.0, 1.0, 1.0);
     }
 
     const float x =
@@ -73,16 +68,12 @@ float4 Project(float3 relative, float4 color)
     const float y =
         dot(relative, cameraUp);
 
-    const float aspect =
-        max(g.projection.x, 0.001);
-    const float tanHalfFov =
-        max(g.projection.y, 0.001);
-
     return float4(
         x /
-            (aspect * tanHalfFov),
+            (max(g.projection.x, 0.001) *
+             max(g.projection.y, 0.001)),
         -y /
-            tanHalfFov,
+            max(g.projection.y, 0.001),
         z * 0.5,
         z);
 }
@@ -93,24 +84,19 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     const uint tileEdge =
         max(g.layout.x, 1u);
-    const uint tileCellCount =
-        tileEdge *
-        tileEdge *
-        tileEdge;
     const uint residentTiles =
         g.layout.y;
-    const uint debugLayer =
+    const uint debugSlice =
         g.layout.z;
-    const uint viewMode =
-        g.layout.w;
+    const bool vectorField =
+        g.layout.w != 0u;
 
     const uint lineIndex =
         vertexId / 2u;
     const uint endpoint =
         vertexId & 1u;
     const uint cellsPerTileSlice =
-        tileEdge *
-        tileEdge;
+        tileEdge * tileEdge;
     const uint slot =
         lineIndex /
         cellsPerTileSlice;
@@ -127,10 +113,10 @@ VSOutput main(uint vertexId : SV_VertexID)
         lineIndex -
         slot *
             cellsPerTileSlice;
-    const uint localX =
+    const uint u =
         sliceIndex %
         tileEdge;
-    const uint localZ =
+    const uint v =
         sliceIndex /
         tileEdge;
 
@@ -139,40 +125,98 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     const int3 tile =
         int3(
-            asint(
-                g_residency.Load(
-                    residencyBase + 0u)),
-            asint(
-                g_residency.Load(
-                    residencyBase + 4u)),
-            asint(
-                g_residency.Load(
-                    residencyBase + 8u)));
+            asint(g_residency.Load(
+                residencyBase + 0u)),
+            asint(g_residency.Load(
+                residencyBase + 4u)),
+            asint(g_residency.Load(
+                residencyBase + 8u)));
 
-    const bool resident =
-        g_residency.Load(
-            residencyBase + 16u) !=
-        0u;
-
-    const uint layerTile =
-        debugLayer /
-        tileEdge;
-    const uint localY =
-        debugLayer %
-        tileEdge;
-    const int minimumTileY =
-        asint(g.cameraAndMode.w);
-
-    if (!resident ||
-        tile.y !=
-            minimumTileY +
-            int(layerTile))
+    if (g_residency.Load(
+            residencyBase + 16u) == 0u)
     {
         output.position =
             float4(2.0,2.0,1.0,1.0);
         output.color = 0.0;
         return output;
     }
+
+    const uint axis =
+        uint(g.sliceMeta.w);
+    const uint tileOffset =
+        debugSlice /
+        tileEdge;
+    const uint localSlice =
+        debugSlice %
+        tileEdge;
+
+    const int3 minimumTile =
+        g.sliceMeta.xyz;
+
+    const int targetTile =
+        axis == 0u
+            ? minimumTile.x +
+                int(tileOffset)
+            : axis == 1u
+                ? minimumTile.y +
+                    int(tileOffset)
+                : minimumTile.z +
+                    int(tileOffset);
+
+    const int actualTile =
+        axis == 0u
+            ? tile.x
+            : axis == 1u
+                ? tile.y
+                : tile.z;
+
+    if (actualTile != targetTile)
+    {
+        output.position =
+            float4(2.0,2.0,1.0,1.0);
+        output.color = 0.0;
+        return output;
+    }
+
+    uint3 local;
+
+    if (axis == 0u)
+    {
+        local = uint3(
+            localSlice,
+            u,
+            v);
+    }
+    else if (axis == 1u)
+    {
+        local = uint3(
+            u,
+            localSlice,
+            v);
+    }
+    else
+    {
+        local = uint3(
+            u,
+            v,
+            localSlice);
+    }
+
+    const uint localIndex =
+        local.z *
+            tileEdge *
+            tileEdge +
+        local.y *
+            tileEdge +
+        local.x;
+    const uint tileCellCount =
+        tileEdge *
+        tileEdge *
+        tileEdge;
+    const uint physicalIndex =
+        slot *
+            tileCellCount +
+        localIndex;
 
     const float3 cellSize =
         g.cellSizeAndScale.xyz;
@@ -182,37 +226,40 @@ VSOutput main(uint vertexId : SV_VertexID)
     const float3 world =
         (float3(tile) *
              float(tileEdge) +
-         float3(
-             localX,
-             localY,
-             localZ) +
+         float3(local) +
          0.5) *
         cellSize;
 
-    const uint localIndex =
-        localZ *
-            tileEdge *
-            tileEdge +
-        localY *
-            tileEdge +
-        localX;
-    const uint physicalIndex =
-        slot *
-            tileCellCount +
-        localIndex;
-
     float3 endWorld =
         world;
-    float4 color =
-        float4(
-            0.15,
-            0.80,
-            1.0,
-            0.90);
+    float4 color;
 
-    if (viewMode == 1u)
+    if (vectorField)
     {
-        const float density =
+        const uint address =
+            physicalIndex *
+            16u;
+
+        const float3 value =
+            float3(
+                asfloat(g_field.Load(
+                    address + 0u)),
+                asfloat(g_field.Load(
+                    address + 4u)),
+                asfloat(g_field.Load(
+                    address + 8u)));
+
+        endWorld += value * scale;
+        color =
+            float4(
+                1.0,
+                0.62,
+                0.12,
+                0.95);
+    }
+    else
+    {
+        const float value =
             max(
                 asfloat(
                     g_field.Load(
@@ -220,53 +267,26 @@ VSOutput main(uint vertexId : SV_VertexID)
                             4u)),
                 0.0);
 
-        endWorld.y +=
-            min(
-                density,
-                8.0) *
+        const float magnitude =
+            min(value, 8.0) *
             scale;
+
+        if (axis == 0u)
+            endWorld.x += magnitude;
+        else if (axis == 1u)
+            endWorld.y += magnitude;
+        else
+            endWorld.z += magnitude;
 
         color =
             float4(
-                0.20,
-                0.85,
+                0.18,
+                0.84,
                 1.0,
                 saturate(
-                    0.25 +
-                    density * 0.25));
+                    0.28 +
+                    value * 0.22));
     }
-    else
-    {
-        const uint address =
-            physicalIndex *
-            16u;
-
-        const float3 velocity =
-            float3(
-                asfloat(
-                    g_field.Load(
-                        address + 0u)),
-                asfloat(
-                    g_field.Load(
-                        address + 4u)),
-                asfloat(
-                    g_field.Load(
-                        address + 8u)));
-
-        endWorld +=
-            velocity *
-            scale;
-
-        color =
-            float4(
-                1.0,
-                0.65,
-                0.12,
-                0.95);
-    }
-
-    const float3 cameraPosition =
-        g.cameraAndMode.xyz;
 
     const float3 point =
         endpoint == 0u
@@ -276,8 +296,7 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.position =
         Project(
             point -
-            cameraPosition,
-            color);
+            g.camera.xyz);
     output.color =
         color;
 
@@ -323,7 +342,7 @@ SurfaceVolumeDebugRenderer::SurfaceVolumeDebugRenderer(
         pixel.bytecode.empty())
     {
         throw std::runtime_error(
-            "Orbit failed to compile M33 field debug shaders.");
+            "Orbit failed to compile M34 field debug shaders.");
     }
 
     pipeline_ =
@@ -338,7 +357,7 @@ SurfaceVolumeDebugRenderer::SurfaceVolumeDebugRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 24U,
+            .pushConstantDwords = 28U,
             .shaderResourceBuffers = 2U,
             .sampledTextures = 0U,
             .topology =
@@ -369,6 +388,8 @@ void SurfaceVolumeDebugRenderer::Draw(
     const world_model::ResolvedVolumeDomain& domain,
     const volume_fields::VolumeFieldDiagnostics& fields,
     const volume_solver::SurfaceVolumeDebugView view,
+    const volume_solver::VolumeSliceAxis sliceAxis,
+    const world_model::VolumeField fieldChannel,
     const u32 debugLayer,
     rhi::Buffer& field,
     rhi::Buffer& residency)
@@ -393,35 +414,74 @@ void SurfaceVolumeDebugRenderer::Draw(
         static_cast<f32>(
             domain.halfExtentsMeters.x *
             2.0 /
-            static_cast<f64>(
-                std::max(
-                    fields.resolutionX,
-                    1U)));
+            std::max<f64>(
+                fields.resolutionX,
+                1U));
     const f32 cellY =
         static_cast<f32>(
             domain.halfExtentsMeters.y *
             2.0 /
-            static_cast<f64>(
-                std::max(
-                    fields.resolutionY,
-                    1U)));
+            std::max<f64>(
+                fields.resolutionY,
+                1U));
     const f32 cellZ =
         static_cast<f32>(
             domain.halfExtentsMeters.z *
             2.0 /
-            static_cast<f64>(
-                std::max(
-                    fields.resolutionZ,
-                    1U)));
+            std::max<f64>(
+                fields.resolutionZ,
+                1U));
 
-    const i32 minimumTileY =
+    const math::Double3 tileSize{
+        static_cast<f64>(cellX) *
+            fields.tileEdge,
+        static_cast<f64>(cellY) *
+            fields.tileEdge,
+        static_cast<f64>(cellZ) *
+            fields.tileEdge
+    };
+
+    const math::Double3 minimum{
+        domain.centerMeters.x -
+            domain.halfExtentsMeters.x,
+        domain.centerMeters.y -
+            domain.halfExtentsMeters.y,
+        domain.centerMeters.z -
+            domain.halfExtentsMeters.z
+    };
+
+    const std::array<i32,3> minimumTile{
         static_cast<i32>(
             std::floor(
-                (domain.centerMeters.y -
-                 domain.halfExtentsMeters.y) /
-                (static_cast<f64>(
-                     cellY) *
-                 fields.tileEdge)));
+                minimum.x /
+                tileSize.x)),
+        static_cast<i32>(
+            std::floor(
+                minimum.y /
+                tileSize.y)),
+        static_cast<i32>(
+            std::floor(
+                minimum.z /
+                tileSize.z))
+    };
+
+    const u32 axis =
+        static_cast<u32>(
+            sliceAxis);
+
+    const std::array<u32,3> resolution{
+        fields.resolutionX,
+        fields.resolutionY,
+        fields.resolutionZ
+    };
+
+    const u32 clampedSlice =
+        std::min(
+            debugLayer,
+            std::max(
+                resolution[axis],
+                1U) -
+                1U);
 
     const auto bits =
         [](const f32 value)
@@ -431,7 +491,7 @@ void SurfaceVolumeDebugRenderer::Draw(
                     value);
         };
 
-    std::array<u32,24> constants{};
+    std::array<u32,28> constants{};
 
     constants[0] =
         bits(
@@ -464,40 +524,51 @@ void SurfaceVolumeDebugRenderer::Draw(
         bits(
             static_cast<f32>(
                 camera.localPositionMeters.z));
-    constants[15] =
-        std::bit_cast<u32>(
-            minimumTileY);
 
     constants[16] = bits(cellX);
     constants[17] = bits(cellY);
     constants[18] = bits(cellZ);
     constants[19] =
         bits(
-            view ==
-                    volume_solver::
-                        SurfaceVolumeDebugView::
-                            Density
-                ? std::max(
-                      cellY,
-                      0.25F)
-                : 0.35F);
+            volume_fields::FieldKind(
+                fieldChannel) ==
+                    volume_fields::
+                        FieldValueKind::Vector3
+                ? 0.35F
+                : std::max(
+                      std::min({
+                          cellX,
+                          cellY,
+                          cellZ}),
+                      0.20F));
 
     constants[20] =
         fields.tileEdge;
     constants[21] =
         fields.residentTiles;
     constants[22] =
-        std::min(
-            debugLayer,
-            std::max(
-                fields.resolutionY,
-                1U) -
-                1U);
+        clampedSlice;
     constants[23] =
-        static_cast<u32>(view);
+        volume_fields::FieldKind(
+            fieldChannel) ==
+                volume_fields::
+                    FieldValueKind::Vector3
+            ? 1U
+            : 0U;
 
-    commands.SetRenderTarget(
-        target);
+    constants[24] =
+        std::bit_cast<u32>(
+            minimumTile[0]);
+    constants[25] =
+        std::bit_cast<u32>(
+            minimumTile[1]);
+    constants[26] =
+        std::bit_cast<u32>(
+            minimumTile[2]);
+    constants[27] =
+        axis;
+
+    commands.SetRenderTarget(target);
     commands.SetViewport({
         .x = 0.0F,
         .y = 0.0F,
@@ -516,7 +587,6 @@ void SurfaceVolumeDebugRenderer::Draw(
         .bottom =
             static_cast<i32>(height)
     });
-
     commands.SetGraphicsPipeline(
         *pipeline_);
     commands.SetGraphicsConstants(
