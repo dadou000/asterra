@@ -2047,6 +2047,221 @@ ResolveStudioDirectLight(
 }
 
 
+[[nodiscard]] std::vector<lighting::ResolvedLocalLight>
+ResolveStudioLocalLights(
+    studio_session::StudioSession& session,
+    const lighting::LightingView& lightingView,
+    const std::optional<scene::ObjectId> root)
+{
+    const auto authored =
+        world_model::ResolveAuthoredLocalLights(
+            session.World().Objects(),
+            root);
+
+    std::vector<lighting::ResolvedLocalLight>
+        result;
+    result.reserve(
+        authored.size());
+
+    constexpr f64 kDegreesToRadians =
+        0.017453292519943295769;
+
+    for (const auto& item : authored)
+    {
+        const lighting::LocalLight light{
+            .type =
+                item.kind ==
+                        world_model::
+                            AuthoredLightKind::Spot
+                    ? lighting::
+                          LocalLightType::Spot
+                    : lighting::
+                          LocalLightType::Point,
+            .positionInFrameMeters =
+                item.positionMeters,
+            .direction = {
+                static_cast<f32>(
+                    item.direction.x),
+                static_cast<f32>(
+                    item.direction.y),
+                static_cast<f32>(
+                    item.direction.z)
+            },
+            .colorLinear = {
+                static_cast<f32>(
+                    item.colorLinear.x),
+                static_cast<f32>(
+                    item.colorLinear.y),
+                static_cast<f32>(
+                    item.colorLinear.z)
+            },
+            .luminousFluxLumens =
+                static_cast<f32>(
+                    item.luminousFluxLumens),
+            .rangeMeters =
+                static_cast<f32>(
+                    item.rangeMeters),
+            .innerConeRadians =
+                static_cast<f32>(
+                    item.innerConeDegrees *
+                    kDegreesToRadians),
+            .outerConeRadians =
+                static_cast<f32>(
+                    item.outerConeDegrees *
+                    kDegreesToRadians),
+            .stableId =
+                item.object.high ^
+                item.object.low
+        };
+
+        result.push_back(
+            lighting::ResolveLocalLight(
+                light,
+                lightingView));
+    }
+
+    return result;
+}
+
+[[nodiscard]] std::vector<scene::ObjectId>
+CollectVolumeObjects(
+    const scene::ObjectStore& objects)
+{
+    std::vector<scene::ObjectId>
+        result;
+    std::vector<scene::ObjectRecord>
+        pending =
+            objects.Roots();
+
+    while (!pending.empty())
+    {
+        const auto current =
+            pending.back();
+        pending.pop_back();
+
+        if (current.type ==
+            world_model::kVolumeType)
+        {
+            result.push_back(
+                current.id);
+        }
+
+        const auto children =
+            objects.Children(
+                current.id);
+
+        pending.insert(
+            pending.end(),
+            children.begin(),
+            children.end());
+    }
+
+    return result;
+}
+
+[[nodiscard]] std::vector<lighting::EmissiveVolumeSource>
+ResolveAuthoredEmissiveVolumes(
+    const scene::ObjectStore& objects)
+{
+    std::vector<lighting::EmissiveVolumeSource>
+        result;
+
+    constexpr u64 kEmissionBit =
+        static_cast<u64>(
+            world_model::
+                VolumeField::Emission);
+
+    for (const auto volumeId :
+         CollectVolumeObjects(objects))
+    {
+        const auto domain =
+            world_model::ResolveVolumeDomain(
+                objects,
+                volumeId);
+
+        if (!domain.has_value() ||
+            !domain->enabled ||
+            !domain->renderEnabled ||
+            (domain->fieldMask &
+             kEmissionBit) == 0U ||
+            domain->emissionScale <= 0.0F ||
+            domain->giEmissionScale <= 0.0F)
+        {
+            continue;
+        }
+
+        f64 authoredEmission = 0.0;
+
+        for (const auto& input :
+             world_model::ResolveVolumeInputs(
+                 objects,
+                 volumeId))
+        {
+            if (!input.enabled ||
+                input.role !=
+                    world_model::
+                        VolumeInputRole::Source ||
+                (input.fieldMask &
+                 kEmissionBit) == 0U)
+            {
+                continue;
+            }
+
+            authoredEmission +=
+                std::max(
+                    input.scalarValue,
+                    0.0);
+        }
+
+        if (authoredEmission <= 0.0 &&
+            domain->preset == "Fire")
+        {
+            authoredEmission = 1.0;
+        }
+
+        if (authoredEmission <= 0.0)
+        {
+            continue;
+        }
+
+        const f64 radius =
+            std::sqrt(
+                domain->halfExtentsMeters.x *
+                    domain->halfExtentsMeters.x +
+                domain->halfExtentsMeters.y *
+                    domain->halfExtentsMeters.y +
+                domain->halfExtentsMeters.z *
+                    domain->halfExtentsMeters.z);
+
+        result.push_back({
+            .centerInFrameMeters =
+                domain->centerMeters,
+            .radiusMeters =
+                static_cast<f32>(
+                    std::max(
+                        radius,
+                        0.05)),
+            .emissionLinear =
+                domain->emissionColor,
+            .intensityScale =
+                static_cast<f32>(
+                    authoredEmission) *
+                domain->emissionScale *
+                domain->giEmissionScale,
+            .influenceRangeMeters =
+                static_cast<f32>(
+                    std::max(
+                        radius * 12.0,
+                        1.0)),
+            .stableId =
+                volumeId.high ^
+                volumeId.low
+        });
+    }
+
+    return result;
+}
+
 [[nodiscard]] editor_ui::PreviewMaterial
 ResolveRuntimeMaterialAsset(
     content::ContentService& content,
