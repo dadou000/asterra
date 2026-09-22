@@ -65,9 +65,11 @@ SelectedVolumeId(
 VolumeAuthoringUi::VolumeAuthoringUi(
     studio_session::StudioSession& session,
     volume_fields::VolumeFieldStorageService& fields,
+    volume_solver::SurfaceVolumeSolverService& solver,
     StudioViewportRenderer& renderer) noexcept
     : session_(&session),
       fields_(&fields),
+      solver_(&solver),
       renderer_(&renderer)
 {
 }
