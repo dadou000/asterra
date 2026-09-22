@@ -653,6 +653,284 @@ SelectedLocalLightGizmoLines(
 
 
 [[nodiscard]] std::vector<editor_ui::PreviewLine>
+VolumeInputGizmoLines(
+    studio_session::StudioSession& session,
+    const render_view::CameraState& camera,
+    const bool showAll)
+{
+    std::vector<editor_ui::PreviewLine> lines;
+
+    if (!session.World().HasWorld() ||
+        session.World().Selection().Ordered().size() != 1U)
+    {
+        return lines;
+    }
+
+    const auto selected =
+        session.World().Selection().Ordered().front();
+    const auto selectedRecord =
+        session.World().Objects().Find(
+            selected);
+
+    if (!selectedRecord.has_value())
+    {
+        return lines;
+    }
+
+    std::optional<scene::ObjectId> volumeId;
+
+    if (selectedRecord->type ==
+        world_model::kVolumeType)
+    {
+        volumeId =
+            selectedRecord->id;
+    }
+    else if ((selectedRecord->type ==
+                  world_model::kVolumeSourceType ||
+              selectedRecord->type ==
+                  world_model::kVolumeEffectorType) &&
+             selectedRecord->parent.has_value())
+    {
+        volumeId =
+            selectedRecord->parent;
+    }
+
+    if (!volumeId.has_value())
+    {
+        return lines;
+    }
+
+    const auto inputs =
+        world_model::ResolveVolumeInputs(
+            session.World().Objects(),
+            *volumeId);
+
+    const auto relative =
+        [&](const math::Double3 point)
+        {
+            return math::Float3{
+                static_cast<f32>(
+                    point.x -
+                    camera.localPositionMeters.x),
+                static_cast<f32>(
+                    point.y -
+                    camera.localPositionMeters.y),
+                static_cast<f32>(
+                    point.z -
+                    camera.localPositionMeters.z)
+            };
+        };
+
+    for (const auto& input :
+         inputs)
+    {
+        if (!showAll &&
+            input.object != selected)
+        {
+            continue;
+        }
+
+        const math::Float4 color =
+            input.role ==
+                    world_model::
+                        VolumeInputRole::Source
+                ? math::Float4{
+                      0.20F, 0.95F, 0.72F, 0.95F}
+                : math::Float4{
+                      1.0F, 0.48F, 0.18F, 0.95F};
+
+        const auto add =
+            [&lines, color](
+                const math::Double3 a,
+                const math::Double3 b)
+            {
+                lines.push_back({
+                    .start = {
+                        static_cast<f32>(a.x),
+                        static_cast<f32>(a.y),
+                        static_cast<f32>(a.z)
+                    },
+                    .end = {
+                        static_cast<f32>(b.x),
+                        static_cast<f32>(b.y),
+                        static_cast<f32>(b.z)
+                    },
+                    .color = color
+                });
+            };
+
+        const auto center =
+            relative(
+                input.positionMeters);
+        const f32 marker =
+            static_cast<f32>(
+                std::max(
+                    input.radiusMeters * 0.2,
+                    0.25));
+
+        lines.push_back({
+            .start = center + math::Float3{-marker,0.0F,0.0F},
+            .end = center + math::Float3{marker,0.0F,0.0F},
+            .color = color
+        });
+        lines.push_back({
+            .start = center + math::Float3{0.0F,-marker,0.0F},
+            .end = center + math::Float3{0.0F,marker,0.0F},
+            .color = color
+        });
+        lines.push_back({
+            .start = center + math::Float3{0.0F,0.0F,-marker},
+            .end = center + math::Float3{0.0F,0.0F,marker},
+            .color = color
+        });
+
+        if (input.shape ==
+                world_model::
+                    VolumeSourceShape::Point)
+        {
+            continue;
+        }
+
+        if (input.shape ==
+                world_model::
+                    VolumeSourceShape::Sphere)
+        {
+            constexpr u32 segments = 24U;
+            const f64 radius =
+                std::max(
+                    input.radiusMeters,
+                    0.001);
+
+            for (u32 axis = 0U;
+                 axis < 3U;
+                 ++axis)
+            {
+                for (u32 segment = 0U;
+                     segment < segments;
+                     ++segment)
+                {
+                    const f64 a =
+                        2.0 *
+                        std::numbers::pi_v<f64> *
+                        static_cast<f64>(segment) /
+                        static_cast<f64>(segments);
+                    const f64 b =
+                        2.0 *
+                        std::numbers::pi_v<f64> *
+                        static_cast<f64>(segment + 1U) /
+                        static_cast<f64>(segments);
+
+                    math::Double3 pa =
+                        input.positionMeters;
+                    math::Double3 pb =
+                        input.positionMeters;
+
+                    if (axis == 0U)
+                    {
+                        pa.y += std::cos(a) * radius;
+                        pa.z += std::sin(a) * radius;
+                        pb.y += std::cos(b) * radius;
+                        pb.z += std::sin(b) * radius;
+                    }
+                    else if (axis == 1U)
+                    {
+                        pa.x += std::cos(a) * radius;
+                        pa.z += std::sin(a) * radius;
+                        pb.x += std::cos(b) * radius;
+                        pb.z += std::sin(b) * radius;
+                    }
+                    else
+                    {
+                        pa.x += std::cos(a) * radius;
+                        pa.y += std::sin(a) * radius;
+                        pb.x += std::cos(b) * radius;
+                        pb.y += std::sin(b) * radius;
+                    }
+
+                    const auto ra = relative(pa);
+                    const auto rb = relative(pb);
+
+                    lines.push_back({
+                        .start = ra,
+                        .end = rb,
+                        .color = color
+                    });
+                }
+            }
+        }
+        else
+        {
+            const auto& bounds =
+                input.bounds;
+
+            const std::array<math::Double3,8> worldPoints{{
+                {bounds.minimumMeters.x,bounds.minimumMeters.y,bounds.minimumMeters.z},
+                {bounds.maximumMeters.x,bounds.minimumMeters.y,bounds.minimumMeters.z},
+                {bounds.maximumMeters.x,bounds.maximumMeters.y,bounds.minimumMeters.z},
+                {bounds.minimumMeters.x,bounds.maximumMeters.y,bounds.minimumMeters.z},
+                {bounds.minimumMeters.x,bounds.minimumMeters.y,bounds.maximumMeters.z},
+                {bounds.maximumMeters.x,bounds.minimumMeters.y,bounds.maximumMeters.z},
+                {bounds.maximumMeters.x,bounds.maximumMeters.y,bounds.maximumMeters.z},
+                {bounds.minimumMeters.x,bounds.maximumMeters.y,bounds.maximumMeters.z}
+            }};
+
+            constexpr std::array<std::array<u32,2>,12> edges{{
+                {{0,1}},{{1,2}},{{2,3}},{{3,0}},
+                {{4,5}},{{5,6}},{{6,7}},{{7,4}},
+                {{0,4}},{{1,5}},{{2,6}},{{3,7}}
+            }};
+
+            for (const auto& edge :
+                 edges)
+            {
+                lines.push_back({
+                    .start =
+                        relative(
+                            worldPoints[
+                                edge[0]]),
+                    .end =
+                        relative(
+                            worldPoints[
+                                edge[1]]),
+                    .color = color
+                });
+            }
+        }
+
+        if (input.shape ==
+                world_model::
+                    VolumeSourceShape::Spline ||
+            math::LengthSquared(
+                input.vectorValue) >
+                1.0e-12)
+        {
+            const auto vectorEnd =
+                math::Double3{
+                    input.positionMeters.x +
+                        input.vectorValue.x,
+                    input.positionMeters.y +
+                        input.vectorValue.y,
+                    input.positionMeters.z +
+                        input.vectorValue.z
+                };
+
+            lines.push_back({
+                .start = center,
+                .end = relative(vectorEnd),
+                .color = {
+                    color.x,
+                    color.y,
+                    color.z,
+                    1.0F
+                }
+            });
+        }
+    }
+
+    return lines;
+}
+
+[[nodiscard]] std::vector<editor_ui::PreviewLine>
 SelectedVolumeDomainLines(
     studio_session::StudioSession& session,
     const render_view::CameraState& camera)
@@ -1821,6 +2099,18 @@ void StudioViewportRenderer::SetVolumeFieldStorageService(
     volume_fields::VolumeFieldStorageService* const fields) noexcept
 {
     volumeFields_ = fields;
+}
+
+void StudioViewportRenderer::SetVolumeSourceDebugVisualization(
+    const bool enabled) noexcept
+{
+    volumeSourceDebugVisualization_ =
+        enabled;
+}
+
+bool StudioViewportRenderer::VolumeSourceDebugVisualization() const noexcept
+{
+    return volumeSourceDebugVisualization_;
 }
 
 void StudioViewportRenderer::SetColorLut(
@@ -9563,6 +9853,12 @@ StudioViewportRenderer::Compose(
                     volumeFields_->Ensure(
                         *selectedVolume);
 
+                static_cast<void>(
+                    volumeFields_->
+                        SyncAuthoredInputs(
+                            session.World().Objects(),
+                            selectedVolume->object));
+
                 auto importedFields =
                     fieldStorage.Import(
                         graph,
@@ -9607,6 +9903,54 @@ StudioViewportRenderer::Compose(
                         rhi::CommandList&,
                         const render_graph::Resources&)
                     {
+                    });
+            }
+        }
+
+        {
+            auto volumeInputLines =
+                VolumeInputGizmoLines(
+                    session,
+                    view->Camera(),
+                    volumeSourceDebugVisualization_);
+
+            if (!volumeInputLines.empty())
+            {
+                const auto camera =
+                    view->Camera();
+
+                graph.AddPass(
+                    prefix + ".VolumeInputGizmos",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     width,
+                     height,
+                     camera,
+                     volumeInputLines =
+                         std::move(
+                             volumeInputLines)](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        pathRenderer_.
+                            DrawCameraRelativeLines(
+                                commands,
+                                *color,
+                                width,
+                                height,
+                                camera,
+                                volumeInputLines);
                     });
             }
         }
