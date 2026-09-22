@@ -33,11 +33,12 @@ struct alignas(16) GpuVolumeParams
 
     std::array<i32,4> minimumTile{};
     std::array<u32,4> tileLayout{};
+    std::array<u32,4> logicalResolution{};
     std::array<u32,4> renderParams{};
 };
 
 static_assert(
-    sizeof(GpuVolumeParams) == 208U);
+    sizeof(GpuVolumeParams) == 224U);
 
 [[nodiscard]] render_graph::BufferHandle
 FindField(
@@ -175,6 +176,7 @@ struct GpuVolumeParams
 
     int4 minimumTile;
     uint4 tileLayout;
+    uint4 logicalResolution;
     uint4 renderParams;
 };
 
@@ -274,25 +276,6 @@ float ReverseZViewDepth(
                 (farPlane - nearPlane) +
             nearPlane,
             1.0e-6);
-}
-
-uint PhysicalIndex(
-    float3 worldPosition,
-    GpuVolumeParams p,
-    out bool valid)
-{
-    const float3 cellSize =
-        max(
-            p.domainHalfAlbedo.xyz *
-                0.0 +
-            float3(
-                p.depthRangeHistory.w,
-                p.depthRangeHistory.w,
-                p.depthRangeHistory.w),
-            1.0e-6);
-
-    valid = false;
-    return 0u;
 }
 
 // cell size/tile edge are packed into render-independent values reconstructed
@@ -714,16 +697,13 @@ float4 main(VSOutput input) : SV_Target0
     const float3 logicalResolution =
         float3(
             max(
-                p.tileLayout.x *
-                    tileEdge,
+                p.logicalResolution.x,
                 1u),
             max(
-                p.tileLayout.y *
-                    tileEdge,
+                p.logicalResolution.y,
                 1u),
             max(
-                p.tileLayout.z *
-                    tileEdge,
+                p.logicalResolution.z,
                 1u));
 
     const float3 cellSize =
@@ -2070,6 +2050,12 @@ void UniversalVolumeRenderer::AddPasses(
             fieldDiagnostics.tilesY,
             fieldDiagnostics.tilesZ,
             lightCount
+        },
+        .logicalResolution = {
+            fieldDiagnostics.resolutionX,
+            fieldDiagnostics.resolutionY,
+            fieldDiagnostics.resolutionZ,
+            0U
         },
         .renderParams = {
             domain.renderSteps,
