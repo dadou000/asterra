@@ -19,7 +19,15 @@ enum class SurfaceVolumeDebugView : u8
 {
     Off = 0U,
     Density = 1U,
-    Velocity = 2U
+    Velocity = 2U,
+    FieldSlice = 3U
+};
+
+enum class VolumeSliceAxis : u8
+{
+    X = 0U,
+    Y = 1U,
+    Z = 2U
 };
 
 struct SurfaceVolumeSolverSettings
@@ -35,10 +43,14 @@ struct SurfaceVolumeSolverSettings
     f32 velocityDissipationPerSecond{0.04F};
     f32 sourceScale{1.0F};
     u32 iterationsPerFrame{1U};
+    f32 gpuBudgetMilliseconds{2.0F};
 
     SurfaceVolumeDebugView debugView{
         SurfaceVolumeDebugView::Off};
     u32 debugLayer{0U};
+    VolumeSliceAxis sliceAxis{VolumeSliceAxis::Y};
+    world_model::VolumeField debugField{
+        world_model::VolumeField::Density};
 };
 
 struct SurfaceVolumeSolverDiagnostics
@@ -50,6 +62,7 @@ struct SurfaceVolumeSolverDiagnostics
     bool resetThisFrame{false};
 
     u32 iterationsThisFrame{0U};
+    u32 requestedIterations{0U};
     u32 scalarChannelsSolved{0U};
     u32 sourceCount{0U};
     u32 effectorCount{0U};
@@ -59,11 +72,21 @@ struct SurfaceVolumeSolverDiagnostics
     u64 metadataBytes{0U};
 
     f32 simulatedSeconds{0.0F};
+    f32 gpuMilliseconds{0.0F};
+    f32 gpuBudgetMilliseconds{0.0F};
+    bool gpuTimingValid{false};
 };
 
 struct SurfaceVolumeCell
 {
     f32 scalar{0.0F};
+    math::Float3 velocity{};
+};
+
+struct LocalVolumeReferenceCell
+{
+    f32 density{0.0F};
+    f32 temperature{0.0F};
     math::Float3 velocity{};
 };
 
@@ -88,12 +111,19 @@ void StepSurfaceVolumeReference(
     const SurfaceVolumeReferenceConfig& config,
     math::Float3 uniformWind = {});
 
+void StepLocalVolumeReference(
+    std::span<const LocalVolumeReferenceCell> input,
+    std::span<LocalVolumeReferenceCell> output,
+    const SurfaceVolumeReferenceConfig& config,
+    math::Float3 uniformWind = {});
+
 class SurfaceVolumeSolverService
 {
 public:
     SurfaceVolumeSolverService(
         rhi::Device& device,
-        const shader::Compiler& compiler);
+        const shader::Compiler& compiler,
+        u32 framesInFlight = 1U);
     ~SurfaceVolumeSolverService();
 
     SurfaceVolumeSolverService(
@@ -109,6 +139,13 @@ public:
     Diagnostics(
         scene::ObjectId volume) const noexcept;
 
+    void BeginGpuTimingFrame(
+        rhi::CommandList& commands,
+        u32 frameSlot);
+
+    void ResolveGpuTimingFrame(
+        u32 frameSlot);
+
     void RemoveMissing(
         const scene::ObjectStore& objects);
 
@@ -118,7 +155,8 @@ public:
         const scene::ObjectStore& objects,
         const world_model::ResolvedVolumeDomain& domain,
         volume_fields::VolumeFieldStorage& storage,
-        const volume_fields::ImportedVolumeFields& fields);
+        const volume_fields::ImportedVolumeFields& fields,
+        u32 frameSlot = 0U);
 
 private:
     class Impl;
@@ -128,4 +166,8 @@ private:
 [[nodiscard]] std::string_view
 SurfaceVolumeDebugViewName(
     SurfaceVolumeDebugView view) noexcept;
+
+[[nodiscard]] std::string_view
+VolumeSliceAxisName(
+    VolumeSliceAxis axis) noexcept;
 } // namespace orbit::volume_solver
