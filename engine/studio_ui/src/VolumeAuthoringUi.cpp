@@ -1,19 +1,74 @@
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/world_model/VolumeSchemas.hpp>
 
 #include <array>
 #include <exception>
 #include <format>
+#include <optional>
 
 namespace orbit::studio_ui
 {
+namespace
+{
+[[nodiscard]] std::optional<scene::ObjectId>
+SelectedVolumeId(
+    editor_session::EditorWorldSession& world)
+{
+    const auto& selected =
+        world.Selection().Ordered();
+
+    if (selected.size() != 1U)
+    {
+        return std::nullopt;
+    }
+
+    const auto record =
+        world.Objects().Find(
+            selected.front());
+
+    if (!record.has_value())
+    {
+        return std::nullopt;
+    }
+
+    if (record->type ==
+        world_model::kVolumeType)
+    {
+        return record->id;
+    }
+
+    if ((record->type ==
+             world_model::kVolumeSourceType ||
+         record->type ==
+             world_model::kVolumeEffectorType) &&
+        record->parent.has_value())
+    {
+        const auto parent =
+            world.Objects().Find(
+                *record->parent);
+
+        if (parent.has_value() &&
+            parent->type ==
+                world_model::kVolumeType)
+        {
+            return parent->id;
+        }
+    }
+
+    return std::nullopt;
+}
+} // namespace
+
 VolumeAuthoringUi::VolumeAuthoringUi(
     studio_session::StudioSession& session,
-    volume_fields::VolumeFieldStorageService& fields) noexcept
+    volume_fields::VolumeFieldStorageService& fields,
+    StudioViewportRenderer& renderer) noexcept
     : session_(&session),
-      fields_(&fields)
+      fields_(&fields),
+      renderer_(&renderer)
 {
 }
 
@@ -28,8 +83,8 @@ void VolumeAuthoringUi::Register(
             editor_ui::DockRegion::Right,
         .dockOrder = 35,
         .minSize = {
-            .width = 300.0F,
-            .height = 260.0F
+            .width = 320.0F,
+            .height = 300.0F
         },
         .draw =
             [this](editor_ui::PanelContext& context)
@@ -55,7 +110,7 @@ void VolumeAuthoringUi::Draw(
 
     context.Heading("Create Volume");
     context.MutedText(
-        "Presets author ordinary editable Volume domains. Select a World or Celestial Body first.");
+        "Presets create ordinary editable Volume domains.");
 
     constexpr std::array presets{
         "Empty",
@@ -109,16 +164,15 @@ void VolumeAuthoringUi::Draw(
         }
     }
 
-    const auto& selected =
-        world.Selection().Ordered();
+    const auto volumeId =
+        SelectedVolumeId(world);
 
-    if (selected.size() == 1U)
+    if (volumeId.has_value())
     {
         const auto volume =
-            world_model::
-                ResolveVolumeDomain(
-                    world.Objects(),
-                    selected.front());
+            world_model::ResolveVolumeDomain(
+                world.Objects(),
+                *volumeId);
 
         if (volume.has_value())
         {
@@ -136,13 +190,6 @@ void VolumeAuthoringUi::Draw(
                             volume->representationMode),
                     volume->fieldMask));
 
-            context.Text(
-                std::format(
-                    "Sources {} | Effectors {} | Base resolution {}",
-                    volume->sourceCount,
-                    volume->effectorCount,
-                    volume->resolution));
-
             if (fields_ != nullptr)
             {
                 fields_->RemoveMissing(
@@ -152,18 +199,21 @@ void VolumeAuthoringUi::Draw(
                     fields_->Ensure(
                         *volume);
 
+                const u32 invalidated =
+                    fields_->SyncAuthoredInputs(
+                        world.Objects(),
+                        *volumeId);
+
                 const auto& diagnostics =
                     storage.Diagnostics();
 
-                const double memoryMiB =
-                    static_cast<double>(
-                        diagnostics.totalBytes) /
-                    (1024.0 * 1024.0);
-
                 context.Text(
                     std::format(
-                        "GPU fields {:.2f} MiB | tiles {}x{}x{} @ {}^3",
-                        memoryMiB,
+                        "GPU fields {:.2f} MiB | {}^3 cells | tiles {}x{}x{} @ {}^3",
+                        static_cast<double>(
+                            diagnostics.totalBytes) /
+                            (1024.0 * 1024.0),
+                        diagnostics.resolution,
                         diagnostics.tilesX,
                         diagnostics.tilesY,
                         diagnostics.tilesZ,
@@ -171,40 +221,321 @@ void VolumeAuthoringUi::Draw(
 
                 context.Text(
                     std::format(
-                        "Residency {}/{} | valid {} | pending {}",
+                        "Residency {} | valid {} | pending {} | source invalidation {} tile{}",
                         diagnostics.residentTiles,
-                        diagnostics.tilesX *
-                            diagnostics.tilesY *
-                            diagnostics.tilesZ,
                         diagnostics.validTiles,
-                        diagnostics.pendingTiles));
+                        diagnostics.pendingTiles,
+                        invalidated,
+                        invalidated == 1U ? "" : "s"));
+            }
 
-                context.MutedText(
-                    std::format(
-                        "Last move reused {} | new {} | evicted {}",
-                        diagnostics.lastUpdate.reusedTiles,
-                        diagnostics.lastUpdate.newTiles,
-                        diagnostics.lastUpdate.evictedTiles));
+            context.Separator();
+            context.Heading("Sources");
 
-                for (const auto& channel :
-                     diagnostics.channels)
+            constexpr std::array sourceKinds{
+                "Brush",
+                "Texture / Mask",
+                "Terrain Paint",
+                "Spline",
+                "Mesh / SDF",
+                "Collision Proxy",
+                "Particles",
+                "Object Motion",
+                "World Motion"
+            };
+
+            for (std::size_t index = 0U;
+                 index < sourceKinds.size();
+                 ++index)
+            {
+                const std::string label =
+                    "+ " +
+                    std::string(
+                        sourceKinds[index]) +
+                    "##volume-source-add-" +
+                    std::to_string(index);
+
+                if (context.Button(label))
                 {
-                    context.MutedText(
-                        std::format(
-                            "Field {} | {} bytes/cell | {:.2f} MiB",
-                            static_cast<u64>(
-                                channel.field),
-                            channel.bytesPerCell,
-                            static_cast<double>(
-                                channel.sizeBytes) /
-                                (1024.0 * 1024.0)));
+                    try
+                    {
+                        commands::CommandArguments args;
+                        args.emplace(
+                            "kind",
+                            std::string(
+                                sourceKinds[index]));
+
+                        world.CommandRegistry().Invoke(
+                            editor_model::
+                                authoring_commands::
+                                    kAddVolumeSource,
+                            args);
+
+                        status_ =
+                            std::string(
+                                sourceKinds[index]) +
+                            " source added.";
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ =
+                            exception.what();
+                    }
+                }
+
+                if (index + 1U < sourceKinds.size())
+                {
+                    context.SameLine();
+                }
+            }
+
+            context.Heading("Effectors");
+
+            constexpr std::array effectorKinds{
+                "Obstacle",
+                "Drag",
+                "Wind",
+                "Temperature",
+                "Dissipation"
+            };
+
+            for (std::size_t index = 0U;
+                 index < effectorKinds.size();
+                 ++index)
+            {
+                const std::string label =
+                    "+ " +
+                    std::string(
+                        effectorKinds[index]) +
+                    "##volume-effector-add-" +
+                    std::to_string(index);
+
+                if (context.Button(label))
+                {
+                    try
+                    {
+                        commands::CommandArguments args;
+                        args.emplace(
+                            "kind",
+                            std::string(
+                                effectorKinds[index]));
+
+                        world.CommandRegistry().Invoke(
+                            editor_model::
+                                authoring_commands::
+                                    kAddVolumeEffector,
+                            args);
+
+                        status_ =
+                            std::string(
+                                effectorKinds[index]) +
+                            " effector added.";
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ =
+                            exception.what();
+                    }
+                }
+
+                if (index + 1U < effectorKinds.size())
+                {
+                    context.SameLine();
+                }
+            }
+
+            const auto inputs =
+                world_model::ResolveVolumeInputs(
+                    world.Objects(),
+                    *volumeId);
+
+            const auto& selection =
+                world.Selection().Ordered();
+            const auto selectedInput =
+                selection.size() == 1U
+                    ? std::optional<scene::ObjectId>(
+                          selection.front())
+                    : std::nullopt;
+
+            context.Separator();
+            context.Heading("Evaluation Order");
+
+            for (const auto& input :
+                 inputs)
+            {
+                const std::string kindName =
+                    input.role ==
+                            world_model::
+                                VolumeInputRole::Source
+                        ? std::string(
+                              world_model::
+                                  VolumeSourceKindName(
+                                      static_cast<
+                                          world_model::
+                                              VolumeSourceKind>(
+                                          input.kind)))
+                        : std::string(
+                              world_model::
+                                  VolumeEffectorKindName(
+                                      static_cast<
+                                          world_model::
+                                              VolumeEffectorKind>(
+                                          input.kind)));
+
+                const std::string label =
+                    std::format(
+                        "{:02} {} | {} | {}##volume-input-{}",
+                        input.order,
+                        input.role ==
+                                world_model::
+                                    VolumeInputRole::Source
+                            ? "Source"
+                            : "Effector",
+                        kindName,
+                        world_model::
+                            VolumeSourceShapeName(
+                                input.shape),
+                        input.object.ToString());
+
+                if (context.Selectable(
+                        label,
+                        selectedInput.has_value() &&
+                            *selectedInput ==
+                                input.object))
+                {
+                    const scene::ObjectId selected[]{
+                        input.object};
+                    world.Selection().Set(
+                        selected);
+                }
+            }
+
+            if (selectedInput.has_value())
+            {
+                const auto selectedRecord =
+                    world.Objects().Find(
+                        *selectedInput);
+
+                if (selectedRecord.has_value() &&
+                    (selectedRecord->type ==
+                         world_model::
+                             kVolumeSourceType ||
+                     selectedRecord->type ==
+                         world_model::
+                             kVolumeEffectorType))
+                {
+                    if (context.Button(
+                            "Up##volume-input-up"))
+                    {
+                        world.CommandRegistry().Invoke(
+                            editor_model::
+                                authoring_commands::
+                                    kMoveVolumeInputUp);
+                    }
+
+                    context.SameLine();
+
+                    if (context.Button(
+                            "Down##volume-input-down"))
+                    {
+                        world.CommandRegistry().Invoke(
+                            editor_model::
+                                authoring_commands::
+                                    kMoveVolumeInputDown);
+                    }
+
+                    context.SameLine();
+
+                    if (context.Button(
+                            "Remove##volume-input-remove"))
+                    {
+                        world.CommandRegistry().Invoke(
+                            editor_model::
+                                authoring_commands::
+                                    kRemoveVolumeInput);
+                    }
+                }
+            }
+
+            context.Separator();
+            context.Heading("Terrain Source Painting");
+            context.MutedText(
+                "Each stroke is an authored TerrainPatch source with a stable object ID. Viewport tools/MCP may invoke the same command with picked world coordinates.");
+
+            static_cast<void>(
+                context.InputDouble3(
+                    "World Position##volume-paint-position",
+                    paintPosition_));
+            static_cast<void>(
+                context.InputDouble(
+                    "Radius m##volume-paint-radius",
+                    paintRadius_));
+            static_cast<void>(
+                context.InputDouble(
+                    "Strength##volume-paint-strength",
+                    paintStrength_));
+
+            if (context.PrimaryButton(
+                    "Paint Terrain Source Stroke##volume-paint-stroke"))
+            {
+                try
+                {
+                    commands::CommandArguments args;
+                    args.emplace(
+                        "position",
+                        paintPosition_);
+                    args.emplace(
+                        "radius",
+                        paintRadius_);
+                    args.emplace(
+                        "strength",
+                        paintStrength_);
+
+                    world.CommandRegistry().Invoke(
+                        editor_model::
+                            authoring_commands::
+                                kPaintVolumeTerrainSource,
+                        args);
+
+                    status_ =
+                        "Terrain source stroke authored.";
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ =
+                        exception.what();
+                }
+            }
+
+            if (renderer_ != nullptr)
+            {
+                bool debug =
+                    renderer_->
+                        VolumeSourceDebugVisualization();
+
+                if (context.Checkbox(
+                        "Show All Source / Effector Gizmos##volume-source-debug",
+                        debug))
+                {
+                    renderer_->
+                        SetVolumeSourceDebugVisualization(
+                            debug);
                 }
             }
 
             context.MutedText(
-                "Exact domain, solver, representation and field properties are edited in the normal Properties Inspector.");
+                "Exact source geometry, field mask, asset/path, target object and values remain editable in the normal Properties Inspector.");
 
-            if (context.Button(
+            const auto selectedRecord =
+                world.Selection().Ordered().size() == 1U
+                    ? world.Objects().Find(
+                          world.Selection().Ordered().front())
+                    : std::optional<scene::ObjectRecord>{};
+
+            if (selectedRecord.has_value() &&
+                selectedRecord->type ==
+                    world_model::kVolumeType &&
+                context.Button(
                     "Remove Selected Volume##volume-remove"))
             {
                 try
