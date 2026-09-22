@@ -28,6 +28,8 @@ public:
         const world_model::ResolvedVolumeDomain& domain,
         const volume_fields::VolumeFieldDiagnostics& fields,
         volume_solver::SurfaceVolumeDebugView view,
+        volume_solver::VolumeSliceAxis sliceAxis,
+        world_model::VolumeField fieldChannel,
         u32 debugLayer,
         rhi::Buffer& field,
         rhi::Buffer& residency);
