@@ -64,6 +64,7 @@
 #include <orbit/world_model/MaterialAssignmentBinding.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
+#include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1976,6 +1977,12 @@ int main(
                 volumeFieldStorage(
                     device);
 
+        orbit::volume_solver::
+            SurfaceVolumeSolverService
+                surfaceVolumeSolver(
+                    device,
+                    compiler);
+
         orbit::studio_ui::StudioViewportRenderer
             studioViewportRenderer(
                 device,
@@ -1988,6 +1995,9 @@ int main(
         studioViewportRenderer.
             SetVolumeFieldStorageService(
                 &volumeFieldStorage);
+        studioViewportRenderer.
+            SetSurfaceVolumeSolverService(
+                &surfaceVolumeSolver);
 
         orbit::studio_ui::DisplayDiagnosticsUi
             displayDiagnosticsUi(
@@ -2067,6 +2077,7 @@ int main(
             volumeAuthoringUi(
                 studioSession,
                 volumeFieldStorage,
+                surfaceVolumeSolver,
                 studioViewportRenderer);
         volumeAuthoringUi.Register(ui);
 
