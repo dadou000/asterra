@@ -8,6 +8,7 @@
 #include <exception>
 #include <format>
 #include <optional>
+#include <utility>
 
 namespace orbit::studio_ui
 {
