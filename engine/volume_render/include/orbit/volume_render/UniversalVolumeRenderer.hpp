@@ -37,6 +37,10 @@ struct VolumeRenderRuntimeSettings
     // still the explicit force/debug authority.
     volume_representation::FollowTarget followTarget{
         volume_representation::FollowTarget::AuthoredDomain};
+    std::optional<scene::ObjectId> followObject;
+    std::optional<math::Double3>
+        followObjectPositionInFrameMeters;
+
     f64 liveDistanceMeters{120.0};
     f64 passiveDistanceMeters{1200.0};
     f32 liveProjectedPixels{96.0F};
@@ -66,12 +70,14 @@ struct VolumeRenderDiagnostics
     f32 liveWeight{1.0F};
     f32 coarseWeight{0.0F};
     f32 passiveWeight{0.0F};
+    math::Double3 runtimeCenterInFrameMeters{};
     f64 distanceToBoundsMeters{0.0};
     f32 projectedDiameterPixels{0.0F};
     bool representationForced{false};
     bool representationTransition{false};
     bool denseFieldRequired{true};
     bool bakedFallback{false};
+    bool followTargetResolved{true};
     u64 stableAddressFingerprint{0U};
 };
 
