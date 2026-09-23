@@ -8,6 +8,7 @@
 #include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
 #include <orbit/studio_ui/VolumeSurfaceEffectRenderBridge.hpp>
+#include <orbit/studio_ui/VolumeParticleRenderBridge.hpp>
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialCloudBinding.hpp>
 #include <orbit/world_model/CelestialGiantBinding.hpp>
@@ -2477,6 +2478,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       pathRenderer_(device, compiler),
       surfaceVolumeDebugRenderer_(device, compiler),
       universalVolumeRenderer_(device, compiler),
+      volumeParticleRenderer_(device, compiler, framesInFlight),
       debugComposite_(device, compiler),
       directLightingRenderer_(device, compiler),
       materialEmissionSurfaceOverride_(device, compiler),
@@ -10788,6 +10790,74 @@ StudioViewportRenderer::Compose(
                                 camera,
                                 volumeDomainLines);
                     });
+            }
+        }
+
+        {
+            // M38 particle output is an exactly-once simulation packet. Build
+            // this viewport's GPU packet relative to the camera itself so the
+            // float representation retains local precision at planetary scale.
+            const auto particleSpawns =
+                BuildVolumeParticleRenderBatch(
+                    studio_session::VolumeParticleOutputs().Events(),
+                    view->Camera().localPositionMeters);
+
+            if (!particleSpawns.empty())
+            {
+                volumeParticleRenderer_.SetSpawns(
+                    particleSpawns);
+
+                const auto camera =
+                    view->Camera();
+                auto* particleColor =
+                    color;
+                auto* particleDepth =
+                    &view->Depth();
+                const u32 particleFrameIndex =
+                    frameIndex % framesInFlight_;
+
+                graph.AddPass(
+                    prefix + ".VolumeParticles",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::RenderTarget,
+                            .access =
+                                render_graph::Access::Write
+                        },
+                        {
+                            .texture = targets.depth,
+                            .state =
+                                rhi::ResourceState::DepthRead,
+                            .access =
+                                render_graph::Access::Read
+                        }
+                    },
+                    [this,
+                     particleColor,
+                     particleDepth,
+                     width,
+                     height,
+                     camera,
+                     particleFrameIndex](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        volumeParticleRenderer_.Draw(
+                            commands,
+                            *particleColor,
+                            *particleDepth,
+                            width,
+                            height,
+                            camera,
+                            {},
+                            particleFrameIndex);
+                    });
+            }
+            else
+            {
+                volumeParticleRenderer_.SetSpawns({});
             }
         }
 

@@ -38,6 +38,7 @@
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
+#include <orbit/volume_render/VolumeParticleRenderer.hpp>
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -758,6 +759,7 @@ private:
     editor_ui::PathPreviewRenderer pathRenderer_;
     SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
     volume_render::UniversalVolumeRenderer universalVolumeRenderer_;
+    volume_render::VolumeParticleRenderer volumeParticleRenderer_;
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
     lighting::MaterialEmissionSurfaceOverrideRenderer
