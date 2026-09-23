@@ -34,6 +34,12 @@ int main()
     Check(sizeof(volume_render::VolumeParticleGpuSplashState) == 64U);
     Check(volume_render::VolumeParticleGpuState::SplashGraphicsBufferSlot == 3U);
     Check(volume_render::VolumeParticleGpuState::DropletGraphicsBufferSlot == 4U);
+    Check(volume_render::VolumeParticleGpuState::ParticleActiveIndexGraphicsBufferSlot == 5U);
+    Check(volume_render::VolumeParticleGpuState::SplashActiveIndexGraphicsBufferSlot == 6U);
+    Check(volume_render::VolumeParticleGpuState::DropletActiveIndexGraphicsBufferSlot == 7U);
+    Check(volume_render::VolumeParticleGpuState::ParticleIndirectOffsetBytes == 0U);
+    Check(volume_render::VolumeParticleGpuState::SplashIndirectOffsetBytes == 16U);
+    Check(volume_render::VolumeParticleGpuState::DropletIndirectOffsetBytes == 32U);
 
     const universe::BodyId body{
         .high = 0x1122334455667788ULL,

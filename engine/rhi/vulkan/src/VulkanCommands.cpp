@@ -84,6 +84,10 @@ ImageBarrierInfo ToImageBarrierInfo(
             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
             VK_ACCESS_2_TRANSFER_WRITE_BIT};
 
+    case ResourceState::IndirectArgument:
+        // Buffer-only state.
+        return {VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE};
+
     case ResourceState::VertexOrConstantBuffer:
     case ResourceState::IndexBuffer:
         // Buffer-only states; never used for a Texture in this
@@ -145,6 +149,11 @@ BufferBarrierInfo ToBufferBarrierInfo(const ResourceState state)
         return {
             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
             VK_ACCESS_2_TRANSFER_WRITE_BIT};
+
+    case ResourceState::IndirectArgument:
+        return {
+            VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+            VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
     }
 
     throw std::runtime_error(
@@ -1547,6 +1556,35 @@ void VulkanCommandList::Draw(
     const u32 firstVertex)
 {
     vkCmdDraw(nativeCommandList_, vertexCount, 1, firstVertex, 0);
+}
+
+void VulkanCommandList::DrawIndirect(
+    Buffer& argumentBuffer,
+    const u64 argumentOffsetBytes)
+{
+    auto* vulkanBuffer = dynamic_cast<VulkanBuffer*>(&argumentBuffer);
+    if (vulkanBuffer == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received an indirect argument buffer from another backend.");
+    }
+    if (argumentBuffer.Usage() != BufferUsage::Indirect)
+    {
+        throw std::invalid_argument(
+            "Orbit DrawIndirect requires BufferUsage::Indirect.");
+    }
+    if ((argumentOffsetBytes % 4U) != 0U ||
+        argumentOffsetBytes + sizeof(VkDrawIndirectCommand) > argumentBuffer.SizeBytes())
+    {
+        throw std::out_of_range(
+            "Orbit DrawIndirect argument range exceeds the supplied buffer.");
+    }
+    vkCmdDrawIndirect(
+        nativeCommandList_,
+        vulkanBuffer->Native(),
+        static_cast<VkDeviceSize>(argumentOffsetBytes),
+        1U,
+        sizeof(VkDrawIndirectCommand));
 }
 
 void VulkanCommandList::ResetTimestampQueryPool(

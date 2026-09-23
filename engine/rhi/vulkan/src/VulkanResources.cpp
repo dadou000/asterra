@@ -43,6 +43,11 @@ namespace
         // uses today.
         flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         break;
+    case BufferUsage::Indirect:
+        // Compute writes the arguments through a storage descriptor and the
+        // graphics queue later consumes the same allocation via vkCmdDrawIndirect.
+        flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+        break;
     }
 
     return flags;

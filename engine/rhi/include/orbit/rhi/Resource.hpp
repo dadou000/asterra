@@ -18,7 +18,8 @@ enum class ResourceState : u8
     ShaderResource,
     UnorderedAccess,
     CopySource,
-    CopyDestination
+    CopyDestination,
+    IndirectArgument
 };
 
 enum class MemoryUsage : u8
@@ -37,7 +38,9 @@ enum class BufferUsage : u8
     Vertex,
     Index,
     Constant,
-    Structured
+    Structured,
+    // Storage-writable GPU draw arguments consumed by DrawIndirect.
+    Indirect
 };
 
 struct BufferDesc

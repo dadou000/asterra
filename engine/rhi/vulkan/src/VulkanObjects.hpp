@@ -534,6 +534,10 @@ public:
         u32 vertexCount,
         u32 firstVertex) override;
 
+    void DrawIndirect(
+        Buffer& argumentBuffer,
+        u64 argumentOffsetBytes) override;
+
     void ResetTimestampQueryPool(
         TimestampQueryPool& pool,
         u32 firstQuery,

@@ -138,6 +138,12 @@ public:
     static constexpr u32 GraphicsBufferSlot = 2U;
     static constexpr u32 SplashGraphicsBufferSlot = 3U;
     static constexpr u32 DropletGraphicsBufferSlot = 4U;
+    static constexpr u32 ParticleActiveIndexGraphicsBufferSlot = 5U;
+    static constexpr u32 SplashActiveIndexGraphicsBufferSlot = 6U;
+    static constexpr u32 DropletActiveIndexGraphicsBufferSlot = 7U;
+    static constexpr u64 ParticleIndirectOffsetBytes = 0U;
+    static constexpr u64 SplashIndirectOffsetBytes = 16U;
+    static constexpr u64 DropletIndirectOffsetBytes = 32U;
 
     VolumeParticleGpuState(
         rhi::Device& device,
@@ -170,6 +176,7 @@ public:
     [[nodiscard]] u32 DropletGeneration() const noexcept;
     [[nodiscard]] u32 SubmittedSpawnCount() const noexcept;
     [[nodiscard]] rhi::Buffer& CurrentBuffer() noexcept;
+    [[nodiscard]] rhi::Buffer& IndirectDrawArguments() noexcept;
 
 private:
     using SpawnArray = std::array<
@@ -205,6 +212,10 @@ private:
     rhi::ResourceState dropletStateAState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState dropletStateBState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState dropletCounterState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState particleActiveIndicesState_{rhi::ResourceState::UnorderedAccess};
+    rhi::ResourceState splashActiveIndicesState_{rhi::ResourceState::UnorderedAccess};
+    rhi::ResourceState dropletActiveIndicesState_{rhi::ResourceState::UnorderedAccess};
+    rhi::ResourceState indirectDrawArgumentsState_{rhi::ResourceState::CopyDestination};
 
     std::unique_ptr<rhi::Buffer> stateA_;
     std::unique_ptr<rhi::Buffer> stateB_;
@@ -224,11 +235,17 @@ private:
     std::unique_ptr<rhi::Buffer> zeroDropletStateUpload_;
     std::unique_ptr<rhi::Buffer> dropletCounter_;
     std::unique_ptr<rhi::Buffer> zeroDropletCounterUpload_;
+    std::unique_ptr<rhi::Buffer> particleActiveIndices_;
+    std::unique_ptr<rhi::Buffer> splashActiveIndices_;
+    std::unique_ptr<rhi::Buffer> dropletActiveIndices_;
+    std::unique_ptr<rhi::Buffer> indirectDrawArguments_;
+    std::unique_ptr<rhi::Buffer> zeroIndirectDrawArgumentsUpload_;
     std::vector<std::unique_ptr<rhi::Buffer>> spawnBuffers_;
     std::unique_ptr<rhi::ComputePipeline> simulationPipeline_;
     std::unique_ptr<rhi::ComputePipeline> terrainCollisionPipeline_;
     std::unique_ptr<rhi::ComputePipeline> splashSimulationPipeline_;
     std::unique_ptr<rhi::ComputePipeline> dropletSimulationPipeline_;
     std::unique_ptr<rhi::ComputePipeline> dropletCollisionPipeline_;
+    std::unique_ptr<rhi::ComputePipeline> drawListPipeline_;
 };
 } // namespace orbit::volume_render

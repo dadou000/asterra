@@ -42,6 +42,7 @@ struct Particle
 
 [[vk::binding(2, 0)]]
 StructuredBuffer<Particle> g_particles : register(t2);
+[[vk::binding(5, 0)]] StructuredBuffer<uint> g_particleIndices : register(t5);
 
 struct Push
 {
@@ -103,7 +104,7 @@ VSOutput main(uint vertexId : SV_VertexID)
         float2(-1.0,  1.0)
     };
 
-    const uint particleIndex = vertexId / 6u;
+    const uint particleIndex = g_particleIndices[vertexId / 6u];
     const uint cornerIndex = vertexId % 6u;
     const Particle particle = g_particles[particleIndex];
     const uint currentGeneration = asuint(g.viewport.w);
@@ -172,6 +173,7 @@ VSOutput main(uint vertexId : SV_VertexID)
 constexpr const char* kSplashVertexShader = R"(
 struct SplashState { float3 positionMeters; float baseScaleMeters; float3 normal; float expansionMetersPerSecond; float3 tint; float impactSpeedMetersPerSecond; float ageSeconds; float lifetimeSeconds; uint generation; uint reserved; };
 [[vk::binding(3, 0)]] StructuredBuffer<SplashState> g_splashes : register(t3);
+[[vk::binding(6, 0)]] StructuredBuffer<uint> g_splashIndices : register(t6);
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; };
 [[vk::push_constant]] Push g;
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; };
@@ -184,7 +186,7 @@ float4 Project(float3 relative) {
 }
 VSOutput main(uint vertexId:SV_VertexID) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)};
-    uint eventIndex=vertexId/6u, cornerIndex=vertexId%6u; SplashState e=g_splashes[eventIndex]; VSOutput o;
+    uint eventIndex=g_splashIndices[vertexId/6u], cornerIndex=vertexId%6u; SplashState e=g_splashes[eventIndex]; VSOutput o;
     if(e.generation!=asuint(g.viewport.w)||e.baseScaleMeters<=0.0||e.lifetimeSeconds<=0.0||e.ageSeconds>=e.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.impact=0;return o;}
     float4 center=Project(e.positionMeters-g.camera.xyz); if(center.w<=0.0){o.position=center;o.uv=0;o.tint=0;o.impact=0;return o;}
     float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0));
@@ -209,10 +211,11 @@ float4 main(VSOutput i):SV_Target0 {
 constexpr const char* kDropletVertexShader = R"(
 struct Droplet { float3 positionMeters; float radiusMeters; float3 velocityMetersPerSecond; float ageSeconds; float3 tint; float lifetimeSeconds; float3 bodyCenterMeters; float gravitationalParameterM3PerS2; float3 surfaceRadiiMeters; float gravitySofteningMeters; uint4 bodyIdentity; uint generation; uint flags; uint2 reserved; };
 [[vk::binding(4,0)]] StructuredBuffer<Droplet> g_droplets : register(t4);
+[[vk::binding(7, 0)]] StructuredBuffer<uint> g_dropletIndices : register(t7);
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; }; [[vk::push_constant]] Push g;
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; };
 float4 Project(float3 relative){ float3 f=normalize(g.forward.xyz),u=normalize(g.up.xyz),r=normalize(cross(f,u)),cu=normalize(cross(r,f)); float z=dot(relative,f); if(z<=g.projection.z||z>=g.projection.w)return float4(2,2,1,1); return float4(dot(relative,r)/(max(g.projection.x,0.001)*max(g.projection.y,0.001)),-dot(relative,cu)/max(g.projection.y,0.001),z*0.5,z); }
-VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)}; uint i=vertexId/6u,c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o; if(d.generation!=asuint(g.viewport.w)||d.lifetimeSeconds<=0.0||d.ageSeconds>=d.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.life=0;return o;} float4 center=Project(d.positionMeters-g.camera.xyz); if(center.w<=0){o.position=center;o.uv=0;o.tint=0;o.life=0;return o;} float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0)); float px=max(d.radiusMeters,0.002)/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5; px=max(px,0.75); o.position=center;o.position.xy+=corners[c]*ndc*px*center.w;o.uv=corners[c];o.tint=max(d.tint,0.0);o.life=saturate(1.0-d.ageSeconds/max(d.lifetimeSeconds,0.001));return o; }
+VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)}; uint i=g_dropletIndices[vertexId/6u],c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o; if(d.generation!=asuint(g.viewport.w)||d.lifetimeSeconds<=0.0||d.ageSeconds>=d.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.life=0;return o;} float4 center=Project(d.positionMeters-g.camera.xyz); if(center.w<=0){o.position=center;o.uv=0;o.tint=0;o.life=0;return o;} float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0)); float px=max(d.radiusMeters,0.002)/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5; px=max(px,0.75); o.position=center;o.position.xy+=corners[c]*ndc*px*center.w;o.uv=corners[c];o.tint=max(d.tint,0.0);o.life=saturate(1.0-d.ageSeconds/max(d.lifetimeSeconds,0.001));return o; }
 )";
 constexpr const char* kDropletPixelShader = R"(
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; };
@@ -298,7 +301,7 @@ VolumeParticleRenderer::VolumeParticleRenderer(
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
         .pushConstantDwords = 20U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = 8U,
         .sampledTextures = 0U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
@@ -316,12 +319,12 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     splashPipeline_ = device.CreateGraphicsPipeline({
         .vertexShader={.data=splashVertex.bytecode.data(),.size=splashVertex.bytecode.size()},
         .pixelShader={.data=splashPixel.bytecode.data(),.size=splashPixel.bytecode.size()},
-        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=4U,.sampledTextures=0U,
+        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=0U,
         .topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,
         .blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,
         .colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U
     });
-    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=5U,.sampledTextures=0U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
+    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=0U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
 }
 
 void VolumeParticleRenderer::SetSpawns(
@@ -463,17 +466,17 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsPipeline(*pipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
-    commands.Draw(VolumeParticleGpuState::MaximumParticleCount * 6U);
+    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::ParticleIndirectOffsetBytes);
     constants[19] = state_.DropletGeneration();
     commands.SetGraphicsPipeline(*dropletPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
-    commands.Draw(VolumeParticleGpuState::MaximumDropletCount * 6U);
+    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::DropletIndirectOffsetBytes);
     constants[19] = state_.SplashGeneration();
     commands.SetGraphicsPipeline(*splashPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
-    commands.Draw(VolumeParticleGpuState::MaximumPersistentSplashCount * 6U);
+    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);
 }
 
 void VolumeParticleRenderer::Reset() noexcept

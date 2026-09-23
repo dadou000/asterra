@@ -212,6 +212,13 @@ public:
         u32 vertexCount,
         u32 firstVertex = 0) = 0;
 
+    // Non-indexed GPU-driven draw. `argumentBuffer` contains the native
+    // four-u32 draw layout: vertexCount, instanceCount, firstVertex,
+    // firstInstance. The buffer must be in ResourceState::IndirectArgument.
+    virtual void DrawIndirect(
+        Buffer& argumentBuffer,
+        u64 argumentOffsetBytes = 0) = 0;
+
     // Must be called for a query range before the first WriteTimestamp
     // into it each frame (and outside any active render target -- call
     // it right after Reset(), before the frame's first SetRenderTarget/
