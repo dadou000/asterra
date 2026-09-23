@@ -61,6 +61,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::TerrainScatter
         Orbit::TerrainStream
         Orbit::TerrainView
+        Orbit::VolumeRepresentation
         Orbit::World
 )
 
