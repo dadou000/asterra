@@ -2,6 +2,7 @@
 
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/ViewportTargetRpc.hpp>
+#include <orbit/studio_session/VolumeParticleOutputState.hpp>
 #include <orbit/studio_session/VolumeSurfaceEffectState.hpp>
 #include <orbit/studio_session/VolumeSurfaceOutputResolver.hpp>
 #include <orbit/volume_representation/VolumeOutputRuntime.hpp>
@@ -41,6 +42,7 @@ void ResetVolumeOutputRuntime() noexcept
         VolumeParticleRequests().Clear();
     volume_representation::
         VolumeSurfaceRequests().Clear();
+    VolumeParticleOutputs().Clear();
     VolumeSurfaceOutputs().Clear();
     VolumeSurfaceEffects().Clear();
 }
@@ -69,6 +71,12 @@ void TickVolumeOutputRuntime(
         runtime.TickWorld(
             world.Objects(),
             atTime));
+
+    // Particle output is transferred exactly once into a frame packet. M38
+    // deliberately preserves transport data without inventing lifetime,
+    // gravity, collision or visual policy that is not authored yet.
+    VolumeParticleOutputs().Consume(
+        particles.Drain());
 
     // Surface output has a real authoritative consumer at M38. Transfer the
     // raw batch exactly once, resolve it against the owning composed body and
