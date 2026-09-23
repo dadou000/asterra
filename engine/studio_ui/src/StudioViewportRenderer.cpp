@@ -7,6 +7,7 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/studio_ui/StudioTerrainDiagnosticOverlayGeometry.hpp>
 #include <orbit/studio_ui/StudioTerrainOverlayGeometry.hpp>
+#include <orbit/studio_ui/VolumeSurfaceEffectRenderBridge.hpp>
 #include <orbit/world_model/CelestialAtmosphereBinding.hpp>
 #include <orbit/world_model/CelestialCloudBinding.hpp>
 #include <orbit/world_model/CelestialGiantBinding.hpp>
@@ -5358,6 +5359,16 @@ StudioViewportRenderer::Compose(
                 SetPhysicalPages(
                     physicalPages.pages,
                     physicalPages.generation);
+
+            const auto surfaceEffects =
+                BuildVolumeSurfaceEffectRenderBatch(
+                    terrainRuntime->body,
+                    studio_session::VolumeSurfaceEffects().Stamps(),
+                    terrain_render::SurfaceEffectGpuBinding::MaximumStampCount);
+
+            terrain.renderer->
+                SetSurfaceEffects(
+                    surfaceEffects.stamps);
 
             const auto camera =
                 TerrainCameraFromBodyCamera(

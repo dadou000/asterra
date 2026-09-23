@@ -1,4 +1,6 @@
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
+#include <orbit/terrain_render/SurfaceEffectGpuBinding.hpp>
+#include <orbit/terrain_render/SurfaceEffectShader.hpp>
 #include "TerrainSurfaceShader.hpp"
 
 #include <orbit/math/Matrix.hpp>
@@ -824,6 +826,9 @@ public:
           regionDeltaComposite_(regionDeltaComposite),
           hydrologyRegionCache_(hydrologyRegionCache),
           config_(std::move(config)),
+          surfaceEffects_(
+              device,
+              config_.framesInFlight),
           baseClipmapConfig_(
               config_.clipmap),
           layout_(
@@ -940,6 +945,12 @@ public:
             generation;
 
         RecordPhysicalPageRefresh();
+    }
+
+    void SetSurfaceEffects(
+        const std::span<const SurfaceEffectGpuStamp> effects)
+    {
+        surfaceEffects_.Set(effects);
     }
 
     void Draw(
@@ -1065,6 +1076,10 @@ public:
         commandList.
             SetGraphicsPipeline(
                 *pipeline_);
+
+        surfaceEffects_.Bind(
+            commandList,
+            frameIndex);
 
         for (u32 levelIndex = 0;
              levelIndex <
@@ -1307,11 +1322,15 @@ private:
                     .debug = false
                 });
 
+        const std::string pixelShaderSource =
+            BuildSurfaceEffectPixelShader(
+                kPixelShader);
+
         const shader::Binary
             pixelShader =
                 shaderCompiler.Compile({
                     .source =
-                        kPixelShader,
+                        pixelShaderSource,
                     .entryPoint =
                         "main",
                     .stage =
@@ -1346,7 +1365,7 @@ private:
                     .vertexAttributes = {},
                     .vertexStrideBytes = 0,
                     .pushConstantDwords = 56,
-                    .shaderResourceBuffers = 1,
+                    .shaderResourceBuffers = 2,
                     .topology =
                         rhi::
                             PrimitiveTopology::
@@ -2238,6 +2257,7 @@ private:
         regionDeltaBuffers_;
 
     TerrainPreviewConfig config_;
+    SurfaceEffectGpuBinding surfaceEffects_;
     terrain_view::ClipmapConfig
         baseClipmapConfig_{};
     terrain_view::ClipmapLayout layout_;
@@ -2346,6 +2366,12 @@ void TerrainPreviewRenderer::SetPhysicalPages(
     impl_->SetPhysicalPages(
         pages,
         generation);
+}
+
+void TerrainPreviewRenderer::SetSurfaceEffects(
+    const std::span<const SurfaceEffectGpuStamp> effects)
+{
+    impl_->SetSurfaceEffects(effects);
 }
 
 void TerrainPreviewRenderer::Draw(
