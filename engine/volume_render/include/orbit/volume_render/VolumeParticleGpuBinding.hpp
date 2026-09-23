@@ -37,10 +37,11 @@ struct VolumeParticleGpuSpawn
     f32 gravitationalParameterM3PerS2{0.0F};
     math::Float3 surfaceRadiiMeters{};
     f32 gravitySofteningMeters{0.0F};
-    f32 physicalSurfaceEnabled{0.0F};
-    f32 reserved2{0.0F};
-    f32 reserved3{0.0F};
-    f32 reserved4{0.0F};
+
+    // Full 128-bit owning body identity. Surface-authority is encoded in
+    // behaviorFlags bit 4 so this replaces existing reserved words without
+    // increasing the 144-byte GPU record.
+    std::array<u32, 4U> bodyIdentity{};
 };
 
 static_assert(sizeof(VolumeParticleGpuSpawn) == 144U);
