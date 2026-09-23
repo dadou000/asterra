@@ -43,9 +43,7 @@ BuildVolumeParticleRenderBatch(
             [](const Candidate& a, const Candidate& b)
             {
                 if (a.authority != b.authority)
-                {
                     return a.authority > b.authority;
-                }
                 return a.event->request.eventId < b.event->request.eventId;
             });
         candidates.resize(maximumCount);
@@ -61,6 +59,11 @@ BuildVolumeParticleRenderBatch(
             request.positionMeters.x - presentationOriginMeters.x,
             request.positionMeters.y - presentationOriginMeters.y,
             request.positionMeters.z - presentationOriginMeters.z
+        };
+        const math::Double3 bodyCenterRelative{
+            -presentationOriginMeters.x,
+            -presentationOriginMeters.y,
+            -presentationOriginMeters.z
         };
 
         const u32 behaviorFlags =
@@ -85,14 +88,18 @@ BuildVolumeParticleRenderBatch(
             .behaviorFlags = behaviorFlags,
             .baseColor = request.baseColor,
             .emissionColor = request.emissionColor,
-            .surfaceRadiiMeters = {
-                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.x, 0.0)),
-                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.y, 0.0)),
-                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.z, 0.0))},
+            .bodyCenterMeters = {
+                static_cast<f32>(bodyCenterRelative.x),
+                static_cast<f32>(bodyCenterRelative.y),
+                static_cast<f32>(bodyCenterRelative.z)},
             .gravitationalParameterM3PerS2 =
                 std::isfinite(event.physics.gravitationalParameterM3PerS2)
                     ? static_cast<f32>(std::max(event.physics.gravitationalParameterM3PerS2, 0.0))
                     : 0.0F,
+            .surfaceRadiiMeters = {
+                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.x, 0.0)),
+                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.y, 0.0)),
+                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.z, 0.0))},
             .gravitySofteningMeters =
                 std::isfinite(event.physics.gravitySofteningMeters)
                     ? static_cast<f32>(std::max(event.physics.gravitySofteningMeters, 0.0))
