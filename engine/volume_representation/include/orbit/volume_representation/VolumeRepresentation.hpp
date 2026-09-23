@@ -19,6 +19,30 @@ enum class ResolvedRepresentation : u8
     Baked = 3U
 };
 
+enum class FollowTarget : u8
+{
+    AuthoredDomain = 0U,
+    Camera = 1U
+};
+
+struct VolumeRepresentationSettings
+{
+    FollowTarget followTarget{
+        FollowTarget::AuthoredDomain};
+
+    f64 liveDistanceMeters{120.0};
+    f64 passiveDistanceMeters{1200.0};
+    f32 liveProjectedPixels{96.0F};
+    f32 passiveProjectedPixels{12.0F};
+    f32 hysteresisFraction{0.12F};
+
+    // Coarse/passive are deliberately field-free procedural representations.
+    // These budgets bound their screen-space ray work independent of authored
+    // live-field resolution.
+    u32 coarseRaymarchSteps{24U};
+    u32 passiveRaymarchSteps{8U};
+};
+
 struct RepresentationInput
 {
     scene::ObjectId volume{};
@@ -77,6 +101,12 @@ ResolveRepresentation(
 class VolumeRepresentationService
 {
 public:
+    [[nodiscard]] VolumeRepresentationSettings& Settings(
+        scene::ObjectId volume);
+
+    [[nodiscard]] VolumeRepresentationSettings Settings(
+        scene::ObjectId volume) const noexcept;
+
     [[nodiscard]] RepresentationDecision Resolve(
         std::string_view viewportId,
         const RepresentationInput& input);
@@ -98,10 +128,15 @@ private:
             const Key& other) const noexcept;
     };
 
+    std::map<scene::ObjectId, VolumeRepresentationSettings> settings_;
     std::map<Key, RepresentationDecision> decisions_;
 };
 
 [[nodiscard]] std::string_view
 ResolvedRepresentationName(
     ResolvedRepresentation value) noexcept;
+
+[[nodiscard]] std::string_view
+FollowTargetName(
+    FollowTarget value) noexcept;
 } // namespace orbit::volume_representation
