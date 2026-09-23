@@ -80,6 +80,7 @@ int main()
     Check(rhi::TextureFormatBytesPerTexel(rhi::TextureFormat::RGBA16_Float) == 8U);
     Check(rhi::TextureFormatBytesPerTexel(rhi::TextureFormat::R16_Float) == 2U);
     Check(volume_render::VolumeParticleRenderer::MaximumLocalLightCount == 64U);
+    Check(volume_render::VolumeParticleRenderer::ParticleLightGridResolution == 32U);
 
     const universe::BodyId body{
         .high = 0x1122334455667788ULL,

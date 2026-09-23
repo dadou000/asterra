@@ -26,6 +26,7 @@ class VolumeParticleRenderer
 {
 public:
     static constexpr u32 MaximumLocalLightCount = 64U;
+    static constexpr u32 ParticleLightGridResolution = 32U;
 
     VolumeParticleRenderer(
         rhi::Device& device,
@@ -73,6 +74,7 @@ public:
 
     [[nodiscard]] u32 Generation() const noexcept;
     [[nodiscard]] u32 SubmittedSpawnCount() const noexcept;
+    [[nodiscard]] rhi::Buffer& ParticleLightGrid() noexcept;
 
 private:
     struct OitTargets
@@ -105,6 +107,10 @@ private:
     std::unique_ptr<rhi::GraphicsPipeline> dropletPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> oitTemporalPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> oitCompositePipeline_;
+    std::unique_ptr<rhi::ComputePipeline> particleLightGridPipeline_;
+    std::unique_ptr<rhi::Buffer> particleLightGrid_;
+    std::unique_ptr<rhi::Buffer> zeroParticleLightGridUpload_;
+    rhi::ResourceState particleLightGridState_{rhi::ResourceState::CopyDestination};
     std::map<std::pair<u64, u64>, std::vector<OitTargets>> oitTargets_;
     std::vector<VolumeParticleTerrainCollisionPage> terrainCollisionPages_;
 };
