@@ -188,9 +188,20 @@ public:
     explicit VolumeFieldStorageService(
         rhi::Device& device) noexcept;
 
+#ifdef ORBIT_VOLUME_FIELDS_BASE_IMPLEMENTATION
+    [[nodiscard]] VolumeFieldStorage&
+    EnsureBase(
+        const world_model::ResolvedVolumeDomain& domain);
+#else
     [[nodiscard]] VolumeFieldStorage&
     Ensure(
         const world_model::ResolvedVolumeDomain& domain);
+
+    // M31 implementation retained as the allocation backend for M36 policy.
+    [[nodiscard]] VolumeFieldStorage&
+    EnsureBase(
+        const world_model::ResolvedVolumeDomain& domain);
+#endif
 
     [[nodiscard]] u32 SyncAuthoredInputs(
         const scene::ObjectStore& objects,
