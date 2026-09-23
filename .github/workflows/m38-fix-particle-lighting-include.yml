@@ -1,0 +1,34 @@
+name: M38 Fix Particle Lighting Include
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - '.github/workflows/m38-fix-particle-lighting-include.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('engine/volume_render/src/VolumeParticleRenderer.cpp')
+          t=p.read_text()
+          old='#include <cmath>\n#include <stdexcept>'
+          new='#include <cmath>\n#include <cstring>\n#include <stdexcept>'
+          if old not in t: raise SystemExit('include seam missing')
+          p.write_text(t.replace(old,new,1))
+          PY
+      - name: Commit
+        run: |
+          rm .github/workflows/m38-fix-particle-lighting-include.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Fix M38 particle light upload include'
+          git push origin HEAD:orbit
