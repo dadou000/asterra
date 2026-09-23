@@ -760,6 +760,10 @@ private:
     SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
     volume_render::UniversalVolumeRenderer universalVolumeRenderer_;
     volume_render::VolumeParticleRenderer volumeParticleRenderer_;
+    u64 particleOutputGeneration_{0U};
+    time::SimulationTime particleSimulationTime_{};
+    bool particleSimulationTimeValid_{false};
+    math::Double3 particlePresentationOriginMeters_{};
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
     lighting::MaterialEmissionSurfaceOverrideRenderer

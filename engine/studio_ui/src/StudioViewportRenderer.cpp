@@ -10794,25 +10794,82 @@ StudioViewportRenderer::Compose(
         }
 
         {
-            // M38 particle output is an exactly-once simulation packet. Build
-            // this viewport's GPU packet relative to the camera itself so the
-            // float representation retains local precision at planetary scale.
-            const auto particleSpawns =
-                BuildVolumeParticleRenderBatch(
-                    studio_session::VolumeParticleOutputs().Events(),
-                    view->Camera().localPositionMeters);
+            // M38 particle simulation is shared by all Studio viewports. The
+            // authoritative output generation advances GPU state exactly once;
+            // later viewports only render that already-advanced state.
+            const auto& particleOutput =
+                studio_session::VolumeParticleOutputs();
+            const u64 outputGeneration =
+                particleOutput.Diagnostics().generation;
 
-            if (!particleSpawns.empty())
+            if (outputGeneration < particleOutputGeneration_)
             {
+                volumeParticleRenderer_.Reset();
+                particleOutputGeneration_ = 0U;
+                particleSimulationTimeValid_ = false;
+                particlePresentationOriginMeters_ = {};
+            }
+
+            bool advanceParticleState = false;
+            f64 particleDeltaSeconds = 0.0;
+            math::Double3 previousParticleOrigin =
+                particlePresentationOriginMeters_;
+            math::Double3 nextParticleOrigin =
+                particlePresentationOriginMeters_;
+
+            if (outputGeneration > 0U &&
+                outputGeneration != particleOutputGeneration_)
+            {
+                nextParticleOrigin =
+                    view->Camera().localPositionMeters;
+                previousParticleOrigin =
+                    particleOutputGeneration_ == 0U
+                        ? nextParticleOrigin
+                        : particlePresentationOriginMeters_;
+
+                const auto particleSpawns =
+                    BuildVolumeParticleRenderBatch(
+                        particleOutput.Events(),
+                        nextParticleOrigin);
                 volumeParticleRenderer_.SetSpawns(
                     particleSpawns);
 
+                if (particleSimulationTimeValid_)
+                {
+                    particleDeltaSeconds =
+                        static_cast<f64>(
+                            (atTime - particleSimulationTime_).count()) /
+                        1000000.0;
+                    if (!std::isfinite(particleDeltaSeconds) ||
+                        particleDeltaSeconds < 0.0)
+                    {
+                        particleDeltaSeconds = 0.0;
+                    }
+                }
+
+                particleOutputGeneration_ =
+                    outputGeneration;
+                particleSimulationTime_ = atTime;
+                particleSimulationTimeValid_ = true;
+                particlePresentationOriginMeters_ =
+                    nextParticleOrigin;
+                advanceParticleState = true;
+            }
+
+            if (particleOutputGeneration_ > 0U)
+            {
                 const auto camera =
                     view->Camera();
-                auto* particleColor =
-                    color;
-                auto* particleDepth =
-                    &view->Depth();
+                const math::Double3 cameraRelativeToParticleOrigin{
+                    camera.localPositionMeters.x -
+                        particlePresentationOriginMeters_.x,
+                    camera.localPositionMeters.y -
+                        particlePresentationOriginMeters_.y,
+                    camera.localPositionMeters.z -
+                        particlePresentationOriginMeters_.z
+                };
+                auto* particleColor = color;
+                auto* particleDepth = &view->Depth();
                 const u32 particleFrameIndex =
                     frameIndex % framesInFlight_;
 
@@ -10840,10 +10897,25 @@ StudioViewportRenderer::Compose(
                      width,
                      height,
                      camera,
-                     particleFrameIndex](
+                     cameraRelativeToParticleOrigin,
+                     particleFrameIndex,
+                     advanceParticleState,
+                     particleDeltaSeconds,
+                     previousParticleOrigin,
+                     nextParticleOrigin](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
+                        if (advanceParticleState)
+                        {
+                            volumeParticleRenderer_.Advance(
+                                commands,
+                                particleFrameIndex,
+                                particleDeltaSeconds,
+                                previousParticleOrigin,
+                                nextParticleOrigin);
+                        }
+
                         volumeParticleRenderer_.Draw(
                             commands,
                             *particleColor,
@@ -10851,13 +10923,8 @@ StudioViewportRenderer::Compose(
                             width,
                             height,
                             camera,
-                            {},
-                            particleFrameIndex);
+                            cameraRelativeToParticleOrigin);
                     });
-            }
-            else
-            {
-                volumeParticleRenderer_.SetSpawns({});
             }
         }
 
