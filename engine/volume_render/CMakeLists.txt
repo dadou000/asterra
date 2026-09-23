@@ -1,5 +1,6 @@
 add_library(OrbitVolumeRender STATIC
     src/UniversalVolumeRenderer.cpp
+    src/VolumeParticleGpuBinding.cpp
     src/VolumeRepresentationPass.cpp
 )
 
