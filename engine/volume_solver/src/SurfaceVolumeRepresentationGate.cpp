@@ -12,16 +12,28 @@ void SurfaceVolumeSolverService::AddPasses(
     const volume_fields::ImportedVolumeFields& fields,
     const u32 frameSlot)
 {
-    if (const auto policy =
-            volume_representation::AllocationPolicy(
-                domain.object);
-        policy.has_value() &&
-        !policy->denseFieldRequired)
+    const auto policy =
+        volume_representation::AllocationPolicy(
+            domain.object);
+
+    const bool authoredFarForce =
+        domain.representationMode ==
+            world_model::VolumeRepresentationMode::Coarse ||
+        domain.representationMode ==
+            world_model::VolumeRepresentationMode::Passive ||
+        domain.representationMode ==
+            world_model::VolumeRepresentationMode::Baked;
+
+    if ((policy.has_value() &&
+         !policy->denseFieldRequired) ||
+        (!policy.has_value() &&
+         authoredFarForce))
     {
         // M36 coarse/passive/baked representations are intentionally
         // non-interactive. Their bounded procedural aggregate fields are
         // populated by the representation renderer; no M33/M34 compute work
-        // is scheduled while they are active.
+        // is scheduled while they are active. The authored-mode fallback also
+        // closes the first-frame gap before a viewport has published policy.
         return;
     }
 
