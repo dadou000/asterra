@@ -5,6 +5,8 @@
 #include <iostream>
 #include <source_location>
 
+void RunVolumeCacheTests();
+
 namespace
 {
 void Check(
@@ -106,7 +108,7 @@ int main()
         ResolvedRepresentation::Coarse);
     Check(!forced.denseFieldRequired);
 
-    // Baked cannot silently claim a cache before M37 supplies one.
+    // Baked explicitly falls back until M37 supplies a validated cache.
     input.authoredMode =
         world_model::VolumeRepresentationMode::Baked;
     input.bakedAvailable = false;
@@ -118,10 +120,23 @@ int main()
     Check(missingBake.representation ==
         ResolvedRepresentation::Passive);
 
+    // Once M37 publishes a cache, Baked becomes a first-class representation.
+    input.bakedAvailable = true;
+    const auto availableBake =
+        ResolveRepresentation(
+            input,
+            ResolvedRepresentation::Passive);
+    Check(!availableBake.bakedFallback);
+    Check(availableBake.representation ==
+        ResolvedRepresentation::Baked);
+    Check(availableBake.bakedWeight == 1.0F);
+    Check(!availableBake.denseFieldRequired);
+
     // Stable identity is semantic frame/body/object + stable frame-space cell
     // state and is therefore unchanged by a presentation-origin rebase.
     input.authoredMode =
         world_model::VolumeRepresentationMode::Auto;
+    input.bakedAvailable = false;
     input.observerInFrameMeters =
         {1000000.0,2000000.0,3000000.0};
     input.volumeCenterInFrameMeters =
@@ -208,5 +223,6 @@ int main()
     ClearAllocationPolicy(volumeId);
     Check(!AllocationPolicy(volumeId).has_value());
 
+    RunVolumeCacheTests();
     return 0;
 }
