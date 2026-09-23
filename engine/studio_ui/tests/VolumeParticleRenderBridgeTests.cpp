@@ -1,5 +1,6 @@
 #include <orbit/studio_session/VolumeParticleOutputState.hpp>
 #include <orbit/studio_ui/VolumeParticleRenderBridge.hpp>
+#include <orbit/volume_render/VolumeParticleGpuState.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -19,6 +20,10 @@ void Check(const bool condition)
 int main()
 {
     using namespace orbit;
+
+    Check(sizeof(volume_render::VolumeParticleGpuSplashEvent) == 48U);
+    Check(volume_render::VolumeParticleGpuState::MaximumSplashEventCount == 4096U);
+    Check(volume_render::VolumeParticleGpuState::SplashGraphicsBufferSlot == 3U);
 
     const universe::BodyId body{
         .high = 0x1122334455667788ULL,
@@ -111,7 +116,6 @@ int main()
     Check((full[0].behaviorFlags & (1U << 4U)) != 0U);
     Check((full[0].behaviorFlags & (1U << 5U)) != 0U);
     Check((full[0].behaviorFlags & (1U << 6U)) != 0U);
-    // Runtime-only water state must never be authored by the CPU bridge.
     Check((full[0].behaviorFlags & (1U << 30U)) == 0U);
     Check((full[0].behaviorFlags & (1U << 31U)) == 0U);
     Check(full[0].baseColor.x == 0.2F);
