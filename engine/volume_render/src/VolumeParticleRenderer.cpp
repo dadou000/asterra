@@ -29,6 +29,14 @@ struct Particle
     uint behaviorFlags;
     float3 emissionColor;
     uint generation;
+    float3 bodyCenterMeters;
+    float gravitationalParameterM3PerS2;
+    float3 surfaceRadiiMeters;
+    float gravitySofteningMeters;
+    float physicalSurfaceEnabled;
+    float reserved0;
+    float reserved1;
+    float reserved2;
 };
 
 [[vk::binding(2, 0)]]

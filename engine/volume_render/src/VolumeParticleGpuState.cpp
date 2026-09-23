@@ -30,6 +30,14 @@ struct Spawn
     float reserved0;
     float3 emissionColor;
     float reserved1;
+    float3 bodyCenterMeters;
+    float gravitationalParameterM3PerS2;
+    float3 surfaceRadiiMeters;
+    float gravitySofteningMeters;
+    float physicalSurfaceEnabled;
+    float reserved2;
+    float reserved3;
+    float reserved4;
 };
 
 struct Particle
@@ -50,6 +58,14 @@ struct Particle
     uint behaviorFlags;
     float3 emissionColor;
     uint generation;
+    float3 bodyCenterMeters;
+    float gravitationalParameterM3PerS2;
+    float3 surfaceRadiiMeters;
+    float gravitySofteningMeters;
+    float physicalSurfaceEnabled;
+    float reserved0;
+    float reserved1;
+    float reserved2;
 };
 
 [[vk::binding(0, 0)]]
@@ -103,11 +119,72 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
             if (particle.ageSeconds < particle.lifetimeSeconds)
             {
                 particle.positionMeters += g.originDelta.xyz;
+                particle.bodyCenterMeters += g.originDelta.xyz;
+
+                const uint gravityMode = particle.behaviorFlags & 0x3u;
+                if (gravityMode == 1u &&
+                    particle.gravitationalParameterM3PerS2 > 0.0 &&
+                    particle.gravityScale > 0.0)
+                {
+                    const float3 radial = particle.positionMeters - particle.bodyCenterMeters;
+                    const float softening = max(particle.gravitySofteningMeters, 0.0);
+                    const float radius2 = dot(radial, radial) + softening * softening;
+                    if (radius2 > 1.0e-6)
+                    {
+                        const float inverseRadius = rsqrt(radius2);
+                        const float inverseRadius3 = inverseRadius * inverseRadius * inverseRadius;
+                        particle.velocityMetersPerSecond +=
+                            -radial * particle.gravitationalParameterM3PerS2 *
+                            particle.gravityScale * inverseRadius3 * dt;
+                    }
+                }
+
                 const float dragScale = exp(-max(particle.linearDragPerSecond, 0.0) * dt);
                 particle.velocityMetersPerSecond *= dragScale;
-                particle.positionMeters +=
-                    particle.velocityMetersPerSecond * dt;
-                AppendParticle(particle);
+                particle.positionMeters += particle.velocityMetersPerSecond * dt;
+
+                const uint collisionMode = (particle.behaviorFlags >> 2u) & 0x3u;
+                bool keepParticle = true;
+                if (collisionMode != 0u && particle.physicalSurfaceEnabled > 0.5)
+                {
+                    const float3 radii = max(particle.surfaceRadiiMeters, 0.001);
+                    const float3 local = particle.positionMeters - particle.bodyCenterMeters;
+                    const float normalizedRadius2 = dot(local / radii, local / radii);
+                    if (normalizedRadius2 <= 1.0)
+                    {
+                        if (collisionMode == 1u)
+                        {
+                            keepParticle = false;
+                        }
+                        else
+                        {
+                            const float scale = rsqrt(max(normalizedRadius2, 1.0e-12));
+                            const float3 surfacePoint = local * scale;
+                            const float3 normal = normalize(surfacePoint / (radii * radii));
+                            particle.positionMeters =
+                                particle.bodyCenterMeters + surfacePoint +
+                                normal * max(particle.radiusMeters, 0.001);
+                            const float normalSpeed = dot(particle.velocityMetersPerSecond, normal);
+                            if (normalSpeed < 0.0)
+                            {
+                                if (collisionMode == 2u)
+                                {
+                                    particle.velocityMetersPerSecond -= normal * normalSpeed;
+                                }
+                                else
+                                {
+                                    particle.velocityMetersPerSecond -=
+                                        normal * normalSpeed * (1.0 + saturate(particle.restitution));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (keepParticle)
+                {
+                    AppendParticle(particle);
+                }
             }
         }
     }
@@ -131,6 +208,14 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         particle.baseColor = max(spawn.baseColor, 0.0);
         particle.behaviorFlags = spawn.behaviorFlags;
         particle.emissionColor = max(spawn.emissionColor, 0.0);
+        particle.bodyCenterMeters = spawn.bodyCenterMeters;
+        particle.gravitationalParameterM3PerS2 = max(spawn.gravitationalParameterM3PerS2, 0.0);
+        particle.surfaceRadiiMeters = max(spawn.surfaceRadiiMeters, 0.0);
+        particle.gravitySofteningMeters = max(spawn.gravitySofteningMeters, 0.0);
+        particle.physicalSurfaceEnabled = spawn.physicalSurfaceEnabled;
+        particle.reserved0 = 0.0;
+        particle.reserved1 = 0.0;
+        particle.reserved2 = 0.0;
         particle.generation = g.counts.y;
         AppendParticle(particle);
     }

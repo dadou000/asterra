@@ -76,6 +76,9 @@ void TickVolumeOutputRuntime(
     // deliberately preserves transport data without inventing lifetime,
     // gravity, collision or visual policy that is not authored yet.
     VolumeParticleOutputs().Consume(
+        world.Objects(),
+        world.Universe(),
+        world.Surfaces(),
         particles.Drain());
 
     // Surface output has a real authoritative consumer at M38. Transfer the
