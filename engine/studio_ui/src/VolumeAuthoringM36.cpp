@@ -1,3 +1,18 @@
+// Pre-include every dependency used by the preserved implementation before the
+// method-name macros below. Include guards then prevent Register/Draw from
+// leaking into dependency declarations; only VolumeAuthoringUi's two method
+// definitions are renamed into the M30-M35 base implementation.
+#include <orbit/studio_ui/VolumeAuthoringUi.hpp>
+#include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/studio_ui/StudioViewportRenderer.hpp>
+#include <orbit/world_model/VolumeSchemas.hpp>
+
+#include <array>
+#include <exception>
+#include <format>
+#include <optional>
+#include <utility>
+
 // M36 wraps the preserved M30-M35 Volumes implementation in the same
 // translation unit. This keeps one panel and one authoring workflow while
 // allowing the representation policy to extend it without copying thousands of
@@ -11,9 +26,7 @@
 #include <orbit/volume_representation/VolumeRepresentation.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
-#include <format>
 
 namespace orbit::studio_ui
 {
