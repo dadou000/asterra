@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/VolumeSurfaceEffectRenderBridge.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -24,26 +25,27 @@ int main()
 
     const universe::BodyId bodyA{1U, 2U};
     const universe::BodyId bodyB{3U, 4U};
+    constexpr f64 radius = 4'200'000.0;
 
     const VolumeSurfaceEffectStamp source[]{
         {
             .body = bodyA,
             .effect = VolumeSurfaceEffect::Wetness,
-            .bodyLocalSurfacePointMeters = {10.0, 20.0, 30.0},
+            .bodyLocalSurfacePointMeters = {radius, 0.0, 0.0},
             .radiusMeters = 3.0F,
             .amount = 0.25F
         },
         {
             .body = bodyA,
             .effect = VolumeSurfaceEffect::Heat,
-            .bodyLocalSurfacePointMeters = {40.0, 50.0, 60.0},
+            .bodyLocalSurfacePointMeters = {0.0, radius, 0.0},
             .radiusMeters = 5.0F,
             .amount = 2.0F
         },
         {
             .body = bodyB,
             .effect = VolumeSurfaceEffect::Soot,
-            .bodyLocalSurfacePointMeters = {70.0, 80.0, 90.0},
+            .bodyLocalSurfacePointMeters = {0.0, 0.0, radius},
             .radiusMeters = 4.0F,
             .amount = 8.0F
         }
@@ -52,6 +54,7 @@ int main()
     const auto batch =
         BuildVolumeSurfaceEffectRenderBatch(
             bodyA,
+            radius,
             source,
             8U);
 
@@ -61,11 +64,15 @@ int main()
     Check(batch.stamps.size() == 2U);
     Check(batch.stamps[0].effect == terrain_render::SurfaceEffectKind::Heat);
     Check(batch.stamps[0].amount == 2.0F);
+    Check(std::abs(batch.stamps[0].bodyFixedDirection.y - 1.0F) < 1.0e-6F);
+    Check(std::abs(batch.stamps[0].angularRadiusRadians - 5.0F / static_cast<f32>(radius)) < 1.0e-10F);
     Check(batch.stamps[1].effect == terrain_render::SurfaceEffectKind::Wetness);
+    Check(std::abs(batch.stamps[1].bodyFixedDirection.x - 1.0F) < 1.0e-6F);
 
     const auto constrained =
         BuildVolumeSurfaceEffectRenderBatch(
             bodyA,
+            radius,
             source,
             1U);
     Check(constrained.stamps.size() == 1U);
