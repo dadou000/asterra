@@ -1,0 +1,291 @@
+#include <orbit/volume_render/VolumeParticleRenderer.hpp>
+
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cmath>
+#include <stdexcept>
+
+namespace orbit::volume_render
+{
+namespace
+{
+constexpr const char* kVertexShader = R"(
+struct Spawn
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float reserved0;
+    float reserved1;
+    float reserved2;
+};
+
+[[vk::binding(2, 0)]]
+StructuredBuffer<Spawn> g_spawns : register(t2);
+
+struct Push
+{
+    float4 projection;
+    float4 forward;
+    float4 up;
+    float4 camera;
+    float4 viewport;
+};
+
+[[vk::push_constant]]
+Push g;
+
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float authority : TEXCOORD1;
+    float density : TEXCOORD2;
+    float emission : TEXCOORD3;
+};
+
+float4 Project(float3 relative)
+{
+    const float3 forward = normalize(g.forward.xyz);
+    const float3 requestedUp = normalize(g.up.xyz);
+    const float3 right = normalize(cross(forward, requestedUp));
+    const float3 cameraUp = normalize(cross(right, forward));
+
+    const float z = dot(relative, forward);
+    if (z <= g.projection.z || z >= g.projection.w)
+    {
+        return float4(2.0, 2.0, 1.0, 1.0);
+    }
+
+    const float x = dot(relative, right);
+    const float y = dot(relative, cameraUp);
+
+    return float4(
+        x / (max(g.projection.x, 0.001) * max(g.projection.y, 0.001)),
+        -y / max(g.projection.y, 0.001),
+        z * 0.5,
+        z);
+}
+
+VSOutput main(uint vertexId : SV_VertexID)
+{
+    static const float2 corners[6] =
+    {
+        float2(-1.0, -1.0),
+        float2( 1.0, -1.0),
+        float2( 1.0,  1.0),
+        float2(-1.0, -1.0),
+        float2( 1.0,  1.0),
+        float2(-1.0,  1.0)
+    };
+
+    const uint spawnIndex = vertexId / 6u;
+    const uint cornerIndex = vertexId % 6u;
+    const Spawn spawn = g_spawns[spawnIndex];
+
+    VSOutput output;
+    const float4 center = Project(spawn.positionMeters - g.camera.xyz);
+
+    if (center.w <= 0.0)
+    {
+        output.position = center;
+        output.uv = 0.0;
+        output.authority = 0.0;
+        output.density = 0.0;
+        output.emission = 0.0;
+        return output;
+    }
+
+    const float2 ndcPerPixel = float2(
+        2.0 / max(g.viewport.x, 1.0),
+        2.0 / max(g.viewport.y, 1.0));
+    const float2 corner = corners[cornerIndex];
+    const float radiusPixels = max(g.viewport.z, 0.5);
+
+    output.position = center;
+    output.position.xy += corner * ndcPerPixel * radiusPixels * center.w;
+    output.uv = corner;
+    output.authority = max(spawn.authority, 0.0);
+    output.density = max(spawn.density, 0.0);
+    output.emission = max(spawn.emission, 0.0);
+    return output;
+}
+)";
+
+constexpr const char* kPixelShader = R"(
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float authority : TEXCOORD1;
+    float density : TEXCOORD2;
+    float emission : TEXCOORD3;
+};
+
+float4 main(VSOutput input) : SV_Target0
+{
+    const float radius2 = dot(input.uv, input.uv);
+    if (radius2 >= 1.0)
+    {
+        discard;
+    }
+
+    const float soft = 1.0 - smoothstep(0.30, 1.0, radius2);
+    const float density = saturate(input.density);
+    const float emission = max(input.emission, 0.0);
+    const float authority = saturate(input.authority);
+
+    const float3 densityColor = lerp(
+        float3(0.70, 0.76, 0.82),
+        float3(0.93, 0.96, 1.00),
+        density);
+    const float3 emissiveColor = float3(1.00, 0.42, 0.08) * emission;
+    const float3 color = densityColor + emissiveColor;
+    const float alpha = soft * saturate(0.16 + 0.64 * authority + 0.20 * density);
+
+    return float4(color, alpha);
+}
+)";
+}
+
+VolumeParticleRenderer::VolumeParticleRenderer(
+    rhi::Device& device,
+    const shader::Compiler& compiler,
+    const u32 framesInFlight)
+    : binding_(device, framesInFlight)
+{
+    const auto vertex = compiler.Compile({
+        .source = kVertexShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Vertex,
+        .debug = false
+    });
+    const auto pixel = compiler.Compile({
+        .source = kPixelShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false
+    });
+
+    if (vertex.bytecode.empty() || pixel.bytecode.empty())
+    {
+        throw std::runtime_error(
+            "Orbit failed to compile M38 particle presentation shaders.");
+    }
+
+    pipeline_ = device.CreateGraphicsPipeline({
+        .vertexShader = {
+            .data = vertex.bytecode.data(),
+            .size = vertex.bytecode.size()
+        },
+        .pixelShader = {
+            .data = pixel.bytecode.data(),
+            .size = pixel.bytecode.size()
+        },
+        .vertexAttributes = {},
+        .vertexStrideBytes = 0U,
+        .pushConstantDwords = 20U,
+        .shaderResourceBuffers = 3U,
+        .sampledTextures = 0U,
+        .topology = rhi::PrimitiveTopology::TriangleList,
+        .fillMode = rhi::FillMode::Solid,
+        .cullMode = rhi::CullMode::None,
+        .blendMode = rhi::BlendMode::Alpha,
+        .depthCompare = rhi::DepthCompare::LessEqual,
+        .depthTest = true,
+        .depthWrite = false,
+        .colorAttachmentFormats = {
+            rhi::TextureFormat::RGBA16_Float
+        },
+        .colorAttachmentCount = 1U
+    });
+}
+
+void VolumeParticleRenderer::SetSpawns(
+    const std::span<const VolumeParticleGpuSpawn> spawns)
+{
+    binding_.Set(spawns);
+}
+
+void VolumeParticleRenderer::Draw(
+    rhi::CommandList& commands,
+    rhi::Texture& sceneColor,
+    rhi::Texture& depth,
+    const u32 width,
+    const u32 height,
+    const render_view::CameraState& camera,
+    const math::Double3 cameraPositionRelativeToPresentationOriginMeters,
+    const u32 frameIndex,
+    const f32 radiusPixels)
+{
+    const u32 spawnCount = binding_.ActiveSpawnCount();
+    if (spawnCount == 0U || width == 0U || height == 0U)
+    {
+        return;
+    }
+
+    const f32 tanHalfFov = std::tan(camera.verticalFovRadians * 0.5F);
+    const auto bits = [](const f32 value)
+    {
+        return std::bit_cast<u32>(value);
+    };
+
+    std::array<u32, 20> constants{};
+    constants[0] = bits(
+        static_cast<f32>(width) /
+        static_cast<f32>(height));
+    constants[1] = bits(tanHalfFov);
+    constants[2] = bits(camera.nearPlaneMeters);
+    constants[3] = bits(camera.farPlaneMeters);
+
+    constants[4] = bits(camera.forward.x);
+    constants[5] = bits(camera.forward.y);
+    constants[6] = bits(camera.forward.z);
+
+    constants[8] = bits(camera.up.x);
+    constants[9] = bits(camera.up.y);
+    constants[10] = bits(camera.up.z);
+
+    constants[12] = bits(static_cast<f32>(
+        cameraPositionRelativeToPresentationOriginMeters.x));
+    constants[13] = bits(static_cast<f32>(
+        cameraPositionRelativeToPresentationOriginMeters.y));
+    constants[14] = bits(static_cast<f32>(
+        cameraPositionRelativeToPresentationOriginMeters.z));
+
+    constants[16] = bits(static_cast<f32>(width));
+    constants[17] = bits(static_cast<f32>(height));
+    constants[18] = bits(
+        std::isfinite(radiusPixels)
+            ? std::max(radiusPixels, 0.5F)
+            : 3.0F);
+
+    commands.SetRenderTargets(sceneColor, depth);
+    commands.SetViewport({
+        .x = 0.0F,
+        .y = 0.0F,
+        .width = static_cast<f32>(width),
+        .height = static_cast<f32>(height),
+        .minDepth = 0.0F,
+        .maxDepth = 1.0F
+    });
+    commands.SetScissor({
+        .left = 0,
+        .top = 0,
+        .right = static_cast<i32>(width),
+        .bottom = static_cast<i32>(height)
+    });
+    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsConstants(constants);
+    binding_.Bind(commands, frameIndex);
+    commands.Draw(spawnCount * 6U);
+}
+
+u32 VolumeParticleRenderer::ActiveSpawnCount() const noexcept
+{
+    return binding_.ActiveSpawnCount();
+}
+} // namespace orbit::volume_render
