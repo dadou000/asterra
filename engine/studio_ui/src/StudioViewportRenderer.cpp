@@ -8945,6 +8945,7 @@ StudioViewportRenderer::Compose(
                  lightingView,
                  historyCompatible,
                  gatherSettings,
+                 particleLightGridForDirect,
                  lightingTimestamps,
                  frameIndex](
                     rhi::CommandList& commands,
@@ -8976,6 +8977,7 @@ StudioViewportRenderer::Compose(
                         height,
                         lightingView,
                         historyCompatible,
+                        particleLightGridForDirect,
                         gatherSettings);
                 });
 

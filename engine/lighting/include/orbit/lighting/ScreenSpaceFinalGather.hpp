@@ -46,6 +46,7 @@ public:
         u32 height,
         const LightingView& view,
         bool historyCompatible,
+        rhi::Buffer* particleLightGrid = nullptr,
         const ScreenSpaceFinalGatherSettings& settings = {});
 
     void Combine(
@@ -60,5 +61,6 @@ public:
 private:
     std::unique_ptr<rhi::ComputePipeline> gatherPipeline_;
     std::unique_ptr<rhi::ComputePipeline> combinePipeline_;
+    std::unique_ptr<rhi::Buffer> dummyParticleLightGrid_;
 };
 } // namespace orbit::lighting
