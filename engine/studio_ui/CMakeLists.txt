@@ -11,7 +11,7 @@ add_library(OrbitStudioUi STATIC
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
-    src/VolumeAuthoringUi.cpp
+    src/VolumeAuthoringM36.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
@@ -58,6 +58,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::VolumeFields
         Orbit::VolumeSolver
         Orbit::VolumeRender
+        Orbit::VolumeRepresentation
 )
 
 target_compile_features(OrbitStudioUi PUBLIC cxx_std_23)
