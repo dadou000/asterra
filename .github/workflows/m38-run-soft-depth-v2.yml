@@ -1,0 +1,33 @@
+name: M38 Run Soft Depth V2
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - 'tools/m38_soft_depth_patch_v2.py'
+      - '.github/workflows/m38-run-soft-depth-v2.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Apply patch
+        run: python3 tools/m38_soft_depth_patch_v2.py
+      - name: Verify
+        run: |
+          grep -q 'SetRenderTargetsReadOnlyDepth' engine/rhi/include/orbit/rhi/Command.hpp
+          grep -q 'VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL' engine/rhi/vulkan/src/VulkanCommands.cpp
+          grep -q 'SoftDepth' engine/volume_render/src/VolumeParticleRenderer.cpp
+          grep -q 'commands.SetGraphicsTexture(0U,depth)' engine/volume_render/src/VolumeParticleRenderer.cpp
+      - name: Commit
+        run: |
+          rm -f tools/m38_soft_depth_patch.py tools/m38_soft_depth_patch_v2.py
+          rm -f .github/workflows/m38-run-soft-depth.yml .github/workflows/m38-run-soft-depth-retry.yml .github/workflows/m38-run-soft-depth-retry2.yml .github/workflows/m38-run-soft-depth-v2.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Add soft depth intersections for M38 effects'
+          git push origin HEAD:orbit
