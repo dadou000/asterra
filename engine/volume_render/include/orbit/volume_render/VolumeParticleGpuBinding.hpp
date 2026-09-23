@@ -29,14 +29,20 @@ struct VolumeParticleGpuSpawn
     f32 reserved0{0.0F};
     math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
     f32 reserved1{0.0F};
+
+    // Owning-body physics authority. Positions are body-local, therefore the
+    // gravity center is exactly the body-frame origin and does not need to be
+    // carried per particle.
+    math::Float3 surfaceRadiiMeters{};
+    f32 gravitationalParameterM3PerS2{0.0F};
+    f32 gravitySofteningMeters{0.0F};
+    f32 physicalSurfaceEnabled{0.0F};
+    f32 reserved2{0.0F};
+    f32 reserved3{0.0F};
 };
 
-static_assert(sizeof(VolumeParticleGpuSpawn) == 96U);
+static_assert(sizeof(VolumeParticleGpuSpawn) == 128U);
 
-// Frame-in-flight-safe upload seam for M38 particle spawn packets. This class
-// deliberately owns no particle lifetime or simulation state: it transfers the
-// authoritative per-simulation-step spawn packet to GPU-visible memory so a
-// particle backend can consume it without a full volume-field readback.
 class VolumeParticleGpuBinding
 {
 public:
