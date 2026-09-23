@@ -19,6 +19,7 @@ namespace orbit::studio_session
 {
 struct VolumeParticlePhysicsEnvironment
 {
+    universe::BodyId body{};
     f64 gravitationalParameterM3PerS2{0.0};
     f64 gravitySofteningMeters{0.0};
     math::Double3 surfaceRadiiMeters{};
@@ -79,6 +80,7 @@ public:
             }
 
             VolumeParticlePhysicsEnvironment physics{};
+            physics.body = *bodyId;
             physics.surfaceRadiiMeters = ShapeRadii(body->shape);
             physics.hasPhysicalSurface =
                 surfaces.TerrainObjectForBody(*bodyId).has_value();
