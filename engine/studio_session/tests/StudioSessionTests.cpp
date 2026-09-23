@@ -2,6 +2,7 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_session/VolumeSurfaceEffectState.hpp>
 #include <orbit/studio_session/VolumeSurfaceOutputResolver.hpp>
 #include <orbit/volume_representation/VolumeCache.hpp>
 #include <orbit/volume_representation/VolumeOutputCoupling.hpp>
@@ -173,8 +174,6 @@ void CheckVolumeOutputSimulationCadence(
     settings.particleRatePerSecond = 10.0F;
     settings.particleBudgetPerStep = 10U;
 
-    // StudioSession::Tick is the sole M38 producer cadence. Advancing the
-    // simulation clock by half a second produces exactly five requests.
     studio.Clock().Advance(0.5);
     static_cast<void>(studio.Tick(false));
     Check(VolumeParticleRequests().Pending().size() == 5U);
@@ -182,8 +181,6 @@ void CheckVolumeOutputSimulationCadence(
         VolumeOutputRuntimeService().Diagnostics().
             dispatchedParticleRequests == 5U);
 
-    // A second Studio tick without simulation-time advance starts a fresh
-    // step, clears the previous queue, and emits no duplicate render/UI work.
     static_cast<void>(studio.Tick(false));
     Check(VolumeParticleRequests().Pending().empty());
     Check(
@@ -223,7 +220,9 @@ void CheckVolumeSurfaceProjection(
             .radiusMeters = 0.5F,
             .amount = 0.75F,
             .density = 1.0F,
-            .emission = 0.0F
+            .emission = 0.0F,
+            .effect = VolumeSurfaceEffect::Soot,
+            .halfLifeSeconds = 8.0F
         }
     };
 
@@ -244,14 +243,13 @@ void CheckVolumeSurfaceProjection(
     Check(resolved.volume == volume);
     Check(resolved.body == runtimeBody);
     Check(resolved.request.eventId == 0x380001U);
+    Check(resolved.request.effect == VolumeSurfaceEffect::Soot);
+    Check(std::abs(resolved.request.halfLifeSeconds - 8.0F) < 1.0e-6F);
     Check(std::abs(
         resolved.bodyLocalSurfacePointMeters.x -
         radiusMeters) < 1.0e-4);
     Check(std::abs(resolved.bodyLocalSurfacePointMeters.y) < 1.0e-6);
     Check(std::abs(resolved.bodyLocalSurfacePointMeters.z) < 1.0e-6);
-
-    // This +X test is intentionally incompatible with a hidden global -Y
-    // projection. The resolved point must stay on the +X radial line.
     Check(std::abs(resolved.coordinate.latitudeRadians) < 1.0e-8);
     Check(std::abs(resolved.coordinate.longitudeRadians) < 1.0e-8);
 
@@ -265,6 +263,102 @@ void CheckVolumeSurfaceProjection(
         rejected);
     Check(resolver.Resolved().empty());
     Check(resolver.Diagnostics().projectionOutOfRange == 1U);
+}
+
+void CheckVolumeSurfaceEffectState(
+    orbit::studio_session::StudioSession& studio,
+    const orbit::universe::BodyId firstBody,
+    const orbit::universe::BodyId secondBody,
+    const orbit::f64 firstRadius,
+    const orbit::f64 secondRadius)
+{
+    using namespace orbit;
+    using namespace orbit::studio_session;
+    using namespace orbit::volume_representation;
+
+    VolumeSurfaceEffectState state;
+
+    const ResolvedVolumeSurfaceDeposit deposits[]{
+        {
+            .body = firstBody,
+            .bodyLocalSurfacePointMeters = {firstRadius, 0.0, 0.0},
+            .request = {
+                .eventId = 1U,
+                .radiusMeters = 4.0F,
+                .amount = 1.0F,
+                .effect = VolumeSurfaceEffect::Soot,
+                .halfLifeSeconds = 2.0F
+            }
+        },
+        {
+            .body = firstBody,
+            .bodyLocalSurfacePointMeters = {firstRadius, 1.0, 0.0},
+            .request = {
+                .eventId = 2U,
+                .radiusMeters = 4.0F,
+                .amount = 0.25F,
+                .effect = VolumeSurfaceEffect::Soot,
+                .halfLifeSeconds = 2.0F
+            }
+        },
+        {
+            .body = secondBody,
+            .bodyLocalSurfacePointMeters = {secondRadius, 0.0, 0.0},
+            .request = {
+                .eventId = 3U,
+                .radiusMeters = 4.0F,
+                .amount = 0.5F,
+                .effect = VolumeSurfaceEffect::Soot,
+                .halfLifeSeconds = 2.0F
+            }
+        }
+    };
+
+    state.Advance(
+        studio.World().Universe().Bodies(),
+        deposits,
+        0.0);
+
+    Check(state.Diagnostics().submitted == 3U);
+    Check(state.Diagnostics().added == 2U);
+    Check(state.Diagnostics().merged == 1U);
+    Check(state.Stamps().size() == 2U);
+
+    const f32 firstInfluence = state.InfluenceAt(
+        firstBody,
+        {firstRadius, 0.0, 0.0},
+        VolumeSurfaceEffect::Soot);
+    Check(std::abs(firstInfluence - 1.25F) < 1.0e-5F);
+    Check(
+        state.InfluenceAt(
+            firstBody,
+            {firstRadius, 0.0, 0.0},
+            VolumeSurfaceEffect::Wetness) == 0.0F);
+
+    const f32 secondInfluence = state.InfluenceAt(
+        secondBody,
+        {secondRadius, 0.0, 0.0},
+        VolumeSurfaceEffect::Soot);
+    Check(std::abs(secondInfluence - 0.5F) < 1.0e-5F);
+
+    state.Advance(
+        studio.World().Universe().Bodies(),
+        {},
+        2.0);
+    Check(state.Stamps().size() == 2U);
+    Check(state.Diagnostics().decayed == 2U);
+    Check(std::abs(
+        state.InfluenceAt(
+            firstBody,
+            {firstRadius, 0.0, 0.0},
+            VolumeSurfaceEffect::Soot) -
+        0.625F) < 1.0e-5F);
+    Check(std::abs(
+        state.InfluenceAt(
+            secondBody,
+            {secondRadius, 0.0, 0.0},
+            VolumeSurfaceEffect::Soot) -
+        0.25F) < 1.0e-5F);
 }
 } // namespace
 
@@ -414,49 +508,50 @@ int main()
             1U);
 
         const auto activeRuntimeBody =
-            studio.ActiveBody().Active()->
-                body;
+            studio.ActiveBody().Active()->body;
 
         const auto* terrainServices =
-            studio.World().Surfaces().
-                ServicesForBody(
-                    activeRuntimeBody);
+            studio.World().Surfaces().ServicesForBody(
+                activeRuntimeBody);
 
+        Check(terrainServices != nullptr);
+        Check(terrainServices->IsValid());
         Check(
-            terrainServices !=
-                nullptr);
-        Check(
-            terrainServices->
-                IsValid());
-        Check(
-            terrainServices->
-                Biomes().
-                Definitions().
-                size() ==
+            terrainServices->Biomes().Definitions().size() ==
             1U);
         Check(
-            terrainServices->
-                Biomes().
-                BaseBiome().
-                IsValid());
+            terrainServices->Biomes().BaseBiome().IsValid());
 
         const auto veyraChildren =
-            studio.World().Objects().
-                Children(
-                    veyra);
+            studio.World().Objects().Children(veyra);
 
         Check(
-            veyraChildren.size() ==
-                1U &&
+            veyraChildren.size() == 1U &&
             veyraChildren.front().type ==
-                orbit::world_model::
-                    kTerrainSurfaceType);
+                orbit::world_model::kTerrainSurfaceType);
 
         CheckVolumeSurfaceProjection(
             studio,
             veyra,
             activeRuntimeBody,
             4'200'000.0);
+
+        const auto effectPeer =
+            AddBody(
+                studio,
+                "M38 Effect Peer",
+                3'000'000.0);
+        static_cast<void>(studio.Tick(false));
+        const auto effectPeerBody =
+            studio.World().Universe().BodyForObject(effectPeer);
+        Check(effectPeerBody.has_value());
+
+        CheckVolumeSurfaceEffectState(
+            studio,
+            activeRuntimeBody,
+            *effectPeerBody,
+            4'200'000.0,
+            3'000'000.0);
 
         const auto roots =
             RpcCall(
