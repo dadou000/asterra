@@ -1,0 +1,692 @@
+name: M38 Authored Particle Behavior V2
+
+on:
+  push:
+    branches: [orbit]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'orbit-ci'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+          fetch-depth: 0
+
+      - name: Apply authored particle behavior
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f'{path}: expected one seam, found {n}: {old[:80]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # ---- world_model schema registration + resolution ----
+          path = 'engine/world_model/src/VolumeSchemas.cpp'
+          once(path,
+              '            {.id=kVolumeTemporalWeight,.name="Temporal Weight",.kind=schema::PropertyKind::Float,.defaultValue=0.85,.range={.minimum=0.0,.maximum=0.98},.advanced=true}\n',
+              '''            {.id=kVolumeTemporalWeight,.name="Temporal Weight",.kind=schema::PropertyKind::Float,.defaultValue=0.85,.range={.minimum=0.0,.maximum=0.98},.advanced=true},
+            {.id=kVolumeOutputParticlesEnabled,.name="Output Particles",.kind=schema::PropertyKind::Boolean,.defaultValue=false},
+            {.id=kVolumeOutputSurfaceDepositsEnabled,.name="Output Surface Deposits",.kind=schema::PropertyKind::Boolean,.defaultValue=false},
+            {.id=kVolumeOutputFieldThreshold,.name="Output Field Threshold",.kind=schema::PropertyKind::Float,.defaultValue=0.15,.range={.minimum=0.0,.maximum=64.0}},
+            {.id=kVolumeOutputParticleRate,.name="Particle Rate",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=64.0,.range={.minimum=0.0,.maximum=1000000.0}},
+            {.id=kVolumeOutputParticleBudget,.name="Particle Budget / Step",.kind=schema::PropertyKind::Integer,.defaultValue=i64{256},.range={.minimum=1.0,.maximum=1000000.0},.advanced=true},
+            {.id=kVolumeOutputSurfaceRate,.name="Surface Deposit Rate",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=24.0,.range={.minimum=0.0,.maximum=1000000.0}},
+            {.id=kVolumeOutputSurfaceBudget,.name="Surface Deposit Budget / Step",.kind=schema::PropertyKind::Integer,.defaultValue=i64{128},.range={.minimum=1.0,.maximum=1000000.0},.advanced=true},
+            {.id=kVolumeOutputSurfaceRadius,.name="Surface Deposit Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.25,.range={.minimum=0.001,.maximum=10000.0}},
+            {.id=kVolumeOutputCandidateMultiplier,.name="Output Candidate Multiplier",.kind=schema::PropertyKind::Integer,.defaultValue=i64{8},.range={.minimum=1.0,.maximum=64.0},.advanced=true},
+            {.id=kVolumeOutputSurfaceEffect,.name="Surface Effect",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=4.0}},
+            {.id=kVolumeOutputSurfaceHalfLife,.name="Surface Effect Half Life",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=30.0,.range={.minimum=0.0,.maximum=86400.0}},
+            {.id=kVolumeParticleLifetime,.name="Particle Lifetime",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=2.0,.range={.minimum=0.001,.maximum=3600.0}},
+            {.id=kVolumeParticleLinearDrag,.name="Particle Linear Drag",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=0.0,.range={.minimum=0.0,.maximum=100.0}},
+            {.id=kVolumeParticleRadiusMeters,.name="Particle Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.08,.range={.minimum=0.001,.maximum=100.0}},
+            {.id=kVolumeParticleEmissionScale,.name="Particle Emission Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=1024.0}},
+            {.id=kVolumeParticleGravityMode,.name="Particle Gravity Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kVolumeParticleGravityScale,.name="Particle Gravity Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=16.0}},
+            {.id=kVolumeParticleCollisionMode,.name="Particle Collision Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=3.0}},
+            {.id=kVolumeParticleRestitution,.name="Particle Restitution",.kind=schema::PropertyKind::Float,.defaultValue=0.25,.range={.minimum=0.0,.maximum=1.0}}
+''')
+
+          once(path,
+              '''        .temporalWeight =
+            static_cast<f32>(
+                std::clamp(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeTemporalWeight,
+                        0.85),
+                    0.0,
+                    0.98))
+    };
+''',
+              '''        .temporalWeight =
+            static_cast<f32>(
+                std::clamp(
+                    Read<f64>(
+                        objects,
+                        volume,
+                        kVolumeTemporalWeight,
+                        0.85),
+                    0.0,
+                    0.98)),
+        .outputParticlesEnabled = Read<bool>(objects, volume, kVolumeOutputParticlesEnabled, false),
+        .outputSurfaceDepositsEnabled = Read<bool>(objects, volume, kVolumeOutputSurfaceDepositsEnabled, false),
+        .outputFieldThreshold = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputFieldThreshold, 0.15), 0.0, 64.0)),
+        .outputParticleRatePerSecond = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputParticleRate, 64.0), 0.0, 1000000.0)),
+        .outputParticleBudgetPerStep = static_cast<u32>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputParticleBudget, 256), 1, 1000000)),
+        .outputSurfaceDepositRatePerSecond = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputSurfaceRate, 24.0), 0.0, 1000000.0)),
+        .outputSurfaceDepositBudgetPerStep = static_cast<u32>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputSurfaceBudget, 128), 1, 1000000)),
+        .outputSurfaceDepositRadiusMeters = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputSurfaceRadius, 0.25), 0.001, 10000.0)),
+        .outputCandidateMultiplier = static_cast<u32>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputCandidateMultiplier, 8), 1, 64)),
+        .outputSurfaceEffect = static_cast<VolumeSurfaceOutputEffect>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputSurfaceEffect, 0), 0, 4)),
+        .outputSurfaceEffectHalfLifeSeconds = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputSurfaceHalfLife, 30.0), 0.0, 86400.0)),
+        .particleLifetimeSeconds = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleLifetime, 2.0), 0.001, 3600.0)),
+        .particleLinearDragPerSecond = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleLinearDrag, 0.0), 0.0, 100.0)),
+        .particleRadiusMeters = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleRadiusMeters, 0.08), 0.001, 100.0)),
+        .particleEmissionScale = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleEmissionScale, 1.0), 0.0, 1024.0)),
+        .particleGravityMode = static_cast<VolumeParticleGravityMode>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeParticleGravityMode, 0), 0, 1)),
+        .particleGravityScale = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleGravityScale, 1.0), 0.0, 16.0)),
+        .particleCollisionMode = static_cast<VolumeParticleCollisionMode>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeParticleCollisionMode, 0), 0, 3)),
+        .particleRestitution = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleRestitution, 0.25), 0.0, 1.0))
+    };
+''')
+
+          # ---- transport request ----
+          path = 'engine/volume_representation/include/orbit/volume_representation/VolumeOutputCoupling.hpp'
+          once(path,
+              '''    f32 particleRatePerSecond{64.0F};
+    u32 particleBudgetPerStep{256U};
+
+    f32 surfaceDepositRatePerSecond{24.0F};
+''',
+              '''    f32 particleRatePerSecond{64.0F};
+    u32 particleBudgetPerStep{256U};
+    f32 particleLifetimeSeconds{2.0F};
+    f32 particleLinearDragPerSecond{0.0F};
+    f32 particleRadiusMeters{0.08F};
+    f32 particleEmissionScale{1.0F};
+    world_model::VolumeParticleGravityMode particleGravityMode{world_model::VolumeParticleGravityMode::None};
+    f32 particleGravityScale{1.0F};
+    world_model::VolumeParticleCollisionMode particleCollisionMode{world_model::VolumeParticleCollisionMode::None};
+    f32 particleRestitution{0.25F};
+
+    f32 surfaceDepositRatePerSecond{24.0F};
+''')
+          once(path,
+              '''    f32 authority{0.0F};
+    f32 density{0.0F};
+    f32 emission{0.0F};
+};
+''',
+              '''    f32 authority{0.0F};
+    f32 density{0.0F};
+    f32 emission{0.0F};
+    f32 lifetimeSeconds{2.0F};
+    f32 linearDragPerSecond{0.0F};
+    f32 radiusMeters{0.08F};
+    f32 emissionScale{1.0F};
+    math::Float3 baseColor{1.0F, 1.0F, 1.0F};
+    math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
+    world_model::VolumeParticleGravityMode gravityMode{world_model::VolumeParticleGravityMode::None};
+    f32 gravityScale{1.0F};
+    world_model::VolumeParticleCollisionMode collisionMode{world_model::VolumeParticleCollisionMode::None};
+    f32 restitution{0.25F};
+};
+''')
+
+          path = 'engine/volume_representation/src/VolumeOutputCoupling.cpp'
+          once(path,
+              '''    batch.particles.reserve(particleBudget.admitted);
+
+    const u32 particleCandidateLimit =
+''',
+              '''    const f32 particleLifetime = std::isfinite(entry.settings.particleLifetimeSeconds) ? std::max(entry.settings.particleLifetimeSeconds, 0.001F) : 2.0F;
+    const f32 particleDrag = std::isfinite(entry.settings.particleLinearDragPerSecond) ? std::max(entry.settings.particleLinearDragPerSecond, 0.0F) : 0.0F;
+    const f32 particleRadius = std::isfinite(entry.settings.particleRadiusMeters) ? std::max(entry.settings.particleRadiusMeters, 0.001F) : 0.08F;
+    const f32 particleEmissionScale = std::isfinite(entry.settings.particleEmissionScale) ? std::max(entry.settings.particleEmissionScale, 0.0F) : 1.0F;
+    const f32 particleGravityScale = std::isfinite(entry.settings.particleGravityScale) ? std::max(entry.settings.particleGravityScale, 0.0F) : 1.0F;
+    const f32 particleRestitution = std::isfinite(entry.settings.particleRestitution) ? std::clamp(entry.settings.particleRestitution, 0.0F, 1.0F) : 0.25F;
+
+    batch.particles.reserve(particleBudget.admitted);
+
+    const u32 particleCandidateLimit =
+''')
+          once(path,
+              '''            .authority = sample.authority,
+            .density = sample.density,
+            .emission = sample.emission
+        });
+''',
+              '''            .authority = sample.authority,
+            .density = sample.density,
+            .emission = sample.emission,
+            .lifetimeSeconds = particleLifetime,
+            .linearDragPerSecond = particleDrag,
+            .radiusMeters = particleRadius,
+            .emissionScale = particleEmissionScale,
+            .baseColor = domain.scatteringColor,
+            .emissionColor = domain.emissionColor,
+            .gravityMode = entry.settings.particleGravityMode,
+            .gravityScale = particleGravityScale,
+            .collisionMode = entry.settings.particleCollisionMode,
+            .restitution = particleRestitution
+        });
+''')
+
+          # ---- runtime sync from authored domain ----
+          path = 'engine/volume_representation/src/VolumeOutputRuntime.cpp'
+          once(path,
+              '''        const auto& settings =
+            VolumeOutputs().Settings(record.id);
+
+        if (!settings.particlesEnabled &&
+            !settings.surfaceDepositsEnabled)
+''',
+              '''        auto& settings =
+            VolumeOutputs().Settings(record.id);
+        settings.particlesEnabled = domain->outputParticlesEnabled;
+        settings.surfaceDepositsEnabled = domain->outputSurfaceDepositsEnabled;
+        settings.fieldThreshold = domain->outputFieldThreshold;
+        settings.particleRatePerSecond = domain->outputParticleRatePerSecond;
+        settings.particleBudgetPerStep = domain->outputParticleBudgetPerStep;
+        settings.particleLifetimeSeconds = domain->particleLifetimeSeconds;
+        settings.particleLinearDragPerSecond = domain->particleLinearDragPerSecond;
+        settings.particleRadiusMeters = domain->particleRadiusMeters;
+        settings.particleEmissionScale = domain->particleEmissionScale;
+        settings.particleGravityMode = domain->particleGravityMode;
+        settings.particleGravityScale = domain->particleGravityScale;
+        settings.particleCollisionMode = domain->particleCollisionMode;
+        settings.particleRestitution = domain->particleRestitution;
+        settings.surfaceDepositRatePerSecond = domain->outputSurfaceDepositRatePerSecond;
+        settings.surfaceDepositBudgetPerStep = domain->outputSurfaceDepositBudgetPerStep;
+        settings.surfaceDepositRadiusMeters = domain->outputSurfaceDepositRadiusMeters;
+        settings.candidateMultiplier = domain->outputCandidateMultiplier;
+        settings.surfaceEffect = static_cast<VolumeSurfaceEffect>(static_cast<u8>(domain->outputSurfaceEffect));
+        settings.surfaceEffectHalfLifeSeconds = domain->outputSurfaceEffectHalfLifeSeconds;
+
+        if (!settings.particlesEnabled &&
+            !settings.surfaceDepositsEnabled)
+''')
+
+          # ---- GPU spawn/state layouts ----
+          path = 'engine/volume_render/include/orbit/volume_render/VolumeParticleGpuBinding.hpp'
+          once(path,
+              '''struct VolumeParticleGpuSpawn
+{
+    math::Float3 positionMeters{};
+    f32 authority{0.0F};
+    math::Float3 velocityMetersPerSecond{};
+    f32 density{0.0F};
+    f32 emission{0.0F};
+    f32 reserved0{0.0F};
+    f32 reserved1{0.0F};
+    f32 reserved2{0.0F};
+};
+
+static_assert(sizeof(VolumeParticleGpuSpawn) == 48U);
+''',
+              '''struct VolumeParticleGpuSpawn
+{
+    math::Float3 positionMeters{};
+    f32 authority{0.0F};
+    math::Float3 velocityMetersPerSecond{};
+    f32 density{0.0F};
+    f32 emission{0.0F};
+    f32 lifetimeSeconds{2.0F};
+    f32 linearDragPerSecond{0.0F};
+    f32 radiusMeters{0.08F};
+    f32 emissionScale{1.0F};
+    f32 gravityScale{1.0F};
+    f32 restitution{0.25F};
+    u32 behaviorFlags{0U};
+    math::Float3 baseColor{1.0F, 1.0F, 1.0F};
+    f32 reserved0{0.0F};
+    math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
+    f32 reserved1{0.0F};
+};
+
+static_assert(sizeof(VolumeParticleGpuSpawn) == 96U);
+''')
+
+          path = 'engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp'
+          once(path,
+              '''struct VolumeParticleGpuStateRecord
+{
+    math::Float3 positionMeters{};
+    f32 authority{0.0F};
+    math::Float3 velocityMetersPerSecond{};
+    f32 density{0.0F};
+    f32 emission{0.0F};
+    f32 ageSeconds{0.0F};
+    f32 lifetimeSeconds{0.0F};
+    u32 generation{0U};
+    math::Float4 reserved{};
+};
+
+static_assert(sizeof(VolumeParticleGpuStateRecord) == 64U);
+''',
+              '''struct VolumeParticleGpuStateRecord
+{
+    math::Float3 positionMeters{};
+    f32 authority{0.0F};
+    math::Float3 velocityMetersPerSecond{};
+    f32 density{0.0F};
+    f32 emission{0.0F};
+    f32 ageSeconds{0.0F};
+    f32 lifetimeSeconds{0.0F};
+    f32 linearDragPerSecond{0.0F};
+    f32 radiusMeters{0.08F};
+    f32 emissionScale{1.0F};
+    f32 gravityScale{1.0F};
+    f32 restitution{0.25F};
+    math::Float3 baseColor{1.0F, 1.0F, 1.0F};
+    u32 behaviorFlags{0U};
+    math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
+    u32 generation{0U};
+};
+
+static_assert(sizeof(VolumeParticleGpuStateRecord) == 96U);
+''')
+
+          path = 'engine/volume_render/src/VolumeParticleGpuState.cpp'
+          once(path,
+              '''struct Spawn
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float reserved0;
+    float reserved1;
+    float reserved2;
+};
+
+struct Particle
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float ageSeconds;
+    float lifetimeSeconds;
+    uint generation;
+    float4 reserved;
+};
+''',
+              '''struct Spawn
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float lifetimeSeconds;
+    float linearDragPerSecond;
+    float radiusMeters;
+    float emissionScale;
+    float gravityScale;
+    float restitution;
+    uint behaviorFlags;
+    float3 baseColor;
+    float reserved0;
+    float3 emissionColor;
+    float reserved1;
+};
+
+struct Particle
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float ageSeconds;
+    float lifetimeSeconds;
+    float linearDragPerSecond;
+    float radiusMeters;
+    float emissionScale;
+    float gravityScale;
+    float restitution;
+    float3 baseColor;
+    uint behaviorFlags;
+    float3 emissionColor;
+    uint generation;
+};
+''')
+          once(path, '    const float spawnLifetime = max(g.timing.y, 0.001);\n    const float drag = max(g.timing.z, 0.0);\n',
+                     '    const float fallbackLifetime = max(g.timing.y, 0.001);\n    const float fallbackDrag = max(g.timing.z, 0.0);\n')
+          once(path, '                const float dragScale = exp(-drag * dt);\n                particle.velocityMetersPerSecond *= dragScale;\n',
+                     '                const float dragScale = exp(-max(particle.linearDragPerSecond, 0.0) * dt);\n                particle.velocityMetersPerSecond *= dragScale;\n')
+          once(path,
+              '''        particle.emission = max(spawn.emission, 0.0);
+        particle.ageSeconds = 0.0;
+        particle.lifetimeSeconds = spawnLifetime;
+        particle.generation = g.counts.y;
+        particle.reserved = 0.0;
+        AppendParticle(particle);
+''',
+              '''        particle.emission = max(spawn.emission, 0.0);
+        particle.ageSeconds = 0.0;
+        particle.lifetimeSeconds = spawn.lifetimeSeconds > 0.0 ? spawn.lifetimeSeconds : fallbackLifetime;
+        particle.linearDragPerSecond = spawn.linearDragPerSecond >= 0.0 ? spawn.linearDragPerSecond : fallbackDrag;
+        particle.radiusMeters = max(spawn.radiusMeters, 0.001);
+        particle.emissionScale = max(spawn.emissionScale, 0.0);
+        particle.gravityScale = max(spawn.gravityScale, 0.0);
+        particle.restitution = saturate(spawn.restitution);
+        particle.baseColor = max(spawn.baseColor, 0.0);
+        particle.behaviorFlags = spawn.behaviorFlags;
+        particle.emissionColor = max(spawn.emissionColor, 0.0);
+        particle.generation = g.counts.y;
+        AppendParticle(particle);
+''')
+
+          # ---- CPU bridge ----
+          path = 'engine/studio_ui/include/orbit/studio_ui/VolumeParticleRenderBridge.hpp'
+          once(path,
+              '''        result.push_back({
+            .positionMeters = {
+                static_cast<f32>(relative.x),
+                static_cast<f32>(relative.y),
+                static_cast<f32>(relative.z)},
+            .authority = candidate.authority,
+            .velocityMetersPerSecond = request.velocity,
+            .density = std::isfinite(request.density)
+                ? std::max(request.density, 0.0F)
+                : 0.0F,
+            .emission = std::isfinite(request.emission)
+                ? std::max(request.emission, 0.0F)
+                : 0.0F
+        });
+''',
+              '''        const u32 behaviorFlags =
+            (static_cast<u32>(request.gravityMode) & 0x3U) |
+            ((static_cast<u32>(request.collisionMode) & 0x3U) << 2U);
+
+        result.push_back({
+            .positionMeters = {
+                static_cast<f32>(relative.x),
+                static_cast<f32>(relative.y),
+                static_cast<f32>(relative.z)},
+            .authority = candidate.authority,
+            .velocityMetersPerSecond = request.velocity,
+            .density = std::isfinite(request.density) ? std::max(request.density, 0.0F) : 0.0F,
+            .emission = std::isfinite(request.emission) ? std::max(request.emission, 0.0F) : 0.0F,
+            .lifetimeSeconds = std::isfinite(request.lifetimeSeconds) ? std::max(request.lifetimeSeconds, 0.001F) : 2.0F,
+            .linearDragPerSecond = std::isfinite(request.linearDragPerSecond) ? std::max(request.linearDragPerSecond, 0.0F) : 0.0F,
+            .radiusMeters = std::isfinite(request.radiusMeters) ? std::max(request.radiusMeters, 0.001F) : 0.08F,
+            .emissionScale = std::isfinite(request.emissionScale) ? std::max(request.emissionScale, 0.0F) : 1.0F,
+            .gravityScale = std::isfinite(request.gravityScale) ? std::max(request.gravityScale, 0.0F) : 1.0F,
+            .restitution = std::isfinite(request.restitution) ? std::clamp(request.restitution, 0.0F, 1.0F) : 0.25F,
+            .behaviorFlags = behaviorFlags,
+            .baseColor = request.baseColor,
+            .emissionColor = request.emissionColor
+        });
+''')
+
+          # ---- persistent particle renderer, current layout ----
+          path = 'engine/volume_render/src/VolumeParticleRenderer.cpp'
+          once(path,
+              '''struct Particle
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float ageSeconds;
+    float lifetimeSeconds;
+    uint generation;
+    float4 reserved;
+};
+''',
+              '''struct Particle
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float ageSeconds;
+    float lifetimeSeconds;
+    float linearDragPerSecond;
+    float radiusMeters;
+    float emissionScale;
+    float gravityScale;
+    float restitution;
+    float3 baseColor;
+    uint behaviorFlags;
+    float3 emissionColor;
+    uint generation;
+};
+''')
+          # Both vertex and pixel VSOutput blocks use this exact current shape.
+          old_vs = '''struct VSOutput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float authority : TEXCOORD1;
+    float density : TEXCOORD2;
+    float emission : TEXCOORD3;
+    float life : TEXCOORD4;
+};
+'''
+          new_vs = '''struct VSOutput
+{
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+    float authority : TEXCOORD1;
+    float density : TEXCOORD2;
+    float emission : TEXCOORD3;
+    float life : TEXCOORD4;
+    float3 baseColor : TEXCOORD5;
+    float3 emissionColor : TEXCOORD6;
+    float emissionScale : TEXCOORD7;
+};
+'''
+          p = Path(path)
+          t = p.read_text(encoding='utf-8')
+          if t.count(old_vs) != 2:
+              raise SystemExit(f'{path}: expected two VSOutput blocks, found {t.count(old_vs)}')
+          t = t.replace(old_vs, new_vs)
+          p.write_text(t, encoding='utf-8')
+
+          # Two invalid-return paths need the new outputs initialized.
+          p = Path(path); t = p.read_text(encoding='utf-8')
+          old = '''        output.emission = 0.0;
+        output.life = 0.0;
+        return output;
+'''
+          if t.count(old) != 2:
+              raise SystemExit(f'{path}: expected two invalid output blocks, found {t.count(old)}')
+          new = '''        output.emission = 0.0;
+        output.life = 0.0;
+        output.baseColor = 0.0;
+        output.emissionColor = 0.0;
+        output.emissionScale = 0.0;
+        return output;
+'''
+          p.write_text(t.replace(old, new), encoding='utf-8')
+
+          once(path,
+              '''    const float2 corner = corners[cornerIndex];
+    const float radiusPixels = max(g.viewport.z, 0.5);
+
+    output.position = center;
+''',
+              '''    const float2 corner = corners[cornerIndex];
+    const float projectedRadiusPixels =
+        max(particle.radiusMeters, 0.001) /
+        max(center.w * max(g.projection.y, 0.001), 0.001) *
+        max(g.viewport.y, 1.0) * 0.5;
+    const float radiusPixels = max(projectedRadiusPixels, max(g.viewport.z, 0.5));
+
+    output.position = center;
+''')
+          once(path,
+              '''    output.life = saturate(
+        1.0 - particle.ageSeconds /
+            max(particle.lifetimeSeconds, 0.001));
+    return output;
+''',
+              '''    output.life = saturate(
+        1.0 - particle.ageSeconds /
+            max(particle.lifetimeSeconds, 0.001));
+    output.baseColor = max(particle.baseColor, 0.0);
+    output.emissionColor = max(particle.emissionColor, 0.0);
+    output.emissionScale = max(particle.emissionScale, 0.0);
+    return output;
+''')
+          once(path,
+              '''    const float3 densityColor = lerp(
+        float3(0.70, 0.76, 0.82),
+        float3(0.93, 0.96, 1.00),
+        density);
+    const float3 emissiveColor = float3(1.00, 0.42, 0.08) * emission;
+    const float3 color = densityColor + emissiveColor;
+''',
+              '''    const float3 densityColor = input.baseColor * lerp(0.72, 1.0, density);
+    const float3 emissiveColor = input.emissionColor * emission * input.emissionScale;
+    const float3 color = densityColor + emissiveColor;
+''')
+
+          # ---- authored Studio UI ----
+          path = 'engine/studio_ui/src/VolumeAuthoringM36.cpp'
+          p = Path(path); text = p.read_text(encoding='utf-8')
+          start_marker = '''    auto& outputSettings =
+        volume_representation::
+            VolumeOutputs().Settings(
+                *volumeId);
+'''
+          end_marker = '''    if ((outputSettings.particlesEnabled ||
+         outputSettings.surfaceDepositsEnabled) &&
+'''
+          start = text.find(start_marker); end = text.find(end_marker)
+          if start < 0 or end <= start:
+              raise SystemExit('VolumeAuthoringM36.cpp: transient output settings block not found')
+          replacement = '''    bool particlesEnabled = volume->outputParticlesEnabled;
+    if (context.Checkbox("Particles##volume-output-particles", particlesEnabled))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputParticlesEnabled, particlesEnabled);
+
+    bool depositsEnabled = volume->outputSurfaceDepositsEnabled;
+    if (context.Checkbox("Surface Deposits##volume-output-deposits", depositsEnabled))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceDepositsEnabled, depositsEnabled);
+
+    f64 threshold = volume->outputFieldThreshold;
+    if (context.InputDouble("Field Threshold##volume-output-threshold", threshold))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputFieldThreshold, std::clamp(threshold, 0.0, 64.0));
+
+    f64 particleRate = volume->outputParticleRatePerSecond;
+    i64 particleBudget = static_cast<i64>(volume->outputParticleBudgetPerStep);
+    if (context.InputDouble("Particle Rate / s##volume-output-particle-rate", particleRate))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputParticleRate, std::clamp(particleRate, 0.0, 1000000.0));
+    if (context.InputInteger("Particle Budget / Step##volume-output-particle-budget", particleBudget))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputParticleBudget, std::clamp<i64>(particleBudget, 1, 1000000));
+
+    f64 lifetime = volume->particleLifetimeSeconds;
+    f64 drag = volume->particleLinearDragPerSecond;
+    f64 particleRadius = volume->particleRadiusMeters;
+    f64 particleEmissionScale = volume->particleEmissionScale;
+    if (context.InputDouble("Particle Lifetime s##volume-output-particle-life", lifetime))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleLifetime, std::clamp(lifetime, 0.001, 3600.0));
+    if (context.InputDouble("Particle Linear Drag / s##volume-output-particle-drag", drag))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleLinearDrag, std::clamp(drag, 0.0, 100.0));
+    if (context.InputDouble("Particle Radius m##volume-output-particle-radius", particleRadius))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleRadiusMeters, std::clamp(particleRadius, 0.001, 100.0));
+    if (context.InputDouble("Particle Emission Scale##volume-output-particle-emission", particleEmissionScale))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleEmissionScale, std::clamp(particleEmissionScale, 0.0, 1024.0));
+
+    context.Text("Particle Gravity");
+    for (const auto& [label, mode] : std::array{
+             std::pair{"None", world_model::VolumeParticleGravityMode::None},
+             std::pair{"Owning Body", world_model::VolumeParticleGravityMode::OwningBody}})
+        if (context.Selectable(std::string(label) + "##volume-output-gravity-" + std::to_string(static_cast<i64>(mode)), volume->particleGravityMode == mode))
+            world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleGravityMode, static_cast<i64>(mode));
+
+    f64 gravityScale = volume->particleGravityScale;
+    if (context.InputDouble("Gravity Scale##volume-output-gravity-scale", gravityScale))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleGravityScale, std::clamp(gravityScale, 0.0, 16.0));
+
+    context.Text("Particle Collision");
+    for (const auto& [label, mode] : std::array{
+             std::pair{"None", world_model::VolumeParticleCollisionMode::None},
+             std::pair{"Kill", world_model::VolumeParticleCollisionMode::Kill},
+             std::pair{"Slide", world_model::VolumeParticleCollisionMode::Slide},
+             std::pair{"Bounce", world_model::VolumeParticleCollisionMode::Bounce}})
+        if (context.Selectable(std::string(label) + "##volume-output-collision-" + std::to_string(static_cast<i64>(mode)), volume->particleCollisionMode == mode))
+            world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleCollisionMode, static_cast<i64>(mode));
+
+    f64 restitution = volume->particleRestitution;
+    if (context.InputDouble("Restitution##volume-output-restitution", restitution))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleRestitution, std::clamp(restitution, 0.0, 1.0));
+
+    f64 depositRate = volume->outputSurfaceDepositRatePerSecond;
+    i64 depositBudget = static_cast<i64>(volume->outputSurfaceDepositBudgetPerStep);
+    f64 depositRadius = volume->outputSurfaceDepositRadiusMeters;
+    if (context.InputDouble("Deposit Rate / s##volume-output-deposit-rate", depositRate))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceRate, std::clamp(depositRate, 0.0, 1000000.0));
+    if (context.InputInteger("Deposit Budget / Step##volume-output-deposit-budget", depositBudget))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceBudget, std::clamp<i64>(depositBudget, 1, 1000000));
+    if (context.InputDouble("Deposit Radius m##volume-output-deposit-radius", depositRadius))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceRadius, std::clamp(depositRadius, 0.001, 10000.0));
+
+    context.Text("Surface Effect");
+    for (const auto& [label, effect] : std::array{
+             std::pair{"Wetness", world_model::VolumeSurfaceOutputEffect::Wetness},
+             std::pair{"Soot", world_model::VolumeSurfaceOutputEffect::Soot},
+             std::pair{"Ash", world_model::VolumeSurfaceOutputEffect::Ash},
+             std::pair{"Sediment", world_model::VolumeSurfaceOutputEffect::Sediment},
+             std::pair{"Heat", world_model::VolumeSurfaceOutputEffect::Heat}})
+        if (context.Selectable(std::string(label) + "##volume-output-effect-" + std::to_string(static_cast<i64>(effect)), volume->outputSurfaceEffect == effect))
+            world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceEffect, static_cast<i64>(effect));
+
+    f64 halfLife = volume->outputSurfaceEffectHalfLifeSeconds;
+    if (context.InputDouble("Surface Effect Half Life s##volume-output-effect-half-life", halfLife))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceHalfLife, std::clamp(halfLife, 0.0, 86400.0));
+
+    i64 candidateMultiplier = static_cast<i64>(volume->outputCandidateMultiplier);
+    if (context.InputInteger("Candidate Multiplier##volume-output-candidates", candidateMultiplier))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputCandidateMultiplier, std::clamp<i64>(candidateMultiplier, 1, 64));
+
+    context.MutedText("Gravity/collision policies are authored and carried per particle. GPU body-gravity and physical-surface response are resolved by the next M38 simulation hook.");
+
+'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace(end_marker,
+              '''    if ((volume->outputParticlesEnabled ||
+         volume->outputSurfaceDepositsEnabled) &&
+''', 1)
+          p.write_text(text, encoding='utf-8')
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'kVolumeParticleLifetime' engine/world_model/src/VolumeSchemas.cpp
+          grep -q 'settings.particleLifetimeSeconds = domain->particleLifetimeSeconds' engine/volume_representation/src/VolumeOutputRuntime.cpp
+          grep -q 'static_assert(sizeof(VolumeParticleGpuSpawn) == 96U)' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuBinding.hpp
+          grep -q 'static_assert(sizeof(VolumeParticleGpuStateRecord) == 96U)' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp
+          grep -q 'projectedRadiusPixels' engine/volume_render/src/VolumeParticleRenderer.cpp
+          grep -q 'kVolumeParticleCollisionMode' engine/studio_ui/src/VolumeAuthoringM36.cpp
+
+      - name: Commit and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/m38-authored-particle-behavior-v2.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Author M38 particle behavior per volume'
+          git push origin HEAD:orbit
