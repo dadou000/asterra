@@ -19,9 +19,10 @@ jobs:
       - name: Verify
         run: |
           grep -q 'MaximumDropletCount = 16384U' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp
+          grep -q 'DropletGraphicsBufferSlot = 4U' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp
           grep -q 'kDropletSimulationShader' engine/volume_render/src/VolumeParticleGpuState.cpp
           grep -q 'kDropletCollisionShader' engine/volume_render/src/VolumeParticleGpuState.cpp
-          grep -q 'DropletGraphicsBufferSlot' engine/volume_render/src/VolumeParticleRenderer.cpp
+          grep -q 'MaximumDropletCount \* 6U' engine/volume_render/src/VolumeParticleRenderer.cpp
           grep -q 'VolumeParticleGpuDropletState) == 112U' engine/studio_ui/tests/VolumeParticleRenderBridgeTests.cpp
       - name: Commit
         run: |
