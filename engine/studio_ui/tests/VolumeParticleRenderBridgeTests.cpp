@@ -1,6 +1,7 @@
 #include <orbit/studio_session/VolumeParticleOutputState.hpp>
 #include <orbit/studio_ui/VolumeParticleRenderBridge.hpp>
 #include <orbit/volume_render/VolumeParticleGpuState.hpp>
+#include <orbit/volume_render/VolumeParticleRenderer.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -34,6 +35,26 @@ int main()
             1.0F,
             0.1F,
             1000.0F);
+    });
+
+    static_assert(requires(
+        volume_render::VolumeParticleRenderer& renderer,
+        rhi::CommandList& commands,
+        rhi::Texture& color,
+        rhi::Texture& depth,
+        const render_view::CameraState& camera)
+    {
+        renderer.Draw(
+            commands,
+            color,
+            depth,
+            1920U,
+            1080U,
+            camera,
+            math::Double3{},
+            0U,
+            0x12345678ULL,
+            3.0F);
     });
 
     Check(sizeof(volume_render::VolumeParticleGpuSplashEvent) == 112U);
