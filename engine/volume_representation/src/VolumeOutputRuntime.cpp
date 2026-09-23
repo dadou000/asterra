@@ -1,0 +1,236 @@
+#include <orbit/volume_representation/VolumeOutputRuntime.hpp>
+
+#include <algorithm>
+#include <chrono>
+
+namespace orbit::volume_representation
+{
+namespace
+{
+void DiscoverRecursive(
+    const scene::ObjectStore& objects,
+    const scene::ObjectRecord& record,
+    std::vector<scene::ObjectRecord>& volumes)
+{
+    if (record.type == world_model::kVolumeType)
+    {
+        volumes.push_back(record);
+    }
+
+    for (const auto& child : objects.Children(record.id))
+    {
+        DiscoverRecursive(objects, child, volumes);
+    }
+}
+} // namespace
+
+void VolumeOutputRuntime::SetParticleSink(
+    VolumeParticleOutputSink* const sink) noexcept
+{
+    particleSink_ = sink;
+}
+
+void VolumeOutputRuntime::SetSurfaceSink(
+    VolumeSurfaceOutputSink* const sink) noexcept
+{
+    surfaceSink_ = sink;
+}
+
+VolumeOutputRuntimeDiagnostics VolumeOutputRuntime::TickWorld(
+    const scene::ObjectStore& objects,
+    const time::SimulationTime atTime)
+{
+    diagnostics_ = {};
+    diagnostics_.firstTick = !lastTime_.has_value();
+
+    f64 deltaSeconds = 0.0;
+
+    if (lastTime_.has_value())
+    {
+        const auto elapsed =
+            atTime - *lastTime_;
+
+        if (elapsed.count() < 0)
+        {
+            diagnostics_.timeReversed = true;
+            VolumeOutputs().RemoveMissing(objects);
+
+            for (const auto& record : DiscoverVolumes(objects))
+            {
+                VolumeOutputs().Reset(record.id);
+            }
+        }
+        else
+        {
+            deltaSeconds =
+                std::chrono::duration<f64>(elapsed).count();
+        }
+    }
+
+    lastTime_ = atTime;
+    diagnostics_.deltaSeconds = deltaSeconds;
+
+    VolumeOutputs().RemoveMissing(objects);
+    VolumeCaches().RemoveMissing(objects);
+
+    const auto volumes = DiscoverVolumes(objects);
+    diagnostics_.discoveredVolumes =
+        static_cast<u32>(volumes.size());
+
+    for (const auto& record : volumes)
+    {
+        const auto domain =
+            world_model::ResolveVolumeDomain(
+                objects,
+                record.id);
+
+        if (!domain.has_value() || !domain->enabled)
+        {
+            continue;
+        }
+
+        const auto& settings =
+            VolumeOutputs().Settings(record.id);
+
+        if (!settings.particlesEnabled &&
+            !settings.surfaceDepositsEnabled)
+        {
+            continue;
+        }
+
+        ++diagnostics_.eligibleVolumes;
+
+        const auto* cache =
+            VolumeCaches().Find(record.id);
+
+        if (cache == nullptr)
+        {
+            ++diagnostics_.volumesWithoutReadableAuthority;
+            continue;
+        }
+
+        const auto& batch =
+            VolumeOutputs().AdvanceBaked(
+                *domain,
+                *cache,
+                deltaSeconds);
+
+        ++diagnostics_.advancedVolumes;
+        diagnostics_.dispatchedParticleRequests +=
+            static_cast<u32>(batch.particles.size());
+        diagnostics_.dispatchedSurfaceRequests +=
+            static_cast<u32>(batch.surfaceDeposits.size());
+
+        DispatchVolumeOutputs(
+            batch,
+            particleSink_,
+            surfaceSink_);
+    }
+
+    return diagnostics_;
+}
+
+const VolumeOutputRuntimeDiagnostics&
+VolumeOutputRuntime::Diagnostics() const noexcept
+{
+    return diagnostics_;
+}
+
+void VolumeOutputRuntime::Reset() noexcept
+{
+    lastTime_.reset();
+    diagnostics_ = {};
+}
+
+std::vector<scene::ObjectRecord>
+VolumeOutputRuntime::DiscoverVolumes(
+    const scene::ObjectStore& objects)
+{
+    std::vector<scene::ObjectRecord> volumes;
+
+    for (const auto& root : objects.Roots())
+    {
+        DiscoverRecursive(objects, root, volumes);
+    }
+
+    std::sort(
+        volumes.begin(),
+        volumes.end(),
+        [](const auto& a, const auto& b)
+        {
+            if (a.sortOrder != b.sortOrder)
+            {
+                return a.sortOrder < b.sortOrder;
+            }
+
+            if (a.id.high != b.id.high)
+            {
+                return a.id.high < b.id.high;
+            }
+
+            return a.id.low < b.id.low;
+        });
+
+    return volumes;
+}
+
+void VolumeParticleRequestQueue::SubmitParticleSpawns(
+    const scene::ObjectId,
+    const std::span<const VolumeParticleSpawnRequest> requests)
+{
+    pending_.insert(
+        pending_.end(),
+        requests.begin(),
+        requests.end());
+}
+
+std::span<const VolumeParticleSpawnRequest>
+VolumeParticleRequestQueue::Pending() const noexcept
+{
+    return pending_;
+}
+
+void VolumeParticleRequestQueue::Clear() noexcept
+{
+    pending_.clear();
+}
+
+void VolumeSurfaceRequestQueue::SubmitSurfaceDeposits(
+    const scene::ObjectId,
+    const std::span<const VolumeSurfaceDepositRequest> requests)
+{
+    pending_.insert(
+        pending_.end(),
+        requests.begin(),
+        requests.end());
+}
+
+std::span<const VolumeSurfaceDepositRequest>
+VolumeSurfaceRequestQueue::Pending() const noexcept
+{
+    return pending_;
+}
+
+void VolumeSurfaceRequestQueue::Clear() noexcept
+{
+    pending_.clear();
+}
+
+VolumeOutputRuntime& VolumeOutputRuntimeService() noexcept
+{
+    static VolumeOutputRuntime runtime;
+    return runtime;
+}
+
+VolumeParticleRequestQueue& VolumeParticleRequests() noexcept
+{
+    static VolumeParticleRequestQueue queue;
+    return queue;
+}
+
+VolumeSurfaceRequestQueue& VolumeSurfaceRequests() noexcept
+{
+    static VolumeSurfaceRequestQueue queue;
+    return queue;
+}
+} // namespace orbit::volume_representation
