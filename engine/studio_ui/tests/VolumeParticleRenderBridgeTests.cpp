@@ -40,6 +40,12 @@ int main()
             .gravityScale = 0.75F,
             .collisionMode = world_model::VolumeParticleCollisionMode::Bounce,
             .restitution = 0.6F
+        },
+        .physics = {
+            .gravitationalParameterM3PerS2 = 3.986004418e14,
+            .gravitySofteningMeters = 10.0,
+            .surfaceRadiiMeters = {6378137.0, 6378137.0, 6356752.3},
+            .hasPhysicalSurface = true
         }});
     events.push_back({
         .sourceVolume = {.high = 1U, .low = 2U},
@@ -61,14 +67,9 @@ int main()
         }});
 
     const math::Double3 origin{1000000000.0, 0.0, 0.0};
-    const auto batch =
-        studio_ui::BuildVolumeParticleRenderBatch(
-            events,
-            origin,
-            2U);
+    const auto batch = studio_ui::BuildVolumeParticleRenderBatch(events, origin, 2U);
 
     Check(batch.size() == 2U);
-    // Equal-authority candidates use event id for deterministic tie-breaking.
     Check(batch[0].positionMeters.x == 3.5F);
     Check(batch[1].positionMeters.x == 2.5F);
     Check(batch[0].authority == 0.9F);
@@ -77,20 +78,13 @@ int main()
     Check(batch[0].emission == 0.0F);
     Check(batch[1].emission == 2.0F);
 
-    const auto full =
-        studio_ui::BuildVolumeParticleRenderBatch(
-            events,
-            origin,
-            3U);
+    const auto full = studio_ui::BuildVolumeParticleRenderBatch(events, origin, 3U);
     Check(full.size() == 3U);
     Check(full[0].positionMeters.x == 1.25F);
     Check(full[0].velocityMetersPerSecond.x == 1.0F);
     Check(full[0].velocityMetersPerSecond.y == 2.0F);
     Check(full[0].velocityMetersPerSecond.z == 3.0F);
 
-    // M38 authored particle behavior must survive the transport bridge on a
-    // per-event basis so different Volumes can coexist in one GPU particle
-    // state without inheriting a renderer-global policy.
     Check(full[0].lifetimeSeconds == 5.0F);
     Check(full[0].linearDragPerSecond == 0.4F);
     Check(full[0].radiusMeters == 0.5F);
@@ -105,9 +99,17 @@ int main()
     Check(full[0].emissionColor.y == 0.5F);
     Check(full[0].emissionColor.z == 0.1F);
 
-    // Studio uses this monotonically increasing packet generation as the
-    // once-only GPU simulation key across all viewports. Empty packets still
-    // represent an authoritative simulation step and must advance it.
+    // The body center is encoded in the same presentation-relative frame as
+    // particle positions, avoiding the erroneous pull toward camera origin.
+    Check(full[0].bodyCenterMeters.x == -1000000000.0F);
+    Check(full[0].bodyCenterMeters.y == 0.0F);
+    Check(full[0].bodyCenterMeters.z == 0.0F);
+    Check(full[0].gravitationalParameterM3PerS2 > 3.98e14F);
+    Check(full[0].gravitySofteningMeters == 10.0F);
+    Check(full[0].surfaceRadiiMeters.x == 6378137.0F);
+    Check(full[0].surfaceRadiiMeters.z > 6356752.0F);
+    Check(full[0].physicalSurfaceEnabled == 1.0F);
+
     studio_session::VolumeParticleOutputState output;
     Check(output.Diagnostics().generation == 0U);
     output.Consume({});
