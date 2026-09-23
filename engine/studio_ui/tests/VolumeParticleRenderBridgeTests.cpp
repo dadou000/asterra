@@ -1,3 +1,4 @@
+#include <orbit/studio_session/VolumeParticleOutputState.hpp>
 #include <orbit/studio_ui/VolumeParticleRenderBridge.hpp>
 
 #include <cstdlib>
@@ -76,6 +77,20 @@ int main()
     Check(full[2].velocityMetersPerSecond.x == 1.0F);
     Check(full[2].velocityMetersPerSecond.y == 2.0F);
     Check(full[2].velocityMetersPerSecond.z == 3.0F);
+
+    // Studio uses this monotonically increasing packet generation as the
+    // once-only GPU simulation key across all viewports. Empty packets still
+    // represent an authoritative simulation step and must advance it.
+    studio_session::VolumeParticleOutputState output;
+    Check(output.Diagnostics().generation == 0U);
+    output.Consume({});
+    Check(output.Diagnostics().generation == 1U);
+    Check(output.Events().empty());
+    output.Consume({});
+    Check(output.Diagnostics().generation == 2U);
+    output.Clear();
+    Check(output.Diagnostics().generation == 0U);
+    Check(output.Events().empty());
 
     return 0;
 }
