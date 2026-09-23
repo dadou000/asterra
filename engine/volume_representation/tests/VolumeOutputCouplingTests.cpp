@@ -1,4 +1,5 @@
 #include <orbit/volume_representation/VolumeOutputCoupling.hpp>
+#include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -81,6 +82,26 @@ void RunVolumeOutputCouplingTests()
     CheckOutput(
         first.surfaceDeposits.front().maximumProjectionDistanceMeters ==
         8.0);
+
+    // Concrete runtime queues must preserve source-volume identity. Consumers
+    // need that provenance to select particle/material policy and the correct
+    // physical body/frame instead of receiving anonymous requests.
+    VolumeParticleRequestQueue particleQueue;
+    VolumeSurfaceRequestQueue surfaceQueue;
+    DispatchVolumeOutputs(
+        first,
+        &particleQueue,
+        &surfaceQueue);
+    CheckOutput(particleQueue.Pending().size() == first.particles.size());
+    CheckOutput(surfaceQueue.Pending().size() == first.surfaceDeposits.size());
+    CheckOutput(particleQueue.Pending().front().volume == domain.object);
+    CheckOutput(surfaceQueue.Pending().front().volume == domain.object);
+    CheckOutput(
+        particleQueue.Pending().front().request.eventId ==
+        first.particles.front().eventId);
+    CheckOutput(
+        surfaceQueue.Pending().front().request.eventId ==
+        first.surfaceDeposits.front().eventId);
 
     const auto replayPosition =
         first.particles.front().positionMeters;
