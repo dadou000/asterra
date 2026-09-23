@@ -55,6 +55,21 @@ struct VolumeParticleGpuSplashEvent
 };
 static_assert(sizeof(VolumeParticleGpuSplashEvent) == 48U);
 
+struct VolumeParticleGpuSplashState
+{
+    math::Float3 positionMeters{};
+    f32 baseScaleMeters{0.0F};
+    math::Float3 normal{};
+    f32 expansionMetersPerSecond{0.0F};
+    math::Float3 tint{1.0F, 1.0F, 1.0F};
+    f32 impactSpeedMetersPerSecond{0.0F};
+    f32 ageSeconds{0.0F};
+    f32 lifetimeSeconds{0.0F};
+    u32 generation{0U};
+    u32 reserved{0U};
+};
+static_assert(sizeof(VolumeParticleGpuSplashState) == 64U);
+
 struct VolumeParticleSimulationSettings
 {
     f32 lifetimeSeconds{2.0F};
@@ -90,6 +105,7 @@ class VolumeParticleGpuState
 public:
     static constexpr u32 MaximumParticleCount = 65536U;
     static constexpr u32 MaximumSplashEventCount = 4096U;
+    static constexpr u32 MaximumPersistentSplashCount = 8192U;
     static constexpr u32 ComputeBufferCount = 4U;
     static constexpr u32 GraphicsBufferSlot = 2U;
     static constexpr u32 SplashGraphicsBufferSlot = 3U;
@@ -139,14 +155,19 @@ private:
     SpawnArray spawnSnapshot_{};
     u32 spawnCount_{0U};
     u32 generation_{0U};
+    u32 splashGeneration_{0U};
     bool initialized_{false};
     bool currentIsA_{true};
+    bool splashCurrentIsA_{true};
 
     rhi::ResourceState stateAState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState stateBState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState counterState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState splashEventState_{rhi::ResourceState::UnorderedAccess};
     rhi::ResourceState splashCounterState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState splashStateAState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState splashStateBState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState splashStateCounterState_{rhi::ResourceState::CopyDestination};
 
     std::unique_ptr<rhi::Buffer> stateA_;
     std::unique_ptr<rhi::Buffer> stateB_;
@@ -156,8 +177,14 @@ private:
     std::unique_ptr<rhi::Buffer> splashEvents_;
     std::unique_ptr<rhi::Buffer> splashCounter_;
     std::unique_ptr<rhi::Buffer> zeroSplashCounterUpload_;
+    std::unique_ptr<rhi::Buffer> splashStateA_;
+    std::unique_ptr<rhi::Buffer> splashStateB_;
+    std::unique_ptr<rhi::Buffer> zeroSplashStateUpload_;
+    std::unique_ptr<rhi::Buffer> splashStateCounter_;
+    std::unique_ptr<rhi::Buffer> zeroSplashStateCounterUpload_;
     std::vector<std::unique_ptr<rhi::Buffer>> spawnBuffers_;
     std::unique_ptr<rhi::ComputePipeline> simulationPipeline_;
     std::unique_ptr<rhi::ComputePipeline> terrainCollisionPipeline_;
+    std::unique_ptr<rhi::ComputePipeline> splashSimulationPipeline_;
 };
 } // namespace orbit::volume_render

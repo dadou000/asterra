@@ -621,6 +621,26 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 }
 )";
 
+
+constexpr const char* kSplashSimulationShader = R"(
+struct SplashEvent { float3 positionMeters; float scaleMeters; float3 normal; float impactSpeedMetersPerSecond; float3 tint; uint generation; };
+struct SplashState { float3 positionMeters; float baseScaleMeters; float3 normal; float expansionMetersPerSecond; float3 tint; float impactSpeedMetersPerSecond; float ageSeconds; float lifetimeSeconds; uint generation; uint reserved; };
+[[vk::binding(0,0)]] RWStructuredBuffer<SplashState> g_source : register(u0);
+[[vk::binding(1,0)]] RWStructuredBuffer<SplashState> g_destination : register(u1);
+[[vk::binding(2,0)]] RWStructuredBuffer<SplashEvent> g_events : register(u2);
+[[vk::binding(3,0)]] RWStructuredBuffer<uint> g_eventCounter : register(u3);
+[[vk::binding(4,0)]] RWStructuredBuffer<uint> g_stateCounter : register(u4);
+struct Push { uint4 counts; float4 timing; };
+[[vk::push_constant]] Push g;
+void Append(SplashState s){ uint i=0u; InterlockedAdd(g_stateCounter[0],1u,i); if(i<g.counts.w){ s.generation=g.counts.y; g_destination[i]=s; } }
+[numthreads(64,1,1)] void main(uint3 id:SV_DispatchThreadID){
+ uint i=id.x; float dt=max(g.timing.x,0.0); float3 originDelta=g.timing.yzw;
+ if(i<g.counts.z){ SplashState s=g_source[i]; if(s.generation==g.counts.x && s.lifetimeSeconds>0.0){ s.ageSeconds+=dt; if(s.ageSeconds<s.lifetimeSeconds){ s.positionMeters+=originDelta; Append(s); } } }
+ uint eventCount=min(g_eventCounter[0],4096u);
+ if(i<eventCount){ SplashEvent e=g_events[i]; if(e.generation==g.counts.y){ SplashState s; s.positionMeters=e.positionMeters; s.baseScaleMeters=max(e.scaleMeters,0.01); s.normal=normalize(e.normal); s.expansionMetersPerSecond=max(0.35*e.impactSpeedMetersPerSecond,0.15*s.baseScaleMeters); s.tint=max(e.tint,0.0); s.impactSpeedMetersPerSecond=max(e.impactSpeedMetersPerSecond,0.0); s.ageSeconds=0.0; s.lifetimeSeconds=clamp(0.45+0.10*s.impactSpeedMetersPerSecond,0.45,1.75); s.generation=g.counts.y; s.reserved=0u; Append(s); } }
+}
+)";
+
 [[nodiscard]] u32 Bits(const f32 value) noexcept
 {
     return std::bit_cast<u32>(value);
@@ -708,6 +728,16 @@ VolumeParticleGpuState::VolumeParticleGpuState(
         zeroSplashCounterUpload_->Unmap();
     }
 
+    const u64 splashStateBytes = static_cast<u64>(MaximumPersistentSplashCount) * sizeof(VolumeParticleGpuSplashState);
+    const rhi::BufferDesc splashStateDesc{.sizeBytes=splashStateBytes,.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::GpuOnly,.initialState=rhi::ResourceState::CopyDestination};
+    splashStateA_=device.CreateBuffer(splashStateDesc);
+    splashStateB_=device.CreateBuffer(splashStateDesc);
+    zeroSplashStateUpload_=device.CreateBuffer({.sizeBytes=splashStateBytes,.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::HostVisible,.initialState=rhi::ResourceState::CopySource});
+    { std::byte* mapped=zeroSplashStateUpload_->Map(); std::memset(mapped,0,static_cast<std::size_t>(splashStateBytes)); zeroSplashStateUpload_->Unmap(); }
+    splashStateCounter_=device.CreateBuffer({.sizeBytes=sizeof(u32),.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::GpuOnly,.initialState=rhi::ResourceState::CopyDestination});
+    zeroSplashStateCounterUpload_=device.CreateBuffer({.sizeBytes=sizeof(u32),.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::HostVisible,.initialState=rhi::ResourceState::CopySource});
+    { std::byte* mapped=zeroSplashStateCounterUpload_->Map(); std::memset(mapped,0,sizeof(u32)); zeroSplashStateCounterUpload_->Unmap(); }
+
     spawnBuffers_.reserve(framesInFlight);
     for (u32 frame = 0U; frame < framesInFlight; ++frame)
     {
@@ -766,6 +796,10 @@ VolumeParticleGpuState::VolumeParticleGpuState(
         .sampledTextures = 0U,
         .accelerationStructures = 0U
     });
+
+    const auto splashSimulation=compiler.Compile({.source=kSplashSimulationShader,.entryPoint="main",.stage=shader::Stage::Compute,.debug=false});
+    if(splashSimulation.bytecode.empty()) throw std::runtime_error("Orbit failed to compile the M38 persistent splash simulation shader.");
+    splashSimulationPipeline_=device.CreateComputePipeline({.computeShader={.data=splashSimulation.bytecode.data(),.size=splashSimulation.bytecode.size()},.pushConstantDwords=8U,.shaderResourceBuffers=5U,.storageTextures=0U,.sampledTextures=0U,.accelerationStructures=0U});
 }
 
 void VolumeParticleGpuState::SetSpawns(
@@ -808,6 +842,12 @@ void VolumeParticleGpuState::InitializeState(
         *zeroStateUpload_, 0U, *stateB_, 0U, stateB_->SizeBytes());
     commands.CopyBuffer(
         *zeroCounterUpload_, 0U, *counter_, 0U, sizeof(u32));
+    TransitionState(commands,*splashStateA_,splashStateAState_,rhi::ResourceState::CopyDestination);
+    TransitionState(commands,*splashStateB_,splashStateBState_,rhi::ResourceState::CopyDestination);
+    TransitionState(commands,*splashStateCounter_,splashStateCounterState_,rhi::ResourceState::CopyDestination);
+    commands.CopyBuffer(*zeroSplashStateUpload_,0U,*splashStateA_,0U,splashStateA_->SizeBytes());
+    commands.CopyBuffer(*zeroSplashStateUpload_,0U,*splashStateB_,0U,splashStateB_->SizeBytes());
+    commands.CopyBuffer(*zeroSplashStateCounterUpload_,0U,*splashStateCounter_,0U,sizeof(u32));
 
     TransitionState(
         commands, *stateA_, stateAState_, rhi::ResourceState::UnorderedAccess);
@@ -817,7 +857,9 @@ void VolumeParticleGpuState::InitializeState(
         commands, *counter_, counterState_, rhi::ResourceState::UnorderedAccess);
 
     currentIsA_ = true;
+    splashCurrentIsA_ = true;
     generation_ = 0U;
+    splashGeneration_ = 0U;
     initialized_ = true;
 }
 
@@ -923,7 +965,7 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
     const std::span<const VolumeParticleTerrainCollisionPage> pages,
     const f64 deltaSeconds)
 {
-    if (!initialized_ || generation_ == 0U || pages.empty())
+    if (!initialized_ || generation_ == 0U)
     {
         return;
     }
@@ -984,7 +1026,26 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
         current,
         currentState,
         rhi::ResourceState::ShaderResource);
-    TransitionState(commands, *splashEvents_, splashEventState_, rhi::ResourceState::ShaderResource);
+    TransitionState(commands, *splashEvents_, splashEventState_, rhi::ResourceState::UnorderedAccess);
+
+    // Compact/age persistent splash state and append this generation's exact-once water-entry events.
+    rhi::Buffer& splashSource=splashCurrentIsA_?*splashStateA_:*splashStateB_;
+    rhi::Buffer& splashDestination=splashCurrentIsA_?*splashStateB_:*splashStateA_;
+    rhi::ResourceState& splashSourceState=splashCurrentIsA_?splashStateAState_:splashStateBState_;
+    rhi::ResourceState& splashDestinationState=splashCurrentIsA_?splashStateBState_:splashStateAState_;
+    TransitionState(commands,splashSource,splashSourceState,rhi::ResourceState::UnorderedAccess);
+    TransitionState(commands,splashDestination,splashDestinationState,rhi::ResourceState::UnorderedAccess);
+    TransitionState(commands,*splashStateCounter_,splashStateCounterState_,rhi::ResourceState::CopyDestination);
+    commands.CopyBuffer(*zeroSplashStateCounterUpload_,0U,*splashStateCounter_,0U,sizeof(u32));
+    TransitionState(commands,*splashStateCounter_,splashStateCounterState_,rhi::ResourceState::UnorderedAccess);
+    const u32 previousSplashGeneration=splashGeneration_; ++splashGeneration_; if(splashGeneration_==0U) splashGeneration_=1U;
+    const f32 splashDt=std::isfinite(deltaSeconds)?static_cast<f32>(std::clamp(deltaSeconds,0.0,1.0)):0.0F;
+    std::array<u32,8U> splashConstants{}; splashConstants[0]=previousSplashGeneration; splashConstants[1]=splashGeneration_; splashConstants[2]=MaximumPersistentSplashCount; splashConstants[3]=MaximumPersistentSplashCount; splashConstants[4]=Bits(splashDt);
+    // Splash state shares the same presentation frame; particle rebasing delta was already applied in Advance. New events are in the new frame, while old splash state needs the same delta.
+    splashConstants[5]=0U; splashConstants[6]=0U; splashConstants[7]=0U;
+    commands.SetComputePipeline(*splashSimulationPipeline_); commands.SetComputeConstants(splashConstants); commands.SetComputeBuffer(0U,splashSource); commands.SetComputeBuffer(1U,splashDestination); commands.SetComputeBuffer(2U,*splashEvents_); commands.SetComputeBuffer(3U,*splashCounter_); commands.SetComputeBuffer(4U,*splashStateCounter_);
+    commands.Dispatch((std::max(MaximumPersistentSplashCount,MaximumSplashEventCount)+63U)/64U,1U,1U); commands.UavBarrier(splashDestination); splashCurrentIsA_=!splashCurrentIsA_;
+    TransitionState(commands,splashDestination,splashDestinationState,rhi::ResourceState::ShaderResource);
 }
 
 void VolumeParticleGpuState::BindForGraphics(
@@ -995,8 +1056,10 @@ void VolumeParticleGpuState::BindForGraphics(
     TransitionState(
         commands, current, state, rhi::ResourceState::ShaderResource);
     commands.SetGraphicsBuffer(GraphicsBufferSlot, current);
-    TransitionState(commands, *splashEvents_, splashEventState_, rhi::ResourceState::ShaderResource);
-    commands.SetGraphicsBuffer(SplashGraphicsBufferSlot, *splashEvents_);
+    rhi::Buffer& splashCurrent=splashCurrentIsA_?*splashStateA_:*splashStateB_;
+    rhi::ResourceState& splashState=splashCurrentIsA_?splashStateAState_:splashStateBState_;
+    TransitionState(commands,splashCurrent,splashState,rhi::ResourceState::ShaderResource);
+    commands.SetGraphicsBuffer(SplashGraphicsBufferSlot,splashCurrent);
 }
 
 void VolumeParticleGpuState::Reset() noexcept
@@ -1004,6 +1067,8 @@ void VolumeParticleGpuState::Reset() noexcept
     spawnSnapshot_.fill({});
     spawnCount_ = 0U;
     generation_ = 0U;
+    splashGeneration_ = 0U;
+    splashCurrentIsA_ = true;
     initialized_ = false;
 }
 

@@ -170,8 +170,8 @@ VSOutput main(uint vertexId : SV_VertexID)
 
 
 constexpr const char* kSplashVertexShader = R"(
-struct SplashEvent { float3 positionMeters; float scaleMeters; float3 normal; float impactSpeedMetersPerSecond; float3 tint; uint generation; };
-[[vk::binding(3, 0)]] StructuredBuffer<SplashEvent> g_splashes : register(t3);
+struct SplashState { float3 positionMeters; float baseScaleMeters; float3 normal; float expansionMetersPerSecond; float3 tint; float impactSpeedMetersPerSecond; float ageSeconds; float lifetimeSeconds; uint generation; uint reserved; };
+[[vk::binding(3, 0)]] StructuredBuffer<SplashState> g_splashes : register(t3);
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; };
 [[vk::push_constant]] Push g;
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; };
@@ -184,13 +184,15 @@ float4 Project(float3 relative) {
 }
 VSOutput main(uint vertexId:SV_VertexID) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)};
-    uint eventIndex=vertexId/6u, cornerIndex=vertexId%6u; SplashEvent e=g_splashes[eventIndex]; VSOutput o;
-    if(e.generation!=asuint(g.viewport.w)||e.scaleMeters<=0.0){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.impact=0;return o;}
+    uint eventIndex=vertexId/6u, cornerIndex=vertexId%6u; SplashState e=g_splashes[eventIndex]; VSOutput o;
+    if(e.generation==0u||e.baseScaleMeters<=0.0||e.lifetimeSeconds<=0.0||e.ageSeconds>=e.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.impact=0;return o;}
     float4 center=Project(e.positionMeters-g.camera.xyz); if(center.w<=0.0){o.position=center;o.uv=0;o.tint=0;o.impact=0;return o;}
     float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0));
-    float pixels=max(e.scaleMeters,0.01)/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5;
+    float life=saturate(1.0-e.ageSeconds/max(e.lifetimeSeconds,0.001));
+    float radius=max(e.baseScaleMeters+e.expansionMetersPerSecond*e.ageSeconds,0.01);
+    float pixels=radius/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5;
     pixels=max(pixels,max(g.viewport.z,0.5)); o.position=center; o.position.xy+=corners[cornerIndex]*ndc*pixels*center.w;
-    o.uv=corners[cornerIndex]; o.tint=max(e.tint,0.0); o.impact=max(e.impactSpeedMetersPerSecond,0.0); return o;
+    o.uv=corners[cornerIndex]; o.tint=max(e.tint,0.0)*life; o.impact=max(e.impactSpeedMetersPerSecond,0.0)*life; return o;
 }
 )";
 constexpr const char* kSplashPixelShader = R"(
@@ -449,7 +451,7 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsPipeline(*splashPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
-    commands.Draw(VolumeParticleGpuState::MaximumSplashEventCount * 6U);
+    commands.Draw(VolumeParticleGpuState::MaximumPersistentSplashCount * 6U);
 }
 
 void VolumeParticleRenderer::Reset() noexcept
