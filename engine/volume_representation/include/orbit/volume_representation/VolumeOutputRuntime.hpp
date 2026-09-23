@@ -15,6 +15,7 @@ struct VolumeOutputRuntimeDiagnostics
     u32 eligibleVolumes{0U};
     u32 advancedVolumes{0U};
     u32 volumesWithoutReadableAuthority{0U};
+    u32 volumesWithStaleAuthority{0U};
     u32 dispatchedParticleRequests{0U};
     u32 dispatchedSurfaceRequests{0U};
     f64 deltaSeconds{0.0};
@@ -32,9 +33,9 @@ public:
         VolumeSurfaceOutputSink* sink) noexcept;
 
     // Advances every authored Volume exactly once from simulation time rather
-    // than render/UI cadence. At M38, attached M37 caches are the readable
-    // authority. Live GPU producers can be attached behind the same coupling
-    // seam without changing downstream consumers.
+    // than render/UI cadence. At M38, a current M37 cache is the CPU-readable
+    // authority. Stale caches are rejected rather than silently emitting from
+    // authored state that no longer matches the world.
     [[nodiscard]] VolumeOutputRuntimeDiagnostics TickWorld(
         const scene::ObjectStore& objects,
         time::SimulationTime atTime);
@@ -54,6 +55,18 @@ private:
     VolumeOutputRuntimeDiagnostics diagnostics_{};
 };
 
+struct VolumeParticleQueuedRequest
+{
+    scene::ObjectId volume{};
+    VolumeParticleSpawnRequest request{};
+};
+
+struct VolumeSurfaceQueuedRequest
+{
+    scene::ObjectId volume{};
+    VolumeSurfaceDepositRequest request{};
+};
+
 class VolumeParticleRequestQueue final :
     public VolumeParticleOutputSink
 {
@@ -62,13 +75,13 @@ public:
         scene::ObjectId volume,
         std::span<const VolumeParticleSpawnRequest> requests) override;
 
-    [[nodiscard]] std::span<const VolumeParticleSpawnRequest>
+    [[nodiscard]] std::span<const VolumeParticleQueuedRequest>
     Pending() const noexcept;
 
     void Clear() noexcept;
 
 private:
-    std::vector<VolumeParticleSpawnRequest> pending_;
+    std::vector<VolumeParticleQueuedRequest> pending_;
 };
 
 class VolumeSurfaceRequestQueue final :
@@ -79,13 +92,13 @@ public:
         scene::ObjectId volume,
         std::span<const VolumeSurfaceDepositRequest> requests) override;
 
-    [[nodiscard]] std::span<const VolumeSurfaceDepositRequest>
+    [[nodiscard]] std::span<const VolumeSurfaceQueuedRequest>
     Pending() const noexcept;
 
     void Clear() noexcept;
 
 private:
-    std::vector<VolumeSurfaceDepositRequest> pending_;
+    std::vector<VolumeSurfaceQueuedRequest> pending_;
 };
 
 [[nodiscard]] VolumeOutputRuntime& VolumeOutputRuntimeService() noexcept;
