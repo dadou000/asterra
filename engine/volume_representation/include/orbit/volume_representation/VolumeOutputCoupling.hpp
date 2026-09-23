@@ -12,6 +12,18 @@
 
 namespace orbit::volume_representation
 {
+// Semantic effect carried by a resolved M38 surface deposit. The volume layer
+// owns only this transport-neutral classification; material/render systems
+// decide how each channel changes BRDF, albedo, thermal state, particles, etc.
+enum class VolumeSurfaceEffect : u8
+{
+    Wetness = 0U,
+    Soot = 1U,
+    Ash = 2U,
+    Sediment = 3U,
+    Heat = 4U
+};
+
 // M38 deliberately publishes transport-neutral requests. Particle systems,
 // terrain, meshes and material/wetness systems consume these requests without
 // making the volume solver depend on any one presentation or surface backend.
@@ -32,6 +44,10 @@ struct VolumeOutputSettings
     // Rejection sampling remains explicitly bounded even when only a tiny
     // fraction of a volume is above the selected output threshold.
     u32 candidateMultiplier{8U};
+
+    VolumeSurfaceEffect surfaceEffect{VolumeSurfaceEffect::Wetness};
+    // Runtime influence decay. <= 0 means persistent until explicitly cleared.
+    f32 surfaceEffectHalfLifeSeconds{30.0F};
 };
 
 struct VolumeOutputFieldSample
@@ -66,6 +82,9 @@ struct VolumeSurfaceDepositRequest
     f32 amount{0.0F};
     f32 density{0.0F};
     f32 emission{0.0F};
+
+    VolumeSurfaceEffect effect{VolumeSurfaceEffect::Wetness};
+    f32 halfLifeSeconds{30.0F};
 };
 
 struct VolumeOutputDiagnostics
