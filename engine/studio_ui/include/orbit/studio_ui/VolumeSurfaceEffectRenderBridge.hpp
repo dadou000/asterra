@@ -4,6 +4,7 @@
 #include <orbit/terrain_render/SurfaceEffects.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <span>
 #include <vector>
 
@@ -41,12 +42,34 @@ ToRenderEffect(
     return Target::Wetness;
 }
 
-// Builds a bounded GPU-facing snapshot for one body. Strongest effects are
-// retained first when the runtime state exceeds the render upload budget.
-// Runtime authority is untouched; this is a presentation snapshot only.
+[[nodiscard]] inline math::Float3
+NormalizedRenderDirection(const math::Double3 point) noexcept
+{
+    const f64 lengthSquared =
+        point.x * point.x +
+        point.y * point.y +
+        point.z * point.z;
+
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 1.0e-20)
+    {
+        return {0.0F, 1.0F, 0.0F};
+    }
+
+    const f64 inverse = 1.0 / std::sqrt(lengthSquared);
+    return {
+        static_cast<f32>(point.x * inverse),
+        static_cast<f32>(point.y * inverse),
+        static_cast<f32>(point.z * inverse)
+    };
+}
+
+// Builds a bounded GPU-facing snapshot for one body. Directions and angular
+// radii avoid losing small footprints to float precision at planetary scale.
+// Strongest effects are retained first when the upload budget is exceeded.
 [[nodiscard]] inline VolumeSurfaceEffectRenderBatch
 BuildVolumeSurfaceEffectRenderBatch(
     const universe::BodyId body,
+    const f64 referenceRadiusMeters,
     const std::span<const studio_session::VolumeSurfaceEffectStamp> source,
     const u32 maximumGpuStamps = 512U)
 {
@@ -81,16 +104,24 @@ BuildVolumeSurfaceEffectRenderBatch(
             maximumGpuStamps);
     result.stamps.reserve(count);
 
+    const f64 safeRadius =
+        std::isfinite(referenceRadiusMeters)
+            ? std::max(referenceRadiusMeters, 0.001)
+            : 0.001;
+
     for (std::size_t index = 0U; index < count; ++index)
     {
         const auto& stamp = *candidates[index];
         result.stamps.push_back({
-            .bodyLocalPointMeters = {
-                static_cast<f32>(stamp.bodyLocalSurfacePointMeters.x),
-                static_cast<f32>(stamp.bodyLocalSurfacePointMeters.y),
-                static_cast<f32>(stamp.bodyLocalSurfacePointMeters.z)
-            },
-            .radiusMeters = stamp.radiusMeters,
+            .bodyFixedDirection =
+                NormalizedRenderDirection(
+                    stamp.bodyLocalSurfacePointMeters),
+            .angularRadiusRadians =
+                static_cast<f32>(
+                    std::max(
+                        static_cast<f64>(stamp.radiusMeters) /
+                            safeRadius,
+                        1.0e-9)),
             .amount = stamp.amount,
             .effect = ToRenderEffect(stamp.effect)
         });
