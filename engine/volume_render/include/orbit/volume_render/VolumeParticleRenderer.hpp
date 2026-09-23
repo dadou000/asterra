@@ -5,18 +5,16 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
-#include <orbit/volume_render/VolumeParticleGpuBinding.hpp>
+#include <orbit/volume_render/VolumeParticleGpuState.hpp>
 
 #include <memory>
 #include <span>
 
 namespace orbit::volume_render
 {
-// Presentation-only renderer for M38 volume particle spawn packets. It does
-// not integrate lifetime, forces, collision or motion; one authoritative spawn
-// packet is rendered for the frame in which it is consumed. A future GPU
-// particle simulator can replace this presentation layer without changing the
-// volume-output contract or Studio handoff.
+// Persistent M38 GPU particle renderer. CPU input is limited to the compact
+// authoritative spawn packet; lifetime, velocity integration and compaction
+// remain GPU resident between simulation generations.
 class VolumeParticleRenderer
 {
 public:
@@ -28,6 +26,14 @@ public:
     void SetSpawns(
         std::span<const VolumeParticleGpuSpawn> spawns);
 
+    void Advance(
+        rhi::CommandList& commands,
+        u32 frameIndex,
+        f64 deltaSeconds,
+        math::Double3 previousOriginMeters,
+        math::Double3 newOriginMeters,
+        VolumeParticleSimulationSettings settings = {});
+
     void Draw(
         rhi::CommandList& commands,
         rhi::Texture& sceneColor,
@@ -36,13 +42,15 @@ public:
         u32 height,
         const render_view::CameraState& camera,
         math::Double3 cameraPositionRelativeToPresentationOriginMeters,
-        u32 frameIndex,
         f32 radiusPixels = 3.0F);
 
-    [[nodiscard]] u32 ActiveSpawnCount() const noexcept;
+    void Reset() noexcept;
+
+    [[nodiscard]] u32 Generation() const noexcept;
+    [[nodiscard]] u32 SubmittedSpawnCount() const noexcept;
 
 private:
-    VolumeParticleGpuBinding binding_;
+    VolumeParticleGpuState state_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
 };
 } // namespace orbit::volume_render
