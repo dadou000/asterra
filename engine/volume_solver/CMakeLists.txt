@@ -1,5 +1,6 @@
 add_library(OrbitVolumeSolver STATIC
     src/SurfaceVolumeSolver.cpp
+    src/SurfaceVolumeRepresentationGate.cpp
 )
 
 add_library(Orbit::VolumeSolver ALIAS OrbitVolumeSolver)
@@ -18,6 +19,7 @@ target_link_libraries(OrbitVolumeSolver
         Orbit::Scene
         Orbit::Shader
         Orbit::VolumeFields
+        Orbit::VolumeRepresentation
         Orbit::WorldModel
 )
 
