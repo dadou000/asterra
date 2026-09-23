@@ -6,6 +6,7 @@
 #include <source_location>
 
 void RunVolumeCacheTests();
+void RunVolumeOutputCouplingTests();
 
 namespace
 {
@@ -224,5 +225,6 @@ int main()
     Check(!AllocationPolicy(volumeId).has_value());
 
     RunVolumeCacheTests();
+    RunVolumeOutputCouplingTests();
     return 0;
 }
