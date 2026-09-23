@@ -24,16 +24,62 @@ rep(p,
 
 # ---- Shader / renderer ----
 p='engine/lighting/src/ScreenSpaceFinalGather.cpp'
-# Add buffer binding 0 and shift storage/sample bindings by one.
-rep(p,
-'''constexpr const char* kGatherCs = R"(
+old_header='''constexpr const char* kGatherCs = R"(
 [[vk::binding(0, 0)]]
 RWTexture2D<float4> g_currentIndirect : register(u0);
 [[vk::binding(1, 0)]]
 RWTexture2D<float4> g_currentMeta : register(u1);
 
-[[vk::binding(2, 0)]]''',
-'''constexpr const char* kGatherCs = R"(
+[[vk::binding(2, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_sceneColor : register(t2);
+[[vk::binding(2, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_sceneSampler : register(s2);
+
+[[vk::binding(3, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_baseRoughness : register(t3);
+[[vk::binding(3, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_baseSampler : register(s3);
+
+[[vk::binding(4, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_normalMetallic : register(t4);
+[[vk::binding(4, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_normalSampler : register(s4);
+
+[[vk::binding(5, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_emissionClass : register(t5);
+[[vk::binding(5, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_emissionSampler : register(s5);
+
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_depth : register(t6);
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_depthSampler : register(s6);
+
+[[vk::binding(7, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_previousIndirect : register(t7);
+[[vk::binding(7, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_previousIndirectSampler : register(s7);
+
+[[vk::binding(8, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_previousMeta : register(t8);
+[[vk::binding(8, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_previousMetaSampler : register(s8);
+'''
+new_header='''constexpr const char* kGatherCs = R"(
 [[vk::binding(0, 0)]]
 StructuredBuffer<uint4> g_particleLightGrid : register(t0);
 
@@ -42,11 +88,57 @@ RWTexture2D<float4> g_currentIndirect : register(u1);
 [[vk::binding(2, 0)]]
 RWTexture2D<float4> g_currentMeta : register(u2);
 
-[[vk::binding(3, 0)]]''')
-# Shift remaining sampled texture binding attributes, one by one.
-for old,new in [(3,4),(4,5),(5,6),(6,7),(7,8),(8,9)]:
-    rep(p,f'[[vk::binding({old}, 0)]]',f'[[vk::binding({new}, 0)]]',2)
-# Extend constants with frame origin + enable flag.
+[[vk::binding(3, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_sceneColor : register(t3);
+[[vk::binding(3, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_sceneSampler : register(s3);
+
+[[vk::binding(4, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_baseRoughness : register(t4);
+[[vk::binding(4, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_baseSampler : register(s4);
+
+[[vk::binding(5, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_normalMetallic : register(t5);
+[[vk::binding(5, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_normalSampler : register(s5);
+
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_emissionClass : register(t6);
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_emissionSampler : register(s6);
+
+[[vk::binding(7, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_depth : register(t7);
+[[vk::binding(7, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_depthSampler : register(s7);
+
+[[vk::binding(8, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_previousIndirect : register(t8);
+[[vk::binding(8, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_previousIndirectSampler : register(s8);
+
+[[vk::binding(9, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_previousMeta : register(t9);
+[[vk::binding(9, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_previousMetaSampler : register(s9);
+'''
+rep(p,old_header,new_header)
+
 rep(p,
 '''    float4 depthRangeRadius;
     float4 gatherTuning;
@@ -55,14 +147,11 @@ rep(p,
     float4 gatherTuning;
     float4 cameraFrameParticleGrid;
 };''')
-# Add shared-grid helpers before Hash12.
+
 helper='''
 float4 SampleParticleLightGrid(float3 framePosition)
 {
-    if (g.cameraFrameParticleGrid.w <= 0.0)
-    {
-        return 0.0;
-    }
+    if (g.cameraFrameParticleGrid.w <= 0.0) return 0.0;
     const uint4 meta = g_particleLightGrid[1];
     const float3 origin = float3(asfloat(meta.x),asfloat(meta.y),asfloat(meta.z));
     const float cellSize = asfloat(meta.w);
@@ -105,7 +194,6 @@ float3 ParticleGridEmissionAlong(float3 start,float3 direction,float distance)
 
 '''
 rep(p,'float Hash12(float2 p)\n{',helper+'float Hash12(float2 p)\n{')
-# At source position, derive frame-space origin once.
 rep(p,
 '''    const float3 surfacePosition =
         ReconstructPosition(
@@ -122,27 +210,11 @@ rep(p,
         g.cameraFrameParticleGrid.xyz;
 
     const float radius =''')
-# Modify resolved hit radiance to include M38 extinction/emission along ray.
 rep(p,
-'''                    const float3 radiance =
-                        max(
-                            g_sceneColor.SampleLevel(
-                                g_sceneSampler,
-                                hitUv,
-                                0).rgb,
-                            0.0);
-
-                    accumulated +=
+'''                    accumulated +=
                         radiance *
                         weight;''',
-'''                    const float3 radiance =
-                        max(
-                            g_sceneColor.SampleLevel(
-                                g_sceneSampler,
-                                hitUv,
-                                0).rgb,
-                            0.0);
-                    const float particleT =
+'''                    const float particleT =
                         ParticleGridTransmittance(
                             surfaceFramePosition,
                             direction,
@@ -156,7 +228,8 @@ rep(p,
                     accumulated +=
                         (radiance * particleT + particleEmission) *
                         weight;''')
-# Pipeline descriptor counts and dummy grid.
+
+rep(p,'#include <cmath>\n','#include <cmath>\n#include <cstring>\n')
 rep(p,
 '''            .pushConstantDwords = 20U,
             .shaderResourceBuffers = 0U,
@@ -167,8 +240,8 @@ rep(p,
             .storageTextures = 2U,
             .sampledTextures = 7U''')
 rep(p,
-'''    combinePipeline_ =
-        device.CreateComputePipeline({''',
+'''    const auto combine =
+        compiler.Compile({''',
 '''    dummyParticleLightGrid_ = device.CreateBuffer({
         .sizeBytes = 2U * sizeof(std::array<u32,4U>),
         .usage = rhi::BufferUsage::Structured,
@@ -178,11 +251,8 @@ rep(p,
     std::memset(dummyParticleLightGrid_->Map(),0,static_cast<std::size_t>(dummyParticleLightGrid_->SizeBytes()));
     dummyParticleLightGrid_->Unmap();
 
-    combinePipeline_ =
-        device.CreateComputePipeline({''')
-# Need cstring for memset.
-rep(p,'#include <cmath>\n','#include <cmath>\n#include <cstring>\n')
-# Gather signature.
+    const auto combine =
+        compiler.Compile({''')
 rep(p,
 '''    const LightingView& view,
     const bool historyCompatible,
@@ -191,10 +261,7 @@ rep(p,
     const bool historyCompatible,
     rhi::Buffer* const particleLightGrid,
     const ScreenSpaceFinalGatherSettings& settings)''')
-# constants 20 -> 24, append frame-space camera and enable.
-rep(p,
-'''    const std::array<u32, 20> fullConstants{''',
-'''    const std::array<u32, 24> fullConstants{''')
+rep(p,'    const std::array<u32, 20> fullConstants{','    const std::array<u32, 24> fullConstants{')
 rep(p,
 '''        tuning[0],
         tuning[1],
@@ -211,7 +278,6 @@ rep(p,
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.z)),
         bits(particleLightGrid != nullptr ? 1.0F : 0.0F)
     };''')
-# Bind buffer before storage textures.
 rep(p,
 '''    commands.SetComputeConstants(
         fullConstants);
@@ -227,9 +293,8 @@ rep(p,
 
     commands.SetComputeStorageTexture(''')
 
-# ---- Studio call ----
+# ---- Studio ----
 p='engine/studio_ui/src/StudioViewportRenderer.cpp'
-# Capture the already-resolved previous-frame grid pointer in gather lambda.
 rep(p,
 '''                 gatherSettings,
                  lightingTimestamps,''',
