@@ -51,6 +51,9 @@ public:
         const LightingView& view,
         const DirectionalLight& light,
         const TiledLightGrid& localLightGrid,
+        // Optional previous-completed M38 GPU particle light grid. When
+        // present it is the shared authority for smoke transmittance and
+        // low-frequency particle emission; no particle-state readback occurs.
         rhi::Buffer* particleLightGrid = nullptr,
         const DirectLightingSettings& settings = {});
 
