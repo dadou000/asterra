@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 namespace orbit::volume_representation
 {
@@ -217,6 +218,14 @@ VolumeParticleRequestQueue::Pending() const noexcept
     return pending_;
 }
 
+std::vector<VolumeParticleQueuedRequest>
+VolumeParticleRequestQueue::Drain() noexcept
+{
+    return std::exchange(
+        pending_,
+        std::vector<VolumeParticleQueuedRequest>{});
+}
+
 void VolumeParticleRequestQueue::Clear() noexcept
 {
     pending_.clear();
@@ -242,6 +251,14 @@ std::span<const VolumeSurfaceQueuedRequest>
 VolumeSurfaceRequestQueue::Pending() const noexcept
 {
     return pending_;
+}
+
+std::vector<VolumeSurfaceQueuedRequest>
+VolumeSurfaceRequestQueue::Drain() noexcept
+{
+    return std::exchange(
+        pending_,
+        std::vector<VolumeSurfaceQueuedRequest>{});
 }
 
 void VolumeSurfaceRequestQueue::Clear() noexcept
