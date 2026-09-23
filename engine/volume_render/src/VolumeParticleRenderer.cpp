@@ -11,20 +11,21 @@ namespace orbit::volume_render
 namespace
 {
 constexpr const char* kVertexShader = R"(
-struct Spawn
+struct Particle
 {
     float3 positionMeters;
     float authority;
     float3 velocityMetersPerSecond;
     float density;
     float emission;
-    float reserved0;
-    float reserved1;
-    float reserved2;
+    float ageSeconds;
+    float lifetimeSeconds;
+    uint generation;
+    float4 reserved;
 };
 
 [[vk::binding(2, 0)]]
-StructuredBuffer<Spawn> g_spawns : register(t2);
+StructuredBuffer<Particle> g_particles : register(t2);
 
 struct Push
 {
@@ -45,6 +46,7 @@ struct VSOutput
     float authority : TEXCOORD1;
     float density : TEXCOORD2;
     float emission : TEXCOORD3;
+    float life : TEXCOORD4;
 };
 
 float4 Project(float3 relative)
@@ -82,12 +84,27 @@ VSOutput main(uint vertexId : SV_VertexID)
         float2(-1.0,  1.0)
     };
 
-    const uint spawnIndex = vertexId / 6u;
+    const uint particleIndex = vertexId / 6u;
     const uint cornerIndex = vertexId % 6u;
-    const Spawn spawn = g_spawns[spawnIndex];
+    const Particle particle = g_particles[particleIndex];
+    const uint currentGeneration = asuint(g.viewport.w);
 
     VSOutput output;
-    const float4 center = Project(spawn.positionMeters - g.camera.xyz);
+    if (particle.generation != currentGeneration ||
+        particle.lifetimeSeconds <= 0.0 ||
+        particle.ageSeconds >= particle.lifetimeSeconds)
+    {
+        output.position = float4(2.0, 2.0, 1.0, 1.0);
+        output.uv = 0.0;
+        output.authority = 0.0;
+        output.density = 0.0;
+        output.emission = 0.0;
+        output.life = 0.0;
+        return output;
+    }
+
+    const float4 center = Project(
+        particle.positionMeters - g.camera.xyz);
 
     if (center.w <= 0.0)
     {
@@ -96,6 +113,7 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.authority = 0.0;
         output.density = 0.0;
         output.emission = 0.0;
+        output.life = 0.0;
         return output;
     }
 
@@ -108,9 +126,12 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.position = center;
     output.position.xy += corner * ndcPerPixel * radiusPixels * center.w;
     output.uv = corner;
-    output.authority = max(spawn.authority, 0.0);
-    output.density = max(spawn.density, 0.0);
-    output.emission = max(spawn.emission, 0.0);
+    output.authority = max(particle.authority, 0.0);
+    output.density = max(particle.density, 0.0);
+    output.emission = max(particle.emission, 0.0);
+    output.life = saturate(
+        1.0 - particle.ageSeconds /
+            max(particle.lifetimeSeconds, 0.001));
     return output;
 }
 )";
@@ -123,12 +144,13 @@ struct VSOutput
     float authority : TEXCOORD1;
     float density : TEXCOORD2;
     float emission : TEXCOORD3;
+    float life : TEXCOORD4;
 };
 
 float4 main(VSOutput input) : SV_Target0
 {
     const float radius2 = dot(input.uv, input.uv);
-    if (radius2 >= 1.0)
+    if (radius2 >= 1.0 || input.life <= 0.0)
     {
         discard;
     }
@@ -144,7 +166,8 @@ float4 main(VSOutput input) : SV_Target0
         density);
     const float3 emissiveColor = float3(1.00, 0.42, 0.08) * emission;
     const float3 color = densityColor + emissiveColor;
-    const float alpha = soft * saturate(0.16 + 0.64 * authority + 0.20 * density);
+    const float alpha = soft * input.life *
+        saturate(0.16 + 0.64 * authority + 0.20 * density);
 
     return float4(color, alpha);
 }
@@ -155,7 +178,7 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler,
     const u32 framesInFlight)
-    : binding_(device, framesInFlight)
+    : state_(device, compiler, framesInFlight)
 {
     const auto vertex = compiler.Compile({
         .source = kVertexShader,
@@ -173,7 +196,7 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     if (vertex.bytecode.empty() || pixel.bytecode.empty())
     {
         throw std::runtime_error(
-            "Orbit failed to compile M38 particle presentation shaders.");
+            "Orbit failed to compile M38 persistent particle shaders.");
     }
 
     pipeline_ = device.CreateGraphicsPipeline({
@@ -207,7 +230,24 @@ VolumeParticleRenderer::VolumeParticleRenderer(
 void VolumeParticleRenderer::SetSpawns(
     const std::span<const VolumeParticleGpuSpawn> spawns)
 {
-    binding_.Set(spawns);
+    state_.SetSpawns(spawns);
+}
+
+void VolumeParticleRenderer::Advance(
+    rhi::CommandList& commands,
+    const u32 frameIndex,
+    const f64 deltaSeconds,
+    const math::Double3 previousOriginMeters,
+    const math::Double3 newOriginMeters,
+    const VolumeParticleSimulationSettings settings)
+{
+    state_.Advance(
+        commands,
+        frameIndex,
+        deltaSeconds,
+        previousOriginMeters,
+        newOriginMeters,
+        settings);
 }
 
 void VolumeParticleRenderer::Draw(
@@ -218,11 +258,9 @@ void VolumeParticleRenderer::Draw(
     const u32 height,
     const render_view::CameraState& camera,
     const math::Double3 cameraPositionRelativeToPresentationOriginMeters,
-    const u32 frameIndex,
     const f32 radiusPixels)
 {
-    const u32 spawnCount = binding_.ActiveSpawnCount();
-    if (spawnCount == 0U || width == 0U || height == 0U)
+    if (state_.Generation() == 0U || width == 0U || height == 0U)
     {
         return;
     }
@@ -262,6 +300,7 @@ void VolumeParticleRenderer::Draw(
         std::isfinite(radiusPixels)
             ? std::max(radiusPixels, 0.5F)
             : 3.0F);
+    constants[19] = state_.Generation();
 
     commands.SetRenderTargets(sceneColor, depth);
     commands.SetViewport({
@@ -280,12 +319,22 @@ void VolumeParticleRenderer::Draw(
     });
     commands.SetGraphicsPipeline(*pipeline_);
     commands.SetGraphicsConstants(constants);
-    binding_.Bind(commands, frameIndex);
-    commands.Draw(spawnCount * 6U);
+    state_.BindForGraphics(commands);
+    commands.Draw(VolumeParticleGpuState::MaximumParticleCount * 6U);
 }
 
-u32 VolumeParticleRenderer::ActiveSpawnCount() const noexcept
+void VolumeParticleRenderer::Reset() noexcept
 {
-    return binding_.ActiveSpawnCount();
+    state_.Reset();
+}
+
+u32 VolumeParticleRenderer::Generation() const noexcept
+{
+    return state_.Generation();
+}
+
+u32 VolumeParticleRenderer::SubmittedSpawnCount() const noexcept
+{
+    return state_.SubmittedSpawnCount();
 }
 } // namespace orbit::volume_render
