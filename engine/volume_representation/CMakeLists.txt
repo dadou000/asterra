@@ -1,5 +1,6 @@
 add_library(OrbitVolumeRepresentation STATIC
     src/VolumeRepresentation.cpp
+    src/VolumeCache.cpp
 )
 
 add_library(Orbit::VolumeRepresentation ALIAS OrbitVolumeRepresentation)
@@ -23,6 +24,7 @@ orbit_enable_warnings(OrbitVolumeRepresentation)
 if(BUILD_TESTING)
     add_executable(OrbitVolumeRepresentationTests
         tests/VolumeRepresentationTests.cpp
+        tests/VolumeCacheTests.cpp
     )
 
     target_link_libraries(OrbitVolumeRepresentationTests
