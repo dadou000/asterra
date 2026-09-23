@@ -7,14 +7,16 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 #include <orbit/volume_render/VolumeParticleGpuState.hpp>
 
+#include <array>
 #include <memory>
 #include <span>
+#include <vector>
 
 namespace orbit::volume_render
 {
-// Persistent M38 GPU particle renderer. CPU input is limited to the compact
-// authoritative spawn packet; lifetime, velocity integration and compaction
-// remain GPU resident between simulation generations.
+// Persistent M38 GPU particle renderer. CPU input is limited to compact spawn
+// and terrain-page metadata; particle state, integration and collision remain
+// GPU resident between simulation generations.
 class VolumeParticleRenderer
 {
 public:
@@ -34,6 +36,17 @@ public:
         math::Double3 newOriginMeters,
         VolumeParticleSimulationSettings settings = {});
 
+    void UpdateTerrainCollisionPages(
+        const std::array<u32, 4U>& bodyIdentity,
+        std::span<const VolumeParticleTerrainCollisionPage> pages);
+
+    [[nodiscard]] std::vector<VolumeParticleTerrainCollisionPage>
+    TerrainCollisionPagesSnapshot() const;
+
+    void ApplyTerrainCollision(
+        rhi::CommandList& commands,
+        std::span<const VolumeParticleTerrainCollisionPage> pages);
+
     void Draw(
         rhi::CommandList& commands,
         rhi::Texture& sceneColor,
@@ -52,5 +65,6 @@ public:
 private:
     VolumeParticleGpuState state_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::vector<VolumeParticleTerrainCollisionPage> terrainCollisionPages_;
 };
 } // namespace orbit::volume_render
