@@ -23,6 +23,7 @@
 #undef Draw
 #undef Register
 
+#include <orbit/volume_representation/VolumeCache.hpp>
 #include <orbit/volume_representation/VolumeRepresentation.hpp>
 
 #include <algorithm>
@@ -408,10 +409,11 @@ void VolumeAuthoringUi::DrawRepresentationPolicy(
 
     context.Text(
         std::format(
-            "Blend Live {:.3f} | Coarse {:.3f} | Passive {:.3f}",
+            "Blend Live {:.3f} | Coarse {:.3f} | Passive {:.3f} | Baked {:.3f}",
             diagnostics.liveWeight,
             diagnostics.coarseWeight,
-            diagnostics.passiveWeight));
+            diagnostics.passiveWeight,
+            diagnostics.bakedWeight));
 
     context.Text(
         std::format(
@@ -439,7 +441,251 @@ void VolumeAuthoringUi::DrawRepresentationPolicy(
     if (diagnostics.bakedFallback)
     {
         context.MutedText(
-            "Baked was forced but M37 has not supplied a valid cache yet; Passive is used explicitly as the bounded fallback.");
+            "Baked was forced but no validated M37 cache is attached; Passive is used explicitly as the bounded fallback.");
+    }
+
+    // M37 native cache pipeline. A bake is immediately attached for preview;
+    // export is optional. Import validates schema, dimensions and checksum
+    // before the renderer can see the cache.
+    context.Separator();
+    context.Heading("Volume Cache / Bake");
+    context.MutedText(
+        "Bake authored static density/emission into a versioned .orbitvol asset, or import an existing validated cache. Baked representation resamples it into the current runtime residency tier.");
+
+    i64 bakeResolution =
+        static_cast<i64>(cacheBakeResolution_);
+    if (context.InputInteger(
+            "Bake Resolution##volume-cache-resolution",
+            bakeResolution))
+    {
+        cacheBakeResolution_ =
+            static_cast<u32>(
+                std::clamp<i64>(
+                    bakeResolution,
+                    4,
+                    512));
+    }
+
+    context.InputText(
+        "Cache Path##volume-cache-path",
+        cachePath_);
+
+    const auto inputs =
+        world_model::ResolveVolumeInputs(
+            world.Objects(),
+            *volumeId);
+
+    const u64 cacheFields =
+        volume->fieldMask &
+        (static_cast<u64>(
+             world_model::VolumeField::Density) |
+         static_cast<u64>(
+             world_model::VolumeField::Emission));
+
+    const volume_representation::
+        VolumeCacheBakeSettings bakeSettings{
+            .resolution = cacheBakeResolution_,
+            .fieldMask =
+                cacheFields != 0U
+                    ? cacheFields
+                    : static_cast<u64>(
+                          world_model::
+                              VolumeField::Density)
+        };
+
+    if (context.Button(
+            "Bake & Attach##volume-cache-bake"))
+    {
+        auto cache =
+            volume_representation::BakeVolumeCache(
+                *volume,
+                inputs,
+                bakeSettings);
+
+        const auto bytes =
+            cache.ByteSize();
+        const auto fingerprint =
+            cache.payloadFingerprint;
+
+        volume_representation::
+            VolumeCaches().Attach(
+                *volumeId,
+                std::move(cache));
+
+        status_ =
+            std::format(
+                "M37 cache baked: {}^3, {:.2f} MiB, payload 0x{:016X}.",
+                cacheBakeResolution_,
+                static_cast<double>(bytes) /
+                    (1024.0 * 1024.0),
+                fingerprint);
+
+        if (!cachePath_.empty())
+        {
+            const auto* attached =
+                volume_representation::
+                    VolumeCaches().Find(
+                        *volumeId);
+            std::string error;
+            if (attached != nullptr &&
+                !volume_representation::
+                    SaveVolumeCache(
+                        cachePath_,
+                        *attached,
+                        &error))
+            {
+                status_ +=
+                    " Export failed: " + error;
+            }
+            else
+            {
+                status_ +=
+                    " Exported to " + cachePath_ + ".";
+            }
+        }
+    }
+
+    context.SameLine();
+    if (context.Button(
+            "Import##volume-cache-import"))
+    {
+        if (cachePath_.empty())
+        {
+            status_ =
+                "Set a .orbitvol path before importing.";
+        }
+        else
+        {
+            auto loaded =
+                volume_representation::
+                    LoadVolumeCache(
+                        cachePath_);
+            if (loaded)
+            {
+                volume_representation::
+                    VolumeCaches().Attach(
+                        *volumeId,
+                        std::move(*loaded.cache));
+                status_ =
+                    "M37 cache imported, checksum validated and attached.";
+            }
+            else
+            {
+                status_ =
+                    std::format(
+                        "Import failed [{}]: {}",
+                        volume_representation::
+                            VolumeCacheLoadStatusName(
+                                loaded.status),
+                        loaded.message);
+            }
+        }
+    }
+
+    context.SameLine();
+    if (context.Button(
+            "Export##volume-cache-export"))
+    {
+        const auto* cache =
+            volume_representation::
+                VolumeCaches().Find(
+                    *volumeId);
+        if (cache == nullptr)
+        {
+            status_ =
+                "No cache is attached to this Volume.";
+        }
+        else if (cachePath_.empty())
+        {
+            status_ =
+                "Set a .orbitvol path before exporting.";
+        }
+        else
+        {
+            std::string error;
+            if (volume_representation::
+                    SaveVolumeCache(
+                        cachePath_,
+                        *cache,
+                        &error))
+            {
+                status_ =
+                    "M37 cache exported to " +
+                    cachePath_ + ".";
+            }
+            else
+            {
+                status_ =
+                    "Cache export failed: " +
+                    error;
+            }
+        }
+    }
+
+    context.SameLine();
+    if (context.Button(
+            "Detach##volume-cache-detach"))
+    {
+        volume_representation::
+            VolumeCaches().Detach(
+                *volumeId);
+        status_ =
+            "M37 cache detached. Forced Baked will explicitly fall back to Passive.";
+    }
+
+    if (const auto* cache =
+            volume_representation::
+                VolumeCaches().Find(
+                    *volumeId);
+        cache != nullptr)
+    {
+        std::string freshness;
+        const volume_representation::VolumeCacheBakeSettings
+            attachedSettings{
+                .resolution =
+                    cache->descriptor.resolutionX,
+                .fieldMask =
+                    cache->descriptor.fieldMask
+            };
+        const bool current =
+            volume_representation::
+                IsVolumeCacheCurrent(
+                    *cache,
+                    *volume,
+                    inputs,
+                    attachedSettings,
+                    &freshness);
+
+        context.Text(
+            std::format(
+                "Attached {}x{}x{} | {:.2f} MiB | payload 0x{:016X}",
+                cache->descriptor.resolutionX,
+                cache->descriptor.resolutionY,
+                cache->descriptor.resolutionZ,
+                static_cast<double>(
+                    cache->ByteSize()) /
+                    (1024.0 * 1024.0),
+                cache->payloadFingerprint));
+        context.MutedText(
+            current
+                ? "Cache matches current authored inputs and bake settings."
+                : freshness);
+        if (!cache->sourcePath.empty())
+        {
+            context.MutedText(
+                "Imported from: " +
+                cache->sourcePath);
+        }
+    }
+    else
+    {
+        context.MutedText(
+            "No cache attached. Baked remains unavailable and cannot silently masquerade as live data.");
+    }
+
+    if (!status_.empty())
+    {
+        context.MutedText(status_);
     }
 
     if (settings.showRepresentationRegions)
