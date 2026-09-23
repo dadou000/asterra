@@ -71,6 +71,7 @@ struct VolumeRenderDiagnostics
     f32 liveWeight{1.0F};
     f32 coarseWeight{0.0F};
     f32 passiveWeight{0.0F};
+    f32 bakedWeight{0.0F};
     math::Double3 runtimeCenterInFrameMeters{};
     f64 distanceToBoundsMeters{0.0};
     f32 projectedDiameterPixels{0.0F};
