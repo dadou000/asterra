@@ -187,6 +187,8 @@ if(BUILD_TESTING)
         COMMAND OrbitVolumeSurfaceEffectRenderBridgeTests
     )
 
+    # M38 particle/foam/droplet rendering is GPU-driven; this regression also
+    # compiles the RHI indirect-draw contract used by the render bridge.
     add_executable(OrbitVolumeParticleRenderBridgeTests
         tests/VolumeParticleRenderBridgeTests.cpp
     )
