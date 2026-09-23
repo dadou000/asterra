@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstring>
 #include <map>
-#include <numbers>
 #include <string>
 #include <vector>
 
@@ -62,21 +61,16 @@ FindFieldInfo(
     return nullptr;
 }
 
-[[nodiscard]] f32 Saturate(const f64 value) noexcept
+[[nodiscard]] f32 Saturate(
+    const f64 value) noexcept
 {
     return static_cast<f32>(
         std::clamp(value, 0.0, 1.0));
 }
 
-[[nodiscard]] f32 ProceduralNoise(
-    const math::Double3 position,
-    const bool passive) noexcept
+[[nodiscard]] f32 DetailedProceduralNoise(
+    const math::Double3 position) noexcept
 {
-    if (passive)
-    {
-        return 0.78F;
-    }
-
     const f64 a =
         std::sin(
             position.x * 0.071 +
@@ -111,18 +105,27 @@ struct ProceduralSample
 [[nodiscard]] ProceduralSample SampleProceduralRepresentation(
     const world_model::ResolvedVolumeDomain& domain,
     const math::Double3 worldPosition,
-    const ResolvedRepresentation representation) noexcept
+    const f32 passiveBlend) noexcept
 {
     const math::Double3 half{
-        std::max(std::abs(domain.halfExtentsMeters.x), 1.0e-6),
-        std::max(std::abs(domain.halfExtentsMeters.y), 1.0e-6),
-        std::max(std::abs(domain.halfExtentsMeters.z), 1.0e-6)
+        std::max(
+            std::abs(domain.halfExtentsMeters.x),
+            1.0e-6),
+        std::max(
+            std::abs(domain.halfExtentsMeters.y),
+            1.0e-6),
+        std::max(
+            std::abs(domain.halfExtentsMeters.z),
+            1.0e-6)
     };
 
     const math::Double3 local{
-        (worldPosition.x - domain.centerMeters.x) / half.x,
-        (worldPosition.y - domain.centerMeters.y) / half.y,
-        (worldPosition.z - domain.centerMeters.z) / half.z
+        (worldPosition.x - domain.centerMeters.x) /
+            half.x,
+        (worldPosition.y - domain.centerMeters.y) /
+            half.y,
+        (worldPosition.z - domain.centerMeters.z) /
+            half.z
     };
 
     const f64 maximumAxis =
@@ -138,18 +141,27 @@ struct ProceduralSample
     }
 
     const f32 edge =
-        Saturate(1.0 - maximumAxis);
+        Saturate(
+            1.0 - maximumAxis);
     const f32 softEdge =
-        edge * edge * (3.0F - 2.0F * edge);
-    const bool passive =
-        representation == ResolvedRepresentation::Passive ||
-        representation == ResolvedRepresentation::Baked;
+        edge * edge *
+        (3.0F - 2.0F * edge);
+
+    const f32 blend =
+        std::clamp(
+            passiveBlend,
+            0.0F,
+            1.0F);
+    const f32 detailedNoise =
+        DetailedProceduralNoise(
+            worldPosition);
     const f32 noise =
-        ProceduralNoise(
-            worldPosition,
-            passive);
+        detailedNoise *
+            (1.0F - blend) +
+        0.78F * blend;
     const f32 height =
-        Saturate(local.y * 0.5 + 0.5);
+        Saturate(
+            local.y * 0.5 + 0.5);
 
     f32 density = 0.0F;
     f32 emission = 0.0F;
@@ -158,7 +170,7 @@ struct ProceduralSample
     {
         density =
             0.48F * softEdge *
-            (passive ? 1.0F : 0.82F + 0.18F * noise);
+            (0.82F + 0.18F * noise);
     }
     else if (domain.preset == "Smoke")
     {
@@ -206,8 +218,14 @@ struct ProceduralSample
     }
 
     return {
-        .density = std::max(density, 0.0F),
-        .emission = std::max(emission, 0.0F)
+        .density =
+            std::max(
+                density,
+                0.0F),
+        .emission =
+            std::max(
+                emission,
+                0.0F)
     };
 }
 
@@ -217,7 +235,7 @@ void AddProceduralFieldUpload(
     const world_model::ResolvedVolumeDomain& domain,
     volume_fields::VolumeFieldStorage& storage,
     const volume_fields::ImportedVolumeFields& fields,
-    const ResolvedRepresentation representation)
+    const f32 passiveBlend)
 {
     const auto diagnostics =
         storage.Diagnostics();
@@ -253,20 +271,28 @@ void AddProceduralFieldUpload(
     }
 
     const u32 tileEdge =
-        std::max(diagnostics.tileEdge, 1U);
+        std::max(
+            diagnostics.tileEdge,
+            1U);
     const u32 tileCellCount =
         tileEdge * tileEdge * tileEdge;
 
     const math::Double3 cellSize{
         domain.halfExtentsMeters.x * 2.0 /
             static_cast<f64>(
-                std::max(diagnostics.resolutionX, 1U)),
+                std::max(
+                    diagnostics.resolutionX,
+                    1U)),
         domain.halfExtentsMeters.y * 2.0 /
             static_cast<f64>(
-                std::max(diagnostics.resolutionY, 1U)),
+                std::max(
+                    diagnostics.resolutionY,
+                    1U)),
         domain.halfExtentsMeters.z * 2.0 /
             static_cast<f64>(
-                std::max(diagnostics.resolutionZ, 1U))
+                std::max(
+                    diagnostics.resolutionZ,
+                    1U))
     };
 
     std::vector<f32> densityValues(
@@ -276,6 +302,7 @@ void AddProceduralFieldUpload(
         0.0F);
 
     std::vector<f32> emissionValues;
+
     if (emissionHandle.IsValid() &&
         emissionInfo != nullptr)
     {
@@ -293,11 +320,17 @@ void AddProceduralFieldUpload(
             continue;
         }
 
-        for (u32 z = 0U; z < tileEdge; ++z)
+        for (u32 z = 0U;
+             z < tileEdge;
+             ++z)
         {
-            for (u32 y = 0U; y < tileEdge; ++y)
+            for (u32 y = 0U;
+                 y < tileEdge;
+                 ++y)
             {
-                for (u32 x = 0U; x < tileEdge; ++x)
+                for (u32 x = 0U;
+                     x < tileEdge;
+                     ++x)
                 {
                     const u32 localIndex =
                         z * tileEdge * tileEdge +
@@ -315,13 +348,16 @@ void AddProceduralFieldUpload(
                     }
 
                     const math::Double3 worldPosition{
-                        (static_cast<f64>(tile.coord.x) * tileEdge +
+                        (static_cast<f64>(tile.coord.x) *
+                             tileEdge +
                          static_cast<f64>(x) + 0.5) *
                             cellSize.x,
-                        (static_cast<f64>(tile.coord.y) * tileEdge +
+                        (static_cast<f64>(tile.coord.y) *
+                             tileEdge +
                          static_cast<f64>(y) + 0.5) *
                             cellSize.y,
-                        (static_cast<f64>(tile.coord.z) * tileEdge +
+                        (static_cast<f64>(tile.coord.z) *
+                             tileEdge +
                          static_cast<f64>(z) + 0.5) *
                             cellSize.z
                     };
@@ -330,7 +366,7 @@ void AddProceduralFieldUpload(
                         SampleProceduralRepresentation(
                             domain,
                             worldPosition,
-                            representation);
+                            passiveBlend);
 
                     densityValues[
                         static_cast<std::size_t>(
@@ -438,18 +474,6 @@ void AddProceduralFieldUpload(
 
     storage.MarkAllResidentTilesValid();
 }
-
-[[nodiscard]] u64 StableIdFingerprint(
-    const core::StrongId<frames::FrameIdTag> id) noexcept
-{
-    return id.high ^ std::rotl(id.low, 17);
-}
-
-[[nodiscard]] u64 StableIdFingerprint(
-    const core::StrongId<universe::BodyIdTag> id) noexcept
-{
-    return id.high ^ std::rotl(id.low, 29);
-}
 } // namespace
 
 void UniversalVolumeRenderer::AddPasses(
@@ -478,20 +502,28 @@ void UniversalVolumeRenderer::AddPasses(
     volume_representation::RepresentationInput input{
         .volume = domain.object,
         .volumeCenterInFrameMeters =
-            runtime.followTarget ==
-                    volume_representation::FollowTarget::Camera
-                ? lightingView.cameraPositionInFrameMeters
-                : domain.centerMeters,
+            domain.centerMeters,
         .halfExtentsMeters =
             domain.halfExtentsMeters,
         .observerInFrameMeters =
             lightingView.cameraPositionInFrameMeters,
+        .followTarget =
+            runtime.followTarget,
+        .followObject =
+            runtime.followObject,
+        .followObjectPositionInFrameMeters =
+            runtime.
+                followObjectPositionInFrameMeters,
         .stableFrame =
             lightingView.frame.high ^
-            std::rotl(lightingView.frame.low, 17),
+            std::rotl(
+                lightingView.frame.low,
+                17),
         .stableBody =
             lightingView.body.high ^
-            std::rotl(lightingView.body.low, 29),
+            std::rotl(
+                lightingView.body.low,
+                29),
         .viewportHeightPixels = height,
         .verticalFovRadians =
             camera.verticalFovRadians,
@@ -520,16 +552,31 @@ void UniversalVolumeRenderer::AddPasses(
         decision);
 
     volume_representation::VolumeRepresentationSettings policy{
-        .followTarget = runtime.followTarget,
-        .liveDistanceMeters = runtime.liveDistanceMeters,
-        .passiveDistanceMeters = runtime.passiveDistanceMeters,
-        .liveProjectedPixels = runtime.liveProjectedPixels,
-        .passiveProjectedPixels = runtime.passiveProjectedPixels,
-        .hysteresisFraction = runtime.hysteresisFraction,
-        .coarseResolution = runtime.coarseResolution,
-        .passiveResolution = runtime.passiveResolution,
-        .coarseRaymarchSteps = runtime.coarseRaymarchSteps,
-        .passiveRaymarchSteps = runtime.passiveRaymarchSteps
+        .followTarget =
+            runtime.followTarget,
+        .followObject =
+            runtime.followObject,
+        .followObjectPositionInFrameMeters =
+            runtime.
+                followObjectPositionInFrameMeters,
+        .liveDistanceMeters =
+            runtime.liveDistanceMeters,
+        .passiveDistanceMeters =
+            runtime.passiveDistanceMeters,
+        .liveProjectedPixels =
+            runtime.liveProjectedPixels,
+        .passiveProjectedPixels =
+            runtime.passiveProjectedPixels,
+        .hysteresisFraction =
+            runtime.hysteresisFraction,
+        .coarseResolution =
+            runtime.coarseResolution,
+        .passiveResolution =
+            runtime.passiveResolution,
+        .coarseRaymarchSteps =
+            runtime.coarseRaymarchSteps,
+        .passiveRaymarchSteps =
+            runtime.passiveRaymarchSteps
     };
 
     volume_representation::PublishAllocationPolicy(
@@ -538,21 +585,27 @@ void UniversalVolumeRenderer::AddPasses(
         policy);
 
     auto renderDomain = domain;
+    renderDomain.centerMeters =
+        decision.runtimeCenterInFrameMeters;
 
-    if (decision.representation ==
-            ResolvedRepresentation::Coarse ||
-        decision.representation ==
-            ResolvedRepresentation::Passive ||
-        decision.representation ==
-            ResolvedRepresentation::Baked)
+    const bool proceduralAggregate =
+        decision.liveWeight <= 0.001F &&
+        (decision.representation ==
+             ResolvedRepresentation::Coarse ||
+         decision.representation ==
+             ResolvedRepresentation::Passive ||
+         decision.representation ==
+             ResolvedRepresentation::Baked);
+
+    if (proceduralAggregate)
     {
         AddProceduralFieldUpload(
             graph,
             prefix,
-            domain,
+            renderDomain,
             storage,
             fields,
-            decision.representation);
+            decision.passiveWeight);
 
         if (decision.representation ==
             ResolvedRepresentation::Coarse)
@@ -589,6 +642,9 @@ void UniversalVolumeRenderer::AddPasses(
         }
     }
 
+    // Do not flush M35 history merely because the representation tier changed.
+    // Radiance/transmittance rejection already bounds stale history, while
+    // preserving it smooths the live/coarse/passive energy handoff.
     AddLivePasses(
         graph,
         prefix,
@@ -607,9 +663,7 @@ void UniversalVolumeRenderer::AddPasses(
         radianceCells,
         radianceLevels,
         radianceLevelCount,
-        resetHistory ||
-            decision.representation !=
-                decision.previousRepresentation);
+        resetHistory);
 }
 
 VolumeRenderDiagnostics
@@ -641,6 +695,8 @@ UniversalVolumeRenderer::Diagnostics(
         decision.coarseWeight;
     result.passiveWeight =
         decision.passiveWeight;
+    result.runtimeCenterInFrameMeters =
+        decision.runtimeCenterInFrameMeters;
     result.distanceToBoundsMeters =
         decision.distanceToBoundsMeters;
     result.projectedDiameterPixels =
@@ -653,6 +709,8 @@ UniversalVolumeRenderer::Diagnostics(
         decision.denseFieldRequired;
     result.bakedFallback =
         decision.bakedFallback;
+    result.followTargetResolved =
+        decision.followTargetResolved;
     result.stableAddressFingerprint =
         decision.stableAddressFingerprint;
 
