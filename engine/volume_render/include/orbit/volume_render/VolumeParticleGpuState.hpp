@@ -34,10 +34,6 @@ struct VolumeParticleSimulationSettings
     f32 linearDragPerSecond{0.0F};
 };
 
-// Persistent GPU-only M38 particle state. Surviving particles are compacted
-// into a ping-pong destination buffer with one atomic counter while the current
-// simulation-step spawn packet is appended in the same dispatch. The CPU never
-// reads the live count or particle records back.
 class VolumeParticleGpuState
 {
 public:
@@ -50,12 +46,8 @@ public:
         const shader::Compiler& compiler,
         u32 framesInFlight);
 
-    void SetSpawns(
-        std::span<const VolumeParticleGpuSpawn> spawns);
+    void SetSpawns(std::span<const VolumeParticleGpuSpawn> spawns);
 
-    // Advances the persistent state exactly once for a new simulation packet.
-    // Existing state is rebased by previousOrigin-newOrigin before integration,
-    // keeping float coordinates precise while the presentation origin moves.
     void Advance(
         rhi::CommandList& commands,
         u32 frameIndex,
@@ -64,9 +56,7 @@ public:
         math::Double3 newOriginMeters,
         VolumeParticleSimulationSettings settings = {});
 
-    void BindForGraphics(
-        rhi::CommandList& commands);
-
+    void BindForGraphics(rhi::CommandList& commands);
     void Reset() noexcept;
 
     [[nodiscard]] u32 Generation() const noexcept;
@@ -74,19 +64,26 @@ public:
     [[nodiscard]] rhi::Buffer& CurrentBuffer() noexcept;
 
 private:
-    using SpawnArray =
-        std::array<
-            VolumeParticleGpuSpawn,
-            VolumeParticleGpuBinding::MaximumSpawnCount>;
+    using SpawnArray = std::array<
+        VolumeParticleGpuSpawn,
+        VolumeParticleGpuBinding::MaximumSpawnCount>;
 
-    void InitializeState(
-        rhi::CommandList& commands);
+    void InitializeState(rhi::CommandList& commands);
+    void TransitionState(
+        rhi::CommandList& commands,
+        rhi::Buffer& buffer,
+        rhi::ResourceState& tracked,
+        rhi::ResourceState desired);
 
     SpawnArray spawnSnapshot_{};
     u32 spawnCount_{0U};
     u32 generation_{0U};
     bool initialized_{false};
     bool currentIsA_{true};
+
+    rhi::ResourceState stateAState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState stateBState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState counterState_{rhi::ResourceState::CopyDestination};
 
     std::unique_ptr<rhi::Buffer> stateA_;
     std::unique_ptr<rhi::Buffer> stateB_;
