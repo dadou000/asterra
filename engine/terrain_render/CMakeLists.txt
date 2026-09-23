@@ -1,5 +1,6 @@
 add_library(OrbitTerrainRender STATIC
     src/PhysicalSurface.cpp
+    src/SurfaceEffects.cpp
     src/SurfaceMaterial.cpp
     src/TerrainPreviewRenderer.cpp
     src/UniformPlanetRenderer.cpp
@@ -47,5 +48,22 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.TerrainSurfaceShader
         COMMAND OrbitTerrainSurfaceShaderTests
+    )
+
+    add_executable(OrbitTerrainSurfaceEffectsTests
+        tests/SurfaceEffectsTests.cpp
+    )
+
+    target_link_libraries(OrbitTerrainSurfaceEffectsTests
+        PRIVATE
+            Orbit::TerrainRender
+    )
+
+    target_compile_features(OrbitTerrainSurfaceEffectsTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainSurfaceEffectsTests)
+
+    add_test(
+        NAME Orbit.TerrainSurfaceEffects
+        COMMAND OrbitTerrainSurfaceEffectsTests
     )
 endif()
