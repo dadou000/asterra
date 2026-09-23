@@ -25,11 +25,7 @@ rep(p,'    const float3 incident=ParticleIncident(input.centerCameraRelative,pse
 rep(p,'.pushConstantDwords = 32U,\n        .shaderResourceBuffers = 9U,', '.pushConstantDwords = 32U,\n        .shaderResourceBuffers = 10U,')
 repn(p,'.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=9U,.sampledTextures=1U,', '.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=10U,.sampledTextures=1U,',2)
 rep(p,'constexpr u64 gridBytes=static_cast<u64>(ParticleLightGridResolution)*ParticleLightGridResolution*ParticleLightGridResolution*sizeof(std::array<u32,4U>);', 'constexpr u64 gridBytes=(1ULL+static_cast<u64>(ParticleLightGridResolution)*ParticleLightGridResolution*ParticleLightGridResolution)*sizeof(std::array<u32,4U>);')
-text=Path(p).read_text()
-needle='    state_.BindForGraphics(commands);\n    commands.SetGraphicsTexture(0U,depth);'
-if text.count(needle)!=3: raise RuntimeError(f'expected 3 draw bindings, got {text.count(needle)}')
-text=text.replace(needle,'    state_.BindForGraphics(commands);\n    commands.SetGraphicsBuffer(8U,*oit.localLights);\n    commands.SetGraphicsBuffer(9U,*particleLightGrid_);\n    commands.SetGraphicsTexture(0U,depth);')
-Path(p).write_text(text)
+repn(p,'    commands.SetGraphicsBuffer(8U,*oit.localLights);\n    commands.SetGraphicsTexture(0U,depth);', '    commands.SetGraphicsBuffer(8U,*oit.localLights);\n    commands.SetGraphicsBuffer(9U,*particleLightGrid_);\n    commands.SetGraphicsTexture(0U,depth);',3)
 
 p='engine/studio_ui/tests/VolumeParticleRenderBridgeTests.cpp'
 rep(p,'    Check(volume_render::VolumeParticleRenderer::ParticleLightGridResolution == 32U);\n','    Check(volume_render::VolumeParticleRenderer::ParticleLightGridResolution == 32U);\n    Check((1U + volume_render::VolumeParticleRenderer::ParticleLightGridResolution * volume_render::VolumeParticleRenderer::ParticleLightGridResolution * volume_render::VolumeParticleRenderer::ParticleLightGridResolution) == 32769U);\n')
