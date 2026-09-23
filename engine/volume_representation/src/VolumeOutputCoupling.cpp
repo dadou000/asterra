@@ -171,10 +171,6 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
             ? std::max(deltaSeconds, 0.0)
             : 0.0;
 
-    // An unavailable producer or disabled domain must not silently consume
-    // fractional rate state. When authority returns, generation resumes from
-    // the same deterministic sequence/carry rather than creating a catch-up
-    // burst or losing events while no field data existed.
     if (!domain.enabled || !sampler)
     {
         return batch;
@@ -273,6 +269,10 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
                   entry.settings.surfaceDepositRadiusMeters,
                   0.001F)
             : 0.25F;
+    const f32 effectHalfLife =
+        std::isfinite(entry.settings.surfaceEffectHalfLifeSeconds)
+            ? std::max(entry.settings.surfaceEffectHalfLifeSeconds, 0.0F)
+            : 30.0F;
 
     for (u32 attempt = 0U;
          attempt < surfaceCandidateLimit &&
@@ -306,7 +306,9 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
             .radiusMeters = depositRadius,
             .amount = sample.authority,
             .density = sample.density,
-            .emission = sample.emission
+            .emission = sample.emission,
+            .effect = entry.settings.surfaceEffect,
+            .halfLifeSeconds = effectHalfLife
         });
     }
 
