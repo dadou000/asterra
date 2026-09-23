@@ -1,5 +1,6 @@
 add_library(OrbitVolumeFields STATIC
     src/VolumeFieldStorage.cpp
+    src/VolumeFieldAllocationPolicy.cpp
 )
 
 add_library(Orbit::VolumeFields ALIAS OrbitVolumeFields)
@@ -16,6 +17,7 @@ target_link_libraries(OrbitVolumeFields
         Orbit::RenderGraph
         Orbit::RHI
         Orbit::Scene
+        Orbit::VolumeRepresentation
         Orbit::WorldModel
 )
 
