@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace orbit::world_model
 {
@@ -66,6 +67,48 @@ inline constexpr schema::PropertyId kVolumeShadowSteps{
 inline constexpr schema::PropertyId kVolumeTemporalWeight{
     .high = 0x4f52424954564f4cULL, .low = 0x54454d5057454901ULL};
 
+// M38 authored output contract. These properties intentionally live on the
+// Volume object so save/load, undo, RPC/MCP, plugins and the generic inspector
+// all observe the same state as the simulation runtime.
+inline constexpr schema::PropertyId kVolumeOutputParticlesEnabled{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545041525401ULL};
+inline constexpr schema::PropertyId kVolumeOutputSurfaceDepositsEnabled{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545355524601ULL};
+inline constexpr schema::PropertyId kVolumeOutputFieldThreshold{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545448525301ULL};
+inline constexpr schema::PropertyId kVolumeOutputParticleRate{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545052544501ULL};
+inline constexpr schema::PropertyId kVolumeOutputParticleBudget{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545042444701ULL};
+inline constexpr schema::PropertyId kVolumeOutputSurfaceRate{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545352544501ULL};
+inline constexpr schema::PropertyId kVolumeOutputSurfaceBudget{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545342444701ULL};
+inline constexpr schema::PropertyId kVolumeOutputSurfaceRadius{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545352414401ULL};
+inline constexpr schema::PropertyId kVolumeOutputCandidateMultiplier{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f555443414e4401ULL};
+inline constexpr schema::PropertyId kVolumeOutputSurfaceEffect{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f55545345464601ULL};
+inline constexpr schema::PropertyId kVolumeOutputSurfaceHalfLife{
+    .high = 0x4f52424954564f4cULL, .low = 0x4f555453484c4601ULL};
+inline constexpr schema::PropertyId kVolumeParticleLifetime{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052544c49464501ULL};
+inline constexpr schema::PropertyId kVolumeParticleLinearDrag{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052544452414701ULL};
+inline constexpr schema::PropertyId kVolumeParticleRadiusMeters{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052545241444901ULL};
+inline constexpr schema::PropertyId kVolumeParticleEmissionScale{
+    .high = 0x4f52424954564f4cULL, .low = 0x505254454d495301ULL};
+inline constexpr schema::PropertyId kVolumeParticleGravityMode{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052544752415601ULL};
+inline constexpr schema::PropertyId kVolumeParticleGravityScale{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052544752534301ULL};
+inline constexpr schema::PropertyId kVolumeParticleCollisionMode{
+    .high = 0x4f52424954564f4cULL, .low = 0x505254434f4c4c01ULL};
+inline constexpr schema::PropertyId kVolumeParticleRestitution{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052545245535401ULL};
+
 inline constexpr schema::PropertyId kVolumeChildEnabled{
     .high = 0x4f52424954564f4cULL, .low = 0x4348454e41424c01ULL};
 inline constexpr schema::PropertyId kVolumeChildKind{
@@ -108,6 +151,29 @@ enum class VolumeRepresentationMode : i64
     Coarse = 2,
     Passive = 3,
     Baked = 4
+};
+
+enum class VolumeSurfaceOutputEffect : i64
+{
+    Wetness = 0,
+    Soot = 1,
+    Ash = 2,
+    Sediment = 3,
+    Heat = 4
+};
+
+enum class VolumeParticleGravityMode : i64
+{
+    None = 0,
+    OwningBody = 1
+};
+
+enum class VolumeParticleCollisionMode : i64
+{
+    None = 0,
+    Kill = 1,
+    Slide = 2,
+    Bounce = 3
 };
 
 enum class VolumeSourceKind : i64
@@ -214,6 +280,30 @@ struct ResolvedVolumeDomain
     u32 renderSteps{64U};
     u32 shadowSteps{6U};
     f32 temporalWeight{0.85F};
+
+    bool outputParticlesEnabled{false};
+    bool outputSurfaceDepositsEnabled{false};
+    f32 outputFieldThreshold{0.15F};
+    f32 outputParticleRatePerSecond{64.0F};
+    u32 outputParticleBudgetPerStep{256U};
+    f32 outputSurfaceDepositRatePerSecond{24.0F};
+    u32 outputSurfaceDepositBudgetPerStep{128U};
+    f32 outputSurfaceDepositRadiusMeters{0.25F};
+    u32 outputCandidateMultiplier{8U};
+    VolumeSurfaceOutputEffect outputSurfaceEffect{
+        VolumeSurfaceOutputEffect::Wetness};
+    f32 outputSurfaceEffectHalfLifeSeconds{30.0F};
+
+    f32 particleLifetimeSeconds{2.0F};
+    f32 particleLinearDragPerSecond{0.0F};
+    f32 particleRadiusMeters{0.08F};
+    f32 particleEmissionScale{1.0F};
+    VolumeParticleGravityMode particleGravityMode{
+        VolumeParticleGravityMode::None};
+    f32 particleGravityScale{1.0F};
+    VolumeParticleCollisionMode particleCollisionMode{
+        VolumeParticleCollisionMode::None};
+    f32 particleRestitution{0.25F};
 
     u32 sourceCount{0U};
     u32 effectorCount{0U};
