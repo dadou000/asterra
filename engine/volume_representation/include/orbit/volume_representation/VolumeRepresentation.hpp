@@ -24,13 +24,22 @@ enum class ResolvedRepresentation : u8
 enum class FollowTarget : u8
 {
     AuthoredDomain = 0U,
-    Camera = 1U
+    Camera = 1U,
+    Object = 2U
 };
 
 struct VolumeRepresentationSettings
 {
     FollowTarget followTarget{
         FollowTarget::AuthoredDomain};
+
+    // Object is semantic identity; the host runtime resolves its frame-space
+    // position through the appropriate actor/transform adapter. Keeping the
+    // resolved position separate prevents this module from depending on any
+    // game-specific transform type.
+    std::optional<scene::ObjectId> followObject;
+    std::optional<math::Double3>
+        followObjectPositionInFrameMeters;
 
     f64 liveDistanceMeters{120.0};
     f64 passiveDistanceMeters{1200.0};
@@ -50,6 +59,12 @@ struct RepresentationInput
     math::Double3 volumeCenterInFrameMeters{};
     math::Double3 halfExtentsMeters{1.0,1.0,1.0};
     math::Double3 observerInFrameMeters{};
+
+    FollowTarget followTarget{
+        FollowTarget::AuthoredDomain};
+    std::optional<scene::ObjectId> followObject;
+    std::optional<math::Double3>
+        followObjectPositionInFrameMeters;
 
     u64 stableFrame{0U};
     u64 stableBody{0U};
@@ -81,6 +96,7 @@ struct RepresentationDecision
     f32 passiveWeight{0.0F};
     f32 bakedWeight{0.0F};
 
+    math::Double3 runtimeCenterInFrameMeters{};
     f64 centerDistanceMeters{0.0};
     f64 distanceToBoundsMeters{0.0};
     f32 projectedDiameterPixels{0.0F};
@@ -89,6 +105,7 @@ struct RepresentationDecision
     bool denseFieldRequired{true};
     bool transitionActive{false};
     bool bakedFallback{false};
+    bool followTargetResolved{true};
 
     u64 stableAddressFingerprint{0U};
 };
@@ -100,6 +117,8 @@ struct PublishedAllocationPolicy
     bool denseFieldRequired{true};
     u32 coarseResolution{24U};
     u32 passiveResolution{8U};
+    math::Double3 runtimeCenterInFrameMeters{};
+    bool hasRuntimeCenter{false};
 };
 
 namespace detail
@@ -136,7 +155,13 @@ inline void PublishAllocationPolicy(
                 std::clamp(
                     settings.passiveResolution,
                     8U,
-                    64U)
+                    64U),
+            .runtimeCenterInFrameMeters =
+                decision.runtimeCenterInFrameMeters,
+            .hasRuntimeCenter =
+                decision.followTargetResolved &&
+                settings.followTarget !=
+                    FollowTarget::AuthoredDomain
         });
 }
 
@@ -152,6 +177,12 @@ AllocationPolicy(
     return found == policies.end()
         ? std::nullopt
         : std::optional(found->second);
+}
+
+inline void ClearAllocationPolicy(
+    const scene::ObjectId volume) noexcept
+{
+    detail::AllocationPolicies().erase(volume);
 }
 
 [[nodiscard]] RepresentationDecision
@@ -217,6 +248,8 @@ FollowTargetName(
         return "Authored Domain";
     case FollowTarget::Camera:
         return "Camera";
+    case FollowTarget::Object:
+        return "Object";
     }
 
     return "Unknown";
