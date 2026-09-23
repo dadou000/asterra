@@ -18,10 +18,20 @@ jobs:
         run: python3 tools/m38_shared_particle_light_grid_patch.py
       - name: Verify
         run: |
-          grep -q 'ParticleLightGrid(u32 frameIndex)' engine/volume_render/include/orbit/volume_render/VolumeParticleRenderer.hpp
-          grep -q 'StructuredBuffer<uint4> g_particleLightGrid : register(t7)' engine/volume_render/src/UniversalVolumeRendererBase.inc
-          grep -q 'ParticleGridTransmittance' engine/volume_render/src/UniversalVolumeRendererBase.inc
-          grep -q 'renderer.ParticleLightGrid(0U)' engine/studio_ui/tests/VolumeParticleRenderBridgeTests.cpp
+          python3 - <<'PY'
+          from pathlib import Path
+          particle_h = Path('engine/volume_render/include/orbit/volume_render/VolumeParticleRenderer.hpp').read_text()
+          volume = Path('engine/volume_render/src/UniversalVolumeRendererBase.inc').read_text()
+          direct = Path('engine/lighting/src/DirectLighting.cpp').read_text()
+          test = Path('engine/studio_ui/tests/VolumeParticleRenderBridgeTests.cpp').read_text()
+          assert 'ParticleLightGrid() noexcept' in particle_h
+          assert 'ParticleLightGridReady() const noexcept' in particle_h
+          assert 'StructuredBuffer<uint4> g_particleLightGrid : register(t7)' in volume
+          assert 'Texture2D g_depth;\n[[vk::binding(8, 0)]]\n[[vk::combinedImageSampler]]\nSamplerState g_depthSampler;' in volume
+          assert 'Texture2D g_baseRoughness;\n[[vk::binding(4, 0)]]\n[[vk::combinedImageSampler]]\nSamplerState g_baseSampler;' in direct
+          assert 'ParticleGridTransmittance' in volume
+          assert 'ParticleLightGridReady' in test
+          PY
       - name: Commit
         run: |
           rm tools/m38_shared_particle_light_grid_patch.py
@@ -29,5 +39,5 @@ jobs:
           git config user.name orbit-ci
           git config user.email orbit-ci@users.noreply.github.com
           git add -A
-          git commit -m 'Share M38 particle lighting with universal volumes'
+          git commit -m 'Repair M38 shared light-grid bindings'
           git push origin HEAD:orbit
