@@ -30,18 +30,20 @@ struct VolumeParticleGpuSpawn
     math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
     f32 reserved1{0.0F};
 
-    // Owning-body physics authority. Positions are body-local, therefore the
-    // gravity center is exactly the body-frame origin and does not need to be
-    // carried per particle.
-    math::Float3 surfaceRadiiMeters{};
+    // Owning-body physics authority in the same presentation-relative frame as
+    // positionMeters. The center is rebased with the particle state whenever
+    // the floating/presentation origin changes.
+    math::Float3 bodyCenterMeters{};
     f32 gravitationalParameterM3PerS2{0.0F};
+    math::Float3 surfaceRadiiMeters{};
     f32 gravitySofteningMeters{0.0F};
     f32 physicalSurfaceEnabled{0.0F};
     f32 reserved2{0.0F};
     f32 reserved3{0.0F};
+    f32 reserved4{0.0F};
 };
 
-static_assert(sizeof(VolumeParticleGpuSpawn) == 128U);
+static_assert(sizeof(VolumeParticleGpuSpawn) == 144U);
 
 class VolumeParticleGpuBinding
 {
