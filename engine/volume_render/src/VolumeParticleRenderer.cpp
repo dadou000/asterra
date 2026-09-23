@@ -277,12 +277,16 @@ struct VSOutput
 };
 struct GpuLocalLight { float4 positionType; float4 directionRange; float4 colorFlux; float4 cone; };
 [[vk::binding(8,0)]] StructuredBuffer<GpuLocalLight> g_localLights;
-[[vk::binding(9,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth;
-[[vk::binding(9,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+[[vk::binding(9,0)]] StructuredBuffer<uint4> g_particleLightGrid;
+[[vk::binding(10,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth;
+[[vk::binding(10,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; float4 stellar; float4 lighting; }; [[vk::push_constant]] Push g;
 float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
 float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 
+
+float GridOptical(float3 p){ uint4 meta=g_particleLightGrid[0]; float3 o=float3(asfloat(meta.x),asfloat(meta.y),asfloat(meta.z)); float cell=max(asfloat(meta.w),1e-4); int3 c=int3(floor((p-o)/cell)); const int r=32; if(any(c<0)||any(c>=int3(r,r,r))) return 0.0; uint idx=1u+(uint(c.z)*r+uint(c.y))*r+uint(c.x); return min(float(g_particleLightGrid[idx].x)/4096.0,20.0); }
+float GridTransmittance(float3 p,float3 dir,float maxDistance){ float3 d=normalize(dir); float optical=0.0; float stepLen=max(maxDistance/6.0,8.0); [unroll] for(uint s=1u;s<=6u;++s){ float dist=min(stepLen*float(s),maxDistance); optical+=GridOptical(p+d*dist)*0.18; } return exp(-min(optical,20.0)); }
 struct OitOutput { float4 accumulation : SV_Target0; float4 opticalDepth : SV_Target1; float4 motionReject : SV_Target2; };
 float Hash12(float2 p,uint seed){uint x=asuint(p.x)*1664525u+asuint(p.y)*1013904223u+seed*747796405u;x^=x>>16;x*=2246822519u;x^=x>>13;return float(x&0x00ffffffu)/16777216.0;}
 OitOutput main(VSOutput input)
@@ -307,7 +311,9 @@ OitOutput main(VSOutput input)
     const float3 right=normalize(cross(fw,requestedUp)), cameraUp=normalize(cross(right,fw));
     const float z=sqrt(saturate(1.0-radius2));
     const float3 pseudoNormal=normalize(right*input.uv.x-cameraUp*input.uv.y-fw*z);
-    const float3 incident=ParticleIncident(input.centerCameraRelative,pseudoNormal,opticalDepth);
+    float3 incident=ParticleIncident(input.centerCameraRelative,pseudoNormal,opticalDepth);
+    const float stellarGridT=GridTransmittance(input.centerCameraRelative,normalize(g.stellar.xyz),192.0);
+    incident*=lerp(1.0,stellarGridT,saturate(g.stellar.w));
     const float3 densityColor = input.baseColor * lerp(0.72, 1.0, density) * incident;
     const float3 emissiveColor = input.emissionColor * emission * input.emissionScale;
     const float3 color = densityColor + emissiveColor;
@@ -325,7 +331,7 @@ struct Particle { float3 positionMeters; float authority; float3 velocityMetersP
 [[vk::binding(0,0)]] StructuredBuffer<Particle> g_particles;
 [[vk::binding(1,0)]] RWStructuredBuffer<uint4> g_grid;
 struct Push { float4 originCell; uint4 params; }; [[vk::push_constant]] Push g;
-[numthreads(64,1,1)] void main(uint3 tid:SV_DispatchThreadID){ uint i=tid.x; if(i>=65536u) return; Particle p=g_particles[i]; if(p.generation!=g.params.x||p.lifetimeSeconds<=0.0||p.ageSeconds>=p.lifetimeSeconds) return; float3 q=(p.positionMeters-g.originCell.xyz)/max(g.originCell.w,1e-4); int3 c=int3(floor(q)); uint r=g.params.y; if(any(c<0)||any(c>=int3(r,r,r))) return; uint idx=(uint(c.z)*r+uint(c.y))*r+uint(c.x); float life=saturate(1.0-p.ageSeconds/max(p.lifetimeSeconds,1e-4)); float optical=max(p.density,0.0)*max(p.authority,0.0)*life*max(p.radiusMeters,0.01); float3 e=max(p.emissionColor,0.0)*max(p.emission,0.0)*max(p.emissionScale,0.0)*life; uint opticalQ=(uint)min(optical*4096.0,16777215.0); uint3 emissionQ=(uint3)min(e*1024.0,16777215.0); InterlockedAdd(g_grid[idx].x,opticalQ); InterlockedAdd(g_grid[idx].y,emissionQ.x); InterlockedAdd(g_grid[idx].z,emissionQ.y); InterlockedAdd(g_grid[idx].w,emissionQ.z); }
+[numthreads(64,1,1)] void main(uint3 tid:SV_DispatchThreadID){ uint i=tid.x; if(i==0u) g_grid[0]=uint4(asuint(g.originCell.x),asuint(g.originCell.y),asuint(g.originCell.z),asuint(g.originCell.w)); if(i>=65536u) return; Particle p=g_particles[i]; if(p.generation!=g.params.x||p.lifetimeSeconds<=0.0||p.ageSeconds>=p.lifetimeSeconds) return; float3 q=(p.positionMeters-g.originCell.xyz)/max(g.originCell.w,1e-4); int3 c=int3(floor(q)); uint r=g.params.y; if(any(c<0)||any(c>=int3(r,r,r))) return; uint idx=1u+(uint(c.z)*r+uint(c.y))*r+uint(c.x); float life=saturate(1.0-p.ageSeconds/max(p.lifetimeSeconds,1e-4)); float optical=max(p.density,0.0)*max(p.authority,0.0)*life*max(p.radiusMeters,0.01); float3 e=max(p.emissionColor,0.0)*max(p.emission,0.0)*max(p.emissionScale,0.0)*life; uint opticalQ=(uint)min(optical*4096.0,16777215.0); uint3 emissionQ=(uint3)min(e*1024.0,16777215.0); InterlockedAdd(g_grid[idx].x,opticalQ); InterlockedAdd(g_grid[idx].y,emissionQ.x); InterlockedAdd(g_grid[idx].z,emissionQ.y); InterlockedAdd(g_grid[idx].w,emissionQ.z); }
 )";
 
 constexpr const char* kOitCompositeVertexShader = R"(
@@ -395,7 +401,7 @@ VolumeParticleRenderer::VolumeParticleRenderer(
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
         .pushConstantDwords = 32U,
-        .shaderResourceBuffers = 9U,
+        .shaderResourceBuffers = 10U,
         .sampledTextures = 1U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
@@ -411,16 +417,16 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     splashPipeline_ = device.CreateGraphicsPipeline({
         .vertexShader={.data=splashVertex.bytecode.data(),.size=splashVertex.bytecode.size()},
         .pixelShader={.data=splashPixel.bytecode.data(),.size=splashPixel.bytecode.size()},
-        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=9U,.sampledTextures=1U,
+        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=10U,.sampledTextures=1U,
         .topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,
         .blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,
         .colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=3U
     });
-    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=9U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=3U});
+    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=10U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=3U});
     oitTemporalPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitTemporalPixel.bytecode.data(),.size=oitTemporalPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=4U,.shaderResourceBuffers=0U,.sampledTextures=4U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Opaque,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
     oitCompositePipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitCompositePixel.bytecode.data(),.size=oitCompositePixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=0U,.shaderResourceBuffers=0U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
     particleLightGridPipeline_=device.CreateComputePipeline({.computeShader={.data=particleLightGrid.bytecode.data(),.size=particleLightGrid.bytecode.size()},.pushConstantDwords=8U,.shaderResourceBuffers=2U,.storageTextures=0U,.sampledTextures=0U,.accelerationStructures=0U});
-    constexpr u64 gridBytes=static_cast<u64>(ParticleLightGridResolution)*ParticleLightGridResolution*ParticleLightGridResolution*sizeof(std::array<u32,4U>);
+    constexpr u64 gridBytes=(1ULL+static_cast<u64>(ParticleLightGridResolution)*ParticleLightGridResolution*ParticleLightGridResolution)*sizeof(std::array<u32,4U>);
     particleLightGrid_=device.CreateBuffer({.sizeBytes=gridBytes,.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::GpuOnly,.initialState=rhi::ResourceState::CopyDestination});
     zeroParticleLightGridUpload_=device.CreateBuffer({.sizeBytes=gridBytes,.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::HostVisible,.initialState=rhi::ResourceState::CopySource});
     {auto* m=zeroParticleLightGridUpload_->Map();std::memset(m,0,static_cast<std::size_t>(gridBytes));zeroParticleLightGridUpload_->Unmap();}
@@ -633,6 +639,7 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
     commands.SetGraphicsBuffer(8U,*oit.localLights);
+    commands.SetGraphicsBuffer(9U,*particleLightGrid_);
     commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::ParticleIndirectOffsetBytes);
     constants[19] = state_.DropletGeneration();
@@ -640,6 +647,7 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
     commands.SetGraphicsBuffer(8U,*oit.localLights);
+    commands.SetGraphicsBuffer(9U,*particleLightGrid_);
     commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::DropletIndirectOffsetBytes);
     constants[19] = state_.SplashGeneration();
@@ -647,6 +655,7 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
     commands.SetGraphicsBuffer(8U,*oit.localLights);
+    commands.SetGraphicsBuffer(9U,*particleLightGrid_);
     commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);
 
