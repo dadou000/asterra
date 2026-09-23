@@ -21,13 +21,17 @@ int main()
 {
     using namespace orbit;
 
-    Check(sizeof(volume_render::VolumeParticleGpuSplashEvent) == 48U);
+    Check(sizeof(volume_render::VolumeParticleGpuSplashEvent) == 112U);
+    Check(sizeof(volume_render::VolumeParticleGpuDropletState) == 112U);
     Check(volume_render::VolumeParticleGpuState::MaximumSplashEventCount == 4096U);
+    Check(volume_render::VolumeParticleGpuState::MaximumDropletCount == 16384U);
+    Check(volume_render::VolumeParticleGpuState::MaximumDropletsPerSplash == 8U);
     Check(volume_render::VolumeParticleGpuState::MaximumPersistentSplashCount == 8192U);
     Check(volume_render::VolumeParticleGpuState::MaximumPersistentSplashCount >=
           volume_render::VolumeParticleGpuState::MaximumSplashEventCount);
     Check(sizeof(volume_render::VolumeParticleGpuSplashState) == 64U);
     Check(volume_render::VolumeParticleGpuState::SplashGraphicsBufferSlot == 3U);
+    Check(volume_render::VolumeParticleGpuState::DropletGraphicsBufferSlot == 4U);
 
     const universe::BodyId body{
         .high = 0x1122334455667788ULL,

@@ -52,8 +52,15 @@ struct VolumeParticleGpuSplashEvent
     f32 impactSpeedMetersPerSecond{0.0F};
     math::Float3 tint{1.0F, 1.0F, 1.0F};
     u32 generation{0U};
+    math::Float3 bodyCenterMeters{};
+    f32 gravitationalParameterM3PerS2{0.0F};
+    math::Float3 surfaceRadiiMeters{};
+    f32 gravitySofteningMeters{0.0F};
+    std::array<u32, 4U> bodyIdentity{};
+    u32 flags{0U};
+    std::array<u32, 3U> reserved{};
 };
-static_assert(sizeof(VolumeParticleGpuSplashEvent) == 48U);
+static_assert(sizeof(VolumeParticleGpuSplashEvent) == 112U);
 
 struct VolumeParticleGpuSplashState
 {
@@ -69,6 +76,25 @@ struct VolumeParticleGpuSplashState
     u32 reserved{0U};
 };
 static_assert(sizeof(VolumeParticleGpuSplashState) == 64U);
+
+struct VolumeParticleGpuDropletState
+{
+    math::Float3 positionMeters{};
+    f32 radiusMeters{0.0F};
+    math::Float3 velocityMetersPerSecond{};
+    f32 ageSeconds{0.0F};
+    math::Float3 tint{1.0F, 1.0F, 1.0F};
+    f32 lifetimeSeconds{0.0F};
+    math::Float3 bodyCenterMeters{};
+    f32 gravitationalParameterM3PerS2{0.0F};
+    math::Float3 surfaceRadiiMeters{};
+    f32 gravitySofteningMeters{0.0F};
+    std::array<u32, 4U> bodyIdentity{};
+    u32 generation{0U};
+    u32 flags{0U};
+    std::array<u32, 2U> reserved{};
+};
+static_assert(sizeof(VolumeParticleGpuDropletState) == 112U);
 
 struct VolumeParticleSimulationSettings
 {
@@ -106,9 +132,12 @@ public:
     static constexpr u32 MaximumParticleCount = 65536U;
     static constexpr u32 MaximumSplashEventCount = 4096U;
     static constexpr u32 MaximumPersistentSplashCount = 8192U;
+    static constexpr u32 MaximumDropletCount = 16384U;
+    static constexpr u32 MaximumDropletsPerSplash = 8U;
     static constexpr u32 ComputeBufferCount = 4U;
     static constexpr u32 GraphicsBufferSlot = 2U;
     static constexpr u32 SplashGraphicsBufferSlot = 3U;
+    static constexpr u32 DropletGraphicsBufferSlot = 4U;
 
     VolumeParticleGpuState(
         rhi::Device& device,
@@ -137,6 +166,8 @@ public:
     void Reset() noexcept;
 
     [[nodiscard]] u32 Generation() const noexcept;
+    [[nodiscard]] u32 SplashGeneration() const noexcept;
+    [[nodiscard]] u32 DropletGeneration() const noexcept;
     [[nodiscard]] u32 SubmittedSpawnCount() const noexcept;
     [[nodiscard]] rhi::Buffer& CurrentBuffer() noexcept;
 
@@ -156,9 +187,11 @@ private:
     u32 spawnCount_{0U};
     u32 generation_{0U};
     u32 splashGeneration_{0U};
+    u32 dropletGeneration_{0U};
     bool initialized_{false};
     bool currentIsA_{true};
     bool splashCurrentIsA_{true};
+    bool dropletCurrentIsA_{true};
     math::Double3 splashOriginDeltaMeters_{};
 
     rhi::ResourceState stateAState_{rhi::ResourceState::CopyDestination};
@@ -169,6 +202,9 @@ private:
     rhi::ResourceState splashStateAState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState splashStateBState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState splashStateCounterState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState dropletStateAState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState dropletStateBState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState dropletCounterState_{rhi::ResourceState::CopyDestination};
 
     std::unique_ptr<rhi::Buffer> stateA_;
     std::unique_ptr<rhi::Buffer> stateB_;
@@ -183,9 +219,16 @@ private:
     std::unique_ptr<rhi::Buffer> zeroSplashStateUpload_;
     std::unique_ptr<rhi::Buffer> splashStateCounter_;
     std::unique_ptr<rhi::Buffer> zeroSplashStateCounterUpload_;
+    std::unique_ptr<rhi::Buffer> dropletStateA_;
+    std::unique_ptr<rhi::Buffer> dropletStateB_;
+    std::unique_ptr<rhi::Buffer> zeroDropletStateUpload_;
+    std::unique_ptr<rhi::Buffer> dropletCounter_;
+    std::unique_ptr<rhi::Buffer> zeroDropletCounterUpload_;
     std::vector<std::unique_ptr<rhi::Buffer>> spawnBuffers_;
     std::unique_ptr<rhi::ComputePipeline> simulationPipeline_;
     std::unique_ptr<rhi::ComputePipeline> terrainCollisionPipeline_;
     std::unique_ptr<rhi::ComputePipeline> splashSimulationPipeline_;
+    std::unique_ptr<rhi::ComputePipeline> dropletSimulationPipeline_;
+    std::unique_ptr<rhi::ComputePipeline> dropletCollisionPipeline_;
 };
 } // namespace orbit::volume_render

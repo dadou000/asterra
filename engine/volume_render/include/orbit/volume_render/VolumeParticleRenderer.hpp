@@ -67,6 +67,7 @@ private:
     VolumeParticleGpuState state_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> splashPipeline_;
+    std::unique_ptr<rhi::GraphicsPipeline> dropletPipeline_;
     std::vector<VolumeParticleTerrainCollisionPage> terrainCollisionPages_;
 };
 } // namespace orbit::volume_render

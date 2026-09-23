@@ -185,7 +185,7 @@ float4 Project(float3 relative) {
 VSOutput main(uint vertexId:SV_VertexID) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)};
     uint eventIndex=vertexId/6u, cornerIndex=vertexId%6u; SplashState e=g_splashes[eventIndex]; VSOutput o;
-    if(e.generation==0u||e.baseScaleMeters<=0.0||e.lifetimeSeconds<=0.0||e.ageSeconds>=e.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.impact=0;return o;}
+    if(e.generation!=asuint(g.viewport.w)||e.baseScaleMeters<=0.0||e.lifetimeSeconds<=0.0||e.ageSeconds>=e.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.impact=0;return o;}
     float4 center=Project(e.positionMeters-g.camera.xyz); if(center.w<=0.0){o.position=center;o.uv=0;o.tint=0;o.impact=0;return o;}
     float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0));
     float life=saturate(1.0-e.ageSeconds/max(e.lifetimeSeconds,0.001));
@@ -204,6 +204,19 @@ float4 main(VSOutput i):SV_Target0 {
     float3 foam=lerp(float3(0.72,0.84,0.90),float3(1.0,1.0,1.0),impact)*i.tint;
     return float4(foam,alpha);
 }
+)";
+
+constexpr const char* kDropletVertexShader = R"(
+struct Droplet { float3 positionMeters; float radiusMeters; float3 velocityMetersPerSecond; float ageSeconds; float3 tint; float lifetimeSeconds; float3 bodyCenterMeters; float gravitationalParameterM3PerS2; float3 surfaceRadiiMeters; float gravitySofteningMeters; uint4 bodyIdentity; uint generation; uint flags; uint2 reserved; };
+[[vk::binding(4,0)]] StructuredBuffer<Droplet> g_droplets : register(t4);
+struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; }; [[vk::push_constant]] Push g;
+struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; };
+float4 Project(float3 relative){ float3 f=normalize(g.forward.xyz),u=normalize(g.up.xyz),r=normalize(cross(f,u)),cu=normalize(cross(r,f)); float z=dot(relative,f); if(z<=g.projection.z||z>=g.projection.w)return float4(2,2,1,1); return float4(dot(relative,r)/(max(g.projection.x,0.001)*max(g.projection.y,0.001)),-dot(relative,cu)/max(g.projection.y,0.001),z*0.5,z); }
+VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)}; uint i=vertexId/6u,c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o; if(d.generation!=asuint(g.viewport.w)||d.lifetimeSeconds<=0.0||d.ageSeconds>=d.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.life=0;return o;} float4 center=Project(d.positionMeters-g.camera.xyz); if(center.w<=0){o.position=center;o.uv=0;o.tint=0;o.life=0;return o;} float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0)); float px=max(d.radiusMeters,0.002)/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5; px=max(px,0.75); o.position=center;o.position.xy+=corners[c]*ndc*px*center.w;o.uv=corners[c];o.tint=max(d.tint,0.0);o.life=saturate(1.0-d.ageSeconds/max(d.lifetimeSeconds,0.001));return o; }
+)";
+constexpr const char* kDropletPixelShader = R"(
+struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; };
+float4 main(VSOutput i):SV_Target0 { float r2=dot(i.uv,i.uv); if(r2>=1.0||i.life<=0.0) discard; float alpha=(1.0-smoothstep(0.2,1.0,r2))*i.life*0.82; float3 c=lerp(float3(0.70,0.84,0.94),float3(1,1,1),0.65)*i.tint; return float4(c,alpha); }
 )";
 
 constexpr const char* kPixelShader = R"(
@@ -265,7 +278,9 @@ VolumeParticleRenderer::VolumeParticleRenderer(
 
     const auto splashVertex = compiler.Compile({.source=kSplashVertexShader,.entryPoint="main",.stage=shader::Stage::Vertex,.debug=false});
     const auto splashPixel = compiler.Compile({.source=kSplashPixelShader,.entryPoint="main",.stage=shader::Stage::Pixel,.debug=false});
-    if (vertex.bytecode.empty() || pixel.bytecode.empty() || splashVertex.bytecode.empty() || splashPixel.bytecode.empty())
+    const auto dropletVertex = compiler.Compile({.source=kDropletVertexShader,.entryPoint="main",.stage=shader::Stage::Vertex,.debug=false});
+    const auto dropletPixel = compiler.Compile({.source=kDropletPixelShader,.entryPoint="main",.stage=shader::Stage::Pixel,.debug=false});
+    if (vertex.bytecode.empty() || pixel.bytecode.empty() || splashVertex.bytecode.empty() || splashPixel.bytecode.empty() || dropletVertex.bytecode.empty() || dropletPixel.bytecode.empty())
     {
         throw std::runtime_error(
             "Orbit failed to compile M38 persistent particle shaders.");
@@ -306,6 +321,7 @@ VolumeParticleRenderer::VolumeParticleRenderer(
         .blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,
         .colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U
     });
+    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=5U,.sampledTextures=0U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
 }
 
 void VolumeParticleRenderer::SetSpawns(
@@ -448,6 +464,12 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
     commands.Draw(VolumeParticleGpuState::MaximumParticleCount * 6U);
+    constants[19] = state_.DropletGeneration();
+    commands.SetGraphicsPipeline(*dropletPipeline_);
+    commands.SetGraphicsConstants(constants);
+    state_.BindForGraphics(commands);
+    commands.Draw(VolumeParticleGpuState::MaximumDropletCount * 6U);
+    constants[19] = state_.SplashGeneration();
     commands.SetGraphicsPipeline(*splashPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
