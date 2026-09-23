@@ -2,6 +2,7 @@
 
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/ViewportTargetRpc.hpp>
+#include <orbit/studio_session/VolumeSurfaceOutputResolver.hpp>
 #include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 
 #include <algorithm>
@@ -39,10 +40,11 @@ void ResetVolumeOutputRuntime() noexcept
         VolumeParticleRequests().Clear();
     volume_representation::
         VolumeSurfaceRequests().Clear();
+    VolumeSurfaceOutputs().Clear();
 }
 
 void TickVolumeOutputRuntime(
-    const scene::ObjectStore& objects,
+    editor_session::EditorWorldSession& world,
     const time::SimulationTime atTime)
 {
     auto& particles =
@@ -63,8 +65,20 @@ void TickVolumeOutputRuntime(
 
     static_cast<void>(
         runtime.TickWorld(
-            objects,
+            world.Objects(),
             atTime));
+
+    // Surface output has a real authoritative consumer at M38. Transfer the
+    // raw batch exactly once, resolve it against the owning composed body and
+    // Surface capability, and retain only resolved body-local deposits.
+    const auto surfaceBatch =
+        surfaces.Drain();
+
+    VolumeSurfaceOutputs().Resolve(
+        world.Objects(),
+        world.Universe(),
+        world.Surfaces(),
+        surfaceBatch);
 }
 } // namespace
 
@@ -470,7 +484,7 @@ StudioTickResult StudioSession::Tick(
     terrainPhysicalPages_.Tick();
 
     TickVolumeOutputRuntime(
-        world_.Objects(),
+        world_,
         clock_.Time());
 
     result.worldGeneration =
