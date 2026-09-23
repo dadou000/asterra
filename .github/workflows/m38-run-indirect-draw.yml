@@ -15,7 +15,15 @@ jobs:
         with:
           ref: orbit
       - name: Apply patch
-        run: python3 tools/m38_indirect_draw_patch.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tools/m38_indirect_draw_patch.py')
+          t=p.read_text(encoding='utf-8')
+          t=t.replace('[[vk::binding(4, 0)]] StructuredBuffer<Droplet> g_droplets : register(t4);','[[vk::binding(4,0)]] StructuredBuffer<Droplet> g_droplets : register(t4);')
+          p.write_text(t,encoding='utf-8')
+          PY
+          python3 tools/m38_indirect_draw_patch.py
       - name: Verify
         run: |
           grep -q 'virtual void DrawIndirect' engine/rhi/include/orbit/rhi/Command.hpp
