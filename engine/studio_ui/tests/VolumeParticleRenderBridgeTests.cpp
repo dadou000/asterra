@@ -29,7 +29,17 @@ int main()
             .velocity = {1.0F, 2.0F, 3.0F},
             .authority = 0.25F,
             .density = 0.5F,
-            .emission = 0.1F
+            .emission = 0.1F,
+            .lifetimeSeconds = 5.0F,
+            .linearDragPerSecond = 0.4F,
+            .radiusMeters = 0.5F,
+            .emissionScale = 3.0F,
+            .baseColor = {0.2F, 0.3F, 0.4F},
+            .emissionColor = {1.0F, 0.5F, 0.1F},
+            .gravityMode = world_model::VolumeParticleGravityMode::OwningBody,
+            .gravityScale = 0.75F,
+            .collisionMode = world_model::VolumeParticleCollisionMode::Bounce,
+            .restitution = 0.6F
         }});
     events.push_back({
         .sourceVolume = {.high = 1U, .low = 2U},
@@ -73,10 +83,27 @@ int main()
             origin,
             3U);
     Check(full.size() == 3U);
-    Check(full[2].positionMeters.x == 1.25F);
-    Check(full[2].velocityMetersPerSecond.x == 1.0F);
-    Check(full[2].velocityMetersPerSecond.y == 2.0F);
-    Check(full[2].velocityMetersPerSecond.z == 3.0F);
+    Check(full[0].positionMeters.x == 1.25F);
+    Check(full[0].velocityMetersPerSecond.x == 1.0F);
+    Check(full[0].velocityMetersPerSecond.y == 2.0F);
+    Check(full[0].velocityMetersPerSecond.z == 3.0F);
+
+    // M38 authored particle behavior must survive the transport bridge on a
+    // per-event basis so different Volumes can coexist in one GPU particle
+    // state without inheriting a renderer-global policy.
+    Check(full[0].lifetimeSeconds == 5.0F);
+    Check(full[0].linearDragPerSecond == 0.4F);
+    Check(full[0].radiusMeters == 0.5F);
+    Check(full[0].emissionScale == 3.0F);
+    Check(full[0].gravityScale == 0.75F);
+    Check(full[0].restitution == 0.6F);
+    Check(full[0].behaviorFlags == 13U);
+    Check(full[0].baseColor.x == 0.2F);
+    Check(full[0].baseColor.y == 0.3F);
+    Check(full[0].baseColor.z == 0.4F);
+    Check(full[0].emissionColor.x == 1.0F);
+    Check(full[0].emissionColor.y == 0.5F);
+    Check(full[0].emissionColor.z == 0.1F);
 
     // Studio uses this monotonically increasing packet generation as the
     // once-only GPU simulation key across all viewports. Empty packets still
