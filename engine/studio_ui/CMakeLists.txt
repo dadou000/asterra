@@ -186,4 +186,21 @@ if(BUILD_TESTING)
         NAME Orbit.VolumeSurfaceEffectRenderBridge
         COMMAND OrbitVolumeSurfaceEffectRenderBridgeTests
     )
+
+    add_executable(OrbitVolumeParticleRenderBridgeTests
+        tests/VolumeParticleRenderBridgeTests.cpp
+    )
+
+    target_link_libraries(OrbitVolumeParticleRenderBridgeTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitVolumeParticleRenderBridgeTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitVolumeParticleRenderBridgeTests)
+
+    add_test(
+        NAME Orbit.VolumeParticleRenderBridge
+        COMMAND OrbitVolumeParticleRenderBridgeTests
+    )
 endif()
