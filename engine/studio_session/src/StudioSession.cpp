@@ -2,6 +2,7 @@
 
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/ViewportTargetRpc.hpp>
+#include <orbit/studio_session/VolumeSurfaceEffectState.hpp>
 #include <orbit/studio_session/VolumeSurfaceOutputResolver.hpp>
 #include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 
@@ -41,6 +42,7 @@ void ResetVolumeOutputRuntime() noexcept
     volume_representation::
         VolumeSurfaceRequests().Clear();
     VolumeSurfaceOutputs().Clear();
+    VolumeSurfaceEffects().Clear();
 }
 
 void TickVolumeOutputRuntime(
@@ -79,6 +81,14 @@ void TickVolumeOutputRuntime(
         world.Universe(),
         world.Surfaces(),
         surfaceBatch);
+
+    // Resolved deposits feed a transient body-local material influence layer.
+    // This deliberately does not mutate authored terrain: rendering, material
+    // physics and later persistence systems consume the sampled runtime state.
+    VolumeSurfaceEffects().Advance(
+        world.Universe().Bodies(),
+        VolumeSurfaceOutputs().Resolved(),
+        runtime.Diagnostics().deltaSeconds);
 }
 } // namespace
 
@@ -371,9 +381,6 @@ StudioSession::DispatchRpc(
 
     if (world_.HasWorld())
     {
-        // Semantic edits must compose before any generation-bound consumer
-        // refreshes. ActiveBodyModel still has its own defensive refresh, but
-        // Studio's lifecycle no longer relies on that side effect.
         static_cast<void>(
             world_.RefreshUniverseIfChanged());
         static_cast<void>(
@@ -454,10 +461,6 @@ StudioTickResult StudioSession::Tick(
             world_.Plugins().PollHotReload();
     }
 
-    // Composition is the first runtime-bound refresh after all semantic
-    // mutation sources for this tick. Everything below observes the new
-    // UniverseComposition/SurfaceComposition generation or the unchanged
-    // previous generation.
     result.compositionChanged =
         world_.RefreshUniverseIfChanged();
 
