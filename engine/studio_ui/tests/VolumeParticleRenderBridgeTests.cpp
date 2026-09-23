@@ -24,6 +24,8 @@ int main()
     Check(sizeof(volume_render::VolumeParticleGpuSplashEvent) == 48U);
     Check(volume_render::VolumeParticleGpuState::MaximumSplashEventCount == 4096U);
     Check(volume_render::VolumeParticleGpuState::MaximumPersistentSplashCount == 8192U);
+    Check(volume_render::VolumeParticleGpuState::MaximumPersistentSplashCount >=
+          volume_render::VolumeParticleGpuState::MaximumSplashEventCount);
     Check(sizeof(volume_render::VolumeParticleGpuSplashState) == 64U);
     Check(volume_render::VolumeParticleGpuState::SplashGraphicsBufferSlot == 3U);
 
