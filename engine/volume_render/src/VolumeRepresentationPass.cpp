@@ -560,6 +560,7 @@ void UniversalVolumeRenderer::AddPasses(
     const render_graph::BufferHandle radianceCells,
     const render_graph::BufferHandle radianceLevels,
     const u32 radianceLevelCount,
+    const render_graph::BufferHandle particleLightGrid,
     const bool resetHistory)
 {
     const auto& runtime =
@@ -731,6 +732,7 @@ void UniversalVolumeRenderer::AddPasses(
         radianceCells,
         radianceLevels,
         radianceLevelCount,
+        particleLightGrid,
         resetHistory);
 }
 

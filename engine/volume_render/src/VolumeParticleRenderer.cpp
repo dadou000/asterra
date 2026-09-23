@@ -72,6 +72,7 @@ struct VSOutput
     float softnessMeters : TEXCOORD8;
     float stochasticCoverage : TEXCOORD9;
     float3 centerCameraRelative : TEXCOORD10;
+    float3 gridPosition : TEXCOORD11;
 };
 
 float4 Project(float3 relative)
@@ -132,6 +133,8 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.emissionScale = 0.0;
         output.softnessMeters = 0.0;
         output.stochasticCoverage = 0.0;
+        output.centerCameraRelative = 0.0;
+        output.gridPosition = 0.0;
         return output;
     }
 
@@ -151,6 +154,8 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.emissionScale = 0.0;
         output.softnessMeters = 0.0;
         output.stochasticCoverage = 0.0;
+        output.centerCameraRelative = 0.0;
+        output.gridPosition = 0.0;
         return output;
     }
 
@@ -178,6 +183,8 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.emissionScale = max(particle.emissionScale, 0.0);
     output.softnessMeters = max(particle.radiusMeters * 2.0, 0.05);
     output.stochasticCoverage = saturate((projectedRadiusPixels * projectedRadiusPixels) / max(radiusPixels * radiusPixels, 1.0e-4));
+    output.centerCameraRelative = particle.positionMeters - g.camera.xyz;
+    output.gridPosition = particle.positionMeters;
     return output;
 }
 )";
@@ -274,6 +281,7 @@ struct VSOutput
     float emissionScale : TEXCOORD7;    float softnessMeters : TEXCOORD8;
     float stochasticCoverage : TEXCOORD9;
     float3 centerCameraRelative : TEXCOORD10;
+    float3 gridPosition : TEXCOORD11;
 };
 struct GpuLocalLight { float4 positionType; float4 directionRange; float4 colorFlux; float4 cone; };
 [[vk::binding(8,0)]] StructuredBuffer<GpuLocalLight> g_localLights;
@@ -285,7 +293,7 @@ float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w
 float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 
 
-float GridOptical(float3 p){ uint4 meta=g_particleLightGrid[0]; float3 o=float3(asfloat(meta.x),asfloat(meta.y),asfloat(meta.z)); float cell=max(asfloat(meta.w),1e-4); int3 c=int3(floor((p-o)/cell)); const int r=32; if(any(c<0)||any(c>=int3(r,r,r))) return 0.0; uint idx=1u+(uint(c.z)*r+uint(c.y))*r+uint(c.x); return min(float(g_particleLightGrid[idx].x)/4096.0,20.0); }
+float GridOptical(float3 p){ uint4 meta=g_particleLightGrid[0]; float3 o=float3(asfloat(meta.x),asfloat(meta.y),asfloat(meta.z)); float cell=max(asfloat(meta.w),1e-4); int3 c=int3(floor((p-o)/cell)); const int r=32; if(any(c<0)||any(c>=int3(r,r,r))) return 0.0; uint idx=2u+(uint(c.z)*r+uint(c.y))*r+uint(c.x); return min(float(g_particleLightGrid[idx].x)/4096.0,20.0); }
 float GridTransmittance(float3 p,float3 dir,float maxDistance){ float3 d=normalize(dir); float optical=0.0; float stepLen=max(maxDistance/6.0,8.0); [unroll] for(uint s=1u;s<=6u;++s){ float dist=min(stepLen*float(s),maxDistance); optical+=GridOptical(p+d*dist)*0.18; } return exp(-min(optical,20.0)); }
 struct OitOutput { float4 accumulation : SV_Target0; float4 opticalDepth : SV_Target1; float4 motionReject : SV_Target2; };
 float Hash12(float2 p,uint seed){uint x=asuint(p.x)*1664525u+asuint(p.y)*1013904223u+seed*747796405u;x^=x>>16;x*=2246822519u;x^=x>>13;return float(x&0x00ffffffu)/16777216.0;}
@@ -312,7 +320,7 @@ OitOutput main(VSOutput input)
     const float z=sqrt(saturate(1.0-radius2));
     const float3 pseudoNormal=normalize(right*input.uv.x-cameraUp*input.uv.y-fw*z);
     float3 incident=ParticleIncident(input.centerCameraRelative,pseudoNormal,opticalDepth);
-    const float stellarGridT=GridTransmittance(input.centerCameraRelative,normalize(g.stellar.xyz),192.0);
+    const float stellarGridT=GridTransmittance(input.gridPosition,normalize(g.stellar.xyz),192.0);
     incident*=lerp(1.0,stellarGridT,saturate(g.stellar.w));
     const float3 densityColor = input.baseColor * lerp(0.72, 1.0, density) * incident;
     const float3 emissiveColor = input.emissionColor * emission * input.emissionScale;
@@ -330,8 +338,8 @@ constexpr const char* kParticleLightGridShader = R"(
 struct Particle { float3 positionMeters; float authority; float3 velocityMetersPerSecond; float density; float emission; float ageSeconds; float lifetimeSeconds; float linearDragPerSecond; float radiusMeters; float emissionScale; float gravityScale; float restitution; float3 baseColor; uint behaviorFlags; float3 emissionColor; uint generation; float3 bodyCenterMeters; float gravitationalParameterM3PerS2; float3 surfaceRadiiMeters; float gravitySofteningMeters; float waterDensityRatio; float waterDragPerSecond; float waterBuoyancyScale; float waterSplashScale; uint4 bodyIdentity; };
 [[vk::binding(0,0)]] StructuredBuffer<Particle> g_particles;
 [[vk::binding(1,0)]] RWStructuredBuffer<uint4> g_grid;
-struct Push { float4 originCell; uint4 params; }; [[vk::push_constant]] Push g;
-[numthreads(64,1,1)] void main(uint3 tid:SV_DispatchThreadID){ uint i=tid.x; if(i==0u) g_grid[0]=uint4(asuint(g.originCell.x),asuint(g.originCell.y),asuint(g.originCell.z),asuint(g.originCell.w)); if(i>=65536u) return; Particle p=g_particles[i]; if(p.generation!=g.params.x||p.lifetimeSeconds<=0.0||p.ageSeconds>=p.lifetimeSeconds) return; float3 q=(p.positionMeters-g.originCell.xyz)/max(g.originCell.w,1e-4); int3 c=int3(floor(q)); uint r=g.params.y; if(any(c<0)||any(c>=int3(r,r,r))) return; uint idx=1u+(uint(c.z)*r+uint(c.y))*r+uint(c.x); float life=saturate(1.0-p.ageSeconds/max(p.lifetimeSeconds,1e-4)); float optical=max(p.density,0.0)*max(p.authority,0.0)*life*max(p.radiusMeters,0.01); float3 e=max(p.emissionColor,0.0)*max(p.emission,0.0)*max(p.emissionScale,0.0)*life; uint opticalQ=(uint)min(optical*4096.0,16777215.0); uint3 emissionQ=(uint3)min(e*1024.0,16777215.0); InterlockedAdd(g_grid[idx].x,opticalQ); InterlockedAdd(g_grid[idx].y,emissionQ.x); InterlockedAdd(g_grid[idx].z,emissionQ.y); InterlockedAdd(g_grid[idx].w,emissionQ.z); }
+struct Push { float4 originCell; float4 frameOrigin; uint4 params; }; [[vk::push_constant]] Push g;
+[numthreads(64,1,1)] void main(uint3 tid:SV_DispatchThreadID){ uint i=tid.x; if(i==0u){ g_grid[0]=uint4(asuint(g.originCell.x),asuint(g.originCell.y),asuint(g.originCell.z),asuint(g.originCell.w)); float3 absoluteOrigin=g.originCell.xyz+g.frameOrigin.xyz; g_grid[1]=uint4(asuint(absoluteOrigin.x),asuint(absoluteOrigin.y),asuint(absoluteOrigin.z),asuint(g.originCell.w)); } if(i>=65536u) return; Particle p=g_particles[i]; if(p.generation!=g.params.x||p.lifetimeSeconds<=0.0||p.ageSeconds>=p.lifetimeSeconds) return; float3 q=(p.positionMeters-g.originCell.xyz)/max(g.originCell.w,1e-4); int3 c=int3(floor(q)); uint r=g.params.y; if(any(c<0)||any(c>=int3(r,r,r))) return; uint idx=2u+(uint(c.z)*r+uint(c.y))*r+uint(c.x); float life=saturate(1.0-p.ageSeconds/max(p.lifetimeSeconds,1e-4)); float optical=max(p.density,0.0)*max(p.authority,0.0)*life*max(p.radiusMeters,0.01); float3 e=max(p.emissionColor,0.0)*max(p.emission,0.0)*max(p.emissionScale,0.0)*life; uint opticalQ=(uint)min(optical*4096.0,16777215.0); uint3 emissionQ=(uint3)min(e*1024.0,16777215.0); InterlockedAdd(g_grid[idx].x,opticalQ); InterlockedAdd(g_grid[idx].y,emissionQ.x); InterlockedAdd(g_grid[idx].z,emissionQ.y); InterlockedAdd(g_grid[idx].w,emissionQ.z); }
 )";
 
 constexpr const char* kOitCompositeVertexShader = R"(
@@ -425,8 +433,8 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=10U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=3U});
     oitTemporalPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitTemporalPixel.bytecode.data(),.size=oitTemporalPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=4U,.shaderResourceBuffers=0U,.sampledTextures=4U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Opaque,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
     oitCompositePipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitCompositePixel.bytecode.data(),.size=oitCompositePixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=0U,.shaderResourceBuffers=0U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
-    particleLightGridPipeline_=device.CreateComputePipeline({.computeShader={.data=particleLightGrid.bytecode.data(),.size=particleLightGrid.bytecode.size()},.pushConstantDwords=8U,.shaderResourceBuffers=2U,.storageTextures=0U,.sampledTextures=0U,.accelerationStructures=0U});
-    constexpr u64 gridBytes=(1ULL+static_cast<u64>(ParticleLightGridResolution)*ParticleLightGridResolution*ParticleLightGridResolution)*sizeof(std::array<u32,4U>);
+    particleLightGridPipeline_=device.CreateComputePipeline({.computeShader={.data=particleLightGrid.bytecode.data(),.size=particleLightGrid.bytecode.size()},.pushConstantDwords=12U,.shaderResourceBuffers=2U,.storageTextures=0U,.sampledTextures=0U,.accelerationStructures=0U});
+    constexpr u64 gridBytes=(2ULL+static_cast<u64>(ParticleLightGridResolution)*ParticleLightGridResolution*ParticleLightGridResolution)*sizeof(std::array<u32,4U>);
     particleLightGrid_=device.CreateBuffer({.sizeBytes=gridBytes,.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::GpuOnly,.initialState=rhi::ResourceState::CopyDestination});
     zeroParticleLightGridUpload_=device.CreateBuffer({.sizeBytes=gridBytes,.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::HostVisible,.initialState=rhi::ResourceState::CopySource});
     {auto* m=zeroParticleLightGridUpload_->Map();std::memset(m,0,static_cast<std::size_t>(gridBytes));zeroParticleLightGridUpload_->Unmap();}
@@ -600,9 +608,16 @@ void VolumeParticleRenderer::Draw(
     if(particleLightGridState_!=rhi::ResourceState::CopyDestination){commands.Transition(*particleLightGrid_,particleLightGridState_,rhi::ResourceState::CopyDestination);particleLightGridState_=rhi::ResourceState::CopyDestination;}
     commands.CopyBuffer(*zeroParticleLightGridUpload_,0U,*particleLightGrid_,0U,particleLightGrid_->SizeBytes());
     commands.Transition(*particleLightGrid_,particleLightGridState_,rhi::ResourceState::UnorderedAccess); particleLightGridState_=rhi::ResourceState::UnorderedAccess;
-    std::array<u32,8U> lightGridConstants{bits(lightGridOrigin.x),bits(lightGridOrigin.y),bits(lightGridOrigin.z),bits(lightGridCellMeters),state_.Generation(),ParticleLightGridResolution,0U,0U};
+    const math::Double3 presentationOrigin{
+        camera.localPositionMeters.x-cameraPositionRelativeToPresentationOriginMeters.x,
+        camera.localPositionMeters.y-cameraPositionRelativeToPresentationOriginMeters.y,
+        camera.localPositionMeters.z-cameraPositionRelativeToPresentationOriginMeters.z};
+    std::array<u32,12U> lightGridConstants{
+        bits(lightGridOrigin.x),bits(lightGridOrigin.y),bits(lightGridOrigin.z),bits(lightGridCellMeters),
+        bits(static_cast<f32>(presentationOrigin.x)),bits(static_cast<f32>(presentationOrigin.y)),bits(static_cast<f32>(presentationOrigin.z)),0U,
+        state_.Generation(),ParticleLightGridResolution,0U,0U};
     commands.SetComputePipeline(*particleLightGridPipeline_); commands.SetComputeConstants(lightGridConstants); commands.SetComputeBuffer(0U,state_.CurrentBuffer()); commands.SetComputeBuffer(1U,*particleLightGrid_); commands.Dispatch((VolumeParticleGpuState::MaximumParticleCount+63U)/64U,1U,1U); commands.UavBarrier(*particleLightGrid_);
-    commands.Transition(*particleLightGrid_,particleLightGridState_,rhi::ResourceState::ShaderResource); particleLightGridState_=rhi::ResourceState::ShaderResource;
+    commands.Transition(*particleLightGrid_,particleLightGridState_,rhi::ResourceState::ShaderResource); particleLightGridState_=rhi::ResourceState::ShaderResource; particleLightGridReady_=true;
 
     auto& oit=EnsureOitTargets(width,height,frameIndex,temporalHistoryKey);
     ++oit.temporalSequence; if(oit.temporalSequence==0U) oit.temporalSequence=1U;
@@ -704,6 +719,7 @@ void VolumeParticleRenderer::Reset() noexcept
     terrainCollisionPages_.clear();
     oitTargets_.clear();
     particleLightGridState_=rhi::ResourceState::CopyDestination;
+    particleLightGridReady_=false;
 }
 
 u32 VolumeParticleRenderer::Generation() const noexcept
@@ -719,5 +735,10 @@ u32 VolumeParticleRenderer::SubmittedSpawnCount() const noexcept
 rhi::Buffer& VolumeParticleRenderer::ParticleLightGrid() noexcept
 {
     return *particleLightGrid_;
+}
+
+bool VolumeParticleRenderer::ParticleLightGridReady() const noexcept
+{
+    return particleLightGridReady_;
 }
 } // namespace orbit::volume_render

@@ -10447,6 +10447,15 @@ StudioViewportRenderer::Compose(
                             view->Lighting(),
                             volumeLightRoot);
 
+                    render_graph::BufferHandle previousParticleLightGrid{};
+                    if (volumeParticleRenderer_.ParticleLightGridReady())
+                    {
+                        previousParticleLightGrid = graph.ImportBuffer(
+                            prefix + ".ParticleLightGridPrevious",
+                            volumeParticleRenderer_.ParticleLightGrid(),
+                            rhi::ResourceState::ShaderResource);
+                    }
+
                     const lighting::DirectionalLight
                         volumeStellarLight{
                             .directionToLight =
@@ -10482,6 +10491,7 @@ StudioViewportRenderer::Compose(
                             sharedRadianceCellsHandle,
                             sharedRadianceLevelsHandle,
                             sharedRadianceLevelCount,
+                            previousParticleLightGrid,
                             view->Lighting().change !=
                                 lighting::
                                     LightingViewChange::

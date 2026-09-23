@@ -157,6 +157,7 @@ public:
         render_graph::BufferHandle radianceCells,
         render_graph::BufferHandle radianceLevels,
         u32 radianceLevelCount,
+        render_graph::BufferHandle particleLightGrid,
         bool resetHistory);
 #else
     void AddLivePasses(
@@ -177,6 +178,7 @@ public:
         render_graph::BufferHandle radianceCells,
         render_graph::BufferHandle radianceLevels,
         u32 radianceLevelCount,
+        render_graph::BufferHandle particleLightGrid,
         bool resetHistory);
 #endif
 
@@ -204,6 +206,7 @@ public:
         render_graph::BufferHandle radianceCells,
         render_graph::BufferHandle radianceLevels,
         u32 radianceLevelCount,
+        render_graph::BufferHandle particleLightGrid,
         bool resetHistory);
 #endif
 

@@ -75,6 +75,7 @@ public:
     [[nodiscard]] u32 Generation() const noexcept;
     [[nodiscard]] u32 SubmittedSpawnCount() const noexcept;
     [[nodiscard]] rhi::Buffer& ParticleLightGrid() noexcept;
+    [[nodiscard]] bool ParticleLightGridReady() const noexcept;
 
 private:
     struct OitTargets
@@ -111,6 +112,7 @@ private:
     std::unique_ptr<rhi::Buffer> particleLightGrid_;
     std::unique_ptr<rhi::Buffer> zeroParticleLightGridUpload_;
     rhi::ResourceState particleLightGridState_{rhi::ResourceState::CopyDestination};
+    bool particleLightGridReady_{false};
     std::map<std::pair<u64, u64>, std::vector<OitTargets>> oitTargets_;
     std::vector<VolumeParticleTerrainCollisionPage> terrainCollisionPages_;
 };

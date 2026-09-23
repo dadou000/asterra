@@ -211,18 +211,20 @@ StructuredBuffer<GpuVolumeParams> g_params : register(t4);
 StructuredBuffer<GpuRadianceCell> g_radianceCells : register(t5);
 [[vk::binding(6, 0)]]
 StructuredBuffer<GpuRadianceLevelInfo> g_radianceLevels : register(t6);
-
 [[vk::binding(7, 0)]]
+StructuredBuffer<uint4> g_particleLightGrid : register(t7);
+
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
 [[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
-[[vk::binding(8, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_history;
-[[vk::binding(8, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_historySampler;
 
@@ -605,6 +607,35 @@ float LocalLightScale(
         1361.0;
 }
 
+float4 SampleParticleLightGrid(float3 worldPosition)
+{
+    const uint4 meta = g_particleLightGrid[1];
+    const float3 origin = float3(asfloat(meta.x),asfloat(meta.y),asfloat(meta.z));
+    const float cellSize = asfloat(meta.w);
+    if (!(cellSize > 0.0)) return 0.0;
+    const int3 cell = int3(floor((worldPosition-origin)/cellSize));
+    const int resolution = 32;
+    if (any(cell < 0) || any(cell >= int3(resolution,resolution,resolution))) return 0.0;
+    const uint index = 2u + (uint(cell.z)*32u + uint(cell.y))*32u + uint(cell.x);
+    const uint4 packed = g_particleLightGrid[index];
+    return float4(float(packed.x)/4096.0, float3(packed.y,packed.z,packed.w)/1024.0);
+}
+
+float ParticleGridTransmittance(float3 start,float3 direction,float maximumDistance)
+{
+    if (maximumDistance <= 1.0e-4) return 1.0;
+    const float3 d=normalize(direction);
+    const float distance=min(maximumDistance,192.0);
+    const float stepLength=max(distance/6.0,8.0);
+    float optical=0.0;
+    [unroll] for(uint i=1u;i<=6u;++i)
+    {
+        const float t=min(stepLength*float(i),distance);
+        optical += SampleParticleLightGrid(start+d*t).x * 0.18;
+    }
+    return exp(-min(optical,20.0));
+}
+
 float ShadowTransmittance(
     float3 start,
     float3 direction,
@@ -939,7 +970,11 @@ float4 main(VSOutput input) : SV_Target0
                     1.0e20,
                     p,
                     cellSize,
-                    tileEdge);
+                    tileEdge) *
+                ParticleGridTransmittance(
+                    worldPosition + stellarDirection * 0.01,
+                    stellarDirection,
+                    192.0);
 
             const float phaseStellar =
                 HenyeyGreenstein(
@@ -957,6 +992,10 @@ float4 main(VSOutput input) : SV_Target0
             incident +=
                 ambient *
                 0.07957747154594767;
+
+            // Previous completed M38 particle grid contributes low-frequency
+            // emissive radiance without downloading particle state.
+            incident += SampleParticleLightGrid(worldPosition).yzw;
 
             const float3 sampleRelative =
                 worldPosition -
@@ -1016,7 +1055,11 @@ float4 main(VSOutput input) : SV_Target0
                         lightDistance,
                         p,
                         cellSize,
-                        tileEdge);
+                        tileEdge) *
+                    ParticleGridTransmittance(
+                        worldPosition + sampleToLight * 0.01,
+                        sampleToLight,
+                        lightDistance);
 
                 const float phase =
                     HenyeyGreenstein(
@@ -1498,6 +1541,8 @@ public:
             dummyRadianceCells;
         std::unique_ptr<rhi::Buffer>
             dummyRadianceLevels;
+        std::unique_ptr<rhi::Buffer>
+            dummyParticleLightGrid;
 
         u32 slotCapacity{0U};
         u32 lightCapacity{0U};
@@ -1522,7 +1567,7 @@ public:
                 compiler,
                 kRaymarchPs,
                 0U,
-                7U,
+                8U,
                 2U);
         compositePipeline =
             CompileFullscreen(
@@ -1751,6 +1796,7 @@ void UniversalVolumeRenderer::AddPasses(
     const render_graph::BufferHandle radianceCells,
     const render_graph::BufferHandle radianceLevels,
     const u32 radianceLevelCount,
+    const render_graph::BufferHandle particleLightGrid,
     const bool resetHistory)
 {
     auto& entry =
@@ -2145,6 +2191,18 @@ void UniversalVolumeRenderer::AddPasses(
             dummyRadianceLevels->Unmap();
     }
 
+    if (presentation.dummyParticleLightGrid == nullptr)
+    {
+        presentation.dummyParticleLightGrid = impl_->device->CreateBuffer({
+            .sizeBytes = 2U * sizeof(std::array<u32,4U>),
+            .usage = rhi::BufferUsage::Structured,
+            .memory = rhi::MemoryUsage::HostVisible,
+            .initialState = rhi::ResourceState::ShaderResource
+        });
+        std::memset(presentation.dummyParticleLightGrid->Map(),0,static_cast<std::size_t>(presentation.dummyParticleLightGrid->SizeBytes()));
+        presentation.dummyParticleLightGrid->Unmap();
+    }
+
     const f32 aspect =
         static_cast<f32>(width) /
         static_cast<f32>(height);
@@ -2352,6 +2410,15 @@ void UniversalVolumeRenderer::AddPasses(
             ? radianceLevels
             : dummyRadianceLevels;
 
+    const auto dummyParticleLightGrid = graph.ImportBuffer(
+        std::string(prefix) + ".DummyParticleLightGrid",
+        *presentation.dummyParticleLightGrid,
+        rhi::ResourceState::ShaderResource);
+    const auto effectiveParticleLightGrid =
+        particleLightGrid.IsValid()
+            ? particleLightGrid
+            : dummyParticleLightGrid;
+
     auto emission =
         FindField(
             fields,
@@ -2405,7 +2472,8 @@ void UniversalVolumeRenderer::AddPasses(
             {localLightsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
             {paramsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
             {effectiveRadianceCells,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {effectiveRadianceLevels,rhi::ResourceState::ShaderResource,render_graph::Access::Read}
+            {effectiveRadianceLevels,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+            {effectiveParticleLightGrid,rhi::ResourceState::ShaderResource,render_graph::Access::Read}
         },
         [this,
          currentHandle,
@@ -2418,6 +2486,7 @@ void UniversalVolumeRenderer::AddPasses(
          paramsHandle,
          effectiveRadianceCells,
          effectiveRadianceLevels,
+         effectiveParticleLightGrid,
          width,
          height](
             rhi::CommandList& commands,
@@ -2457,6 +2526,10 @@ void UniversalVolumeRenderer::AddPasses(
                 6U,
                 resources.Buffer(
                     effectiveRadianceLevels));
+            commands.SetGraphicsBuffer(
+                7U,
+                resources.Buffer(
+                    effectiveParticleLightGrid));
             commands.SetGraphicsTexture(
                 0U,
                 resources.Texture(depth));

@@ -42,7 +42,8 @@ int main()
         rhi::CommandList& commands,
         rhi::Texture& color,
         rhi::Texture& depth,
-        const render_view::CameraState& camera)
+        const render_view::CameraState& camera,
+        const lighting::DirectionalLight& stellar)
     {
         renderer.Draw(
             commands,
@@ -54,6 +55,8 @@ int main()
             math::Double3{},
             0U,
             0x12345678ULL,
+            stellar,
+            std::span<const lighting::ResolvedLocalLight>{},
             3.0F);
     });
 
@@ -81,7 +84,8 @@ int main()
     Check(rhi::TextureFormatBytesPerTexel(rhi::TextureFormat::R16_Float) == 2U);
     Check(volume_render::VolumeParticleRenderer::MaximumLocalLightCount == 64U);
     Check(volume_render::VolumeParticleRenderer::ParticleLightGridResolution == 32U);
-    Check((1U + volume_render::VolumeParticleRenderer::ParticleLightGridResolution * volume_render::VolumeParticleRenderer::ParticleLightGridResolution * volume_render::VolumeParticleRenderer::ParticleLightGridResolution) == 32769U);
+    Check((2U + volume_render::VolumeParticleRenderer::ParticleLightGridResolution * volume_render::VolumeParticleRenderer::ParticleLightGridResolution * volume_render::VolumeParticleRenderer::ParticleLightGridResolution) == 32770U);
+    static_assert(requires(const volume_render::VolumeParticleRenderer& renderer) { renderer.ParticleLightGridReady(); });
 
     const universe::BodyId body{
         .high = 0x1122334455667788ULL,
