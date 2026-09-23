@@ -45,6 +45,16 @@ struct SurfaceVolumeSolverSettings
     u32 iterationsPerFrame{1U};
     f32 gpuBudgetMilliseconds{2.0F};
 
+    // M36 representation policy. RepresentationMode on the authored Volume
+    // remains the force/debug authority; these values drive Auto.
+    f64 lodLiveDistanceMeters{120.0};
+    f64 lodPassiveDistanceMeters{1200.0};
+    f32 lodLiveProjectedPixels{96.0F};
+    f32 lodPassiveProjectedPixels{12.0F};
+    f32 lodHysteresisFraction{0.12F};
+    u32 coarseRaymarchSteps{24U};
+    u32 passiveRaymarchSteps{8U};
+
     SurfaceVolumeDebugView debugView{
         SurfaceVolumeDebugView::Off};
     u32 debugLayer{0U};
