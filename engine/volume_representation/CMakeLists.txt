@@ -2,6 +2,7 @@ add_library(OrbitVolumeRepresentation STATIC
     src/VolumeRepresentation.cpp
     src/VolumeCache.cpp
     src/VolumeOutputCoupling.cpp
+    src/VolumeOutputDispatch.cpp
 )
 
 add_library(Orbit::VolumeRepresentation ALIAS OrbitVolumeRepresentation)
