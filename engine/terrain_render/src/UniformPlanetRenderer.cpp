@@ -1,5 +1,7 @@
 #include <orbit/terrain_render/UniformPlanetRenderer.hpp>
 #include <orbit/math/Matrix.hpp>
+#include <orbit/terrain_render/SurfaceEffectGpuBinding.hpp>
+#include <orbit/terrain_render/SurfaceEffectShader.hpp>
 #include "TerrainSurfaceShader.hpp"
 #include <array>
 #include <bit>
@@ -59,9 +61,6 @@ uint Address(uint2 cell)
     uint n = (uint)g_pc.g_planet.z;
     return (((uint)g_pc.g_planet.w * n + cell.y) * n + cell.x) * 20u;
 }
-// Decodes the octahedral-packed normal baked once at mesh build time
-// (see PackOctahedralNormal in UniformPlanetMesh.cpp) instead of
-// finite-differencing neighbor heights here every frame.
 float3 UnpackOctahedralNormal(uint packed)
 {
     int2 signedLanes = int2((int)(packed << 16) >> 16, (int)packed >> 16);
@@ -103,20 +102,8 @@ VSOutput main(uint id : SV_VertexID)
     output.bodyFixedSurfaceDirection = direction;
     output.waterDepth = asfloat(data.y);
     output.localPosition = local;
-    // Unlike localPosition/surfaceDirection above (deliberately
-    // observer-relative, see LocalDirection), `direction` here is
-    // computed purely from the cube-sphere cell/face -- already
-    // camera-independent, so no extra reconstruction is needed the
-    // way TerrainPreviewRenderer's vertex shader requires (it has no
-    // equivalent observer-independent direction available).
     output.worldPosition = direction * g_pc.g_planet.x;
-    // This mesh has no clipmap levels to derive a real sample spacing
-    // from -- approximate it from a cube face's ~90-degree arc over
-    // its resolution, just to fade the shader-only detail-normal
-    // bump (see ApplyDetailNormal) in the same way the clipmap
-    // renderer does.
     output.spacingMeters = (g_pc.g_planet.x * 1.5707963) / max(g_pc.g_planet.z - 1.0, 1.0);
-    // Full closed planet; depth testing handles occlusion, no clipmap horizon cut.
     output.horizonClip = 1.0;
     return output;
 }
@@ -138,6 +125,7 @@ public:
     world::PlanetDefinition planet;
     std::shared_ptr<const terrain::TerrainSource> source;
     TerrainPreviewConfig config;
+    SurfaceEffectGpuBinding surfaceEffects;
     i32 requested{-1};
     i32 active{-1};
     std::future<terrain_stream::UniformPlanetMesh> future;
@@ -147,16 +135,20 @@ public:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline;
     u32 resolution{};
     u32 indexCount{};
+    u32 effectFrameIndex{};
     Impl(rhi::Device& d, const shader::Compiler& compiler, const world::PlanetDefinition p,
         std::shared_ptr<const terrain::TerrainSource> s, const TerrainPreviewConfig c)
-        : device(d), planet(p), source(std::move(s)), config(c)
+        : device(d), planet(p), source(std::move(s)), config(c),
+          surfaceEffects(d, c.framesInFlight)
     {
         const auto vs = compiler.Compile({.source = kVertexShader, .entryPoint = "main", .stage = shader::Stage::Vertex});
-        const auto ps = compiler.Compile({.source = detail::kTerrainSurfacePixelShader, .entryPoint = "main", .stage = shader::Stage::Pixel});
+        const std::string effectPixelShader =
+            BuildSurfaceEffectPixelShader(detail::kTerrainSurfacePixelShader);
+        const auto ps = compiler.Compile({.source = effectPixelShader, .entryPoint = "main", .stage = shader::Stage::Pixel});
         pipeline = device.CreateGraphicsPipeline({
             .vertexShader = {vs.bytecode.data(), vs.bytecode.size()},
             .pixelShader = {ps.bytecode.data(), ps.bytecode.size()},
-            .pushConstantDwords = 32, .shaderResourceBuffers = 1,
+            .pushConstantDwords = 32, .shaderResourceBuffers = 2,
             .cullMode = rhi::CullMode::Back, .depthCompare = rhi::DepthCompare::GreaterEqual,
             .depthTest = true,
             .depthWrite = true,
@@ -204,10 +196,6 @@ void UniformPlanetRenderer::CommitReadyMesh()
 {
     if (!impl_->ready) return;
     const auto& mesh = *impl_->ready;
-    // Free the outgoing LOD's buffers before allocating the incoming
-    // one's, rather than briefly holding both -- at LOD7+ a single
-    // copy is already gigabytes, so the caller (who has already
-    // waited out in-flight GPU work) shouldn't have to fit two.
     impl_->samples.reset();
     impl_->indices.reset();
     impl_->samples = Upload(impl_->device, mesh.samples.data(), mesh.samples.size() * sizeof(mesh.samples[0]),
@@ -218,6 +206,11 @@ void UniformPlanetRenderer::CommitReadyMesh()
     impl_->indexCount = static_cast<u32>(mesh.indices.size());
     impl_->active = static_cast<i32>(mesh.lod);
     impl_->ready.reset();
+}
+void UniformPlanetRenderer::SetSurfaceEffects(
+    const std::span<const SurfaceEffectGpuStamp> effects)
+{
+    impl_->surfaceEffects.Set(effects);
 }
 i32 UniformPlanetRenderer::RequestedLod() const { return impl_->requested; }
 i32 UniformPlanetRenderer::ActiveLod() const { return impl_->active; }
@@ -242,6 +235,9 @@ void UniformPlanetRenderer::Draw(rhi::CommandList& commands, const world::WorldP
     commands.SetScissor({0, 0, static_cast<i32>(width), static_cast<i32>(height)});
     commands.SetGraphicsPipeline(*impl_->pipeline);
     commands.SetGraphicsBuffer(0, *impl_->samples);
+    impl_->surfaceEffects.Bind(commands, impl_->effectFrameIndex);
+    impl_->effectFrameIndex =
+        (impl_->effectFrameIndex + 1U) % impl_->config.framesInFlight;
     commands.SetIndexBuffer(*impl_->indices, rhi::IndexFormat::UInt32);
     for (u32 face = 0; face < 6; ++face)
     {
