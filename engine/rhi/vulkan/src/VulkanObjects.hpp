@@ -473,6 +473,10 @@ public:
         std::span<Texture* const> colors,
         Texture* depth) override;
 
+    void SetRenderTargetsReadOnlyDepth(
+        std::span<Texture* const> colors,
+        Texture& depth) override;
+
     void SetViewport(const Viewport& viewport) override;
     void SetScissor(const ScissorRect& rect) override;
 

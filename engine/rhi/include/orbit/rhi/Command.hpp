@@ -135,6 +135,13 @@ public:
         std::span<Texture* const> colors,
         Texture* depth) = 0;
 
+    // Bind MRT color targets with a depth attachment kept in DepthRead so it
+    // can simultaneously be sampled by fragment shaders. Used by soft
+    // particles and other read-only-depth transparent passes.
+    virtual void SetRenderTargetsReadOnlyDepth(
+        std::span<Texture* const> colors,
+        Texture& depth) = 0;
+
     virtual void SetViewport(const Viewport& viewport) = 0;
     virtual void SetScissor(const ScissorRect& rect) = 0;
 

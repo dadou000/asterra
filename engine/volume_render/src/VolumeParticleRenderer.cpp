@@ -67,6 +67,7 @@ struct VSOutput
     float3 baseColor : TEXCOORD5;
     float3 emissionColor : TEXCOORD6;
     float emissionScale : TEXCOORD7;
+    float softnessMeters : TEXCOORD8;
 };
 
 float4 Project(float3 relative)
@@ -85,10 +86,12 @@ float4 Project(float3 relative)
     const float x = dot(relative, right);
     const float y = dot(relative, cameraUp);
 
+    const float n=max(g.projection.z,1.0e-4), f=max(g.projection.w,n+1.0e-3);
+    const float clipZ=z*f/(f-n)-f*n/(f-n);
     return float4(
         x / (max(g.projection.x, 0.001) * max(g.projection.y, 0.001)),
         -y / max(g.projection.y, 0.001),
-        z * 0.5,
+        clipZ,
         z);
 }
 
@@ -123,6 +126,7 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.baseColor = 0.0;
         output.emissionColor = 0.0;
         output.emissionScale = 0.0;
+        output.softnessMeters = 0.0;
         return output;
     }
 
@@ -140,6 +144,7 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.baseColor = 0.0;
         output.emissionColor = 0.0;
         output.emissionScale = 0.0;
+        output.softnessMeters = 0.0;
         return output;
     }
 
@@ -165,6 +170,7 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.baseColor = max(particle.baseColor, 0.0);
     output.emissionColor = max(particle.emissionColor, 0.0);
     output.emissionScale = max(particle.emissionScale, 0.0);
+    output.softnessMeters = max(particle.radiusMeters * 2.0, 0.05);
     return output;
 }
 )";
@@ -176,34 +182,38 @@ struct SplashState { float3 positionMeters; float baseScaleMeters; float3 normal
 [[vk::binding(6, 0)]] StructuredBuffer<uint> g_splashIndices : register(t6);
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; };
 [[vk::push_constant]] Push g;
-struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; };
+struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; float softnessMeters:TEXCOORD3; };
 float4 Project(float3 relative) {
     float3 forward=normalize(g.forward.xyz); float3 requestedUp=normalize(g.up.xyz);
     float3 right=normalize(cross(forward,requestedUp)); float3 cameraUp=normalize(cross(right,forward));
     float z=dot(relative,forward); if(z<=g.projection.z||z>=g.projection.w) return float4(2,2,1,1);
     float x=dot(relative,right), y=dot(relative,cameraUp);
-    return float4(x/(max(g.projection.x,0.001)*max(g.projection.y,0.001)),-y/max(g.projection.y,0.001),z*0.5,z);
+    float n=max(g.projection.z,1.0e-4),f=max(g.projection.w,n+1.0e-3); float clipZ=z*f/(f-n)-f*n/(f-n); return float4(x/(max(g.projection.x,0.001)*max(g.projection.y,0.001)),-y/max(g.projection.y,0.001),clipZ,z);
 }
 VSOutput main(uint vertexId:SV_VertexID) {
     static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)};
     uint eventIndex=g_splashIndices[vertexId/6u], cornerIndex=vertexId%6u; SplashState e=g_splashes[eventIndex]; VSOutput o;
-    if(e.generation!=asuint(g.viewport.w)||e.baseScaleMeters<=0.0||e.lifetimeSeconds<=0.0||e.ageSeconds>=e.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.impact=0;return o;}
-    float4 center=Project(e.positionMeters-g.camera.xyz); if(center.w<=0.0){o.position=center;o.uv=0;o.tint=0;o.impact=0;return o;}
+    if(e.generation!=asuint(g.viewport.w)||e.baseScaleMeters<=0.0||e.lifetimeSeconds<=0.0||e.ageSeconds>=e.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.impact=0;o.softnessMeters=0;return o;}
+    float4 center=Project(e.positionMeters-g.camera.xyz); if(center.w<=0.0){o.position=center;o.uv=0;o.tint=0;o.impact=0;o.softnessMeters=0;return o;}
     float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0));
     float life=saturate(1.0-e.ageSeconds/max(e.lifetimeSeconds,0.001));
     float radius=max(e.baseScaleMeters+e.expansionMetersPerSecond*e.ageSeconds,0.01);
     float pixels=radius/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5;
     pixels=max(pixels,max(g.viewport.z,0.5)); o.position=center; o.position.xy+=corners[cornerIndex]*ndc*pixels*center.w;
-    o.uv=corners[cornerIndex]; o.tint=max(e.tint,0.0)*life; o.impact=max(e.impactSpeedMetersPerSecond,0.0)*life; return o;
+    o.uv=corners[cornerIndex]; o.tint=max(e.tint,0.0)*life; o.impact=max(e.impactSpeedMetersPerSecond,0.0)*life; o.softnessMeters=max(radius*0.25,0.03); return o;
 }
 )";
 constexpr const char* kSplashPixelShader = R"(
-struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; };
+struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; float softnessMeters:TEXCOORD3; };
+[[vk::binding(8,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(8,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; }; [[vk::push_constant]] Push g;
+float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
+float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 struct OitOutput { float4 accumulation:SV_Target0; float4 opticalDepth:SV_Target1; };
 OitOutput main(VSOutput i) {
     float r=length(i.uv); if(r>=1.0||r<0.42) discard;
     float ring=(1.0-smoothstep(0.42,0.62,r))*smoothstep(0.42,0.52,r);
-    float impact=saturate(i.impact/8.0); float alpha=ring*(0.35+0.55*impact);
+    float impact=saturate(i.impact/8.0); float alpha=ring*(0.35+0.55*impact)*SoftDepth(i.position,i.softnessMeters);
     float3 foam=lerp(float3(0.72,0.84,0.90),float3(1.0,1.0,1.0),impact)*i.tint;
     OitOutput o; float optical=-log(max(1.0-saturate(alpha),1.0e-4));
     o.accumulation=float4(foam*alpha,alpha); o.opticalDepth=float4(optical,0,0,0); return o;
@@ -215,14 +225,18 @@ struct Droplet { float3 positionMeters; float radiusMeters; float3 velocityMeter
 [[vk::binding(4,0)]] StructuredBuffer<Droplet> g_droplets : register(t4);
 [[vk::binding(7, 0)]] StructuredBuffer<uint> g_dropletIndices : register(t7);
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; }; [[vk::push_constant]] Push g;
-struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; };
-float4 Project(float3 relative){ float3 f=normalize(g.forward.xyz),u=normalize(g.up.xyz),r=normalize(cross(f,u)),cu=normalize(cross(r,f)); float z=dot(relative,f); if(z<=g.projection.z||z>=g.projection.w)return float4(2,2,1,1); return float4(dot(relative,r)/(max(g.projection.x,0.001)*max(g.projection.y,0.001)),-dot(relative,cu)/max(g.projection.y,0.001),z*0.5,z); }
-VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)}; uint i=g_dropletIndices[vertexId/6u],c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o; if(d.generation!=asuint(g.viewport.w)||d.lifetimeSeconds<=0.0||d.ageSeconds>=d.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.life=0;return o;} float4 center=Project(d.positionMeters-g.camera.xyz); if(center.w<=0){o.position=center;o.uv=0;o.tint=0;o.life=0;return o;} float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0)); float px=max(d.radiusMeters,0.002)/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5; px=max(px,0.75); o.position=center;o.position.xy+=corners[c]*ndc*px*center.w;o.uv=corners[c];o.tint=max(d.tint,0.0);o.life=saturate(1.0-d.ageSeconds/max(d.lifetimeSeconds,0.001));return o; }
+struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; float softnessMeters:TEXCOORD3; };
+float4 Project(float3 relative){ float3 fw=normalize(g.forward.xyz),u=normalize(g.up.xyz),r=normalize(cross(fw,u)),cu=normalize(cross(r,fw)); float z=dot(relative,fw); if(z<=g.projection.z||z>=g.projection.w)return float4(2,2,1,1); float n=max(g.projection.z,1.0e-4),f=max(g.projection.w,n+1.0e-3); float clipZ=z*f/(f-n)-f*n/(f-n); return float4(dot(relative,r)/(max(g.projection.x,0.001)*max(g.projection.y,0.001)),-dot(relative,cu)/max(g.projection.y,0.001),clipZ,z); }
+VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2(-1,-1),float2(1,-1),float2(1,1),float2(-1,-1),float2(1,1),float2(-1,1)}; uint i=g_dropletIndices[vertexId/6u],c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o; if(d.generation!=asuint(g.viewport.w)||d.lifetimeSeconds<=0.0||d.ageSeconds>=d.lifetimeSeconds){o.position=float4(2,2,1,1);o.uv=0;o.tint=0;o.life=0;o.softnessMeters=0;return o;} float4 center=Project(d.positionMeters-g.camera.xyz); if(center.w<=0){o.position=center;o.uv=0;o.tint=0;o.life=0;o.softnessMeters=0;return o;} float2 ndc=float2(2.0/max(g.viewport.x,1.0),2.0/max(g.viewport.y,1.0)); float px=max(d.radiusMeters,0.002)/max(center.w*max(g.projection.y,0.001),0.001)*max(g.viewport.y,1.0)*0.5; px=max(px,0.75); o.position=center;o.position.xy+=corners[c]*ndc*px*center.w;o.uv=corners[c];o.tint=max(d.tint,0.0);o.life=saturate(1.0-d.ageSeconds/max(d.lifetimeSeconds,0.001));o.softnessMeters=max(d.radiusMeters*4.0,0.02);return o; }
 )";
 constexpr const char* kDropletPixelShader = R"(
-struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; };
+struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; float softnessMeters:TEXCOORD3; };
+[[vk::binding(8,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(8,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; }; [[vk::push_constant]] Push g;
+float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
+float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 struct OitOutput { float4 accumulation:SV_Target0; float4 opticalDepth:SV_Target1; };
-OitOutput main(VSOutput i) { float r2=dot(i.uv,i.uv); if(r2>=1.0||i.life<=0.0) discard; float alpha=(1.0-smoothstep(0.2,1.0,r2))*i.life*0.82; float3 c=lerp(float3(0.70,0.84,0.94),float3(1,1,1),0.65)*i.tint; OitOutput o; float optical=-log(max(1.0-saturate(alpha),1.0e-4)); o.accumulation=float4(c*alpha,alpha); o.opticalDepth=float4(optical,0,0,0); return o; }
+OitOutput main(VSOutput i) { float r2=dot(i.uv,i.uv); if(r2>=1.0||i.life<=0.0) discard; float alpha=(1.0-smoothstep(0.2,1.0,r2))*i.life*0.82*SoftDepth(i.position,i.softnessMeters); float3 c=lerp(float3(0.70,0.84,0.94),float3(1,1,1),0.65)*i.tint; OitOutput o; float optical=-log(max(1.0-saturate(alpha),1.0e-4)); o.accumulation=float4(c*alpha,alpha); o.opticalDepth=float4(optical,0,0,0); return o; }
 )";
 
 constexpr const char* kPixelShader = R"(
@@ -236,8 +250,13 @@ struct VSOutput
     float life : TEXCOORD4;
     float3 baseColor : TEXCOORD5;
     float3 emissionColor : TEXCOORD6;
-    float emissionScale : TEXCOORD7;
+    float emissionScale : TEXCOORD7;    float softnessMeters : TEXCOORD8;
 };
+[[vk::binding(8,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth;
+[[vk::binding(8,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; }; [[vk::push_constant]] Push g;
+float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
+float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 
 struct OitOutput { float4 accumulation : SV_Target0; float4 opticalDepth : SV_Target1; };
 OitOutput main(VSOutput input)
@@ -256,7 +275,8 @@ OitOutput main(VSOutput input)
     const float3 densityColor = input.baseColor * lerp(0.72, 1.0, density);
     const float3 emissiveColor = input.emissionColor * emission * input.emissionScale;
     const float3 color = densityColor + emissiveColor;
-    const float alpha = soft * input.life *
+    const float depthFade=SoftDepth(input.position,input.softnessMeters);
+    const float alpha = soft * input.life * depthFade *
         saturate(0.16 + 0.64 * authority + 0.20 * density);
 
     OitOutput output;
@@ -327,7 +347,7 @@ VolumeParticleRenderer::VolumeParticleRenderer(
         .vertexStrideBytes = 0U,
         .pushConstantDwords = 20U,
         .shaderResourceBuffers = 8U,
-        .sampledTextures = 0U,
+        .sampledTextures = 1U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::None,
@@ -342,12 +362,12 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     splashPipeline_ = device.CreateGraphicsPipeline({
         .vertexShader={.data=splashVertex.bytecode.data(),.size=splashVertex.bytecode.size()},
         .pixelShader={.data=splashPixel.bytecode.data(),.size=splashPixel.bytecode.size()},
-        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=0U,
+        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=1U,
         .topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,
         .blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,
         .colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=2U
     });
-    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=0U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=2U});
+    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=2U});
     oitCompositePipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitCompositePixel.bytecode.data(),.size=oitCompositePixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=0U,.shaderResourceBuffers=0U,.sampledTextures=2U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
 }
 
@@ -508,7 +528,7 @@ void VolumeParticleRenderer::Draw(
     commands.ClearColorTarget(*oit.accumulation,{0,0,0,0});
     commands.ClearColorTarget(*oit.opticalDepth,{0,0,0,0});
     std::array<rhi::Texture*,2U> oitColors{oit.accumulation.get(),oit.opticalDepth.get()};
-    commands.SetRenderTargets(oitColors,&depth);
+    commands.SetRenderTargetsReadOnlyDepth(oitColors,depth);
     commands.SetViewport({
         .x = 0.0F,
         .y = 0.0F,
@@ -526,16 +546,19 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsPipeline(*pipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
+    commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::ParticleIndirectOffsetBytes);
     constants[19] = state_.DropletGeneration();
     commands.SetGraphicsPipeline(*dropletPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
+    commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::DropletIndirectOffsetBytes);
     constants[19] = state_.SplashGeneration();
     commands.SetGraphicsPipeline(*splashPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
+    commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);
 
     commands.Transition(*oit.accumulation,oit.accumulationState,rhi::ResourceState::ShaderResource); oit.accumulationState=rhi::ResourceState::ShaderResource;

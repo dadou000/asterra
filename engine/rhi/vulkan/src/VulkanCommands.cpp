@@ -1025,6 +1025,32 @@ void VulkanCommandList::SetRenderTargets(
         height);
 }
 
+void VulkanCommandList::SetRenderTargetsReadOnlyDepth(
+    const std::span<Texture* const> colors,
+    Texture& depth)
+{
+    if (colors.empty() || colors.size() > 4U)
+        throw std::invalid_argument("Orbit Vulkan read-only-depth MRT requires one to four color targets.");
+
+    std::array<VkRenderingAttachmentInfo, 4> nativeColors{};
+    u32 width=0U, height=0U;
+    for(std::size_t i=0;i<colors.size();++i)
+    {
+        auto* texture=dynamic_cast<VulkanTexture*>(colors[i]);
+        if(texture==nullptr) throw std::runtime_error("Orbit Vulkan received an incompatible MRT color target.");
+        if(i==0U){width=texture->Width();height=texture->Height();}
+        else if(texture->Width()!=width||texture->Height()!=height) throw std::invalid_argument("Orbit Vulkan MRT color targets must have equal extents.");
+        const auto pending=texture->TakePendingClear();
+        auto& a=nativeColors[i]; a.sType=VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO; a.imageView=texture->View(); a.imageLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        a.loadOp=pending.has_value()?VK_ATTACHMENT_LOAD_OP_CLEAR:VK_ATTACHMENT_LOAD_OP_LOAD; a.storeOp=VK_ATTACHMENT_STORE_OP_STORE; if(pending.has_value()) a.clearValue=*pending;
+    }
+    auto* nativeDepth=dynamic_cast<VulkanTexture*>(&depth);
+    if(nativeDepth==nullptr) throw std::runtime_error("Orbit Vulkan received an incompatible read-only depth target.");
+    if(nativeDepth->Width()!=width||nativeDepth->Height()!=height) throw std::invalid_argument("Orbit Vulkan read-only depth target must match color extents.");
+    VkRenderingAttachmentInfo depthAttachment{}; depthAttachment.sType=VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO; depthAttachment.imageView=nativeDepth->View(); depthAttachment.imageLayout=VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL; depthAttachment.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD; depthAttachment.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+    BeginRendering(std::span<const VkRenderingAttachmentInfo>(nativeColors.data(),colors.size()),&depthAttachment,width,height);
+}
+
 void VulkanCommandList::SetViewport(const Viewport& viewport)
 {
     // Vulkan's viewport Y axis points down with a positive height,
