@@ -1,6 +1,7 @@
 add_library(OrbitVolumeRepresentation STATIC
     src/VolumeRepresentation.cpp
     src/VolumeCache.cpp
+    src/VolumeOutputCoupling.cpp
 )
 
 add_library(Orbit::VolumeRepresentation ALIAS OrbitVolumeRepresentation)
@@ -25,6 +26,7 @@ if(BUILD_TESTING)
     add_executable(OrbitVolumeRepresentationTests
         tests/VolumeRepresentationTests.cpp
         tests/VolumeCacheTests.cpp
+        tests/VolumeOutputCouplingTests.cpp
     )
 
     target_link_libraries(OrbitVolumeRepresentationTests
