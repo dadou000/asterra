@@ -8558,6 +8558,11 @@ StudioViewportRenderer::Compose(
                 }
             }
 
+            rhi::Buffer* particleLightGridForDirect =
+                volumeParticleRenderer_.ParticleLightGridReady()
+                    ? &volumeParticleRenderer_.ParticleLightGrid()
+                    : nullptr;
+
             graph.AddPass(
                 prefix + ".SharedDirectLighting",
                 {
@@ -8656,6 +8661,7 @@ StudioViewportRenderer::Compose(
                  localLightsHandle,
                  localOffsetsHandle,
                  localIndicesHandle,
+                 particleLightGridForDirect,
                  lightingTimestamps,
                  frameIndex](
                     rhi::CommandList& commands,
@@ -8687,7 +8693,8 @@ StudioViewportRenderer::Compose(
                         height,
                         lightingView,
                         directLight,
-                        localLightGrid);
+                        localLightGrid,
+                        particleLightGridForDirect);
 
                     if (lightingTimestamps != nullptr)
                     {

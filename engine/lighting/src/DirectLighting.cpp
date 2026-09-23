@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstring>
 
 namespace orbit::lighting
 {
@@ -62,32 +63,34 @@ StructuredBuffer<uint> g_tileOffsets;
 
 [[vk::binding(2, 0)]]
 StructuredBuffer<uint> g_tileLightIndices;
-
 [[vk::binding(3, 0)]]
+StructuredBuffer<uint4> g_particleLightGrid;
+
+[[vk::binding(4, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness;
 [[vk::binding(3, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler;
 
-[[vk::binding(4, 0)]]
+[[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic;
-[[vk::binding(4, 0)]]
+[[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler;
 
-[[vk::binding(5, 0)]]
+[[vk::binding(6, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass;
-[[vk::binding(5, 0)]]
+[[vk::binding(6, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler;
 
-[[vk::binding(6, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(6, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
@@ -99,6 +102,7 @@ struct Constants
     float4 cameraUpAndTanHalfFov;
     float4 depthRangeAndPhotometry;
     uint4 localGrid;
+    float4 cameraFrameAndParticleGrid;
 };
 [[vk::push_constant]] Constants g;
 
@@ -321,6 +325,36 @@ float LocalLightIrradianceScale(
         referenceIrradiance;
 }
 
+
+float4 SampleParticleLightGrid(float3 framePosition)
+{
+    if (g.cameraFrameAndParticleGrid.w <= 0.0) return 0.0;
+    const uint4 meta = g_particleLightGrid[1];
+    const float3 origin = float3(asfloat(meta.x),asfloat(meta.y),asfloat(meta.z));
+    const float cellSize = asfloat(meta.w);
+    if (!(cellSize > 0.0)) return 0.0;
+    const int3 cell = int3(floor((framePosition-origin)/cellSize));
+    if (any(cell < 0) || any(cell >= int3(32,32,32))) return 0.0;
+    const uint index = 2u + (uint(cell.z)*32u + uint(cell.y))*32u + uint(cell.x);
+    const uint4 packed = g_particleLightGrid[index];
+    return float4(float(packed.x)/4096.0, float3(packed.y,packed.z,packed.w)/1024.0);
+}
+
+float ParticleGridTransmittance(float3 framePosition,float3 direction,float maximumDistance)
+{
+    if (g.cameraFrameAndParticleGrid.w <= 0.0 || maximumDistance <= 1.0e-4) return 1.0;
+    const float3 d=normalize(direction);
+    const float distance=min(maximumDistance,192.0);
+    const float stepLength=max(distance/6.0,8.0);
+    float optical=0.0;
+    [unroll] for(uint i=1u;i<=6u;++i)
+    {
+        const float t=min(stepLength*float(i),distance);
+        optical += SampleParticleLightGrid(framePosition+d*t).x * 0.18;
+    }
+    return exp(-min(optical,20.0));
+}
+
 float4 main(VSOutput input) : SV_Target0
 {
     const float4 baseRoughness =
@@ -387,7 +421,7 @@ float4 main(VSOutput input) : SV_Target0
     const float3 stellarColor =
         max(g.lightColorAndAmbient.rgb, 0.0);
 
-    float3 sceneLinear =
+    float3 stellarLinear =
         EvaluateBrdf(
             n,
             v,
@@ -400,16 +434,29 @@ float4 main(VSOutput input) : SV_Target0
 
     const float ambient =
         max(g.lightColorAndAmbient.w, 0.0);
-
-    sceneLinear +=
+    const float3 ambientLinear =
         baseColor *
         (1.0 - metallic) *
         ambient;
+    float3 sceneLinear = stellarLinear + ambientLinear;
 
     const float depth =
         g_depth.Sample(
             g_depthSampler,
             input.uv).r;
+
+    if (depth > 0.0 && g.cameraFrameAndParticleGrid.w > 0.0)
+    {
+        const float3 surfaceRelative =
+            ReconstructSurfacePosition(depth,cameraRay,cameraForward);
+        const float3 framePosition =
+            surfaceRelative + g.cameraFrameAndParticleGrid.xyz;
+        const float stellarParticleT =
+            ParticleGridTransmittance(framePosition,stellarDirection,192.0);
+        const float3 particleEmission =
+            SampleParticleLightGrid(framePosition).yzw;
+        sceneLinear = stellarLinear * stellarParticleT + ambientLinear + particleEmission;
+    }
 
     // Reverse-Z depth 0 is the untouched/far clear value. Analytic globe
     // representations currently do not populate geometric depth, so local
@@ -492,6 +539,10 @@ float4 main(VSOutput input) : SV_Target0
                 continue;
             }
 
+            const float3 framePosition =
+                surfacePosition + g.cameraFrameAndParticleGrid.xyz;
+            const float particleT =
+                ParticleGridTransmittance(framePosition,l,distanceMeters);
             sceneLinear +=
                 EvaluateBrdf(
                     n,
@@ -501,7 +552,7 @@ float4 main(VSOutput input) : SV_Target0
                     roughness,
                     metallic) *
                 max(local.colorFlux.rgb, 0.0) *
-                irradianceScale;
+                irradianceScale * particleT;
         }
     }
 
@@ -545,8 +596,8 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 24U,
-            .shaderResourceBuffers = 3U,
+            .pushConstantDwords = 28U,
+            .shaderResourceBuffers = 4U,
             .sampledTextures = 4U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
@@ -560,6 +611,15 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .colorAttachmentCount = 1U
         });
+
+    dummyParticleLightGrid_ = device.CreateBuffer({
+        .sizeBytes = 2U * sizeof(std::array<u32,4U>),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource
+    });
+    std::memset(dummyParticleLightGrid_->Map(),0,static_cast<std::size_t>(dummyParticleLightGrid_->SizeBytes()));
+    dummyParticleLightGrid_->Unmap();
 }
 
 void DirectLightingRenderer::Draw(
@@ -577,6 +637,7 @@ void DirectLightingRenderer::Draw(
     const LightingView& view,
     const DirectionalLight& light,
     const TiledLightGrid& localLightGrid,
+    rhi::Buffer* particleLightGrid,
     const DirectLightingSettings& settings)
 {
     if (width == 0U || height == 0U)
@@ -595,7 +656,7 @@ void DirectLightingRenderer::Draw(
     constexpr f32 kPhotopicLuminousEfficacy =
         683.0F;
 
-    const std::array<u32, 24> constants{
+    const std::array<u32, 28> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -635,7 +696,12 @@ void DirectLightingRenderer::Draw(
         localLightGrid.tilesX,
         localLightGrid.tilesY,
         static_cast<u32>(
-            localLightGrid.lights.size())
+            localLightGrid.lights.size()),
+
+        bits(static_cast<f32>(view.cameraPositionInFrameMeters.x)),
+        bits(static_cast<f32>(view.cameraPositionInFrameMeters.y)),
+        bits(static_cast<f32>(view.cameraPositionInFrameMeters.z)),
+        bits(particleLightGrid != nullptr ? 1.0F : 0.0F)
     };
 
     commands.SetRenderTarget(targetSceneColor);
@@ -666,6 +732,11 @@ void DirectLightingRenderer::Draw(
     commands.SetGraphicsBuffer(
         2U,
         tileLightIndices);
+    commands.SetGraphicsBuffer(
+        3U,
+        particleLightGrid != nullptr
+            ? *particleLightGrid
+            : *dummyParticleLightGrid_);
 
     commands.SetGraphicsTexture(
         0U,

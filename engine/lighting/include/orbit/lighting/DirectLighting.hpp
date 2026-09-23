@@ -51,9 +51,11 @@ public:
         const LightingView& view,
         const DirectionalLight& light,
         const TiledLightGrid& localLightGrid,
+        rhi::Buffer* particleLightGrid = nullptr,
         const DirectLightingSettings& settings = {});
 
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::unique_ptr<rhi::Buffer> dummyParticleLightGrid_;
 };
 } // namespace orbit::lighting
