@@ -712,11 +712,13 @@ struct Droplet { float3 positionMeters; float radiusMeters; float3 velocityMeter
 [[vk::binding(5,0)]] RWStructuredBuffer<uint> g_dropletIndices : register(u5);
 [[vk::binding(6,0)]] RWByteAddressBuffer g_drawArgs : register(u6);
 struct Push { uint4 generation; uint4 capacity; }; [[vk::push_constant]] Push g;
-void AppendIndex(uint argsOffset,uint index,RWStructuredBuffer<uint> indices){ uint oldVertices=0u; g_drawArgs.InterlockedAdd(argsOffset,6u,oldVertices); indices[oldVertices/6u]=index; }
+void AppendParticleIndex(uint index){ uint oldVertices=0u; g_drawArgs.InterlockedAdd(0u,6u,oldVertices); g_particleIndices[oldVertices/6u]=index; }
+void AppendSplashIndex(uint index){ uint oldVertices=0u; g_drawArgs.InterlockedAdd(16u,6u,oldVertices); g_splashIndices[oldVertices/6u]=index; }
+void AppendDropletIndex(uint index){ uint oldVertices=0u; g_drawArgs.InterlockedAdd(32u,6u,oldVertices); g_dropletIndices[oldVertices/6u]=index; }
 [numthreads(64,1,1)] void main(uint3 id:SV_DispatchThreadID){ uint i=id.x;
- if(i<g.capacity.x){ Particle p=g_particles[i]; if(p.generation==g.generation.x&&p.lifetimeSeconds>0.0&&p.ageSeconds<p.lifetimeSeconds) AppendIndex(0u,i,g_particleIndices); }
- if(i<g.capacity.y){ SplashState s=g_splashes[i]; if(s.generation==g.generation.y&&s.lifetimeSeconds>0.0&&s.ageSeconds<s.lifetimeSeconds) AppendIndex(16u,i,g_splashIndices); }
- if(i<g.capacity.z){ Droplet d=g_droplets[i]; if(d.generation==g.generation.z&&d.lifetimeSeconds>0.0&&d.ageSeconds<d.lifetimeSeconds) AppendIndex(32u,i,g_dropletIndices); }
+ if(i<g.capacity.x){ Particle p=g_particles[i]; if(p.generation==g.generation.x&&p.lifetimeSeconds>0.0&&p.ageSeconds<p.lifetimeSeconds) AppendParticleIndex(i); }
+ if(i<g.capacity.y){ SplashState s=g_splashes[i]; if(s.generation==g.generation.y&&s.lifetimeSeconds>0.0&&s.ageSeconds<s.lifetimeSeconds) AppendSplashIndex(i); }
+ if(i<g.capacity.z){ Droplet d=g_droplets[i]; if(d.generation==g.generation.z&&d.lifetimeSeconds>0.0&&d.ageSeconds<d.lifetimeSeconds) AppendDropletIndex(i); }
 }
 )";
 
