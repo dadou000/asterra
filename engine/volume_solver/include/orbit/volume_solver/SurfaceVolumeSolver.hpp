@@ -45,8 +45,6 @@ struct SurfaceVolumeSolverSettings
     u32 iterationsPerFrame{1U};
     f32 gpuBudgetMilliseconds{2.0F};
 
-    // M36 representation policy. RepresentationMode on the authored Volume
-    // remains the force/debug authority; these values drive Auto.
     f64 lodLiveDistanceMeters{120.0};
     f64 lodPassiveDistanceMeters{1200.0};
     f32 lodLiveProjectedPixels{96.0F};
@@ -113,8 +111,6 @@ struct SurfaceVolumeReferenceConfig
     f32 velocityDissipationPerSecond{0.0F};
 };
 
-// Deterministic CPU reference used to validate the same first-order upwind
-// transport model the GPU solver uses.
 void StepSurfaceVolumeReference(
     std::span<const SurfaceVolumeCell> input,
     std::span<SurfaceVolumeCell> output,
@@ -142,23 +138,30 @@ public:
         const SurfaceVolumeSolverService&) = delete;
 
     [[nodiscard]] SurfaceVolumeSolverSettings&
-    Settings(
-        scene::ObjectId volume);
+    Settings(scene::ObjectId volume);
 
     [[nodiscard]] SurfaceVolumeSolverDiagnostics
-    Diagnostics(
-        scene::ObjectId volume) const noexcept;
+    Diagnostics(scene::ObjectId volume) const noexcept;
 
     void BeginGpuTimingFrame(
         rhi::CommandList& commands,
         u32 frameSlot);
 
-    void ResolveGpuTimingFrame(
-        u32 frameSlot);
+    void ResolveGpuTimingFrame(u32 frameSlot);
 
     void RemoveMissing(
         const scene::ObjectStore& objects);
 
+#ifdef ORBIT_VOLUME_SOLVER_BASE_IMPLEMENTATION
+    void AddPassesBase(
+        render_graph::RenderGraph& graph,
+        std::string_view prefix,
+        const scene::ObjectStore& objects,
+        const world_model::ResolvedVolumeDomain& domain,
+        volume_fields::VolumeFieldStorage& storage,
+        const volume_fields::ImportedVolumeFields& fields,
+        u32 frameSlot = 0U);
+#else
     void AddPasses(
         render_graph::RenderGraph& graph,
         std::string_view prefix,
@@ -167,6 +170,16 @@ public:
         volume_fields::VolumeFieldStorage& storage,
         const volume_fields::ImportedVolumeFields& fields,
         u32 frameSlot = 0U);
+
+    void AddPassesBase(
+        render_graph::RenderGraph& graph,
+        std::string_view prefix,
+        const scene::ObjectStore& objects,
+        const world_model::ResolvedVolumeDomain& domain,
+        volume_fields::VolumeFieldStorage& storage,
+        const volume_fields::ImportedVolumeFields& fields,
+        u32 frameSlot = 0U);
+#endif
 
 private:
     class Impl;
