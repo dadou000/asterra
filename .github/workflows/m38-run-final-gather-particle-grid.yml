@@ -1,0 +1,43 @@
+name: M38 Run Particle-Aware Final Gather
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - 'tools/m38_final_gather_particle_grid_patch.py'
+      - '.github/workflows/m38-run-final-gather-particle-grid.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Apply patch
+        run: python3 tools/m38_final_gather_particle_grid_patch.py
+      - name: Verify
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('engine/lighting/include/orbit/lighting/ScreenSpaceFinalGather.hpp').read_text()
+          s=Path('engine/lighting/src/ScreenSpaceFinalGather.cpp').read_text()
+          studio=Path('engine/studio_ui/src/StudioViewportRenderer.cpp').read_text()
+          assert 'rhi::Buffer* particleLightGrid = nullptr' in h
+          assert 'StructuredBuffer<uint4> g_particleLightGrid : register(t0)' in s
+          assert '.shaderResourceBuffers = 1U' in s
+          assert '.storageTextures = 2U' in s
+          assert '.sampledTextures = 7U' in s
+          assert 'ParticleGridTransmittance' in s
+          assert 'ParticleGridEmissionAlong' in s
+          assert 'particleLightGridForDirect,\n                        gatherSettings' in studio
+          PY
+      - name: Commit
+        run: |
+          rm tools/m38_final_gather_particle_grid_patch.py
+          rm .github/workflows/m38-run-final-gather-particle-grid.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Feed M38 particles into final gather'
+          git push origin HEAD:orbit
