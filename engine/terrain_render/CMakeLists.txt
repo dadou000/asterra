@@ -1,5 +1,6 @@
 add_library(OrbitTerrainRender STATIC
     src/PhysicalSurface.cpp
+    src/SurfaceEffectShader.cpp
     src/SurfaceEffects.cpp
     src/SurfaceMaterial.cpp
     src/TerrainPreviewRenderer.cpp
@@ -39,6 +40,7 @@ if(BUILD_TESTING)
     target_link_libraries(OrbitTerrainSurfaceShaderTests
         PRIVATE
             Orbit::ShaderDxc
+            Orbit::TerrainRender
     )
 
     target_compile_features(OrbitTerrainSurfaceShaderTests PRIVATE cxx_std_23)
