@@ -217,7 +217,7 @@ StructuredBuffer<uint4> g_particleLightGrid : register(t7);
 [[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(7, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
