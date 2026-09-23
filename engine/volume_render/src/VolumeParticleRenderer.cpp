@@ -318,9 +318,10 @@ VolumeParticleRenderer::TerrainCollisionPagesSnapshot() const
 
 void VolumeParticleRenderer::ApplyTerrainCollision(
     rhi::CommandList& commands,
-    const std::span<const VolumeParticleTerrainCollisionPage> pages)
+    const std::span<const VolumeParticleTerrainCollisionPage> pages,
+    const f64 deltaSeconds)
 {
-    state_.ApplyTerrainCollision(commands, pages);
+    state_.ApplyTerrainCollision(commands, pages, deltaSeconds);
 }
 
 void VolumeParticleRenderer::Draw(

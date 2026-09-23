@@ -45,7 +45,8 @@ public:
 
     void ApplyTerrainCollision(
         rhi::CommandList& commands,
-        std::span<const VolumeParticleTerrainCollisionPage> pages);
+        std::span<const VolumeParticleTerrainCollisionPage> pages,
+        f64 deltaSeconds);
 
     void Draw(
         rhi::CommandList& commands,

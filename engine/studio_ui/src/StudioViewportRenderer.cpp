@@ -10948,7 +10948,8 @@ StudioViewportRenderer::Compose(
                                 nextParticleOrigin);
                             volumeParticleRenderer_.ApplyTerrainCollision(
                                 commands,
-                                particleTerrainCollisionPages);
+                                particleTerrainCollisionPages,
+                                particleDeltaSeconds);
                         }
 
                         volumeParticleRenderer_.Draw(

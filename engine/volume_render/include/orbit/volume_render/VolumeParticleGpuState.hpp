@@ -97,7 +97,8 @@ public:
     // in place after integration; pages outside coverage are simply skipped.
     void ApplyTerrainCollision(
         rhi::CommandList& commands,
-        std::span<const VolumeParticleTerrainCollisionPage> pages);
+        std::span<const VolumeParticleTerrainCollisionPage> pages,
+        f64 deltaSeconds);
 
     void BindForGraphics(rhi::CommandList& commands);
     void Reset() noexcept;

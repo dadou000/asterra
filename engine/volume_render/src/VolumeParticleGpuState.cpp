@@ -341,6 +341,65 @@ float2 SamplePhysicalPage(float2 uv)
     return lerp(a, b, fraction.y);
 }
 
+float3 CubeToDirection(uint face, float2 uv)
+{
+    float3 direction;
+    if (face == 0u) direction = float3(1.0, uv.y, -uv.x);
+    else if (face == 1u) direction = float3(-1.0, uv.y, uv.x);
+    else if (face == 2u) direction = float3(uv.x, 1.0, -uv.y);
+    else if (face == 3u) direction = float3(uv.x, -1.0, uv.y);
+    else if (face == 4u) direction = float3(uv.x, uv.y, 1.0);
+    else direction = float3(-uv.x, uv.y, -1.0);
+    return normalize(direction);
+}
+
+float ReferenceRadius(float3 direction, float3 radii)
+{
+    float inverseRadius = sqrt(dot(direction / radii, direction / radii));
+    return inverseRadius > 0.0 ? 1.0 / inverseRadius : 0.0;
+}
+
+float3 PhysicalSurfacePoint(uint face, float2 uv, float3 radii)
+{
+    float3 direction = CubeToDirection(face, uv);
+    float elevation = SamplePhysicalPage(uv).x;
+    return direction * (ReferenceRadius(direction, radii) + elevation);
+}
+
+float3 TerrainSurfaceNormal(float2 uv, float3 radii, float3 outward)
+{
+    float2 minimumUv = PageBoundsMin();
+    float2 maximumUv = PageBoundsMax();
+    float2 extent = max(maximumUv - minimumUv, float2(0.0000001, 0.0000001));
+    float2 texelUv = extent / float(max(g.meta.x - 1u, 1u));
+
+    float2 leftUv = clamp(uv - float2(texelUv.x, 0.0), minimumUv, maximumUv);
+    float2 rightUv = clamp(uv + float2(texelUv.x, 0.0), minimumUv, maximumUv);
+    float2 downUv = clamp(uv - float2(0.0, texelUv.y), minimumUv, maximumUv);
+    float2 upUv = clamp(uv + float2(0.0, texelUv.y), minimumUv, maximumUv);
+
+    float3 tangentU =
+        PhysicalSurfacePoint(g.tile.x, rightUv, radii) -
+        PhysicalSurfacePoint(g.tile.x, leftUv, radii);
+    float3 tangentV =
+        PhysicalSurfacePoint(g.tile.x, upUv, radii) -
+        PhysicalSurfacePoint(g.tile.x, downUv, radii);
+
+    float3 normal = cross(tangentU, tangentV);
+    float normalLength2 = dot(normal, normal);
+    if (normalLength2 <= 1.0e-12)
+    {
+        return normalize(outward);
+    }
+
+    normal *= rsqrt(normalLength2);
+    if (dot(normal, outward) < 0.0)
+    {
+        normal = -normal;
+    }
+    return normal;
+}
+
 bool SameBody(uint4 a, uint4 b)
 {
     return all(a == b);
@@ -359,7 +418,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     uint collisionMode = (particle.behaviorFlags >> 2u) & 0x3u;
 
     if (particle.generation != generation ||
-        collisionMode == 0u ||
         (particle.behaviorFlags & (1u << 4u)) == 0u ||
         !SameBody(particle.bodyIdentity, pageBody))
     {
@@ -376,17 +434,48 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     DirectionToCube(direction, face, uv);
     if (!BelongsToPage(face, uv)) return;
 
-    float elevationMeters = SamplePhysicalPage(uv).x;
+    float2 physical = SamplePhysicalPage(uv);
+    float elevationMeters = physical.x;
+    float standingWaterDepthMeters = max(physical.y, 0.0);
     float3 radii = max(particle.surfaceRadiiMeters, 0.001);
-    float inverseReferenceRadius = sqrt(dot(direction / radii, direction / radii));
-    if (inverseReferenceRadius <= 0.0) return;
+    float referenceRadius = ReferenceRadius(direction, radii);
+    if (referenceRadius <= 0.0) return;
 
-    float referenceRadius = 1.0 / inverseReferenceRadius;
     float terrainRadius = referenceRadius + elevationMeters;
     float particleRadius = max(particle.radiusMeters, 0.001);
+    float3 normal = TerrainSurfaceNormal(uv, radii, direction);
 
-    if (radialDistance > terrainRadius + particleRadius)
+    // Standing water is an environment, not a solid surface. Reuse the
+    // particle's authored linear drag as the water-response coefficient and
+    // scale it only by actual submersion. No hidden buoyancy/density model is
+    // invented here.
+    bool waterAffected = false;
+    if (standingWaterDepthMeters > 0.0)
     {
+        float waterRadius = terrainRadius + standingWaterDepthMeters;
+        float submersion = saturate(
+            (waterRadius + particleRadius - radialDistance) /
+            max(2.0 * particleRadius, 0.001));
+        if (submersion > 0.0)
+        {
+            float dt = max(asfloat(g.body.w), 0.0);
+            float waterDrag = exp(
+                -max(particle.linearDragPerSecond, 0.0) * dt * submersion);
+            particle.velocityMetersPerSecond *= waterDrag;
+            waterAffected = true;
+        }
+    }
+
+    // CollisionMode::None still allows water drag, but never treats terrain as
+    // a solid. Other modes refine the reference-ellipsoid fallback to the
+    // actual physical terrain surface and slope normal.
+    if (collisionMode == 0u ||
+        radialDistance > terrainRadius + particleRadius)
+    {
+        if (waterAffected)
+        {
+            g_particles[index] = particle;
+        }
         return;
     }
 
@@ -398,7 +487,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     float3 surfacePoint = direction * terrainRadius;
-    float3 normal = normalize(surfacePoint / (radii * radii));
     particle.positionMeters =
         particle.bodyCenterMeters + surfacePoint + normal * particleRadius;
 
@@ -695,7 +783,8 @@ void VolumeParticleGpuState::Advance(
 
 void VolumeParticleGpuState::ApplyTerrainCollision(
     rhi::CommandList& commands,
-    const std::span<const VolumeParticleTerrainCollisionPage> pages)
+    const std::span<const VolumeParticleTerrainCollisionPage> pages,
+    const f64 deltaSeconds)
 {
     if (!initialized_ || generation_ == 0U || pages.empty())
     {
@@ -733,6 +822,11 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
         constants[8] = page.bodyIdentity[2];
         constants[9] = page.bodyIdentity[3];
         constants[10] = MaximumParticleCount;
+        const f32 terrainDeltaSeconds =
+            std::isfinite(deltaSeconds)
+                ? static_cast<f32>(std::clamp(deltaSeconds, 0.0, 1.0))
+                : 0.0F;
+        constants[11] = Bits(terrainDeltaSeconds);
 
         commands.SetComputeConstants(constants);
         commands.SetComputeBuffer(0U, current);
