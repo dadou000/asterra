@@ -102,10 +102,19 @@ class VolumeRepresentationService
 {
 public:
     [[nodiscard]] VolumeRepresentationSettings& Settings(
-        scene::ObjectId volume);
+        const scene::ObjectId volume)
+    {
+        return settings_[volume];
+    }
 
     [[nodiscard]] VolumeRepresentationSettings Settings(
-        scene::ObjectId volume) const noexcept;
+        const scene::ObjectId volume) const noexcept
+    {
+        const auto found = settings_.find(volume);
+        return found == settings_.end()
+            ? VolumeRepresentationSettings{}
+            : found->second;
+    }
 
     [[nodiscard]] RepresentationDecision Resolve(
         std::string_view viewportId,
@@ -136,7 +145,18 @@ private:
 ResolvedRepresentationName(
     ResolvedRepresentation value) noexcept;
 
-[[nodiscard]] std::string_view
+[[nodiscard]] constexpr std::string_view
 FollowTargetName(
-    FollowTarget value) noexcept;
+    const FollowTarget value) noexcept
+{
+    switch (value)
+    {
+    case FollowTarget::AuthoredDomain:
+        return "Authored Domain";
+    case FollowTarget::Camera:
+        return "Camera";
+    }
+
+    return "Unknown";
+}
 } // namespace orbit::volume_representation
