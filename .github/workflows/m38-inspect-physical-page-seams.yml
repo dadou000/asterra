@@ -1,0 +1,20 @@
+name: M38 Inspect Physical Page Seams
+on:
+  push:
+    branches: [orbit]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Inspect seams
+        shell: bash
+        run: |
+          echo '=== StudioViewportRenderer physical page seams ==='
+          grep -n -C 8 -E 'physicalSurface|GpuPhysicalSurfacePage|physicalPage|physicalTerrain|PersistentGpuTerrainCache' engine/studio_ui/src/StudioViewportRenderer.cpp || true
+          echo '=== Terrain preview physical page seams ==='
+          grep -R -n -C 5 -E 'GpuPhysicalSurfacePage|physicalSurface' engine/terrain_render engine/terrain_gpu | head -n 500 || true
