@@ -1,0 +1,32 @@
+name: M38 Run Persistent Splash Fix
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - 'tools/m38_persistent_splash_fix.py'
+      - '.github/workflows/m38-run-persistent-splash-fix.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Apply patch
+        run: python3 tools/m38_persistent_splash_fix.py
+      - name: Verify
+        run: |
+          grep -q 'if(e.generation==g.counts.z)' engine/volume_render/src/VolumeParticleGpuState.cpp
+          grep -q 'splashOriginDeltaMeters_' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp
+          grep -q 'splashConstants\[2\]=generation_' engine/volume_render/src/VolumeParticleGpuState.cpp
+      - name: Commit
+        run: |
+          rm tools/m38_persistent_splash_fix.py
+          rm .github/workflows/m38-run-persistent-splash-fix.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Fix persistent splash generation and rebasing'
+          git push origin HEAD:orbit
