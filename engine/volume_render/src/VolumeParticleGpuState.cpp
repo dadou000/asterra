@@ -34,10 +34,7 @@ struct Spawn
     float gravitationalParameterM3PerS2;
     float3 surfaceRadiiMeters;
     float gravitySofteningMeters;
-    float physicalSurfaceEnabled;
-    float reserved2;
-    float reserved3;
-    float reserved4;
+    uint4 bodyIdentity;
 };
 
 struct Particle
@@ -62,10 +59,7 @@ struct Particle
     float gravitationalParameterM3PerS2;
     float3 surfaceRadiiMeters;
     float gravitySofteningMeters;
-    float physicalSurfaceEnabled;
-    float reserved0;
-    float reserved1;
-    float reserved2;
+    uint4 bodyIdentity;
 };
 
 [[vk::binding(0, 0)]]
@@ -145,7 +139,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 
                 const uint collisionMode = (particle.behaviorFlags >> 2u) & 0x3u;
                 bool keepParticle = true;
-                if (collisionMode != 0u && particle.physicalSurfaceEnabled > 0.5)
+                if (collisionMode != 0u &&
+                    (particle.behaviorFlags & (1u << 4u)) != 0u)
                 {
                     const float3 radii = max(particle.surfaceRadiiMeters, 0.001);
                     const float3 local = particle.positionMeters - particle.bodyCenterMeters;
@@ -212,13 +207,216 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         particle.gravitationalParameterM3PerS2 = max(spawn.gravitationalParameterM3PerS2, 0.0);
         particle.surfaceRadiiMeters = max(spawn.surfaceRadiiMeters, 0.0);
         particle.gravitySofteningMeters = max(spawn.gravitySofteningMeters, 0.0);
-        particle.physicalSurfaceEnabled = spawn.physicalSurfaceEnabled;
-        particle.reserved0 = 0.0;
-        particle.reserved1 = 0.0;
-        particle.reserved2 = 0.0;
+        particle.bodyIdentity = spawn.bodyIdentity;
         particle.generation = g.counts.y;
         AppendParticle(particle);
     }
+}
+)";
+
+
+
+constexpr const char* kTerrainCollisionShader = R"(
+struct Particle
+{
+    float3 positionMeters;
+    float authority;
+    float3 velocityMetersPerSecond;
+    float density;
+    float emission;
+    float ageSeconds;
+    float lifetimeSeconds;
+    float linearDragPerSecond;
+    float radiusMeters;
+    float emissionScale;
+    float gravityScale;
+    float restitution;
+    float3 baseColor;
+    uint behaviorFlags;
+    float3 emissionColor;
+    uint generation;
+    float3 bodyCenterMeters;
+    float gravitationalParameterM3PerS2;
+    float3 surfaceRadiiMeters;
+    float gravitySofteningMeters;
+    uint4 bodyIdentity;
+};
+
+[[vk::binding(0, 0)]]
+RWStructuredBuffer<Particle> g_particles : register(u0);
+[[vk::binding(1, 0)]]
+ByteAddressBuffer g_physicalPage : register(t1);
+
+struct Push
+{
+    uint4 tile;
+    uint4 meta;
+    uint4 body;
+};
+
+[[vk::push_constant]]
+Push g;
+
+static const uint kPhysicalTexelStrideBytes = 8u;
+
+void DirectionToCube(float3 direction, out uint face, out float2 uv)
+{
+    float3 unit = normalize(direction);
+    float ax = abs(unit.x);
+    float ay = abs(unit.y);
+    float az = abs(unit.z);
+
+    if (ax >= ay && ax >= az)
+    {
+        if (unit.x >= 0.0) { face = 0u; uv = float2(-unit.z / ax, unit.y / ax); }
+        else { face = 1u; uv = float2(unit.z / ax, unit.y / ax); }
+    }
+    else if (ay >= ax && ay >= az)
+    {
+        if (unit.y >= 0.0) { face = 2u; uv = float2(unit.x / ay, -unit.z / ay); }
+        else { face = 3u; uv = float2(unit.x / ay, unit.z / ay); }
+    }
+    else
+    {
+        if (unit.z >= 0.0) { face = 4u; uv = float2(unit.x / az, unit.y / az); }
+        else { face = 5u; uv = float2(-unit.x / az, unit.y / az); }
+    }
+
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+}
+
+uint CoordinateToTileIndex(float coordinate, uint count)
+{
+    float normalized = clamp(coordinate * 0.5 + 0.5, 0.0, 1.0);
+    if (normalized >= 1.0) return count - 1u;
+    return uint(normalized * float(count));
+}
+
+bool BelongsToPage(uint face, float2 uv)
+{
+    if (face != g.tile.x) return false;
+    uint level = min(g.tile.y, 30u);
+    uint count = 1u << level;
+    return
+        CoordinateToTileIndex(uv.x, count) == g.tile.z &&
+        CoordinateToTileIndex(uv.y, count) == g.tile.w;
+}
+
+float2 PageBoundsMin()
+{
+    uint count = 1u << min(g.tile.y, 30u);
+    return float2(
+        -1.0 + 2.0 * float(g.tile.z) / float(count),
+        -1.0 + 2.0 * float(g.tile.w) / float(count));
+}
+
+float2 PageBoundsMax()
+{
+    uint count = 1u << min(g.tile.y, 30u);
+    return float2(
+        -1.0 + 2.0 * float(g.tile.z + 1u) / float(count),
+        -1.0 + 2.0 * float(g.tile.w + 1u) / float(count));
+}
+
+float2 LoadPhysicalTexel(uint x, uint y)
+{
+    uint resolution = g.meta.x;
+    uint index = y * resolution + x;
+    return asfloat(g_physicalPage.Load2(index * kPhysicalTexelStrideBytes));
+}
+
+float2 SamplePhysicalPage(float2 uv)
+{
+    float2 minimumUv = PageBoundsMin();
+    float2 maximumUv = PageBoundsMax();
+    float2 extent = max(maximumUv - minimumUv, float2(0.0000001, 0.0000001));
+    float2 normalized = saturate((uv - minimumUv) / extent);
+    float resolutionMinusOne = float(max(g.meta.x - 1u, 1u));
+    float2 coordinate = normalized * resolutionMinusOne;
+    uint2 p0 = uint2(floor(coordinate));
+    uint2 p1 = min(p0 + uint2(1u, 1u), uint2(g.meta.x - 1u, g.meta.x - 1u));
+    float2 fraction = coordinate - float2(p0);
+    float2 a = lerp(LoadPhysicalTexel(p0.x, p0.y), LoadPhysicalTexel(p1.x, p0.y), fraction.x);
+    float2 b = lerp(LoadPhysicalTexel(p0.x, p1.y), LoadPhysicalTexel(p1.x, p1.y), fraction.x);
+    return lerp(a, b, fraction.y);
+}
+
+bool SameBody(uint4 a, uint4 b)
+{
+    return all(a == b);
+}
+
+[numthreads(64, 1, 1)]
+void main(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    uint index = dispatchThreadId.x;
+    uint capacity = g.body.z;
+    if (index >= capacity) return;
+
+    Particle particle = g_particles[index];
+    uint generation = g.meta.y;
+    uint4 pageBody = uint4(g.meta.z, g.meta.w, g.body.x, g.body.y);
+    uint collisionMode = (particle.behaviorFlags >> 2u) & 0x3u;
+
+    if (particle.generation != generation ||
+        collisionMode == 0u ||
+        (particle.behaviorFlags & (1u << 4u)) == 0u ||
+        !SameBody(particle.bodyIdentity, pageBody))
+    {
+        return;
+    }
+
+    float3 local = particle.positionMeters - particle.bodyCenterMeters;
+    float radialDistance = length(local);
+    if (radialDistance <= 0.000001) return;
+
+    float3 direction = local / radialDistance;
+    uint face;
+    float2 uv;
+    DirectionToCube(direction, face, uv);
+    if (!BelongsToPage(face, uv)) return;
+
+    float elevationMeters = SamplePhysicalPage(uv).x;
+    float3 radii = max(particle.surfaceRadiiMeters, 0.001);
+    float inverseReferenceRadius = sqrt(dot(direction / radii, direction / radii));
+    if (inverseReferenceRadius <= 0.0) return;
+
+    float referenceRadius = 1.0 / inverseReferenceRadius;
+    float terrainRadius = referenceRadius + elevationMeters;
+    float particleRadius = max(particle.radiusMeters, 0.001);
+
+    if (radialDistance > terrainRadius + particleRadius)
+    {
+        return;
+    }
+
+    if (collisionMode == 1u)
+    {
+        particle.generation = 0u;
+        g_particles[index] = particle;
+        return;
+    }
+
+    float3 surfacePoint = direction * terrainRadius;
+    float3 normal = normalize(surfacePoint / (radii * radii));
+    particle.positionMeters =
+        particle.bodyCenterMeters + surfacePoint + normal * particleRadius;
+
+    float normalSpeed = dot(particle.velocityMetersPerSecond, normal);
+    if (normalSpeed < 0.0)
+    {
+        if (collisionMode == 2u)
+        {
+            particle.velocityMetersPerSecond -= normal * normalSpeed;
+        }
+        else
+        {
+            particle.velocityMetersPerSecond -=
+                normal * normalSpeed * (1.0 + saturate(particle.restitution));
+        }
+    }
+
+    g_particles[index] = particle;
 }
 )";
 
@@ -315,6 +513,30 @@ VolumeParticleGpuState::VolumeParticleGpuState(
         },
         .pushConstantDwords = 12U,
         .shaderResourceBuffers = ComputeBufferCount,
+        .storageTextures = 0U,
+        .sampledTextures = 0U,
+        .accelerationStructures = 0U
+    });
+
+    const auto terrainCollision = compiler.Compile({
+        .source = kTerrainCollisionShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Compute,
+        .debug = false
+    });
+    if (terrainCollision.bytecode.empty())
+    {
+        throw std::runtime_error(
+            "Orbit failed to compile the M38 physical terrain particle collision shader.");
+    }
+
+    terrainCollisionPipeline_ = device.CreateComputePipeline({
+        .computeShader = {
+            .data = terrainCollision.bytecode.data(),
+            .size = terrainCollision.bytecode.size()
+        },
+        .pushConstantDwords = 12U,
+        .shaderResourceBuffers = 2U,
         .storageTextures = 0U,
         .sampledTextures = 0U,
         .accelerationStructures = 0U
@@ -468,6 +690,62 @@ void VolumeParticleGpuState::Advance(
         rhi::ResourceState::ShaderResource);
 
     currentIsA_ = !currentIsA_;
+}
+
+
+void VolumeParticleGpuState::ApplyTerrainCollision(
+    rhi::CommandList& commands,
+    const std::span<const VolumeParticleTerrainCollisionPage> pages)
+{
+    if (!initialized_ || generation_ == 0U || pages.empty())
+    {
+        return;
+    }
+
+    rhi::Buffer& current = CurrentBuffer();
+    rhi::ResourceState& currentState =
+        currentIsA_ ? stateAState_ : stateBState_;
+
+    TransitionState(
+        commands,
+        current,
+        currentState,
+        rhi::ResourceState::UnorderedAccess);
+
+    commands.SetComputePipeline(*terrainCollisionPipeline_);
+
+    for (const auto& page : pages)
+    {
+        if (!page.IsValid())
+        {
+            continue;
+        }
+
+        std::array<u32, 12U> constants{};
+        constants[0] = page.face;
+        constants[1] = page.level;
+        constants[2] = page.tileX;
+        constants[3] = page.tileY;
+        constants[4] = page.resolution;
+        constants[5] = generation_;
+        constants[6] = page.bodyIdentity[0];
+        constants[7] = page.bodyIdentity[1];
+        constants[8] = page.bodyIdentity[2];
+        constants[9] = page.bodyIdentity[3];
+        constants[10] = MaximumParticleCount;
+
+        commands.SetComputeConstants(constants);
+        commands.SetComputeBuffer(0U, current);
+        commands.SetComputeBuffer(1U, *page.samples);
+        commands.Dispatch((MaximumParticleCount + 63U) / 64U, 1U, 1U);
+        commands.UavBarrier(current);
+    }
+
+    TransitionState(
+        commands,
+        current,
+        currentState,
+        rhi::ResourceState::ShaderResource);
 }
 
 void VolumeParticleGpuState::BindForGraphics(

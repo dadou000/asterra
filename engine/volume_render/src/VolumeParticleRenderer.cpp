@@ -33,10 +33,7 @@ struct Particle
     float gravitationalParameterM3PerS2;
     float3 surfaceRadiiMeters;
     float gravitySofteningMeters;
-    float physicalSurfaceEnabled;
-    float reserved0;
-    float reserved1;
-    float reserved2;
+    uint4 bodyIdentity;
 };
 
 [[vk::binding(2, 0)]]
@@ -281,6 +278,51 @@ void VolumeParticleRenderer::Advance(
         settings);
 }
 
+
+void VolumeParticleRenderer::UpdateTerrainCollisionPages(
+    const std::array<u32, 4U>& bodyIdentity,
+    const std::span<const VolumeParticleTerrainCollisionPage> pages)
+{
+    terrainCollisionPages_.erase(
+        std::remove_if(
+            terrainCollisionPages_.begin(),
+            terrainCollisionPages_.end(),
+            [&bodyIdentity](const auto& page)
+            {
+                return page.bodyIdentity == bodyIdentity;
+            }),
+        terrainCollisionPages_.end());
+
+    for (const auto& page : pages)
+    {
+        if (page.IsValid())
+        {
+            terrainCollisionPages_.push_back(page);
+        }
+    }
+
+    std::stable_sort(
+        terrainCollisionPages_.begin(),
+        terrainCollisionPages_.end(),
+        [](const auto& a, const auto& b)
+        {
+            return a.level > b.level;
+        });
+}
+
+std::vector<VolumeParticleTerrainCollisionPage>
+VolumeParticleRenderer::TerrainCollisionPagesSnapshot() const
+{
+    return terrainCollisionPages_;
+}
+
+void VolumeParticleRenderer::ApplyTerrainCollision(
+    rhi::CommandList& commands,
+    const std::span<const VolumeParticleTerrainCollisionPage> pages)
+{
+    state_.ApplyTerrainCollision(commands, pages);
+}
+
 void VolumeParticleRenderer::Draw(
     rhi::CommandList& commands,
     rhi::Texture& sceneColor,
@@ -357,6 +399,7 @@ void VolumeParticleRenderer::Draw(
 void VolumeParticleRenderer::Reset() noexcept
 {
     state_.Reset();
+    terrainCollisionPages_.clear();
 }
 
 u32 VolumeParticleRenderer::Generation() const noexcept

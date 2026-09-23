@@ -5362,6 +5362,34 @@ StudioViewportRenderer::Compose(
                     physicalPages.pages,
                     physicalPages.generation);
 
+            const auto particleBodyIdentity =
+                VolumeParticleBodyIdentityWords(
+                    terrainRuntime->body);
+            std::vector<
+                volume_render::VolumeParticleTerrainCollisionPage>
+                particleCollisionPages;
+            particleCollisionPages.reserve(
+                physicalPages.pages.size());
+            for (const auto& page : physicalPages.pages)
+            {
+                if (!page.IsValid())
+                {
+                    continue;
+                }
+                particleCollisionPages.push_back({
+                    .samples = page.samples,
+                    .resolution = page.resolution,
+                    .face = static_cast<u32>(page.address.tile.face),
+                    .level = page.address.tile.level,
+                    .tileX = page.address.tile.x,
+                    .tileY = page.address.tile.y,
+                    .bodyIdentity = particleBodyIdentity
+                });
+            }
+            volumeParticleRenderer_.UpdateTerrainCollisionPages(
+                particleBodyIdentity,
+                particleCollisionPages);
+
             const auto surfaceEffects =
                 BuildVolumeSurfaceEffectRenderBatch(
                     terrainRuntime->body,
@@ -10794,6 +10822,9 @@ StudioViewportRenderer::Compose(
         }
 
         {
+            const auto particleTerrainCollisionPages =
+                volumeParticleRenderer_.TerrainCollisionPagesSnapshot();
+
             // M38 particle simulation is shared by all Studio viewports. The
             // authoritative output generation advances GPU state exactly once;
             // later viewports only render that already-advanced state.
@@ -10902,7 +10933,8 @@ StudioViewportRenderer::Compose(
                      advanceParticleState,
                      particleDeltaSeconds,
                      previousParticleOrigin,
-                     nextParticleOrigin](
+                     nextParticleOrigin,
+                     particleTerrainCollisionPages](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -10914,6 +10946,9 @@ StudioViewportRenderer::Compose(
                                 particleDeltaSeconds,
                                 previousParticleOrigin,
                                 nextParticleOrigin);
+                            volumeParticleRenderer_.ApplyTerrainCollision(
+                                commands,
+                                particleTerrainCollisionPages);
                         }
 
                         volumeParticleRenderer_.Draw(
