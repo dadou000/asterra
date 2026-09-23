@@ -59,6 +59,7 @@ public:
         const render_view::CameraState& camera,
         math::Double3 cameraPositionRelativeToPresentationOriginMeters,
         u32 frameIndex,
+        u64 temporalHistoryKey,
         f32 radiusPixels = 3.0F);
 
     void Reset() noexcept;
@@ -71,11 +72,22 @@ private:
     {
         std::unique_ptr<rhi::Texture> accumulation;
         std::unique_ptr<rhi::Texture> opticalDepth;
+        std::unique_ptr<rhi::Texture> motionReject;
+        std::unique_ptr<rhi::Texture> historyA;
+        std::unique_ptr<rhi::Texture> historyB;
         rhi::ResourceState accumulationState{rhi::ResourceState::ShaderResource};
         rhi::ResourceState opticalDepthState{rhi::ResourceState::ShaderResource};
+        rhi::ResourceState motionRejectState{rhi::ResourceState::ShaderResource};
+        rhi::ResourceState historyAState{rhi::ResourceState::ShaderResource};
+        rhi::ResourceState historyBState{rhi::ResourceState::ShaderResource};
+        bool writeHistoryA{true};
+        bool hasHistory{false};
+        math::Double3 previousCameraPositionMeters{};
+        math::Float3 previousForward{0.0F, 0.0F, 1.0F};
+        u32 temporalSequence{0U};
     };
 
-    [[nodiscard]] OitTargets& EnsureOitTargets(u32 width, u32 height, u32 frameIndex);
+    [[nodiscard]] OitTargets& EnsureOitTargets(u32 width, u32 height, u32 frameIndex, u64 temporalHistoryKey);
 
     rhi::Device* device_{nullptr};
     u32 framesInFlight_{1U};
@@ -83,8 +95,9 @@ private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> splashPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> dropletPipeline_;
+    std::unique_ptr<rhi::GraphicsPipeline> oitTemporalPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> oitCompositePipeline_;
-    std::map<u64, std::vector<OitTargets>> oitTargets_;
+    std::map<std::pair<u64, u64>, std::vector<OitTargets>> oitTargets_;
     std::vector<VolumeParticleTerrainCollisionPage> terrainCollisionPages_;
 };
 } // namespace orbit::volume_render

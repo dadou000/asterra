@@ -10901,8 +10901,10 @@ StudioViewportRenderer::Compose(
                 };
                 auto* particleColor = color;
                 auto* particleDepth = &view->Depth();
-                const u32 particleFrameIndex =
-                    frameIndex % framesInFlight_;
+            const u32 particleFrameIndex =
+                frameIndex % framesInFlight_;
+            const u64 particleTemporalHistoryKey =
+                StableViewportHash(info.id);
 
                 graph.AddPass(
                     prefix + ".VolumeParticles",
@@ -10930,6 +10932,7 @@ StudioViewportRenderer::Compose(
                      camera,
                      cameraRelativeToParticleOrigin,
                      particleFrameIndex,
+                     particleTemporalHistoryKey,
                      advanceParticleState,
                      particleDeltaSeconds,
                      previousParticleOrigin,
@@ -10960,7 +10963,8 @@ StudioViewportRenderer::Compose(
                             height,
                             camera,
                             cameraRelativeToParticleOrigin,
-                            particleFrameIndex);
+                            particleFrameIndex,
+                            particleTemporalHistoryKey);
                     });
             }
         }
