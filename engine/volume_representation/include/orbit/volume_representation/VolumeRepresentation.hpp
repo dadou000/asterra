@@ -6,6 +6,7 @@
 #include <orbit/world_model/VolumeSchemas.hpp>
 
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -36,9 +37,8 @@ struct VolumeRepresentationSettings
     f32 passiveProjectedPixels{12.0F};
     f32 hysteresisFraction{0.12F};
 
-    // Coarse/passive are deliberately field-free procedural representations.
-    // These budgets bound their screen-space ray work independent of authored
-    // live-field resolution.
+    u32 coarseResolution{24U};
+    u32 passiveResolution{8U};
     u32 coarseRaymarchSteps{24U};
     u32 passiveRaymarchSteps{8U};
 };
@@ -91,6 +91,67 @@ struct RepresentationDecision
 
     u64 stableAddressFingerprint{0U};
 };
+
+struct PublishedAllocationPolicy
+{
+    ResolvedRepresentation representation{
+        ResolvedRepresentation::Live};
+    bool denseFieldRequired{true};
+    u32 coarseResolution{24U};
+    u32 passiveResolution{8U};
+};
+
+namespace detail
+{
+[[nodiscard]] inline std::map<
+    scene::ObjectId,
+    PublishedAllocationPolicy>&
+AllocationPolicies() noexcept
+{
+    static std::map<
+        scene::ObjectId,
+        PublishedAllocationPolicy>
+        policies;
+    return policies;
+}
+} // namespace detail
+
+inline void PublishAllocationPolicy(
+    const scene::ObjectId volume,
+    const RepresentationDecision& decision,
+    const VolumeRepresentationSettings& settings)
+{
+    detail::AllocationPolicies().insert_or_assign(
+        volume,
+        PublishedAllocationPolicy{
+            .representation = decision.representation,
+            .denseFieldRequired = decision.denseFieldRequired,
+            .coarseResolution =
+                std::clamp(
+                    settings.coarseResolution,
+                    8U,
+                    128U),
+            .passiveResolution =
+                std::clamp(
+                    settings.passiveResolution,
+                    8U,
+                    64U)
+        });
+}
+
+[[nodiscard]] inline std::optional<PublishedAllocationPolicy>
+AllocationPolicy(
+    const scene::ObjectId volume) noexcept
+{
+    const auto& policies =
+        detail::AllocationPolicies();
+    const auto found =
+        policies.find(volume);
+
+    return found == policies.end()
+        ? std::nullopt
+        : std::optional(found->second);
+}
 
 [[nodiscard]] RepresentationDecision
 ResolveRepresentation(
