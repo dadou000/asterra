@@ -23,20 +23,20 @@ int main()
 
     const SurfaceEffectGpuStamp stamps[]{
         {
-            .bodyLocalPointMeters = {10.0F, 0.0F, 0.0F},
-            .radiusMeters = 4.0F,
+            .bodyFixedDirection = {1.0F, 0.0F, 0.0F},
+            .angularRadiusRadians = 0.04F,
             .amount = 0.8F,
             .effect = SurfaceEffectKind::Wetness
         },
         {
-            .bodyLocalPointMeters = {10.0F, 0.0F, 0.0F},
-            .radiusMeters = 2.0F,
+            .bodyFixedDirection = {1.0F, 0.0F, 0.0F},
+            .angularRadiusRadians = 0.02F,
             .amount = 0.5F,
             .effect = SurfaceEffectKind::Soot
         },
         {
-            .bodyLocalPointMeters = {10.0F, 0.0F, 0.0F},
-            .radiusMeters = 3.0F,
+            .bodyFixedDirection = {1.0F, 0.0F, 0.0F},
+            .angularRadiusRadians = 0.03F,
             .amount = 2.0F,
             .effect = SurfaceEffectKind::Heat
         }
@@ -44,20 +44,20 @@ int main()
 
     const auto center =
         EvaluateSurfaceEffects(
-            {10.0F, 0.0F, 0.0F},
+            {1.0F, 0.0F, 0.0F},
             stamps);
 
     Check(std::abs(center.wetness - 0.8F) < 1.0e-6F);
     Check(std::abs(center.soot - 0.5F) < 1.0e-6F);
     Check(std::abs(center.heat - 2.0F) < 1.0e-6F);
 
-    const auto edge =
+    const auto outside =
         EvaluateSurfaceEffects(
-            {14.0F, 0.0F, 0.0F},
+            {0.99F, 0.0F, 0.141067F},
             stamps);
-    Check(edge.wetness == 0.0F);
-    Check(edge.soot == 0.0F);
-    Check(edge.heat == 0.0F);
+    Check(outside.wetness == 0.0F);
+    Check(outside.soot == 0.0F);
+    Check(outside.heat == 0.0F);
 
     const SurfacePbrState base{
         .baseColor = {0.6F, 0.5F, 0.4F},
