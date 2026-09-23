@@ -169,4 +169,21 @@ if(BUILD_TESTING)
         NAME Orbit.StudioViewportPresentation
         COMMAND OrbitStudioViewportPresentationTests
     )
+
+    add_executable(OrbitVolumeSurfaceEffectRenderBridgeTests
+        tests/VolumeSurfaceEffectRenderBridgeTests.cpp
+    )
+
+    target_link_libraries(OrbitVolumeSurfaceEffectRenderBridgeTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitVolumeSurfaceEffectRenderBridgeTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitVolumeSurfaceEffectRenderBridgeTests)
+
+    add_test(
+        NAME Orbit.VolumeSurfaceEffectRenderBridge
+        COMMAND OrbitVolumeSurfaceEffectRenderBridgeTests
+    )
 endif()
