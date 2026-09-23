@@ -247,8 +247,13 @@ private:
             iterator->amount += amount;
             iterator->radiusMeters =
                 std::max(iterator->radiusMeters, radius);
+            // Zero means persistent. Once an overlapping runtime influence is
+            // persistent, merging a decaying contribution must not make the
+            // accumulated state transient again.
             iterator->halfLifeSeconds =
-                std::max(iterator->halfLifeSeconds, halfLife);
+                iterator->halfLifeSeconds <= 0.0F || halfLife <= 0.0F
+                    ? 0.0F
+                    : std::max(iterator->halfLifeSeconds, halfLife);
             iterator->sourceVolume = deposit.volume;
             iterator->sourceEventId = request.eventId;
             ++diagnostics_.merged;
