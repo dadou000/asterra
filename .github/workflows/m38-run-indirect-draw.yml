@@ -21,6 +21,8 @@ jobs:
           p=Path('tools/m38_indirect_draw_patch.py')
           t=p.read_text(encoding='utf-8')
           t=t.replace('[[vk::binding(4, 0)]] StructuredBuffer<Droplet> g_droplets : register(t4);','[[vk::binding(4,0)]] StructuredBuffer<Droplet> g_droplets : register(t4);')
+          t=t.replace('uint i=vertexId/6u,c=vertexId%6u; Droplet d=g_droplets[i]; O o;','uint i=vertexId/6u,c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o;')
+          t=t.replace('uint i=g_dropletIndices[vertexId/6u],c=vertexId%6u; Droplet d=g_droplets[i]; O o;','uint i=g_dropletIndices[vertexId/6u],c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o;')
           p.write_text(t,encoding='utf-8')
           PY
           python3 tools/m38_indirect_draw_patch.py
