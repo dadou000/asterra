@@ -1,0 +1,34 @@
+name: M38 Run Droplet Spray
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - 'tools/m38_droplet_spray_patch.py'
+      - '.github/workflows/m38-run-droplet-spray.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Apply patch
+        run: python3 tools/m38_droplet_spray_patch.py
+      - name: Verify
+        run: |
+          grep -q 'MaximumDropletCount = 16384U' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp
+          grep -q 'kDropletSimulationShader' engine/volume_render/src/VolumeParticleGpuState.cpp
+          grep -q 'kDropletCollisionShader' engine/volume_render/src/VolumeParticleGpuState.cpp
+          grep -q 'DropletGraphicsBufferSlot' engine/volume_render/src/VolumeParticleRenderer.cpp
+          grep -q 'VolumeParticleGpuDropletState) == 112U' engine/studio_ui/tests/VolumeParticleRenderBridgeTests.cpp
+      - name: Commit
+        run: |
+          rm tools/m38_droplet_spray_patch.py
+          rm .github/workflows/m38-run-droplet-spray.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Add M38 ballistic GPU water droplets'
+          git push origin HEAD:orbit
