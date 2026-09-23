@@ -24,6 +24,8 @@
 #undef Register
 
 #include <orbit/volume_representation/VolumeCache.hpp>
+#include <orbit/volume_representation/VolumeOutputCoupling.hpp>
+#include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 #include <orbit/volume_representation/VolumeRepresentation.hpp>
 
 #include <algorithm>
@@ -682,6 +684,206 @@ void VolumeAuthoringUi::DrawRepresentationPolicy(
         context.MutedText(
             "No cache attached. Baked remains unavailable and cannot silently masquerade as live data.");
     }
+
+    context.Separator();
+    context.Heading("Particle / Surface Output");
+    context.MutedText(
+        "M38 samples the authoritative volume field on simulation time and publishes bounded particle and physical-surface requests. The current CPU-readable producer is the validated M37 cache; live GPU fields will use the same output contract through compact GPU production.");
+
+    auto& outputSettings =
+        volume_representation::
+            VolumeOutputs().Settings(
+                *volumeId);
+
+    bool particlesEnabled =
+        outputSettings.particlesEnabled;
+    if (context.Checkbox(
+            "Particles##volume-output-particles",
+            particlesEnabled))
+    {
+        outputSettings.particlesEnabled =
+            particlesEnabled;
+    }
+
+    bool depositsEnabled =
+        outputSettings.surfaceDepositsEnabled;
+    if (context.Checkbox(
+            "Surface Deposits##volume-output-deposits",
+            depositsEnabled))
+    {
+        outputSettings.surfaceDepositsEnabled =
+            depositsEnabled;
+    }
+
+    f64 threshold =
+        outputSettings.fieldThreshold;
+    if (context.InputDouble(
+            "Field Threshold##volume-output-threshold",
+            threshold))
+    {
+        outputSettings.fieldThreshold =
+            static_cast<f32>(
+                std::clamp(
+                    threshold,
+                    0.0,
+                    64.0));
+    }
+
+    f64 particleRate =
+        outputSettings.particleRatePerSecond;
+    i64 particleBudget =
+        static_cast<i64>(
+            outputSettings.particleBudgetPerStep);
+
+    if (context.InputDouble(
+            "Particle Rate / s##volume-output-particle-rate",
+            particleRate))
+    {
+        outputSettings.particleRatePerSecond =
+            static_cast<f32>(
+                std::clamp(
+                    particleRate,
+                    0.0,
+                    1'000'000.0));
+    }
+
+    if (context.InputInteger(
+            "Particle Budget / Step##volume-output-particle-budget",
+            particleBudget))
+    {
+        outputSettings.particleBudgetPerStep =
+            static_cast<u32>(
+                std::clamp<i64>(
+                    particleBudget,
+                    1,
+                    1'000'000));
+    }
+
+    f64 depositRate =
+        outputSettings.surfaceDepositRatePerSecond;
+    i64 depositBudget =
+        static_cast<i64>(
+            outputSettings.surfaceDepositBudgetPerStep);
+    f64 depositRadius =
+        outputSettings.surfaceDepositRadiusMeters;
+
+    if (context.InputDouble(
+            "Deposit Rate / s##volume-output-deposit-rate",
+            depositRate))
+    {
+        outputSettings.surfaceDepositRatePerSecond =
+            static_cast<f32>(
+                std::clamp(
+                    depositRate,
+                    0.0,
+                    1'000'000.0));
+    }
+
+    if (context.InputInteger(
+            "Deposit Budget / Step##volume-output-deposit-budget",
+            depositBudget))
+    {
+        outputSettings.surfaceDepositBudgetPerStep =
+            static_cast<u32>(
+                std::clamp<i64>(
+                    depositBudget,
+                    1,
+                    1'000'000));
+    }
+
+    if (context.InputDouble(
+            "Deposit Radius m##volume-output-deposit-radius",
+            depositRadius))
+    {
+        outputSettings.surfaceDepositRadiusMeters =
+            static_cast<f32>(
+                std::clamp(
+                    depositRadius,
+                    0.001,
+                    10'000.0));
+    }
+
+    i64 candidateMultiplier =
+        static_cast<i64>(
+            outputSettings.candidateMultiplier);
+    if (context.InputInteger(
+            "Candidate Multiplier##volume-output-candidates",
+            candidateMultiplier))
+    {
+        outputSettings.candidateMultiplier =
+            static_cast<u32>(
+                std::clamp<i64>(
+                    candidateMultiplier,
+                    1,
+                    64));
+    }
+
+    if ((outputSettings.particlesEnabled ||
+         outputSettings.surfaceDepositsEnabled) &&
+        volume_representation::
+            VolumeCaches().Find(
+                *volumeId) == nullptr)
+    {
+        context.MutedText(
+            "Output is enabled but this Volume has no CPU-readable field authority yet. No synthetic events are emitted; attach a current M37 cache or use the upcoming live GPU producer.");
+    }
+
+    if (const auto* output =
+            volume_representation::
+                VolumeOutputs().Latest(
+                    *volumeId);
+        output != nullptr)
+    {
+        const auto& d =
+            output->diagnostics;
+
+        context.Text(
+            std::format(
+                "Last step {:.4f} s | particles {}/{} | deposits {}/{}",
+                d.deltaSeconds,
+                d.emittedParticles,
+                d.requestedParticles,
+                d.emittedSurfaceDeposits,
+                d.requestedSurfaceDeposits));
+        context.MutedText(
+            std::format(
+                "Candidates {} | threshold rejects {} | budget drops P {} / S {}",
+                d.candidatesTested,
+                d.thresholdRejected,
+                d.particleBudgetDropped,
+                d.surfaceBudgetDropped));
+    }
+
+    const auto& runtimeDiagnostics =
+        volume_representation::
+            VolumeOutputRuntimeService().
+                Diagnostics();
+
+    context.MutedText(
+        std::format(
+            "World runtime: {} volumes | {} eligible | {} advanced | {} without readable authority | dispatched P {} / S {}",
+            runtimeDiagnostics.discoveredVolumes,
+            runtimeDiagnostics.eligibleVolumes,
+            runtimeDiagnostics.advancedVolumes,
+            runtimeDiagnostics.volumesWithoutReadableAuthority,
+            runtimeDiagnostics.dispatchedParticleRequests,
+            runtimeDiagnostics.dispatchedSurfaceRequests));
+
+    if (runtimeDiagnostics.timeReversed)
+    {
+        context.MutedText(
+            "Simulation time moved backward this step; M38 sequence/carry state was reset deterministically.");
+    }
+
+    context.MutedText(
+        std::format(
+            "Pending consumer queues: particles {} | surface requests {}",
+            volume_representation::
+                VolumeParticleRequests().
+                    Pending().size(),
+            volume_representation::
+                VolumeSurfaceRequests().
+                    Pending().size()));
 
     if (!status_.empty())
     {
