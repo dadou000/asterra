@@ -199,12 +199,14 @@ VSOutput main(uint vertexId:SV_VertexID) {
 )";
 constexpr const char* kSplashPixelShader = R"(
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; };
-float4 main(VSOutput i):SV_Target0 {
+struct OitOutput { float4 accumulation:SV_Target0; float4 opticalDepth:SV_Target1; };
+OitOutput main(VSOutput i) {
     float r=length(i.uv); if(r>=1.0||r<0.42) discard;
     float ring=(1.0-smoothstep(0.42,0.62,r))*smoothstep(0.42,0.52,r);
     float impact=saturate(i.impact/8.0); float alpha=ring*(0.35+0.55*impact);
     float3 foam=lerp(float3(0.72,0.84,0.90),float3(1.0,1.0,1.0),impact)*i.tint;
-    return float4(foam,alpha);
+    OitOutput o; float optical=-log(max(1.0-saturate(alpha),1.0e-4));
+    o.accumulation=float4(foam*alpha,alpha); o.opticalDepth=float4(optical,0,0,0); return o;
 }
 )";
 
@@ -219,7 +221,8 @@ VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2
 )";
 constexpr const char* kDropletPixelShader = R"(
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; };
-float4 main(VSOutput i):SV_Target0 { float r2=dot(i.uv,i.uv); if(r2>=1.0||i.life<=0.0) discard; float alpha=(1.0-smoothstep(0.2,1.0,r2))*i.life*0.82; float3 c=lerp(float3(0.70,0.84,0.94),float3(1,1,1),0.65)*i.tint; return float4(c,alpha); }
+struct OitOutput { float4 accumulation:SV_Target0; float4 opticalDepth:SV_Target1; };
+OitOutput main(VSOutput i) { float r2=dot(i.uv,i.uv); if(r2>=1.0||i.life<=0.0) discard; float alpha=(1.0-smoothstep(0.2,1.0,r2))*i.life*0.82; float3 c=lerp(float3(0.70,0.84,0.94),float3(1,1,1),0.65)*i.tint; OitOutput o; float optical=-log(max(1.0-saturate(alpha),1.0e-4)); o.accumulation=float4(c*alpha,alpha); o.opticalDepth=float4(optical,0,0,0); return o; }
 )";
 
 constexpr const char* kPixelShader = R"(
@@ -236,7 +239,8 @@ struct VSOutput
     float emissionScale : TEXCOORD7;
 };
 
-float4 main(VSOutput input) : SV_Target0
+struct OitOutput { float4 accumulation : SV_Target0; float4 opticalDepth : SV_Target1; };
+OitOutput main(VSOutput input)
 {
     const float radius2 = dot(input.uv, input.uv);
     if (radius2 >= 1.0 || input.life <= 0.0)
@@ -255,8 +259,25 @@ float4 main(VSOutput input) : SV_Target0
     const float alpha = soft * input.life *
         saturate(0.16 + 0.64 * authority + 0.20 * density);
 
-    return float4(color, alpha);
+    OitOutput output;
+    const float opticalDepth = -log(max(1.0 - saturate(alpha), 1.0e-4));
+    output.accumulation = float4(color * alpha, alpha);
+    output.opticalDepth = float4(opticalDepth, 0.0, 0.0, 0.0);
+    return output;
 }
+)";
+
+constexpr const char* kOitCompositeVertexShader = R"(
+struct O { float4 position:SV_Position; float2 uv:TEXCOORD0; };
+O main(uint id:SV_VertexID){ static const float2 p[6]={float2(-1,-1),float2(-1,1),float2(1,-1),float2(1,-1),float2(-1,1),float2(1,1)}; static const float2 u[6]={float2(0,1),float2(0,0),float2(1,1),float2(1,1),float2(0,0),float2(1,0)}; O o;o.position=float4(p[id],0,1);o.uv=u[id];return o; }
+)";
+constexpr const char* kOitCompositePixelShader = R"(
+struct O { float4 position:SV_Position; float2 uv:TEXCOORD0; };
+[[vk::binding(0,0)]][[vk::combinedImageSampler]] Texture2D g_accum;
+[[vk::binding(0,0)]][[vk::combinedImageSampler]] SamplerState g_accumSampler;
+[[vk::binding(1,0)]][[vk::combinedImageSampler]] Texture2D g_optical;
+[[vk::binding(1,0)]][[vk::combinedImageSampler]] SamplerState g_opticalSampler;
+float4 main(O i):SV_Target0 { float4 a=g_accum.Sample(g_accumSampler,i.uv); float optical=max(g_optical.Sample(g_opticalSampler,i.uv).r,0.0); if(a.a<=1.0e-6||optical<=1.0e-6) discard; float3 color=a.rgb/max(a.a,1.0e-6); float alpha=1.0-exp(-min(optical,20.0)); return float4(color,alpha); }
 )";
 }
 
@@ -264,7 +285,9 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler,
     const u32 framesInFlight)
-    : state_(device, compiler, framesInFlight)
+    : device_(&device),
+      framesInFlight_(framesInFlight),
+      state_(device, compiler, framesInFlight)
 {
     const auto vertex = compiler.Compile({
         .source = kVertexShader,
@@ -283,7 +306,9 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     const auto splashPixel = compiler.Compile({.source=kSplashPixelShader,.entryPoint="main",.stage=shader::Stage::Pixel,.debug=false});
     const auto dropletVertex = compiler.Compile({.source=kDropletVertexShader,.entryPoint="main",.stage=shader::Stage::Vertex,.debug=false});
     const auto dropletPixel = compiler.Compile({.source=kDropletPixelShader,.entryPoint="main",.stage=shader::Stage::Pixel,.debug=false});
-    if (vertex.bytecode.empty() || pixel.bytecode.empty() || splashVertex.bytecode.empty() || splashPixel.bytecode.empty() || dropletVertex.bytecode.empty() || dropletPixel.bytecode.empty())
+    const auto oitCompositeVertex=compiler.Compile({.source=kOitCompositeVertexShader,.entryPoint="main",.stage=shader::Stage::Vertex,.debug=false});
+    const auto oitCompositePixel=compiler.Compile({.source=kOitCompositePixelShader,.entryPoint="main",.stage=shader::Stage::Pixel,.debug=false});
+    if (vertex.bytecode.empty() || pixel.bytecode.empty() || splashVertex.bytecode.empty() || splashPixel.bytecode.empty() || dropletVertex.bytecode.empty() || dropletPixel.bytecode.empty() || oitCompositeVertex.bytecode.empty() || oitCompositePixel.bytecode.empty())
     {
         throw std::runtime_error(
             "Orbit failed to compile M38 persistent particle shaders.");
@@ -306,14 +331,12 @@ VolumeParticleRenderer::VolumeParticleRenderer(
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
         .cullMode = rhi::CullMode::None,
-        .blendMode = rhi::BlendMode::Alpha,
+        .blendMode = rhi::BlendMode::Additive,
         .depthCompare = rhi::DepthCompare::LessEqual,
         .depthTest = true,
         .depthWrite = false,
-        .colorAttachmentFormats = {
-            rhi::TextureFormat::RGBA16_Float
-        },
-        .colorAttachmentCount = 1U
+        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float, rhi::TextureFormat::R16_Float},
+        .colorAttachmentCount = 2U
     });
 
     splashPipeline_ = device.CreateGraphicsPipeline({
@@ -321,10 +344,26 @@ VolumeParticleRenderer::VolumeParticleRenderer(
         .pixelShader={.data=splashPixel.bytecode.data(),.size=splashPixel.bytecode.size()},
         .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=0U,
         .topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,
-        .blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,
-        .colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U
+        .blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,
+        .colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=2U
     });
-    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=0U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
+    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=20U,.shaderResourceBuffers=8U,.sampledTextures=0U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=2U});
+    oitCompositePipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitCompositePixel.bytecode.data(),.size=oitCompositePixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=0U,.shaderResourceBuffers=0U,.sampledTextures=2U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
+}
+
+VolumeParticleRenderer::OitTargets& VolumeParticleRenderer::EnsureOitTargets(const u32 width,const u32 height,const u32 frameIndex)
+{
+    if(frameIndex>=framesInFlight_) throw std::out_of_range("Orbit M38 OIT frame index exceeds frames in flight.");
+    const u64 key=(static_cast<u64>(width)<<32U)|static_cast<u64>(height);
+    auto& slots=oitTargets_[key];
+    if(slots.empty()) slots.resize(framesInFlight_);
+    auto& target=slots[frameIndex];
+    if(target.accumulation==nullptr){
+        target.accumulation=device_->CreateTexture({.width=width,.height=height,.format=rhi::TextureFormat::RGBA16_Float,.initialState=rhi::ResourceState::ShaderResource});
+        target.opticalDepth=device_->CreateTexture({.width=width,.height=height,.format=rhi::TextureFormat::R16_Float,.initialState=rhi::ResourceState::ShaderResource});
+        target.accumulationState=rhi::ResourceState::ShaderResource; target.opticalDepthState=rhi::ResourceState::ShaderResource;
+    }
+    return target;
 }
 
 void VolumeParticleRenderer::SetSpawns(
@@ -404,6 +443,7 @@ void VolumeParticleRenderer::Draw(
     const u32 height,
     const render_view::CameraState& camera,
     const math::Double3 cameraPositionRelativeToPresentationOriginMeters,
+    const u32 frameIndex,
     const f32 radiusPixels)
 {
     if (state_.Generation() == 0U || width == 0U || height == 0U)
@@ -462,7 +502,13 @@ void VolumeParticleRenderer::Draw(
         camera.nearPlaneMeters,
         camera.farPlaneMeters);
 
-    commands.SetRenderTargets(sceneColor, depth);
+    auto& oit=EnsureOitTargets(width,height,frameIndex);
+    if(oit.accumulationState!=rhi::ResourceState::RenderTarget){commands.Transition(*oit.accumulation,oit.accumulationState,rhi::ResourceState::RenderTarget);oit.accumulationState=rhi::ResourceState::RenderTarget;}
+    if(oit.opticalDepthState!=rhi::ResourceState::RenderTarget){commands.Transition(*oit.opticalDepth,oit.opticalDepthState,rhi::ResourceState::RenderTarget);oit.opticalDepthState=rhi::ResourceState::RenderTarget;}
+    commands.ClearColorTarget(*oit.accumulation,{0,0,0,0});
+    commands.ClearColorTarget(*oit.opticalDepth,{0,0,0,0});
+    std::array<rhi::Texture*,2U> oitColors{oit.accumulation.get(),oit.opticalDepth.get()};
+    commands.SetRenderTargets(oitColors,&depth);
     commands.SetViewport({
         .x = 0.0F,
         .y = 0.0F,
@@ -491,6 +537,14 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);
+
+    commands.Transition(*oit.accumulation,oit.accumulationState,rhi::ResourceState::ShaderResource); oit.accumulationState=rhi::ResourceState::ShaderResource;
+    commands.Transition(*oit.opticalDepth,oit.opticalDepthState,rhi::ResourceState::ShaderResource); oit.opticalDepthState=rhi::ResourceState::ShaderResource;
+    commands.SetRenderTarget(sceneColor);
+    commands.SetGraphicsPipeline(*oitCompositePipeline_);
+    commands.SetGraphicsTexture(0U,*oit.accumulation);
+    commands.SetGraphicsTexture(1U,*oit.opticalDepth);
+    commands.Draw(6U);
 }
 
 void VolumeParticleRenderer::Reset() noexcept

@@ -419,6 +419,16 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
             colorBlendAttachment.alphaBlendOp =
                 VK_BLEND_OP_ADD;
             break;
+
+        case BlendMode::Additive:
+            colorBlendAttachment.blendEnable = VK_TRUE;
+            colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+            colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+            break;
         }
     }
 

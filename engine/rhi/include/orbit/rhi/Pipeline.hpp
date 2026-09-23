@@ -51,7 +51,8 @@ enum class CullMode : u8
 enum class BlendMode : u8
 {
     Opaque,
-    Alpha
+    Alpha,
+    Additive
 };
 
 enum class DepthCompare : u8

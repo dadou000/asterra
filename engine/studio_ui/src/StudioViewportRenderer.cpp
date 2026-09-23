@@ -10959,7 +10959,8 @@ StudioViewportRenderer::Compose(
                             width,
                             height,
                             camera,
-                            cameraRelativeToParticleOrigin);
+                            cameraRelativeToParticleOrigin,
+                            particleFrameIndex);
                     });
             }
         }

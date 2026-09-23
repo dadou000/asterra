@@ -55,6 +55,7 @@ int main()
     Check(volume_render::VolumeParticleGpuState::ParticleIndirectOffsetBytes == 0U);
     Check(volume_render::VolumeParticleGpuState::SplashIndirectOffsetBytes == 16U);
     Check(volume_render::VolumeParticleGpuState::DropletIndirectOffsetBytes == 32U);
+    Check(static_cast<u32>(rhi::BlendMode::Additive) != static_cast<u32>(rhi::BlendMode::Alpha));
 
     const universe::BodyId body{
         .high = 0x1122334455667788ULL,
