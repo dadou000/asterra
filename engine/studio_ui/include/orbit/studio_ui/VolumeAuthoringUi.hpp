@@ -29,7 +29,16 @@ public:
     };
 
 private:
+    // Preserved M30-M35 implementation. M36 wraps these methods instead of
+    // duplicating or rewriting the existing Volumes authoring workflow.
+    void RegisterBase(
+        editor_ui::EditorUi& ui);
+    void DrawBase(
+        editor_ui::PanelContext& context);
+
     void Draw(
+        editor_ui::PanelContext& context);
+    void DrawRepresentationPolicy(
         editor_ui::PanelContext& context);
 
     studio_session::StudioSession* session_{nullptr};
