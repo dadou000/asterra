@@ -1,4 +1,5 @@
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
+#include <orbit/volume_representation/VolumeCache.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -107,6 +108,65 @@ struct ProceduralSample
     const math::Double3 worldPosition,
     const f32 passiveBlend) noexcept
 {
+    // M37 caches are authoritative only when Baked is explicitly selected.
+    // They are resampled into whatever bounded M31 allocation is active, so
+    // asset resolution does not dictate runtime residency or tile dimensions.
+    if (domain.representationMode ==
+        world_model::VolumeRepresentationMode::Baked)
+    {
+        if (const auto* cache =
+                volume_representation::VolumeCaches().Find(
+                    domain.object);
+            cache != nullptr)
+        {
+            const math::Double3 minimum =
+                domain.centerMeters -
+                domain.halfExtentsMeters;
+            const math::Double3 size =
+                domain.halfExtentsMeters * 2.0;
+
+            const f64 u =
+                std::abs(size.x) > 1.0e-9
+                    ? (worldPosition.x - minimum.x) /
+                        size.x
+                    : 0.5;
+            const f64 v =
+                std::abs(size.y) > 1.0e-9
+                    ? (worldPosition.y - minimum.y) /
+                        size.y
+                    : 0.5;
+            const f64 w =
+                std::abs(size.z) > 1.0e-9
+                    ? (worldPosition.z - minimum.z) /
+                        size.z
+                    : 0.5;
+
+            if (u < 0.0 || u > 1.0 ||
+                v < 0.0 || v > 1.0 ||
+                w < 0.0 || w > 1.0)
+            {
+                return {};
+            }
+
+            return {
+                .density =
+                    volume_representation::
+                        SampleVolumeCacheDensity(
+                            *cache,
+                            u,
+                            v,
+                            w),
+                .emission =
+                    volume_representation::
+                        SampleVolumeCacheEmission(
+                            *cache,
+                            u,
+                            v,
+                            w)
+            };
+        }
+    }
+
     const math::Double3 half{
         std::max(
             std::abs(domain.halfExtentsMeters.x),
@@ -348,14 +408,20 @@ void AddProceduralFieldUpload(
                     }
 
                     const math::Double3 worldPosition{
+                        domain.centerMeters.x -
+                            domain.halfExtentsMeters.x +
                         (static_cast<f64>(tile.coord.x) *
                              tileEdge +
                          static_cast<f64>(x) + 0.5) *
                             cellSize.x,
+                        domain.centerMeters.y -
+                            domain.halfExtentsMeters.y +
                         (static_cast<f64>(tile.coord.y) *
                              tileEdge +
                          static_cast<f64>(y) + 0.5) *
                             cellSize.y,
+                        domain.centerMeters.z -
+                            domain.halfExtentsMeters.z +
                         (static_cast<f64>(tile.coord.z) *
                              tileEdge +
                          static_cast<f64>(z) + 0.5) *
@@ -539,7 +605,9 @@ void UniversalVolumeRenderer::AddPasses(
             runtime.passiveProjectedPixels,
         .hysteresisFraction =
             runtime.hysteresisFraction,
-        .bakedAvailable = false
+        .bakedAvailable =
+            volume_representation::VolumeCaches().Has(
+                domain.object)
     };
 
     auto decision =
@@ -644,7 +712,7 @@ void UniversalVolumeRenderer::AddPasses(
 
     // Do not flush M35 history merely because the representation tier changed.
     // Radiance/transmittance rejection already bounds stale history, while
-    // preserving it smooths the live/coarse/passive energy handoff.
+    // preserving it smooths the live/coarse/passive/baked energy handoff.
     AddLivePasses(
         graph,
         prefix,
@@ -695,6 +763,8 @@ UniversalVolumeRenderer::Diagnostics(
         decision.coarseWeight;
     result.passiveWeight =
         decision.passiveWeight;
+    result.bakedWeight =
+        decision.bakedWeight;
     result.runtimeCenterInFrameMeters =
         decision.runtimeCenterInFrameMeters;
     result.distanceToBoundsMeters =
