@@ -31,11 +31,16 @@ jobs:
           from pathlib import Path
           p=Path('engine/volume_render/src/VolumeParticleRenderer.cpp')
           t=p.read_text(encoding='utf-8')
-          old='''    state_.BindForGraphics(commands);\n    commands.Draw(VolumeParticleGpuState::MaximumParticleCount * 6U);\n    constants[19] = state_.DropletGeneration();\n    commands.SetGraphicsPipeline(*dropletPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.Draw(VolumeParticleGpuState::MaximumDropletCount * 6U);\n    constants[19] = state_.SplashGeneration();\n    commands.SetGraphicsPipeline(*splashPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.Draw(VolumeParticleGpuState::MaximumPersistentSplashCount * 6U);'''
-          new='''    state_.BindForGraphics(commands);\n    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::ParticleIndirectOffsetBytes);\n    constants[19] = state_.DropletGeneration();\n    commands.SetGraphicsPipeline(*dropletPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::DropletIndirectOffsetBytes);\n    constants[19] = state_.SplashGeneration();\n    commands.SetGraphicsPipeline(*splashPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);'''
-          if t.count(old)!=1:
-              raise SystemExit('renderer indirect draw block seam mismatch')
-          p.write_text(t.replace(old,new,1),encoding='utf-8')
+          replacements={
+            'commands.Draw(VolumeParticleGpuState::MaximumParticleCount * 6U);':'commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::ParticleIndirectOffsetBytes);',
+            'commands.Draw(VolumeParticleGpuState::MaximumDropletCount * 6U);':'commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::DropletIndirectOffsetBytes);',
+            'commands.Draw(VolumeParticleGpuState::MaximumPersistentSplashCount * 6U);':'commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);',
+          }
+          for old,new in replacements.items():
+              t=t.replace(old,new)
+          if t.count('DrawIndirect(state_.IndirectDrawArguments()') != 3:
+              raise SystemExit('expected exactly three M38 indirect draws')
+          p.write_text(t,encoding='utf-8')
           PY
       - name: Verify
         run: |
