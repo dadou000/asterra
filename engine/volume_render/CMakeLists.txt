@@ -1,5 +1,6 @@
 add_library(OrbitVolumeRender STATIC
     src/UniversalVolumeRenderer.cpp
+    src/VolumeRepresentationPass.cpp
 )
 
 add_library(Orbit::VolumeRender ALIAS OrbitVolumeRender)
