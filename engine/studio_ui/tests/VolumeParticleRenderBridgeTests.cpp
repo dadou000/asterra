@@ -108,9 +108,12 @@ int main()
     Check(full[0].waterDragPerSecond == 7.5F);
     Check(full[0].waterBuoyancyScale == 1.2F);
     Check(full[0].waterSplashScale == 2.5F);
-    // Bit 4 is the composed-world physical-surface authority gate used by
-    // both reference fallback and resident physical-page terrain/water passes.
     Check((full[0].behaviorFlags & (1U << 4U)) != 0U);
+    Check((full[0].behaviorFlags & (1U << 5U)) != 0U);
+    Check((full[0].behaviorFlags & (1U << 6U)) != 0U);
+    // Runtime-only water state must never be authored by the CPU bridge.
+    Check((full[0].behaviorFlags & (1U << 30U)) == 0U);
+    Check((full[0].behaviorFlags & (1U << 31U)) == 0U);
     Check(full[0].baseColor.x == 0.2F);
     Check(full[0].baseColor.y == 0.3F);
     Check(full[0].baseColor.z == 0.4F);
@@ -118,8 +121,6 @@ int main()
     Check(full[0].emissionColor.y == 0.5F);
     Check(full[0].emissionColor.z == 0.1F);
 
-    // The body center is encoded in the same presentation-relative frame as
-    // particle positions, avoiding the erroneous pull toward camera origin.
     Check(full[0].bodyCenterMeters.x == -1000000000.0F);
     Check(full[0].bodyCenterMeters.y == 0.0F);
     Check(full[0].bodyCenterMeters.z == 0.0F);
