@@ -1,0 +1,33 @@
+name: M38 Run Persistent Splash
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - 'tools/m38_persistent_splash_patch.py'
+      - '.github/workflows/m38-run-persistent-splash.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Apply patch
+        run: python3 tools/m38_persistent_splash_patch.py
+      - name: Verify
+        run: |
+          grep -q 'MaximumPersistentSplashCount = 8192U' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp
+          grep -q 'kSplashSimulationShader' engine/volume_render/src/VolumeParticleGpuState.cpp
+          grep -q 'expansionMetersPerSecond' engine/volume_render/src/VolumeParticleRenderer.cpp
+          grep -q 'MaximumPersistentSplashCount == 8192U' engine/studio_ui/tests/VolumeParticleRenderBridgeTests.cpp
+      - name: Commit
+        run: |
+          rm tools/m38_persistent_splash_patch.py
+          rm .github/workflows/m38-run-persistent-splash.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Persist M38 GPU water splash state'
+          git push origin HEAD:orbit
