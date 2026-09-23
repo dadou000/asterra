@@ -2,6 +2,7 @@
 #include <orbit/terrain_render/TerrainPreviewRenderer.hpp>
 #include <orbit/terrain_stream/UniformPlanetMesh.hpp>
 #include <memory>
+#include <span>
 
 namespace orbit::terrain_render
 {
@@ -18,6 +19,7 @@ public:
     [[nodiscard]] bool HasReadyMesh() const;
     // Caller must wait for outstanding graphics work before replacing buffers.
     void CommitReadyMesh();
+    void SetSurfaceEffects(std::span<const SurfaceEffectGpuStamp> effects);
     void Draw(rhi::CommandList& commands, const world::WorldPosition& observer,
         const world::SurfaceFrame& frame, u32 width, u32 height, const TerrainPreviewCamera& camera);
     [[nodiscard]] i32 RequestedLod() const;
