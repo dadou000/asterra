@@ -78,6 +78,13 @@ public:
     [[nodiscard]] std::span<const VolumeParticleQueuedRequest>
     Pending() const noexcept;
 
+    // Transfers the complete pending batch to its consumer and atomically
+    // leaves this queue empty. This is the preferred frame handoff: consumers
+    // cannot accidentally observe requests twice and producers never need to
+    // clear data before it has been consumed.
+    [[nodiscard]] std::vector<VolumeParticleQueuedRequest>
+    Drain() noexcept;
+
     void Clear() noexcept;
 
 private:
@@ -94,6 +101,12 @@ public:
 
     [[nodiscard]] std::span<const VolumeSurfaceQueuedRequest>
     Pending() const noexcept;
+
+    // Same ownership-transfer semantics as the particle queue. A physical
+    // surface resolver can drain once, project each request in the appropriate
+    // body/frame, and retain the resulting material/deposition work itself.
+    [[nodiscard]] std::vector<VolumeSurfaceQueuedRequest>
+    Drain() noexcept;
 
     void Clear() noexcept;
 
