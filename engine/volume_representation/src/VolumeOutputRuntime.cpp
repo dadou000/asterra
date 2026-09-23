@@ -109,6 +109,27 @@ VolumeOutputRuntimeDiagnostics VolumeOutputRuntime::TickWorld(
             continue;
         }
 
+        const auto inputs =
+            world_model::ResolveVolumeInputs(
+                objects,
+                record.id);
+
+        const VolumeCacheBakeSettings cacheSettings{
+            .resolution = cache->descriptor.resolutionX,
+            .fieldMask = cache->descriptor.fieldMask
+        };
+
+        if (!IsVolumeCacheCurrent(
+                *cache,
+                *domain,
+                inputs,
+                cacheSettings))
+        {
+            ++diagnostics_.volumesWithStaleAuthority;
+            VolumeOutputs().Reset(record.id);
+            continue;
+        }
+
         const auto& batch =
             VolumeOutputs().AdvanceBaked(
                 *domain,
@@ -175,16 +196,22 @@ VolumeOutputRuntime::DiscoverVolumes(
 }
 
 void VolumeParticleRequestQueue::SubmitParticleSpawns(
-    const scene::ObjectId,
+    const scene::ObjectId volume,
     const std::span<const VolumeParticleSpawnRequest> requests)
 {
-    pending_.insert(
-        pending_.end(),
-        requests.begin(),
-        requests.end());
+    pending_.reserve(
+        pending_.size() + requests.size());
+
+    for (const auto& request : requests)
+    {
+        pending_.push_back({
+            .volume = volume,
+            .request = request
+        });
+    }
 }
 
-std::span<const VolumeParticleSpawnRequest>
+std::span<const VolumeParticleQueuedRequest>
 VolumeParticleRequestQueue::Pending() const noexcept
 {
     return pending_;
@@ -196,16 +223,22 @@ void VolumeParticleRequestQueue::Clear() noexcept
 }
 
 void VolumeSurfaceRequestQueue::SubmitSurfaceDeposits(
-    const scene::ObjectId,
+    const scene::ObjectId volume,
     const std::span<const VolumeSurfaceDepositRequest> requests)
 {
-    pending_.insert(
-        pending_.end(),
-        requests.begin(),
-        requests.end());
+    pending_.reserve(
+        pending_.size() + requests.size());
+
+    for (const auto& request : requests)
+    {
+        pending_.push_back({
+            .volume = volume,
+            .request = request
+        });
+    }
 }
 
-std::span<const VolumeSurfaceDepositRequest>
+std::span<const VolumeSurfaceQueuedRequest>
 VolumeSurfaceRequestQueue::Pending() const noexcept
 {
     return pending_;
