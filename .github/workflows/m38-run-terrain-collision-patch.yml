@@ -1,0 +1,34 @@
+name: M38 Run Terrain Collision Patch
+on:
+  push:
+    branches: [orbit]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'orbit-ci'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+          fetch-depth: 0
+      - name: Apply patch
+        run: python tools/m38_terrain_collision_patch.py
+      - name: Verify
+        shell: bash
+        run: |
+          grep -q 'ApplyTerrainCollision' engine/volume_render/src/VolumeParticleGpuState.cpp
+          grep -q 'g_physicalPage' engine/volume_render/src/VolumeParticleGpuState.cpp
+          grep -q 'particleTerrainCollisionPages' engine/studio_ui/src/StudioViewportRenderer.cpp
+          grep -q 'bodyIdentity' engine/volume_render/src/VolumeParticleRenderer.cpp
+      - name: Commit
+        shell: bash
+        run: |
+          rm -f tools/m38_terrain_collision_patch.py
+          rm -f .github/workflows/m38-run-terrain-collision-patch.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Integrate M38 physical terrain particle collision'
+          git push origin orbit
