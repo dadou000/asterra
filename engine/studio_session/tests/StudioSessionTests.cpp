@@ -2,6 +2,10 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/volume_representation/VolumeCache.hpp>
+#include <orbit/volume_representation/VolumeOutputCoupling.hpp>
+#include <orbit/volume_representation/VolumeOutputRuntime.hpp>
+#include <orbit/world_model/VolumeSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cstdlib>
@@ -90,6 +94,103 @@ orbit::scene::ObjectId AddBody(
         5.0e24);
     return body;
 }
+
+void CheckVolumeOutputSimulationCadence(
+    orbit::studio_session::StudioSession& studio)
+{
+    using namespace orbit;
+    using namespace orbit::volume_representation;
+
+    auto roots = studio.World().Objects().Roots();
+    Check(!roots.empty());
+
+    auto& commands = studio.World().Commands();
+    const auto volume = commands.CreateObject(
+        world_model::kVolumeType,
+        "M38 Tick Volume",
+        roots.front().id);
+
+    commands.SetProperty(
+        volume,
+        world_model::kVolumeHalfExtentsMeters,
+        math::Double3{2.0, 2.0, 2.0});
+    commands.SetProperty(
+        volume,
+        world_model::kVolumeFieldMask,
+        static_cast<i64>(world_model::VolumeField::Density));
+
+    const auto source = commands.CreateObject(
+        world_model::kVolumeSourceType,
+        "M38 Density Source",
+        volume);
+    commands.SetProperty(
+        source,
+        world_model::kVolumeChildShape,
+        static_cast<i64>(world_model::VolumeSourceShape::Sphere));
+    commands.SetProperty(
+        source,
+        world_model::kVolumeChildRadiusMeters,
+        10.0);
+    commands.SetProperty(
+        source,
+        world_model::kVolumeChildScalar,
+        1.0);
+    commands.SetProperty(
+        source,
+        world_model::kVolumeChildFieldMask,
+        static_cast<i64>(world_model::VolumeField::Density));
+
+    const auto domain =
+        world_model::ResolveVolumeDomain(
+            studio.World().Objects(),
+            volume);
+    Check(domain.has_value());
+
+    const auto inputs =
+        world_model::ResolveVolumeInputs(
+            studio.World().Objects(),
+            volume);
+    Check(inputs.size() == 1U);
+
+    const VolumeCacheBakeSettings bakeSettings{
+        .resolution = 4U,
+        .fieldMask = static_cast<u64>(
+            world_model::VolumeField::Density)
+    };
+    auto cache = BakeVolumeCache(
+        *domain,
+        inputs,
+        bakeSettings);
+    Check(!cache.density.empty());
+    VolumeCaches().Attach(volume, std::move(cache));
+
+    auto& settings = VolumeOutputs().Settings(volume);
+    settings.particlesEnabled = true;
+    settings.surfaceDepositsEnabled = false;
+    settings.fieldThreshold = 0.1F;
+    settings.particleRatePerSecond = 10.0F;
+    settings.particleBudgetPerStep = 10U;
+
+    // StudioSession::Tick is the sole M38 producer cadence. Advancing the
+    // simulation clock by half a second produces exactly five requests.
+    studio.Clock().Advance(0.5);
+    static_cast<void>(studio.Tick(false));
+    Check(VolumeParticleRequests().Pending().size() == 5U);
+    Check(
+        VolumeOutputRuntimeService().Diagnostics().
+            dispatchedParticleRequests == 5U);
+
+    // A second Studio tick without simulation-time advance starts a fresh
+    // step, clears the previous queue, and emits no duplicate render/UI work.
+    static_cast<void>(studio.Tick(false));
+    Check(VolumeParticleRequests().Pending().empty());
+    Check(
+        VolumeOutputRuntimeService().Diagnostics().
+            dispatchedParticleRequests == 0U);
+
+    VolumeCaches().Detach(volume);
+    VolumeOutputs().Reset(volume);
+}
 } // namespace
 
 int main()
@@ -138,6 +239,8 @@ int main()
         Check(
             studio.ActiveBody().Active()->semanticObject ==
             asterra);
+
+        CheckVolumeOutputSimulationCadence(studio);
 
         const auto stableUniverseGeneration =
             studio.World().UniverseGeneration();
