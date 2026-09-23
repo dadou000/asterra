@@ -2,6 +2,7 @@
 
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/ViewportTargetRpc.hpp>
+#include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 
 #include <algorithm>
 #include <stdexcept>
@@ -28,6 +29,42 @@ namespace
     }
 
     return "Studio world lifecycle RPC failed.";
+}
+
+void ResetVolumeOutputRuntime() noexcept
+{
+    volume_representation::
+        VolumeOutputRuntimeService().Reset();
+    volume_representation::
+        VolumeParticleRequests().Clear();
+    volume_representation::
+        VolumeSurfaceRequests().Clear();
+}
+
+void TickVolumeOutputRuntime(
+    const scene::ObjectStore& objects,
+    const time::SimulationTime atTime)
+{
+    auto& particles =
+        volume_representation::
+            VolumeParticleRequests();
+    auto& surfaces =
+        volume_representation::
+            VolumeSurfaceRequests();
+
+    particles.Clear();
+    surfaces.Clear();
+
+    auto& runtime =
+        volume_representation::
+            VolumeOutputRuntimeService();
+    runtime.SetParticleSink(&particles);
+    runtime.SetSurfaceSink(&surfaces);
+
+    static_cast<void>(
+        runtime.TickWorld(
+            objects,
+            atTime));
 }
 } // namespace
 
@@ -295,6 +332,7 @@ void StudioSession::OpenWorld(
 {
     pendingTerrainInvalidations_.clear();
     terrainPhysicalPages_.Clear();
+    ResetVolumeOutputRuntime();
 
     DispatchWorldLifecycle(
         "world.open",
@@ -308,6 +346,7 @@ void StudioSession::CloseWorld()
         std::nullopt);
     pendingTerrainInvalidations_.clear();
     terrainPhysicalPages_.Clear();
+    ResetVolumeOutputRuntime();
 }
 
 std::optional<std::string>
@@ -387,6 +426,7 @@ StudioTickResult StudioSession::Tick(
             terrainRuntime_.Refresh();
         terrainPhysicalPages_.Clear();
         pendingTerrainInvalidations_.clear();
+        ResetVolumeOutputRuntime();
         result.worldGeneration =
             world_.Generation();
         result.universeGeneration =
@@ -428,6 +468,10 @@ StudioTickResult StudioSession::Tick(
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();
+
+    TickVolumeOutputRuntime(
+        world_.Objects(),
+        clock_.Time());
 
     result.worldGeneration =
         world_.Generation();
