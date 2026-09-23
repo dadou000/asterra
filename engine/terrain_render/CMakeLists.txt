@@ -1,5 +1,6 @@
 add_library(OrbitTerrainRender STATIC
     src/PhysicalSurface.cpp
+    src/SurfaceEffectGpuBinding.cpp
     src/SurfaceEffectShader.cpp
     src/SurfaceEffects.cpp
     src/SurfaceMaterial.cpp
