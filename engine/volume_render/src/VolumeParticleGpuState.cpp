@@ -258,10 +258,24 @@ struct Particle
     uint4 bodyIdentity;
 };
 
+struct SplashEvent
+{
+    float3 positionMeters;
+    float scaleMeters;
+    float3 normal;
+    float impactSpeedMetersPerSecond;
+    float3 tint;
+    uint generation;
+};
+
 [[vk::binding(0, 0)]]
 RWStructuredBuffer<Particle> g_particles : register(u0);
 [[vk::binding(1, 0)]]
 ByteAddressBuffer g_physicalPage : register(t1);
+[[vk::binding(2, 0)]]
+RWStructuredBuffer<SplashEvent> g_splashes : register(u2);
+[[vk::binding(3, 0)]]
+RWStructuredBuffer<uint> g_splashCounter : register(u3);
 
 struct Push
 {
@@ -421,6 +435,26 @@ bool SameBody(uint4 a, uint4 b)
     return all(a == b);
 }
 
+void EmitSplash(Particle particle, float3 positionMeters, float3 normal, float impactSpeed)
+{
+    const uint kWaterEntryPending = 1u << 30u;
+    if ((particle.behaviorFlags & kWaterEntryPending) == 0u) return;
+
+    uint eventIndex = 0u;
+    InterlockedAdd(g_splashCounter[0], 1u, eventIndex);
+    if (eventIndex < 4096u)
+    {
+        SplashEvent event;
+        event.positionMeters = positionMeters;
+        event.scaleMeters = max(particle.radiusMeters * max(particle.waterSplashScale, 0.0), 0.01);
+        event.normal = normal;
+        event.impactSpeedMetersPerSecond = max(impactSpeed, 0.0);
+        event.tint = lerp(float3(1.0, 1.0, 1.0), max(particle.baseColor, 0.0), 0.15);
+        event.generation = g.meta.y;
+        g_splashes[eventIndex] = event;
+    }
+}
+
 [numthreads(64, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
@@ -525,6 +559,18 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     if (nowSubmerged) particle.behaviorFlags |= kWaterSubmerged;
     else particle.behaviorFlags &= ~kWaterSubmerged;
+
+    // Consume the pending entry event exactly once on the first/highest-detail
+    // resident page that covers this particle. Later overlapping LOD pages see
+    // the cleared bit and cannot duplicate the splash.
+    if ((particle.behaviorFlags & kWaterEntryPending) != 0u)
+    {
+        float waterRadius = terrainRadius + standingWaterDepthMeters;
+        float3 waterContact = particle.bodyCenterMeters + direction * waterRadius;
+        float impactSpeed = max(-dot(particle.velocityMetersPerSecond, normal), 0.0);
+        EmitSplash(particle, waterContact, normal, impactSpeed);
+        particle.behaviorFlags &= ~kWaterEntryPending;
+    }
 
     if (killForWater)
     {
@@ -638,6 +684,30 @@ VolumeParticleGpuState::VolumeParticleGpuState(
         zeroCounterUpload_->Unmap();
     }
 
+    splashEvents_ = device.CreateBuffer({
+        .sizeBytes = static_cast<u64>(MaximumSplashEventCount) * sizeof(VolumeParticleGpuSplashEvent),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::GpuOnly,
+        .initialState = rhi::ResourceState::UnorderedAccess
+    });
+    splashCounter_ = device.CreateBuffer({
+        .sizeBytes = sizeof(u32),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::GpuOnly,
+        .initialState = rhi::ResourceState::CopyDestination
+    });
+    zeroSplashCounterUpload_ = device.CreateBuffer({
+        .sizeBytes = sizeof(u32),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::CopySource
+    });
+    {
+        std::byte* mapped = zeroSplashCounterUpload_->Map();
+        std::memset(mapped, 0, sizeof(u32));
+        zeroSplashCounterUpload_->Unmap();
+    }
+
     spawnBuffers_.reserve(framesInFlight);
     for (u32 frame = 0U; frame < framesInFlight; ++frame)
     {
@@ -691,7 +761,7 @@ VolumeParticleGpuState::VolumeParticleGpuState(
             .size = terrainCollision.bytecode.size()
         },
         .pushConstantDwords = 12U,
-        .shaderResourceBuffers = 2U,
+        .shaderResourceBuffers = 4U,
         .storageTextures = 0U,
         .sampledTextures = 0U,
         .accelerationStructures = 0U
@@ -867,6 +937,10 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
         current,
         currentState,
         rhi::ResourceState::UnorderedAccess);
+    TransitionState(commands, *splashEvents_, splashEventState_, rhi::ResourceState::UnorderedAccess);
+    TransitionState(commands, *splashCounter_, splashCounterState_, rhi::ResourceState::CopyDestination);
+    commands.CopyBuffer(*zeroSplashCounterUpload_, 0U, *splashCounter_, 0U, sizeof(u32));
+    TransitionState(commands, *splashCounter_, splashCounterState_, rhi::ResourceState::UnorderedAccess);
 
     commands.SetComputePipeline(*terrainCollisionPipeline_);
 
@@ -898,8 +972,11 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
         commands.SetComputeConstants(constants);
         commands.SetComputeBuffer(0U, current);
         commands.SetComputeBuffer(1U, *page.samples);
+        commands.SetComputeBuffer(2U, *splashEvents_);
+        commands.SetComputeBuffer(3U, *splashCounter_);
         commands.Dispatch((MaximumParticleCount + 63U) / 64U, 1U, 1U);
         commands.UavBarrier(current);
+        commands.UavBarrier(*splashEvents_);
     }
 
     TransitionState(
@@ -907,6 +984,7 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
         current,
         currentState,
         rhi::ResourceState::ShaderResource);
+    TransitionState(commands, *splashEvents_, splashEventState_, rhi::ResourceState::ShaderResource);
 }
 
 void VolumeParticleGpuState::BindForGraphics(
@@ -917,6 +995,8 @@ void VolumeParticleGpuState::BindForGraphics(
     TransitionState(
         commands, current, state, rhi::ResourceState::ShaderResource);
     commands.SetGraphicsBuffer(GraphicsBufferSlot, current);
+    TransitionState(commands, *splashEvents_, splashEventState_, rhi::ResourceState::ShaderResource);
+    commands.SetGraphicsBuffer(SplashGraphicsBufferSlot, *splashEvents_);
 }
 
 void VolumeParticleGpuState::Reset() noexcept

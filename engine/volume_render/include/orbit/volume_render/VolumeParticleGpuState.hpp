@@ -44,6 +44,17 @@ struct VolumeParticleGpuStateRecord
 
 static_assert(sizeof(VolumeParticleGpuStateRecord) == 160U);
 
+struct VolumeParticleGpuSplashEvent
+{
+    math::Float3 positionMeters{};
+    f32 scaleMeters{0.0F};
+    math::Float3 normal{};
+    f32 impactSpeedMetersPerSecond{0.0F};
+    math::Float3 tint{1.0F, 1.0F, 1.0F};
+    u32 generation{0U};
+};
+static_assert(sizeof(VolumeParticleGpuSplashEvent) == 48U);
+
 struct VolumeParticleSimulationSettings
 {
     f32 lifetimeSeconds{2.0F};
@@ -78,8 +89,10 @@ class VolumeParticleGpuState
 {
 public:
     static constexpr u32 MaximumParticleCount = 65536U;
+    static constexpr u32 MaximumSplashEventCount = 4096U;
     static constexpr u32 ComputeBufferCount = 4U;
     static constexpr u32 GraphicsBufferSlot = 2U;
+    static constexpr u32 SplashGraphicsBufferSlot = 3U;
 
     VolumeParticleGpuState(
         rhi::Device& device,
@@ -132,12 +145,17 @@ private:
     rhi::ResourceState stateAState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState stateBState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState counterState_{rhi::ResourceState::CopyDestination};
+    rhi::ResourceState splashEventState_{rhi::ResourceState::UnorderedAccess};
+    rhi::ResourceState splashCounterState_{rhi::ResourceState::CopyDestination};
 
     std::unique_ptr<rhi::Buffer> stateA_;
     std::unique_ptr<rhi::Buffer> stateB_;
     std::unique_ptr<rhi::Buffer> zeroStateUpload_;
     std::unique_ptr<rhi::Buffer> counter_;
     std::unique_ptr<rhi::Buffer> zeroCounterUpload_;
+    std::unique_ptr<rhi::Buffer> splashEvents_;
+    std::unique_ptr<rhi::Buffer> splashCounter_;
+    std::unique_ptr<rhi::Buffer> zeroSplashCounterUpload_;
     std::vector<std::unique_ptr<rhi::Buffer>> spawnBuffers_;
     std::unique_ptr<rhi::ComputePipeline> simulationPipeline_;
     std::unique_ptr<rhi::ComputePipeline> terrainCollisionPipeline_;
