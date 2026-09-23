@@ -17,7 +17,8 @@ namespace orbit::volume_render
 {
 // Persistent M38 GPU particle renderer. CPU input is limited to compact spawn
 // and terrain-page metadata; particle state, integration and collision remain
-// GPU resident between simulation generations.
+// GPU resident between simulation generations. Transparent presentation uses
+// weighted OIT and samples the read-only scene depth for soft intersections.
 class VolumeParticleRenderer
 {
 public:
