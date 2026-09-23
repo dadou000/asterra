@@ -20,8 +20,15 @@ struct Particle
     float emission;
     float ageSeconds;
     float lifetimeSeconds;
+    float linearDragPerSecond;
+    float radiusMeters;
+    float emissionScale;
+    float gravityScale;
+    float restitution;
+    float3 baseColor;
+    uint behaviorFlags;
+    float3 emissionColor;
     uint generation;
-    float4 reserved;
 };
 
 [[vk::binding(2, 0)]]
@@ -47,6 +54,9 @@ struct VSOutput
     float density : TEXCOORD2;
     float emission : TEXCOORD3;
     float life : TEXCOORD4;
+    float3 baseColor : TEXCOORD5;
+    float3 emissionColor : TEXCOORD6;
+    float emissionScale : TEXCOORD7;
 };
 
 float4 Project(float3 relative)
@@ -100,6 +110,9 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.density = 0.0;
         output.emission = 0.0;
         output.life = 0.0;
+        output.baseColor = 0.0;
+        output.emissionColor = 0.0;
+        output.emissionScale = 0.0;
         return output;
     }
 
@@ -114,6 +127,9 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.density = 0.0;
         output.emission = 0.0;
         output.life = 0.0;
+        output.baseColor = 0.0;
+        output.emissionColor = 0.0;
+        output.emissionScale = 0.0;
         return output;
     }
 
@@ -121,7 +137,11 @@ VSOutput main(uint vertexId : SV_VertexID)
         2.0 / max(g.viewport.x, 1.0),
         2.0 / max(g.viewport.y, 1.0));
     const float2 corner = corners[cornerIndex];
-    const float radiusPixels = max(g.viewport.z, 0.5);
+    const float projectedRadiusPixels =
+        max(particle.radiusMeters, 0.001) /
+        max(center.w * max(g.projection.y, 0.001), 0.001) *
+        max(g.viewport.y, 1.0) * 0.5;
+    const float radiusPixels = max(projectedRadiusPixels, max(g.viewport.z, 0.5));
 
     output.position = center;
     output.position.xy += corner * ndcPerPixel * radiusPixels * center.w;
@@ -132,6 +152,9 @@ VSOutput main(uint vertexId : SV_VertexID)
     output.life = saturate(
         1.0 - particle.ageSeconds /
             max(particle.lifetimeSeconds, 0.001));
+    output.baseColor = max(particle.baseColor, 0.0);
+    output.emissionColor = max(particle.emissionColor, 0.0);
+    output.emissionScale = max(particle.emissionScale, 0.0);
     return output;
 }
 )";
@@ -145,6 +168,9 @@ struct VSOutput
     float density : TEXCOORD2;
     float emission : TEXCOORD3;
     float life : TEXCOORD4;
+    float3 baseColor : TEXCOORD5;
+    float3 emissionColor : TEXCOORD6;
+    float emissionScale : TEXCOORD7;
 };
 
 float4 main(VSOutput input) : SV_Target0
@@ -160,11 +186,8 @@ float4 main(VSOutput input) : SV_Target0
     const float emission = max(input.emission, 0.0);
     const float authority = saturate(input.authority);
 
-    const float3 densityColor = lerp(
-        float3(0.70, 0.76, 0.82),
-        float3(0.93, 0.96, 1.00),
-        density);
-    const float3 emissiveColor = float3(1.00, 0.42, 0.08) * emission;
+    const float3 densityColor = input.baseColor * lerp(0.72, 1.0, density);
+    const float3 emissiveColor = input.emissionColor * emission * input.emissionScale;
     const float3 color = densityColor + emissiveColor;
     const float alpha = soft * input.life *
         saturate(0.16 + 0.64 * authority + 0.20 * density);

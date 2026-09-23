@@ -210,6 +210,13 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
             1U,
             64U);
 
+    const f32 particleLifetime = std::isfinite(entry.settings.particleLifetimeSeconds) ? std::max(entry.settings.particleLifetimeSeconds, 0.001F) : 2.0F;
+    const f32 particleDrag = std::isfinite(entry.settings.particleLinearDragPerSecond) ? std::max(entry.settings.particleLinearDragPerSecond, 0.0F) : 0.0F;
+    const f32 particleRadius = std::isfinite(entry.settings.particleRadiusMeters) ? std::max(entry.settings.particleRadiusMeters, 0.001F) : 0.08F;
+    const f32 particleEmissionScale = std::isfinite(entry.settings.particleEmissionScale) ? std::max(entry.settings.particleEmissionScale, 0.0F) : 1.0F;
+    const f32 particleGravityScale = std::isfinite(entry.settings.particleGravityScale) ? std::max(entry.settings.particleGravityScale, 0.0F) : 1.0F;
+    const f32 particleRestitution = std::isfinite(entry.settings.particleRestitution) ? std::clamp(entry.settings.particleRestitution, 0.0F, 1.0F) : 0.25F;
+
     batch.particles.reserve(particleBudget.admitted);
 
     const u32 particleCandidateLimit =
@@ -244,7 +251,17 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
             .velocity = sample.velocity,
             .authority = sample.authority,
             .density = sample.density,
-            .emission = sample.emission
+            .emission = sample.emission,
+            .lifetimeSeconds = particleLifetime,
+            .linearDragPerSecond = particleDrag,
+            .radiusMeters = particleRadius,
+            .emissionScale = particleEmissionScale,
+            .baseColor = domain.scatteringColor,
+            .emissionColor = domain.emissionColor,
+            .gravityMode = entry.settings.particleGravityMode,
+            .gravityScale = particleGravityScale,
+            .collisionMode = entry.settings.particleCollisionMode,
+            .restitution = particleRestitution
         });
     }
 

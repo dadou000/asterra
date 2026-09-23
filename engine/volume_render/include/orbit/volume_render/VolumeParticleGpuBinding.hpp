@@ -18,12 +18,20 @@ struct VolumeParticleGpuSpawn
     math::Float3 velocityMetersPerSecond{};
     f32 density{0.0F};
     f32 emission{0.0F};
+    f32 lifetimeSeconds{2.0F};
+    f32 linearDragPerSecond{0.0F};
+    f32 radiusMeters{0.08F};
+    f32 emissionScale{1.0F};
+    f32 gravityScale{1.0F};
+    f32 restitution{0.25F};
+    u32 behaviorFlags{0U};
+    math::Float3 baseColor{1.0F, 1.0F, 1.0F};
     f32 reserved0{0.0F};
+    math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
     f32 reserved1{0.0F};
-    f32 reserved2{0.0F};
 };
 
-static_assert(sizeof(VolumeParticleGpuSpawn) == 48U);
+static_assert(sizeof(VolumeParticleGpuSpawn) == 96U);
 
 // Frame-in-flight-safe upload seam for M38 particle spawn packets. This class
 // deliberately owns no particle lifetime or simulation state: it transfers the

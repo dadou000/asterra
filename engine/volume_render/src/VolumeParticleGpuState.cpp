@@ -19,9 +19,17 @@ struct Spawn
     float3 velocityMetersPerSecond;
     float density;
     float emission;
+    float lifetimeSeconds;
+    float linearDragPerSecond;
+    float radiusMeters;
+    float emissionScale;
+    float gravityScale;
+    float restitution;
+    uint behaviorFlags;
+    float3 baseColor;
     float reserved0;
+    float3 emissionColor;
     float reserved1;
-    float reserved2;
 };
 
 struct Particle
@@ -33,8 +41,15 @@ struct Particle
     float emission;
     float ageSeconds;
     float lifetimeSeconds;
+    float linearDragPerSecond;
+    float radiusMeters;
+    float emissionScale;
+    float gravityScale;
+    float restitution;
+    float3 baseColor;
+    uint behaviorFlags;
+    float3 emissionColor;
     uint generation;
-    float4 reserved;
 };
 
 [[vk::binding(0, 0)]]
@@ -75,8 +90,8 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     const uint spawnCount = g.counts.z;
     const uint capacity = g.counts.w;
     const float dt = max(g.timing.x, 0.0);
-    const float spawnLifetime = max(g.timing.y, 0.001);
-    const float drag = max(g.timing.z, 0.0);
+    const float fallbackLifetime = max(g.timing.y, 0.001);
+    const float fallbackDrag = max(g.timing.z, 0.0);
 
     if (index < capacity)
     {
@@ -88,7 +103,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
             if (particle.ageSeconds < particle.lifetimeSeconds)
             {
                 particle.positionMeters += g.originDelta.xyz;
-                const float dragScale = exp(-drag * dt);
+                const float dragScale = exp(-max(particle.linearDragPerSecond, 0.0) * dt);
                 particle.velocityMetersPerSecond *= dragScale;
                 particle.positionMeters +=
                     particle.velocityMetersPerSecond * dt;
@@ -107,9 +122,16 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         particle.density = max(spawn.density, 0.0);
         particle.emission = max(spawn.emission, 0.0);
         particle.ageSeconds = 0.0;
-        particle.lifetimeSeconds = spawnLifetime;
+        particle.lifetimeSeconds = spawn.lifetimeSeconds > 0.0 ? spawn.lifetimeSeconds : fallbackLifetime;
+        particle.linearDragPerSecond = spawn.linearDragPerSecond >= 0.0 ? spawn.linearDragPerSecond : fallbackDrag;
+        particle.radiusMeters = max(spawn.radiusMeters, 0.001);
+        particle.emissionScale = max(spawn.emissionScale, 0.0);
+        particle.gravityScale = max(spawn.gravityScale, 0.0);
+        particle.restitution = saturate(spawn.restitution);
+        particle.baseColor = max(spawn.baseColor, 0.0);
+        particle.behaviorFlags = spawn.behaviorFlags;
+        particle.emissionColor = max(spawn.emissionColor, 0.0);
         particle.generation = g.counts.y;
-        particle.reserved = 0.0;
         AppendParticle(particle);
     }
 }

@@ -62,6 +62,10 @@ BuildVolumeParticleRenderBatch(
             request.positionMeters.z - presentationOriginMeters.z
         };
 
+        const u32 behaviorFlags =
+            (static_cast<u32>(request.gravityMode) & 0x3U) |
+            ((static_cast<u32>(request.collisionMode) & 0x3U) << 2U);
+
         result.push_back({
             .positionMeters = {
                 static_cast<f32>(relative.x),
@@ -69,12 +73,17 @@ BuildVolumeParticleRenderBatch(
                 static_cast<f32>(relative.z)},
             .authority = candidate.authority,
             .velocityMetersPerSecond = request.velocity,
-            .density = std::isfinite(request.density)
-                ? std::max(request.density, 0.0F)
-                : 0.0F,
-            .emission = std::isfinite(request.emission)
-                ? std::max(request.emission, 0.0F)
-                : 0.0F
+            .density = std::isfinite(request.density) ? std::max(request.density, 0.0F) : 0.0F,
+            .emission = std::isfinite(request.emission) ? std::max(request.emission, 0.0F) : 0.0F,
+            .lifetimeSeconds = std::isfinite(request.lifetimeSeconds) ? std::max(request.lifetimeSeconds, 0.001F) : 2.0F,
+            .linearDragPerSecond = std::isfinite(request.linearDragPerSecond) ? std::max(request.linearDragPerSecond, 0.0F) : 0.0F,
+            .radiusMeters = std::isfinite(request.radiusMeters) ? std::max(request.radiusMeters, 0.001F) : 0.08F,
+            .emissionScale = std::isfinite(request.emissionScale) ? std::max(request.emissionScale, 0.0F) : 1.0F,
+            .gravityScale = std::isfinite(request.gravityScale) ? std::max(request.gravityScale, 0.0F) : 1.0F,
+            .restitution = std::isfinite(request.restitution) ? std::clamp(request.restitution, 0.0F, 1.0F) : 0.25F,
+            .behaviorFlags = behaviorFlags,
+            .baseColor = request.baseColor,
+            .emissionColor = request.emissionColor
         });
     }
 

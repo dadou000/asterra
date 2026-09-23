@@ -36,6 +36,14 @@ struct VolumeOutputSettings
 
     f32 particleRatePerSecond{64.0F};
     u32 particleBudgetPerStep{256U};
+    f32 particleLifetimeSeconds{2.0F};
+    f32 particleLinearDragPerSecond{0.0F};
+    f32 particleRadiusMeters{0.08F};
+    f32 particleEmissionScale{1.0F};
+    world_model::VolumeParticleGravityMode particleGravityMode{world_model::VolumeParticleGravityMode::None};
+    f32 particleGravityScale{1.0F};
+    world_model::VolumeParticleCollisionMode particleCollisionMode{world_model::VolumeParticleCollisionMode::None};
+    f32 particleRestitution{0.25F};
 
     f32 surfaceDepositRatePerSecond{24.0F};
     u32 surfaceDepositBudgetPerStep{128U};
@@ -65,6 +73,16 @@ struct VolumeParticleSpawnRequest
     f32 authority{0.0F};
     f32 density{0.0F};
     f32 emission{0.0F};
+    f32 lifetimeSeconds{2.0F};
+    f32 linearDragPerSecond{0.0F};
+    f32 radiusMeters{0.08F};
+    f32 emissionScale{1.0F};
+    math::Float3 baseColor{1.0F, 1.0F, 1.0F};
+    math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
+    world_model::VolumeParticleGravityMode gravityMode{world_model::VolumeParticleGravityMode::None};
+    f32 gravityScale{1.0F};
+    world_model::VolumeParticleCollisionMode collisionMode{world_model::VolumeParticleCollisionMode::None};
+    f32 restitution{0.25F};
 };
 
 struct VolumeSurfaceDepositRequest

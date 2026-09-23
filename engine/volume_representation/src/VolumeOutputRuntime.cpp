@@ -90,8 +90,26 @@ VolumeOutputRuntimeDiagnostics VolumeOutputRuntime::TickWorld(
             continue;
         }
 
-        const auto& settings =
-            VolumeOutputs().Settings(record.id);
+        auto& settings = VolumeOutputs().Settings(record.id);
+        settings.particlesEnabled = domain->outputParticlesEnabled;
+        settings.surfaceDepositsEnabled = domain->outputSurfaceDepositsEnabled;
+        settings.fieldThreshold = domain->outputFieldThreshold;
+        settings.particleRatePerSecond = domain->outputParticleRatePerSecond;
+        settings.particleBudgetPerStep = domain->outputParticleBudgetPerStep;
+        settings.particleLifetimeSeconds = domain->particleLifetimeSeconds;
+        settings.particleLinearDragPerSecond = domain->particleLinearDragPerSecond;
+        settings.particleRadiusMeters = domain->particleRadiusMeters;
+        settings.particleEmissionScale = domain->particleEmissionScale;
+        settings.particleGravityMode = domain->particleGravityMode;
+        settings.particleGravityScale = domain->particleGravityScale;
+        settings.particleCollisionMode = domain->particleCollisionMode;
+        settings.particleRestitution = domain->particleRestitution;
+        settings.surfaceDepositRatePerSecond = domain->outputSurfaceDepositRatePerSecond;
+        settings.surfaceDepositBudgetPerStep = domain->outputSurfaceDepositBudgetPerStep;
+        settings.surfaceDepositRadiusMeters = domain->outputSurfaceDepositRadiusMeters;
+        settings.candidateMultiplier = domain->outputCandidateMultiplier;
+        settings.surfaceEffect = static_cast<VolumeSurfaceEffect>(static_cast<u8>(domain->outputSurfaceEffect));
+        settings.surfaceEffectHalfLifeSeconds = domain->outputSurfaceEffectHalfLifeSeconds;
 
         if (!settings.particlesEnabled &&
             !settings.surfaceDepositsEnabled)

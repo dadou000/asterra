@@ -690,136 +690,94 @@ void VolumeAuthoringUi::DrawRepresentationPolicy(
     context.MutedText(
         "M38 samples the authoritative volume field on simulation time and publishes bounded particle and physical-surface requests. The current CPU-readable producer is the validated M37 cache; live GPU fields will use the same output contract through compact GPU production.");
 
-    auto& outputSettings =
-        volume_representation::
-            VolumeOutputs().Settings(
-                *volumeId);
+    bool particlesEnabled = volume->outputParticlesEnabled;
+    if (context.Checkbox("Particles##volume-output-particles", particlesEnabled))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputParticlesEnabled, particlesEnabled);
 
-    bool particlesEnabled =
-        outputSettings.particlesEnabled;
-    if (context.Checkbox(
-            "Particles##volume-output-particles",
-            particlesEnabled))
-    {
-        outputSettings.particlesEnabled =
-            particlesEnabled;
-    }
+    bool depositsEnabled = volume->outputSurfaceDepositsEnabled;
+    if (context.Checkbox("Surface Deposits##volume-output-deposits", depositsEnabled))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceDepositsEnabled, depositsEnabled);
 
-    bool depositsEnabled =
-        outputSettings.surfaceDepositsEnabled;
-    if (context.Checkbox(
-            "Surface Deposits##volume-output-deposits",
-            depositsEnabled))
-    {
-        outputSettings.surfaceDepositsEnabled =
-            depositsEnabled;
-    }
+    f64 threshold = volume->outputFieldThreshold;
+    if (context.InputDouble("Field Threshold##volume-output-threshold", threshold))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputFieldThreshold, std::clamp(threshold, 0.0, 64.0));
 
-    f64 threshold =
-        outputSettings.fieldThreshold;
-    if (context.InputDouble(
-            "Field Threshold##volume-output-threshold",
-            threshold))
-    {
-        outputSettings.fieldThreshold =
-            static_cast<f32>(
-                std::clamp(
-                    threshold,
-                    0.0,
-                    64.0));
-    }
+    f64 particleRate = volume->outputParticleRatePerSecond;
+    i64 particleBudget = static_cast<i64>(volume->outputParticleBudgetPerStep);
+    if (context.InputDouble("Particle Rate / s##volume-output-particle-rate", particleRate))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputParticleRate, std::clamp(particleRate, 0.0, 1000000.0));
+    if (context.InputInteger("Particle Budget / Step##volume-output-particle-budget", particleBudget))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputParticleBudget, std::clamp<i64>(particleBudget, 1, 1000000));
 
-    f64 particleRate =
-        outputSettings.particleRatePerSecond;
-    i64 particleBudget =
-        static_cast<i64>(
-            outputSettings.particleBudgetPerStep);
+    f64 lifetime = volume->particleLifetimeSeconds;
+    f64 drag = volume->particleLinearDragPerSecond;
+    f64 particleRadius = volume->particleRadiusMeters;
+    f64 particleEmissionScale = volume->particleEmissionScale;
+    if (context.InputDouble("Particle Lifetime s##volume-output-particle-life", lifetime))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleLifetime, std::clamp(lifetime, 0.001, 3600.0));
+    if (context.InputDouble("Particle Linear Drag / s##volume-output-particle-drag", drag))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleLinearDrag, std::clamp(drag, 0.0, 100.0));
+    if (context.InputDouble("Particle Radius m##volume-output-particle-radius", particleRadius))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleRadiusMeters, std::clamp(particleRadius, 0.001, 100.0));
+    if (context.InputDouble("Particle Emission Scale##volume-output-particle-emission", particleEmissionScale))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleEmissionScale, std::clamp(particleEmissionScale, 0.0, 1024.0));
 
-    if (context.InputDouble(
-            "Particle Rate / s##volume-output-particle-rate",
-            particleRate))
-    {
-        outputSettings.particleRatePerSecond =
-            static_cast<f32>(
-                std::clamp(
-                    particleRate,
-                    0.0,
-                    1'000'000.0));
-    }
+    context.Text("Particle Gravity");
+    for (const auto& [label, mode] : std::array{
+             std::pair{"None", world_model::VolumeParticleGravityMode::None},
+             std::pair{"Owning Body", world_model::VolumeParticleGravityMode::OwningBody}})
+        if (context.Selectable(std::string(label) + "##volume-output-gravity-" + std::to_string(static_cast<i64>(mode)), volume->particleGravityMode == mode))
+            world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleGravityMode, static_cast<i64>(mode));
 
-    if (context.InputInteger(
-            "Particle Budget / Step##volume-output-particle-budget",
-            particleBudget))
-    {
-        outputSettings.particleBudgetPerStep =
-            static_cast<u32>(
-                std::clamp<i64>(
-                    particleBudget,
-                    1,
-                    1'000'000));
-    }
+    f64 gravityScale = volume->particleGravityScale;
+    if (context.InputDouble("Gravity Scale##volume-output-gravity-scale", gravityScale))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleGravityScale, std::clamp(gravityScale, 0.0, 16.0));
 
-    f64 depositRate =
-        outputSettings.surfaceDepositRatePerSecond;
-    i64 depositBudget =
-        static_cast<i64>(
-            outputSettings.surfaceDepositBudgetPerStep);
-    f64 depositRadius =
-        outputSettings.surfaceDepositRadiusMeters;
+    context.Text("Particle Collision");
+    for (const auto& [label, mode] : std::array{
+             std::pair{"None", world_model::VolumeParticleCollisionMode::None},
+             std::pair{"Kill", world_model::VolumeParticleCollisionMode::Kill},
+             std::pair{"Slide", world_model::VolumeParticleCollisionMode::Slide},
+             std::pair{"Bounce", world_model::VolumeParticleCollisionMode::Bounce}})
+        if (context.Selectable(std::string(label) + "##volume-output-collision-" + std::to_string(static_cast<i64>(mode)), volume->particleCollisionMode == mode))
+            world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleCollisionMode, static_cast<i64>(mode));
 
-    if (context.InputDouble(
-            "Deposit Rate / s##volume-output-deposit-rate",
-            depositRate))
-    {
-        outputSettings.surfaceDepositRatePerSecond =
-            static_cast<f32>(
-                std::clamp(
-                    depositRate,
-                    0.0,
-                    1'000'000.0));
-    }
+    f64 restitution = volume->particleRestitution;
+    if (context.InputDouble("Restitution##volume-output-restitution", restitution))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleRestitution, std::clamp(restitution, 0.0, 1.0));
 
-    if (context.InputInteger(
-            "Deposit Budget / Step##volume-output-deposit-budget",
-            depositBudget))
-    {
-        outputSettings.surfaceDepositBudgetPerStep =
-            static_cast<u32>(
-                std::clamp<i64>(
-                    depositBudget,
-                    1,
-                    1'000'000));
-    }
+    f64 depositRate = volume->outputSurfaceDepositRatePerSecond;
+    i64 depositBudget = static_cast<i64>(volume->outputSurfaceDepositBudgetPerStep);
+    f64 depositRadius = volume->outputSurfaceDepositRadiusMeters;
+    if (context.InputDouble("Deposit Rate / s##volume-output-deposit-rate", depositRate))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceRate, std::clamp(depositRate, 0.0, 1000000.0));
+    if (context.InputInteger("Deposit Budget / Step##volume-output-deposit-budget", depositBudget))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceBudget, std::clamp<i64>(depositBudget, 1, 1000000));
+    if (context.InputDouble("Deposit Radius m##volume-output-deposit-radius", depositRadius))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceRadius, std::clamp(depositRadius, 0.001, 10000.0));
 
-    if (context.InputDouble(
-            "Deposit Radius m##volume-output-deposit-radius",
-            depositRadius))
-    {
-        outputSettings.surfaceDepositRadiusMeters =
-            static_cast<f32>(
-                std::clamp(
-                    depositRadius,
-                    0.001,
-                    10'000.0));
-    }
+    context.Text("Surface Effect");
+    for (const auto& [label, effect] : std::array{
+             std::pair{"Wetness", world_model::VolumeSurfaceOutputEffect::Wetness},
+             std::pair{"Soot", world_model::VolumeSurfaceOutputEffect::Soot},
+             std::pair{"Ash", world_model::VolumeSurfaceOutputEffect::Ash},
+             std::pair{"Sediment", world_model::VolumeSurfaceOutputEffect::Sediment},
+             std::pair{"Heat", world_model::VolumeSurfaceOutputEffect::Heat}})
+        if (context.Selectable(std::string(label) + "##volume-output-effect-" + std::to_string(static_cast<i64>(effect)), volume->outputSurfaceEffect == effect))
+            world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceEffect, static_cast<i64>(effect));
 
-    i64 candidateMultiplier =
-        static_cast<i64>(
-            outputSettings.candidateMultiplier);
-    if (context.InputInteger(
-            "Candidate Multiplier##volume-output-candidates",
-            candidateMultiplier))
-    {
-        outputSettings.candidateMultiplier =
-            static_cast<u32>(
-                std::clamp<i64>(
-                    candidateMultiplier,
-                    1,
-                    64));
-    }
+    f64 halfLife = volume->outputSurfaceEffectHalfLifeSeconds;
+    if (context.InputDouble("Surface Effect Half Life s##volume-output-effect-half-life", halfLife))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputSurfaceHalfLife, std::clamp(halfLife, 0.0, 86400.0));
 
-    if ((outputSettings.particlesEnabled ||
-         outputSettings.surfaceDepositsEnabled) &&
+    i64 candidateMultiplier = static_cast<i64>(volume->outputCandidateMultiplier);
+    if (context.InputInteger("Candidate Multiplier##volume-output-candidates", candidateMultiplier))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputCandidateMultiplier, std::clamp<i64>(candidateMultiplier, 1, 64));
+
+    context.MutedText("Gravity/collision policies are authored and carried per particle. GPU body-gravity and physical-surface response are the next M38 simulation hook.");
+
+    if ((volume->outputParticlesEnabled ||
+         volume->outputSurfaceDepositsEnabled) &&
         volume_representation::
             VolumeCaches().Find(
                 *volumeId) == nullptr)

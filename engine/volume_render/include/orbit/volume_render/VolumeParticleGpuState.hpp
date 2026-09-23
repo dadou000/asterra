@@ -22,11 +22,18 @@ struct VolumeParticleGpuStateRecord
     f32 emission{0.0F};
     f32 ageSeconds{0.0F};
     f32 lifetimeSeconds{0.0F};
+    f32 linearDragPerSecond{0.0F};
+    f32 radiusMeters{0.08F};
+    f32 emissionScale{1.0F};
+    f32 gravityScale{1.0F};
+    f32 restitution{0.25F};
+    math::Float3 baseColor{1.0F, 1.0F, 1.0F};
+    u32 behaviorFlags{0U};
+    math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
     u32 generation{0U};
-    math::Float4 reserved{};
 };
 
-static_assert(sizeof(VolumeParticleGpuStateRecord) == 64U);
+static_assert(sizeof(VolumeParticleGpuStateRecord) == 96U);
 
 struct VolumeParticleSimulationSettings
 {

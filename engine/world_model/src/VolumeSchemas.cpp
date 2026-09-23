@@ -66,7 +66,26 @@ void RegisterVolumeSchemas(
             {.id=kVolumeGiEmissionScale,.name="GI Emission Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=64.0},.advanced=true},
             {.id=kVolumeRenderSteps,.name="Raymarch Steps",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=8.0,.maximum=256.0},.advanced=true},
             {.id=kVolumeShadowSteps,.name="Shadow Steps",.kind=schema::PropertyKind::Integer,.defaultValue=i64{6},.range={.minimum=0.0,.maximum=32.0},.advanced=true},
-            {.id=kVolumeTemporalWeight,.name="Temporal Weight",.kind=schema::PropertyKind::Float,.defaultValue=0.85,.range={.minimum=0.0,.maximum=0.98},.advanced=true}
+            {.id=kVolumeTemporalWeight,.name="Temporal Weight",.kind=schema::PropertyKind::Float,.defaultValue=0.85,.range={.minimum=0.0,.maximum=0.98},.advanced=true},
+            {.id=kVolumeOutputParticlesEnabled,.name="Output Particles",.kind=schema::PropertyKind::Boolean,.defaultValue=false},
+            {.id=kVolumeOutputSurfaceDepositsEnabled,.name="Output Surface Deposits",.kind=schema::PropertyKind::Boolean,.defaultValue=false},
+            {.id=kVolumeOutputFieldThreshold,.name="Output Field Threshold",.kind=schema::PropertyKind::Float,.defaultValue=0.15,.range={.minimum=0.0,.maximum=64.0}},
+            {.id=kVolumeOutputParticleRate,.name="Particle Rate",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=64.0,.range={.minimum=0.0,.maximum=1000000.0}},
+            {.id=kVolumeOutputParticleBudget,.name="Particle Budget / Step",.kind=schema::PropertyKind::Integer,.defaultValue=i64{256},.range={.minimum=1.0,.maximum=1000000.0},.advanced=true},
+            {.id=kVolumeOutputSurfaceRate,.name="Surface Deposit Rate",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=24.0,.range={.minimum=0.0,.maximum=1000000.0}},
+            {.id=kVolumeOutputSurfaceBudget,.name="Surface Deposit Budget / Step",.kind=schema::PropertyKind::Integer,.defaultValue=i64{128},.range={.minimum=1.0,.maximum=1000000.0},.advanced=true},
+            {.id=kVolumeOutputSurfaceRadius,.name="Surface Deposit Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.25,.range={.minimum=0.001,.maximum=10000.0}},
+            {.id=kVolumeOutputCandidateMultiplier,.name="Output Candidate Multiplier",.kind=schema::PropertyKind::Integer,.defaultValue=i64{8},.range={.minimum=1.0,.maximum=64.0},.advanced=true},
+            {.id=kVolumeOutputSurfaceEffect,.name="Surface Effect",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=4.0}},
+            {.id=kVolumeOutputSurfaceHalfLife,.name="Surface Effect Half Life",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=30.0,.range={.minimum=0.0,.maximum=86400.0}},
+            {.id=kVolumeParticleLifetime,.name="Particle Lifetime",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=2.0,.range={.minimum=0.001,.maximum=3600.0}},
+            {.id=kVolumeParticleLinearDrag,.name="Particle Linear Drag",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=0.0,.range={.minimum=0.0,.maximum=100.0}},
+            {.id=kVolumeParticleRadiusMeters,.name="Particle Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.08,.range={.minimum=0.001,.maximum=100.0}},
+            {.id=kVolumeParticleEmissionScale,.name="Particle Emission Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=1024.0}},
+            {.id=kVolumeParticleGravityMode,.name="Particle Gravity Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kVolumeParticleGravityScale,.name="Particle Gravity Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=16.0}},
+            {.id=kVolumeParticleCollisionMode,.name="Particle Collision Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=3.0}},
+            {.id=kVolumeParticleRestitution,.name="Particle Restitution",.kind=schema::PropertyKind::Float,.defaultValue=0.25,.range={.minimum=0.0,.maximum=1.0}}
         }
     });
 
@@ -242,13 +261,27 @@ ResolveVolumeDomain(
         .temporalWeight =
             static_cast<f32>(
                 std::clamp(
-                    Read<f64>(
-                        objects,
-                        volume,
-                        kVolumeTemporalWeight,
-                        0.85),
-                    0.0,
-                    0.98))
+                    Read<f64>(objects, volume, kVolumeTemporalWeight, 0.85),
+                    0.0, 0.98)),
+        .outputParticlesEnabled = Read<bool>(objects, volume, kVolumeOutputParticlesEnabled, false),
+        .outputSurfaceDepositsEnabled = Read<bool>(objects, volume, kVolumeOutputSurfaceDepositsEnabled, false),
+        .outputFieldThreshold = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputFieldThreshold, 0.15), 0.0, 64.0)),
+        .outputParticleRatePerSecond = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputParticleRate, 64.0), 0.0, 1000000.0)),
+        .outputParticleBudgetPerStep = static_cast<u32>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputParticleBudget, 256), 1, 1000000)),
+        .outputSurfaceDepositRatePerSecond = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputSurfaceRate, 24.0), 0.0, 1000000.0)),
+        .outputSurfaceDepositBudgetPerStep = static_cast<u32>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputSurfaceBudget, 128), 1, 1000000)),
+        .outputSurfaceDepositRadiusMeters = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputSurfaceRadius, 0.25), 0.001, 10000.0)),
+        .outputCandidateMultiplier = static_cast<u32>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputCandidateMultiplier, 8), 1, 64)),
+        .outputSurfaceEffect = static_cast<VolumeSurfaceOutputEffect>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeOutputSurfaceEffect, 0), 0, 4)),
+        .outputSurfaceEffectHalfLifeSeconds = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeOutputSurfaceHalfLife, 30.0), 0.0, 86400.0)),
+        .particleLifetimeSeconds = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleLifetime, 2.0), 0.001, 3600.0)),
+        .particleLinearDragPerSecond = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleLinearDrag, 0.0), 0.0, 100.0)),
+        .particleRadiusMeters = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleRadiusMeters, 0.08), 0.001, 100.0)),
+        .particleEmissionScale = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleEmissionScale, 1.0), 0.0, 1024.0)),
+        .particleGravityMode = static_cast<VolumeParticleGravityMode>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeParticleGravityMode, 0), 0, 1)),
+        .particleGravityScale = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleGravityScale, 1.0), 0.0, 16.0)),
+        .particleCollisionMode = static_cast<VolumeParticleCollisionMode>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeParticleCollisionMode, 0), 0, 3)),
+        .particleRestitution = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleRestitution, 0.25), 0.0, 1.0))
     };
 
     for (const auto& child :
