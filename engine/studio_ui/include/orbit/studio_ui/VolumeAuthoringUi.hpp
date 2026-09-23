@@ -48,6 +48,11 @@ private:
     math::Double3 paintPosition_{};
     f64 paintRadius_{2.0};
     f64 paintStrength_{1.0};
+
+    // M37 native cache authoring/import state. Cache data itself lives in the
+    // shared VolumeCacheRegistry and therefore remains renderer-accessible.
+    u32 cacheBakeResolution_{32U};
+    std::string cachePath_;
     std::string status_;
 };
 } // namespace orbit::studio_ui
