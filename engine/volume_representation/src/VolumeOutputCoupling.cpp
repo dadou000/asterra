@@ -171,6 +171,15 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
             ? std::max(deltaSeconds, 0.0)
             : 0.0;
 
+    // An unavailable producer or disabled domain must not silently consume
+    // fractional rate state. When authority returns, generation resumes from
+    // the same deterministic sequence/carry rather than creating a catch-up
+    // burst or losing events while no field data existed.
+    if (!domain.enabled || !sampler)
+    {
+        return batch;
+    }
+
     const auto particleBudget =
         ResolveRateBudget(
             entry.settings.particlesEnabled
@@ -196,11 +205,6 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
         surfaceBudget.requested;
     batch.diagnostics.surfaceBudgetDropped =
         surfaceBudget.dropped;
-
-    if (!domain.enabled || !sampler)
-    {
-        return batch;
-    }
 
     const f32 threshold =
         FiniteNonNegative(entry.settings.fieldThreshold);
