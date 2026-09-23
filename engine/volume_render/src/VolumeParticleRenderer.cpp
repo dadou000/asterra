@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 
 namespace orbit::volume_render
