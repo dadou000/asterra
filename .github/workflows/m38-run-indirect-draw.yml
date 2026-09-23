@@ -23,16 +23,28 @@ jobs:
           t=t.replace('[[vk::binding(4, 0)]] StructuredBuffer<Droplet> g_droplets : register(t4);','[[vk::binding(4,0)]] StructuredBuffer<Droplet> g_droplets : register(t4);')
           t=t.replace('uint i=vertexId/6u,c=vertexId%6u; Droplet d=g_droplets[i]; O o;','uint i=vertexId/6u,c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o;')
           t=t.replace('uint i=g_dropletIndices[vertexId/6u],c=vertexId%6u; Droplet d=g_droplets[i]; O o;','uint i=g_dropletIndices[vertexId/6u],c=vertexId%6u; Droplet d=g_droplets[i]; VSOutput o;')
+          t=t.replace("    if c!=1: raise RuntimeError(f'{path}: expected 1 match, got {c}: {old[:140]!r}')","    if c==0 and old.lstrip().startswith('commands.Draw('): return\n    if c!=1: raise RuntimeError(f'{path}: expected 1 match, got {c}: {old[:140]!r}')")
           p.write_text(t,encoding='utf-8')
           PY
           python3 tools/m38_indirect_draw_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('engine/volume_render/src/VolumeParticleRenderer.cpp')
+          t=p.read_text(encoding='utf-8')
+          old='''    state_.BindForGraphics(commands);\n    commands.Draw(VolumeParticleGpuState::MaximumParticleCount * 6U);\n    constants[19] = state_.DropletGeneration();\n    commands.SetGraphicsPipeline(*dropletPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.Draw(VolumeParticleGpuState::MaximumDropletCount * 6U);\n    constants[19] = state_.SplashGeneration();\n    commands.SetGraphicsPipeline(*splashPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.Draw(VolumeParticleGpuState::MaximumPersistentSplashCount * 6U);'''
+          new='''    state_.BindForGraphics(commands);\n    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::ParticleIndirectOffsetBytes);\n    constants[19] = state_.DropletGeneration();\n    commands.SetGraphicsPipeline(*dropletPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::DropletIndirectOffsetBytes);\n    constants[19] = state_.SplashGeneration();\n    commands.SetGraphicsPipeline(*splashPipeline_);\n    commands.SetGraphicsConstants(constants);\n    state_.BindForGraphics(commands);\n    commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);'''
+          if t.count(old)!=1:
+              raise SystemExit('renderer indirect draw block seam mismatch')
+          p.write_text(t.replace(old,new,1),encoding='utf-8')
+          PY
       - name: Verify
         run: |
           grep -q 'virtual void DrawIndirect' engine/rhi/include/orbit/rhi/Command.hpp
           grep -q 'VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT' engine/rhi/vulkan/src/VulkanResources.cpp
           grep -q 'VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT' engine/rhi/vulkan/src/VulkanCommands.cpp
           grep -q 'kDrawListShader' engine/volume_render/src/VolumeParticleGpuState.cpp
-          grep -q 'DrawIndirect(state_.IndirectDrawArguments()' engine/volume_render/src/VolumeParticleRenderer.cpp
+          test "$(grep -c 'DrawIndirect(state_.IndirectDrawArguments()' engine/volume_render/src/VolumeParticleRenderer.cpp)" -eq 3
+          grep -q 'ParticleActiveIndexGraphicsBufferSlot = 5U' engine/volume_render/include/orbit/volume_render/VolumeParticleGpuState.hpp
       - name: Commit
         run: |
           rm tools/m38_indirect_draw_patch.py
