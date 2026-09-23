@@ -20,6 +20,7 @@ target_link_libraries(OrbitVolumeRender
         Orbit::Scene
         Orbit::Shader
         Orbit::VolumeFields
+        Orbit::VolumeRepresentation
         Orbit::WorldModel
 )
 
