@@ -5,6 +5,40 @@ int main()
     using namespace orbit;
     using namespace orbit::lighting;
 
+    static_assert(requires(
+        ScreenSpaceFinalGatherRenderer& renderer,
+        rhi::CommandList& commands,
+        rhi::Texture& sceneColor,
+        rhi::Texture& baseRoughness,
+        rhi::Texture& normalMetallic,
+        rhi::Texture& emissionClass,
+        rhi::Texture& depth,
+        rhi::Texture& previousIndirect,
+        rhi::Texture& previousMeta,
+        rhi::Texture& currentIndirect,
+        rhi::Texture& currentMeta,
+        const LightingView& view,
+        rhi::Buffer& particleLightGrid)
+    {
+        renderer.Gather(
+            commands,
+            sceneColor,
+            baseRoughness,
+            normalMetallic,
+            emissionClass,
+            depth,
+            previousIndirect,
+            previousMeta,
+            currentIndirect,
+            currentMeta,
+            1920U,
+            1080U,
+            view,
+            false,
+            &particleLightGrid,
+            ScreenSpaceFinalGatherSettings{});
+    });
+
     LightingView previous;
     previous.frame = frames::FrameId{
         .high = 1U,
