@@ -1,0 +1,33 @@
+name: M38 Run Shared Particle Light Grid
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - 'tools/m38_shared_particle_light_grid_patch.py'
+      - '.github/workflows/m38-run-shared-particle-light-grid.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+      - name: Apply patch
+        run: python3 tools/m38_shared_particle_light_grid_patch.py
+      - name: Verify
+        run: |
+          grep -q 'ParticleLightGrid(u32 frameIndex)' engine/volume_render/include/orbit/volume_render/VolumeParticleRenderer.hpp
+          grep -q 'StructuredBuffer<uint4> g_particleLightGrid : register(t7)' engine/volume_render/src/UniversalVolumeRendererBase.inc
+          grep -q 'ParticleGridTransmittance' engine/volume_render/src/UniversalVolumeRendererBase.inc
+          grep -q 'renderer.ParticleLightGrid(0U)' engine/studio_ui/tests/VolumeParticleRenderBridgeTests.cpp
+      - name: Commit
+        run: |
+          rm tools/m38_shared_particle_light_grid_patch.py
+          rm .github/workflows/m38-run-shared-particle-light-grid.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m 'Share M38 particle lighting with universal volumes'
+          git push origin HEAD:orbit
