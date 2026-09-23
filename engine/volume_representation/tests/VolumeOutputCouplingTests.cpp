@@ -103,6 +103,25 @@ void RunVolumeOutputCouplingTests()
         surfaceQueue.Pending().front().request.eventId ==
         first.surfaceDeposits.front().eventId);
 
+    // Draining transfers ownership exactly once. The producer queue is empty
+    // immediately, while the consumer-owned batch retains provenance and data.
+    auto drainedParticles = particleQueue.Drain();
+    auto drainedSurfaces = surfaceQueue.Drain();
+    CheckOutput(particleQueue.Pending().empty());
+    CheckOutput(surfaceQueue.Pending().empty());
+    CheckOutput(drainedParticles.size() == first.particles.size());
+    CheckOutput(drainedSurfaces.size() == first.surfaceDeposits.size());
+    CheckOutput(drainedParticles.front().volume == domain.object);
+    CheckOutput(drainedSurfaces.front().volume == domain.object);
+    CheckOutput(
+        drainedParticles.front().request.eventId ==
+        first.particles.front().eventId);
+    CheckOutput(
+        drainedSurfaces.front().request.eventId ==
+        first.surfaceDeposits.front().eventId);
+    CheckOutput(particleQueue.Drain().empty());
+    CheckOutput(surfaceQueue.Drain().empty());
+
     const auto replayPosition =
         first.particles.front().positionMeters;
     const auto replayEvent =
