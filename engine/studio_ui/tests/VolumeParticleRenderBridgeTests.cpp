@@ -26,6 +26,8 @@ int main()
     Check(volume_render::VolumeParticleGpuState::MaximumSplashEventCount == 4096U);
     Check(volume_render::VolumeParticleGpuState::MaximumDropletCount == 16384U);
     Check(volume_render::VolumeParticleGpuState::MaximumDropletsPerSplash == 8U);
+    Check(volume_render::VolumeParticleGpuState::MaximumDropletCount >=
+          volume_render::VolumeParticleGpuState::MaximumSplashEventCount * 4U);
     Check(volume_render::VolumeParticleGpuState::MaximumPersistentSplashCount == 8192U);
     Check(volume_render::VolumeParticleGpuState::MaximumPersistentSplashCount >=
           volume_render::VolumeParticleGpuState::MaximumSplashEventCount);
