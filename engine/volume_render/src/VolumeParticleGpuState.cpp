@@ -635,9 +635,9 @@ struct Push { uint4 counts; float4 timing; };
 void Append(SplashState s){ uint i=0u; InterlockedAdd(g_stateCounter[0],1u,i); if(i<g.counts.w){ s.generation=g.counts.y; g_destination[i]=s; } }
 [numthreads(64,1,1)] void main(uint3 id:SV_DispatchThreadID){
  uint i=id.x; float dt=max(g.timing.x,0.0); float3 originDelta=g.timing.yzw;
- if(i<g.counts.z){ SplashState s=g_source[i]; if(s.generation==g.counts.x && s.lifetimeSeconds>0.0){ s.ageSeconds+=dt; if(s.ageSeconds<s.lifetimeSeconds){ s.positionMeters+=originDelta; Append(s); } } }
+ if(i<g.counts.w){ SplashState s=g_source[i]; if(s.generation==g.counts.x && s.lifetimeSeconds>0.0){ s.ageSeconds+=dt; if(s.ageSeconds<s.lifetimeSeconds){ s.positionMeters+=originDelta; Append(s); } } }
  uint eventCount=min(g_eventCounter[0],4096u);
- if(i<eventCount){ SplashEvent e=g_events[i]; if(e.generation==g.counts.y){ SplashState s; s.positionMeters=e.positionMeters; s.baseScaleMeters=max(e.scaleMeters,0.01); s.normal=normalize(e.normal); s.expansionMetersPerSecond=max(0.35*e.impactSpeedMetersPerSecond,0.15*s.baseScaleMeters); s.tint=max(e.tint,0.0); s.impactSpeedMetersPerSecond=max(e.impactSpeedMetersPerSecond,0.0); s.ageSeconds=0.0; s.lifetimeSeconds=clamp(0.45+0.10*s.impactSpeedMetersPerSecond,0.45,1.75); s.generation=g.counts.y; s.reserved=0u; Append(s); } }
+ if(i<eventCount){ SplashEvent e=g_events[i]; if(e.generation==g.counts.z){ SplashState s; s.positionMeters=e.positionMeters; s.baseScaleMeters=max(e.scaleMeters,0.01); s.normal=normalize(e.normal); s.expansionMetersPerSecond=max(0.35*e.impactSpeedMetersPerSecond,0.15*s.baseScaleMeters); s.tint=max(e.tint,0.0); s.impactSpeedMetersPerSecond=max(e.impactSpeedMetersPerSecond,0.0); s.ageSeconds=0.0; s.lifetimeSeconds=clamp(0.45+0.10*s.impactSpeedMetersPerSecond,0.45,1.75); s.generation=g.counts.y; s.reserved=0u; Append(s); } }
 }
 )";
 
@@ -928,6 +928,7 @@ void VolumeParticleGpuState::Advance(
         previousOriginMeters.y - newOriginMeters.y,
         previousOriginMeters.z - newOriginMeters.z
     };
+    splashOriginDeltaMeters_ = originDelta;
 
     std::array<u32, 12U> constants{};
     constants[0] = sourceGeneration;
@@ -1040,11 +1041,12 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
     TransitionState(commands,*splashStateCounter_,splashStateCounterState_,rhi::ResourceState::UnorderedAccess);
     const u32 previousSplashGeneration=splashGeneration_; ++splashGeneration_; if(splashGeneration_==0U) splashGeneration_=1U;
     const f32 splashDt=std::isfinite(deltaSeconds)?static_cast<f32>(std::clamp(deltaSeconds,0.0,1.0)):0.0F;
-    std::array<u32,8U> splashConstants{}; splashConstants[0]=previousSplashGeneration; splashConstants[1]=splashGeneration_; splashConstants[2]=MaximumPersistentSplashCount; splashConstants[3]=MaximumPersistentSplashCount; splashConstants[4]=Bits(splashDt);
-    // Splash state shares the same presentation frame; particle rebasing delta was already applied in Advance. New events are in the new frame, while old splash state needs the same delta.
-    splashConstants[5]=0U; splashConstants[6]=0U; splashConstants[7]=0U;
+    std::array<u32,8U> splashConstants{}; splashConstants[0]=previousSplashGeneration; splashConstants[1]=splashGeneration_; splashConstants[2]=generation_; splashConstants[3]=MaximumPersistentSplashCount; splashConstants[4]=Bits(splashDt);
+    // New events are already in the new presentation frame. Only surviving splash state is rebased.
+    splashConstants[5]=Bits(static_cast<f32>(splashOriginDeltaMeters_.x)); splashConstants[6]=Bits(static_cast<f32>(splashOriginDeltaMeters_.y)); splashConstants[7]=Bits(static_cast<f32>(splashOriginDeltaMeters_.z));
     commands.SetComputePipeline(*splashSimulationPipeline_); commands.SetComputeConstants(splashConstants); commands.SetComputeBuffer(0U,splashSource); commands.SetComputeBuffer(1U,splashDestination); commands.SetComputeBuffer(2U,*splashEvents_); commands.SetComputeBuffer(3U,*splashCounter_); commands.SetComputeBuffer(4U,*splashStateCounter_);
     commands.Dispatch((std::max(MaximumPersistentSplashCount,MaximumSplashEventCount)+63U)/64U,1U,1U); commands.UavBarrier(splashDestination); splashCurrentIsA_=!splashCurrentIsA_;
+    splashOriginDeltaMeters_ = {};
     TransitionState(commands,splashDestination,splashDestinationState,rhi::ResourceState::ShaderResource);
 }
 
@@ -1069,6 +1071,7 @@ void VolumeParticleGpuState::Reset() noexcept
     generation_ = 0U;
     splashGeneration_ = 0U;
     splashCurrentIsA_ = true;
+    splashOriginDeltaMeters_ = {};
     initialized_ = false;
 }
 

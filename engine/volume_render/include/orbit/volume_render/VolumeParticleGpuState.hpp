@@ -159,6 +159,7 @@ private:
     bool initialized_{false};
     bool currentIsA_{true};
     bool splashCurrentIsA_{true};
+    math::Double3 splashOriginDeltaMeters_{};
 
     rhi::ResourceState stateAState_{rhi::ResourceState::CopyDestination};
     rhi::ResourceState stateBState_{rhi::ResourceState::CopyDestination};
