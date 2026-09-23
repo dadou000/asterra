@@ -21,6 +21,21 @@ int main()
 {
     using namespace orbit;
 
+    static_assert(requires(
+        volume_render::VolumeParticleGpuState& state,
+        rhi::CommandList& commands)
+    {
+        state.BuildVisibleDrawLists(
+            commands,
+            math::Float3{},
+            math::Float3{},
+            math::Float3{},
+            1.0F,
+            1.0F,
+            0.1F,
+            1000.0F);
+    });
+
     Check(sizeof(volume_render::VolumeParticleGpuSplashEvent) == 112U);
     Check(sizeof(volume_render::VolumeParticleGpuDropletState) == 112U);
     Check(volume_render::VolumeParticleGpuState::MaximumSplashEventCount == 4096U);
