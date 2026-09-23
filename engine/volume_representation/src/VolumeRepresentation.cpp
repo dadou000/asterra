@@ -38,6 +38,12 @@ namespace
     return seed;
 }
 
+[[nodiscard]] u64 SignedBits(
+    const i64 value) noexcept
+{
+    return std::bit_cast<u64>(value);
+}
+
 [[nodiscard]] ResolvedRepresentation
 ForcedRepresentation(
     const world_model::VolumeRepresentationMode mode,
@@ -83,8 +89,40 @@ RepresentationDecision ResolveRepresentation(
             math::Length(half),
             0.01);
 
+    math::Double3 runtimeCenter =
+        input.volumeCenterInFrameMeters;
+    bool followTargetResolved = true;
+
+    switch (input.followTarget)
+    {
+    case FollowTarget::AuthoredDomain:
+        break;
+
+    case FollowTarget::Camera:
+        runtimeCenter =
+            input.observerInFrameMeters;
+        break;
+
+    case FollowTarget::Object:
+        if (input.
+                followObjectPositionInFrameMeters.
+                has_value())
+        {
+            runtimeCenter =
+                *input.
+                    followObjectPositionInFrameMeters;
+        }
+        else
+        {
+            // Keep authored center rather than teleporting to an undefined
+            // origin. Diagnostics make the unresolved target explicit.
+            followTargetResolved = false;
+        }
+        break;
+    }
+
     const math::Double3 delta =
-        input.volumeCenterInFrameMeters -
+        runtimeCenter -
         input.observerInFrameMeters;
 
     const f64 centerDistance =
@@ -145,16 +183,42 @@ RepresentationDecision ResolveRepresentation(
 
     RepresentationDecision result{
         .previousRepresentation = previous,
+        .runtimeCenterInFrameMeters = runtimeCenter,
         .centerDistanceMeters = centerDistance,
         .distanceToBoundsMeters = boundsDistance,
-        .projectedDiameterPixels = projected
+        .projectedDiameterPixels = projected,
+        .followTargetResolved = followTargetResolved
     };
+
+    // Stable identity uses semantic frame/body/object state plus a coarse
+    // frame-space roaming cell. No GPU presentation origin participates, so a
+    // floating-origin rebase cannot change the address.
+    constexpr f64 kStableCellMeters = 32.0;
+
+    const i64 stableX =
+        static_cast<i64>(
+            std::floor(
+                runtimeCenter.x /
+                kStableCellMeters));
+    const i64 stableY =
+        static_cast<i64>(
+            std::floor(
+                runtimeCenter.y /
+                kStableCellMeters));
+    const i64 stableZ =
+        static_cast<i64>(
+            std::floor(
+                runtimeCenter.z /
+                kStableCellMeters));
 
     u64 stable = 0x4f52424954564f4cULL;
     stable = Mix(stable, input.volume.high);
     stable = Mix(stable, input.volume.low);
     stable = Mix(stable, input.stableFrame);
     stable = Mix(stable, input.stableBody);
+    stable = Mix(stable, SignedBits(stableX));
+    stable = Mix(stable, SignedBits(stableY));
+    stable = Mix(stable, SignedBits(stableZ));
     result.stableAddressFingerprint = stable;
 
     if (input.authoredMode !=
@@ -287,6 +351,9 @@ RepresentationDecision ResolveRepresentation(
         }
     }
 
+    // Full-resolution live fields stay resident through the live/coarse overlap
+    // band. Once Live has faded out, M31 may reconfigure to a bounded coarse or
+    // passive aggregate allocation.
     result.denseFieldRequired =
         result.representation ==
             ResolvedRepresentation::Live ||
@@ -376,6 +443,29 @@ void VolumeRepresentationService::RemoveMissing(
                 record->type !=
                     world_model::kVolumeType;
         });
+
+    for (auto iterator =
+             settings_.begin();
+         iterator != settings_.end();)
+    {
+        const auto record =
+            objects.Find(
+                iterator->first);
+
+        if (!record.has_value() ||
+            record->type !=
+                world_model::kVolumeType)
+        {
+            ClearAllocationPolicy(
+                iterator->first);
+            iterator =
+                settings_.erase(iterator);
+        }
+        else
+        {
+            ++iterator;
+        }
+    }
 }
 
 std::string_view ResolvedRepresentationName(
