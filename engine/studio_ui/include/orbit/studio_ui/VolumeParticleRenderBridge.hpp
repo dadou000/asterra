@@ -55,7 +55,8 @@ BuildVolumeParticleRenderBatch(
     result.reserve(candidates.size());
     for (const auto& candidate : candidates)
     {
-        const auto& request = candidate.event->request;
+        const auto& event = *candidate.event;
+        const auto& request = event.request;
         const auto relative = math::Double3{
             request.positionMeters.x - presentationOriginMeters.x,
             request.positionMeters.y - presentationOriginMeters.y,
@@ -83,7 +84,20 @@ BuildVolumeParticleRenderBatch(
             .restitution = std::isfinite(request.restitution) ? std::clamp(request.restitution, 0.0F, 1.0F) : 0.25F,
             .behaviorFlags = behaviorFlags,
             .baseColor = request.baseColor,
-            .emissionColor = request.emissionColor
+            .emissionColor = request.emissionColor,
+            .surfaceRadiiMeters = {
+                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.x, 0.0)),
+                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.y, 0.0)),
+                static_cast<f32>(std::max(event.physics.surfaceRadiiMeters.z, 0.0))},
+            .gravitationalParameterM3PerS2 =
+                std::isfinite(event.physics.gravitationalParameterM3PerS2)
+                    ? static_cast<f32>(std::max(event.physics.gravitationalParameterM3PerS2, 0.0))
+                    : 0.0F,
+            .gravitySofteningMeters =
+                std::isfinite(event.physics.gravitySofteningMeters)
+                    ? static_cast<f32>(std::max(event.physics.gravitySofteningMeters, 0.0))
+                    : 0.0F,
+            .physicalSurfaceEnabled = event.physics.hasPhysicalSurface ? 1.0F : 0.0F
         });
     }
 
