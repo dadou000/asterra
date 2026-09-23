@@ -20,6 +20,11 @@ int main()
 {
     using namespace orbit;
 
+    const universe::BodyId body{
+        .high = 0x1122334455667788ULL,
+        .low = 0x99AABBCCDDEEFF00ULL
+    };
+
     std::vector<studio_session::VolumeParticleRuntimeEvent> events;
     events.push_back({
         .sourceVolume = {.high = 1U, .low = 1U},
@@ -42,6 +47,7 @@ int main()
             .restitution = 0.6F
         },
         .physics = {
+            .body = body,
             .gravitationalParameterM3PerS2 = 3.986004418e14,
             .gravitySofteningMeters = 10.0,
             .surfaceRadiiMeters = {6378137.0, 6378137.0, 6356752.3},
@@ -91,7 +97,7 @@ int main()
     Check(full[0].emissionScale == 3.0F);
     Check(full[0].gravityScale == 0.75F);
     Check(full[0].restitution == 0.6F);
-    Check(full[0].behaviorFlags == 13U);
+    Check(full[0].behaviorFlags == 29U);
     Check(full[0].baseColor.x == 0.2F);
     Check(full[0].baseColor.y == 0.3F);
     Check(full[0].baseColor.z == 0.4F);
@@ -108,7 +114,13 @@ int main()
     Check(full[0].gravitySofteningMeters == 10.0F);
     Check(full[0].surfaceRadiiMeters.x == 6378137.0F);
     Check(full[0].surfaceRadiiMeters.z > 6356752.0F);
-    Check(full[0].physicalSurfaceEnabled == 1.0F);
+
+    const auto bodyWords = studio_ui::VolumeParticleBodyIdentityWords(body);
+    Check(full[0].bodyIdentity == bodyWords);
+    Check(bodyWords[0] == 0x55667788U);
+    Check(bodyWords[1] == 0x11223344U);
+    Check(bodyWords[2] == 0xDDEEFF00U);
+    Check(bodyWords[3] == 0x99AABBCCU);
 
     studio_session::VolumeParticleOutputState output;
     Check(output.Diagnostics().generation == 0U);
