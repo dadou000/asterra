@@ -1,7 +1,7 @@
 #pragma once
 
 #include <orbit/studio_session/VolumeSurfaceEffectState.hpp>
-#include <orbit/terrain_render/SurfaceEffects.hpp>
+#include <orbit/terrain_render/SurfaceEffectGpuBinding.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -63,15 +63,41 @@ NormalizedRenderDirection(const math::Double3 point) noexcept
     };
 }
 
+[[nodiscard]] inline f64
+SurfacePointRadiusMeters(
+    const math::Double3 point,
+    const f64 fallbackRadiusMeters) noexcept
+{
+    const f64 lengthSquared =
+        point.x * point.x +
+        point.y * point.y +
+        point.z * point.z;
+
+    if (std::isfinite(lengthSquared) && lengthSquared > 1.0e-20)
+    {
+        return std::sqrt(lengthSquared);
+    }
+
+    if (std::isfinite(fallbackRadiusMeters))
+    {
+        return std::max(fallbackRadiusMeters, 0.001);
+    }
+
+    return 0.001;
+}
+
 // Builds a bounded GPU-facing snapshot for one body. Directions and angular
 // radii avoid losing small footprints to float precision at planetary scale.
-// Strongest effects are retained first when the upload budget is exceeded.
+// Each stamp derives its angular radius from its own body-local surface radius,
+// which remains correct across floating-origin shifts and better follows
+// non-spherical reference surfaces than one global radius approximation.
 [[nodiscard]] inline VolumeSurfaceEffectRenderBatch
 BuildVolumeSurfaceEffectRenderBatch(
     const universe::BodyId body,
     const f64 referenceRadiusMeters,
     const std::span<const studio_session::VolumeSurfaceEffectStamp> source,
-    const u32 maximumGpuStamps = 512U)
+    const u32 maximumGpuStamps =
+        terrain_render::SurfaceEffectGpuBinding::MaximumStampCount)
 {
     VolumeSurfaceEffectRenderBatch result{
         .body = body
@@ -104,14 +130,14 @@ BuildVolumeSurfaceEffectRenderBatch(
             maximumGpuStamps);
     result.stamps.reserve(count);
 
-    const f64 safeRadius =
-        std::isfinite(referenceRadiusMeters)
-            ? std::max(referenceRadiusMeters, 0.001)
-            : 0.001;
-
     for (std::size_t index = 0U; index < count; ++index)
     {
         const auto& stamp = *candidates[index];
+        const f64 localRadius =
+            SurfacePointRadiusMeters(
+                stamp.bodyLocalSurfacePointMeters,
+                referenceRadiusMeters);
+
         result.stamps.push_back({
             .bodyFixedDirection =
                 NormalizedRenderDirection(
@@ -120,7 +146,7 @@ BuildVolumeSurfaceEffectRenderBatch(
                 static_cast<f32>(
                     std::max(
                         static_cast<f64>(stamp.radiusMeters) /
-                            safeRadius,
+                            localRadius,
                         1.0e-9)),
             .amount = stamp.amount,
             .effect = ToRenderEffect(stamp.effect)
@@ -130,5 +156,22 @@ BuildVolumeSurfaceEffectRenderBatch(
     result.droppedForRenderBudget =
         static_cast<u32>(candidates.size() - count);
     return result;
+}
+
+// Convenience path for presentation code that already has resolved body-local
+// surface points. The per-stamp radius above is authoritative, so no separate
+// celestial radius lookup is required.
+[[nodiscard]] inline VolumeSurfaceEffectRenderBatch
+BuildVolumeSurfaceEffectRenderBatch(
+    const universe::BodyId body,
+    const std::span<const studio_session::VolumeSurfaceEffectStamp> source,
+    const u32 maximumGpuStamps =
+        terrain_render::SurfaceEffectGpuBinding::MaximumStampCount)
+{
+    return BuildVolumeSurfaceEffectRenderBatch(
+        body,
+        1.0,
+        source,
+        maximumGpuStamps);
 }
 } // namespace orbit::studio_ui
