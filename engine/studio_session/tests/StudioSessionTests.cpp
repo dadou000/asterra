@@ -2,12 +2,14 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_session/VolumeSurfaceOutputResolver.hpp>
 #include <orbit/volume_representation/VolumeCache.hpp>
 #include <orbit/volume_representation/VolumeOutputCoupling.hpp>
 #include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 #include <orbit/world_model/VolumeSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -190,6 +192,79 @@ void CheckVolumeOutputSimulationCadence(
 
     VolumeCaches().Detach(volume);
     VolumeOutputs().Reset(volume);
+}
+
+void CheckVolumeSurfaceProjection(
+    orbit::studio_session::StudioSession& studio,
+    const orbit::scene::ObjectId semanticBody,
+    const orbit::universe::BodyId runtimeBody,
+    const orbit::f64 radiusMeters)
+{
+    using namespace orbit;
+    using namespace orbit::studio_session;
+    using namespace orbit::volume_representation;
+
+    const auto volume =
+        studio.World().Commands().CreateObject(
+            world_model::kVolumeType,
+            "M38 Surface Receiver Volume",
+            semanticBody);
+
+    const VolumeSurfaceQueuedRequest request{
+        .volume = volume,
+        .request = {
+            .eventId = 0x380001U,
+            .samplePositionMeters = {
+                radiusMeters + 10.0,
+                0.0,
+                0.0
+            },
+            .maximumProjectionDistanceMeters = 20.0,
+            .radiusMeters = 0.5F,
+            .amount = 0.75F,
+            .density = 1.0F,
+            .emission = 0.0F
+        }
+    };
+
+    const VolumeSurfaceQueuedRequest requests[]{request};
+
+    auto& resolver = VolumeSurfaceOutputs();
+    resolver.Resolve(
+        studio.World().Objects(),
+        studio.World().Universe(),
+        studio.World().Surfaces(),
+        requests);
+
+    Check(resolver.Diagnostics().submitted == 1U);
+    Check(resolver.Diagnostics().resolved == 1U);
+    Check(resolver.Resolved().size() == 1U);
+
+    const auto& resolved = resolver.Resolved().front();
+    Check(resolved.volume == volume);
+    Check(resolved.body == runtimeBody);
+    Check(resolved.request.eventId == 0x380001U);
+    Check(std::abs(
+        resolved.bodyLocalSurfacePointMeters.x -
+        radiusMeters) < 1.0e-4);
+    Check(std::abs(resolved.bodyLocalSurfacePointMeters.y) < 1.0e-6);
+    Check(std::abs(resolved.bodyLocalSurfacePointMeters.z) < 1.0e-6);
+
+    // This +X test is intentionally incompatible with a hidden global -Y
+    // projection. The resolved point must stay on the +X radial line.
+    Check(std::abs(resolved.coordinate.latitudeRadians) < 1.0e-8);
+    Check(std::abs(resolved.coordinate.longitudeRadians) < 1.0e-8);
+
+    auto outOfRange = request;
+    outOfRange.request.maximumProjectionDistanceMeters = 5.0;
+    const VolumeSurfaceQueuedRequest rejected[]{outOfRange};
+    resolver.Resolve(
+        studio.World().Objects(),
+        studio.World().Universe(),
+        studio.World().Surfaces(),
+        rejected);
+    Check(resolver.Resolved().empty());
+    Check(resolver.Diagnostics().projectionOutOfRange == 1U);
 }
 } // namespace
 
@@ -376,6 +451,12 @@ int main()
             veyraChildren.front().type ==
                 orbit::world_model::
                     kTerrainSurfaceType);
+
+        CheckVolumeSurfaceProjection(
+            studio,
+            veyra,
+            activeRuntimeBody,
+            4'200'000.0);
 
         const auto roots =
             RpcCall(
