@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <map>
+#include <span>
 #include <vector>
 
 namespace orbit::volume_representation
@@ -87,6 +88,32 @@ struct VolumeOutputBatch
     std::vector<VolumeSurfaceDepositRequest> surfaceDeposits;
     VolumeOutputDiagnostics diagnostics{};
 };
+
+// Downstream systems implement only the channel they own. The volume layer
+// never includes particle renderer, terrain, collision or material-system
+// headers, which keeps the dependency direction one-way.
+class VolumeParticleOutputSink
+{
+public:
+    virtual ~VolumeParticleOutputSink() = default;
+    virtual void SubmitParticleSpawns(
+        scene::ObjectId volume,
+        std::span<const VolumeParticleSpawnRequest> requests) = 0;
+};
+
+class VolumeSurfaceOutputSink
+{
+public:
+    virtual ~VolumeSurfaceOutputSink() = default;
+    virtual void SubmitSurfaceDeposits(
+        scene::ObjectId volume,
+        std::span<const VolumeSurfaceDepositRequest> requests) = 0;
+};
+
+void DispatchVolumeOutputs(
+    const VolumeOutputBatch& batch,
+    VolumeParticleOutputSink* particleSink,
+    VolumeSurfaceOutputSink* surfaceSink);
 
 using VolumeOutputSampler =
     std::function<VolumeOutputFieldSample(f64 u, f64 v, f64 w)>;
