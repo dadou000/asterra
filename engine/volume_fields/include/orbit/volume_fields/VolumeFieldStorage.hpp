@@ -125,15 +125,6 @@ public:
     [[nodiscard]] const VolumeFieldDiagnostics&
     Diagnostics() const noexcept;
 
-    // UniversalVolumeRendererBase.inc is compiled behind a narrow symbol
-    // compatibility wrapper for M36. Its Diagnostics token is renamed in that
-    // translation unit, so preserve the storage accessor under the same alias.
-    [[nodiscard]] const VolumeFieldDiagnostics&
-    LiveDiagnostics() const noexcept
-    {
-        return Diagnostics();
-    }
-
     [[nodiscard]] std::span<const TileSlot>
     Tiles() const noexcept;
 
