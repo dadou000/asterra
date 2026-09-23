@@ -44,6 +44,12 @@ struct VolumeOutputSettings
     f32 particleGravityScale{1.0F};
     world_model::VolumeParticleCollisionMode particleCollisionMode{world_model::VolumeParticleCollisionMode::None};
     f32 particleRestitution{0.25F};
+    f32 particleWaterDensityRatio{1.0F};
+    f32 particleWaterDragPerSecond{0.0F};
+    f32 particleWaterBuoyancyScale{1.0F};
+    bool particleKillOnWaterImmersion{false};
+    bool particleSplashOnWaterEntry{false};
+    f32 particleWaterSplashScale{1.0F};
 
     f32 surfaceDepositRatePerSecond{24.0F};
     u32 surfaceDepositBudgetPerStep{128U};
@@ -83,6 +89,12 @@ struct VolumeParticleSpawnRequest
     f32 gravityScale{1.0F};
     world_model::VolumeParticleCollisionMode collisionMode{world_model::VolumeParticleCollisionMode::None};
     f32 restitution{0.25F};
+    f32 waterDensityRatio{1.0F};
+    f32 waterDragPerSecond{0.0F};
+    f32 waterBuoyancyScale{1.0F};
+    bool killOnWaterImmersion{false};
+    bool splashOnWaterEntry{false};
+    f32 waterSplashScale{1.0F};
 };
 
 struct VolumeSurfaceDepositRequest

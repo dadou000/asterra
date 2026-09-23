@@ -108,6 +108,18 @@ inline constexpr schema::PropertyId kVolumeParticleCollisionMode{
     .high = 0x4f52424954564f4cULL, .low = 0x505254434f4c4c01ULL};
 inline constexpr schema::PropertyId kVolumeParticleRestitution{
     .high = 0x4f52424954564f4cULL, .low = 0x5052545245535401ULL};
+inline constexpr schema::PropertyId kVolumeParticleWaterDensityRatio{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052545744525401ULL};
+inline constexpr schema::PropertyId kVolumeParticleWaterDrag{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052545744524701ULL};
+inline constexpr schema::PropertyId kVolumeParticleWaterBuoyancyScale{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052545742554f01ULL};
+inline constexpr schema::PropertyId kVolumeParticleKillOnWaterImmersion{
+    .high = 0x4f52424954564f4cULL, .low = 0x505254574b494c01ULL};
+inline constexpr schema::PropertyId kVolumeParticleSplashOnWaterEntry{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052545753504c01ULL};
+inline constexpr schema::PropertyId kVolumeParticleWaterSplashScale{
+    .high = 0x4f52424954564f4cULL, .low = 0x5052545753505301ULL};
 
 inline constexpr schema::PropertyId kVolumeChildEnabled{
     .high = 0x4f52424954564f4cULL, .low = 0x4348454e41424c01ULL};
@@ -304,6 +316,13 @@ struct ResolvedVolumeDomain
     VolumeParticleCollisionMode particleCollisionMode{
         VolumeParticleCollisionMode::None};
     f32 particleRestitution{0.25F};
+    // Relative to standing water: 1 = neutrally buoyant, <1 rises, >1 sinks.
+    f32 particleWaterDensityRatio{1.0F};
+    f32 particleWaterDragPerSecond{0.0F};
+    f32 particleWaterBuoyancyScale{1.0F};
+    bool particleKillOnWaterImmersion{false};
+    bool particleSplashOnWaterEntry{false};
+    f32 particleWaterSplashScale{1.0F};
 
     u32 sourceCount{0U};
     u32 effectorCount{0U};

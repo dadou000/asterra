@@ -85,7 +85,13 @@ void RegisterVolumeSchemas(
             {.id=kVolumeParticleGravityMode,.name="Particle Gravity Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=1.0}},
             {.id=kVolumeParticleGravityScale,.name="Particle Gravity Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=16.0}},
             {.id=kVolumeParticleCollisionMode,.name="Particle Collision Mode",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=3.0}},
-            {.id=kVolumeParticleRestitution,.name="Particle Restitution",.kind=schema::PropertyKind::Float,.defaultValue=0.25,.range={.minimum=0.0,.maximum=1.0}}
+            {.id=kVolumeParticleRestitution,.name="Particle Restitution",.kind=schema::PropertyKind::Float,.defaultValue=0.25,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kVolumeParticleWaterDensityRatio,.name="Particle Water Density Ratio",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.01,.maximum=100.0}},
+            {.id=kVolumeParticleWaterDrag,.name="Particle Water Drag",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=0.0,.range={.minimum=0.0,.maximum=1000.0}},
+            {.id=kVolumeParticleWaterBuoyancyScale,.name="Particle Water Buoyancy Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=16.0}},
+            {.id=kVolumeParticleKillOnWaterImmersion,.name="Particle Kill On Water Immersion",.kind=schema::PropertyKind::Boolean,.defaultValue=false},
+            {.id=kVolumeParticleSplashOnWaterEntry,.name="Particle Splash On Water Entry",.kind=schema::PropertyKind::Boolean,.defaultValue=false},
+            {.id=kVolumeParticleWaterSplashScale,.name="Particle Water Splash Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=64.0}}
         }
     });
 
@@ -281,7 +287,13 @@ ResolveVolumeDomain(
         .particleGravityMode = static_cast<VolumeParticleGravityMode>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeParticleGravityMode, 0), 0, 1)),
         .particleGravityScale = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleGravityScale, 1.0), 0.0, 16.0)),
         .particleCollisionMode = static_cast<VolumeParticleCollisionMode>(std::clamp<i64>(Read<i64>(objects, volume, kVolumeParticleCollisionMode, 0), 0, 3)),
-        .particleRestitution = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleRestitution, 0.25), 0.0, 1.0))
+        .particleRestitution = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleRestitution, 0.25), 0.0, 1.0)),
+        .particleWaterDensityRatio = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleWaterDensityRatio, 1.0), 0.01, 100.0)),
+        .particleWaterDragPerSecond = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleWaterDrag, 0.0), 0.0, 1000.0)),
+        .particleWaterBuoyancyScale = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleWaterBuoyancyScale, 1.0), 0.0, 16.0)),
+        .particleKillOnWaterImmersion = Read<bool>(objects, volume, kVolumeParticleKillOnWaterImmersion, false),
+        .particleSplashOnWaterEntry = Read<bool>(objects, volume, kVolumeParticleSplashOnWaterEntry, false),
+        .particleWaterSplashScale = static_cast<f32>(std::clamp(Read<f64>(objects, volume, kVolumeParticleWaterSplashScale, 1.0), 0.0, 64.0))
     };
 
     for (const auto& child :

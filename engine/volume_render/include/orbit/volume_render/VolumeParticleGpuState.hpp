@@ -35,10 +35,14 @@ struct VolumeParticleGpuStateRecord
     f32 gravitationalParameterM3PerS2{0.0F};
     math::Float3 surfaceRadiiMeters{};
     f32 gravitySofteningMeters{0.0F};
+    f32 waterDensityRatio{1.0F};
+    f32 waterDragPerSecond{0.0F};
+    f32 waterBuoyancyScale{1.0F};
+    f32 waterSplashScale{1.0F};
     std::array<u32, 4U> bodyIdentity{};
 };
 
-static_assert(sizeof(VolumeParticleGpuStateRecord) == 144U);
+static_assert(sizeof(VolumeParticleGpuStateRecord) == 160U);
 
 struct VolumeParticleSimulationSettings
 {

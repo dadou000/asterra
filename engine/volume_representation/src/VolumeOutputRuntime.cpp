@@ -104,6 +104,12 @@ VolumeOutputRuntimeDiagnostics VolumeOutputRuntime::TickWorld(
         settings.particleGravityScale = domain->particleGravityScale;
         settings.particleCollisionMode = domain->particleCollisionMode;
         settings.particleRestitution = domain->particleRestitution;
+        settings.particleWaterDensityRatio = domain->particleWaterDensityRatio;
+        settings.particleWaterDragPerSecond = domain->particleWaterDragPerSecond;
+        settings.particleWaterBuoyancyScale = domain->particleWaterBuoyancyScale;
+        settings.particleKillOnWaterImmersion = domain->particleKillOnWaterImmersion;
+        settings.particleSplashOnWaterEntry = domain->particleSplashOnWaterEntry;
+        settings.particleWaterSplashScale = domain->particleWaterSplashScale;
         settings.surfaceDepositRatePerSecond = domain->outputSurfaceDepositRatePerSecond;
         settings.surfaceDepositBudgetPerStep = domain->outputSurfaceDepositBudgetPerStep;
         settings.surfaceDepositRadiusMeters = domain->outputSurfaceDepositRadiusMeters;

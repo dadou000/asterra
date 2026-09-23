@@ -34,6 +34,10 @@ struct Spawn
     float gravitationalParameterM3PerS2;
     float3 surfaceRadiiMeters;
     float gravitySofteningMeters;
+    float waterDensityRatio;
+    float waterDragPerSecond;
+    float waterBuoyancyScale;
+    float waterSplashScale;
     uint4 bodyIdentity;
 };
 
@@ -59,6 +63,10 @@ struct Particle
     float gravitationalParameterM3PerS2;
     float3 surfaceRadiiMeters;
     float gravitySofteningMeters;
+    float waterDensityRatio;
+    float waterDragPerSecond;
+    float waterBuoyancyScale;
+    float waterSplashScale;
     uint4 bodyIdentity;
 };
 
@@ -207,6 +215,10 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
         particle.gravitationalParameterM3PerS2 = max(spawn.gravitationalParameterM3PerS2, 0.0);
         particle.surfaceRadiiMeters = max(spawn.surfaceRadiiMeters, 0.0);
         particle.gravitySofteningMeters = max(spawn.gravitySofteningMeters, 0.0);
+        particle.waterDensityRatio = max(spawn.waterDensityRatio, 0.01);
+        particle.waterDragPerSecond = max(spawn.waterDragPerSecond, 0.0);
+        particle.waterBuoyancyScale = max(spawn.waterBuoyancyScale, 0.0);
+        particle.waterSplashScale = max(spawn.waterSplashScale, 0.0);
         particle.bodyIdentity = spawn.bodyIdentity;
         particle.generation = g.counts.y;
         AppendParticle(particle);
@@ -239,6 +251,10 @@ struct Particle
     float gravitationalParameterM3PerS2;
     float3 surfaceRadiiMeters;
     float gravitySofteningMeters;
+    float waterDensityRatio;
+    float waterDragPerSecond;
+    float waterBuoyancyScale;
+    float waterSplashScale;
     uint4 bodyIdentity;
 };
 
@@ -445,25 +461,76 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float particleRadius = max(particle.radiusMeters, 0.001);
     float3 normal = TerrainSurfaceNormal(uv, radii, direction);
 
-    // Standing water is an environment, not a solid surface. Reuse the
-    // particle's authored linear drag as the water-response coefficient and
-    // scale it only by actual submersion. No hidden buoyancy/density model is
-    // invented here.
+    // Standing-water response is authored per particle. Bit 31 tracks current
+    // immersion and bit 30 latches a water-entry event for the GPU splash
+    // output pass. No particle-state readback is required.
     bool waterAffected = false;
+    bool killForWater = false;
+    const uint kWaterEntryPending = 1u << 30u;
+    const uint kWaterSubmerged = 1u << 31u;
+    bool wasSubmerged = (particle.behaviorFlags & kWaterSubmerged) != 0u;
+    bool nowSubmerged = false;
     if (standingWaterDepthMeters > 0.0)
     {
         float waterRadius = terrainRadius + standingWaterDepthMeters;
         float submersion = saturate(
             (waterRadius + particleRadius - radialDistance) /
             max(2.0 * particleRadius, 0.001));
-        if (submersion > 0.0)
+        nowSubmerged = submersion > 0.0;
+        if (nowSubmerged)
         {
             float dt = max(asfloat(g.body.w), 0.0);
             float waterDrag = exp(
-                -max(particle.linearDragPerSecond, 0.0) * dt * submersion);
+                -max(particle.waterDragPerSecond, 0.0) * dt * submersion);
             particle.velocityMetersPerSecond *= waterDrag;
+
+            // Main integration already applied gravity. Add only buoyancy here:
+            // a density ratio of 1 with scale 1 cancels body gravity at full
+            // submersion; ratios below/above 1 rise/sink respectively.
+            float3 radial = particle.positionMeters - particle.bodyCenterMeters;
+            float radius2 = dot(radial, radial);
+            if (radius2 > 1.0e-6 &&
+                particle.gravitationalParameterM3PerS2 > 0.0 &&
+                particle.gravityScale > 0.0 &&
+                particle.waterBuoyancyScale > 0.0)
+            {
+                float inverseRadius = rsqrt(radius2);
+                float gravityAcceleration =
+                    particle.gravitationalParameterM3PerS2 / radius2 *
+                    particle.gravityScale;
+                float buoyancyAcceleration = gravityAcceleration *
+                    particle.waterBuoyancyScale /
+                    max(particle.waterDensityRatio, 0.01);
+                particle.velocityMetersPerSecond +=
+                    radial * inverseRadius * buoyancyAcceleration *
+                    submersion * dt;
+            }
+
+            if (!wasSubmerged &&
+                (particle.behaviorFlags & (1u << 6u)) != 0u)
+            {
+                particle.behaviorFlags |= kWaterEntryPending;
+            }
+
+            // Kill only after the particle centre crosses the water surface,
+            // avoiding death from a grazing radius contact.
+            if ((particle.behaviorFlags & (1u << 5u)) != 0u &&
+                radialDistance <= waterRadius)
+            {
+                killForWater = true;
+            }
             waterAffected = true;
         }
+    }
+
+    if (nowSubmerged) particle.behaviorFlags |= kWaterSubmerged;
+    else particle.behaviorFlags &= ~kWaterSubmerged;
+
+    if (killForWater)
+    {
+        particle.generation = 0u;
+        g_particles[index] = particle;
+        return;
     }
 
     // CollisionMode::None still allows water drag, but never treats terrain as

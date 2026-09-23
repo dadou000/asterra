@@ -216,6 +216,10 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
     const f32 particleEmissionScale = std::isfinite(entry.settings.particleEmissionScale) ? std::max(entry.settings.particleEmissionScale, 0.0F) : 1.0F;
     const f32 particleGravityScale = std::isfinite(entry.settings.particleGravityScale) ? std::max(entry.settings.particleGravityScale, 0.0F) : 1.0F;
     const f32 particleRestitution = std::isfinite(entry.settings.particleRestitution) ? std::clamp(entry.settings.particleRestitution, 0.0F, 1.0F) : 0.25F;
+    const f32 particleWaterDensityRatio = std::isfinite(entry.settings.particleWaterDensityRatio) ? std::clamp(entry.settings.particleWaterDensityRatio, 0.01F, 100.0F) : 1.0F;
+    const f32 particleWaterDrag = std::isfinite(entry.settings.particleWaterDragPerSecond) ? std::clamp(entry.settings.particleWaterDragPerSecond, 0.0F, 1000.0F) : 0.0F;
+    const f32 particleWaterBuoyancy = std::isfinite(entry.settings.particleWaterBuoyancyScale) ? std::clamp(entry.settings.particleWaterBuoyancyScale, 0.0F, 16.0F) : 1.0F;
+    const f32 particleWaterSplashScale = std::isfinite(entry.settings.particleWaterSplashScale) ? std::clamp(entry.settings.particleWaterSplashScale, 0.0F, 64.0F) : 1.0F;
 
     batch.particles.reserve(particleBudget.admitted);
 
@@ -261,7 +265,13 @@ const VolumeOutputBatch& VolumeOutputCouplingService::Advance(
             .gravityMode = entry.settings.particleGravityMode,
             .gravityScale = particleGravityScale,
             .collisionMode = entry.settings.particleCollisionMode,
-            .restitution = particleRestitution
+            .restitution = particleRestitution,
+            .waterDensityRatio = particleWaterDensityRatio,
+            .waterDragPerSecond = particleWaterDrag,
+            .waterBuoyancyScale = particleWaterBuoyancy,
+            .killOnWaterImmersion = entry.settings.particleKillOnWaterImmersion,
+            .splashOnWaterEntry = entry.settings.particleSplashOnWaterEntry,
+            .waterSplashScale = particleWaterSplashScale
         });
     }
 

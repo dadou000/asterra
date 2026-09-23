@@ -82,7 +82,9 @@ BuildVolumeParticleRenderBatch(
         const u32 behaviorFlags =
             (static_cast<u32>(request.gravityMode) & 0x3U) |
             ((static_cast<u32>(request.collisionMode) & 0x3U) << 2U) |
-            (event.physics.hasPhysicalSurface ? (1U << 4U) : 0U);
+            (event.physics.hasPhysicalSurface ? (1U << 4U) : 0U) |
+            (request.killOnWaterImmersion ? (1U << 5U) : 0U) |
+            (request.splashOnWaterEntry ? (1U << 6U) : 0U);
 
         result.push_back({
             .positionMeters = {
@@ -118,6 +120,10 @@ BuildVolumeParticleRenderBatch(
                 std::isfinite(event.physics.gravitySofteningMeters)
                     ? static_cast<f32>(std::max(event.physics.gravitySofteningMeters, 0.0))
                     : 0.0F,
+            .waterDensityRatio = std::isfinite(request.waterDensityRatio) ? std::clamp(request.waterDensityRatio, 0.01F, 100.0F) : 1.0F,
+            .waterDragPerSecond = std::isfinite(request.waterDragPerSecond) ? std::clamp(request.waterDragPerSecond, 0.0F, 1000.0F) : 0.0F,
+            .waterBuoyancyScale = std::isfinite(request.waterBuoyancyScale) ? std::clamp(request.waterBuoyancyScale, 0.0F, 16.0F) : 1.0F,
+            .waterSplashScale = std::isfinite(request.waterSplashScale) ? std::clamp(request.waterSplashScale, 0.0F, 64.0F) : 1.0F,
             .bodyIdentity = VolumeParticleBodyIdentityWords(event.physics.body)
         });
     }

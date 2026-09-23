@@ -746,6 +746,27 @@ void VolumeAuthoringUi::DrawRepresentationPolicy(
     if (context.InputDouble("Restitution##volume-output-restitution", restitution))
         world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleRestitution, std::clamp(restitution, 0.0, 1.0));
 
+    context.Text("Standing Water Response");
+    f64 waterDensityRatio = volume->particleWaterDensityRatio;
+    f64 waterDrag = volume->particleWaterDragPerSecond;
+    f64 waterBuoyancy = volume->particleWaterBuoyancyScale;
+    f64 waterSplashScale = volume->particleWaterSplashScale;
+    bool killOnWater = volume->particleKillOnWaterImmersion;
+    bool splashOnWaterEntry = volume->particleSplashOnWaterEntry;
+    if (context.InputDouble("Density Ratio to Water##volume-output-water-density", waterDensityRatio))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleWaterDensityRatio, std::clamp(waterDensityRatio, 0.01, 100.0));
+    if (context.InputDouble("Water Drag / s##volume-output-water-drag", waterDrag))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleWaterDrag, std::clamp(waterDrag, 0.0, 1000.0));
+    if (context.InputDouble("Buoyancy Scale##volume-output-water-buoyancy", waterBuoyancy))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleWaterBuoyancyScale, std::clamp(waterBuoyancy, 0.0, 16.0));
+    if (context.Checkbox("Kill On Water Immersion##volume-output-water-kill", killOnWater))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleKillOnWaterImmersion, killOnWater);
+    if (context.Checkbox("Splash On Water Entry##volume-output-water-splash", splashOnWaterEntry))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleSplashOnWaterEntry, splashOnWaterEntry);
+    if (context.InputDouble("Splash Scale##volume-output-water-splash-scale", waterSplashScale))
+        world.Commands().SetProperty(*volumeId, world_model::kVolumeParticleWaterSplashScale, std::clamp(waterSplashScale, 0.0, 64.0));
+    context.MutedText("Density ratio 1.0 is neutrally buoyant at full immersion. Water entry is latched on GPU for the splash-output pass; no particle-state CPU readback is used.");
+
     f64 depositRate = volume->outputSurfaceDepositRatePerSecond;
     i64 depositBudget = static_cast<i64>(volume->outputSurfaceDepositBudgetPerStep);
     f64 depositRadius = volume->outputSurfaceDepositRadiusMeters;
@@ -774,7 +795,7 @@ void VolumeAuthoringUi::DrawRepresentationPolicy(
     if (context.InputInteger("Candidate Multiplier##volume-output-candidates", candidateMultiplier))
         world.Commands().SetProperty(*volumeId, world_model::kVolumeOutputCandidateMultiplier, std::clamp<i64>(candidateMultiplier, 1, 64));
 
-    context.MutedText("Gravity/collision policies are authored and carried per particle. GPU body-gravity and physical-surface response are the next M38 simulation hook.");
+    context.MutedText("Gravity, terrain collision and standing-water response are authored per particle and remain GPU-resident. Water-entry events are latched for the GPU splash-output consumer.");
 
     if ((volume->outputParticlesEnabled ||
          volume->outputSurfaceDepositsEnabled) &&

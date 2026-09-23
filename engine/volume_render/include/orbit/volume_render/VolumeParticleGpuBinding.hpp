@@ -37,14 +37,18 @@ struct VolumeParticleGpuSpawn
     f32 gravitationalParameterM3PerS2{0.0F};
     math::Float3 surfaceRadiiMeters{};
     f32 gravitySofteningMeters{0.0F};
+    f32 waterDensityRatio{1.0F};
+    f32 waterDragPerSecond{0.0F};
+    f32 waterBuoyancyScale{1.0F};
+    f32 waterSplashScale{1.0F};
 
     // Full 128-bit owning body identity. Surface-authority is encoded in
     // behaviorFlags bit 4 so this replaces existing reserved words without
-    // increasing the 144-byte GPU record.
+    // adding only the authored 16-byte water-response block.
     std::array<u32, 4U> bodyIdentity{};
 };
 
-static_assert(sizeof(VolumeParticleGpuSpawn) == 144U);
+static_assert(sizeof(VolumeParticleGpuSpawn) == 160U);
 
 class VolumeParticleGpuBinding
 {

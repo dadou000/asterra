@@ -33,6 +33,10 @@ struct Particle
     float gravitationalParameterM3PerS2;
     float3 surfaceRadiiMeters;
     float gravitySofteningMeters;
+    float waterDensityRatio;
+    float waterDragPerSecond;
+    float waterBuoyancyScale;
+    float waterSplashScale;
     uint4 bodyIdentity;
 };
 

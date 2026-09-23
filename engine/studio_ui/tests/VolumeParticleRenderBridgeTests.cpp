@@ -44,7 +44,13 @@ int main()
             .gravityMode = world_model::VolumeParticleGravityMode::OwningBody,
             .gravityScale = 0.75F,
             .collisionMode = world_model::VolumeParticleCollisionMode::Bounce,
-            .restitution = 0.6F
+            .restitution = 0.6F,
+            .waterDensityRatio = 0.8F,
+            .waterDragPerSecond = 7.5F,
+            .waterBuoyancyScale = 1.2F,
+            .killOnWaterImmersion = true,
+            .splashOnWaterEntry = true,
+            .waterSplashScale = 2.5F
         },
         .physics = {
             .body = body,
@@ -97,7 +103,11 @@ int main()
     Check(full[0].emissionScale == 3.0F);
     Check(full[0].gravityScale == 0.75F);
     Check(full[0].restitution == 0.6F);
-    Check(full[0].behaviorFlags == 29U);
+    Check(full[0].behaviorFlags == 125U);
+    Check(full[0].waterDensityRatio == 0.8F);
+    Check(full[0].waterDragPerSecond == 7.5F);
+    Check(full[0].waterBuoyancyScale == 1.2F);
+    Check(full[0].waterSplashScale == 2.5F);
     // Bit 4 is the composed-world physical-surface authority gate used by
     // both reference fallback and resident physical-page terrain/water passes.
     Check((full[0].behaviorFlags & (1U << 4U)) != 0U);
