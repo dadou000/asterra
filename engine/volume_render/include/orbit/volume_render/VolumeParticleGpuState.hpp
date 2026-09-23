@@ -31,9 +31,15 @@ struct VolumeParticleGpuStateRecord
     u32 behaviorFlags{0U};
     math::Float3 emissionColor{1.0F, 0.32F, 0.06F};
     u32 generation{0U};
+    math::Float3 surfaceRadiiMeters{};
+    f32 gravitationalParameterM3PerS2{0.0F};
+    f32 gravitySofteningMeters{0.0F};
+    f32 physicalSurfaceEnabled{0.0F};
+    f32 reserved0{0.0F};
+    f32 reserved1{0.0F};
 };
 
-static_assert(sizeof(VolumeParticleGpuStateRecord) == 96U);
+static_assert(sizeof(VolumeParticleGpuStateRecord) == 128U);
 
 struct VolumeParticleSimulationSettings
 {
