@@ -70,6 +70,7 @@ struct VSOutput
     float emissionScale : TEXCOORD7;
     float softnessMeters : TEXCOORD8;
     float stochasticCoverage : TEXCOORD9;
+    float3 centerCameraRelative : TEXCOORD10;
 };
 
 float4 Project(float3 relative)
@@ -185,7 +186,7 @@ constexpr const char* kSplashVertexShader = R"(
 struct SplashState { float3 positionMeters; float baseScaleMeters; float3 normal; float expansionMetersPerSecond; float3 tint; float impactSpeedMetersPerSecond; float ageSeconds; float lifetimeSeconds; uint generation; uint reserved; };
 [[vk::binding(3, 0)]] StructuredBuffer<SplashState> g_splashes : register(t3);
 [[vk::binding(6, 0)]] StructuredBuffer<uint> g_splashIndices : register(t6);
-struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; };
+struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; float4 stellar; float4 lighting; };
 [[vk::push_constant]] Push g;
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; float softnessMeters:TEXCOORD3; };
 float4 Project(float3 relative) {
@@ -210,8 +211,8 @@ VSOutput main(uint vertexId:SV_VertexID) {
 )";
 constexpr const char* kSplashPixelShader = R"(
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; float softnessMeters:TEXCOORD3; };
-[[vk::binding(8,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(8,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
-struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; }; [[vk::push_constant]] Push g;
+[[vk::binding(9,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(9,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; float4 stellar; float4 lighting; }; [[vk::push_constant]] Push g;
 float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
 float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 struct OitOutput { float4 accumulation:SV_Target0; float4 opticalDepth:SV_Target1; float4 motionReject:SV_Target2; };
@@ -236,12 +237,25 @@ VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2
 )";
 constexpr const char* kDropletPixelShader = R"(
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; float softnessMeters:TEXCOORD3; float stochasticCoverage:TEXCOORD4; };
-[[vk::binding(8,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(8,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+[[vk::binding(9,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(9,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; }; [[vk::push_constant]] Push g;
 float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
 float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 struct OitOutput { float4 accumulation:SV_Target0; float4 opticalDepth:SV_Target1; float4 motionReject:SV_Target2; };
 float Hash12(float2 p,uint seed){uint x=asuint(p.x)*1664525u+asuint(p.y)*1013904223u+seed*747796405u;x^=x>>16;x*=2246822519u;x^=x>>13;return float(x&0x00ffffffu)/16777216.0;}
+
+float RangeAttenuation(float d,float range){float n=d/max(range,1e-4);float q=n*n*n*n;float s=saturate(1.0-q);return s*s;}
+float LocalIrradiance(GpuLocalLight light,float d,float3 surfaceToLight){
+ float watts=max(light.colorFlux.w,0.0)/683.0; float isSpot=step(0.5,light.positionType.w); float solidAngle=12.5663706; float angular=1.0;
+ if(isSpot>0.5){float outer=clamp(light.cone.y,-1.0,1.0);solidAngle=max(6.2831853*(1.0-outer),1e-4);float spotCos=dot(-surfaceToLight,normalize(light.directionRange.xyz));angular=smoothstep(outer,max(light.cone.x,outer+1e-5),spotCos);}
+ return (watts/solidAngle)*(1.0/max(d*d,0.0025))*RangeAttenuation(d,light.directionRange.w)*angular/1361.0;
+}
+float3 ParticleIncident(float3 p,float3 pseudoNormal,float opticalDepth){
+ float3 stellarDir=normalize(g.stellar.xyz); float back=saturate(0.5-0.5*dot(pseudoNormal,stellarDir)); float stellarT=exp(-opticalDepth*lerp(0.35,1.25,back));
+ float3 incident=max(g.lighting.xyz,0.0)*(0.035+max(g.stellar.w,0.0)*stellarT); uint count=min(asuint(g.lighting.w),64u);
+ [loop] for(uint i=0;i<count;++i){GpuLocalLight l=g_localLights[i];float3 delta=l.positionType.xyz-p;float d=length(delta);if(d<=1e-4||d>=l.directionRange.w)continue;float3 dir=delta/d;float scale=LocalIrradiance(l,d,dir);float localBack=saturate(0.5-0.5*dot(pseudoNormal,dir));float localT=exp(-opticalDepth*lerp(0.35,1.25,localBack));incident+=max(l.colorFlux.rgb,0.0)*scale*localT;}
+ return incident;
+}
 OitOutput main(VSOutput i) { float r2=dot(i.uv,i.uv); if(r2>=1.0||i.life<=0.0) discard; if(i.stochasticCoverage<0.999 && Hash12(floor(i.position.xy),asuint(g.temporal.x))>i.stochasticCoverage) discard; float alpha=(1.0-smoothstep(0.2,1.0,r2))*i.life*0.82*SoftDepth(i.position,i.softnessMeters); float3 c=lerp(float3(0.70,0.84,0.94),float3(1,1,1),0.65)*i.tint; OitOutput o; float optical=-log(max(1.0-saturate(alpha),1.0e-4)); o.accumulation=float4(c*alpha,alpha); o.opticalDepth=float4(optical,0,0,0); o.motionReject=float4(alpha,0,0,0); return o; }
 )";
 
@@ -258,10 +272,13 @@ struct VSOutput
     float3 emissionColor : TEXCOORD6;
     float emissionScale : TEXCOORD7;    float softnessMeters : TEXCOORD8;
     float stochasticCoverage : TEXCOORD9;
+    float3 centerCameraRelative : TEXCOORD10;
 };
-[[vk::binding(8,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth;
-[[vk::binding(8,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
-struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; }; [[vk::push_constant]] Push g;
+struct GpuLocalLight { float4 positionType; float4 directionRange; float4 colorFlux; float4 cone; };
+[[vk::binding(8,0)]] StructuredBuffer<GpuLocalLight> g_localLights;
+[[vk::binding(9,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth;
+[[vk::binding(9,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; float4 stellar; float4 lighting; }; [[vk::push_constant]] Push g;
 float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
 float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 
@@ -281,15 +298,20 @@ OitOutput main(VSOutput input)
     const float emission = max(input.emission, 0.0);
     const float authority = saturate(input.authority);
 
-    const float3 densityColor = input.baseColor * lerp(0.72, 1.0, density);
-    const float3 emissiveColor = input.emissionColor * emission * input.emissionScale;
-    const float3 color = densityColor + emissiveColor;
     const float depthFade=SoftDepth(input.position,input.softnessMeters);
     const float alpha = soft * input.life * depthFade *
         saturate(0.16 + 0.64 * authority + 0.20 * density);
+    const float opticalDepth = -log(max(1.0 - saturate(alpha), 1.0e-4));
+    const float3 fw=normalize(g.forward.xyz), requestedUp=normalize(g.up.xyz);
+    const float3 right=normalize(cross(fw,requestedUp)), cameraUp=normalize(cross(right,fw));
+    const float z=sqrt(saturate(1.0-radius2));
+    const float3 pseudoNormal=normalize(right*input.uv.x-cameraUp*input.uv.y-fw*z);
+    const float3 incident=ParticleIncident(input.centerCameraRelative,pseudoNormal,opticalDepth);
+    const float3 densityColor = input.baseColor * lerp(0.72, 1.0, density) * incident;
+    const float3 emissiveColor = input.emissionColor * emission * input.emissionScale;
+    const float3 color = densityColor + emissiveColor;
 
     OitOutput output;
-    const float opticalDepth = -log(max(1.0 - saturate(alpha), 1.0e-4));
     output.accumulation = float4(color * alpha, alpha);
     output.opticalDepth = float4(opticalDepth, 0.0, 0.0, 0.0);
     output.motionReject = 0.0;
@@ -362,8 +384,8 @@ VolumeParticleRenderer::VolumeParticleRenderer(
         },
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
-        .pushConstantDwords = 24U,
-        .shaderResourceBuffers = 8U,
+        .pushConstantDwords = 32U,
+        .shaderResourceBuffers = 9U,
         .sampledTextures = 1U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
@@ -379,12 +401,12 @@ VolumeParticleRenderer::VolumeParticleRenderer(
     splashPipeline_ = device.CreateGraphicsPipeline({
         .vertexShader={.data=splashVertex.bytecode.data(),.size=splashVertex.bytecode.size()},
         .pixelShader={.data=splashPixel.bytecode.data(),.size=splashPixel.bytecode.size()},
-        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=24U,.shaderResourceBuffers=8U,.sampledTextures=1U,
+        .vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=9U,.sampledTextures=1U,
         .topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,
         .blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,
         .colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=3U
     });
-    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=24U,.shaderResourceBuffers=8U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=3U});
+    dropletPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=dropletVertex.bytecode.data(),.size=dropletVertex.bytecode.size()},.pixelShader={.data=dropletPixel.bytecode.data(),.size=dropletPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=32U,.shaderResourceBuffers=9U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Additive,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=true,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float,rhi::TextureFormat::R16_Float,rhi::TextureFormat::R16_Float},.colorAttachmentCount=3U});
     oitTemporalPipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitTemporalPixel.bytecode.data(),.size=oitTemporalPixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=4U,.shaderResourceBuffers=0U,.sampledTextures=4U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Opaque,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
     oitCompositePipeline_=device.CreateGraphicsPipeline({.vertexShader={.data=oitCompositeVertex.bytecode.data(),.size=oitCompositeVertex.bytecode.size()},.pixelShader={.data=oitCompositePixel.bytecode.data(),.size=oitCompositePixel.bytecode.size()},.vertexAttributes={},.vertexStrideBytes=0U,.pushConstantDwords=0U,.shaderResourceBuffers=0U,.sampledTextures=1U,.topology=rhi::PrimitiveTopology::TriangleList,.fillMode=rhi::FillMode::Solid,.cullMode=rhi::CullMode::None,.blendMode=rhi::BlendMode::Alpha,.depthCompare=rhi::DepthCompare::LessEqual,.depthTest=false,.depthWrite=false,.colorAttachmentFormats={rhi::TextureFormat::RGBA16_Float},.colorAttachmentCount=1U});
 }
@@ -402,6 +424,7 @@ VolumeParticleRenderer::OitTargets& VolumeParticleRenderer::EnsureOitTargets(con
         target.motionReject=device_->CreateTexture({.width=width,.height=height,.format=rhi::TextureFormat::R16_Float,.initialState=rhi::ResourceState::ShaderResource});
         target.historyA=device_->CreateTexture({.width=width,.height=height,.format=rhi::TextureFormat::RGBA16_Float,.initialState=rhi::ResourceState::ShaderResource});
         target.historyB=device_->CreateTexture({.width=width,.height=height,.format=rhi::TextureFormat::RGBA16_Float,.initialState=rhi::ResourceState::ShaderResource});
+        target.localLights=device_->CreateBuffer({.sizeBytes=static_cast<u64>(MaximumLocalLightCount)*sizeof(lighting::GpuLocalLight),.usage=rhi::BufferUsage::Structured,.memory=rhi::MemoryUsage::HostVisible,.initialState=rhi::ResourceState::ShaderResource});
         target.accumulationState=rhi::ResourceState::ShaderResource; target.opticalDepthState=rhi::ResourceState::ShaderResource; target.motionRejectState=rhi::ResourceState::ShaderResource; target.historyAState=rhi::ResourceState::ShaderResource; target.historyBState=rhi::ResourceState::ShaderResource;
     }
     return target;
@@ -486,6 +509,8 @@ void VolumeParticleRenderer::Draw(
     const math::Double3 cameraPositionRelativeToPresentationOriginMeters,
     const u32 frameIndex,
     const u64 temporalHistoryKey,
+    const lighting::DirectionalLight& stellarLight,
+    const std::span<const lighting::ResolvedLocalLight> localLights,
     const f32 radiusPixels)
 {
     if (state_.Generation() == 0U || width == 0U || height == 0U)
@@ -547,6 +572,12 @@ void VolumeParticleRenderer::Draw(
     auto& oit=EnsureOitTargets(width,height,frameIndex,temporalHistoryKey);
     ++oit.temporalSequence; if(oit.temporalSequence==0U) oit.temporalSequence=1U;
     constants[20]=oit.temporalSequence;
+    constants[24]=bits(stellarLight.directionToLight.x); constants[25]=bits(stellarLight.directionToLight.y); constants[26]=bits(stellarLight.directionToLight.z); constants[27]=bits(std::max(stellarLight.irradianceScale,0.0F));
+    constants[28]=bits(std::max(stellarLight.colorLinear.x,0.0F)); constants[29]=bits(std::max(stellarLight.colorLinear.y,0.0F)); constants[30]=bits(std::max(stellarLight.colorLinear.z,0.0F));
+    const u32 localLightCount=std::min<u32>(static_cast<u32>(localLights.size()),MaximumLocalLightCount); constants[31]=localLightCount;
+    if(oit.localLights==nullptr) throw std::logic_error("M38 viewport-local light buffer is unavailable.");
+    auto* mappedLights=oit.localLights->Map(); std::memset(mappedLights,0,static_cast<std::size_t>(oit.localLights->SizeBytes()));
+    auto* encodedLights=reinterpret_cast<lighting::GpuLocalLight*>(mappedLights); for(u32 i=0;i<localLightCount;++i) encodedLights[i]=lighting::EncodeGpuLocalLight(localLights[i]); oit.localLights->Unmap();
     if(oit.accumulationState!=rhi::ResourceState::RenderTarget){commands.Transition(*oit.accumulation,oit.accumulationState,rhi::ResourceState::RenderTarget);oit.accumulationState=rhi::ResourceState::RenderTarget;}
     if(oit.opticalDepthState!=rhi::ResourceState::RenderTarget){commands.Transition(*oit.opticalDepth,oit.opticalDepthState,rhi::ResourceState::RenderTarget);oit.opticalDepthState=rhi::ResourceState::RenderTarget;}
     if(oit.motionRejectState!=rhi::ResourceState::RenderTarget){commands.Transition(*oit.motionReject,oit.motionRejectState,rhi::ResourceState::RenderTarget);oit.motionRejectState=rhi::ResourceState::RenderTarget;}
@@ -572,18 +603,21 @@ void VolumeParticleRenderer::Draw(
     commands.SetGraphicsPipeline(*pipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
+    commands.SetGraphicsBuffer(8U,*oit.localLights);
     commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::ParticleIndirectOffsetBytes);
     constants[19] = state_.DropletGeneration();
     commands.SetGraphicsPipeline(*dropletPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
+    commands.SetGraphicsBuffer(8U,*oit.localLights);
     commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::DropletIndirectOffsetBytes);
     constants[19] = state_.SplashGeneration();
     commands.SetGraphicsPipeline(*splashPipeline_);
     commands.SetGraphicsConstants(constants);
     state_.BindForGraphics(commands);
+    commands.SetGraphicsBuffer(8U,*oit.localLights);
     commands.SetGraphicsTexture(0U,depth);
     commands.DrawIndirect(state_.IndirectDrawArguments(), VolumeParticleGpuState::SplashIndirectOffsetBytes);
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/LocalLightRegistry.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/rhi/Command.hpp>
@@ -22,6 +24,8 @@ namespace orbit::volume_render
 class VolumeParticleRenderer
 {
 public:
+    static constexpr u32 MaximumLocalLightCount = 64U;
+
     VolumeParticleRenderer(
         rhi::Device& device,
         const shader::Compiler& compiler,
@@ -60,6 +64,8 @@ public:
         math::Double3 cameraPositionRelativeToPresentationOriginMeters,
         u32 frameIndex,
         u64 temporalHistoryKey,
+        const lighting::DirectionalLight& stellarLight,
+        std::span<const lighting::ResolvedLocalLight> localLights,
         f32 radiusPixels = 3.0F);
 
     void Reset() noexcept;
@@ -75,6 +81,7 @@ private:
         std::unique_ptr<rhi::Texture> motionReject;
         std::unique_ptr<rhi::Texture> historyA;
         std::unique_ptr<rhi::Texture> historyB;
+        std::unique_ptr<rhi::Buffer> localLights;
         rhi::ResourceState accumulationState{rhi::ResourceState::ShaderResource};
         rhi::ResourceState opticalDepthState{rhi::ResourceState::ShaderResource};
         rhi::ResourceState motionRejectState{rhi::ResourceState::ShaderResource};

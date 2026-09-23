@@ -10891,6 +10891,13 @@ StudioViewportRenderer::Compose(
             {
                 const auto camera =
                     view->Camera();
+                std::optional<scene::ObjectId> particleLightRoot;
+                if(logicalTarget->target.has_value() && snapshot.hasWorld)
+                {
+                    particleLightRoot=session.World().Universe().ObjectForBody(logicalTarget->target->body);
+                }
+                const auto particleLocalLights=ResolveStudioLocalLights(session,view->Lighting(),particleLightRoot);
+                const lighting::DirectionalLight particleStellarLight{.directionToLight=studioDirectLight.directionBody,.colorLinear={1.0F,1.0F,1.0F},.irradianceScale=studioDirectLight.irradianceScale};
                 const math::Double3 cameraRelativeToParticleOrigin{
                     camera.localPositionMeters.x -
                         particlePresentationOriginMeters_.x,
@@ -10933,6 +10940,8 @@ StudioViewportRenderer::Compose(
                      cameraRelativeToParticleOrigin,
                      particleFrameIndex,
                      particleTemporalHistoryKey,
+                     particleStellarLight,
+                     particleLocalLights,
                      advanceParticleState,
                      particleDeltaSeconds,
                      previousParticleOrigin,
@@ -10964,7 +10973,9 @@ StudioViewportRenderer::Compose(
                             camera,
                             cameraRelativeToParticleOrigin,
                             particleFrameIndex,
-                            particleTemporalHistoryKey);
+                            particleTemporalHistoryKey,
+                            particleStellarLight,
+                            particleLocalLights);
                     });
             }
         }
