@@ -40,6 +40,7 @@ struct VolumeRenderRuntimeSettings
     std::optional<scene::ObjectId> followObject;
     std::optional<math::Double3>
         followObjectPositionInFrameMeters;
+    bool showRepresentationRegions{true};
 
     f64 liveDistanceMeters{120.0};
     f64 passiveDistanceMeters{1200.0};
