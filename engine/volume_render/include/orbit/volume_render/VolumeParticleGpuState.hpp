@@ -168,6 +168,20 @@ public:
         std::span<const VolumeParticleTerrainCollisionPage> pages,
         f64 deltaSeconds);
 
+    // Rebuilds compact active-index lists and indirect draw arguments for a
+    // specific viewport. This is deliberately presentation-time work: the
+    // simulation state remains shared/GPU-resident while each viewport gets
+    // its own frustum-filtered draw population immediately before rendering.
+    void BuildVisibleDrawLists(
+        rhi::CommandList& commands,
+        math::Float3 cameraPositionMeters,
+        math::Float3 cameraForward,
+        math::Float3 cameraUp,
+        f32 aspectRatio,
+        f32 tanHalfVerticalFov,
+        f32 nearPlaneMeters,
+        f32 farPlaneMeters);
+
     void BindForGraphics(rhi::CommandList& commands);
     void Reset() noexcept;
 

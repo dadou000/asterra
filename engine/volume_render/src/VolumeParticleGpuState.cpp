@@ -711,17 +711,71 @@ struct Droplet { float3 positionMeters; float radiusMeters; float3 velocityMeter
 [[vk::binding(4,0)]] RWStructuredBuffer<uint> g_splashIndices : register(u4);
 [[vk::binding(5,0)]] RWStructuredBuffer<uint> g_dropletIndices : register(u5);
 [[vk::binding(6,0)]] RWByteAddressBuffer g_drawArgs : register(u6);
-struct Push { uint4 generation; uint4 capacity; }; [[vk::push_constant]] Push g;
+struct Push
+{
+    uint4 generation;
+    uint4 capacity;
+    float4 camera;  // xyz position, w tan(verticalFov/2)
+    float4 forward; // xyz forward,  w aspect
+    float4 up;      // xyz requested up, w near plane
+    float4 clip;    // x far plane
+};
+[[vk::push_constant]] Push g;
+
+bool VisibleSphere(float3 positionMeters, float radiusMeters)
+{
+    float3 forward = normalize(g.forward.xyz);
+    float3 requestedUp = normalize(g.up.xyz);
+    float3 right = normalize(cross(forward, requestedUp));
+    float3 cameraUp = normalize(cross(right, forward));
+    float3 relative = positionMeters - g.camera.xyz;
+    float radius = max(radiusMeters, 0.0);
+    float z = dot(relative, forward);
+    float nearPlane = max(g.up.w, 0.0);
+    float farPlane = max(g.clip.x, nearPlane + 0.001);
+    if (z + radius < nearPlane || z - radius > farPlane) return false;
+
+    // Sphere-vs-frustum-plane test expressed in camera space. Using z clamped
+    // to the near plane keeps grazing spheres stable while the centre crosses
+    // the near plane and intentionally errs on the conservative side.
+    float projectedZ = max(z, nearPlane);
+    float verticalLimit = projectedZ * max(g.camera.w, 0.0001) + radius;
+    float horizontalLimit = projectedZ * max(g.camera.w, 0.0001) * max(g.forward.w, 0.0001) + radius;
+    if (abs(dot(relative, cameraUp)) > verticalLimit) return false;
+    if (abs(dot(relative, right)) > horizontalLimit) return false;
+    return true;
+}
+
 void AppendParticleIndex(uint index){ uint oldVertices=0u; g_drawArgs.InterlockedAdd(0u,6u,oldVertices); g_particleIndices[oldVertices/6u]=index; }
 void AppendSplashIndex(uint index){ uint oldVertices=0u; g_drawArgs.InterlockedAdd(16u,6u,oldVertices); g_splashIndices[oldVertices/6u]=index; }
 void AppendDropletIndex(uint index){ uint oldVertices=0u; g_drawArgs.InterlockedAdd(32u,6u,oldVertices); g_dropletIndices[oldVertices/6u]=index; }
-[numthreads(64,1,1)] void main(uint3 id:SV_DispatchThreadID){ uint i=id.x;
- if(i<g.capacity.x){ Particle p=g_particles[i]; if(p.generation==g.generation.x&&p.lifetimeSeconds>0.0&&p.ageSeconds<p.lifetimeSeconds) AppendParticleIndex(i); }
- if(i<g.capacity.y){ SplashState s=g_splashes[i]; if(s.generation==g.generation.y&&s.lifetimeSeconds>0.0&&s.ageSeconds<s.lifetimeSeconds) AppendSplashIndex(i); }
- if(i<g.capacity.z){ Droplet d=g_droplets[i]; if(d.generation==g.generation.z&&d.lifetimeSeconds>0.0&&d.ageSeconds<d.lifetimeSeconds) AppendDropletIndex(i); }
+[numthreads(64,1,1)] void main(uint3 id:SV_DispatchThreadID)
+{
+    uint i=id.x;
+    if(i<g.capacity.x)
+    {
+        Particle p=g_particles[i];
+        if(p.generation==g.generation.x && p.lifetimeSeconds>0.0 && p.ageSeconds<p.lifetimeSeconds &&
+           VisibleSphere(p.positionMeters,max(p.radiusMeters,0.001)))
+            AppendParticleIndex(i);
+    }
+    if(i<g.capacity.y)
+    {
+        SplashState s=g_splashes[i];
+        float splashRadius=max(s.baseScaleMeters+s.expansionMetersPerSecond*s.ageSeconds,0.01);
+        if(s.generation==g.generation.y && s.lifetimeSeconds>0.0 && s.ageSeconds<s.lifetimeSeconds &&
+           VisibleSphere(s.positionMeters,splashRadius))
+            AppendSplashIndex(i);
+    }
+    if(i<g.capacity.z)
+    {
+        Droplet d=g_droplets[i];
+        if(d.generation==g.generation.z && d.lifetimeSeconds>0.0 && d.ageSeconds<d.lifetimeSeconds &&
+           VisibleSphere(d.positionMeters,max(d.radiusMeters,0.002)))
+            AppendDropletIndex(i);
+    }
 }
 )";
-
 [[nodiscard]] u32 Bits(const f32 value) noexcept
 {
     return std::bit_cast<u32>(value);
@@ -904,7 +958,7 @@ VolumeParticleGpuState::VolumeParticleGpuState(
     dropletCollisionPipeline_=device.CreateComputePipeline({.computeShader={.data=dropletCollision.bytecode.data(),.size=dropletCollision.bytecode.size()},.pushConstantDwords=12U,.shaderResourceBuffers=4U,.storageTextures=0U,.sampledTextures=0U,.accelerationStructures=0U});
     const auto drawList=compiler.Compile({.source=kDrawListShader,.entryPoint="main",.stage=shader::Stage::Compute,.debug=false});
     if(drawList.bytecode.empty()) throw std::runtime_error("Orbit failed to compile the M38 GPU draw-list shader.");
-    drawListPipeline_=device.CreateComputePipeline({.computeShader={.data=drawList.bytecode.data(),.size=drawList.bytecode.size()},.pushConstantDwords=8U,.shaderResourceBuffers=7U,.storageTextures=0U,.sampledTextures=0U,.accelerationStructures=0U});
+    drawListPipeline_=device.CreateComputePipeline({.computeShader={.data=drawList.bytecode.data(),.size=drawList.bytecode.size()},.pushConstantDwords=24U,.shaderResourceBuffers=7U,.storageTextures=0U,.sampledTextures=0U,.accelerationStructures=0U});
 }
 
 void VolumeParticleGpuState::SetSpawns(
@@ -1188,19 +1242,75 @@ void VolumeParticleGpuState::ApplyTerrainCollision(
     splashOriginDeltaMeters_ = {};
     TransitionState(commands,splashDestination,splashDestinationState,rhi::ResourceState::ShaderResource);
 
-    // Build compact GPU draw lists after all in-place collision kills. This
-    // avoids assuming the surviving states are still dense.
+}
+
+void VolumeParticleGpuState::BuildVisibleDrawLists(
+    rhi::CommandList& commands,
+    const math::Float3 cameraPositionMeters,
+    const math::Float3 cameraForward,
+    const math::Float3 cameraUp,
+    const f32 aspectRatio,
+    const f32 tanHalfVerticalFov,
+    const f32 nearPlaneMeters,
+    const f32 farPlaneMeters)
+{
+    if (!initialized_ || generation_ == 0U)
+    {
+        return;
+    }
+
+    rhi::Buffer& particleCurrent = CurrentBuffer();
+    rhi::ResourceState& particleState = currentIsA_ ? stateAState_ : stateBState_;
+    rhi::Buffer& splashCurrent = splashCurrentIsA_ ? *splashStateA_ : *splashStateB_;
+    rhi::ResourceState& splashState = splashCurrentIsA_ ? splashStateAState_ : splashStateBState_;
+    rhi::Buffer& dropletCurrent = dropletCurrentIsA_ ? *dropletStateA_ : *dropletStateB_;
+    rhi::ResourceState& dropletState = dropletCurrentIsA_ ? dropletStateAState_ : dropletStateBState_;
+
+    // Compute buffers use storage descriptors in the current RHI, so expose
+    // the three state pools as UAV-readable for the cull and return them to
+    // graphics SRV state before rasterization.
+    TransitionState(commands, particleCurrent, particleState, rhi::ResourceState::UnorderedAccess);
+    TransitionState(commands, splashCurrent, splashState, rhi::ResourceState::UnorderedAccess);
+    TransitionState(commands, dropletCurrent, dropletState, rhi::ResourceState::UnorderedAccess);
+
     TransitionState(commands,*indirectDrawArguments_,indirectDrawArgumentsState_,rhi::ResourceState::CopyDestination);
     commands.CopyBuffer(*zeroIndirectDrawArgumentsUpload_,0U,*indirectDrawArguments_,0U,48U);
     TransitionState(commands,*indirectDrawArguments_,indirectDrawArgumentsState_,rhi::ResourceState::UnorderedAccess);
     TransitionState(commands,*particleActiveIndices_,particleActiveIndicesState_,rhi::ResourceState::UnorderedAccess);
     TransitionState(commands,*splashActiveIndices_,splashActiveIndicesState_,rhi::ResourceState::UnorderedAccess);
     TransitionState(commands,*dropletActiveIndices_,dropletActiveIndicesState_,rhi::ResourceState::UnorderedAccess);
-    std::array<u32,8U> drawConstants{}; drawConstants[0]=generation_; drawConstants[1]=splashGeneration_; drawConstants[2]=dropletGeneration_; drawConstants[4]=MaximumParticleCount; drawConstants[5]=MaximumPersistentSplashCount; drawConstants[6]=MaximumDropletCount;
-    commands.SetComputePipeline(*drawListPipeline_); commands.SetComputeConstants(drawConstants);
-    commands.SetComputeBuffer(0U,current); commands.SetComputeBuffer(1U,splashDestination); commands.SetComputeBuffer(2U,dropletDestination); commands.SetComputeBuffer(3U,*particleActiveIndices_); commands.SetComputeBuffer(4U,*splashActiveIndices_); commands.SetComputeBuffer(5U,*dropletActiveIndices_); commands.SetComputeBuffer(6U,*indirectDrawArguments_);
+
+    const f32 safeAspect = std::isfinite(aspectRatio) ? std::max(aspectRatio, 0.0001F) : 1.0F;
+    const f32 safeTanHalfFov = std::isfinite(tanHalfVerticalFov) ? std::max(tanHalfVerticalFov, 0.0001F) : 1.0F;
+    const f32 safeNear = std::isfinite(nearPlaneMeters) ? std::max(nearPlaneMeters, 0.0F) : 0.0F;
+    const f32 safeFar = std::isfinite(farPlaneMeters) ? std::max(farPlaneMeters, safeNear + 0.001F) : safeNear + 1.0F;
+
+    std::array<u32,24U> c{};
+    c[0]=generation_; c[1]=splashGeneration_; c[2]=dropletGeneration_;
+    c[4]=MaximumParticleCount; c[5]=MaximumPersistentSplashCount; c[6]=MaximumDropletCount;
+    c[8]=Bits(cameraPositionMeters.x); c[9]=Bits(cameraPositionMeters.y); c[10]=Bits(cameraPositionMeters.z); c[11]=Bits(safeTanHalfFov);
+    c[12]=Bits(cameraForward.x); c[13]=Bits(cameraForward.y); c[14]=Bits(cameraForward.z); c[15]=Bits(safeAspect);
+    c[16]=Bits(cameraUp.x); c[17]=Bits(cameraUp.y); c[18]=Bits(cameraUp.z); c[19]=Bits(safeNear);
+    c[20]=Bits(safeFar);
+
+    commands.SetComputePipeline(*drawListPipeline_);
+    commands.SetComputeConstants(c);
+    commands.SetComputeBuffer(0U,particleCurrent);
+    commands.SetComputeBuffer(1U,splashCurrent);
+    commands.SetComputeBuffer(2U,dropletCurrent);
+    commands.SetComputeBuffer(3U,*particleActiveIndices_);
+    commands.SetComputeBuffer(4U,*splashActiveIndices_);
+    commands.SetComputeBuffer(5U,*dropletActiveIndices_);
+    commands.SetComputeBuffer(6U,*indirectDrawArguments_);
     commands.Dispatch((MaximumParticleCount+63U)/64U,1U,1U);
-    commands.UavBarrier(*particleActiveIndices_); commands.UavBarrier(*splashActiveIndices_); commands.UavBarrier(*dropletActiveIndices_); commands.UavBarrier(*indirectDrawArguments_);
+    commands.UavBarrier(*particleActiveIndices_);
+    commands.UavBarrier(*splashActiveIndices_);
+    commands.UavBarrier(*dropletActiveIndices_);
+    commands.UavBarrier(*indirectDrawArguments_);
+
+    TransitionState(commands,particleCurrent,particleState,rhi::ResourceState::ShaderResource);
+    TransitionState(commands,splashCurrent,splashState,rhi::ResourceState::ShaderResource);
+    TransitionState(commands,dropletCurrent,dropletState,rhi::ResourceState::ShaderResource);
     TransitionState(commands,*particleActiveIndices_,particleActiveIndicesState_,rhi::ResourceState::ShaderResource);
     TransitionState(commands,*splashActiveIndices_,splashActiveIndicesState_,rhi::ResourceState::ShaderResource);
     TransitionState(commands,*dropletActiveIndices_,dropletActiveIndicesState_,rhi::ResourceState::ShaderResource);

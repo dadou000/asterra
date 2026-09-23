@@ -448,6 +448,20 @@ void VolumeParticleRenderer::Draw(
             : 3.0F);
     constants[19] = state_.Generation();
 
+    state_.BuildVisibleDrawLists(
+        commands,
+        {
+            static_cast<f32>(cameraPositionRelativeToPresentationOriginMeters.x),
+            static_cast<f32>(cameraPositionRelativeToPresentationOriginMeters.y),
+            static_cast<f32>(cameraPositionRelativeToPresentationOriginMeters.z)
+        },
+        camera.forward,
+        camera.up,
+        static_cast<f32>(width) / static_cast<f32>(height),
+        tanHalfFov,
+        camera.nearPlaneMeters,
+        camera.farPlaneMeters);
+
     commands.SetRenderTargets(sceneColor, depth);
     commands.SetViewport({
         .x = 0.0F,
