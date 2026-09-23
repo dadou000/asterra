@@ -1,0 +1,33 @@
+name: M38 Run Particle Body Physics
+
+on:
+  push:
+    branches: [orbit]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'orbit-ci'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit
+          fetch-depth: 0
+      - name: Apply patch
+        run: python tools/apply_m38_particle_body_physics.py
+      - name: Verify
+        run: |
+          grep -q "gravitationalParameterM3PerS2" engine/volume_render/src/VolumeParticleGpuState.cpp
+          grep -q "world.Surfaces()" engine/studio_session/src/StudioSession.cpp
+      - name: Commit
+        run: |
+          rm tools/apply_m38_particle_body_physics.py
+          rm .github/workflows/m38-run-particle-body-physics.yml
+          git config user.name orbit-ci
+          git config user.email orbit-ci@users.noreply.github.com
+          git add -A
+          git commit -m "Integrate M38 owning-body particle physics"
+          git push origin orbit
