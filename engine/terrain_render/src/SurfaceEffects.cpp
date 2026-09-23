@@ -12,6 +12,43 @@ namespace
     return std::clamp(value, 0.0F, 1.0F);
 }
 
+[[nodiscard]] math::Float3 NormalizeSafe(
+    const math::Float3 value) noexcept
+{
+    const f32 lengthSquared =
+        value.x * value.x +
+        value.y * value.y +
+        value.z * value.z;
+
+    if (!std::isfinite(lengthSquared) || lengthSquared <= 1.0e-20F)
+    {
+        return {0.0F, 1.0F, 0.0F};
+    }
+
+    const f32 inverse = 1.0F / std::sqrt(lengthSquared);
+    return {
+        value.x * inverse,
+        value.y * inverse,
+        value.z * inverse
+    };
+}
+
+[[nodiscard]] f32 AngularDistance(
+    const math::Float3 a,
+    const math::Float3 b) noexcept
+{
+    const auto na = NormalizeSafe(a);
+    const auto nb = NormalizeSafe(b);
+    const f32 cosine =
+        std::clamp(
+            na.x * nb.x +
+            na.y * nb.y +
+            na.z * nb.z,
+            -1.0F,
+            1.0F);
+    return std::acos(cosine);
+}
+
 [[nodiscard]] math::Float3 Lerp(
     const math::Float3 a,
     const math::Float3 b,
@@ -23,20 +60,10 @@ namespace
         a.z + (b.z - a.z) * t
     };
 }
-
-[[nodiscard]] f32 DistanceSquared(
-    const math::Float3 a,
-    const math::Float3 b) noexcept
-{
-    const f32 dx = a.x - b.x;
-    const f32 dy = a.y - b.y;
-    const f32 dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
-}
 } // namespace
 
 SurfaceEffectInfluence EvaluateSurfaceEffects(
-    const math::Float3 bodyLocalPointMeters,
+    const math::Float3 bodyFixedDirection,
     const std::span<const SurfaceEffectGpuStamp> stamps) noexcept
 {
     SurfaceEffectInfluence result{};
@@ -44,30 +71,25 @@ SurfaceEffectInfluence EvaluateSurfaceEffects(
     for (const auto& stamp : stamps)
     {
         const f32 radius =
-            std::isfinite(stamp.radiusMeters)
-                ? std::max(stamp.radiusMeters, 0.001F)
-                : 0.001F;
+            std::isfinite(stamp.angularRadiusRadians)
+                ? std::max(stamp.angularRadiusRadians, 1.0e-9F)
+                : 1.0e-9F;
         const f32 amount =
             std::isfinite(stamp.amount)
                 ? std::max(stamp.amount, 0.0F)
                 : 0.0F;
+        const f32 distance =
+            AngularDistance(
+                bodyFixedDirection,
+                stamp.bodyFixedDirection);
 
-        const f32 distanceSquared =
-            DistanceSquared(
-                bodyLocalPointMeters,
-                stamp.bodyLocalPointMeters);
-        const f32 radiusSquared = radius * radius;
-
-        if (distanceSquared >= radiusSquared)
+        if (distance >= radius)
         {
             continue;
         }
 
-        const f32 distance = std::sqrt(distanceSquared);
-        const f32 normalized =
-            1.0F - distance / radius;
-        const f32 influence =
-            amount * normalized * normalized;
+        const f32 normalized = 1.0F - distance / radius;
+        const f32 influence = amount * normalized * normalized;
 
         switch (stamp.effect)
         {
@@ -109,8 +131,6 @@ SurfacePbrState ApplySurfaceEffects(
     const f32 sediment = Saturate(influence.sediment);
     const f32 heat = std::max(influence.heat, 0.0F);
 
-    // Wet surfaces get darker and much smoother while retaining their
-    // underlying albedo identity.
     result.baseColor =
         Lerp(
             result.baseColor,
@@ -124,7 +144,6 @@ SurfacePbrState ApplySurfaceEffects(
         result.roughness +
         (0.12F - result.roughness) * wetness;
 
-    // Soot is a strongly absorbing, non-metallic coating.
     result.baseColor =
         Lerp(result.baseColor, {0.018F, 0.016F, 0.014F}, soot);
     result.roughness =
@@ -132,7 +151,6 @@ SurfacePbrState ApplySurfaceEffects(
         (0.94F - result.roughness) * soot;
     result.metallic *= 1.0F - soot;
 
-    // Ash lightens toward a neutral powder and increases diffuse roughness.
     result.baseColor =
         Lerp(result.baseColor, {0.43F, 0.42F, 0.40F}, ash);
     result.roughness =
@@ -140,17 +158,12 @@ SurfacePbrState ApplySurfaceEffects(
         (0.98F - result.roughness) * ash;
     result.metallic *= 1.0F - ash;
 
-    // Sediment uses an earthy mineral tint without forcing a fully opaque
-    // coating at low accumulated loads.
     result.baseColor =
         Lerp(result.baseColor, {0.36F, 0.23F, 0.11F}, sediment);
     result.roughness =
         result.roughness +
         (0.90F - result.roughness) * sediment;
 
-    // Heat is intentionally HDR. Exposure/bloom handles the visible result,
-    // matching Orbit's existing emissive-lighting pipeline rather than
-    // clamping the effect into display range here.
     if (heat > 0.0F)
     {
         const f32 hot = std::min(heat, 8.0F);
