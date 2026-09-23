@@ -9,6 +9,7 @@
 #include <orbit/terrain_gpu/GpuPhysicalPageComposite.hpp>
 #include <orbit/terrain_gpu/GpuRegionDelta.hpp>
 #include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
+#include <orbit/terrain_render/SurfaceEffects.hpp>
 #include <orbit/terrain_view/ClipmapLayout.hpp>
 #include <orbit/world/Planet.hpp>
 #include <orbit/world/WorldPosition.hpp>
@@ -126,6 +127,12 @@ public:
     void SetPhysicalPages(
         std::span<const terrain_gpu::GpuPhysicalSurfacePage> pages,
         u64 generation);
+
+    // M38 transient physical-surface influence. The renderer keeps one
+    // frame-in-flight-safe upload buffer per graphics frame and never mutates
+    // authored terrain data.
+    void SetSurfaceEffects(
+        std::span<const SurfaceEffectGpuStamp> effects);
 
     void Draw(
         rhi::CommandList& commandList,
