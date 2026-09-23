@@ -35,10 +35,7 @@ struct VolumeParticleGpuStateRecord
     f32 gravitationalParameterM3PerS2{0.0F};
     math::Float3 surfaceRadiiMeters{};
     f32 gravitySofteningMeters{0.0F};
-    f32 physicalSurfaceEnabled{0.0F};
-    f32 reserved0{0.0F};
-    f32 reserved1{0.0F};
-    f32 reserved2{0.0F};
+    std::array<u32, 4U> bodyIdentity{};
 };
 
 static_assert(sizeof(VolumeParticleGpuStateRecord) == 144U);
@@ -47,6 +44,30 @@ struct VolumeParticleSimulationSettings
 {
     f32 lifetimeSeconds{2.0F};
     f32 linearDragPerSecond{0.0F};
+};
+
+// One resident M12/M26 physical-surface page exposed to the particle collision
+// pass. `samples` stays GPU resident; only compact tile metadata crosses CPU.
+struct VolumeParticleTerrainCollisionPage
+{
+    std::shared_ptr<rhi::Buffer> samples;
+    u32 resolution{0U};
+    u32 face{0U};
+    u32 level{0U};
+    u32 tileX{0U};
+    u32 tileY{0U};
+    std::array<u32, 4U> bodyIdentity{};
+
+    [[nodiscard]] bool IsValid() const noexcept
+    {
+        return
+            samples != nullptr &&
+            resolution >= 2U &&
+            samples->SizeBytes() >=
+                static_cast<u64>(resolution) *
+                resolution *
+                2U * sizeof(f32);
+    }
 };
 
 class VolumeParticleGpuState
@@ -70,6 +91,13 @@ public:
         math::Double3 previousOriginMeters,
         math::Double3 newOriginMeters,
         VolumeParticleSimulationSettings settings = {});
+
+    // Refines the cheap reference-ellipsoid collision using the actual
+    // resident physical terrain pages. The state stays on GPU and is modified
+    // in place after integration; pages outside coverage are simply skipped.
+    void ApplyTerrainCollision(
+        rhi::CommandList& commands,
+        std::span<const VolumeParticleTerrainCollisionPage> pages);
 
     void BindForGraphics(rhi::CommandList& commands);
     void Reset() noexcept;
@@ -107,5 +135,6 @@ private:
     std::unique_ptr<rhi::Buffer> zeroCounterUpload_;
     std::vector<std::unique_ptr<rhi::Buffer>> spawnBuffers_;
     std::unique_ptr<rhi::ComputePipeline> simulationPipeline_;
+    std::unique_ptr<rhi::ComputePipeline> terrainCollisionPipeline_;
 };
 } // namespace orbit::volume_render
