@@ -4,6 +4,7 @@
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/world_model/VolumeSchemas.hpp>
 
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
