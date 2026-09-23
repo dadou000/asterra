@@ -4,12 +4,25 @@
 #include <orbit/volume_render/VolumeParticleGpuBinding.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <span>
 #include <vector>
 
 namespace orbit::studio_ui
 {
+[[nodiscard]] inline std::array<u32, 4U>
+VolumeParticleBodyIdentityWords(
+    const universe::BodyId body) noexcept
+{
+    return {
+        static_cast<u32>(body.high & 0xffffffffULL),
+        static_cast<u32>((body.high >> 32U) & 0xffffffffULL),
+        static_cast<u32>(body.low & 0xffffffffULL),
+        static_cast<u32>((body.low >> 32U) & 0xffffffffULL)
+    };
+}
+
 [[nodiscard]] inline std::vector<volume_render::VolumeParticleGpuSpawn>
 BuildVolumeParticleRenderBatch(
     const std::span<const studio_session::VolumeParticleRuntimeEvent> events,
@@ -68,7 +81,8 @@ BuildVolumeParticleRenderBatch(
 
         const u32 behaviorFlags =
             (static_cast<u32>(request.gravityMode) & 0x3U) |
-            ((static_cast<u32>(request.collisionMode) & 0x3U) << 2U);
+            ((static_cast<u32>(request.collisionMode) & 0x3U) << 2U) |
+            (event.physics.hasPhysicalSurface ? (1U << 4U) : 0U);
 
         result.push_back({
             .positionMeters = {
@@ -104,7 +118,7 @@ BuildVolumeParticleRenderBatch(
                 std::isfinite(event.physics.gravitySofteningMeters)
                     ? static_cast<f32>(std::max(event.physics.gravitySofteningMeters, 0.0))
                     : 0.0F,
-            .physicalSurfaceEnabled = event.physics.hasPhysicalSurface ? 1.0F : 0.0F
+            .bodyIdentity = VolumeParticleBodyIdentityWords(event.physics.body)
         });
     }
 
