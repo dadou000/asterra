@@ -98,6 +98,9 @@ int main()
     Check(full[0].gravityScale == 0.75F);
     Check(full[0].restitution == 0.6F);
     Check(full[0].behaviorFlags == 29U);
+    // Bit 4 is the composed-world physical-surface authority gate used by
+    // both reference fallback and resident physical-page terrain/water passes.
+    Check((full[0].behaviorFlags & (1U << 4U)) != 0U);
     Check(full[0].baseColor.x == 0.2F);
     Check(full[0].baseColor.y == 0.3F);
     Check(full[0].baseColor.z == 0.4F);
