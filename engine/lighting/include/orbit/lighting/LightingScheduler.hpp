@@ -94,6 +94,16 @@ struct LightingSchedulerConfig
     f32 minimumReflectionScale{0.05F};
     f32 minimumEmissiveScale{0.10F};
 
+    // M40 user policy. Emissive GI quality is intentionally independent from
+    // hardware ray-query capability and from the physical emissive authority.
+    // It scales only the amount of scheduled emissive refresh work.
+    f32 emissiveGiQualityScale{1.0F};
+
+    // M40 backend policy. Disabling ray query never selects a different
+    // lighting model; it only removes the hardware visibility backend from
+    // consideration inside the existing work budget.
+    bool hardwareRayQueryEnabled{true};
+
     // Downward response is intentionally faster than upward recovery so a
     // transient expensive frame sheds optional work immediately but quality
     // returns gradually after pressure disappears.
@@ -104,6 +114,16 @@ struct LightingSchedulerConfig
     // It never raises any count by itself.
     f32 hardwareRayQueryPreferenceThreshold{0.35F};
 };
+
+// Studio/project policy is process-local runtime state layered over the
+// scheduler's authored/default config. Project Settings publishes the project
+// default here; Display Diagnostics may publish a session override. The
+// scheduler remains usable headlessly with no override installed.
+void SetStudioLightingRuntimeConfig(
+    std::optional<LightingSchedulerConfig> config) noexcept;
+
+[[nodiscard]] std::optional<LightingSchedulerConfig>
+StudioLightingRuntimeConfig() noexcept;
 
 class LightingScheduler
 {
@@ -128,6 +148,15 @@ public:
     SmoothedTimings() const noexcept;
 
 private:
+    // M40 wrapper keeps the proven M10 implementation intact while layering
+    // project/session policy above it.
+    void RecordGpuTimingsBase(
+        const LightingGpuTimings& timings) noexcept;
+
+    [[nodiscard]] LightingWorkPlan BuildPlanBase(
+        const LightingRequestedWork& requested,
+        bool hardwareRayQueryAvailable) const noexcept;
+
     [[nodiscard]] f32 ScaleFor(
         LightingGpuSection section,
         f32 minimumScale,
