@@ -2,6 +2,8 @@
 #include <orbit/studio_ui/LightingDisplaySettingsRuntime.hpp>
 #include <orbit/studio_ui/LightingInteractionState.hpp>
 #include <orbit/studio_ui/LightingSelectionInspection.hpp>
+#include <orbit/studio_ui/StudioRuntimeProfiler.hpp>
+#include <orbit/lighting/LightingRuntimeProfiler.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 
 #include <algorithm>
@@ -55,6 +57,12 @@ void ApplyDisplayDefaults(
     }
 
     renderer.SetOutputTransformSettings(defaults.output);
+}
+
+[[nodiscard]] f64 Mebibytes(const u64 bytes) noexcept
+{
+    return static_cast<f64>(bytes) /
+        (1024.0 * 1024.0);
 }
 } // namespace
 
@@ -298,6 +306,221 @@ void DisplayDiagnosticsUi::DrawViewport(
     {
         context.MutedText(
             "Select one authored object to inspect its physical emissive GI authority.");
+    }
+
+    context.Separator();
+    context.Heading("Lighting / Volume Profiler");
+    context.MutedText(
+        "Live production telemetry. Budgets are scheduler targets; measured values are smoothed GPU timestamps from completed frames.");
+
+    const auto& lightingProfile =
+        lighting::StudioLightingRuntimeProfiler();
+
+    if (lightingProfile.hasScheduledPlan)
+    {
+        const auto& budget = lightingProfile.scheduled.budget;
+        const auto& measured = lightingProfile.measured;
+
+        const auto drawLightingSection =
+            [&context, &budget, &measured](
+                const std::string_view sectionName,
+                const lighting::LightingGpuSection section)
+            {
+                if (measured.HasSection(section))
+                {
+                    context.Text(
+                        std::format(
+                            "{}: budget {:.2f} ms | measured {:.2f} ms",
+                            sectionName,
+                            budget.SectionMs(section),
+                            measured.SectionMs(section)));
+                }
+                else
+                {
+                    context.Text(
+                        std::format(
+                            "{}: budget {:.2f} ms | measured --",
+                            sectionName,
+                            budget.SectionMs(section)));
+                }
+            };
+
+        drawLightingSection("Direct", lighting::LightingGpuSection::Direct);
+        drawLightingSection("Visibility", lighting::LightingGpuSection::Visibility);
+        drawLightingSection("GI", lighting::LightingGpuSection::Gi);
+        drawLightingSection("Reflections", lighting::LightingGpuSection::Reflections);
+        drawLightingSection("Emissive", lighting::LightingGpuSection::Emissive);
+        drawLightingSection("Post", lighting::LightingGpuSection::PostProcess);
+
+        context.Text(
+            std::format(
+                "Lighting total: budget {:.2f} ms | measured {}",
+                budget.TotalMs(),
+                lightingProfile.hasMeasuredTimings
+                    ? std::format("{:.2f} ms", measured.TotalMs())
+                    : std::string("--")));
+
+        const auto& requested = lightingProfile.requested;
+        const auto& scheduled = lightingProfile.scheduled;
+
+        context.Text(
+            std::format(
+                "Visibility queries: requested {} | scheduled {} | scale {:.2f}",
+                requested.exactVisibilityQueries,
+                scheduled.exactVisibilityQueries,
+                scheduled.visibilityScale));
+        context.Text(
+            std::format(
+                "Radiance updates: requested {} | scheduled {} | scale {:.2f}",
+                requested.radianceCacheUpdates,
+                scheduled.radianceCacheUpdates,
+                scheduled.giScale));
+        context.Text(
+            std::format(
+                "Reflection queries: requested {} | scheduled {} | scale {:.2f}",
+                requested.reflectionQueries,
+                scheduled.reflectionQueries,
+                scheduled.reflectionScale));
+        context.Text(
+            std::format(
+                "Emissive updates: requested {} | scheduled {} | scale {:.2f} | quality x{:.2f}",
+                requested.emissiveUpdates,
+                scheduled.emissiveUpdates,
+                scheduled.emissiveScale,
+                lightingProfile.config.emissiveGiQualityScale));
+        context.Text(
+            std::format(
+                "Ray-query backend: capability {} | policy {} | selected {}",
+                scheduled.hardwareRayQueryAvailable ? "available" : "unavailable",
+                lightingProfile.config.hardwareRayQueryEnabled ? "enabled" : "disabled",
+                scheduled.preferHardwareRayQuery ? "hardware" : "shared fallback"));
+
+        context.Text(
+            std::format(
+                "GI cache/emission: dirty {} | scheduled {} | emitters {} | invalidations {}",
+                interaction.dirtyRadianceCells,
+                interaction.scheduledRadianceUpdates,
+                interaction.trackedEmissiveSources,
+                interaction.invalidationEventsThisFrame));
+    }
+    else
+    {
+        context.MutedText(
+            "Waiting for the lighting scheduler to publish a production work plan.");
+    }
+
+    context.Separator();
+    context.Text("Selected Volume Runtime");
+
+    const auto& volumeProfile =
+        StudioVolumeRuntimeProfiler();
+
+    if (!volumeProfile.hasSelection)
+    {
+        context.MutedText(
+            "Select a Volume, Volume Source, or Volume Effector to inspect its live field/solver/raymarch state.");
+        return;
+    }
+
+    if (volumeProfile.hasFields)
+    {
+        const auto& fields = volumeProfile.fields;
+        context.Text(
+            std::format(
+                "Fields: {}x{}x{} | tile {} | resident {}/{} | pending {} | channels {}",
+                fields.resolutionX,
+                fields.resolutionY,
+                fields.resolutionZ,
+                fields.tileEdge,
+                fields.residentTiles,
+                fields.validTiles,
+                fields.pendingTiles,
+                fields.channels.size()));
+        context.Text(
+            std::format(
+                "Field memory: {:.2f} MiB total ({:.2f} MiB channels + {:.2f} MiB residency) | invalidated {}",
+                Mebibytes(fields.totalBytes),
+                Mebibytes(fields.channelBytes),
+                Mebibytes(fields.residencyBytes),
+                volumeProfile.invalidatedTiles));
+        context.Text(
+            std::format(
+                "Residency churn: +{} new | {} reused | -{} evicted",
+                fields.lastUpdate.newTiles,
+                fields.lastUpdate.reusedTiles,
+                fields.lastUpdate.evictedTiles));
+    }
+    else
+    {
+        context.MutedText(
+            "Selected volume has no resident field storage in this frame.");
+    }
+
+    if (volumeProfile.hasSolver)
+    {
+        const auto& solver = volumeProfile.solver;
+        context.Text(
+            std::format(
+                "Solver: {}{} | iterations {}/{} | scalar channels {} | sources {} | effectors {}",
+                solver.live ? "live" : "idle",
+                solver.paused ? " / paused" : "",
+                solver.iterationsThisFrame,
+                solver.requestedIterations,
+                solver.scalarChannelsSolved,
+                solver.sourceCount,
+                solver.effectorCount));
+
+        if (solver.gpuTimingValid)
+        {
+            context.Text(
+                std::format(
+                    "Solver GPU: {:.3f} / {:.3f} ms | simulated {:.4f} s | scratch {:.2f} MiB | metadata {:.2f} MiB",
+                    solver.gpuMilliseconds,
+                    solver.gpuBudgetMilliseconds,
+                    solver.simulatedSeconds,
+                    Mebibytes(solver.scratchBytes),
+                    Mebibytes(solver.metadataBytes)));
+        }
+        else
+        {
+            context.Text(
+                std::format(
+                    "Solver GPU: timing pending | budget {:.3f} ms | scratch {:.2f} MiB | metadata {:.2f} MiB",
+                    solver.gpuBudgetMilliseconds,
+                    Mebibytes(solver.scratchBytes),
+                    Mebibytes(solver.metadataBytes)));
+        }
+    }
+
+    if (volumeProfile.hasRenderer)
+    {
+        const auto& render = volumeProfile.renderer;
+        context.Text(
+            std::format(
+                "Raymarch: rendered {} | representation {} | steps {} + shadow {} | local lights {} | resident tiles {}",
+                render.rendered ? "yes" : "no",
+                static_cast<u32>(render.representation),
+                render.raymarchSteps,
+                render.shadowSteps,
+                render.localLightCount,
+                render.residentTiles));
+        context.Text(
+            std::format(
+                "Volume LOD: live {:.2f} | coarse {:.2f} | passive {:.2f} | baked {:.2f} | projected {:.1f}px | distance {:.1f}m",
+                render.liveWeight,
+                render.coarseWeight,
+                render.passiveWeight,
+                render.bakedWeight,
+                render.projectedDiameterPixels,
+                render.distanceToBoundsMeters));
+        context.Text(
+            std::format(
+                "Temporal: history {} | transition {} | baked fallback {} | memory {:.2f} MiB history + {:.2f} MiB scratch",
+                render.historyValid ? "valid" : "invalid",
+                render.representationTransition ? "active" : "stable",
+                render.bakedFallback ? "yes" : "no",
+                Mebibytes(render.historyBytes),
+                Mebibytes(render.scratchBytes)));
     }
 }
 } // namespace orbit::studio_ui
