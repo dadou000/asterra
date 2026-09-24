@@ -1,4 +1,5 @@
 #include <orbit/lighting/LightingScheduler.hpp>
+#include <orbit/lighting/LightingRuntimeProfiler.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -92,8 +93,14 @@ void LightingScheduler::RecordGpuTimings(
     const LightingGpuTimings& timings) noexcept
 {
     const auto local = config_;
-    config_ = EffectiveConfig(local);
+    const auto effective = EffectiveConfig(local);
+    config_ = effective;
     RecordGpuTimingsBase(timings);
+
+    PublishStudioLightingRuntimeTimings(
+        effective,
+        SmoothedTimings());
+
     config_ = local;
 }
 
@@ -143,6 +150,11 @@ LightingWorkPlan LightingScheduler::BuildPlan(
         effective.hardwareRayQueryEnabled &&
         plan.visibilityScale >=
             effective.hardwareRayQueryPreferenceThreshold;
+
+    PublishStudioLightingRuntimePlan(
+        effective,
+        requested,
+        plan);
 
     return plan;
 }
