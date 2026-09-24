@@ -5,6 +5,8 @@
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 
+#include <utility>
+
 namespace orbit::studio_ui
 {
 struct StudioVolumeRuntimeProfilerSnapshot
