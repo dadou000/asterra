@@ -1,562 +1,149 @@
 #include <orbit/lighting/LightingScheduler.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
-#include <stdexcept>
+#include <limits>
+#include <optional>
+#include <utility>
+
+#define RecordGpuTimings RecordGpuTimingsBase
+#define BuildPlan BuildPlanBase
+#include "LightingSchedulerBase.cpp"
+#undef BuildPlan
+#undef RecordGpuTimings
 
 namespace orbit::lighting
 {
 namespace
 {
-[[nodiscard]] f32 ClampFiniteNonNegative(
-    const f32 value) noexcept
-{
-    return
-        std::isfinite(value)
-            ? std::max(value, 0.0F)
-            : 0.0F;
-}
+std::optional<LightingSchedulerConfig> gStudioRuntimeConfig;
 
-[[nodiscard]] u32 ScaleCount(
+[[nodiscard]] u32 ScaleQualityCount(
     const u32 requested,
     const f32 scale) noexcept
 {
-    if (requested == 0U)
+    if (requested == 0U || scale <= 0.0F)
     {
         return 0U;
     }
 
     const f64 scaled =
-        std::floor(
+        std::round(
             static_cast<f64>(requested) *
             static_cast<f64>(
-                std::clamp(
-                    scale,
-                    0.0F,
-                    1.0F)));
+                std::clamp(scale, 0.0F, 4.0F)));
 
-    if (scaled <= 0.0)
-    {
-        return 1U;
-    }
-
-    return
-        static_cast<u32>(
-            std::min<f64>(
-                scaled,
-                requested));
+    return static_cast<u32>(
+        std::clamp<f64>(
+            scaled,
+            1.0,
+            static_cast<f64>(
+                std::numeric_limits<u32>::max())));
 }
 
-[[nodiscard]] f32 MoveToward(
-    const f32 current,
-    const f32 target,
-    const f32 response) noexcept
+[[nodiscard]] LightingSchedulerConfig EffectiveConfig(
+    const LightingSchedulerConfig& local) noexcept
 {
-    return
-        current +
-        (target - current) *
+    auto result =
+        gStudioRuntimeConfig.value_or(local);
+
+    result.emissiveGiQualityScale =
         std::clamp(
-            response,
+            result.emissiveGiQualityScale,
+            0.0F,
+            4.0F);
+    result.hardwareRayQueryPreferenceThreshold =
+        std::clamp(
+            result.hardwareRayQueryPreferenceThreshold,
             0.0F,
             1.0F);
+    return result;
 }
 } // namespace
 
-f32 LightingBudget::TotalMs() const noexcept
+void SetStudioLightingRuntimeConfig(
+    std::optional<LightingSchedulerConfig> config) noexcept
 {
-    return
-        ClampFiniteNonNegative(
-            directLightingMs) +
-        ClampFiniteNonNegative(
-            visibilityMs) +
-        ClampFiniteNonNegative(
-            giMs) +
-        ClampFiniteNonNegative(
-            reflectionMs) +
-        ClampFiniteNonNegative(
-            emissiveMs) +
-        ClampFiniteNonNegative(
-            postProcessMs);
-}
-
-f32 LightingBudget::SectionMs(
-    const LightingGpuSection section) const noexcept
-{
-    switch (section)
+    if (config.has_value())
     {
-    case LightingGpuSection::Direct:
-        return ClampFiniteNonNegative(
-            directLightingMs);
-    case LightingGpuSection::Visibility:
-        return ClampFiniteNonNegative(
-            visibilityMs);
-    case LightingGpuSection::Gi:
-        return ClampFiniteNonNegative(
-            giMs);
-    case LightingGpuSection::Reflections:
-        return ClampFiniteNonNegative(
-            reflectionMs);
-    case LightingGpuSection::Emissive:
-        return ClampFiniteNonNegative(
-            emissiveMs);
-    case LightingGpuSection::PostProcess:
-        return ClampFiniteNonNegative(
-            postProcessMs);
-    case LightingGpuSection::Count:
-        return 0.0F;
+        config->emissiveGiQualityScale =
+            std::clamp(
+                config->emissiveGiQualityScale,
+                0.0F,
+                4.0F);
+        config->hardwareRayQueryPreferenceThreshold =
+            std::clamp(
+                config->hardwareRayQueryPreferenceThreshold,
+                0.0F,
+                1.0F);
     }
 
-    return 0.0F;
+    gStudioRuntimeConfig =
+        std::move(config);
 }
 
-bool LightingGpuTimings::HasSection(
-    const LightingGpuSection section) const noexcept
+std::optional<LightingSchedulerConfig>
+StudioLightingRuntimeConfig() noexcept
 {
-    const u32 index =
-        static_cast<u32>(section);
-
-    return
-        index < valid.size() &&
-        valid[index];
-}
-
-f32 LightingGpuTimings::SectionMs(
-    const LightingGpuSection section) const noexcept
-{
-    const u32 index =
-        static_cast<u32>(section);
-
-    return
-        index < milliseconds.size() &&
-                valid[index]
-            ? ClampFiniteNonNegative(
-                  milliseconds[index])
-            : 0.0F;
-}
-
-f32 LightingGpuTimings::TotalMs() const noexcept
-{
-    f32 total = 0.0F;
-
-    for (u32 index = 0U;
-         index < milliseconds.size();
-         ++index)
-    {
-        if (!valid[index])
-        {
-            continue;
-        }
-
-        total +=
-            ClampFiniteNonNegative(
-                milliseconds[index]);
-    }
-
-    return total;
-}
-
-LightingScheduler::LightingScheduler(
-    LightingSchedulerConfig config)
-{
-    SetConfig(config);
-}
-
-void LightingScheduler::SetConfig(
-    LightingSchedulerConfig config) noexcept
-{
-    config.minimumVisibilityScale =
-        std::clamp(
-            config.minimumVisibilityScale,
-            0.0F,
-            1.0F);
-    config.minimumGiScale =
-        std::clamp(
-            config.minimumGiScale,
-            0.0F,
-            1.0F);
-    config.minimumReflectionScale =
-        std::clamp(
-            config.minimumReflectionScale,
-            0.0F,
-            1.0F);
-    config.minimumEmissiveScale =
-        std::clamp(
-            config.minimumEmissiveScale,
-            0.0F,
-            1.0F);
-    config.overloadResponse =
-        std::clamp(
-            config.overloadResponse,
-            0.0F,
-            1.0F);
-    config.recoveryResponse =
-        std::clamp(
-            config.recoveryResponse,
-            0.0F,
-            1.0F);
-    config.hardwareRayQueryPreferenceThreshold =
-        std::clamp(
-            config.hardwareRayQueryPreferenceThreshold,
-            0.0F,
-            1.0F);
-
-    config_ = config;
-}
-
-const LightingSchedulerConfig&
-LightingScheduler::Config() const noexcept
-{
-    return config_;
-}
-
-f32 LightingScheduler::ScaleFor(
-    const LightingGpuSection section,
-    const f32 minimumScale,
-    const f32 previousScale) const noexcept
-{
-    if (!hasTimings_ ||
-        !smoothed_.HasSection(section))
-    {
-        return previousScale;
-    }
-
-    const f32 budget =
-        config_.budget.SectionMs(section);
-    const f32 measured =
-        smoothed_.SectionMs(section);
-
-    if (budget <= 0.0F)
-    {
-        return 0.0F;
-    }
-
-    if (measured <= 1.0e-5F)
-    {
-        return
-            MoveToward(
-                previousScale,
-                1.0F,
-                config_.recoveryResponse);
-    }
-
-    const f32 target =
-        std::clamp(
-            budget / measured,
-            minimumScale,
-            1.0F);
-
-    const bool overloaded =
-        measured > budget;
-
-    return
-        MoveToward(
-            previousScale,
-            target,
-            overloaded
-                ? config_.overloadResponse
-                : config_.recoveryResponse);
+    return gStudioRuntimeConfig;
 }
 
 void LightingScheduler::RecordGpuTimings(
     const LightingGpuTimings& timings) noexcept
 {
-    constexpr f32 kTimingEwmaAlpha =
-        0.20F;
-
-    for (u32 index = 0U;
-         index < kLightingGpuSectionCount;
-         ++index)
-    {
-        if (!timings.valid[index])
-        {
-            continue;
-        }
-
-        const f32 sample =
-            ClampFiniteNonNegative(
-                timings.milliseconds[index]);
-
-        if (!smoothed_.valid[index])
-        {
-            smoothed_.milliseconds[index] =
-                sample;
-            smoothed_.valid[index] =
-                true;
-        }
-        else
-        {
-            smoothed_.milliseconds[index] =
-                MoveToward(
-                    smoothed_.milliseconds[index],
-                    sample,
-                    kTimingEwmaAlpha);
-        }
-
-        hasTimings_ = true;
-    }
-
-    visibilityScale_ =
-        ScaleFor(
-            LightingGpuSection::Visibility,
-            config_.minimumVisibilityScale,
-            visibilityScale_);
-
-    giScale_ =
-        ScaleFor(
-            LightingGpuSection::Gi,
-            config_.minimumGiScale,
-            giScale_);
-
-    reflectionScale_ =
-        ScaleFor(
-            LightingGpuSection::Reflections,
-            config_.minimumReflectionScale,
-            reflectionScale_);
-
-    emissiveScale_ =
-        ScaleFor(
-            LightingGpuSection::Emissive,
-            config_.minimumEmissiveScale,
-            emissiveScale_);
+    const auto local = config_;
+    config_ = EffectiveConfig(local);
+    RecordGpuTimingsBase(timings);
+    config_ = local;
 }
 
 LightingWorkPlan LightingScheduler::BuildPlan(
     const LightingRequestedWork& requested,
     const bool hardwareRayQueryAvailable) const noexcept
 {
+    const auto effective =
+        EffectiveConfig(config_);
+
+    LightingRequestedWork qualityRequested =
+        requested;
+    qualityRequested.emissiveUpdates =
+        ScaleQualityCount(
+            requested.emissiveUpdates,
+            effective.emissiveGiQualityScale);
+
     LightingWorkPlan plan{
-        .budget = config_.budget,
+        .budget = effective.budget,
         .requested = requested,
         .exactVisibilityQueries =
             ScaleCount(
-                requested.exactVisibilityQueries,
+                qualityRequested.exactVisibilityQueries,
                 visibilityScale_),
         .radianceCacheUpdates =
             ScaleCount(
-                requested.radianceCacheUpdates,
+                qualityRequested.radianceCacheUpdates,
                 giScale_),
         .reflectionQueries =
             ScaleCount(
-                requested.reflectionQueries,
+                qualityRequested.reflectionQueries,
                 reflectionScale_),
         .emissiveUpdates =
             ScaleCount(
-                requested.emissiveUpdates,
+                qualityRequested.emissiveUpdates,
                 emissiveScale_),
-        .visibilityScale =
-            visibilityScale_,
-        .giScale =
-            giScale_,
-        .reflectionScale =
-            reflectionScale_,
-        .emissiveScale =
-            emissiveScale_,
+        .visibilityScale = visibilityScale_,
+        .giScale = giScale_,
+        .reflectionScale = reflectionScale_,
+        .emissiveScale = emissiveScale_,
         .hardwareRayQueryAvailable =
             hardwareRayQueryAvailable
     };
 
-    // Capability changes the preferred implementation of the existing
-    // visibility work, never the quantity of requested work.
     plan.preferHardwareRayQuery =
         hardwareRayQueryAvailable &&
+        effective.hardwareRayQueryEnabled &&
         plan.visibilityScale >=
-            config_.
-                hardwareRayQueryPreferenceThreshold;
+            effective.hardwareRayQueryPreferenceThreshold;
 
     return plan;
-}
-
-const LightingGpuTimings&
-LightingScheduler::SmoothedTimings() const noexcept
-{
-    return smoothed_;
-}
-
-LightingTimestampRecorder::LightingTimestampRecorder(
-    rhi::Device& device,
-    const u32 framesInFlight)
-    : device_(&device),
-      timestampPeriodNanoseconds_(
-          device.TimestampPeriodNanoseconds())
-{
-    if (framesInFlight == 0U)
-    {
-        throw std::invalid_argument(
-            "Lighting timestamp recorder requires at least one frame slot.");
-    }
-
-    pools_.reserve(framesInFlight);
-    frameStates_.resize(framesInFlight);
-
-    for (u32 index = 0U;
-         index < framesInFlight;
-         ++index)
-    {
-        pools_.push_back(
-            device.CreateTimestampQueryPool(
-                kLightingGpuSectionCount *
-                2U));
-    }
-}
-
-u32 LightingTimestampRecorder::QueryIndex(
-    const LightingGpuSection section,
-    const bool end) noexcept
-{
-    return
-        static_cast<u32>(section) *
-            2U +
-        (end ? 1U : 0U);
-}
-
-void LightingTimestampRecorder::BeginFrame(
-    rhi::CommandList& commands,
-    const u32 frameSlot)
-{
-    if (frameSlot >= pools_.size())
-    {
-        throw std::out_of_range(
-            "Lighting timestamp frame slot is out of range.");
-    }
-
-    commands.ResetTimestampQueryPool(
-        *pools_[frameSlot],
-        0U,
-        kLightingGpuSectionCount *
-            2U);
-
-    frameStates_[frameSlot] = {};
-}
-
-void LightingTimestampRecorder::BeginSection(
-    rhi::CommandList& commands,
-    const u32 frameSlot,
-    const LightingGpuSection section)
-{
-    if (frameSlot >= pools_.size() ||
-        section == LightingGpuSection::Count)
-    {
-        throw std::out_of_range(
-            "Lighting timestamp section/frame slot is invalid.");
-    }
-
-    const u32 sectionIndex =
-        static_cast<u32>(section);
-
-    // One timing interval per named section per frame slot. Multiple
-    // viewports may execute the same logical pass; the first interval is the
-    // stable scheduler sample instead of illegally rewriting a query slot.
-    if (frameStates_[frameSlot].begun[sectionIndex])
-    {
-        return;
-    }
-
-    frameStates_[frameSlot].begun[sectionIndex] =
-        true;
-
-    commands.WriteTimestamp(
-        *pools_[frameSlot],
-        QueryIndex(
-            section,
-            false));
-}
-
-void LightingTimestampRecorder::EndSection(
-    rhi::CommandList& commands,
-    const u32 frameSlot,
-    const LightingGpuSection section)
-{
-    if (frameSlot >= pools_.size() ||
-        section == LightingGpuSection::Count)
-    {
-        throw std::out_of_range(
-            "Lighting timestamp section/frame slot is invalid.");
-    }
-
-    const u32 sectionIndex =
-        static_cast<u32>(section);
-
-    if (!frameStates_[frameSlot].begun[sectionIndex] ||
-        frameStates_[frameSlot].ended[sectionIndex])
-    {
-        return;
-    }
-
-    frameStates_[frameSlot].ended[sectionIndex] =
-        true;
-
-    commands.WriteTimestamp(
-        *pools_[frameSlot],
-        QueryIndex(
-            section,
-            true));
-}
-
-std::optional<LightingGpuTimings>
-LightingTimestampRecorder::ResolveCompletedFrame(
-    const u32 frameSlot) const
-{
-    if (frameSlot >= pools_.size())
-    {
-        throw std::out_of_range(
-            "Lighting timestamp frame slot is out of range.");
-    }
-
-    LightingGpuTimings result;
-    bool anyResolved = false;
-
-    for (u32 section = 0U;
-         section < kLightingGpuSectionCount;
-         ++section)
-    {
-        std::array<u64, 2U> ticks{};
-
-        if (!frameStates_[frameSlot].ended[section] ||
-            !pools_[frameSlot]->TryGetResults(
-                section * 2U,
-                2U,
-                ticks.data()))
-        {
-            continue;
-        }
-
-        anyResolved = true;
-        result.valid[section] = true;
-
-        const u64 begin =
-            ticks[0U];
-        const u64 end =
-            ticks[1U];
-
-        if (end < begin)
-        {
-            result.milliseconds[section] =
-                0.0F;
-            continue;
-        }
-
-        const f64 nanoseconds =
-            static_cast<f64>(
-                end - begin) *
-            timestampPeriodNanoseconds_;
-
-        result.milliseconds[section] =
-            static_cast<f32>(
-                nanoseconds /
-                1'000'000.0);
-    }
-
-    return
-        anyResolved
-            ? std::optional(result)
-            : std::nullopt;
-}
-
-u32 LightingTimestampRecorder::FramesInFlight() const noexcept
-{
-    return
-        static_cast<u32>(
-            pools_.size());
 }
 } // namespace orbit::lighting
