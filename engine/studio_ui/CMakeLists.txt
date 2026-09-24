@@ -11,6 +11,7 @@ add_library(OrbitStudioUi STATIC
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
+    src/V007ValidationScenarios.cpp
     src/VolumeAuthoringM36.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportNavigation.cpp
@@ -283,5 +284,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.RuntimeProfilerSnapshot
         COMMAND OrbitRuntimeProfilerSnapshotTests
+    )
+
+    # M43 numerical gates are deterministic CPU/service invariants. GPU image
+    # comparisons stay a separate hardware/tolerance gate by design.
+    add_executable(OrbitV007DeterministicValidationTests
+        tests/V007DeterministicValidationTests.cpp
+    )
+
+    target_link_libraries(OrbitV007DeterministicValidationTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitV007DeterministicValidationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitV007DeterministicValidationTests)
+
+    add_test(
+        NAME Orbit.V007DeterministicValidation
+        COMMAND OrbitV007DeterministicValidationTests
     )
 endif()
