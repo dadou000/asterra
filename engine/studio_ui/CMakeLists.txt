@@ -328,4 +328,26 @@ if(BUILD_TESTING)
         NAME Orbit.V007PerformanceCapture
         COMMAND OrbitV007PerformanceCaptureTests
     )
+
+    # M45 destroys and reconstructs project/session/content authority around a
+    # real SQLite world checkpoint, material asset, project display settings
+    # and .orbitvol cache. Runtime-only radiance state is required to start
+    # empty so the reopened scene converges from persisted physical authority.
+    add_executable(OrbitV007ProjectEquivalenceTests
+        tests/V007ProjectEquivalenceTests.cpp
+    )
+
+    target_link_libraries(OrbitV007ProjectEquivalenceTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitV007ProjectEquivalenceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitV007ProjectEquivalenceTests)
+
+    add_test(
+        NAME Orbit.V007ProjectEquivalence
+        COMMAND OrbitV007ProjectEquivalenceTests
+    )
 endif()
