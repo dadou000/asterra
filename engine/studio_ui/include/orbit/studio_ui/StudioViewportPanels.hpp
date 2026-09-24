@@ -57,6 +57,10 @@ public:
     void RegisterSecondary(editor_ui::EditorUi& ui);
 
 private:
+    void DrawViewBase(
+        editor_ui::PanelContext& context,
+        std::string_view id);
+
     void DrawView(
         editor_ui::PanelContext& context,
         std::string_view id);
