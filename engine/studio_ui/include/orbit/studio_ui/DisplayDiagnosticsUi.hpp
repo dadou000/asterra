@@ -5,6 +5,16 @@
 
 #include <string_view>
 
+namespace orbit::content
+{
+class ContentService;
+}
+
+namespace orbit::studio_session
+{
+class StudioSession;
+}
+
 namespace orbit::studio_ui
 {
 class DisplayDiagnosticsUi
@@ -17,6 +27,22 @@ public:
 
     explicit DisplayDiagnosticsUi(
         StudioViewportRenderer& renderer) noexcept;
+
+    // M41 selection inspection remains an explicit Studio binding. The
+    // diagnostics panel can still be constructed in renderer-only tools/tests.
+    void BindLightingInspection(
+        studio_session::StudioSession& session,
+        content::ContentService& content) noexcept
+    {
+        inspectionSession_ = &session;
+        inspectionContent_ = &content;
+    }
+
+    void ClearLightingInspectionBinding() noexcept
+    {
+        inspectionSession_ = nullptr;
+        inspectionContent_ = nullptr;
+    }
 
     void Register(
         editor_ui::EditorUi& ui);
@@ -37,5 +63,7 @@ private:
         std::string_view label);
 
     StudioViewportRenderer* renderer_{nullptr};
+    studio_session::StudioSession* inspectionSession_{nullptr};
+    content::ContentService* inspectionContent_{nullptr};
 };
 } // namespace orbit::studio_ui
