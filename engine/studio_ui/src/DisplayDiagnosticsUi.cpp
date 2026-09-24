@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
 #include <orbit/studio_ui/LightingDisplaySettingsRuntime.hpp>
 #include <orbit/studio_ui/LightingInteractionState.hpp>
+#include <orbit/studio_ui/LightingSelectionInspection.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 
 #include <algorithm>
@@ -212,6 +213,14 @@ void DisplayDiagnosticsUi::DrawViewport(
             static_cast<u32>(std::clamp<i64>(cacheLevels, 1, 8));
     }
 
+    if (inspectionSession_ != nullptr &&
+        inspectionContent_ != nullptr)
+    {
+        PublishSelectedLightingAuthority(
+            *inspectionSession_,
+            *inspectionContent_);
+    }
+
     auto& interaction = StudioLightingInteractionState();
 
     if (renderer_ != nullptr)
@@ -279,10 +288,16 @@ void DisplayDiagnosticsUi::DrawViewport(
                 "Selected object has no positive physical material emission authority.");
         }
     }
+    else if (inspectionSession_ == nullptr ||
+             inspectionContent_ == nullptr)
+    {
+        context.MutedText(
+            "Selected-emissive inspection is not bound to this Studio host.");
+    }
     else
     {
         context.MutedText(
-            "Selected-emissive inspection seam is ready; viewport/session selection binding is the remaining M41 integration step.");
+            "Select one authored object to inspect its physical emissive GI authority.");
     }
 }
 } // namespace orbit::studio_ui
