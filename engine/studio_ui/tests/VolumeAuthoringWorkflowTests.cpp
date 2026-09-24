@@ -1,3 +1,4 @@
+#include <orbit/studio_ui/LightingDisplaySettingsRuntime.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/volume_representation/VolumeCache.hpp>
@@ -5,7 +6,9 @@
 #include <orbit/volume_representation/VolumeRepresentation.hpp>
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
 
+#include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <source_location>
 #include <span>
@@ -22,7 +25,7 @@ void Check(
     if (!condition)
     {
         std::cerr
-            << "M39 volumetric Studio workflow gate failed at "
+            << "M39/M40 Studio workflow gate failed at "
             << location.file_name()
             << ':'
             << location.line()
@@ -186,8 +189,6 @@ int main()
     Check(batch.diagnostics.emittedSurfaceDeposits <=
         outputSettings.surfaceDepositBudgetPerStep);
 
-    // One final compile-time contract pins the runtime policy fields consumed
-    // by the M39 Studio panel and UniversalVolumeRenderer together.
     static_assert(requires(
         volume_render::VolumeRenderRuntimeSettings settings)
     {
@@ -200,5 +201,71 @@ int main()
         settings.passiveRaymarchSteps;
     });
 
+    // M40 project defaults round trip independently from session overrides.
+    studio_ui::LightingDisplaySettings settings{};
+    settings.lighting.hardwareRayQueryEnabled = false;
+    settings.lighting.emissiveGiQualityScale = 1.75F;
+    settings.lighting.budget.giMs = 3.25F;
+    settings.lighting.budget.emissiveMs = 0.85F;
+    settings.display.histogram.minimumLog2 = -14.0F;
+    settings.display.histogram.maximumLog2 = 18.0F;
+    settings.display.eye.photopicCeilingLog2 = 2.75F;
+    settings.display.eye.exposureMiddleGray = 0.16F;
+    settings.display.highlights.bloomEnabled = true;
+    settings.display.highlights.bloomStrength = 0.12F;
+    settings.display.colorLut.enabled = true;
+    settings.display.colorLut.strength = 0.65F;
+    settings.display.colorLutAsset =
+        "Content/Color/Acceptance.cube";
+    settings.display.output.mode =
+        post_process::OutputMode::Hdr10;
+    settings.display.output.referenceWhiteNits = 220.0F;
+    settings.display.output.requestedPeakNits = 1400.0F;
+
+    const auto settingsRoot =
+        std::filesystem::temp_directory_path() /
+        "orbit-m40-lighting-display-settings";
+    std::filesystem::remove_all(settingsRoot);
+
+    studio_ui::SaveLightingDisplaySettings(
+        settingsRoot,
+        settings);
+
+    const auto reopened =
+        studio_ui::LoadLightingDisplaySettings(
+            settingsRoot);
+
+    Check(!reopened.lighting.hardwareRayQueryEnabled);
+    Check(std::abs(
+        reopened.lighting.emissiveGiQualityScale - 1.75F) < 1.0e-5F);
+    Check(std::abs(
+        reopened.lighting.budget.giMs - 3.25F) < 1.0e-5F);
+    Check(std::abs(
+        reopened.display.eye.photopicCeilingLog2 - 2.75F) < 1.0e-5F);
+    Check(std::abs(
+        reopened.display.highlights.bloomStrength - 0.12F) < 1.0e-5F);
+    Check(reopened.display.colorLutAsset ==
+        settings.display.colorLutAsset);
+    Check(reopened.display.output.mode ==
+        post_process::OutputMode::Hdr10);
+    Check(std::abs(
+        reopened.display.output.requestedPeakNits - 1400.0F) < 1.0e-5F);
+
+    bool consumerNotified = false;
+    int consumerOwner = 0;
+    studio_ui::RegisterStudioDisplayDefaultsConsumer(
+        &consumerOwner,
+        [&](const studio_ui::StudioDisplayDefaults& defaults)
+        {
+            consumerNotified =
+                std::abs(
+                    defaults.eye.photopicCeilingLog2 -
+                    2.75F) < 1.0e-5F;
+        });
+    studio_ui::PublishStudioDisplayDefaultsRuntime(
+        reopened.display);
+    Check(consumerNotified);
+
+    std::filesystem::remove_all(settingsRoot);
     return 0;
 }
