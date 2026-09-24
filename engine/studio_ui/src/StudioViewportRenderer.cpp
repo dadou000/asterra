@@ -2,6 +2,7 @@
 #include <orbit/studio_ui/LightingInteractionState.hpp>
 #include <orbit/studio_ui/LightingSelectionInspection.hpp>
 #include <orbit/studio_ui/StudioLightingOverlayGeometry.hpp>
+#include <orbit/studio_ui/StudioRuntimeProfiler.hpp>
 
 #include <algorithm>
 #include <iterator>
@@ -130,6 +131,70 @@ StudioViewportRenderer::Compose(
         PublishSelectedLightingAuthority(
             session,
             *content_);
+    }
+
+    // M42 publishes selected-volume telemetry from already-existing runtime
+    // services. It never calls Ensure(), so opening diagnostics cannot allocate
+    // or resize field storage and remains observational only.
+    ResetStudioVolumeRuntimeProfiler();
+
+    if (session.World().HasWorld())
+    {
+        const auto& selection =
+            session.World().Selection().Ordered();
+
+        if (selection.size() == 1U)
+        {
+            scene::ObjectId volume = selection.front();
+            const auto selectedRecord =
+                session.World().Objects().Find(volume);
+
+            if (selectedRecord.has_value() &&
+                (selectedRecord->type ==
+                     world_model::kVolumeSourceType ||
+                 selectedRecord->type ==
+                     world_model::kVolumeEffectorType) &&
+                selectedRecord->parent.has_value())
+            {
+                volume = *selectedRecord->parent;
+            }
+
+            if (world_model::ResolveVolumeDomain(
+                    session.World().Objects(),
+                    volume).has_value())
+            {
+                StudioVolumeRuntimeProfilerSnapshot volumeProfile{};
+                volumeProfile.volume = volume;
+                volumeProfile.hasSelection = true;
+
+                if (volumeFields_ != nullptr)
+                {
+                    if (const auto* storage =
+                            volumeFields_->Find(volume);
+                        storage != nullptr)
+                    {
+                        volumeProfile.fields = storage->Diagnostics();
+                        volumeProfile.invalidatedTiles =
+                            volumeFields_->LastInvalidatedTiles(volume);
+                        volumeProfile.hasFields = true;
+                    }
+                }
+
+                if (surfaceVolumeSolver_ != nullptr)
+                {
+                    volumeProfile.solver =
+                        surfaceVolumeSolver_->Diagnostics(volume);
+                    volumeProfile.hasSolver = true;
+                }
+
+                volumeProfile.renderer =
+                    universalVolumeRenderer_.Diagnostics(volume);
+                volumeProfile.hasRenderer = true;
+
+                PublishStudioVolumeRuntimeProfiler(
+                    std::move(volumeProfile));
+            }
+        }
     }
 
     const bool wantsSpatialOverlay =
@@ -268,9 +333,6 @@ StudioViewportRenderer::Compose(
                     overlayLines);
             });
 
-        // RenderView::Import starts the persistent display target in
-        // ShaderResource next frame. Preserve that cross-frame contract just
-        // like the existing luminance-metering display overlay does.
         graph.AddPass(
             passPrefix + ".Restore",
             {
