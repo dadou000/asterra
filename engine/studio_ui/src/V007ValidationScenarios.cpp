@@ -9,7 +9,7 @@
 #include <orbit/world_model/VolumeSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
-#include <algorithm>
+#include <array>
 #include <exception>
 #include <optional>
 #include <string>
@@ -22,11 +22,17 @@ namespace
     editor_session::EditorWorldSession& world)
 {
     const auto& selected = world.Selection().Ordered();
-    if (selected.size() != 1U)
-    {
-        return std::nullopt;
-    }
-    return selected.front();
+    return selected.size() == 1U
+        ? std::optional(selected.front())
+        : std::nullopt;
+}
+
+void SelectSingle(
+    editor_session::EditorWorldSession& world,
+    const scene::ObjectId object)
+{
+    const std::array selection{object};
+    world.Selection().Set(selection);
 }
 
 [[nodiscard]] std::optional<scene::ObjectId> CreateVolumePreset(
@@ -158,6 +164,16 @@ void EnableLightingValidationOverlays()
     overlays.radianceCacheRegions = true;
     overlays.emissiveInfluence = true;
 }
+
+[[nodiscard]] post_process::HumanEyeAdaptationConfig EyeConfig(
+    StudioViewportRenderer& renderer)
+{
+    const auto diagnostics =
+        renderer.LuminanceHistogramDiagnostics("studio.primary");
+    return diagnostics.has_value()
+        ? diagnostics->eyeConfig
+        : post_process::HumanEyeAdaptationConfig{};
+}
 } // namespace
 
 std::string PrepareV007ValidationScenario(
@@ -183,7 +199,7 @@ std::string PrepareV007ValidationScenario(
 
         case V007ValidationScenario::CloudGlare:
         {
-            auto config = renderer.HumanEyeAdaptationConfig("studio.primary");
+            auto config = EyeConfig(renderer);
             config.photopicCeilingLog2 = 2.0F;
             config.photopicCeilingRecoverySeconds = 0.12F;
             config.overloadRecoverySeconds = 0.10F;
@@ -194,7 +210,7 @@ std::string PrepareV007ValidationScenario(
 
         case V007ValidationScenario::DarkInteriorToDaylight:
         {
-            auto config = renderer.HumanEyeAdaptationConfig("studio.primary");
+            auto config = EyeConfig(renderer);
             config.darkAdaptSeconds = 18.0F;
             config.darkResetSeconds = 0.30F;
             config.photopicBrightenSeconds = 0.18F;
@@ -230,9 +246,9 @@ std::string PrepareV007ValidationScenario(
             const auto volume = CreateVolumePreset(world, "Smoke");
             if (!volume.has_value()) return "Smoke preset creation did not yield a selected Volume.";
             AddVolumeInput(world, editor_model::authoring_commands::kAddVolumeSource, "Brush");
-            world.Selection().SetSingle(*volume);
+            SelectSingle(world, *volume);
             AddVolumeInput(world, editor_model::authoring_commands::kAddVolumeEffector, "Obstacle");
-            world.Selection().SetSingle(*volume);
+            SelectSingle(world, *volume);
             return "Smoke Volume + Brush source + Obstacle effector created through production authoring commands.";
         }
 
@@ -241,9 +257,9 @@ std::string PrepareV007ValidationScenario(
             const auto volume = CreateVolumePreset(world, "Dust");
             if (!volume.has_value()) return "Dust preset creation did not yield a selected Volume.";
             AddVolumeInput(world, editor_model::authoring_commands::kAddVolumeSource, "Terrain");
-            world.Selection().SetSingle(*volume);
+            SelectSingle(world, *volume);
             AddVolumeInput(world, editor_model::authoring_commands::kAddVolumeEffector, "Wind");
-            world.Selection().SetSingle(*volume);
+            SelectSingle(world, *volume);
             return "Dust Volume + Terrain source + Wind effector created through production authoring commands.";
         }
 
@@ -252,7 +268,7 @@ std::string PrepareV007ValidationScenario(
             const auto volume = CreateVolumePreset(world, "Fire");
             if (!volume.has_value()) return "Fire preset creation did not yield a selected Volume.";
             AddVolumeInput(world, editor_model::authoring_commands::kAddVolumeSource, "Brush");
-            world.Selection().SetSingle(*volume);
+            SelectSingle(world, *volume);
             world.Commands().SetProperty(*volume, world_model::kVolumeEmissionScale, 12.0);
             world.Commands().SetProperty(*volume, world_model::kVolumeGiEmissionScale, 1.0);
             EnableLightingValidationOverlays();
@@ -274,7 +290,7 @@ std::string PrepareV007ValidationScenario(
             const auto volume = CreateVolumePreset(world, "Fire");
             if (!volume.has_value()) return "Fire preset creation did not yield a selected Volume.";
             AddVolumeInput(world, editor_model::authoring_commands::kAddVolumeSource, "Brush");
-            world.Selection().SetSingle(*volume);
+            SelectSingle(world, *volume);
             const auto domain = world_model::ResolveVolumeDomain(world.Objects(), *volume);
             if (!domain.has_value()) return "Created validation Volume could not be resolved.";
             const auto inputs = world_model::ResolveVolumeInputs(world.Objects(), *volume);
