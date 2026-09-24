@@ -34,6 +34,11 @@ public:
     };
 
 private:
+    // M40 wraps the existing project panel rather than creating a separate
+    // settings application or duplicating the terrain/project workflow.
+    void RegisterBase(editor_ui::EditorUi& ui);
+    void DrawBase(editor_ui::PanelContext& context);
+
     void Draw(editor_ui::PanelContext& context);
     void SynchronizeAuthority();
 
