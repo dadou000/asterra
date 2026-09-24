@@ -3,6 +3,7 @@
 #include <orbit/core/Log.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
+#include <exception>
 #include <string>
 
 namespace orbit::studio_ui
@@ -25,15 +26,19 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
 
     try
     {
-        for (const auto& scenario :
-             kV007ValidationScenarios)
+        for (std::size_t index = 0U;
+             index < kV007ValidationScenarios.size();
+             ++index)
         {
+            const auto& scenario =
+                kV007ValidationScenarios[index];
             const auto id =
                 V007ValidationCommandId(
                     scenario.id);
 
             // Project/session rebinds may rebuild the UI object while the same
-            // world command registry survives. Never double-register IDs.
+            // world command registry survives. Never double-register IDs and
+            // never claim ownership of a descriptor installed by another host.
             if (registry.Find(id) != nullptr)
             {
                 continue;
@@ -82,9 +87,9 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
                         log::Info(result);
                     }
             });
-        }
 
-        registered_ = true;
+            owned_[index] = true;
+        }
     }
     catch (const std::exception& exception)
     {
@@ -97,8 +102,7 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
 
 V007ValidationCommandRegistration::~V007ValidationCommandRegistration()
 {
-    if (!registered_ ||
-        session_ == nullptr ||
+    if (session_ == nullptr ||
         !session_->World().HasWorld())
     {
         return;
@@ -107,13 +111,19 @@ V007ValidationCommandRegistration::~V007ValidationCommandRegistration()
     auto& registry =
         session_->World().CommandRegistry();
 
-    for (const auto& scenario :
-         kV007ValidationScenarios)
+    for (std::size_t index = 0U;
+         index < kV007ValidationScenarios.size();
+         ++index)
     {
+        if (!owned_[index])
+        {
+            continue;
+        }
+
         static_cast<void>(
             registry.Unregister(
                 V007ValidationCommandId(
-                    scenario.id)));
+                    kV007ValidationScenarios[index].id)));
     }
 }
 } // namespace orbit::studio_ui
