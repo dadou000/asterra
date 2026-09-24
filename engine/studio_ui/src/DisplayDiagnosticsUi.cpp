@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
 #include <orbit/studio_ui/LightingDisplaySettingsRuntime.hpp>
+#include <orbit/studio_ui/LightingInteractionState.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 
 #include <algorithm>
@@ -208,6 +209,121 @@ void DisplayDiagnosticsUi::DrawViewport(
                 runtime->hardwareRayQueryEnabled
                     ? "enabled"
                     : "disabled"));
+    }
+
+    context.Separator();
+    context.Heading("Viewport Lighting Inspection");
+    context.MutedText(
+        "Transient production overlays. They never alter lighting authority, project state, GI cache identity or renderer budgets.");
+
+    auto& overlays =
+        StudioLightingOverlays();
+
+    bool showGi = overlays.giUpdateCells;
+    bool showCache = overlays.radianceCacheRegions;
+    bool showReflections = overlays.reflectionInspection;
+    bool showEmissive = overlays.emissiveInfluence;
+
+    bool overlayChanged =
+        context.Checkbox(
+            "GI Update Cells##m41-gi-cells",
+            showGi);
+    overlayChanged |=
+        context.Checkbox(
+            "Radiance Cache Regions##m41-cache-regions",
+            showCache);
+    overlayChanged |=
+        context.Checkbox(
+            "Reflection Inspection##m41-reflections",
+            showReflections);
+    overlayChanged |=
+        context.Checkbox(
+            "Emissive Affected Cells##m41-emissive",
+            showEmissive);
+
+    i64 maximumCells =
+        static_cast<i64>(overlays.maximumGiCells);
+    i64 cacheLevels =
+        static_cast<i64>(overlays.cacheLevels);
+
+    overlayChanged |=
+        context.InputInteger(
+            "Maximum GI Cells##m41-max-cells",
+            maximumCells);
+    overlayChanged |=
+        context.InputInteger(
+            "Cache Levels##m41-cache-levels",
+            cacheLevels);
+
+    if (overlayChanged)
+    {
+        overlays.giUpdateCells = showGi;
+        overlays.radianceCacheRegions = showCache;
+        overlays.reflectionInspection = showReflections;
+        overlays.emissiveInfluence = showEmissive;
+        overlays.maximumGiCells =
+            static_cast<u32>(
+                std::clamp<i64>(
+                    maximumCells,
+                    1,
+                    256));
+        overlays.cacheLevels =
+            static_cast<u32>(
+                std::clamp<i64>(
+                    cacheLevels,
+                    1,
+                    8));
+    }
+
+    const auto& interaction =
+        StudioLightingInteractionState();
+
+    context.Text(
+        std::format(
+            "Emissive sources {} | invalidations {} | dirty cache cells {} | scheduled {}",
+            interaction.trackedEmissiveSources,
+            interaction.invalidationEventsThisFrame,
+            interaction.dirtyRadianceCells,
+            interaction.scheduledRadianceUpdates));
+
+    context.Text(
+        std::format(
+            "Ray query: {} / {} | proxy primitives {}",
+            interaction.hardwareRayQuerySupported
+                ? "supported"
+                : "unsupported",
+            interaction.hardwareRayQueryReady
+                ? "ready"
+                : "not ready",
+            interaction.hardwarePrimitiveCount));
+
+    if (interaction.hasSelection)
+    {
+        context.Text(
+            "Selected: " +
+            interaction.selectedObject);
+
+        if (interaction.selectedEmissive)
+        {
+            context.Text(
+                std::format(
+                    "Emissive GI: {:.1f} nits | GI scale x{:.3f} | {}",
+                    interaction.emissionLuminanceNits,
+                    interaction.emissionGiScale,
+                    interaction.emissionGiEnabled
+                        ? "contributing"
+                        : "visible only"));
+        }
+        else
+        {
+            context.MutedText(
+                "Selected object has no positive physical material emission authority.");
+        }
+    }
+    else
+    {
+        context.MutedText(
+            "Select an authored object to inspect its emissive GI authority.");
     }
 }
 } // namespace orbit::studio_ui
