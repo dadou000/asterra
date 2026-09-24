@@ -350,4 +350,31 @@ if(BUILD_TESTING)
         NAME Orbit.V007ProjectEquivalence
         COMMAND OrbitV007ProjectEquivalenceTests
     )
+
+    # M46 is the release-level architectural smoke gate. Detailed subsystem
+    # assertions remain in their original tests; this target pins the shared
+    # cross-system contracts and is ordered after the major 0.0.7 gates.
+    add_executable(OrbitV007IntegrationGateTests
+        tests/V007IntegrationGateTests.cpp
+    )
+
+    target_link_libraries(OrbitV007IntegrationGateTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitV007IntegrationGateTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitV007IntegrationGateTests)
+
+    add_test(
+        NAME Orbit.V007IntegrationGate
+        COMMAND OrbitV007IntegrationGateTests
+    )
+
+    set_tests_properties(
+        Orbit.V007IntegrationGate
+        PROPERTIES
+            DEPENDS "Orbit.VolumeAuthoringWorkflow;Orbit.StudioLightingOverlayGeometry;Orbit.LightingSelectionInspection;Orbit.RuntimeProfilerSnapshot;Orbit.V007DeterministicValidation;Orbit.V007PerformanceCapture;Orbit.V007ProjectEquivalence"
+    )
 endif()
