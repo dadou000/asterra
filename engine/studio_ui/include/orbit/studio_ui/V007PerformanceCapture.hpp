@@ -10,6 +10,10 @@
 #include <string>
 #include <string_view>
 
+#ifndef ORBIT_GIT_COMMIT
+#define ORBIT_GIT_COMMIT "unknown"
+#endif
+
 namespace orbit::studio_ui
 {
 struct StudioRadianceCachePerformanceDiagnostics
@@ -66,7 +70,7 @@ struct V007PerformancePairValidation
     u32 height,
     std::string_view scenario,
     std::string_view settings,
-    std::string_view commit,
+    std::string_view commit = ORBIT_GIT_COMMIT,
     StudioRadianceCachePerformanceDiagnostics cache = {});
 
 [[nodiscard]] std::string SerializeV007PerformanceCapture(
