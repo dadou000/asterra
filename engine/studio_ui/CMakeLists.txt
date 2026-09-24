@@ -248,4 +248,22 @@ if(BUILD_TESTING)
         NAME Orbit.StudioLightingOverlayGeometry
         COMMAND OrbitStudioLightingOverlayGeometryTests
     )
+
+    add_executable(OrbitLightingSelectionInspectionTests
+        tests/LightingSelectionInspectionTests.cpp
+    )
+
+    target_link_libraries(OrbitLightingSelectionInspectionTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitLightingSelectionInspectionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingSelectionInspectionTests)
+
+    add_test(
+        NAME Orbit.LightingSelectionInspection
+        COMMAND OrbitLightingSelectionInspectionTests
+    )
 endif()
