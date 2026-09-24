@@ -11,6 +11,7 @@ add_library(OrbitStudioUi STATIC
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
+    src/V007ValidationCommands.cpp
     src/V007ValidationScenarios.cpp
     src/VolumeAuthoringM36.cpp
     src/StudioViewportCamera.cpp
