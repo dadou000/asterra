@@ -1,11 +1,68 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
+#define Register RegisterBase
+#define RegisterSecondary RegisterSecondaryBase
 #define DrawView DrawViewBase
 #include "StudioViewportPanelsBase.cpp"
 #undef DrawView
+#undef RegisterSecondary
+#undef Register
 
 namespace orbit::studio_ui
 {
+void StudioViewportPanels::Register(
+    editor_ui::EditorUi& ui)
+{
+    if (views_ != nullptr)
+    {
+        views_->CreateDefaults();
+    }
+
+    ui.RegisterPanel({
+        .id = kPrimaryViewportPanel,
+        .title = "Viewport",
+        .defaultOpen = true,
+        .defaultDock = editor_ui::DockRegion::Center,
+        .dockOrder = 0,
+        .minSize = {.width = 320.0F, .height = 200.0F},
+        .draw =
+            [this](editor_ui::PanelContext& context)
+            {
+                DrawView(context, "studio.primary");
+            }
+    });
+
+    ui.RegisterPanel({
+        .id = kSecondaryViewportPanel,
+        .title = "Body Map / Debug View",
+        .defaultOpen = true,
+        .defaultDock = editor_ui::DockRegion::Center,
+        .dockOrder = 10,
+        .draw =
+            [this](editor_ui::PanelContext& context)
+            {
+                DrawView(context, "studio.map");
+            }
+    });
+}
+
+void StudioViewportPanels::RegisterSecondary(
+    editor_ui::EditorUi& ui)
+{
+    ui.RegisterPanel({
+        .id = kSecondaryViewportPanel,
+        .title = "Body Map / Debug View",
+        .defaultOpen = true,
+        .defaultDock = editor_ui::DockRegion::Center,
+        .dockOrder = 10,
+        .draw =
+            [this](editor_ui::PanelContext& context)
+            {
+                DrawView(context, "studio.map");
+            }
+    });
+}
+
 void StudioViewportPanels::DrawView(
     editor_ui::PanelContext& context,
     const std::string_view id)
@@ -53,7 +110,7 @@ void StudioViewportPanels::DrawView(
     context.Separator();
     context.Text("Selected Light Tools");
     context.MutedText(
-        "Uses the authored light schema and command history; viewport gizmos update from the same properties.");
+        "Uses the authored light schema and command history; viewport range/cone gizmos update from these same properties.");
 
     const auto moveToView =
         [this, renderView, lightId, spot]
