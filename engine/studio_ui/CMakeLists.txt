@@ -266,4 +266,22 @@ if(BUILD_TESTING)
         NAME Orbit.LightingSelectionInspection
         COMMAND OrbitLightingSelectionInspectionTests
     )
+
+    add_executable(OrbitRuntimeProfilerSnapshotTests
+        tests/RuntimeProfilerSnapshotTests.cpp
+    )
+
+    target_link_libraries(OrbitRuntimeProfilerSnapshotTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitRuntimeProfilerSnapshotTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRuntimeProfilerSnapshotTests)
+
+    add_test(
+        NAME Orbit.RuntimeProfilerSnapshot
+        COMMAND OrbitRuntimeProfilerSnapshotTests
+    )
 endif()
