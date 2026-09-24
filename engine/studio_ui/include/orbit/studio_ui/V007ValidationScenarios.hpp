@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/core/Types.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 
@@ -54,8 +55,39 @@ inline constexpr std::array<V007ValidationScenarioDescriptor, 13>
         {V007ValidationScenario::NearToFarVolumeLod,"Near -> Far Volume LOD","Volumes","Live/coarse/passive/baked transitions keep normalized representation weights and stable identity.",true}
     }};
 
+[[nodiscard]] constexpr commands::CommandId
+V007ValidationCommandId(const V007ValidationScenario scenario) noexcept
+{
+    return {
+        .high = 0x4f524249544d3433ULL,
+        .low = 0x56414c0000000001ULL + static_cast<u64>(scenario)
+    };
+}
+
 [[nodiscard]] std::string PrepareV007ValidationScenario(
     V007ValidationScenario scenario,
     studio_session::StudioSession& session,
     StudioViewportRenderer& renderer);
+
+// RAII bridge into Studio's existing command palette/catalog. The normal
+// VolumeAuthoringUi owns one registration while its active project session is
+// alive; no standalone validation application or test-only editor path exists.
+class V007ValidationCommandRegistration
+{
+public:
+    V007ValidationCommandRegistration(
+        studio_session::StudioSession* session,
+        StudioViewportRenderer* renderer) noexcept;
+    ~V007ValidationCommandRegistration();
+
+    V007ValidationCommandRegistration(
+        const V007ValidationCommandRegistration&) = delete;
+    V007ValidationCommandRegistration& operator=(
+        const V007ValidationCommandRegistration&) = delete;
+
+private:
+    studio_session::StudioSession* session_{nullptr};
+    StudioViewportRenderer* renderer_{nullptr};
+    bool registered_{false};
+};
 } // namespace orbit::studio_ui
