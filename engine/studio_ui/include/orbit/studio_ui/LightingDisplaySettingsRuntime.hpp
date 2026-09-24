@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdexcept>
+
 #include <orbit/studio_ui/LightingDisplaySettings.hpp>
 
 #include <algorithm>
@@ -30,7 +32,7 @@ inline void RegisterStudioDisplayDefaultsConsumer(
     StudioDisplayDefaultsConsumer consumer)
 {
     auto& consumers = detail::DisplayDefaultsConsumers();
-    const auto found = std::find_if(
+    auto found = std::find_if(
         consumers.begin(),
         consumers.end(),
         [owner](const auto& entry)
@@ -41,6 +43,7 @@ inline void RegisterStudioDisplayDefaultsConsumer(
     if (found == consumers.end())
     {
         consumers.emplace_back(owner, std::move(consumer));
+        found = std::prev(consumers.end());
     }
     else
     {
@@ -48,9 +51,9 @@ inline void RegisterStudioDisplayDefaultsConsumer(
     }
 
     const auto published = StudioDisplayDefaultsSnapshot();
-    if (published.revision != 0U)
+    if (published.revision != 0U && found->second)
     {
-        consumers.back().second(published.settings);
+        found->second(published.settings);
     }
 }
 
