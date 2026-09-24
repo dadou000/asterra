@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/platform/FileDialog.hpp>
 #include <orbit/studio_session/ProjectBrowserModel.hpp>
 #include <orbit/studio_session/ProjectSettingsModel.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
@@ -40,6 +41,11 @@ public:
     void SetWorkspaceChangedCallback(
         std::function<void()> callback);
 
+    // Window that owns the native folder pickers. Without one, the path
+    // fields remain typeable but the Browse buttons are hidden.
+    void SetDialogOwner(
+        const platform::Window* owner) noexcept;
+
     inline static constexpr editor_ui::PanelId kProjectBrowserPanel{
         .high = 0x4f52424954535455ULL,
         .low = 0x50524f4a42525753ULL
@@ -66,6 +72,7 @@ private:
     studio_session::ProjectBrowserModel projectBrowser_;
     studio_session::ProjectSettingsModel projectSettings_;
     std::function<void()> workspaceChanged_;
+    const platform::Window* dialogOwner_{nullptr};
 
     u64 observedWorkspaceGeneration_{~u64{0}};
     std::string newProjectRoot_;

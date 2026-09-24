@@ -1,0 +1,16 @@
+asset_mount_points = [ 'Content' ]
+plugins = []
+script_entry_points = []
+
+[project]
+engine_compatibility = '0.0.7'
+id = 'c066cb3f-7d05-49c3-9940-abe369ea5d5a'
+name = 'asterra'
+schema_version = 1
+startup_world = 'Worlds/Main.orbitworld'
+
+[[build_profiles]]
+configuration = 'Development'
+name = 'Development Windows'
+platform = 'Windows'
+storefront = 'standalone'

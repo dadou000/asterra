@@ -62,11 +62,15 @@ int main()
             star,
             kBodyRadius,
             10.0);
+        // Body-fixed +Y is the spin pole, which maps to the parent +Z pole
+        // for an untilted body. Placing the star slightly above the parent
+        // XY (equatorial) plane puts it 0.1 rad above the equatorial ring
+        // plane in body coordinates.
         commands.SetProperty(
             star,
             kBodyParentPositionMeters,
             math::Double3{
-                1000.0, 100.0, 0.0});
+                1000.0, 0.0, 100.0});
 
         const auto emitter =
             commands.CreateObject(

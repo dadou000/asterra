@@ -342,13 +342,36 @@ uint StellarHash(uint x)
     return x;
 }
 
+float StellarLattice(int3 c, uint seed)
+{
+    uint h = StellarHash(seed ^ asuint(c.x));
+    h = StellarHash(h ^ asuint(c.y));
+    h = StellarHash(h ^ asuint(c.z));
+    return (float)(h & 0x00ffffffu) / 16777215.0;
+}
+
+// Band-limited value noise: smoothly interpolated lattice values at the
+// requested feature scale. A per-cell hash at a 4096x finer lattice is white
+// noise at pixel scale and turns shading/normals into speckle.
 float StellarNoise(float3 p, float scale, uint seed)
 {
-    int3 q = (int3)floor(p * max(scale, 1.0) * 4096.0);
-    uint h = StellarHash(seed ^ asuint(q.x));
-    h = StellarHash(h ^ asuint(q.y));
-    h = StellarHash(h ^ asuint(q.z));
-    return (float)(h & 0x00ffffffu) / 16777215.0;
+    const float3 x = p * max(scale, 1.0);
+    const float3 cell = floor(x);
+    const float3 f = x - cell;
+    const float3 w = f * f * (3.0 - 2.0 * f);
+    const int3 c = (int3)cell;
+    const float v000 = StellarLattice(c, seed);
+    const float v100 = StellarLattice(c + int3(1, 0, 0), seed);
+    const float v010 = StellarLattice(c + int3(0, 1, 0), seed);
+    const float v110 = StellarLattice(c + int3(1, 1, 0), seed);
+    const float v001 = StellarLattice(c + int3(0, 0, 1), seed);
+    const float v101 = StellarLattice(c + int3(1, 0, 1), seed);
+    const float v011 = StellarLattice(c + int3(0, 1, 1), seed);
+    const float v111 = StellarLattice(c + int3(1, 1, 1), seed);
+    return lerp(
+        lerp(lerp(v000, v100, w.x), lerp(v010, v110, w.x), w.y),
+        lerp(lerp(v001, v101, w.x), lerp(v011, v111, w.x), w.y),
+        w.z);
 }
 
 float StellarFractal(float3 p, float scale, uint seed)
@@ -799,7 +822,8 @@ float3 SmallBodySurfaceColor(float3 n)
     color *=
         lerp(
             0.72,
-            1.18,
+)"
+R"(            1.18,
             saturate(singleScatteringAlbedo));
 
     return max(color, 0.0);
@@ -871,7 +895,10 @@ float4 main(VSOutput input) : SV_Target0
         const float radiusNdc =
             max(g.proxy.y, 0.00025);
         const float2 q =
-            p / radiusNdc;
+            float2(
+                p.x * max(g.radiiAndAspect.w, 1.0e-4),
+                p.y) /
+            radiusNdc;
         const float r2 =
             dot(q, q);
         const float r =
@@ -1066,8 +1093,10 @@ float4 main(VSOutput input) : SV_Target0
             giant > 0.5
                 ? 1.0
                 : saturate(g.material.w);
+        const float viewZ =
+            sqrt(max(1.0 - min(r2, 1.0), 0.0));
         const float3 v =
-            normalize(float3(-q.x, q.y, z));
+            normalize(float3(-q.x, q.y, viewZ));
         const float glint =
             ocean *
             (1.0 - ice) *
@@ -1124,7 +1153,10 @@ float4 main(VSOutput input) : SV_Target0
         const float radiusNdc =
             max(g.proxy.y, 0.00025);
         const float2 q =
-            p / radiusNdc;
+            float2(
+                p.x * max(g.radiiAndAspect.w, 1.0e-4),
+                p.y) /
+            radiusNdc;
         const float r2 = dot(q, q);
 
         if (r2 > 1.0)
@@ -1328,7 +1360,8 @@ float4 main(VSOutput input) : SV_Target0
             ? GiantSurfaceColor(n)
             : smallBody > 0.5
                 ? SmallBodySurfaceColor(n)
-                : g.albedoAndRoughness.xyz;
+)"
+R"(                : g.albedoAndRoughness.xyz;
 
     const float particulate =
         smallBody > 0.5
@@ -1409,6 +1442,163 @@ float EncodeSurfaceMeta(float surfaceClass, float representation)
     return surfaceClass + representation / 16.0;
 }
 
+uint StellarHash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float StellarLattice(int3 c, uint seed)
+{
+    uint h = StellarHash(seed ^ asuint(c.x));
+    h = StellarHash(h ^ asuint(c.y));
+    h = StellarHash(h ^ asuint(c.z));
+    return (float)(h & 0x00ffffffu) / 16777215.0;
+}
+
+// Band-limited value noise: smoothly interpolated lattice values at the
+// requested feature scale. A per-cell hash at a 4096x finer lattice is white
+// noise at pixel scale and turns shading/normals into speckle.
+float StellarNoise(float3 p, float scale, uint seed)
+{
+    const float3 x = p * max(scale, 1.0);
+    const float3 cell = floor(x);
+    const float3 f = x - cell;
+    const float3 w = f * f * (3.0 - 2.0 * f);
+    const int3 c = (int3)cell;
+    const float v000 = StellarLattice(c, seed);
+    const float v100 = StellarLattice(c + int3(1, 0, 0), seed);
+    const float v010 = StellarLattice(c + int3(0, 1, 0), seed);
+    const float v110 = StellarLattice(c + int3(1, 1, 0), seed);
+    const float v001 = StellarLattice(c + int3(0, 0, 1), seed);
+    const float v101 = StellarLattice(c + int3(1, 0, 1), seed);
+    const float v011 = StellarLattice(c + int3(0, 1, 1), seed);
+    const float v111 = StellarLattice(c + int3(1, 1, 1), seed);
+    return lerp(
+        lerp(lerp(v000, v100, w.x), lerp(v010, v110, w.x), w.y),
+        lerp(lerp(v001, v101, w.x), lerp(v011, v111, w.x), w.y),
+        w.z);
+}
+
+float StellarFractal(float3 p, float scale, uint seed)
+{
+    float sum = 0.0;
+    float weight = 0.0;
+    float amplitude = 1.0;
+    float frequency = scale;
+    [unroll]
+    for (uint octave = 0u; octave < 4u; ++octave)
+    {
+        sum += StellarNoise(p, frequency, seed + octave * 0x9e3779b9u) * amplitude;
+        weight += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.07;
+    }
+    return sum / max(weight, 1e-6);
+}
+
+float3 GiantSurfaceColor(float3 n)
+{
+    const float frequency = max(g.material.x, 1.0);
+    const float bandStrength = saturate(g.material.y);
+    const uint seed = asuint(g.material.w);
+    const float zonalShear = max(g.albedoAndRoughness.w, 0.0);
+    const float stormStrength = saturate(g.proxy.z);
+    const float stormScale = max(g.proxy.w, 0.25);
+    const float polarStrength = saturate(g.ocean.w);
+    const float depthContrast = saturate(g.forward.w);
+    const float turbulenceStrength = saturate(g.up.w);
+
+    const float latitude = asin(clamp(n.y, -1.0, 1.0));
+    const float longitude = atan2(n.z, n.x);
+
+    const float broad =
+        StellarFractal(n, 3.2, seed ^ 0x42524f41u) - 0.5;
+    const float fine =
+        StellarFractal(
+            n,
+            max(frequency * 1.7, 4.0),
+            seed ^ 0x54555242u) - 0.5;
+
+    const float shear =
+        zonalShear *
+        (0.55 * broad + 0.45 * fine) *
+        cos(latitude);
+
+    const float wave =
+        sin(
+            latitude * frequency * 3.14159265 +
+            longitude * 0.18 +
+            shear * 4.0);
+
+    const float narrow =
+        sin(
+            latitude * frequency * 2.07 * 3.14159265 -
+            longitude * 0.11 +
+            fine * 1.7);
+
+    float band =
+        saturate(
+            0.5 +
+            (0.5 + 0.5 * (0.72 * wave + 0.28 * narrow) - 0.5) *
+            (0.35 + 1.3 * bandStrength));
+
+    float3 color =
+        lerp(
+            g.albedoAndRoughness.xyz,
+            g.emissionAndOpacity.xyz,
+            band);
+
+    const float depth =
+        1.0 +
+        depthContrast *
+        (0.65 * broad + 0.35 * fine) *
+        0.55;
+    color *= max(depth, 0.2);
+
+    const float stormNoise =
+        StellarFractal(
+            n,
+            stormScale,
+            seed ^ 0x53544f52u);
+
+    const float stormMask =
+        smoothstep(
+            0.82 - 0.18 * stormStrength,
+            0.985,
+            stormNoise);
+
+    color *=
+        1.0 +
+        stormMask *
+        stormStrength *
+        (0.22 + 0.18 * sin(longitude * 5.0));
+
+    color *=
+        1.0 +
+        fine *
+        turbulenceStrength *
+        0.20;
+
+    const float polar =
+        pow(abs(n.y), 2.7) *
+        polarStrength;
+
+    color =
+        lerp(
+            color,
+            g.ocean.xyz,
+            saturate(polar));
+
+    return max(color, 0.0);
+}
+
+
+
 uint SmallBodySurfaceHash(uint x)
 {
     x ^= x >> 16;
@@ -1426,30 +1616,38 @@ float SmallBodySurfaceHash01(uint value)
         16777215.0;
 }
 
+float SmallBodySurfaceLattice(int3 c, uint seed)
+{
+    uint h = SmallBodySurfaceHash(seed ^ asuint(c.x));
+    h = SmallBodySurfaceHash(h ^ asuint(c.y));
+    h = SmallBodySurfaceHash(h ^ asuint(c.z));
+    return (float)(h & 0x00ffffffu) / 16777215.0;
+}
+
+// Band-limited value noise at the requested feature scale (see
+// StellarNoise): smooth shape and normals instead of per-pixel speckle.
 float SmallBodySurfaceNoise(
     float3 p,
     float scale,
     uint seed)
 {
-    int3 q =
-        (int3)floor(
-            p *
-            max(scale, 1.0) *
-            4096.0);
-
-    uint h =
-        SmallBodySurfaceHash(
-            seed ^ asuint(q.x));
-    h =
-        SmallBodySurfaceHash(
-            h ^ asuint(q.y));
-    h =
-        SmallBodySurfaceHash(
-            h ^ asuint(q.z));
-
-    return
-        (float)(h & 0x00ffffffu) /
-        16777215.0;
+    const float3 x = p * max(scale, 1.0);
+    const float3 cell = floor(x);
+    const float3 f = x - cell;
+    const float3 w = f * f * (3.0 - 2.0 * f);
+    const int3 c = (int3)cell;
+    const float v000 = SmallBodySurfaceLattice(c, seed);
+    const float v100 = SmallBodySurfaceLattice(c + int3(1, 0, 0), seed);
+    const float v010 = SmallBodySurfaceLattice(c + int3(0, 1, 0), seed);
+    const float v110 = SmallBodySurfaceLattice(c + int3(1, 1, 0), seed);
+    const float v001 = SmallBodySurfaceLattice(c + int3(0, 0, 1), seed);
+    const float v101 = SmallBodySurfaceLattice(c + int3(1, 0, 1), seed);
+    const float v011 = SmallBodySurfaceLattice(c + int3(0, 1, 1), seed);
+    const float v111 = SmallBodySurfaceLattice(c + int3(1, 1, 1), seed);
+    return lerp(
+        lerp(lerp(v000, v100, w.x), lerp(v010, v110, w.x), w.y),
+        lerp(lerp(v001, v101, w.x), lerp(v011, v111, w.x), w.y),
+        w.z);
 }
 
 float SmallBodySurfaceFractal(
@@ -1776,7 +1974,11 @@ SurfaceOutputs main(VSOutput input)
         const float radiusNdc =
             max(g.proxy.y, 0.00025);
         const float2 q =
-            p / radiusNdc;
+            float2(
+)"
+R"(                p.x * max(g.radiiAndAspect.w, 1.0e-4),
+                p.y) /
+            radiusNdc;
         const float r2 =
             dot(q, q);
 
@@ -1932,16 +2134,25 @@ SurfaceOutputs main(VSOutput input)
     }
 
     SurfaceOutputs output;
+    const bool giantSurface =
+        abs(g.material.z - 2.0) < 0.25;
     output.baseRoughness =
-        float4(
-            max(g.albedoAndRoughness.xyz, 0.0),
-            saturate(g.albedoAndRoughness.w));
+        giantSurface
+            ? float4(
+                  // Band/storm/depth modulation can push the procedural
+                  // colour past 1; a reflectance above ~0.95 would create
+                  // energy, so clamp to a physical single-scattering albedo.
+                  clamp(GiantSurfaceColor(n), 0.0, 0.95),
+                  0.90)
+            : float4(
+                  max(g.albedoAndRoughness.xyz, 0.0),
+                  saturate(g.albedoAndRoughness.w));
     output.normalMetallic =
         float4(
             n,
             0.0);
     float3 surfaceEmission =
-        smallBody > 0.5
+        (smallBody > 0.5 || giantSurface)
             ? float3(0.0, 0.0, 0.0)
             : max(
                   g.emissionAndOpacity.xyz,
@@ -1994,7 +2205,10 @@ float4 main(VSOutput input) : SV_Target0
     const float radiusNdc =
         max(g.proxy.x, 0.00025);
     const float2 q =
-        input.uv / radiusNdc;
+        float2(
+            input.uv.x * max(g.proxy.z, 1.0e-4),
+            input.uv.y) /
+        radiusNdc;
 
     if (dot(q, q) > 1.0)
         discard;
@@ -2564,7 +2778,8 @@ void FarBodyRenderer::Draw(
                     draw.opacity,
                     0.0F,
                     1.0F)),
-                0U,
+                bits(static_cast<f32>(width) /
+                     static_cast<f32>(height)),
                 0U
             };
 

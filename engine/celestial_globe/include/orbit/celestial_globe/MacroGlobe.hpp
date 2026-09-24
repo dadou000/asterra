@@ -121,10 +121,12 @@ public:
         GpuMacroGlobeProduct& globe,
         const render_view::CameraState& camera,
         f32 opacity = 1.0F,
-        const MacroGlobeLighting& lighting = {});
+        const MacroGlobeLighting& lighting = {},
+        rhi::Texture* depth = nullptr);
 
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> surfacePipeline_;
+    std::unique_ptr<rhi::GraphicsPipeline> depthSurfacePipeline_;
 };
 } // namespace orbit::celestial_globe

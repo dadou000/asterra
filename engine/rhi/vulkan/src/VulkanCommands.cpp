@@ -722,10 +722,12 @@ void VulkanCommandList::CopyTextureToBuffer(
     }
 
     if (source.Format() !=
-        TextureFormat::RGBA8_UNorm)
+            TextureFormat::RGBA8_UNorm &&
+        source.Format() !=
+            TextureFormat::RGBA16_Float)
     {
         throw std::invalid_argument(
-            "Orbit texture readback currently supports RGBA8_UNorm only.");
+            "Orbit texture readback supports RGBA8_UNorm and RGBA16_Float color targets.");
     }
 
     const u64 sizeBytes =
@@ -733,7 +735,8 @@ void VulkanCommandList::CopyTextureToBuffer(
             source.Width()) *
         static_cast<u64>(
             source.Height()) *
-        4U;
+        TextureFormatBytesPerTexel(
+            source.Format());
 
     if (destinationOffsetBytes >
             destination.SizeBytes() ||

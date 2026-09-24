@@ -920,7 +920,7 @@ void RegisterCelestialCapabilitySchemas(
             {.id = kMagnetosphereDipoleAxis,
              .name = "Magnetic Axis",
              .kind = schema::PropertyKind::Vector3,
-             .defaultValue = math::Double3{0.0, 0.0, 1.0}},
+             .defaultValue = math::Double3{0.0, 1.0, 0.0}},
             {.id = kMagnetosphereEquatorialFieldTesla,
              .name = "Equatorial Field",
              .kind = schema::PropertyKind::Float,

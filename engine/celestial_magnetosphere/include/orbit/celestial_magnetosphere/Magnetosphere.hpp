@@ -11,7 +11,8 @@ struct MagnetosphereParameters
 {
     // Body-fixed magnetic north axis. It is intentionally independent from the
     // spin axis so tilted/off-axis fields remain authorable.
-    math::Double3 dipoleAxis{0.0, 0.0, 1.0};
+    // Body-fixed: +Y is the spin pole, so an aligned dipole points along +Y.
+    math::Double3 dipoleAxis{0.0, 1.0, 0.0};
 
     // Magnetic field magnitude at the magnetic equator at one reference radius.
     f64 equatorialFieldTesla{3.12e-5};

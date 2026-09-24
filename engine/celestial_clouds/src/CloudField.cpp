@@ -144,6 +144,9 @@ struct CubeLookup
     u32 face{0};
     u32 x{0};
     u32 y{0};
+    // Continuous texel coordinates on the same face, for filtered lookups.
+    f64 fx{0.0};
+    f64 fy{0.0};
 };
 
 [[nodiscard]] CubeLookup DirectionToCube(
@@ -223,7 +226,17 @@ struct CubeLookup
     return {
         .face = face,
         .x = toIndex(u),
-        .y = toIndex(v)
+        .y = toIndex(v),
+        .fx = std::clamp(
+            (u * 0.5 + 0.5) *
+                static_cast<f64>(resolution - 1U),
+            0.0,
+            static_cast<f64>(resolution - 1U)),
+        .fy = std::clamp(
+            (v * 0.5 + 0.5) *
+                static_cast<f64>(resolution - 1U),
+            0.0,
+            static_cast<f64>(resolution - 1U))
     };
 }
 
@@ -791,35 +804,81 @@ void CompositeOrbitalCloudAppearance(
                         continue;
                     }
 
-                    const auto& sample =
-                        layer.At(
-                            lookup.face,
-                            lookup.x,
-                            lookup.y,
-                            field.faceResolution);
+                    // Bilinear within the face: the cloud field is far
+                    // coarser than a close orbital view, and a nearest
+                    // lookup turns every weather cell into a hard block.
+                    const u32 last =
+                        field.faceResolution - 1U;
+                    const u32 x0 =
+                        static_cast<u32>(std::floor(lookup.fx));
+                    const u32 y0 =
+                        static_cast<u32>(std::floor(lookup.fy));
+                    const u32 x1 = std::min(x0 + 1U, last);
+                    const u32 y1 = std::min(y0 + 1U, last);
+                    const f64 tx =
+                        lookup.fx - static_cast<f64>(x0);
+                    const f64 ty =
+                        lookup.fy - static_cast<f64>(y0);
+
+                    const auto& s00 =
+                        layer.At(lookup.face, x0, y0, field.faceResolution);
+                    const auto& s10 =
+                        layer.At(lookup.face, x1, y0, field.faceResolution);
+                    const auto& s01 =
+                        layer.At(lookup.face, x0, y1, field.faceResolution);
+                    const auto& s11 =
+                        layer.At(lookup.face, x1, y1, field.faceResolution);
+
+                    const auto filter =
+                        [tx, ty](
+                            const f64 a,
+                            const f64 b,
+                            const f64 c,
+                            const f64 d)
+                        {
+                            return (a * (1.0 - tx) + b * tx) *
+                                    (1.0 - ty) +
+                                (c * (1.0 - tx) + d * tx) * ty;
+                        };
+
+                    const f64 sampleCoverage =
+                        filter(
+                            s00.coverage,
+                            s10.coverage,
+                            s01.coverage,
+                            s11.coverage);
+                    const f64 sampleOpticalDepth =
+                        filter(
+                            s00.opticalDepth,
+                            s10.opticalDepth,
+                            s01.opticalDepth,
+                            s11.opticalDepth);
+                    const f64 sampleAlbedo =
+                        filter(
+                            s00.singleScatteringAlbedo,
+                            s10.singleScatteringAlbedo,
+                            s01.singleScatteringAlbedo,
+                            s11.singleScatteringAlbedo);
 
                     const f64 coverage =
                         std::clamp(
-                            static_cast<f64>(
-                                sample.coverage),
+                            sampleCoverage,
                             0.0,
                             1.0);
 
                     remaining *=
                         1.0 - coverage;
                     optical +=
-                        sample.opticalDepth;
+                        sampleOpticalDepth;
 
                     const f64 weight =
                         coverage *
                         std::max(
-                            static_cast<f64>(
-                                sample.opticalDepth),
+                            sampleOpticalDepth,
                             1.0e-6);
 
                     weightedScattering +=
-                        sample.
-                            singleScatteringAlbedo *
+                        sampleAlbedo *
                         weight;
                     scatteringWeight += weight;
                 }

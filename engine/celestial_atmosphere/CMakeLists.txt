@@ -1,5 +1,6 @@
 add_library(OrbitCelestialAtmosphere STATIC
     src/Atmosphere.cpp
+    src/AtmosphereRenderer.cpp
 )
 
 add_library(
@@ -19,6 +20,7 @@ target_link_libraries(
         Orbit::Core
         Orbit::Math
         Orbit::RHI
+        Orbit::Shader
 )
 
 target_compile_features(

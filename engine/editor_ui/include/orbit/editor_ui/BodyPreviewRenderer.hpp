@@ -41,6 +41,8 @@ public:
     BodyPreviewRenderer& operator=(
         const BodyPreviewRenderer&) = delete;
 
+    // previewBackground paints the stylised editor backdrop around the body.
+    // Physically exposed views pass false so empty space stays black.
     void Draw(
         rhi::CommandList& commands,
         rhi::Texture& target,
@@ -48,7 +50,8 @@ public:
         u32 height,
         const universe::BodyShape& shape,
         const render_view::CameraState& camera,
-        const PreviewMaterial& material = {});
+        const PreviewMaterial& material = {},
+        bool previewBackground = true);
 
     void DrawSurfaceData(
         rhi::CommandList& commands,

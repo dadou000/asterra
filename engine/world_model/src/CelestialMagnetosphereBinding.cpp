@@ -97,7 +97,7 @@ ResolveMagnetosphere(
                     objects,
                     found->id,
                     kMagnetosphereDipoleAxis,
-                    {0.0,0.0,1.0}),
+                    {0.0,1.0,0.0}),
             .equatorialFieldTesla=
                 PropertyOr<f64>(
                     objects,

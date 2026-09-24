@@ -1,8 +1,18 @@
 add_executable(OrbitStudio
     src/Main.cpp
+    src/RelaunchStudio.cpp
 )
 
 add_dependencies(OrbitStudio OrbitPlayer)
+
+# Studio is a windowed application: no console window. Keep the ordinary
+# main() entry point so startup code is unchanged.
+if(WIN32)
+    set_target_properties(OrbitStudio PROPERTIES
+        WIN32_EXECUTABLE TRUE)
+    target_link_options(OrbitStudio PRIVATE
+        /ENTRY:mainCRTStartup)
+endif()
 
 target_link_libraries(OrbitStudio
     PRIVATE

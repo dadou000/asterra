@@ -219,7 +219,7 @@ VSOutput main(uint vertexId:SV_VertexID) {
 )";
 constexpr const char* kSplashPixelShader = R"(
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float impact:TEXCOORD2; float softnessMeters:TEXCOORD3; };
-[[vk::binding(9,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(9,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+[[vk::binding(10,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(10,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; float4 stellar; float4 lighting; }; [[vk::push_constant]] Push g;
 float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
 float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
@@ -245,25 +245,13 @@ VSOutput main(uint vertexId:SV_VertexID){ static const float2 corners[6]={float2
 )";
 constexpr const char* kDropletPixelShader = R"(
 struct VSOutput { float4 position:SV_Position; float2 uv:TEXCOORD0; float3 tint:TEXCOORD1; float life:TEXCOORD2; float softnessMeters:TEXCOORD3; float stochasticCoverage:TEXCOORD4; };
-[[vk::binding(9,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(9,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
+[[vk::binding(10,0)]] [[vk::combinedImageSampler]] Texture2D g_sceneDepth; [[vk::binding(10,0)]] [[vk::combinedImageSampler]] SamplerState g_sceneDepthSampler;
 struct Push { float4 projection; float4 forward; float4 up; float4 camera; float4 viewport; float4 temporal; }; [[vk::push_constant]] Push g;
 float LinearDepth(float d){float n=max(g.projection.z,1e-4),f=max(g.projection.w,n+1e-3);return n*f/max(f-d*(f-n),1e-5);}
 float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 q=clamp(int2(p.xy),int2(0,0),int2(max(int(w)-1,0),max(int(h)-1,0)));return saturate((LinearDepth(g_sceneDepth.Load(int3(q,0)).r)-LinearDepth(saturate(p.z)))/max(s,1e-3));}
 struct OitOutput { float4 accumulation:SV_Target0; float4 opticalDepth:SV_Target1; float4 motionReject:SV_Target2; };
 float Hash12(float2 p,uint seed){uint x=asuint(p.x)*1664525u+asuint(p.y)*1013904223u+seed*747796405u;x^=x>>16;x*=2246822519u;x^=x>>13;return float(x&0x00ffffffu)/16777216.0;}
 
-float RangeAttenuation(float d,float range){float n=d/max(range,1e-4);float q=n*n*n*n;float s=saturate(1.0-q);return s*s;}
-float LocalIrradiance(GpuLocalLight light,float d,float3 surfaceToLight){
- float watts=max(light.colorFlux.w,0.0)/683.0; float isSpot=step(0.5,light.positionType.w); float solidAngle=12.5663706; float angular=1.0;
- if(isSpot>0.5){float outer=clamp(light.cone.y,-1.0,1.0);solidAngle=max(6.2831853*(1.0-outer),1e-4);float spotCos=dot(-surfaceToLight,normalize(light.directionRange.xyz));angular=smoothstep(outer,max(light.cone.x,outer+1e-5),spotCos);}
- return (watts/solidAngle)*(1.0/max(d*d,0.0025))*RangeAttenuation(d,light.directionRange.w)*angular/1361.0;
-}
-float3 ParticleIncident(float3 p,float3 pseudoNormal,float opticalDepth){
- float3 stellarDir=normalize(g.stellar.xyz); float back=saturate(0.5-0.5*dot(pseudoNormal,stellarDir)); float stellarT=exp(-opticalDepth*lerp(0.35,1.25,back));
- float3 incident=max(g.lighting.xyz,0.0)*(0.035+max(g.stellar.w,0.0)*stellarT); uint count=min(asuint(g.lighting.w),64u);
- [loop] for(uint i=0;i<count;++i){GpuLocalLight l=g_localLights[i];float3 delta=l.positionType.xyz-p;float d=length(delta);if(d<=1e-4||d>=l.directionRange.w)continue;float3 dir=delta/d;float scale=LocalIrradiance(l,d,dir);float localBack=saturate(0.5-0.5*dot(pseudoNormal,dir));float localT=exp(-opticalDepth*lerp(0.35,1.25,localBack));incident+=max(l.colorFlux.rgb,0.0)*scale*localT;}
- return incident;
-}
 OitOutput main(VSOutput i) { float r2=dot(i.uv,i.uv); if(r2>=1.0||i.life<=0.0) discard; if(i.stochasticCoverage<0.999 && Hash12(floor(i.position.xy),asuint(g.temporal.x))>i.stochasticCoverage) discard; float alpha=(1.0-smoothstep(0.2,1.0,r2))*i.life*0.82*SoftDepth(i.position,i.softnessMeters); float3 c=lerp(float3(0.70,0.84,0.94),float3(1,1,1),0.65)*i.tint; OitOutput o; float optical=-log(max(1.0-saturate(alpha),1.0e-4)); o.accumulation=float4(c*alpha,alpha); o.opticalDepth=float4(optical,0,0,0); o.motionReject=float4(alpha,0,0,0); return o; }
 )";
 
@@ -295,6 +283,18 @@ float SoftDepth(float4 p,float s){uint w,h;g_sceneDepth.GetDimensions(w,h);int2 
 
 float GridOptical(float3 p){ uint4 meta=g_particleLightGrid[0]; float3 o=float3(asfloat(meta.x),asfloat(meta.y),asfloat(meta.z)); float cell=max(asfloat(meta.w),1e-4); int3 c=int3(floor((p-o)/cell)); const int r=32; if(any(c<0)||any(c>=int3(r,r,r))) return 0.0; uint idx=2u+(uint(c.z)*r+uint(c.y))*r+uint(c.x); return min(float(g_particleLightGrid[idx].x)/4096.0,20.0); }
 float GridTransmittance(float3 p,float3 dir,float maxDistance){ float3 d=normalize(dir); float optical=0.0; float stepLen=max(maxDistance/6.0,8.0); [unroll] for(uint s=1u;s<=6u;++s){ float dist=min(stepLen*float(s),maxDistance); optical+=GridOptical(p+d*dist)*0.18; } return exp(-min(optical,20.0)); }
+float RangeAttenuation(float d,float range){float n=d/max(range,1e-4);float q=n*n*n*n;float s=saturate(1.0-q);return s*s;}
+float LocalIrradiance(GpuLocalLight light,float d,float3 surfaceToLight){
+ float watts=max(light.colorFlux.w,0.0)/683.0; float isSpot=step(0.5,light.positionType.w); float solidAngle=12.5663706; float angular=1.0;
+ if(isSpot>0.5){float outer=clamp(light.cone.y,-1.0,1.0);solidAngle=max(6.2831853*(1.0-outer),1e-4);float spotCos=dot(-surfaceToLight,normalize(light.directionRange.xyz));angular=smoothstep(outer,max(light.cone.x,outer+1e-5),spotCos);}
+ return (watts/solidAngle)*(1.0/max(d*d,0.0025))*RangeAttenuation(d,light.directionRange.w)*angular/1361.0;
+}
+float3 ParticleIncident(float3 p,float3 pseudoNormal,float opticalDepth){
+ float3 stellarDir=normalize(g.stellar.xyz); float back=saturate(0.5-0.5*dot(pseudoNormal,stellarDir)); float stellarT=exp(-opticalDepth*lerp(0.35,1.25,back));
+ float3 incident=max(g.lighting.xyz,0.0)*(0.035+max(g.stellar.w,0.0)*stellarT); uint count=min(asuint(g.lighting.w),64u);
+ [loop] for(uint i=0;i<count;++i){GpuLocalLight l=g_localLights[i];float3 delta=l.positionType.xyz-p;float d=length(delta);if(d<=1e-4||d>=l.directionRange.w)continue;float3 dir=delta/d;float scale=LocalIrradiance(l,d,dir);float localBack=saturate(0.5-0.5*dot(pseudoNormal,dir));float localT=exp(-opticalDepth*lerp(0.35,1.25,localBack));incident+=max(l.colorFlux.rgb,0.0)*scale*localT;}
+ return incident;
+}
 struct OitOutput { float4 accumulation : SV_Target0; float4 opticalDepth : SV_Target1; float4 motionReject : SV_Target2; };
 float Hash12(float2 p,uint seed){uint x=asuint(p.x)*1664525u+asuint(p.y)*1013904223u+seed*747796405u;x^=x>>16;x*=2246822519u;x^=x>>13;return float(x&0x00ffffffu)/16777216.0;}
 OitOutput main(VSOutput input)

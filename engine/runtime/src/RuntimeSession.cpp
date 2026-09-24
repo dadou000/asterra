@@ -49,7 +49,8 @@ RuntimeSession::RuntimeSession(const RuntimeSessionDesc& desc)
     window_ = platform::MakeWindow({
         .title = desc.windowTitle,
         .width = desc.width,
-        .height = desc.height
+        .height = desc.height,
+        .startMaximized = desc.startMaximized
     });
 
     window_->SetRelativeMouseMode(

@@ -23,6 +23,7 @@ struct RuntimeSessionDesc
 {
     std::string_view applicationName{"Orbit"};
     std::string_view windowTitle{"Orbit"};
+    bool startMaximized{false};
     u32 width{1600};
     u32 height{900};
     u32 swapchainBufferCount{3};

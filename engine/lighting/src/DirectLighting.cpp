@@ -370,10 +370,12 @@ float4 main(VSOutput input) : SV_Target0
             g_emissionSampler,
             input.uv);
 
-    // Metadata 0 means no physical surface was written at this pixel.
+    // Metadata 0 means no physical surface was written at this pixel. Keep
+    // whatever the forward passes produced there (space, stellar corona and
+    // chromosphere, glare) instead of replacing it with a flat fill.
     if (emissionClass.a <= 0.0)
     {
-        return float4(0.006, 0.010, 0.018, 1.0);
+        discard;
     }
 
     const float3 baseColor =

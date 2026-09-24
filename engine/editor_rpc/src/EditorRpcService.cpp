@@ -2548,6 +2548,102 @@ void EditorRpcService::AttachViewport(
                     return data;
                 });
         }
+
+        if (viewport.captureBuffer)
+        {
+            Register(
+                {
+                    .name = "viewport.capture_buffer",
+                    .description =
+                        "Captures a float render target (color, base_roughness, normal_metallic, emission_class, display_linear) of the primary RenderView to an OFB1 file.",
+                    .mutating = false
+                },
+                [captureBuffer =
+                     std::move(
+                         viewport.captureBuffer)](
+                    const rpc::Value& params)
+                {
+                    const auto& values =
+                        RequireObject(params);
+
+                    const auto& pathValue =
+                        Require(
+                            values,
+                            "path");
+                    const auto& bufferValue =
+                        Require(
+                            values,
+                            "buffer");
+
+                    if (!pathValue.IsString() ||
+                        pathValue.AsString().empty() ||
+                        !bufferValue.IsString())
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "viewport.capture_buffer requires string path and buffer.");
+                    }
+
+                    const auto buffer =
+                        render_view::ParseCaptureBuffer(
+                            bufferValue.AsString());
+
+                    if (!buffer.has_value())
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            "Unknown viewport capture buffer.");
+                    }
+
+                    const auto captured =
+                        captureBuffer(
+                            *buffer,
+                            pathValue.AsString());
+
+                    return rpc::Value(
+                        rpc::Value::Object{
+                            {
+                                "path",
+                                captured.path.
+                                    generic_string()
+                            },
+                            {
+                                "width",
+                                static_cast<i64>(
+                                    captured.width)
+                            },
+                            {
+                                "height",
+                                static_cast<i64>(
+                                    captured.height)
+                            }
+                        });
+                });
+        }
+
+        if (viewport.focusBody)
+        {
+            Register(
+                {
+                    .name = "viewport.focus_body",
+                    .description =
+                        "Frames the primary viewport on its current target body.",
+                    .mutating = true
+                },
+                [focusBody =
+                     std::move(
+                         viewport.focusBody)](
+                    const rpc::Value&)
+                {
+                    return rpc::Value(
+                        rpc::Value::Object{
+                            {
+                                "focused",
+                                focusBody()
+                            }
+                        });
+                });
+        }
 }
 
 void EditorRpcService::AttachPathRouting(

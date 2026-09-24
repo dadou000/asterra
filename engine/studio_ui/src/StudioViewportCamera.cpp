@@ -47,24 +47,36 @@ ComposeViewportCamera(
     switch (view.mode)
     {
     case studio_session::ViewportMode::Perspective:
+    {
+        // Body-fixed +Y is the spin pole. Frame the body from 25 degrees
+        // above its equator so ring planes, zonal bands and polar features
+        // are seen obliquely rather than exactly edge-on.
+        constexpr f64 kElevationRadians =
+            0.43633231299858238;
+        const f64 sinElevation =
+            std::sin(kElevationRadians);
+        const f64 cosElevation =
+            std::cos(kElevationRadians);
+
         camera.localPositionMeters = {
             0.0,
-            0.0,
-            -radius * 3.2
+            radius * 3.2 * sinElevation,
+            -radius * 3.2 * cosElevation
         };
         camera.forward = {
             0.0F,
-            0.0F,
-            1.0F
+            static_cast<f32>(-sinElevation),
+            static_cast<f32>(cosElevation)
         };
         camera.up = {
             0.0F,
-            1.0F,
-            0.0F
+            static_cast<f32>(cosElevation),
+            static_cast<f32>(sinElevation)
         };
         camera.verticalFovRadians =
             1.22173048F;
         break;
+    }
 
     case studio_session::ViewportMode::BodyMap:
         camera.localPositionMeters = {

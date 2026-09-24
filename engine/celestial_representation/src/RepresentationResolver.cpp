@@ -243,11 +243,21 @@ Decision Resolve(
     Decision result;
     result.projectedRadiusPixels =
         ProjectedRadiusPixels(input);
-    result.productionDetailErrorPixels =
-        ProjectedLinearError(
-            result.projectedRadiusPixels,
-            input.bodyRadiusMeters,
-            input.maximumProductionDetailMeters);
+    // A globe already represents mountain-scale displacement. Local clipmaps
+    // are useful only near the surface, irrespective of how tall the mountains
+    // look from orbit. Use distance above the relief envelope for the local
+    // detail projection, and bound the local chart to one percent of the radius.
+    const f64 surfaceDistance = std::max(
+        input.cameraDistanceToCenterMeters - input.bodyRadiusMeters -
+            input.maximumMacroDisplacementMeters,
+        1.0);
+    const f64 focalPixels = input.viewportHeightPixels /
+        (2.0 * std::tan(input.verticalFieldOfViewRadians * 0.5));
+    const f64 localRange = input.bodyRadiusMeters * 0.01;
+    result.productionDetailErrorPixels = std::min(
+        focalPixels * input.maximumProductionDetailMeters / surfaceDistance,
+        input.policy.productionSurfaceErrorPixels / input.policy.qualityScale *
+            localRange / surfaceDistance);
     result.macroDisplacementErrorPixels =
         ProjectedLinearError(
             result.projectedRadiusPixels,

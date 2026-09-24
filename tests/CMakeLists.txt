@@ -1229,3 +1229,12 @@ add_custom_target(OrbitV006FinalIntegrationGate
         OrbitStudioCelestialValidationScenarioTests
     USES_TERMINAL
 )
+
+add_executable(OrbitTerrainHandoffRenderTests TerrainHandoffRenderTests.cpp)
+target_link_libraries(OrbitTerrainHandoffRenderTests PRIVATE
+    Orbit::RhiVulkan Orbit::ShaderDxc Orbit::CelestialGlobe Orbit::TerrainRender Orbit::RenderView)
+target_compile_features(OrbitTerrainHandoffRenderTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainHandoffRenderTests)
+orbit_copy_dxc_runtime(OrbitTerrainHandoffRenderTests)
+add_test(NAME Orbit.TerrainHandoffRender COMMAND OrbitTerrainHandoffRenderTests)
+set_tests_properties(Orbit.TerrainHandoffRender PROPERTIES LABELS gpu TIMEOUT 120)

@@ -1551,7 +1551,10 @@ TerrainCameraFromBodyCamera(
                 localForward),
         .up =
             math::Normalize(
-                localUp)
+                localUp),
+        .verticalFovRadians = camera.verticalFovRadians,
+        .nearPlaneMeters = camera.nearPlaneMeters,
+        .farPlaneMeters = camera.farPlaneMeters
     };
 }
 
@@ -1935,6 +1938,11 @@ struct ResolvedStudioDirectLight
         direct;
 };
 
+// Scene-linear reference: stellar irradiance is expressed as a fraction of the
+// solar constant, so a white Lambertian surface at 1 AU has radiance 1/pi.
+constexpr f64 kStudioReferenceIrradianceWattsPerSquareMeter =
+    1361.0;
+
 [[nodiscard]] ResolvedStudioDirectLight
 ResolveStudioDirectLight(
     studio_session::StudioSession& session,
@@ -2039,7 +2047,7 @@ ResolveStudioDirectLight(
             static_cast<f32>(
                 direct->
                     irradianceWattsPerSquareMeter /
-                1361.0);
+                kStudioReferenceIrradianceWattsPerSquareMeter);
 
         result.direct =
             direct;
@@ -2475,6 +2483,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       ringRenderer_(device, compiler),
       auroraRenderer_(device, compiler),
       compactObjectRenderer_(device, compiler),
+      atmosphereRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       surfaceVolumeDebugRenderer_(device, compiler),
       universalVolumeRenderer_(device, compiler),
@@ -2838,6 +2847,7 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
     const universe::BodyId body,
     const universe::BodyShape& shape,
     const terrain::TerrainSource& terrainSource,
+    const f64 projectedRadiusPixels,
     const std::function<bool(u64)>& acquireGrant,
     const std::function<void(u64)>& completeGrant)
 {
@@ -2851,9 +2861,49 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
         macroGlobePresentations_[
             std::string(viewportId)];
 
+    // A fixed 33-sample cube face spreads one vertex (and one appearance
+    // sample: coastline, ice and cloud masks) over ~50 px once a planet
+    // fills the view, producing staircase coastlines. Pick the tier whose
+    // vertex spacing stays within a few pixels, with hysteresis so the
+    // (parallel) rebuild does not thrash around a threshold.
+    {
+        constexpr std::array<u32, 5> kTiers{33U, 65U, 129U, 257U, 513U};
+        constexpr f64 kUpgradeSpacingPixels = 4.0;
+        constexpr f64 kDowngradeSpacingPixels = 2.0;
+
+        const auto spacingPixels =
+            [projectedRadiusPixels](const u32 resolution)
+            {
+                return std::max(projectedRadiusPixels, 0.0) *
+                    (0.5 * std::numbers::pi_v<f64>) /
+                    static_cast<f64>(resolution - 1U);
+            };
+
+        std::size_t tier = 0U;
+        while (tier + 1U < kTiers.size() &&
+               kTiers[tier] < presentation.faceResolution)
+        {
+            ++tier;
+        }
+
+        while (tier + 1U < kTiers.size() &&
+               spacingPixels(kTiers[tier]) > kUpgradeSpacingPixels)
+        {
+            ++tier;
+        }
+
+        while (tier > 0U &&
+               spacingPixels(kTiers[tier - 1U]) < kDowngradeSpacingPixels)
+        {
+            --tier;
+        }
+
+        presentation.faceResolution = kTiers[tier];
+    }
+
     const celestial_globe::MacroGlobeConfig
         globeConfig{
-            .faceResolution = 33U,
+            .faceResolution = presentation.faceResolution,
             .footprintScale = 1.5
         };
 
@@ -3572,6 +3622,7 @@ StudioViewportRenderer::Compose(
     lighting::LightingTimestampRecorder* const lightingTimestamps)
 {
     static_cast<void>(views.Refresh(snapshot));
+    static_cast<void>(drawPathDebug);
 
     const universe::BodyRegistry* bodies = nullptr;
     const frames::FrameGraph* frames = nullptr;
@@ -5069,6 +5120,49 @@ StudioViewportRenderer::Compose(
         const u32 height = view->Height();
         auto* color = &view->Color();
 
+        // Only the production-terrain presentation clears depth itself.
+        // Every other presentation must start from an empty depth buffer, or
+        // depth-driven passes (GI fallback, reflections, atmosphere, particles)
+        // see phantom surfaces left behind by the previously viewed body.
+        if (presentation !=
+            StudioViewportPresentation::ProductionTerrain)
+        {
+            auto* staleDepth = &view->Depth();
+
+            graph.AddPass(
+                prefix + ".ClearDepth",
+                {
+                    {
+                        .texture = targets.color,
+                        .state =
+                            rhi::ResourceState::RenderTarget,
+                        .access =
+                            render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state =
+                            rhi::ResourceState::DepthWrite,
+                        .access =
+                            render_graph::Access::Write
+                    }
+                },
+                [color, staleDepth](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    // Clears are deferred to the next rendering scope that
+                    // binds the attachment; bind depth here so the clear
+                    // actually executes this frame.
+                    commands.ClearDepthTarget(
+                        *staleDepth,
+                        0.0F);
+                    commands.SetRenderTargets(
+                        *color,
+                        *staleDepth);
+                });
+        }
+
         switch (presentation)
         {
         case StudioViewportPresentation::ProductionTerrain:
@@ -5490,9 +5584,9 @@ StudioViewportRenderer::Compose(
                         commands.ClearColorTarget(
                             *color,
                             {
-                                .red = 0.008F,
-                                .green = 0.012F,
-                                .blue = 0.020F,
+                                .red = 0.0F,
+                                .green = 0.0F,
+                                .blue = 0.0F,
                                 .alpha = 1.0F
                             });
     
@@ -5578,18 +5672,8 @@ StudioViewportRenderer::Compose(
                     });
             }
 
-            const bool hasFarRepresentation =
-                representationBlend.richer !=
-                    celestial_representation::
-                        Representation::
-                            ProductionSurface ||
-                representationBlend.lower !=
-                    celestial_representation::
-                        Representation::
-                            ProductionSurface;
-
-            if (hasFarRepresentation &&
-                hasMacroGlobe &&
+            // Keep a closed globe behind the local terrain at every altitude.
+            if (hasMacroGlobe &&
                 macroGlobeSurface != nullptr &&
                 macroGlobeSurface->terrain != nullptr &&
                 shape.has_value())
@@ -5601,6 +5685,8 @@ StudioViewportRenderer::Compose(
                         terrainRuntime->body,
                         *shape,
                         *macroGlobeSurface->terrain,
+                        representationDecision.
+                            projectedRadiusPixels,
                         [&](const u64 revision)
                         {
                             return acquireCelestialGrant(
@@ -5642,6 +5728,7 @@ StudioViewportRenderer::Compose(
                      width,
                      height,
                      transitionGlobe,
+                     depth,
                      farPresentation,
                      surfaceBaseRoughness,
                      surfaceNormalMetallic,
@@ -5711,7 +5798,8 @@ StudioViewportRenderer::Compose(
                                     *transitionGlobe,
                                     globeCamera,
                                     opacity,
-                                    macroLighting);
+                                    macroLighting,
+                                    depth);
                             }
                             else
                             {
@@ -5827,12 +5915,18 @@ StudioViewportRenderer::Compose(
                             .access = render_graph::Access::Write
                         },
                         {
+                            .texture = targets.depth,
+                            .state = rhi::ResourceState::DepthWrite,
+                            .access = render_graph::Access::Write
+                        },
+                        {
                             .texture = targets.surfaceEmissionClass,
                             .state = rhi::ResourceState::RenderTarget,
                             .access = render_graph::Access::Write
                         }
                     },
                     [color,
+                     depth,
                      surfaceBaseRoughness,
                      surfaceNormalMetallic,
                      surfaceEmissionClass,
@@ -5864,12 +5958,16 @@ StudioViewportRenderer::Compose(
 
                         if (clearForFarOnly)
                         {
+                            commands.ClearDepthTarget(*depth, 0.0F);
+                            const std::array<rhi::Texture*, 4> clearTargets{
+                                color, surfaceBaseRoughness,
+                                surfaceNormalMetallic, surfaceEmissionClass};
                             commands.ClearColorTarget(
                                 *color,
                                 {
-                                    .red = 0.006F,
-                                    .green = 0.010F,
-                                    .blue = 0.018F,
+                                    .red = 0.0F,
+                                    .green = 0.0F,
+                                    .blue = 0.0F,
                                     .alpha = 1.0F
                                 });
                         
@@ -5882,6 +5980,17 @@ StudioViewportRenderer::Compose(
                             commands.ClearColorTarget(
                                 *surfaceEmissionClass,
                                 {0.0F, 0.0F, 0.0F, 0.0F});
+                            commands.SetRenderTargets(clearTargets, depth);
+                        }
+
+                        if (richer == celestial_representation::Representation::ProductionSurface)
+                        {
+                            // Depth composes the whole sphere with the local patch;
+                            // a global alpha fade cannot represent spatial coverage.
+                            drawRepresentation(commands,
+                                celestial_representation::Representation::MacroDisplacedGlobe,
+                                1.0F);
+                            return;
                         }
 
                         if (richer !=
@@ -6066,6 +6175,35 @@ StudioViewportRenderer::Compose(
                     "Studio macro-globe presentation lost its terrain authority, device, shape, or target body.");
             }
 
+            const f64 globeProjectedRadiusPixels =
+                [&]()
+                {
+                    const auto globeCamera =
+                        view->Camera();
+                    const f64 radius =
+                        ReferenceRadiusForShape(*shape);
+                    const f64 distance =
+                        std::max(
+                            math::Length(
+                                globeCamera.localPositionMeters),
+                            radius * 1.000001);
+                    const f64 angularRadius =
+                        std::asin(
+                            std::clamp(
+                                radius / distance,
+                                0.0,
+                                1.0));
+                    return std::tan(angularRadius) /
+                        std::max(
+                            std::tan(
+                                static_cast<f64>(
+                                    globeCamera.verticalFovRadians) *
+                                0.5),
+                            1.0e-6) *
+                        static_cast<f64>(height) *
+                        0.5;
+                }();
+
             auto* globe =
                 EnsureMacroGlobePresentation(
                     info.id,
@@ -6073,6 +6211,7 @@ StudioViewportRenderer::Compose(
                     logicalTarget->target->body,
                     *shape,
                     *macroGlobeSurface->terrain,
+                    globeProjectedRadiusPixels,
                     [&](const u64 revision)
                     {
                         return acquireCelestialGrant(
@@ -6152,9 +6291,9 @@ StudioViewportRenderer::Compose(
                     commands.ClearColorTarget(
                         *color,
                         {
-                            .red = 0.006F,
-                            .green = 0.010F,
-                            .blue = 0.018F,
+                            .red = 0.0F,
+                            .green = 0.0F,
+                            .blue = 0.0F,
                             .alpha = 1.0F
                         });
                     commands.ClearColorTarget(
@@ -6546,9 +6685,9 @@ StudioViewportRenderer::Compose(
                         commands.ClearColorTarget(
                             *color,
                             {
-                                .red = 0.006F,
-                                .green = 0.010F,
-                                .blue = 0.018F,
+                                .red = 0.0F,
+                                .green = 0.0F,
+                                .blue = 0.0F,
                                 .alpha = 1.0F
                             });
                         commands.ClearColorTarget(
@@ -6651,30 +6790,26 @@ StudioViewportRenderer::Compose(
                                         luminosityWatts,
                                     distanceMeters);
 
-                        const f64 resolvedPixelIrradiance =
-                            celestial_radiometry::
-                                ResolvedPixelIrradianceWattsPerSquareMeter(
-                                    radiative.
-                                        radiative.
-                                        surfaceRadianceWattsPerSquareMeterSteradian,
-                                    static_cast<f64>(
-                                        camera.
-                                            verticalFovRadians),
-                                    std::max(
-                                        height,
-                                        1U));
-
                         pointRadiometricIntensity =
                             static_cast<f32>(
                                 celestial_radiometry::
                                     EncodeIrradianceSceneLinear(
                                         pointIrradiance));
 
+                        // A resolved stellar disc is an extended source whose
+                        // pixels carry its surface radiance (radiance is
+                        // invariant with distance). Encode it in the same
+                        // scene units as the shared direct-lighting pass,
+                        // where scene value = radiance / reference irradiance
+                        // (a white Lambertian surface at 1 AU reads 1/pi).
+                        // The previous per-pixel solid-angle irradiance left
+                        // a resolved sun orders of magnitude too dark.
                         resolvedRadiometricIntensity =
                             static_cast<f32>(
-                                celestial_radiometry::
-                                    EncodeIrradianceSceneLinear(
-                                        resolvedPixelIrradiance));
+                                radiative.
+                                    radiative.
+                                    surfaceRadianceWattsPerSquareMeterSteradian /
+                                kStudioReferenceIrradianceWattsPerSquareMeter);
                     }
                 }
 
@@ -7212,9 +7347,9 @@ StudioViewportRenderer::Compose(
                         commands.ClearColorTarget(
                             *color,
                             {
-                                .red = 0.006F,
-                                .green = 0.010F,
-                                .blue = 0.018F,
+                                .red = 0.0F,
+                                .green = 0.0F,
+                                .blue = 0.0F,
                                 .alpha = 1.0F
                             });
                         commands.ClearColorTarget(
@@ -7538,6 +7673,9 @@ StudioViewportRenderer::Compose(
                         const render_graph::Resources&)
                     {
                         commands.ClearColorTarget(
+                            *color,
+                            {0.0F, 0.0F, 0.0F, 1.0F});
+                        commands.ClearColorTarget(
                             *bodySurfaceBaseRoughness,
                             {0.0F, 0.0F, 0.0F, 1.0F});
                         commands.ClearColorTarget(
@@ -7554,7 +7692,8 @@ StudioViewportRenderer::Compose(
                             height,
                             bodyShape,
                             camera,
-                            bodyMaterial);
+                            bodyMaterial,
+                            false);
                         bodyRenderer_.DrawSurfaceData(
                             commands,
                             *bodySurfaceBaseRoughness,
@@ -7597,9 +7736,9 @@ StudioViewportRenderer::Compose(
                     commands.ClearColorTarget(
                         *color,
                         {
-                            .red = 0.018F,
-                            .green = 0.021F,
-                            .blue = 0.027F,
+                            .red = 0.0F,
+                            .green = 0.0F,
+                            .blue = 0.0F,
                             .alpha = 1.0F
                         });
                 });
@@ -7925,6 +8064,42 @@ StudioViewportRenderer::Compose(
                         lighting::RadianceClipmapResidency>(
                             lighting::RadianceClipmapConfig{});
             }
+
+            // The near-field indirect stack (screen-space final gather,
+            // radiance-cache fallback, hybrid and exact reflections) only has
+            // data within the camera-centred radiance clipmap. When the
+            // nearest visible surface of the target body lies beyond that
+            // coverage -- a planet seen from orbit -- it can only inject
+            // error: a convex body cannot illuminate itself, and screen-space
+            // gathers/reflections across an entire disc produce spurious
+            // night-side light and budget seams. Direct lighting remains.
+            bool nearFieldIndirect = true;
+
+            if (shape.has_value())
+            {
+                const auto& clipmapConfig =
+                    finalGather.radianceResidency->Config();
+                const f64 clipmapHalfExtentMeters =
+                    lighting::RadianceCellSizeMeters(
+                        clipmapConfig,
+                        clipmapConfig.levelCount > 0U
+                            ? clipmapConfig.levelCount - 1U
+                            : 0U) *
+                    static_cast<f64>(
+                        clipmapConfig.cellsPerAxis) *
+                    0.5;
+                const f64 cameraAltitudeMeters =
+                    math::Length(
+                        view->Camera().
+                            localPositionMeters) -
+                    ReferenceRadiusForShape(
+                        *shape);
+
+                nearFieldIndirect =
+                    cameraAltitudeMeters <=
+                    clipmapHalfExtentMeters;
+            }
+
 
             u64 radianceSourceRevision =
                 session.World().Objects().Revision();
@@ -8663,7 +8838,8 @@ StudioViewportRenderer::Compose(
                  localIndicesHandle,
                  particleLightGridForDirect,
                  lightingTimestamps,
-                 frameIndex](
+                 frameIndex,
+                 nearFieldIndirect](
                     rhi::CommandList& commands,
                     const render_graph::Resources&
                         resources)
@@ -8694,7 +8870,23 @@ StudioViewportRenderer::Compose(
                         lightingView,
                         directLight,
                         localLightGrid,
-                        particleLightGridForDirect);
+                        particleLightGridForDirect,
+                        // The sky/ground fill floor tracks the stellar
+                        // irradiance actually reaching this body, so distant
+                        // planets are not washed flat by a fixed 3.5% floor.
+                        lighting::DirectLightingSettings{
+                            // Sky/ground fill only exists for an observer
+                            // inside the near field; a planet seen from
+                            // space has a black night side.
+                            .ambientIrradianceScale =
+                                nearFieldIndirect
+                                    ? 0.035F *
+                                          std::clamp(
+                                              directLight.irradianceScale,
+                                              0.0F,
+                                              1.0F)
+                                    : 0.0F
+                        });
 
                     if (lightingTimestamps != nullptr)
                     {
@@ -8705,701 +8897,140 @@ StudioViewportRenderer::Compose(
                     }
                 });
 
-            if (finalGather.width != width ||
-                finalGather.height != height ||
-                finalGather.indirectA == nullptr ||
-                finalGather.indirectB == nullptr ||
-                finalGather.metaA == nullptr ||
-                finalGather.metaB == nullptr ||
-                finalGather.scratch == nullptr)
+            if (nearFieldIndirect)
             {
-                const auto createGatherTexture =
-                    [this, width, height]()
-                    {
-                        return device_->CreateTexture({
-                            .width = width,
-                            .height = height,
-                            .format =
-                                rhi::TextureFormat::
-                                    RGBA16_Float,
-                            .initialState =
-                                rhi::ResourceState::
-                                    ShaderResource,
-                            .allowUnorderedAccess =
-                                true
-                        });
-                    };
-
-                finalGather.width = width;
-                finalGather.height = height;
-                finalGather.writeA = true;
-                finalGather.hasHistory = false;
-                finalGather.previousView = {};
-
-                finalGather.indirectA =
-                    createGatherTexture();
-                finalGather.indirectB =
-                    createGatherTexture();
-                finalGather.metaA =
-                    createGatherTexture();
-                finalGather.metaB =
-                    createGatherTexture();
-                finalGather.scratch =
-                    createGatherTexture();
-            }
-
-            auto* currentIndirect =
-                finalGather.writeA
-                    ? finalGather.indirectA.get()
-                    : finalGather.indirectB.get();
-
-            auto* previousIndirect =
-                finalGather.writeA
-                    ? finalGather.indirectB.get()
-                    : finalGather.indirectA.get();
-
-            auto* currentMeta =
-                finalGather.writeA
-                    ? finalGather.metaA.get()
-                    : finalGather.metaB.get();
-
-            auto* previousMeta =
-                finalGather.writeA
-                    ? finalGather.metaB.get()
-                    : finalGather.metaA.get();
-
-            auto* gatherScratch =
-                finalGather.scratch.get();
-
-            const bool historyCompatible =
-                finalGather.hasHistory &&
-                lighting::
-                    CanReuseFinalGatherHistory(
-                        finalGather.previousView,
-                        lightingView);
-
-            const auto currentIndirectHandle =
-                graph.ImportTexture(
-                    prefix +
-                        ".FinalGather.CurrentIndirect",
-                    *currentIndirect,
-                    rhi::ResourceState::
-                        ShaderResource);
-
-            const auto previousIndirectHandle =
-                graph.ImportTexture(
-                    prefix +
-                        ".FinalGather.PreviousIndirect",
-                    *previousIndirect,
-                    rhi::ResourceState::
-                        ShaderResource);
-
-            const auto currentMetaHandle =
-                graph.ImportTexture(
-                    prefix +
-                        ".FinalGather.CurrentMeta",
-                    *currentMeta,
-                    rhi::ResourceState::
-                        ShaderResource);
-
-            const auto previousMetaHandle =
-                graph.ImportTexture(
-                    prefix +
-                        ".FinalGather.PreviousMeta",
-                    *previousMeta,
-                    rhi::ResourceState::
-                        ShaderResource);
-
-            const auto gatherScratchHandle =
-                graph.ImportTexture(
-                    prefix +
-                        ".FinalGather.Scratch",
-                    *gatherScratch,
-                    rhi::ResourceState::
-                        ShaderResource);
-
-            lighting::
-                ScreenSpaceFinalGatherSettings
-                    gatherSettings;
-
-            gatherSettings.stepsPerRay =
-                std::clamp(
-                    static_cast<u32>(
-                        std::lround(
-                            2.0F +
-                            8.0F *
-                                std::clamp(
-                                    lightingPlan.giScale,
-                                    0.0F,
-                                    1.0F))),
-                    2U,
-                    10U);
-
-            graph.AddPass(
-                prefix + ".ScreenSpaceFinalGather",
+                if (finalGather.width != width ||
+                    finalGather.height != height ||
+                    finalGather.indirectA == nullptr ||
+                    finalGather.indirectB == nullptr ||
+                    finalGather.metaA == nullptr ||
+                    finalGather.metaB == nullptr ||
+                    finalGather.scratch == nullptr)
                 {
-                    {
-                        .texture = targets.color,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            targets.
-                                surfaceBaseRoughness,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            targets.
-                                surfaceNormalMetallic,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            targets.
-                                surfaceEmissionClass,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture = targets.depth,
-                        .state =
-                            rhi::ResourceState::
-                                DepthRead,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            previousIndirectHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            previousMetaHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            currentIndirectHandle,
-                        .state =
-                            rhi::ResourceState::
-                                UnorderedAccess,
-                        .access =
-                            render_graph::Access::
-                                Write
-                    },
-                    {
-                        .texture =
-                            currentMetaHandle,
-                        .state =
-                            rhi::ResourceState::
-                                UnorderedAccess,
-                        .access =
-                            render_graph::Access::
-                                Write
-                    }
-                },
-                [this,
-                 color,
-                 lightingBaseRoughness,
-                 lightingNormalMetallic,
-                 lightingEmissionClass,
-                 lightingDepth,
-                 previousIndirect,
-                 previousMeta,
-                 currentIndirect,
-                 currentMeta,
-                 width,
-                 height,
-                 lightingView,
-                 historyCompatible,
-                 gatherSettings,
-                 particleLightGridForDirect,
-                 lightingTimestamps,
-                 frameIndex](
-                    rhi::CommandList& commands,
-                    const render_graph::Resources&)
-                {
-                    if (lightingTimestamps != nullptr)
-                    {
-                        lightingTimestamps->
-                            BeginSection(
-                                commands,
-                                frameIndex,
-                                lighting::
-                                    LightingGpuSection::
-                                        Gi);
-                    }
-
-                    finalGatherRenderer_.Gather(
-                        commands,
-                        *color,
-                        *lightingBaseRoughness,
-                        *lightingNormalMetallic,
-                        *lightingEmissionClass,
-                        *lightingDepth,
-                        *previousIndirect,
-                        *previousMeta,
-                        *currentIndirect,
-                        *currentMeta,
-                        width,
-                        height,
-                        lightingView,
-                        historyCompatible,
-                        particleLightGridForDirect,
-                        gatherSettings);
-                });
-
-            if (radianceLevelCount > 0U)
-            {
-                graph.AddPass(
-                    prefix + ".RadianceCacheFallback",
-                    {
+                    const auto createGatherTexture =
+                        [this, width, height]()
                         {
-                            .texture =
-                                currentIndirectHandle,
-                            .state =
-                                rhi::ResourceState::
-                                    UnorderedAccess,
-                            .access =
-                                render_graph::Access::
-                                    Write
-                        },
-                        {
-                            .texture =
-                                targets.
-                                    surfaceBaseRoughness,
-                            .state =
-                                rhi::ResourceState::
-                                    ShaderResource,
-                            .access =
-                                render_graph::Access::
-                                    Read
-                        },
-                        {
-                            .texture =
-                                targets.
-                                    surfaceNormalMetallic,
-                            .state =
-                                rhi::ResourceState::
-                                    ShaderResource,
-                            .access =
-                                render_graph::Access::
-                                    Read
-                        },
-                        {
-                            .texture =
-                                targets.depth,
-                            .state =
-                                rhi::ResourceState::
-                                    DepthRead,
-                            .access =
-                                render_graph::Access::
-                                    Read
-                        }
-                    },
-                    {
-                        {
-                            .buffer =
-                                radianceCellsHandle,
-                            .state =
-                                rhi::ResourceState::
-                                    ShaderResource,
-                            .access =
-                                render_graph::Access::
-                                    Read
-                        },
-                        {
-                            .buffer =
-                                radianceLevelsHandle,
-                            .state =
-                                rhi::ResourceState::
-                                    ShaderResource,
-                            .access =
-                                render_graph::Access::
-                                    Read
-                        }
-                    },
-                    [this,
-                     currentIndirect,
-                     lightingBaseRoughness,
-                     lightingNormalMetallic,
-                     lightingDepth,
-                     radianceCellsHandle,
-                     radianceLevelsHandle,
-                     radianceLevelCount,
-                     width,
-                     height,
-                     lightingView](
-                        rhi::CommandList& commands,
-                        const render_graph::Resources&
-                            resources)
-                    {
-                        radianceCacheSampler_.
-                            ResolveFallback(
-                                commands,
-                                *currentIndirect,
-                                *lightingBaseRoughness,
-                                *lightingNormalMetallic,
-                                *lightingDepth,
-                                resources.Buffer(
-                                    radianceCellsHandle),
-                                resources.Buffer(
-                                    radianceLevelsHandle),
-                                radianceLevelCount,
-                                width,
-                                height,
-                                lightingView);
-                    });
-            }
-
-            graph.AddPass(
-                prefix + ".FinalGatherCombine",
-                {
-                    {
-                        .texture = targets.color,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            currentIndirectHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            gatherScratchHandle,
-                        .state =
-                            rhi::ResourceState::
-                                UnorderedAccess,
-                        .access =
-                            render_graph::Access::
-                                Write
-                    }
-                },
-                [this,
-                 color,
-                 currentIndirect,
-                 gatherScratch,
-                 width,
-                 height](
-                    rhi::CommandList& commands,
-                    const render_graph::Resources&)
-                {
-                    finalGatherRenderer_.Combine(
-                        commands,
-                        *color,
-                        *currentIndirect,
-                        *gatherScratch,
-                        width,
-                        height);
-                });
-
-            graph.AddPass(
-                prefix + ".FinalGatherCopyBack",
-                {
-                    {
-                        .texture =
-                            gatherScratchHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture = targets.color,
-                        .state =
-                            rhi::ResourceState::
-                                RenderTarget,
-                        .access =
-                            render_graph::Access::
-                                Write
-                    }
-                },
-                [this,
-                 gatherScratch,
-                 color,
-                 width,
-                 height,
-                 lightingTimestamps,
-                 frameIndex](
-                    rhi::CommandList& commands,
-                    const render_graph::Resources&)
-                {
-                    debugComposite_.Draw(
-                        commands,
-                        *gatherScratch,
-                        *color,
-                        width,
-                        height);
-
-                    if (lightingTimestamps != nullptr)
-                    {
-                        lightingTimestamps->
-                            EndSection(
-                                commands,
-                                frameIndex,
-                                lighting::
-                                    LightingGpuSection::
-                                        Gi);
-                    }
-                });
-
-            if (radianceLevelCount > 0U)
-            {
-                lighting::HardwareRayQueryVisibilityBatch*
-                    exactReflectionHardware = nullptr;
-
-                if (const auto proxyFound =
-                        visibilityProxyPresentations_.find(
-                            info.id);
-                    proxyFound !=
-                            visibilityProxyPresentations_.end() &&
-                        proxyFound->second.hardware != nullptr &&
-                        proxyFound->second.hardware->Ready())
-                {
-                    exactReflectionHardware =
-                        proxyFound->second.hardware.get();
-                }
-
-                const u32 maximumExactReflectionQueries =
-                    std::min(
-                        lightingPlan.exactVisibilityQueries,
-                        lightingPlan.reflectionQueries);
-                const auto exactSceneOrigin =
-                    exactReflectionHardware != nullptr
-                        ? exactReflectionHardware->
-                              GpuOriginInFrameMeters()
-                        : lightingView.
-                              gpuOriginInFrameMeters;
-
-                const math::Float3
-                    currentToExactSceneOrigin{
-                        static_cast<f32>(
-                            lightingView.
-                                gpuOriginInFrameMeters.x -
-                            exactSceneOrigin.x),
-                        static_cast<f32>(
-                            lightingView.
-                                gpuOriginInFrameMeters.y -
-                            exactSceneOrigin.y),
-                        static_cast<f32>(
-                            lightingView.
-                                gpuOriginInFrameMeters.z -
-                            exactSceneOrigin.z)
-                    };
-
-                const math::Float3
-                    exactSceneToCurrentOrigin{
-                        -currentToExactSceneOrigin.x,
-                        -currentToExactSceneOrigin.y,
-                        -currentToExactSceneOrigin.z
-                    };
-
-
-                render_graph::BufferHandle
-                    exactReflectionQueriesHandle{};
-                render_graph::BufferHandle
-                    exactReflectionResultsHandle{};
-                render_graph::BufferHandle
-                    exactReflectionPixelMapHandle{};
-                render_graph::BufferHandle
-                    exactReflectionCounterHandle{};
-
-                if (exactReflectionHardware != nullptr &&
-                    maximumExactReflectionQueries > 0U)
-                {
-                    exactReflectionQueriesHandle =
-                        graph.CreateBuffer(
-                            prefix +
-                                ".ExactReflectionQueries",
-                            {
-                                .sizeBytes =
-                                    static_cast<u64>(
-                                        maximumExactReflectionQueries) *
-                                    sizeof(
-                                        lighting::
-                                            GpuVisibilityQuery),
-                                .usage =
-                                    rhi::BufferUsage::
-                                        Structured,
-                                .memory =
-                                    rhi::MemoryUsage::
-                                        HostVisible,
+                            return device_->CreateTexture({
+                                .width = width,
+                                .height = height,
+                                .format =
+                                    rhi::TextureFormat::
+                                        RGBA16_Float,
                                 .initialState =
                                     rhi::ResourceState::
-                                        ShaderResource
+                                        ShaderResource,
+                                .allowUnorderedAccess =
+                                    true
                             });
-
-                    exactReflectionResultsHandle =
-                        graph.CreateBuffer(
-                            prefix +
-                                ".ExactReflectionResults",
-                            {
-                                .sizeBytes =
-                                    static_cast<u64>(
-                                        maximumExactReflectionQueries) *
-                                    sizeof(
-                                        lighting::
-                                            GpuVisibilityResult),
-                                .usage =
-                                    rhi::BufferUsage::
-                                        Structured,
-                                .memory =
-                                    rhi::MemoryUsage::
-                                        HostVisible,
-                                .initialState =
-                                    rhi::ResourceState::
-                                        ShaderResource
-                            });
-
-                    exactReflectionPixelMapHandle =
-                        graph.CreateBuffer(
-                            prefix +
-                                ".ExactReflectionPixelMap",
-                            {
-                                .sizeBytes =
-                                    static_cast<u64>(
-                                        maximumExactReflectionQueries) *
-                                    sizeof(u32),
-                                .usage =
-                                    rhi::BufferUsage::
-                                        Structured,
-                                .memory =
-                                    rhi::MemoryUsage::
-                                        HostVisible,
-                                .initialState =
-                                    rhi::ResourceState::
-                                        ShaderResource
-                            });
-
-                    exactReflectionCounterHandle =
-                        graph.CreateBuffer(
-                            prefix +
-                                ".ExactReflectionCounter",
-                            {
-                                .sizeBytes = sizeof(u32),
-                                .usage =
-                                    rhi::BufferUsage::
-                                        Structured,
-                                .memory =
-                                    rhi::MemoryUsage::
-                                        HostVisible,
-                                .initialState =
-                                    rhi::ResourceState::
-                                        ShaderResource
-                            });
-
-                    std::vector<
-                        lighting::GpuVisibilityQuery>
-                        safeQueries(
-                            maximumExactReflectionQueries);
-
-                    for (auto& safeQuery : safeQueries)
-                    {
-                        safeQuery.originMinimumDistance.w =
-                            0.03F;
-                        safeQuery.directionMaximumDistance =
-                            {0.0F, 0.0F, 1.0F, 0.03F};
-                        safeQuery.requirements = {
-                            std::numeric_limits<f32>::
-                                infinity(),
-                            0.0F,
-                            0.0F,
-                            std::bit_cast<f32>(3U)
                         };
-                    }
 
-                    uploadBuffer(
-                        graph.Buffer(
-                            exactReflectionQueriesHandle),
-                        safeQueries.data(),
-                        static_cast<u64>(
-                            safeQueries.size()) *
-                            sizeof(
-                                lighting::
-                                    GpuVisibilityQuery));
+                    finalGather.width = width;
+                    finalGather.height = height;
+                    finalGather.writeA = true;
+                    finalGather.hasHistory = false;
+                    finalGather.previousView = {};
 
-                    std::vector<u32>
-                        emptyPixelMap(
-                            maximumExactReflectionQueries,
-                            0xFFFF'FFFFU);
-
-                    uploadBuffer(
-                        graph.Buffer(
-                            exactReflectionPixelMapHandle),
-                        emptyPixelMap.data(),
-                        static_cast<u64>(
-                            emptyPixelMap.size()) *
-                            sizeof(u32));
-
-                    const u32 zero = 0U;
-                    uploadBuffer(
-                        graph.Buffer(
-                            exactReflectionCounterHandle),
-                        &zero,
-                        sizeof(zero));
-
-                    std::vector<
-                        lighting::GpuVisibilityResult>
-                        emptyResults(
-                            maximumExactReflectionQueries);
-
-                    uploadBuffer(
-                        graph.Buffer(
-                            exactReflectionResultsHandle),
-                        emptyResults.data(),
-                        static_cast<u64>(
-                            emptyResults.size()) *
-                            sizeof(
-                                lighting::
-                                    GpuVisibilityResult));
+                    finalGather.indirectA =
+                        createGatherTexture();
+                    finalGather.indirectB =
+                        createGatherTexture();
+                    finalGather.metaA =
+                        createGatherTexture();
+                    finalGather.metaB =
+                        createGatherTexture();
+                    finalGather.scratch =
+                        createGatherTexture();
                 }
 
+                auto* currentIndirect =
+                    finalGather.writeA
+                        ? finalGather.indirectA.get()
+                        : finalGather.indirectB.get();
+
+                auto* previousIndirect =
+                    finalGather.writeA
+                        ? finalGather.indirectB.get()
+                        : finalGather.indirectA.get();
+
+                auto* currentMeta =
+                    finalGather.writeA
+                        ? finalGather.metaA.get()
+                        : finalGather.metaB.get();
+
+                auto* previousMeta =
+                    finalGather.writeA
+                        ? finalGather.metaB.get()
+                        : finalGather.metaA.get();
+
+                auto* gatherScratch =
+                    finalGather.scratch.get();
+
+                const bool historyCompatible =
+                    finalGather.hasHistory &&
+                    lighting::
+                        CanReuseFinalGatherHistory(
+                            finalGather.previousView,
+                            lightingView);
+
+                const auto currentIndirectHandle =
+                    graph.ImportTexture(
+                        prefix +
+                            ".FinalGather.CurrentIndirect",
+                        *currentIndirect,
+                        rhi::ResourceState::
+                            ShaderResource);
+
+                const auto previousIndirectHandle =
+                    graph.ImportTexture(
+                        prefix +
+                            ".FinalGather.PreviousIndirect",
+                        *previousIndirect,
+                        rhi::ResourceState::
+                            ShaderResource);
+
+                const auto currentMetaHandle =
+                    graph.ImportTexture(
+                        prefix +
+                            ".FinalGather.CurrentMeta",
+                        *currentMeta,
+                        rhi::ResourceState::
+                            ShaderResource);
+
+                const auto previousMetaHandle =
+                    graph.ImportTexture(
+                        prefix +
+                            ".FinalGather.PreviousMeta",
+                        *previousMeta,
+                        rhi::ResourceState::
+                            ShaderResource);
+
+                const auto gatherScratchHandle =
+                    graph.ImportTexture(
+                        prefix +
+                            ".FinalGather.Scratch",
+                        *gatherScratch,
+                        rhi::ResourceState::
+                            ShaderResource);
+
+                lighting::
+                    ScreenSpaceFinalGatherSettings
+                        gatherSettings;
+
+                gatherSettings.stepsPerRay =
+                    std::clamp(
+                        static_cast<u32>(
+                            std::lround(
+                                2.0F +
+                                8.0F *
+                                    std::clamp(
+                                        lightingPlan.giScale,
+                                        0.0F,
+                                        1.0F))),
+                        2U,
+                        10U);
+
                 graph.AddPass(
-                    prefix + ".HybridReflections",
+                    prefix + ".ScreenSpaceFinalGather",
                     {
                         {
                             .texture = targets.color,
@@ -9433,6 +9064,17 @@ StudioViewportRenderer::Compose(
                                     Read
                         },
                         {
+                            .texture =
+                                targets.
+                                    surfaceEmissionClass,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
                             .texture = targets.depth,
                             .state =
                                 rhi::ResourceState::
@@ -9443,19 +9085,7 @@ StudioViewportRenderer::Compose(
                         },
                         {
                             .texture =
-                                gatherScratchHandle,
-                            .state =
-                                rhi::ResourceState::
-                                    UnorderedAccess,
-                            .access =
-                                render_graph::Access::
-                                    Write
-                        }
-                    },
-                    {
-                        {
-                            .buffer =
-                                radianceCellsHandle,
+                                previousIndirectHandle,
                             .state =
                                 rhi::ResourceState::
                                     ShaderResource,
@@ -9464,34 +9094,56 @@ StudioViewportRenderer::Compose(
                                     Read
                         },
                         {
-                            .buffer =
-                                radianceLevelsHandle,
+                            .texture =
+                                previousMetaHandle,
                             .state =
                                 rhi::ResourceState::
                                     ShaderResource,
                             .access =
                                 render_graph::Access::
                                     Read
+                        },
+                        {
+                            .texture =
+                                currentIndirectHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    UnorderedAccess,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        },
+                        {
+                            .texture =
+                                currentMetaHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    UnorderedAccess,
+                            .access =
+                                render_graph::Access::
+                                    Write
                         }
                     },
                     [this,
                      color,
                      lightingBaseRoughness,
                      lightingNormalMetallic,
+                     lightingEmissionClass,
                      lightingDepth,
-                     gatherScratch,
-                     radianceCellsHandle,
-                     radianceLevelsHandle,
-                     radianceLevelCount,
+                     previousIndirect,
+                     previousMeta,
+                     currentIndirect,
+                     currentMeta,
                      width,
                      height,
                      lightingView,
-                     lightingPlan,
+                     historyCompatible,
+                     gatherSettings,
+                     particleLightGridForDirect,
                      lightingTimestamps,
                      frameIndex](
                         rhi::CommandList& commands,
-                        const render_graph::Resources&
-                            resources)
+                        const render_graph::Resources&)
                     {
                         if (lightingTimestamps != nullptr)
                         {
@@ -9501,203 +9153,36 @@ StudioViewportRenderer::Compose(
                                     frameIndex,
                                     lighting::
                                         LightingGpuSection::
-                                            Reflections);
+                                            Gi);
                         }
 
-                        hybridReflectionRenderer_.
-                            Resolve(
-                                commands,
-                                *color,
-                                *lightingBaseRoughness,
-                                *lightingNormalMetallic,
-                                *lightingDepth,
-                                resources.Buffer(
-                                    radianceCellsHandle),
-                                resources.Buffer(
-                                    radianceLevelsHandle),
-                                radianceLevelCount,
-                                *gatherScratch,
-                                width,
-                                height,
-                                lightingView,
-                                lightingPlan.
-                                    reflectionScale);
+                        finalGatherRenderer_.Gather(
+                            commands,
+                            *color,
+                            *lightingBaseRoughness,
+                            *lightingNormalMetallic,
+                            *lightingEmissionClass,
+                            *lightingDepth,
+                            *previousIndirect,
+                            *previousMeta,
+                            *currentIndirect,
+                            *currentMeta,
+                            width,
+                            height,
+                            lightingView,
+                            historyCompatible,
+                            particleLightGridForDirect,
+                            gatherSettings);
                     });
 
-                if (exactReflectionHardware != nullptr &&
-                    maximumExactReflectionQueries > 0U)
+                if (radianceLevelCount > 0U)
                 {
                     graph.AddPass(
-                        prefix +
-                            ".ExactReflectionCompact",
+                        prefix + ".RadianceCacheFallback",
                         {
                             {
                                 .texture =
-                                    targets.
-                                        surfaceBaseRoughness,
-                                .state =
-                                    rhi::ResourceState::
-                                        ShaderResource,
-                                .access =
-                                    render_graph::Access::
-                                        Read
-                            },
-                            {
-                                .texture =
-                                    targets.
-                                        surfaceNormalMetallic,
-                                .state =
-                                    rhi::ResourceState::
-                                        ShaderResource,
-                                .access =
-                                    render_graph::Access::
-                                        Read
-                            },
-                            {
-                                .texture =
-                                    targets.depth,
-                                .state =
-                                    rhi::ResourceState::
-                                        DepthRead,
-                                .access =
-                                    render_graph::Access::
-                                        Read
-                            }
-                        },
-                        {
-                            {
-                                .buffer =
-                                    exactReflectionQueriesHandle,
-                                .state =
-                                    rhi::ResourceState::
-                                        UnorderedAccess,
-                                .access =
-                                    render_graph::Access::
-                                        Write
-                            },
-                            {
-                                .buffer =
-                                    exactReflectionPixelMapHandle,
-                                .state =
-                                    rhi::ResourceState::
-                                        UnorderedAccess,
-                                .access =
-                                    render_graph::Access::
-                                        Write
-                            },
-                            {
-                                .buffer =
-                                    exactReflectionCounterHandle,
-                                .state =
-                                    rhi::ResourceState::
-                                        UnorderedAccess,
-                                .access =
-                                    render_graph::Access::
-                                        Write
-                            }
-                        },
-                        [this,
-                         lightingBaseRoughness,
-                         lightingNormalMetallic,
-                         lightingDepth,
-                         exactReflectionQueriesHandle,
-                         exactReflectionPixelMapHandle,
-                         exactReflectionCounterHandle,
-                         maximumExactReflectionQueries,
-                         width,
-                         height,
-                         lightingView,
-                         currentToExactSceneOrigin,
-                         lightingPlan](
-                            rhi::CommandList& commands,
-                            const render_graph::Resources&
-                                resources)
-                        {
-                            const u32 screenSteps =
-                                std::clamp(
-                                    static_cast<u32>(
-                                        std::lround(
-                                            4.0F +
-                                            12.0F *
-                                                lightingPlan.
-                                                    reflectionScale)),
-                                    4U,
-                                    16U);
-
-                            exactReflectionQueryRenderer_.
-                                BuildQueries(
-                                    commands,
-                                    *lightingBaseRoughness,
-                                    *lightingNormalMetallic,
-                                    *lightingDepth,
-                                    resources.Buffer(
-                                        exactReflectionQueriesHandle),
-                                    resources.Buffer(
-                                        exactReflectionPixelMapHandle),
-                                    resources.Buffer(
-                                        exactReflectionCounterHandle),
-                                    maximumExactReflectionQueries,
-                                    width,
-                                    height,
-                                    lightingView,
-                                    currentToExactSceneOrigin,
-                                    0.08F,
-                                    40.0F,
-                                    0.12F,
-                                    screenSteps);
-                        });
-
-                    graph.AddPass(
-                        prefix +
-                            ".ExactReflectionTrace",
-                        {},
-                        {
-                            {
-                                .buffer =
-                                    exactReflectionQueriesHandle,
-                                .state =
-                                    rhi::ResourceState::
-                                        ShaderResource,
-                                .access =
-                                    render_graph::Access::
-                                        Read
-                            },
-                            {
-                                .buffer =
-                                    exactReflectionResultsHandle,
-                                .state =
-                                    rhi::ResourceState::
-                                        UnorderedAccess,
-                                .access =
-                                    render_graph::Access::
-                                        Write
-                            }
-                        },
-                        [exactReflectionHardware,
-                         exactReflectionQueriesHandle,
-                         exactReflectionResultsHandle,
-                         maximumExactReflectionQueries](
-                            rhi::CommandList& commands,
-                            const render_graph::Resources&
-                                resources)
-                        {
-                            exactReflectionHardware->
-                                Dispatch(
-                                    commands,
-                                    resources.Buffer(
-                                        exactReflectionQueriesHandle),
-                                    resources.Buffer(
-                                        exactReflectionResultsHandle),
-                                    maximumExactReflectionQueries);
-                        });
-
-                    graph.AddPass(
-                        prefix +
-                            ".ExactReflectionResolve",
-                        {
-                            {
-                                .texture =
-                                    gatherScratchHandle,
+                                    currentIndirectHandle,
                                 .state =
                                     rhi::ResourceState::
                                         UnorderedAccess,
@@ -9739,26 +9224,6 @@ StudioViewportRenderer::Compose(
                             }
                         },
                         {
-                            {
-                                .buffer =
-                                    exactReflectionResultsHandle,
-                                .state =
-                                    rhi::ResourceState::
-                                        ShaderResource,
-                                .access =
-                                    render_graph::Access::
-                                        Read
-                            },
-                            {
-                                .buffer =
-                                    exactReflectionPixelMapHandle,
-                                .state =
-                                    rhi::ResourceState::
-                                        ShaderResource,
-                                .access =
-                                    render_graph::Access::
-                                        Read
-                            },
                             {
                                 .buffer =
                                     radianceCellsHandle,
@@ -9781,50 +9246,91 @@ StudioViewportRenderer::Compose(
                             }
                         },
                         [this,
-                         gatherScratch,
+                         currentIndirect,
                          lightingBaseRoughness,
                          lightingNormalMetallic,
                          lightingDepth,
-                         exactReflectionResultsHandle,
-                         exactReflectionPixelMapHandle,
                          radianceCellsHandle,
                          radianceLevelsHandle,
                          radianceLevelCount,
-                         maximumExactReflectionQueries,
                          width,
                          height,
-                         lightingView,
-                         exactSceneToCurrentOrigin](
+                         lightingView](
                             rhi::CommandList& commands,
                             const render_graph::Resources&
                                 resources)
                         {
-                            exactReflectionQueryRenderer_.
-                                ResolveResults(
+                            radianceCacheSampler_.
+                                ResolveFallback(
                                     commands,
-                                    *gatherScratch,
+                                    *currentIndirect,
                                     *lightingBaseRoughness,
                                     *lightingNormalMetallic,
                                     *lightingDepth,
-                                    resources.Buffer(
-                                        exactReflectionResultsHandle),
-                                    resources.Buffer(
-                                        exactReflectionPixelMapHandle),
                                     resources.Buffer(
                                         radianceCellsHandle),
                                     resources.Buffer(
                                         radianceLevelsHandle),
                                     radianceLevelCount,
-                                    maximumExactReflectionQueries,
                                     width,
                                     height,
-                                    lightingView,
-                                    exactSceneToCurrentOrigin);
+                                    lightingView);
                         });
                 }
 
                 graph.AddPass(
-                    prefix + ".HybridReflectionsCopyBack",
+                    prefix + ".FinalGatherCombine",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                currentIndirectHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                gatherScratchHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    UnorderedAccess,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     currentIndirect,
+                     gatherScratch,
+                     width,
+                     height](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        finalGatherRenderer_.Combine(
+                            commands,
+                            *color,
+                            *currentIndirect,
+                            *gatherScratch,
+                            width,
+                            height);
+                    });
+
+                graph.AddPass(
+                    prefix + ".FinalGatherCopyBack",
                     {
                         {
                             .texture =
@@ -9871,46 +9377,915 @@ StudioViewportRenderer::Compose(
                                     frameIndex,
                                     lighting::
                                         LightingGpuSection::
-                                            Reflections);
+                                            Gi);
                         }
                     });
+
+                if (radianceLevelCount > 0U)
+                {
+                    lighting::HardwareRayQueryVisibilityBatch*
+                        exactReflectionHardware = nullptr;
+
+                    if (const auto proxyFound =
+                            visibilityProxyPresentations_.find(
+                                info.id);
+                        proxyFound !=
+                                visibilityProxyPresentations_.end() &&
+                            proxyFound->second.hardware != nullptr &&
+                            proxyFound->second.hardware->Ready())
+                    {
+                        exactReflectionHardware =
+                            proxyFound->second.hardware.get();
+                    }
+
+                    const u32 maximumExactReflectionQueries =
+                        std::min(
+                            lightingPlan.exactVisibilityQueries,
+                            lightingPlan.reflectionQueries);
+                    const auto exactSceneOrigin =
+                        exactReflectionHardware != nullptr
+                            ? exactReflectionHardware->
+                                  GpuOriginInFrameMeters()
+                            : lightingView.
+                                  gpuOriginInFrameMeters;
+
+                    const math::Float3
+                        currentToExactSceneOrigin{
+                            static_cast<f32>(
+                                lightingView.
+                                    gpuOriginInFrameMeters.x -
+                                exactSceneOrigin.x),
+                            static_cast<f32>(
+                                lightingView.
+                                    gpuOriginInFrameMeters.y -
+                                exactSceneOrigin.y),
+                            static_cast<f32>(
+                                lightingView.
+                                    gpuOriginInFrameMeters.z -
+                                exactSceneOrigin.z)
+                        };
+
+                    const math::Float3
+                        exactSceneToCurrentOrigin{
+                            -currentToExactSceneOrigin.x,
+                            -currentToExactSceneOrigin.y,
+                            -currentToExactSceneOrigin.z
+                        };
+
+
+                    render_graph::BufferHandle
+                        exactReflectionQueriesHandle{};
+                    render_graph::BufferHandle
+                        exactReflectionResultsHandle{};
+                    render_graph::BufferHandle
+                        exactReflectionPixelMapHandle{};
+                    render_graph::BufferHandle
+                        exactReflectionCounterHandle{};
+
+                    if (exactReflectionHardware != nullptr &&
+                        maximumExactReflectionQueries > 0U)
+                    {
+                        exactReflectionQueriesHandle =
+                            graph.CreateBuffer(
+                                prefix +
+                                    ".ExactReflectionQueries",
+                                {
+                                    .sizeBytes =
+                                        static_cast<u64>(
+                                            maximumExactReflectionQueries) *
+                                        sizeof(
+                                            lighting::
+                                                GpuVisibilityQuery),
+                                    .usage =
+                                        rhi::BufferUsage::
+                                            Structured,
+                                    .memory =
+                                        rhi::MemoryUsage::
+                                            HostVisible,
+                                    .initialState =
+                                        rhi::ResourceState::
+                                            ShaderResource
+                                });
+
+                        exactReflectionResultsHandle =
+                            graph.CreateBuffer(
+                                prefix +
+                                    ".ExactReflectionResults",
+                                {
+                                    .sizeBytes =
+                                        static_cast<u64>(
+                                            maximumExactReflectionQueries) *
+                                        sizeof(
+                                            lighting::
+                                                GpuVisibilityResult),
+                                    .usage =
+                                        rhi::BufferUsage::
+                                            Structured,
+                                    .memory =
+                                        rhi::MemoryUsage::
+                                            HostVisible,
+                                    .initialState =
+                                        rhi::ResourceState::
+                                            ShaderResource
+                                });
+
+                        exactReflectionPixelMapHandle =
+                            graph.CreateBuffer(
+                                prefix +
+                                    ".ExactReflectionPixelMap",
+                                {
+                                    .sizeBytes =
+                                        static_cast<u64>(
+                                            maximumExactReflectionQueries) *
+                                        sizeof(u32),
+                                    .usage =
+                                        rhi::BufferUsage::
+                                            Structured,
+                                    .memory =
+                                        rhi::MemoryUsage::
+                                            HostVisible,
+                                    .initialState =
+                                        rhi::ResourceState::
+                                            ShaderResource
+                                });
+
+                        exactReflectionCounterHandle =
+                            graph.CreateBuffer(
+                                prefix +
+                                    ".ExactReflectionCounter",
+                                {
+                                    .sizeBytes = sizeof(u32),
+                                    .usage =
+                                        rhi::BufferUsage::
+                                            Structured,
+                                    .memory =
+                                        rhi::MemoryUsage::
+                                            HostVisible,
+                                    .initialState =
+                                        rhi::ResourceState::
+                                            ShaderResource
+                                });
+
+                        std::vector<
+                            lighting::GpuVisibilityQuery>
+                            safeQueries(
+                                maximumExactReflectionQueries);
+
+                        for (auto& safeQuery : safeQueries)
+                        {
+                            safeQuery.originMinimumDistance.w =
+                                0.03F;
+                            safeQuery.directionMaximumDistance =
+                                {0.0F, 0.0F, 1.0F, 0.03F};
+                            safeQuery.requirements = {
+                                std::numeric_limits<f32>::
+                                    infinity(),
+                                0.0F,
+                                0.0F,
+                                std::bit_cast<f32>(3U)
+                            };
+                        }
+
+                        uploadBuffer(
+                            graph.Buffer(
+                                exactReflectionQueriesHandle),
+                            safeQueries.data(),
+                            static_cast<u64>(
+                                safeQueries.size()) *
+                                sizeof(
+                                    lighting::
+                                        GpuVisibilityQuery));
+
+                        std::vector<u32>
+                            emptyPixelMap(
+                                maximumExactReflectionQueries,
+                                0xFFFF'FFFFU);
+
+                        uploadBuffer(
+                            graph.Buffer(
+                                exactReflectionPixelMapHandle),
+                            emptyPixelMap.data(),
+                            static_cast<u64>(
+                                emptyPixelMap.size()) *
+                                sizeof(u32));
+
+                        const u32 zero = 0U;
+                        uploadBuffer(
+                            graph.Buffer(
+                                exactReflectionCounterHandle),
+                            &zero,
+                            sizeof(zero));
+
+                        std::vector<
+                            lighting::GpuVisibilityResult>
+                            emptyResults(
+                                maximumExactReflectionQueries);
+
+                        uploadBuffer(
+                            graph.Buffer(
+                                exactReflectionResultsHandle),
+                            emptyResults.data(),
+                            static_cast<u64>(
+                                emptyResults.size()) *
+                                sizeof(
+                                    lighting::
+                                        GpuVisibilityResult));
+                    }
+
+                    graph.AddPass(
+                        prefix + ".HybridReflections",
+                        {
+                            {
+                                .texture = targets.color,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture =
+                                    targets.
+                                        surfaceBaseRoughness,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture =
+                                    targets.
+                                        surfaceNormalMetallic,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture = targets.depth,
+                                .state =
+                                    rhi::ResourceState::
+                                        DepthRead,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture =
+                                    gatherScratchHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        UnorderedAccess,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            }
+                        },
+                        {
+                            {
+                                .buffer =
+                                    radianceCellsHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .buffer =
+                                    radianceLevelsHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            }
+                        },
+                        [this,
+                         color,
+                         lightingBaseRoughness,
+                         lightingNormalMetallic,
+                         lightingDepth,
+                         gatherScratch,
+                         radianceCellsHandle,
+                         radianceLevelsHandle,
+                         radianceLevelCount,
+                         width,
+                         height,
+                         lightingView,
+                         lightingPlan,
+                         lightingTimestamps,
+                         frameIndex](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&
+                                resources)
+                        {
+                            if (lightingTimestamps != nullptr)
+                            {
+                                lightingTimestamps->
+                                    BeginSection(
+                                        commands,
+                                        frameIndex,
+                                        lighting::
+                                            LightingGpuSection::
+                                                Reflections);
+                            }
+
+                            hybridReflectionRenderer_.
+                                Resolve(
+                                    commands,
+                                    *color,
+                                    *lightingBaseRoughness,
+                                    *lightingNormalMetallic,
+                                    *lightingDepth,
+                                    resources.Buffer(
+                                        radianceCellsHandle),
+                                    resources.Buffer(
+                                        radianceLevelsHandle),
+                                    radianceLevelCount,
+                                    *gatherScratch,
+                                    width,
+                                    height,
+                                    lightingView,
+                                    lightingPlan.
+                                        reflectionScale);
+                        });
+
+                    if (exactReflectionHardware != nullptr &&
+                        maximumExactReflectionQueries > 0U)
+                    {
+                        graph.AddPass(
+                            prefix +
+                                ".ExactReflectionCompact",
+                            {
+                                {
+                                    .texture =
+                                        targets.
+                                            surfaceBaseRoughness,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .texture =
+                                        targets.
+                                            surfaceNormalMetallic,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .texture =
+                                        targets.depth,
+                                    .state =
+                                        rhi::ResourceState::
+                                            DepthRead,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                }
+                            },
+                            {
+                                {
+                                    .buffer =
+                                        exactReflectionQueriesHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            UnorderedAccess,
+                                    .access =
+                                        render_graph::Access::
+                                            Write
+                                },
+                                {
+                                    .buffer =
+                                        exactReflectionPixelMapHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            UnorderedAccess,
+                                    .access =
+                                        render_graph::Access::
+                                            Write
+                                },
+                                {
+                                    .buffer =
+                                        exactReflectionCounterHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            UnorderedAccess,
+                                    .access =
+                                        render_graph::Access::
+                                            Write
+                                }
+                            },
+                            [this,
+                             lightingBaseRoughness,
+                             lightingNormalMetallic,
+                             lightingDepth,
+                             exactReflectionQueriesHandle,
+                             exactReflectionPixelMapHandle,
+                             exactReflectionCounterHandle,
+                             maximumExactReflectionQueries,
+                             width,
+                             height,
+                             lightingView,
+                             currentToExactSceneOrigin,
+                             lightingPlan](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&
+                                    resources)
+                            {
+                                const u32 screenSteps =
+                                    std::clamp(
+                                        static_cast<u32>(
+                                            std::lround(
+                                                4.0F +
+                                                12.0F *
+                                                    lightingPlan.
+                                                        reflectionScale)),
+                                        4U,
+                                        16U);
+
+                                exactReflectionQueryRenderer_.
+                                    BuildQueries(
+                                        commands,
+                                        *lightingBaseRoughness,
+                                        *lightingNormalMetallic,
+                                        *lightingDepth,
+                                        resources.Buffer(
+                                            exactReflectionQueriesHandle),
+                                        resources.Buffer(
+                                            exactReflectionPixelMapHandle),
+                                        resources.Buffer(
+                                            exactReflectionCounterHandle),
+                                        maximumExactReflectionQueries,
+                                        width,
+                                        height,
+                                        lightingView,
+                                        currentToExactSceneOrigin,
+                                        0.08F,
+                                        40.0F,
+                                        0.12F,
+                                        screenSteps);
+                            });
+
+                        graph.AddPass(
+                            prefix +
+                                ".ExactReflectionTrace",
+                            {},
+                            {
+                                {
+                                    .buffer =
+                                        exactReflectionQueriesHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .buffer =
+                                        exactReflectionResultsHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            UnorderedAccess,
+                                    .access =
+                                        render_graph::Access::
+                                            Write
+                                }
+                            },
+                            [exactReflectionHardware,
+                             exactReflectionQueriesHandle,
+                             exactReflectionResultsHandle,
+                             maximumExactReflectionQueries](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&
+                                    resources)
+                            {
+                                exactReflectionHardware->
+                                    Dispatch(
+                                        commands,
+                                        resources.Buffer(
+                                            exactReflectionQueriesHandle),
+                                        resources.Buffer(
+                                            exactReflectionResultsHandle),
+                                        maximumExactReflectionQueries);
+                            });
+
+                        graph.AddPass(
+                            prefix +
+                                ".ExactReflectionResolve",
+                            {
+                                {
+                                    .texture =
+                                        gatherScratchHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            UnorderedAccess,
+                                    .access =
+                                        render_graph::Access::
+                                            Write
+                                },
+                                {
+                                    .texture =
+                                        targets.
+                                            surfaceBaseRoughness,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .texture =
+                                        targets.
+                                            surfaceNormalMetallic,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .texture =
+                                        targets.depth,
+                                    .state =
+                                        rhi::ResourceState::
+                                            DepthRead,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                }
+                            },
+                            {
+                                {
+                                    .buffer =
+                                        exactReflectionResultsHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .buffer =
+                                        exactReflectionPixelMapHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .buffer =
+                                        radianceCellsHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                },
+                                {
+                                    .buffer =
+                                        radianceLevelsHandle,
+                                    .state =
+                                        rhi::ResourceState::
+                                            ShaderResource,
+                                    .access =
+                                        render_graph::Access::
+                                            Read
+                                }
+                            },
+                            [this,
+                             gatherScratch,
+                             lightingBaseRoughness,
+                             lightingNormalMetallic,
+                             lightingDepth,
+                             exactReflectionResultsHandle,
+                             exactReflectionPixelMapHandle,
+                             radianceCellsHandle,
+                             radianceLevelsHandle,
+                             radianceLevelCount,
+                             maximumExactReflectionQueries,
+                             width,
+                             height,
+                             lightingView,
+                             exactSceneToCurrentOrigin](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&
+                                    resources)
+                            {
+                                exactReflectionQueryRenderer_.
+                                    ResolveResults(
+                                        commands,
+                                        *gatherScratch,
+                                        *lightingBaseRoughness,
+                                        *lightingNormalMetallic,
+                                        *lightingDepth,
+                                        resources.Buffer(
+                                            exactReflectionResultsHandle),
+                                        resources.Buffer(
+                                            exactReflectionPixelMapHandle),
+                                        resources.Buffer(
+                                            radianceCellsHandle),
+                                        resources.Buffer(
+                                            radianceLevelsHandle),
+                                        radianceLevelCount,
+                                        maximumExactReflectionQueries,
+                                        width,
+                                        height,
+                                        lightingView,
+                                        exactSceneToCurrentOrigin);
+                            });
+                    }
+
+                    graph.AddPass(
+                        prefix + ".HybridReflectionsCopyBack",
+                        {
+                            {
+                                .texture =
+                                    gatherScratchHandle,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture = targets.color,
+                                .state =
+                                    rhi::ResourceState::
+                                        RenderTarget,
+                                .access =
+                                    render_graph::Access::
+                                        Write
+                            }
+                        },
+                        [this,
+                         gatherScratch,
+                         color,
+                         width,
+                         height,
+                         lightingTimestamps,
+                         frameIndex](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            debugComposite_.Draw(
+                                commands,
+                                *gatherScratch,
+                                *color,
+                                width,
+                                height);
+
+                            if (lightingTimestamps != nullptr)
+                            {
+                                lightingTimestamps->
+                                    EndSection(
+                                        commands,
+                                        frameIndex,
+                                        lighting::
+                                            LightingGpuSection::
+                                                Reflections);
+                            }
+                        });
+                }
+
+                graph.AddPass(
+                    prefix + ".FinalGatherRestoreHistory",
+                    {
+                        {
+                            .texture =
+                                currentIndirectHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture =
+                                currentMetaHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        }
+                    },
+                    [](
+                        rhi::CommandList&,
+                        const render_graph::Resources&)
+                    {
+                    });
+
+                finalGather.previousView =
+                    lightingView;
+                finalGather.hasHistory = true;
+                finalGather.writeA =
+                    !finalGather.writeA;
+            }
+            else
+            {
+                // Resume from a clean history when the view returns to the
+                // near field instead of reprojecting stale indirect light.
+                finalGather.hasHistory = false;
+                finalGather.previousView = {};
             }
 
-            graph.AddPass(
-                prefix + ".FinalGatherRestoreHistory",
-                {
-                    {
-                        .texture =
-                            currentIndirectHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .texture =
-                            currentMetaHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    }
-                },
-                [](
-                    rhi::CommandList&,
-                    const render_graph::Resources&)
-                {
-                });
+            // Physical atmosphere: attenuate the lit scene along each view
+            // ray and add single + multiple in-scattering, for both the
+            // limb seen from orbit and aerial perspective near the ground.
+            if (const auto atmosphereFound =
+                    atmospherePresentations_.find(
+                        info.id);
+                atmosphereFound !=
+                        atmospherePresentations_.end() &&
+                    atmosphereFound->second.gpu != nullptr &&
+                    logicalTarget->target.has_value() &&
+                    atmosphereFound->second.body ==
+                        logicalTarget->target->body &&
+                    studioDirectLight.direct.has_value() &&
+                    logicalTarget->mode !=
+                        studio_session::ViewportMode::Debug)
+            {
+                auto& scratch =
+                    atmosphereScratch_[info.id];
 
-            finalGather.previousView =
-                lightingView;
-            finalGather.hasHistory = true;
-            finalGather.writeA =
-                !finalGather.writeA;
+                if (scratch == nullptr ||
+                    scratch->Width() != width ||
+                    scratch->Height() != height)
+                {
+                    scratch =
+                        device_->CreateTexture({
+                            .width = width,
+                            .height = height,
+                            .format =
+                                rhi::TextureFormat::
+                                    RGBA16_Float,
+                            .initialState =
+                                rhi::ResourceState::
+                                    ShaderResource
+                        });
+                }
+
+                const auto scratchHandle =
+                    graph.ImportTexture(
+                        prefix + ".AtmosphereScratch",
+                        *scratch,
+                        rhi::ResourceState::
+                            ShaderResource);
+
+                auto* atmosphereScratch =
+                    scratch.get();
+                auto* atmosphereLuts =
+                    atmosphereFound->second.gpu.get();
+                const auto atmosphereParameters =
+                    atmosphereFound->second.parameters;
+                const auto atmosphereCamera =
+                    view->Camera();
+
+                const celestial_atmosphere::
+                    AtmosphereRenderView
+                    atmosphereView{
+                        .cameraPositionMeters =
+                            atmosphereCamera.
+                                localPositionMeters,
+                        .forward =
+                            atmosphereCamera.forward,
+                        .up =
+                            atmosphereCamera.up,
+                        .verticalFovRadians =
+                            atmosphereCamera.
+                                verticalFovRadians,
+                        .nearPlaneMeters =
+                            atmosphereCamera.
+                                nearPlaneMeters,
+                        .farPlaneMeters =
+                            atmosphereCamera.
+                                farPlaneMeters,
+                        .sunDirection =
+                            studioDirectLight.
+                                directionBody,
+                        .irradianceScale =
+                            studioDirectLight.
+                                irradianceScale
+                    };
+
+                graph.AddPass(
+                    prefix + ".Atmosphere",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture = targets.depth,
+                            .state =
+                                rhi::ResourceState::
+                                    DepthRead,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture = scratchHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     color,
+                     lightingDepth,
+                     atmosphereLuts,
+                     atmosphereScratch,
+                     width,
+                     height,
+                     atmosphereParameters,
+                     atmosphereView](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        atmosphereRenderer_.Draw(
+                            commands,
+                            *color,
+                            *lightingDepth,
+                            *atmosphereLuts,
+                            *atmosphereScratch,
+                            width,
+                            height,
+                            atmosphereParameters,
+                            atmosphereView);
+                    });
+
+                graph.AddPass(
+                    prefix + ".AtmosphereCopyBack",
+                    {
+                        {
+                            .texture = scratchHandle,
+                            .state =
+                                rhi::ResourceState::
+                                    ShaderResource,
+                            .access =
+                                render_graph::Access::
+                                    Read
+                        },
+                        {
+                            .texture = targets.color,
+                            .state =
+                                rhi::ResourceState::
+                                    RenderTarget,
+                            .access =
+                                render_graph::Access::
+                                    Write
+                        }
+                    },
+                    [this,
+                     atmosphereScratch,
+                     color,
+                     width,
+                     height](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        debugComposite_.Draw(
+                            commands,
+                            *atmosphereScratch,
+                            *color,
+                            width,
+                            height);
+                    });
+            }
 
             // RenderView imports depth as DepthWrite on the next frame.
             // Shared direct lighting samples it read-only, so close this frame
@@ -10996,6 +11371,25 @@ StudioViewportRenderer::Compose(
                             particleStellarLight,
                             particleLocalLights);
                     });
+
+                // The particle pass leaves depth in DepthRead; return it to
+                // the persistent DepthWrite state RenderView imports next frame.
+                graph.AddPass(
+                    prefix + ".RestoreDepthWriteAfterParticles",
+                    {
+                        {
+                            .texture = targets.depth,
+                            .state =
+                                rhi::ResourceState::DepthWrite,
+                            .access =
+                                render_graph::Access::Write
+                        }
+                    },
+                    [](
+                        rhi::CommandList&,
+                        const render_graph::Resources&)
+                    {
+                    });
             }
         }
 
@@ -11557,6 +11951,7 @@ StudioViewportRenderer::Compose(
             displayResolveSettings.exposureScale *=
                 histogram.diagnostics.eyeState.exposureScale;
         }
+
 
         auto colorLutSettings =
             colorLutSettings_;

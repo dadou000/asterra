@@ -25,6 +25,14 @@ struct ViewportAutomation
     std::function<render_view::CaptureResult(
         const std::filesystem::path&)>
         capture;
+    // Lossless float capture of a named physical render target.
+    std::function<render_view::CaptureResult(
+        render_view::CaptureBuffer,
+        const std::filesystem::path&)>
+        captureBuffer;
+    // Frames the primary viewport on its current target body.
+    std::function<bool()>
+        focusBody;
 };
 
 struct PathRoutingAutomation

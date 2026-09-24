@@ -291,6 +291,16 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
                     weight *
                     float(g.fixedWeightScale))));
 
+    // Zero-radiance pixels (empty space) carry no metering information.
+    // Counting them would drag adaptation toward black and blow out every
+    // body in a mostly-empty celestial frame.
+    if (luminance <= 0.0)
+    {
+        g_meteringMask[pixel] =
+            float4(0.0, normalized, luminance, 1.0);
+        return;
+    }
+
     uint ignored;
 
     g_histogram.InterlockedAdd(

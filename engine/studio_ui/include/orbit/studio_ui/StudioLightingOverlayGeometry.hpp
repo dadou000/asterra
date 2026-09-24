@@ -192,7 +192,9 @@ BuildEmissiveInfluenceOverlayLines(
     for (u32 index = 0U; index < count; ++index)
     {
         const auto& source = sources[index];
-        const auto center = view.ToCameraRelative(source.centerInFrameMeters);
+        const auto center = lighting::ToLightingCameraRelative(
+            source.centerInFrameMeters,
+            view);
         const f32 radius = static_cast<f32>(
             std::max(source.influenceRangeMeters, source.sourceRadiusMeters));
 

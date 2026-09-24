@@ -146,6 +146,18 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         (float2(float(logicalX), float(logicalY)) - halfCells) *
             g_pc.spacingMeters;
 
+    // Sample the displaced vertex's actual location. Applying erosion at the
+    // unmorphed fine location gives coincident child/parent vertices different
+    // heights and reopens the ring seam after base terrain generation.
+    if (g_pc.regionEast.w > 0.5 && g_pc.regionUp.w > g_pc.fineNorth.w)
+    {
+        float2 localOffset = fineOffsetMeters - float2(g_pc.fineUp.w, g_pc.fineEast.w);
+        float edge = max(abs(localOffset.x), abs(localOffset.y));
+        float t = saturate((edge - g_pc.fineNorth.w) / (g_pc.regionUp.w - g_pc.fineNorth.w));
+        float2 target = asfloat(g_samples.Load2(
+            (physicalY * g_pc.resolution + physicalX) * kSampleStrideBytes + 4u));
+        fineOffsetMeters = lerp(fineOffsetMeters, target, t * t * (3.0 - 2.0 * t));
+    }
     float3 direction = DirectionAtSurfaceOffset(
         g_pc.fineUp.xyz, g_pc.fineEast.xyz, g_pc.fineNorth.xyz,
         fineOffsetMeters, g_pc.radius);
@@ -155,14 +167,13 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
     // FieldGenerationCompute.hpp's morph-target code, just against
     // the hydrology tile's frame instead of a coarser clipmap level's.
     float cosine = clamp(dot(g_pc.regionUp.xyz, direction), -1.0, 1.0);
-    float angle = acos(cosine);
+    float3 tangent = direction - g_pc.regionUp.xyz * cosine;
+    float tangentLength = length(tangent);
+    float angle = atan2(tangentLength, cosine);
     float2 regionOffsetMeters = float2(0.0, 0.0);
 
     if (angle > 1.0e-6)
     {
-        float3 tangent = direction - g_pc.regionUp.xyz * cosine;
-        float tangentLength = length(tangent);
-
         if (tangentLength > 1.0e-6)
         {
             float3 tangentDirection = tangent / tangentLength;

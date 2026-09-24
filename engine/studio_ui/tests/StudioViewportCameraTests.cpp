@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioViewportCamera.hpp>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -62,10 +63,27 @@ int main()
         Check(camera.has_value());
         Check(camera->frame.high == 5);
         Check(camera->frame.low == 6);
+        // 3.2 radii from the centre, 25 degrees above the +Y-pole equator,
+        // looking straight at the body.
+        const double distance =
+            std::sqrt(
+                camera->localPositionMeters.x *
+                    camera->localPositionMeters.x +
+                camera->localPositionMeters.y *
+                    camera->localPositionMeters.y +
+                camera->localPositionMeters.z *
+                    camera->localPositionMeters.z);
+        Check(std::abs(distance - 19'200'000.0) < 1.0);
         Check(camera->localPositionMeters.x == 0.0);
-        Check(camera->localPositionMeters.y == 0.0);
-        Check(camera->localPositionMeters.z == -19'200'000.0);
-        Check(camera->forward.z == 1.0F);
+        Check(camera->localPositionMeters.y > 8'000'000.0);
+        Check(camera->localPositionMeters.z < -17'000'000.0);
+        Check(
+            std::abs(
+                camera->forward.y *
+                    static_cast<float>(distance) +
+                static_cast<float>(
+                    camera->localPositionMeters.y)) < 1.0e3F);
+        Check(camera->forward.z > 0.9F);
         Check(camera->nearPlaneMeters == 6.0F);
         Check(camera->farPlaneMeters == 72'000'000.0F);
     }

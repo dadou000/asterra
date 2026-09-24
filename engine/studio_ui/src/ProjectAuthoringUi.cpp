@@ -1,5 +1,7 @@
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 
+#include <orbit/platform/Paths.hpp>
+
 #include <algorithm>
 #include <format>
 #include <stdexcept>
@@ -121,6 +123,12 @@ void ProjectAuthoringUi::SetWorkspaceChangedCallback(
     workspaceChanged_ = std::move(callback);
 }
 
+void ProjectAuthoringUi::SetDialogOwner(
+    const platform::Window* const owner) noexcept
+{
+    dialogOwner_ = owner;
+}
+
 void ProjectAuthoringUi::DrawProjectBrowser(
     editor_ui::PanelContext& context)
 {
@@ -162,21 +170,63 @@ void ProjectAuthoringUi::DrawProjectBrowser(
         "Start a new Orbit project with a persistent project manifest and "
         "world-authoring workspace.");
 
+    if (newProjectRoot_.empty())
+    {
+        newProjectRoot_ =
+            (platform::UserDataDirectory() /
+             "Projects").string();
+    }
+
     static_cast<void>(
         context.InputText(
-            "Project Folder##new-project-root",
+            "Location##new-project-root",
             newProjectRoot_));
+
+    if (dialogOwner_ != nullptr)
+    {
+        context.SameLine();
+
+        if (context.Button("Browse...##new-project-browse"))
+        {
+            try
+            {
+                if (const auto folder =
+                        platform::SelectFolder(
+                            *dialogOwner_,
+                            {
+                                .title = "Choose where to create the project",
+                                .initialDirectory =
+                                    std::filesystem::path(
+                                        newProjectRoot_)
+                            });
+                    folder.has_value())
+                {
+                    newProjectRoot_ = folder->string();
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
+    }
+
     static_cast<void>(
         context.InputText(
             "Project Name##new-project-name",
             newProjectName_));
+
+    context.MutedText(
+        "The project is created in a new folder named after the project "
+        "inside the chosen location.");
 
     if (context.PrimaryButton("Create Project"))
     {
         try
         {
             projectBrowser_.CreateProject(
-                std::filesystem::path(newProjectRoot_),
+                std::filesystem::path(newProjectRoot_) /
+                    newProjectName_,
                 newProjectName_);
             status_ = "Project created and opened.";
             SynchronizeProjectBuffers();
@@ -196,6 +246,35 @@ void ProjectAuthoringUi::DrawProjectBrowser(
         context.InputText(
             "Project Path##open-project-path",
             openProjectPath_));
+
+    if (dialogOwner_ != nullptr)
+    {
+        context.SameLine();
+
+        if (context.Button("Browse...##open-project-browse"))
+        {
+            try
+            {
+                if (const auto folder =
+                        platform::SelectFolder(
+                            *dialogOwner_,
+                            {
+                                .title = "Open Orbit project folder",
+                                .initialDirectory =
+                                    std::filesystem::path(
+                                        openProjectPath_)
+                            });
+                    folder.has_value())
+                {
+                    openProjectPath_ = folder->string();
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
+    }
 
     if (context.PrimaryButton("Open Project"))
     {

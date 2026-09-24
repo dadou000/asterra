@@ -1,0 +1,16 @@
+asset_mount_points = [ 'Content' ]
+plugins = []
+script_entry_points = []
+
+[project]
+engine_compatibility = '0.0.7'
+id = '284b45b5-65c0-4a69-90d8-8a31360f6d50'
+name = 'New Orbit Project'
+schema_version = 1
+startup_world = 'Worlds/Main.orbitworld'
+
+[[build_profiles]]
+configuration = 'Development'
+name = 'Development Windows'
+platform = 'Windows'
+storefront = 'standalone'

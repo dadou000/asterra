@@ -3,6 +3,9 @@
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
+#include <execution>
+#include <numeric>
+#include <vector>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -241,13 +244,36 @@ MacroGlobeMesh BuildMacroGlobe(
         std::numeric_limits<f64>::max();
     result.maximumRadiusMeters = 0.0;
 
-    for (u32 face = 0; face < 6U; ++face)
-    {
-        const u32 base =
-            face * n * n;
+    // Vertex samples are independent pure queries of the immutable terrain
+    // authority, so rows are evaluated in parallel; radius bounds are
+    // reduced per row and combined afterwards.
+    const u32 rowCount =
+        6U * n;
+    std::vector<u32> rows(rowCount);
+    std::iota(
+        rows.begin(),
+        rows.end(),
+        0U);
+    std::vector<f64> rowMinimum(
+        rowCount,
+        std::numeric_limits<f64>::max());
+    std::vector<f64> rowMaximum(
+        rowCount,
+        0.0);
 
-        for (u32 y = 0; y < n; ++y)
+    std::for_each(
+        std::execution::par,
+        rows.begin(),
+        rows.end(),
+        [&](const u32 row)
         {
+            const u32 face =
+                row / n;
+            const u32 y =
+                row % n;
+            const u32 base =
+                face * n * n;
+
             const f64 v =
                 -1.0 +
                 2.0 *
@@ -281,7 +307,7 @@ MacroGlobeMesh BuildMacroGlobe(
                     RadiusAlong(
                         shape,
                         direction) +
-                    sample.elevationMeters;
+                    sample.elevationMeters + sample.standingWaterDepthMeters;
 
                 const u32 index =
                     base + y * n + x;
@@ -294,16 +320,34 @@ MacroGlobeMesh BuildMacroGlobe(
                         sample.elevationMeters
                 };
 
-                result.minimumRadiusMeters =
+                rowMinimum[row] =
                     std::min(
-                        result.minimumRadiusMeters,
+                        rowMinimum[row],
                         radius);
-                result.maximumRadiusMeters =
+                rowMaximum[row] =
                     std::max(
-                        result.maximumRadiusMeters,
+                        rowMaximum[row],
                         radius);
             }
-        }
+                });
+
+    for (u32 row = 0; row < rowCount; ++row)
+    {
+        result.minimumRadiusMeters =
+            std::min(
+                result.minimumRadiusMeters,
+                rowMinimum[row]);
+        result.maximumRadiusMeters =
+            std::max(
+                result.maximumRadiusMeters,
+                rowMaximum[row]);
+    }
+
+    for (u32 face = 0; face < 6U; ++face)
+    {
+        const u32 base =
+            face * n * n;
+
 
         for (u32 y = 0; y + 1U < n; ++y)
         {
@@ -375,11 +419,15 @@ MacroGlobeMesh BuildMacroGlobe(
                 (RadiusAlong(
                      shape,
                      unit) +
-                 sample.elevationMeters);
+                 sample.elevationMeters + sample.standingWaterDepthMeters);
         };
 
-    for (auto& vertex : result.vertices)
-    {
+    std::for_each(
+        std::execution::par,
+        result.vertices.begin(),
+        result.vertices.end(),
+        [&](MacroGlobeVertex& vertex)
+        {
         const math::Double3 direction =
             math::Normalize(
                 vertex.positionMeters);
@@ -435,7 +483,7 @@ MacroGlobeMesh BuildMacroGlobe(
                     1.0e-24
                 ? math::Normalize(normal)
                 : direction;
-    }
+            });
 
     return result;
 }
@@ -679,7 +727,9 @@ VSOutput main(VSInput input)
     output.position = float4(
         x / (tanHalf * aspect),
         y / tanHalf,
-        z * 0.5,
+        g_pc.transition.w > 0.5
+            ? g_pc.transition.y * z + g_pc.transition.z
+            : z * 0.5,
         z);
     output.normal = normalize(input.appearanceNormal);
     output.albedo = input.albedo;
@@ -697,6 +747,18 @@ VSOutput main(VSInput input)
 )";
 
 constexpr const char* kMacroGlobePixelShader = R"(
+struct Constants
+{
+    float4 cameraAndAspect;
+    float4 forwardAndTanHalfFov;
+    float4 upAndScale;
+    float4 transition;
+    float4 lighting;
+    float4 ocean;
+};
+
+[[vk::push_constant]] Constants g_pc;
+
 struct VSOutput
 {
     float4 position : SV_Position;
@@ -786,6 +848,18 @@ float4 main(VSOutput input) : SV_Target0
 )";
 
 constexpr const char* kMacroGlobeSurfacePixelShader = R"(
+struct Constants
+{
+    float4 cameraAndAspect;
+    float4 forwardAndTanHalfFov;
+    float4 upAndScale;
+    float4 transition;
+    float4 lighting;
+    float4 ocean;
+};
+
+[[vk::push_constant]] Constants g_pc;
+
 struct VSOutput
 {
     float4 position : SV_Position;
@@ -991,7 +1065,7 @@ MacroGlobeRenderer::MacroGlobeRenderer(
         .colorAttachmentCount = 1U
     });
 
-    surfacePipeline_ = device.CreateGraphicsPipeline({
+    rhi::GraphicsPipelineDesc surfaceDesc{
         .vertexShader = {
             .data = vs.bytecode.data(),
             .size = vs.bytecode.size()
@@ -1016,7 +1090,12 @@ MacroGlobeRenderer::MacroGlobeRenderer(
             rhi::TextureFormat::RGBA16_Float
         },
         .colorAttachmentCount = 4U
-    });
+    };
+    surfacePipeline_ = device.CreateGraphicsPipeline(surfaceDesc);
+    surfaceDesc.depthTest = true;
+    surfaceDesc.depthWrite = true;
+    surfaceDesc.depthCompare = rhi::DepthCompare::GreaterEqual;
+    depthSurfacePipeline_ = device.CreateGraphicsPipeline(surfaceDesc);
 }
 
 void MacroGlobeRenderer::Draw(
@@ -1126,7 +1205,8 @@ void MacroGlobeRenderer::DrawSurface(
     GpuMacroGlobeProduct& globe,
     const render_view::CameraState& camera,
     const f32 opacity,
-    const MacroGlobeLighting& lighting)
+    const MacroGlobeLighting& lighting,
+    rhi::Texture* depth)
 {
     if (width == 0U || height == 0U)
     {
@@ -1144,7 +1224,7 @@ void MacroGlobeRenderer::DrawSurface(
             return std::bit_cast<u32>(value);
         };
 
-    const std::array<u32, 24> constants{
+    std::array<u32, 24> constants{
         bits(static_cast<f32>(camera.localPositionMeters.x / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.y / radius)),
         bits(static_cast<f32>(camera.localPositionMeters.z / radius)),
@@ -1193,9 +1273,17 @@ void MacroGlobeRenderer::DrawSurface(
         &surfaceNormalMetallic,
         &surfaceEmissionClass
     };
+    if (depth != nullptr)
+    {
+        const f64 nearPlane = std::max(static_cast<f64>(camera.nearPlaneMeters), 0.001);
+        const f64 farPlane = std::max(static_cast<f64>(camera.farPlaneMeters), nearPlane * 2.0);
+        constants[13] = bits(static_cast<f32>(-nearPlane / (farPlane - nearPlane)));
+        constants[14] = bits(static_cast<f32>(nearPlane * farPlane / (farPlane - nearPlane) / radius));
+        constants[15] = bits(1.0F);
+    }
     commands.SetRenderTargets(
         targets,
-        nullptr);
+        depth);
     commands.SetViewport({
         .x = 0.0F,
         .y = 0.0F,
@@ -1210,7 +1298,7 @@ void MacroGlobeRenderer::DrawSurface(
         .right = static_cast<i32>(width),
         .bottom = static_cast<i32>(height)
     });
-    commands.SetGraphicsPipeline(*surfacePipeline_);
+    commands.SetGraphicsPipeline(depth != nullptr ? *depthSurfacePipeline_ : *surfacePipeline_);
     commands.SetGraphicsConstants(constants);
     commands.SetVertexBuffer(
         globe.VertexBuffer(),

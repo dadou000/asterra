@@ -120,6 +120,7 @@ public:
     UniversalVolumeRenderer(
         rhi::Device& device,
         const shader::Compiler& compiler);
+    ~UniversalVolumeRenderer();
 
     [[nodiscard]] VolumeRenderRuntimeSettings&
     Settings(

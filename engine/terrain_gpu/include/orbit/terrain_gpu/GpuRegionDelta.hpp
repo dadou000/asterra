@@ -44,6 +44,9 @@ struct GpuRegionDeltaRequest
     // begins (1.0 = no fade, apply at full strength everywhere inside
     // the tile).
     f32 edgeFadeStartDot{0.75F};
+    bool morphToCoarser{false};
+    f64 morphStartHalfExtentMeters{0.0};
+    f64 morphEndHalfExtentMeters{0.0};
 };
 
 // Composites a GPU hydrology region tile's elevation delta into an

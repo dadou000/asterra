@@ -54,6 +54,10 @@ struct TerrainPreviewCamera
 {
     math::Float3 forward{0.0F, -0.28F, 1.0F};
     math::Float3 up{0.0F, 1.0F, 0.0F};
+    // Zero retains the standalone preview configuration.
+    f32 verticalFovRadians{0.0F};
+    f32 nearPlaneMeters{0.0F};
+    f32 farPlaneMeters{0.0F};
 };
 
 struct TerrainPreviewConfig

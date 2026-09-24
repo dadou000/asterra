@@ -11,7 +11,7 @@ int main()
         .bodyRadiusMeters = 6.4e6,
         .maximumProductionDetailMeters = 20'000.0,
         .maximumMacroDisplacementMeters = 12'000.0,
-        .cameraDistanceToCenterMeters = 6.5e6,
+        .cameraDistanceToCenterMeters = 6.41e6,
         .verticalFieldOfViewRadians = 1.0,
         .viewportHeightPixels = 1080.0,
         .features = {
@@ -357,5 +357,21 @@ int main()
         return 22;
     }
 
+    // Tall mountains must never turn an orbital planet into a local grid.
+    auto orbit = input;
+    orbit.features.productionSurfaceAvailable = true;
+    orbit.features.macroDisplacementAvailable = true;
+    orbit.maximumProductionDetailMeters = 20'000.0;
+    orbit.maximumMacroDisplacementMeters = 12'000.0;
+    orbit.cameraDistanceToCenterMeters = orbit.bodyRadiusMeters + 400'000.0;
+    if (Resolve(orbit).representation != Representation::MacroDisplacedGlobe)
+    {
+        return 23;
+    }
+    orbit.cameraDistanceToCenterMeters = orbit.bodyRadiusMeters + 12'100.0;
+    if (Resolve(orbit).representation != Representation::ProductionSurface)
+    {
+        return 24;
+    }
     return 0;
 }

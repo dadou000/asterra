@@ -107,13 +107,13 @@ ShapeHit IntersectSphere(
         return result;
     }
 
-    const float3 point =
+    const float3 hitPoint =
         origin + direction * t;
 
     result.hit = true;
     result.t = t;
     result.normal =
-        normalize(point - primitive.centerType.xyz);
+        normalize(hitPoint - primitive.centerType.xyz);
     return result;
 }
 
@@ -219,20 +219,22 @@ ShapeHit IntersectPrimitive(
     float minimumDistance,
     float maximumDistance)
 {
-    return
-        primitive.centerType.w >= 0.5
-            ? IntersectBox(
-                  origin,
-                  direction,
-                  primitive,
-                  minimumDistance,
-                  maximumDistance)
-            : IntersectSphere(
-                  origin,
-                  direction,
-                  primitive,
-                  minimumDistance,
-                  maximumDistance);
+    if (primitive.centerType.w >= 0.5)
+    {
+        return IntersectBox(
+            origin,
+            direction,
+            primitive,
+            minimumDistance,
+            maximumDistance);
+    }
+
+    return IntersectSphere(
+        origin,
+        direction,
+        primitive,
+        minimumDistance,
+        maximumDistance);
 }
 
 float ConfidenceForError(
@@ -332,14 +334,17 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 
     RayQuery<RAY_FLAG_NONE> query;
 
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.TMin = minimumDistance;
+    ray.Direction = direction;
+    ray.TMax = maximumDistance;
+
     query.TraceRayInline(
         g_scene,
         RAY_FLAG_NONE,
         0xFF,
-        origin,
-        minimumDistance,
-        direction,
-        maximumDistance);
+        ray);
 
     while (query.Proceed())
     {

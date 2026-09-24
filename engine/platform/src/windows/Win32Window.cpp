@@ -479,7 +479,9 @@ public:
 
         ShowWindow(
             hwnd_,
-            SW_SHOW);
+            desc.startMaximized
+                ? SW_SHOWMAXIMIZED
+                : SW_SHOW);
 
         UpdateWindow(hwnd_);
 
@@ -596,6 +598,17 @@ public:
             static_cast<f64>(
                 cursor.y)
         };
+    }
+
+    void SetTitle(
+        const std::string_view title) override
+    {
+        if (hwnd_ != nullptr)
+        {
+            SetWindowTextA(
+                hwnd_,
+                std::string(title).c_str());
+        }
     }
 
     void SetRelativeMouseMode(

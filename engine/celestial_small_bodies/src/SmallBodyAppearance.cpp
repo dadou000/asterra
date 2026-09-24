@@ -44,19 +44,42 @@ namespace
         static_cast<f64>(0x00ffffffULL);
 }
 
+[[nodiscard]] f64 Lattice(
+    const i64 x,
+    const i64 y,
+    const i64 z,
+    const u64 seed) noexcept
+{
+    u64 h=Mix(seed^static_cast<u64>(x));
+    h=Mix(h^static_cast<u64>(y));
+    h=Mix(h^static_cast<u64>(z));
+    return UnitHash(h);
+}
+
+// Band-limited value noise at the requested feature scale: smoothly
+// interpolated lattice values, matching the GPU far-body shader.
 [[nodiscard]] f64 Noise(
     const math::Double3 p,
     const f64 scale,
     const u64 seed) noexcept
 {
     const auto q=p*scale;
-    const i64 x=static_cast<i64>(std::floor(q.x*4096.0));
-    const i64 y=static_cast<i64>(std::floor(q.y*4096.0));
-    const i64 z=static_cast<i64>(std::floor(q.z*4096.0));
-    u64 h=Mix(seed^static_cast<u64>(x));
-    h=Mix(h^static_cast<u64>(y));
-    h=Mix(h^static_cast<u64>(z));
-    return UnitHash(h);
+    const f64 fx=std::floor(q.x);
+    const f64 fy=std::floor(q.y);
+    const f64 fz=std::floor(q.z);
+    const i64 x=static_cast<i64>(fx);
+    const i64 y=static_cast<i64>(fy);
+    const i64 z=static_cast<i64>(fz);
+    const auto fade=[](const f64 t){return t*t*(3.0-2.0*t);};
+    const f64 wx=fade(q.x-fx);
+    const f64 wy=fade(q.y-fy);
+    const f64 wz=fade(q.z-fz);
+    const auto lerp=[](const f64 a,const f64 b,const f64 t){return a+(b-a)*t;};
+    const f64 x00=lerp(Lattice(x,y,z,seed),Lattice(x+1,y,z,seed),wx);
+    const f64 x10=lerp(Lattice(x,y+1,z,seed),Lattice(x+1,y+1,z,seed),wx);
+    const f64 x01=lerp(Lattice(x,y,z+1,seed),Lattice(x+1,y,z+1,seed),wx);
+    const f64 x11=lerp(Lattice(x,y+1,z+1,seed),Lattice(x+1,y+1,z+1,seed),wx);
+    return lerp(lerp(x00,x10,wy),lerp(x01,x11,wy),wz);
 }
 
 [[nodiscard]] f64 Fractal(

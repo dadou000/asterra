@@ -288,14 +288,14 @@ VSOutput main(uint vertexId : SV_VertexID)
                     value * 0.22));
     }
 
-    const float3 point =
+    const float3 hitPoint =
         endpoint == 0u
             ? world
             : endWorld;
 
     output.position =
         Project(
-            point -
+            hitPoint -
             g.camera.xyz);
     output.color =
         color;

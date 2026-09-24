@@ -192,10 +192,10 @@ bool ProjectPoint(
             (viewDepth * tanHalfFov)
     };
 
-    uv = {
+    uv = float2(
         ndc.x * 0.5 + 0.5,
         0.5 - ndc.y * 0.5
-    };
+    );
 
     return
         all(uv >= 0.0) &&

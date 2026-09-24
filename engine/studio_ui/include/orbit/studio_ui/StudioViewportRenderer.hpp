@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_appearance/PlanetaryAppearance.hpp>
 #include <orbit/celestial_atmosphere/Atmosphere.hpp>
+#include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
 #include <orbit/celestial_compact_render/CompactObjectRenderer.hpp>
 #include <orbit/celestial_ocean/OceanOptics.hpp>
@@ -35,6 +36,7 @@
 #include <orbit/post_process/HighlightEffects.hpp>
 #include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/post_process/OutputTransform.hpp>
+#include <orbit/studio_ui/SurfaceVolumeDebugRenderer.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
@@ -425,6 +427,7 @@ private:
         universe::BodyId body,
         const universe::BodyShape& shape,
         const terrain::TerrainSource& terrainSource,
+        f64 projectedRadiusPixels,
         const std::function<bool(u64)>& acquireGrant,
         const std::function<void(u64)>& completeGrant);
 
@@ -490,6 +493,9 @@ private:
     struct MacroGlobePresentation
     {
         universe::BodyId body{};
+        // Current geometry/appearance face resolution tier, chosen from the
+        // body's projected size so vertex spacing stays a few pixels.
+        u32 faceResolution{33U};
         u64 sourceRevision{0};
         u64 fingerprint{0};
         u64 baseAppearanceFingerprint{0};
@@ -568,6 +574,7 @@ private:
     celestial_rings::RingRenderer ringRenderer_;
     celestial_magnetosphere_render::AuroraRenderer auroraRenderer_;
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
+    celestial_atmosphere::AtmosphereRenderer atmosphereRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
     volume_render::UniversalVolumeRenderer universalVolumeRenderer_;
@@ -623,6 +630,9 @@ private:
     std::map<std::string, CloudPresentation, std::less<>> cloudPresentations_;
     std::map<std::string, StudioAtmosphereDiagnostics, std::less<>> atmosphereDiagnostics_;
     std::map<std::string, AtmospherePresentation, std::less<>> atmospherePresentations_;
+    // Per-view composite target for the atmosphere pass (scene is read while
+    // the result is written, then copied back into the view's scene color).
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> atmosphereScratch_;
     std::map<std::string, StudioCelestialLightingDiagnostics, std::less<>> lightingDiagnostics_;
     std::map<std::string, StudioSurfaceGlobeTransitionDiagnostics, std::less<>> transitionDiagnostics_;
     std::map<std::string, StudioVisibilityProxyDiagnostics, std::less<>> visibilityProxyDiagnostics_;

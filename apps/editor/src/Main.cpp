@@ -85,6 +85,12 @@
 #include <variant>
 #include <vector>
 
+namespace orbit::editor_app
+{
+[[nodiscard]] bool RelaunchStudioWithProject(
+    const std::filesystem::path& projectManifest);
+}
+
 namespace
 {
 [[nodiscard]] orbit::u64
@@ -348,257 +354,55 @@ RouteSearchForProfile(
     };
 }
 
+// Studio always opens straight into the editor. With no explicit project the
+// most recently used one is reopened; on a first run a starter project is
+// created. Switching/creating projects happens from the in-editor Project
+// Browser panel.
 [[nodiscard]] std::optional<
     orbit::documents::ProjectDocument>
-OpenProjectBrowser()
+OpenDefaultProject()
 {
-    orbit::studio_session::StudioWorkspace
-        workspace;
+    const auto dataDirectory =
+        orbit::platform::UserDataDirectory();
 
-    orbit::runtime::RuntimeSession runtime({
-        .applicationName = "OrbitStudio",
-        .windowTitle = "Orbit Studio - Project Browser",
-        .width = 1180,
-        .height = 760,
-        .swapchainBufferCount = 3,
-        .allowTearing = true,
-        .relativeMouseMode = false
-    });
-
-    auto& window = runtime.Window();
-    auto& device = runtime.Device();
-    auto& graphicsQueue =
-        runtime.GraphicsQueue();
-    auto& swapchain =
-        runtime.Swapchain();
-
-    const orbit::shader::dxc::
-        DxcShaderCompiler compiler;
-
-    const auto layoutPath =
-        orbit::platform::
-            UserDataDirectory() /
-        "EditorLayouts" /
-        "ProjectBrowser.ini";
-
-    orbit::editor_ui::EditorUi ui(
-        device,
-        graphicsQueue,
-        compiler,
-        layoutPath);
-
-    orbit::studio_ui::ProjectAuthoringUi
-        projectUi(
-            workspace,
-            orbit::platform::
-                UserDataDirectory() /
-                "RecentProjects.txt");
-
-    // The startup browser is a Studio workspace state inside the unified
-    // OrbitStudio executable. Keep its required content in the central dock
-    // and do not expose project-bound panels before a project has been opened.
-    projectUi.RegisterProjectBrowser(ui, true);
-
-    auto allocator =
-        device.CreateCommandAllocator(
-            orbit::rhi::QueueType::Graphics);
-    auto commands =
-        device.CreateCommandList(
-            *allocator);
-    auto fence =
-        device.CreateFence(0);
-
-    orbit::u64 submittedFence = 0;
-    orbit::u64 nextFence = 1;
-
-    using Clock =
-        std::chrono::steady_clock;
-    auto previous =
-        Clock::now();
-
-    std::optional<std::filesystem::path>
-        selectedManifest;
-
-    while (window.PumpEvents())
     {
-        if (submittedFence != 0)
+        orbit::studio_session::StudioWorkspace
+            scratch;
+        const orbit::studio_session::
+            ProjectBrowserModel browser(
+                scratch,
+                dataDirectory /
+                    "RecentProjects.txt");
+
+        for (const auto& item :
+             browser.RecentProjects())
         {
-            fence->Wait(
-                submittedFence);
-        }
-
-        const auto now =
-            Clock::now();
-        const orbit::f64 deltaSeconds =
-            std::clamp(
-                std::chrono::duration<
-                    orbit::f64>(
-                        now - previous).
-                    count(),
-                1.0 / 1000.0,
-                0.1);
-        previous = now;
-
-        const orbit::u32 width =
-            window.Width();
-        const orbit::u32 height =
-            window.Height();
-
-        if (width == 0 ||
-            height == 0)
-        {
-            continue;
-        }
-
-        static_cast<void>(
-            runtime.ResizeSwapchainToWindow());
-
-        ui.BeginFrame(
-            window,
-            deltaSeconds);
-        ui.DrawStudioShell();
-
-        if (workspace.HasProject())
-        {
-            workspace.Project().Save();
-            workspace.Session().
-                World().Checkpoint();
-
-            selectedManifest =
-                workspace.Project().
-                    ManifestPath();
-        }
-
-        allocator->Reset();
-        commands->Reset(
-            *allocator);
-
-        auto& backBuffer =
-            swapchain.CurrentBackBuffer();
-
-        orbit::render_graph::RenderGraph
-            graph(device);
-
-        const auto backBufferTarget =
-            graph.ImportTexture(
-                "ProjectBrowserSwapchain",
-                backBuffer,
-                orbit::rhi::
-                    ResourceState::Present);
-
-        graph.AddPass(
-            "ProjectBrowser.Canvas",
+            if (item.available)
             {
-                {
-                    .texture =
-                        backBufferTarget,
-                    .state =
-                        orbit::rhi::
-                            ResourceState::
-                                RenderTarget,
-                    .access =
-                        orbit::render_graph::
-                            Access::Write
-                }
-            },
-            [&](orbit::rhi::CommandList&
-                    commandList,
-                const orbit::render_graph::
-                    Resources&)
-            {
-                commandList.ClearColorTarget(
-                    backBuffer,
-                    {
-                        .red = 0.018F,
-                        .green = 0.021F,
-                        .blue = 0.027F,
-                        .alpha = 1.0F
-                    });
-                commandList.SetRenderTarget(
-                    backBuffer);
-            });
-
-        graph.AddPass(
-            "ProjectBrowser.Ui",
-            {
-                {
-                    .texture =
-                        backBufferTarget,
-                    .state =
-                        orbit::rhi::
-                            ResourceState::
-                                RenderTarget,
-                    .access =
-                        orbit::render_graph::
-                            Access::Write
-                }
-            },
-            [&](orbit::rhi::CommandList&
-                    commandList,
-                const orbit::render_graph::
-                    Resources&)
-            {
-                ui.Render(
-                    commandList,
-                    backBuffer,
-                    swapchain.Width(),
-                    swapchain.Height());
-            });
-
-        graph.AddPass(
-            "ProjectBrowser.Present",
-            {
-                {
-                    .texture =
-                        backBufferTarget,
-                    .state =
-                        orbit::rhi::
-                            ResourceState::
-                                Present,
-                    .access =
-                        orbit::render_graph::
-                            Access::Read
-                }
-            },
-            {});
-
-        graph.Execute(*commands);
-
-        commands->Close();
-        graphicsQueue.Submit(
-            *commands);
-        swapchain.Present(true);
-
-        submittedFence =
-            nextFence++;
-        graphicsQueue.Signal(
-            *fence,
-            submittedFence);
-
-        if (selectedManifest.has_value())
-        {
-            break;
+                return orbit::documents::
+                    ProjectDocument::Open(
+                        item.manifestPath);
+            }
         }
     }
 
-    if (submittedFence != 0)
-    {
-        fence->Wait(
-            submittedFence);
-    }
+    const auto root =
+        dataDirectory /
+        "Projects" /
+        "Untitled Project";
 
-    if (!selectedManifest.has_value())
+    if (std::filesystem::exists(
+            root / "Project.orbit.toml"))
     {
-        return std::nullopt;
+        return orbit::documents::
+            ProjectDocument::Open(
+                root / "Project.orbit.toml");
     }
-
-    // Transition from the startup workspace into the selected project's
-    // authoritative Studio session graph inside the same application.
-    workspace.CloseProject();
 
     return orbit::documents::
-        ProjectDocument::Open(
-            *selectedManifest);
+        ProjectDocument::Create(
+            root,
+            "Untitled Project");
 }
 
 [[nodiscard]] std::optional<
@@ -642,9 +446,7 @@ OpenProject(
                 manifest);
     }
 
-    // Normal Studio launches now use the real project browser instead of
-    // silently manufacturing/opening a hidden scratch project.
-    return OpenProjectBrowser();
+    return OpenDefaultProject();
 }
 
 [[nodiscard]] const char* LogPrefix(
@@ -1333,6 +1135,20 @@ int main(
             }
         }
 
+        // One application window for the whole session: the project browser
+        // runs inside it before the project is opened, then the editor takes
+        // over the same window/device.
+        orbit::runtime::RuntimeSession runtime({
+            .applicationName = "OrbitStudio",
+            .windowTitle = "Orbit Studio",
+            .startMaximized = true,
+            .width = 1680,
+            .height = 980,
+            .swapchainBufferCount = 3,
+            .allowTearing = true,
+            .relativeMouseMode = false
+        });
+
         std::filesystem::path
             terrainUiSmokeRoot;
 
@@ -1748,15 +1564,7 @@ int main(
                 project.Manifest().
                     displayName);
 
-        orbit::runtime::RuntimeSession runtime({
-            .applicationName = "OrbitStudio",
-            .windowTitle = windowTitle,
-            .width = 1680,
-            .height = 980,
-            .swapchainBufferCount = 3,
-            .allowTearing = true,
-            .relativeMouseMode = false
-        });
+        runtime.Window().SetTitle(windowTitle);
 
         orbit::platform::Window& window =
             runtime.Window();
@@ -1929,11 +1737,45 @@ int main(
                                projectId.ToString() +
                            ".ini");
 
+        // In-editor Project Browser. Opening/creating a project here hands the
+        // choice to a fresh Studio process (project-bound state is rebuilt).
+        orbit::studio_session::StudioWorkspace
+            projectBrowserWorkspace;
+        orbit::studio_ui::ProjectAuthoringUi
+            projectBrowserUi(
+                projectBrowserWorkspace,
+                orbit::platform::
+                    UserDataDirectory() /
+                    "RecentProjects.txt");
+        std::optional<std::filesystem::path>
+            pendingProjectSwitch;
+        projectBrowserUi.
+            SetWorkspaceChangedCallback(
+                [&]()
+                {
+                    if (projectBrowserWorkspace.
+                            HasProject())
+                    {
+                        projectBrowserWorkspace.
+                            Project().Save();
+                        projectBrowserWorkspace.
+                            Session().World().
+                            Checkpoint();
+                        pendingProjectSwitch =
+                            projectBrowserWorkspace.
+                                Project().
+                                ManifestPath();
+                    }
+                });
+
         orbit::editor_ui::EditorUi ui(
             device,
             graphicsQueue,
             compiler,
             layoutPath);
+
+        projectBrowserUi.SetDialogOwner(&window);
+        projectBrowserUi.RegisterProjectBrowser(ui);
 
         // Validation seam: `--automation-open-menu=View` holds that dropdown
         // open so screenshots/inspection need no real mouse input.
@@ -2041,6 +1883,30 @@ int main(
                             graphicsQueue,
                             *primaryStudioView,
                             path);
+                },
+            .captureBuffer =
+                [&device,
+                 &graphicsQueue,
+                 primaryStudioView](
+                    const orbit::render_view::
+                        CaptureBuffer buffer,
+                    const std::filesystem::path&
+                        path)
+                {
+                    return orbit::render_view::
+                        CaptureFloatBuffer(
+                            device,
+                            graphicsQueue,
+                            *primaryStudioView,
+                            buffer,
+                            path);
+                },
+            .focusBody =
+                [&studioViews]()
+                {
+                    return studioViews.
+                        FocusTerrainBody(
+                            "studio.primary");
                 }
         });
 
@@ -4249,7 +4115,7 @@ int main(
 
                     const auto interaction =
                         context.Image(
-                            primaryView->Color(),
+                            primaryView->DisplayColor(),
                             {
                                 .width =
                                     static_cast<
@@ -5546,6 +5412,7 @@ int main(
                  &materialPreviewMaterial,
                  &materialEmissionEditAsset,
                  &materialEmissionEdit,
+                 &materialEmissiveTextureEdit,
                  &materialEmissionStatus,
                  &studioSession,
                  &window](
@@ -7058,6 +6925,10 @@ int main(
                 }
             };
 
+        std::unique_ptr<
+            orbit::render_graph::RenderGraph>
+            inFlightGraph;
+
         while (window.PumpEvents())
         {
             if (submittedFence != 0)
@@ -7442,6 +7313,21 @@ int main(
 
             publishAutomationChanges();
 
+            if (pendingProjectSwitch.has_value())
+            {
+                projectBrowserWorkspace.
+                    CloseProject();
+
+                if (orbit::editor_app::
+                        RelaunchStudioWithProject(
+                            *pendingProjectSwitch))
+                {
+                    break;
+                }
+
+                pendingProjectSwitch.reset();
+            }
+
             if (window.KeyDown(
                     orbit::platform::
                         Key::Escape) &&
@@ -7471,8 +7357,15 @@ int main(
                     *commands,
                     lightingFrameSlot);
 
-            orbit::render_graph::
-                RenderGraph graph(device);
+            // Transient graph buffers/textures must stay alive until the GPU
+            // finishes this frame; the previous frame's graph is released
+            // after the fence wait at the top of the next iteration.
+            auto graphHolder =
+                std::make_unique<
+                    orbit::render_graph::RenderGraph>(
+                        device);
+            orbit::render_graph::RenderGraph& graph =
+                *graphHolder;
 
             const auto viewTargets =
                 bodyView.Import(
@@ -7851,6 +7744,9 @@ int main(
             graphicsQueue.Signal(
                 *fence,
                 submittedFence);
+
+            inFlightGraph =
+                std::move(graphHolder);
 
             completedLightingFrameSlot =
                 lightingFrameSlot;

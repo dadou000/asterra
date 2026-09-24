@@ -22,6 +22,11 @@ namespace
         axis * (math::Dot(axis, value) * (1.0 - c));
 }
 
+// Body-fixed frame convention: local +Y is the spin (north) pole and the
+// local XZ plane is the equator. Every body-fixed surface authority (terrain
+// climate/wind latitude, giant zonal bands, ring planes, cloud fields) is
+// authored Y-up, so the orientation must map local +Y onto the pole in the
+// parent frame for those fields to rotate about their own poles.
 [[nodiscard]] math::Double3x3 BasisFromAxisPhase(
     const math::Double3 axis,
     const f64 phase)
@@ -32,25 +37,25 @@ namespace
             "Orientation axis must be non-zero.");
     }
 
-    const math::Double3 z =
+    const math::Double3 y =
         math::Normalize(axis);
 
     math::Double3 reference =
-        std::abs(z.x) < 0.9
+        std::abs(y.x) < 0.9
             ? math::Double3{1.0, 0.0, 0.0}
-            : math::Double3{0.0, 1.0, 0.0};
+            : math::Double3{0.0, 0.0, 1.0};
 
     math::Double3 x =
         reference -
-        z * math::Dot(reference, z);
+        y * math::Dot(reference, y);
     x = math::Normalize(x);
 
-    math::Double3 y =
+    math::Double3 z =
         math::Normalize(
-            math::Cross(z, x));
+            math::Cross(x, y));
 
-    x = RotateAroundAxis(x, z, phase);
-    y = RotateAroundAxis(y, z, phase);
+    x = RotateAroundAxis(x, y, phase);
+    z = RotateAroundAxis(z, y, phase);
 
     return {
         .xAxis = x,
@@ -118,7 +123,7 @@ OrientationState EvaluateSynchronous(
             "Synchronous orientation cannot face a zero-length parent vector.");
     }
 
-    math::Double3 z =
+    math::Double3 y =
         math::Normalize(model.poleInParent);
 
     math::Double3 x =
@@ -128,7 +133,7 @@ OrientationState EvaluateSynchronous(
     // Remove any component along the requested pole so X lies in the
     // equatorial plane. For degenerate pole/radius alignment, derive the pole
     // from orbital angular momentum when possible.
-    x = x - z * math::Dot(x, z);
+    x = x - y * math::Dot(x, y);
 
     if (math::Length(x) <= 1.0e-12)
     {
@@ -143,20 +148,22 @@ OrientationState EvaluateSynchronous(
                 "Synchronous orientation requires a non-degenerate orbit.");
         }
 
-        z = math::Normalize(angularMomentum);
+        y = math::Normalize(angularMomentum);
         x = math::Normalize(
             orbit.positionMeters * -1.0);
         x = math::Normalize(
-            x - z * math::Dot(x, z));
+            x - y * math::Dot(x, y));
     }
     else
     {
         x = math::Normalize(x);
     }
 
-    math::Double3 y =
+    // Same body-fixed convention as uniform spin: +Y is the pole, +X faces
+    // the parent, Z completes the right-handed equatorial basis.
+    math::Double3 z =
         math::Normalize(
-            math::Cross(z, x));
+            math::Cross(x, y));
     x = math::Normalize(
         math::Cross(y, z));
 
@@ -164,11 +171,11 @@ OrientationState EvaluateSynchronous(
     {
         x = RotateAroundAxis(
             x,
-            z,
-            model.phaseOffsetRadians);
-        y = RotateAroundAxis(
             y,
+            model.phaseOffsetRadians);
+        z = RotateAroundAxis(
             z,
+            y,
             model.phaseOffsetRadians);
     }
 

@@ -698,7 +698,8 @@ VSOutput main(uint vertexId : SV_VertexID)
 
         output.biome0 = float4(
             colorIndex == 0u ? 1.0 : 0.0,
-            colorIndex == 1u ? 1.0 : 0.0,
+)"
+R"(            colorIndex == 1u ? 1.0 : 0.0,
             colorIndex == 2u ? 1.0 : 0.0,
             colorIndex == 3u ? 1.0 : 0.0);
 
@@ -1036,13 +1037,13 @@ public:
 
         const math::Mat4 projection =
             math::PerspectiveReverseZLH(
-                config_.
-                    verticalFovRadians,
+                camera.verticalFovRadians > 0.0F
+                    ? camera.verticalFovRadians : config_.verticalFovRadians,
                 aspect,
-                config_.
-                    nearPlaneMeters,
-                config_.
-                    farPlaneMeters);
+                camera.nearPlaneMeters > 0.0F
+                    ? camera.nearPlaneMeters : config_.nearPlaneMeters,
+                camera.farPlaneMeters > 0.0F
+                    ? camera.farPlaneMeters : config_.farPlaneMeters);
 
         const math::Mat4 mvp =
             math::Multiply(
@@ -2155,6 +2156,9 @@ private:
         deltaRequest.regionResolution =
             hydrologyRegion->elevationDelta.resolution;
         deltaRequest.edgeFadeStartDot = 0.75F;
+        deltaRequest.morphToCoarser = request.morphToCoarser;
+        deltaRequest.morphStartHalfExtentMeters = request.morphStartHalfExtentMeters;
+        deltaRequest.morphEndHalfExtentMeters = request.morphEndHalfExtentMeters;
 
         regionDeltaComposite_->Dispatch(
             commandList, deltaRequest, *deltaBuffer, gpuBuffer);

@@ -54,8 +54,8 @@ int main()
     const double invSqrt2 =
         1.0 / std::sqrt(2.0);
 
-    if (!Near(tilted.parentFromBodyRotation.zAxis.y, invSqrt2) ||
-        !Near(tilted.parentFromBodyRotation.zAxis.z, invSqrt2))
+    if (!Near(tilted.parentFromBodyRotation.yAxis.y, invSqrt2) ||
+        !Near(tilted.parentFromBodyRotation.yAxis.z, invSqrt2))
     {
         return 4;
     }
@@ -84,7 +84,7 @@ int main()
 
     if (!Near(syncEpoch.parentFromBodyRotation.xAxis.x, -1.0) ||
         !Near(syncEpoch.parentFromBodyRotation.xAxis.y, 0.0) ||
-        !Near(syncEpoch.parentFromBodyRotation.zAxis.z, 1.0))
+        !Near(syncEpoch.parentFromBodyRotation.yAxis.z, 1.0))
     {
         return 2;
     }

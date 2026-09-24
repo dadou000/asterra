@@ -468,9 +468,9 @@ void VolumeAuthoringUi::DrawRepresentationPolicy(
                     512));
     }
 
-    context.InputText(
+    static_cast<void>(context.InputText(
         "Cache Path##volume-cache-path",
-        cachePath_);
+        cachePath_));
 
     const auto inputs =
         world_model::ResolveVolumeInputs(

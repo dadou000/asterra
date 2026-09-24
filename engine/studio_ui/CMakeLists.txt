@@ -50,6 +50,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::Lighting
+        Orbit::Platform
         Orbit::PostProcess
         Orbit::RenderGraph
         Orbit::RenderView

@@ -115,6 +115,11 @@ float4 main(VSOutput input) : SV_Target0
 
     if (discriminant < 0.0)
     {
+        if (g_pc.forward.w < 0.5)
+        {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+
         const float glow =
             0.025 /
             max(
@@ -466,7 +471,8 @@ void BodyPreviewRenderer::Draw(
     const u32 height,
     const universe::BodyShape& shape,
     const render_view::CameraState& camera,
-    const PreviewMaterial& material)
+    const PreviewMaterial& material,
+    const bool previewBackground)
 {
     if (width == 0 || height == 0)
     {
@@ -558,7 +564,7 @@ void BodyPreviewRenderer::Draw(
         bits(camera.forward.x),
         bits(camera.forward.y),
         bits(camera.forward.z),
-        bits(0.0F),
+        bits(previewBackground ? 1.0F : 0.0F),
 
         bits(camera.up.x),
         bits(camera.up.y),

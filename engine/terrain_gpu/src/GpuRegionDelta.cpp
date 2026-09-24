@@ -84,6 +84,10 @@ void GpuRegionDelta::Dispatch(
     StoreFloat3(pushConstants, 12, request.regionSurfaceFrame.up);
     StoreFloat3(pushConstants, 16, request.regionSurfaceFrame.east);
     StoreFloat3(pushConstants, 20, request.regionSurfaceFrame.north);
+    // Reuse spare float4 lanes without changing the shader ABI size.
+    pushConstants[11] = std::bit_cast<u32>(static_cast<f32>(request.morphStartHalfExtentMeters));
+    pushConstants[15] = std::bit_cast<u32>(static_cast<f32>(request.morphEndHalfExtentMeters));
+    pushConstants[19] = std::bit_cast<u32>(request.morphToCoarser ? 1.0F : 0.0F);
 
     u32 i = 24;
     pushConstants[i++] = request.resolution;

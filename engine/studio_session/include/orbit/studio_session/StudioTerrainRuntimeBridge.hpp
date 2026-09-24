@@ -25,8 +25,8 @@ struct StudioTerrainRuntimeConfig
 {
     terrain_view::ClipmapConfig clipmap{
         .levelCount = 12U,
-        .gridResolution = 65U,
-        .baseSpacingMeters = 20.0,
+        .gridResolution = 129U,
+        .baseSpacingMeters = 1.0,
         .levelScale = 2.0,
         .overlapCells = 6U
     };

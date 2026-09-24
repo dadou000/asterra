@@ -66,6 +66,7 @@ struct WindowDesc
     std::string_view title{"Orbit"};
     u32 width{1600};
     u32 height{900};
+    bool startMaximized{false};
 };
 
 class Window
@@ -77,6 +78,8 @@ public:
     Window& operator=(const Window&) = delete;
 
     virtual bool PumpEvents() = 0;
+
+    virtual void SetTitle(std::string_view title) = 0;
 
     [[nodiscard]] virtual bool KeyDown(
         Key key) const = 0;

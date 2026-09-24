@@ -173,8 +173,11 @@ float4 main(VSOut i):SV_Target0
         intercepted*i.singleScatteringAlbedo*phase*
         max(g.lightAndScale.w,0.0)*bodyLight;
 
+    // Ring particles only return light they intercept from the star; an
+    // illumination-independent term would outshine the lit host body by an
+    // order of magnitude at outer-planet irradiance.
     const float3 color=
-        i.color*(0.04*opacity+scattering*6.2831853);
+        i.color*(scattering*6.2831853);
 
     return float4(color,saturate(opacity));
 }

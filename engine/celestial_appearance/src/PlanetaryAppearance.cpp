@@ -3,6 +3,9 @@
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
+#include <execution>
+#include <numeric>
+#include <vector>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -241,14 +244,26 @@ BuildPlanetaryAppearance(
                  sample.elevationMeters);
         };
 
-    for (u32 face = 0;
-         face < 6U;
-         ++face)
-    {
-        for (u32 y = 0;
-             y < config.faceResolution;
-             ++y)
+    // Every texel is an independent pure query of the immutable terrain
+    // authority, so rows are evaluated in parallel.
+    std::vector<u32> rows(
+        6U * config.faceResolution);
+    std::iota(
+        rows.begin(),
+        rows.end(),
+        0U);
+
+    std::for_each(
+        std::execution::par,
+        rows.begin(),
+        rows.end(),
+        [&](const u32 row)
         {
+            const u32 face =
+                row / config.faceResolution;
+            const u32 y =
+                row % config.faceResolution;
+
             const f64 v =
                 -1.0 +
                 2.0 *
@@ -444,8 +459,7 @@ BuildPlanetaryAppearance(
                     .emissionLinear = {}
                 };
             }
-        }
-    }
+                });
 
     return result;
 }
