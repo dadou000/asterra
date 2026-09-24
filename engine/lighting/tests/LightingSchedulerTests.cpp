@@ -152,5 +152,54 @@ int main()
         return 5;
     }
 
+    // M40: emissive GI quality and hardware RT are orthogonal user policies.
+    // RT availability never changes the lighting budget, and disabling the
+    // hardware backend does not disable GI or emissive work.
+    LightingScheduler policyScheduler;
+    LightingSchedulerConfig policy{};
+    policy.hardwareRayQueryEnabled = false;
+    policy.emissiveGiQualityScale = 2.0F;
+    SetStudioLightingRuntimeConfig(policy);
+
+    const auto rtDisabled =
+        policyScheduler.BuildPlan(
+            requested,
+            true);
+
+    if (rtDisabled.preferHardwareRayQuery ||
+        !rtDisabled.hardwareRayQueryAvailable ||
+        rtDisabled.emissiveUpdates != 400U ||
+        rtDisabled.TotalBudgetMs() !=
+            policy.budget.TotalMs())
+    {
+        return 6;
+    }
+
+    policy.hardwareRayQueryEnabled = true;
+    policy.emissiveGiQualityScale = 0.5F;
+    SetStudioLightingRuntimeConfig(policy);
+
+    const auto rtEnabled =
+        policyScheduler.BuildPlan(
+            requested,
+            true);
+
+    if (!rtEnabled.preferHardwareRayQuery ||
+        rtEnabled.emissiveUpdates != 100U ||
+        rtEnabled.exactVisibilityQueries !=
+            rtDisabled.exactVisibilityQueries ||
+        rtEnabled.radianceCacheUpdates !=
+            rtDisabled.radianceCacheUpdates ||
+        rtEnabled.reflectionQueries !=
+            rtDisabled.reflectionQueries ||
+        rtEnabled.TotalBudgetMs() !=
+            rtDisabled.TotalBudgetMs())
+    {
+        return 7;
+    }
+
+    SetStudioLightingRuntimeConfig(
+        std::nullopt);
+
     return 0;
 }
