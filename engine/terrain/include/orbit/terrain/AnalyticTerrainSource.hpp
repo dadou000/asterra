@@ -5,6 +5,7 @@
 #include <orbit/world/Planet.hpp>
 
 #include <array>
+#include <vector>
 
 namespace orbit::terrain
 {
@@ -15,6 +16,29 @@ struct MountainTerrainDesc
     u32 octaves{8};
     f64 warpWavelengthMeters{70'000.0};
     f64 warpAmplitudeMeters{9'000.0};
+};
+
+// Whole-planet impact history evaluated by the same terrain authority used by
+// the orbital globe and ground clipmaps. These are deliberately geological
+// features rather than presentation-only crater rings.
+struct ProceduralCraterTerrainDesc
+{
+    bool enabled{true};
+    u32 count{96};
+    f64 minimumRadiusMeters{4'000.0};
+    f64 maximumRadiusMeters{280'000.0};
+    f64 cumulativeExponent{1.8};
+    f64 complexTransitionRadiusMeters{18'000.0};
+    f64 maximumEjectaExtentRadii{2.4};
+};
+
+struct GpuProceduralCrater
+{
+    math::Double3 centerDirection{};
+    f64 radiusMeters{0.0};
+    f64 degradation{0.0};
+    f64 rimIrregularityPhase{0.0};
+    f64 boundingCosine{-1.0};
 };
 
 struct AnalyticTerrainDesc
@@ -32,6 +56,7 @@ struct AnalyticTerrainDesc
 
     GlobalTerrainFieldDesc global{};
     MountainTerrainDesc mountains{};
+    ProceduralCraterTerrainDesc craters{};
     // Mountain relief and local detail share the available elevation headroom.
     f64 maximumElevationAboveSeaLevelMeters{8'000.0};
 };
@@ -68,6 +93,12 @@ public:
         return desc_;
     }
 
+    [[nodiscard]] const std::vector<GpuProceduralCrater>&
+    CratersForGpu() const noexcept
+    {
+        return craters_;
+    }
+
 private:
     struct NoiseOctave
     {
@@ -82,12 +113,16 @@ private:
         f64 footprintMeters) const noexcept;
 
     [[nodiscard]] f64 LimitElevation(f64 elevationMeters) const noexcept;
+    [[nodiscard]] f64 CraterHeightDelta(
+        const math::Double3& direction,
+        f64 footprintMeters) const noexcept;
 
     world::PlanetDefinition planet_;
     AnalyticTerrainDesc desc_;
     GlobalTerrainFields globalFields_;
     std::array<NoiseOctave, 16> detailBands_{};
     std::array<NoiseOctave, 16> mountainBands_{};
+    std::vector<GpuProceduralCrater> craters_;
     f64 mountainNormalization_{1.0};
     f64 warpFrequency_{0.0};
     f64 warpFootprintScale_{1.0};

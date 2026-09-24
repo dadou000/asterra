@@ -52,8 +52,33 @@ namespace
 }
 
 [[nodiscard]] math::Float3 BiomeAlbedo(
-    const terrain::BiomeWeights& b) noexcept
+    const terrain::BiomeWeights& b,
+    const bool drySurface) noexcept
 {
+    if (drySurface)
+    {
+        // Preserve the canonical biome variation without applying Earth's
+        // blue/green palette to dry worlds such as Mars.
+        const math::Float3 lowland{0.30F, 0.105F, 0.018F};
+        const math::Float3 dust{0.42F, 0.165F, 0.032F};
+        const math::Float3 ochre{0.36F, 0.125F, 0.022F};
+        const math::Float3 darkRock{0.20F, 0.068F, 0.016F};
+        const math::Float3 basalt{0.22F, 0.080F, 0.024F};
+        const math::Float3 coldDust{0.38F, 0.205F, 0.105F};
+        const math::Float3 highland{0.34F, 0.145F, 0.055F};
+        const math::Float3 sediment{0.37F, 0.135F, 0.022F};
+
+        return
+            lowland * b.ocean +
+            dust * b.desert +
+            ochre * b.grassland +
+            darkRock * b.temperateForest +
+            basalt * b.borealForest +
+            coldDust * b.tundra +
+            highland * b.alpine +
+            sediment * b.wetland;
+    }
+
     const math::Float3 ocean{0.015F, 0.055F, 0.095F};
     const math::Float3 desert{0.48F, 0.36F, 0.20F};
     const math::Float3 grass{0.13F, 0.28F, 0.10F};
@@ -119,6 +144,9 @@ namespace
         value,
         std::bit_cast<u64>(
             config.footprintScale));
+    value = terrain::StableCombine64(
+        value,
+        config.standingWaterEnabled ? 1U : 0U);
     value = terrain::StableCombine64(
         value,
         std::bit_cast<u64>(
@@ -297,6 +325,7 @@ BuildPlanetaryAppearance(
                     });
 
                 const f32 ocean =
+                    config.standingWaterEnabled &&
                     sample.standingWaterDepthMeters >
                             0.01
                         ? 1.0F
@@ -334,9 +363,20 @@ BuildPlanetaryAppearance(
                                 1.0F)));
                 }
 
+                if (!config.standingWaterEnabled)
+                {
+                    // The generic climate model is Earth-oriented and can
+                    // classify broad mid-latitude regions as snow. On a dry
+                    // Mars-like body, retain only compact polar frost caps.
+                    ice = Saturate(
+                        (std::abs(direction.y) - 0.84) /
+                        0.12);
+                }
+
                 auto albedo =
                     BiomeAlbedo(
-                        sample.biomes);
+                        sample.biomes,
+                        !config.standingWaterEnabled);
 
                 if (ocean > 0.5F)
                 {
@@ -425,6 +465,38 @@ BuildPlanetaryAppearance(
                         ? math::Normalize(normal)
                         : direction;
 
+                if (!config.standingWaterEnabled)
+                {
+                    // Derive dry-world material variation from the displaced
+                    // field itself. Concave excavation reads as darker fresh
+                    // material, while convex exposed rims and scarps are
+                    // brighter and rougher. This keeps appearance registered
+                    // to real terrain instead of drawing crater rings in a
+                    // presentation shader.
+                    const f64 neighborMeanRadius =
+                        (math::Length(aMinus) + math::Length(aPlus) +
+                         math::Length(bMinus) + math::Length(bPlus)) * 0.25;
+                    const f64 centerRadius =
+                        referenceRadiusMeters + sample.elevationMeters;
+                    const f64 curvatureScale = std::max(
+                        result.sampleFootprintMeters * 0.004, 25.0);
+                    const f32 concavity = Saturate(static_cast<f32>(
+                        (neighborMeanRadius - centerRadius) / curvatureScale));
+                    const f32 convexity = Saturate(static_cast<f32>(
+                        (centerRadius - neighborMeanRadius) / curvatureScale));
+                    const f32 steepness = Saturate(static_cast<f32>(
+                        (1.0 - std::clamp(
+                            math::Dot(normal, direction), 0.0, 1.0)) * 5.0));
+
+                    albedo = Mix(albedo, {0.14F, 0.040F, 0.012F},
+                        concavity * 0.42F);
+                    albedo = Mix(albedo, {0.50F, 0.225F, 0.075F},
+                        std::max(convexity * 0.34F, steepness * 0.24F));
+                    roughness = std::clamp(
+                        roughness + convexity * 0.10F - concavity * 0.06F,
+                        0.18F, 1.0F);
+                }
+
                 const std::size_t index =
                     static_cast<std::size_t>(
                         face) *
@@ -448,9 +520,11 @@ BuildPlanetaryAppearance(
                     .oceanMask = ocean,
                     .waterDepthMeters =
                         static_cast<f32>(
-                            std::max(
-                                sample.standingWaterDepthMeters,
-                                0.0)),
+                            config.standingWaterEnabled
+                                ? std::max(
+                                      sample.standingWaterDepthMeters,
+                                      0.0)
+                                : 0.0),
                     .iceMask = ice,
                     .directLightTransmittance = 1.0F,
                     // Terrain/climate authority currently provides no

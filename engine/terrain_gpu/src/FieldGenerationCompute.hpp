@@ -82,10 +82,17 @@ static const uint kParamTopSeedLo = 41;
 static const uint kParamTopSeedHi = 42;
 static const uint kParamGlobalSeedLo = 43;
 static const uint kParamGlobalSeedHi = 44;
+static const uint kParamCraterCount = 45;
+static const uint kParamComplexCraterRadiusMeters = 46;
+static const uint kParamMaximumEjectaExtentRadii = 47;
+static const uint kParamMinimumCraterRadiusMeters = 48;
+static const uint kParamMaximumCraterRadiusMeters = 49;
+static const uint kParamCraterCumulativeExponent = 50;
 
 static const uint kMaxHotspotAgeSteps = 6u;
 static const uint kPlateStrideBytes = 36u;
 static const uint kHotspotStrideBytes = 136u;
+static const uint kCraterStrideBytes = 28u;
 static const uint kSampleStrideBytes = 32u;
 
 [[vk::binding(0, 0)]]
@@ -96,6 +103,8 @@ ByteAddressBuffer g_plates : register(t1);
 ByteAddressBuffer g_hotspots : register(t2);
 [[vk::binding(3, 0)]]
 RWByteAddressBuffer g_output : register(u3);
+[[vk::binding(4, 0)]]
+ByteAddressBuffer g_craters : register(t4);
 
 // float4, not float3, for every basis vector below: HLSL/DXC pads a
 // bare float3 push-constant member out to a 16-byte slot anyway (the
@@ -736,6 +745,78 @@ float LimitElevation(float elevationMeters, float seaLevelMeters, float maxEleva
     float x = (relative - shoulder) / headroom;
     return seaLevelMeters + shoulder + headroom * (1.0 - 1.0 / (1.0 + x + x * x));
 }
+
+float CraterFeatureWeight(float diameterMeters, float footprintMeters)
+{
+    float lower = footprintMeters * 2.0;
+    float upper = footprintMeters * 4.0;
+    if (diameterMeters <= lower) return 0.0;
+    if (diameterMeters >= upper) return 1.0;
+    return Smooth((diameterMeters - lower) / max(upper - lower, 1.0));
+}
+
+float ProceduralCraterHeight(float3 direction, float footprintMeters)
+{
+    float planetRadius = ParamFloat(kParamPlanetRadiusMeters);
+    float complexRadius = ParamFloat(kParamComplexCraterRadiusMeters);
+    float ejectaExtent = ParamFloat(kParamMaximumEjectaExtentRadii);
+    uint craterCount = ParamUint(kParamCraterCount);
+    float result = 0.0;
+
+    [loop]
+    for (uint i = 0u; i < craterCount; ++i)
+    {
+        uint address = i * kCraterStrideBytes;
+        float3 center = asfloat(g_craters.Load3(address));
+        float craterRadius = asfloat(g_craters.Load(address + 12u));
+        float degradation = asfloat(g_craters.Load(address + 16u));
+        float phase = asfloat(g_craters.Load(address + 20u));
+        float boundingCosine = asfloat(g_craters.Load(address + 24u));
+        float spectralWeight = CraterFeatureWeight(
+            craterRadius * 2.0, footprintMeters);
+        if (spectralWeight <= 0.0) break;
+        float cosine = clamp(dot(center, direction), -1.0, 1.0);
+        if (cosine < boundingCosine) continue;
+
+        float x = acos(cosine) * planetRadius / craterRadius;
+        bool complex = craterRadius >= complexRadius;
+        float delta = 0.0;
+        if (x < 1.0)
+        {
+            float bowl = max(0.0, 1.0 - x * x);
+            delta -= craterRadius * (complex ? 0.070 : 0.18) * bowl * bowl;
+            if (complex && x < 0.28)
+            {
+                float peak = 1.0 - x / 0.28;
+                delta += craterRadius * 0.045 * peak * peak;
+            }
+            if (complex && x > 0.62)
+            {
+                float terrace = (x - 0.62) / 0.38;
+                delta += craterRadius * 0.010 *
+                    sin(terrace * 3.0 * 3.14159265358979) *
+                    (1.0 - terrace);
+            }
+        }
+
+        float rimNoise = sin(
+            direction.x * 31.0 + direction.y * 43.0 +
+            direction.z * 29.0 + phase);
+        float rimCenter = 1.0 + rimNoise * 0.035;
+        float rimDistance = (x - rimCenter) / 0.10;
+        delta += craterRadius * 0.035 *
+            exp(-0.5 * rimDistance * rimDistance);
+
+        if (x >= 1.0 && x <= ejectaExtent)
+        {
+            float extent = (x - 1.0) / max(ejectaExtent - 1.0, 1.0e-6);
+            delta += craterRadius * 0.010 * pow(max(x, 1.0), -3.0) *
+                (1.0 - Smooth(extent));
+        }
+        result += delta * (1.0 - degradation) * spectralWeight;
+    }
+    return result;
+}
 )" R"(
 struct FullSample
 {
@@ -783,9 +864,12 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
         elevation += min(global.hotspotElevationMeters, headroom);
     }
 
+    elevation += ProceduralCraterHeight(direction, footprintMeters);
+
     float coarseElevation = elevation;
     float detailAmplitude = ParamFloat(kParamDetailAmplitudeMeters);
-    float detailGain = min(1.0, (ceiling - elevation) / max(detailAmplitude * 2.0, 1.0));
+    float detailGain = saturate(
+        (ceiling - elevation) / max(detailAmplitude * 2.0, 1.0));
     float hillDetailWeight = 1.0 - Smooth(mountainMask / 0.65);
 
     uint detailOctaves = ParamUint(kParamDetailOctaves);

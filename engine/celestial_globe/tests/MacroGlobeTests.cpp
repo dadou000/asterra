@@ -123,6 +123,20 @@ int main()
         }
     }
 
+    // Orbit's Vulkan rasterizer treats clockwise screen-space winding as the
+    // exterior. In body space that is the opposite of the conventional
+    // mathematical outward cross product for this projection convention.
+    for (std::size_t index = 0; index < mesh.indices.size(); index += 3U)
+    {
+        const auto& a = mesh.vertices[mesh.indices[index + 0U]].positionMeters;
+        const auto& b = mesh.vertices[mesh.indices[index + 1U]].positionMeters;
+        const auto& c = mesh.vertices[mesh.indices[index + 2U]].positionMeters;
+        if (orbit::math::Dot(orbit::math::Cross(b - a, c - a), a) >= 0.0)
+        {
+            return 8;
+        }
+    }
+
     TestTerrain revised(43);
 
     const auto revisedMesh =

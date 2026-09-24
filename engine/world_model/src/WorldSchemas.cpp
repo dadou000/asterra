@@ -213,6 +213,50 @@ void RegisterSchemas(
                 .range = {
                     .minimum = 1.0
                 }
+            },
+            schema::PropertySchema{
+                .id = kTerrainCratersEnabled,
+                .name = "Procedural Craters",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = true
+            },
+            schema::PropertySchema{
+                .id = kTerrainCraterCount,
+                .name = "Crater Count",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{96},
+                .range = {.minimum = 0.0, .maximum = 4096.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainCraterMinimumRadiusMeters,
+                .name = "Minimum Crater Radius",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 4'000.0,
+                .range = {.minimum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainCraterMaximumRadiusMeters,
+                .name = "Maximum Crater Radius",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 280'000.0,
+                .range = {.minimum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainCraterCumulativeExponent,
+                .name = "Crater Size Exponent",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 1.8,
+                .range = {.minimum = 0.1, .maximum = 8.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainComplexCraterRadiusMeters,
+                .name = "Complex Crater Transition Radius",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 18'000.0,
+                .range = {.minimum = 1.0}
             }
         }
     });

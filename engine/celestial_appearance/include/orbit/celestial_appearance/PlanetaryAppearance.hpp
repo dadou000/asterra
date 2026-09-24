@@ -13,6 +13,9 @@ struct AppearanceConfig
 {
     u32 faceResolution{33};
     f64 footprintScale{1.5};
+    // Datum depressions only contain standing water when the owning body
+    // actually exposes an ocean capability.
+    bool standingWaterEnabled{true};
     f64 iceFreezeTemperatureC{-1.5};
     f64 iceFullTemperatureC{-15.0};
 };

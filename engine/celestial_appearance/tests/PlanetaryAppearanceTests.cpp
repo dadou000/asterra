@@ -167,5 +167,33 @@ int main()
         return 6;
     }
 
+    const orbit::celestial_appearance::AppearanceConfig
+        dryConfig{
+            .faceResolution = 9,
+            .footprintScale = 1.5,
+            .standingWaterEnabled = false
+        };
+    const auto dryProduct =
+        orbit::celestial_appearance::
+            BuildPlanetaryAppearance(
+                terrain,
+                1.0e6,
+                dryConfig);
+
+    for (const auto& texel : dryProduct.texels)
+    {
+        if (texel.oceanMask != 0.0F ||
+            texel.waterDepthMeters != 0.0F)
+        {
+            return 7;
+        }
+    }
+
+    if (dryProduct.fingerprint ==
+        product.fingerprint)
+    {
+        return 8;
+    }
+
     return 0;
 }

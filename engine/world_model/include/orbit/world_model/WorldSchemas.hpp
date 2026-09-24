@@ -223,6 +223,36 @@ inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
     .low = 0x4d4158454c455641ULL
 };
 
+inline constexpr schema::PropertyId kTerrainCratersEnabled{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x435241544552454eULL
+};
+
+inline constexpr schema::PropertyId kTerrainCraterCount{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x435241544552434eULL
+};
+
+inline constexpr schema::PropertyId kTerrainCraterMinimumRadiusMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4352415445524d49ULL
+};
+
+inline constexpr schema::PropertyId kTerrainCraterMaximumRadiusMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4352415445524d41ULL
+};
+
+inline constexpr schema::PropertyId kTerrainCraterCumulativeExponent{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4352415445524558ULL
+};
+
+inline constexpr schema::PropertyId kTerrainComplexCraterRadiusMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4352415445524358ULL
+};
+
 // M11 authored terrain-process configuration. The semantic record owns
 // service policy; physical pages/products remain derived runtime state.
 inline constexpr schema::PropertyId kProcessStreamPowerEnabled{

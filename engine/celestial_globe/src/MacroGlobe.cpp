@@ -372,14 +372,20 @@ MacroGlobeMesh BuildMacroGlobe(
                     result.vertices[i2].
                         positionMeters;
 
-                const bool outward =
+                // Vulkan pipelines in Orbit define clockwise screen-space
+                // triangles as front-facing. The mathematical outward order
+                // below projects counter-clockwise with this shader's camera
+                // convention, so store the opposite index order. The previous
+                // order culled the exterior and exposed the terrain only when
+                // the camera crossed inside the globe.
+                const bool mathematicalOutward =
                     math::Dot(
                         math::Cross(
-                            p2 - p0,
-                            p1 - p0),
+                            p1 - p0,
+                            p2 - p0),
                         p0) > 0.0;
 
-                if (outward)
+                if (mathematicalOutward)
                 {
                     result.indices.insert(
                         result.indices.end(),
@@ -703,6 +709,7 @@ struct VSOutput
     float3 lightDirection : TEXCOORD2;
     float lightScale : TEXCOORD3;
     float3 viewDirection : TEXCOORD4;
+    float3 surfaceDirection : TEXCOORD5;
 };
 
 VSOutput main(VSInput input)
@@ -742,6 +749,7 @@ VSOutput main(VSInput input)
         max(g_pc.lighting.w, 0.0);
     output.viewDirection =
         normalize(camera - world);
+    output.surfaceDirection = normalize(input.position);
     return output;
 }
 )";
@@ -770,7 +778,35 @@ struct VSOutput
     float3 lightDirection : TEXCOORD2;
     float lightScale : TEXCOORD3;
     float3 viewDirection : TEXCOORD4;
+    float3 surfaceDirection : TEXCOORD5;
 };
+
+float3 Hash33(float3 p)
+{
+    p = frac(p * float3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return frac((p.xxy + p.yxx) * p.zyx);
+}
+
+float ValueNoise3(float3 p)
+{
+    const float3 i = floor(p);
+    float3 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float values[8];
+    [unroll] for (int z = 0; z < 2; ++z)
+    [unroll] for (int y = 0; y < 2; ++y)
+    [unroll] for (int x = 0; x < 2; ++x)
+    {
+        const int index = x + y * 2 + z * 4;
+        values[index] = Hash33(i + float3(x, y, z)).x;
+    }
+    const float x00 = lerp(values[0], values[1], f.x);
+    const float x10 = lerp(values[2], values[3], f.x);
+    const float x01 = lerp(values[4], values[5], f.x);
+    const float x11 = lerp(values[6], values[7], f.x);
+    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+}
 
 float4 main(VSOutput input) : SV_Target0
 {
@@ -841,6 +877,18 @@ float4 main(VSOutput input) : SV_Target0
         ice * 0.03 +
         input.emission;
 
+    // Dry rocky bodies need apparent detail beyond the orbital geometry
+    // spacing. Direction-space noise and cellular crater rings are continuous
+    // across every cube-face boundary, unlike face UV detail textures.
+    if (g_pc.ocean.w < 0.5)
+    {
+        const float3 direction = normalize(input.surfaceDirection);
+        const float broad = ValueNoise3(direction * 17.0) - 0.5;
+        const float fine = ValueNoise3(direction * 145.0) - 0.5;
+        const float detail = broad * 0.30 + fine * 0.13;
+        color *= 1.0 + detail;
+    }
+
     return float4(
         color,
         saturate(input.opacity));
@@ -871,7 +919,35 @@ struct VSOutput
     float3 lightDirection : TEXCOORD2;
     float lightScale : TEXCOORD3;
     float3 viewDirection : TEXCOORD4;
+    float3 surfaceDirection : TEXCOORD5;
 };
+
+float3 Hash33(float3 p)
+{
+    p = frac(p * float3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return frac((p.xxy + p.yxx) * p.zyx);
+}
+
+float ValueNoise3(float3 p)
+{
+    const float3 i = floor(p);
+    float3 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float values[8];
+    [unroll] for (int z = 0; z < 2; ++z)
+    [unroll] for (int y = 0; y < 2; ++y)
+    [unroll] for (int x = 0; x < 2; ++x)
+    {
+        const int index = x + y * 2 + z * 4;
+        values[index] = Hash33(i + float3(x, y, z)).x;
+    }
+    const float x00 = lerp(values[0], values[1], f.x);
+    const float x10 = lerp(values[2], values[3], f.x);
+    const float x01 = lerp(values[4], values[5], f.x);
+    const float x11 = lerp(values[6], values[7], f.x);
+    return lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z);
+}
 
 struct SurfaceOutputs
 {
@@ -934,8 +1010,19 @@ SurfaceOutputs main(VSOutput input)
         D * Gl * Gv * F /
         max(4.0 * ndl * ndv, 1e-5);
 
+    float3 surfaceAlbedo = input.albedo;
+
+    if (g_pc.ocean.w < 0.5)
+    {
+        const float3 direction = normalize(input.surfaceDirection);
+        const float broad = ValueNoise3(direction * 17.0) - 0.5;
+        const float fine = ValueNoise3(direction * 145.0) - 0.5;
+        const float detail = broad * 0.30 + fine * 0.13;
+        surfaceAlbedo *= 1.0 + detail;
+    }
+
     const float3 color =
-        input.albedo *
+        surfaceAlbedo *
             (0.045 * input.lightScale +
              0.955 * ndl *
                  input.lightScale *
@@ -951,7 +1038,7 @@ SurfaceOutputs main(VSOutput input)
     output.previewColor =
         float4(color, saturate(input.opacity));
     output.baseRoughness =
-        float4(input.albedo, roughness);
+        float4(surfaceAlbedo, roughness);
     output.normalMetallic =
         float4(n, 0.0);
     output.emissionClass =

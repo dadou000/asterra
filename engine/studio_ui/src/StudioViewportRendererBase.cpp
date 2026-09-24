@@ -2930,7 +2930,7 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             "Planetary appearance currently requires the spherical terrain body contract.");
     }
 
-    const celestial_appearance::
+    celestial_appearance::
         AppearanceConfig
         appearanceConfig{
             .faceResolution =
@@ -2960,6 +2960,9 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
                           Objects(),
                       *bodyObject)
             : std::nullopt;
+
+    appearanceConfig.standingWaterEnabled =
+        resolvedOcean.has_value();
 
     const u64 activeOceanFingerprint =
         resolvedOcean.has_value()

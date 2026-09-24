@@ -1180,6 +1180,29 @@ ConstraintSetFor(
         object,
         world_model::kTerrainMaximumElevationMeters,
         8'000.0);
+    result.craters.enabled = PropertyOr<bool>(
+        objects, object, world_model::kTerrainCratersEnabled, true);
+    const i64 craterCount = PropertyOr<i64>(
+        objects, object, world_model::kTerrainCraterCount, i64{96});
+    if (craterCount < 0 || craterCount > 4096)
+    {
+        throw std::runtime_error(
+            "Terrain crater count must be between 0 and 4096 on object " +
+            object.ToString() + ".");
+    }
+    result.craters.count = static_cast<u32>(craterCount);
+    result.craters.minimumRadiusMeters = PropertyOr<f64>(
+        objects, object, world_model::kTerrainCraterMinimumRadiusMeters,
+        4'000.0);
+    result.craters.maximumRadiusMeters = PropertyOr<f64>(
+        objects, object, world_model::kTerrainCraterMaximumRadiusMeters,
+        280'000.0);
+    result.craters.cumulativeExponent = PropertyOr<f64>(
+        objects, object, world_model::kTerrainCraterCumulativeExponent,
+        1.8);
+    result.craters.complexTransitionRadiusMeters = PropertyOr<f64>(
+        objects, object, world_model::kTerrainComplexCraterRadiusMeters,
+        18'000.0);
 
     if (result.macroAmplitudeMeters < 0.0 ||
         result.detailAmplitudeMeters < 0.0 ||

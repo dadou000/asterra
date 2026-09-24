@@ -17,10 +17,11 @@ namespace orbit::terrain_gpu
 namespace
 {
 // Must match FieldGenerationCompute.hpp's kParam* indices exactly.
-constexpr u32 kParamCount = 45;
+constexpr u32 kParamCount = 51;
 
 constexpr u32 kPlateStrideFloats = 9;
 constexpr u32 kHotspotStrideFloats = 34;
+constexpr u32 kCraterStrideFloats = 7;
 constexpr u32 kPushConstantDwords = 40;
 
 [[nodiscard]] std::array<u32, kParamCount> BuildParamsBuffer(
@@ -95,7 +96,33 @@ constexpr u32 kPushConstantDwords = 40;
     storeFloat(40, tectonic.windBandTransitionDegrees);
     storeU64(41, 42, topSeed);
     storeU64(43, 44, globalSeed);
+    storeUint(45, desc.craters.enabled ? desc.craters.count : 0U);
+    storeFloat(46, desc.craters.complexTransitionRadiusMeters);
+    storeFloat(47, desc.craters.maximumEjectaExtentRadii);
+    storeFloat(48, desc.craters.minimumRadiusMeters);
+    storeFloat(49, desc.craters.maximumRadiusMeters);
+    storeFloat(50, desc.craters.cumulativeExponent);
 
+    return result;
+}
+
+[[nodiscard]] std::vector<f32> BuildCratersBuffer(
+    const std::vector<terrain::GpuProceduralCrater>& craters)
+{
+    std::vector<f32> result(
+        craters.size() * kCraterStrideFloats, 0.0F);
+    for (std::size_t i = 0; i < craters.size(); ++i)
+    {
+        const auto& crater = craters[i];
+        f32* out = result.data() + i * kCraterStrideFloats;
+        out[0] = static_cast<f32>(crater.centerDirection.x);
+        out[1] = static_cast<f32>(crater.centerDirection.y);
+        out[2] = static_cast<f32>(crater.centerDirection.z);
+        out[3] = static_cast<f32>(crater.radiusMeters);
+        out[4] = static_cast<f32>(crater.degradation);
+        out[5] = static_cast<f32>(crater.rimIrregularityPhase);
+        out[6] = static_cast<f32>(crater.boundingCosine);
+    }
     return result;
 }
 
@@ -216,7 +243,7 @@ GpuFieldGenerator::GpuFieldGenerator(
             .size = compute.bytecode.size()
         },
         .pushConstantDwords = kPushConstantDwords,
-        .shaderResourceBuffers = 4
+        .shaderResourceBuffers = 5
     });
 
     const terrain::AnalyticTerrainDesc& desc = source.Description();
@@ -263,6 +290,8 @@ GpuFieldGenerator::GpuFieldGenerator(
 
     const std::vector<f32> plateFloats = BuildPlatesBuffer(plates);
     const std::vector<f32> hotspotFloats = BuildHotspotsBuffer(hotspots);
+    const std::vector<f32> craterFloats =
+        BuildCratersBuffer(source.CratersForGpu());
 
     paramsBuffer_ = CreateStaticBuffer(
         device, params.data(), params.size() * sizeof(u32));
@@ -270,6 +299,8 @@ GpuFieldGenerator::GpuFieldGenerator(
         device, plateFloats.data(), plateFloats.size() * sizeof(f32));
     hotspotsBuffer_ = CreateStaticBuffer(
         device, hotspotFloats.data(), hotspotFloats.size() * sizeof(f32));
+    cratersBuffer_ = CreateStaticBuffer(
+        device, craterFloats.data(), craterFloats.size() * sizeof(f32));
 }
 
 GpuFieldGenerator::~GpuFieldGenerator() = default;
@@ -335,6 +366,7 @@ void GpuFieldGenerator::Dispatch(
     commandList.SetComputeBuffer(1, *platesBuffer_);
     commandList.SetComputeBuffer(2, *hotspotsBuffer_);
     commandList.SetComputeBuffer(3, outputSamples);
+    commandList.SetComputeBuffer(4, *cratersBuffer_);
     commandList.SetComputeConstants(pushConstants);
 
     constexpr u32 kThreadGroupSize = 8;
