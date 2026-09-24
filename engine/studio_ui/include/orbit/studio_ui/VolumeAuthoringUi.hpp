@@ -2,6 +2,7 @@
 
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/V007ValidationScenarios.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 
@@ -45,6 +46,14 @@ private:
     volume_fields::VolumeFieldStorageService* fields_{nullptr};
     volume_solver::SurfaceVolumeSolverService* solver_{nullptr};
     StudioViewportRenderer* renderer_{nullptr};
+
+    // M43 extends the normal Studio command catalog/palette with the named
+    // validation scenarios. Member order follows session_/renderer_ so the
+    // registration sees the active production services during construction.
+    V007ValidationCommandRegistration validationCommands_{
+        session_,
+        renderer_};
+
     math::Double3 paintPosition_{};
     f64 paintRadius_{2.0};
     f64 paintStrength_{1.0};
