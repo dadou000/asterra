@@ -17,6 +17,7 @@
 #include <iostream>
 #include <source_location>
 #include <type_traits>
+#include <vector>
 
 namespace
 {
