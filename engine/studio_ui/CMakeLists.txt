@@ -145,7 +145,8 @@ if(BUILD_TESTING)
             Orbit::StudioUi
     )
 
-    target_compile_features(OrbitStudioViewportNavigationTests PRIVATE cxx_std_23)
+    target_compile_features(
+        OrbitStudioViewportNavigationTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitStudioViewportNavigationTests)
 
     add_test(
@@ -162,7 +163,8 @@ if(BUILD_TESTING)
             Orbit::StudioUi
     )
 
-    target_compile_features(OrbitStudioViewportPresentationTests PRIVATE cxx_std_23)
+    target_compile_features(
+        OrbitStudioViewportPresentationTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitStudioViewportPresentationTests)
 
     add_test(
@@ -179,7 +181,8 @@ if(BUILD_TESTING)
             Orbit::StudioUi
     )
 
-    target_compile_features(OrbitVolumeSurfaceEffectRenderBridgeTests PRIVATE cxx_std_23)
+    target_compile_features(
+        OrbitVolumeSurfaceEffectRenderBridgeTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitVolumeSurfaceEffectRenderBridgeTests)
 
     add_test(
@@ -204,5 +207,27 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.VolumeParticleRenderBridge
         COMMAND OrbitVolumeParticleRenderBridgeTests
+    )
+
+    # M39 is the end-to-end Studio workflow gate over the already-shipped
+    # M30-M38 volume stack. It pins the real panel wiring together with cache,
+    # lighting, representation and output contracts so later UI changes cannot
+    # silently disconnect one part of the workflow.
+    add_executable(OrbitVolumeAuthoringWorkflowTests
+        tests/VolumeAuthoringWorkflowTests.cpp
+    )
+
+    target_link_libraries(OrbitVolumeAuthoringWorkflowTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitVolumeAuthoringWorkflowTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitVolumeAuthoringWorkflowTests)
+
+    add_test(
+        NAME Orbit.VolumeAuthoringWorkflow
+        COMMAND OrbitVolumeAuthoringWorkflowTests
     )
 endif()
