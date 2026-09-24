@@ -230,4 +230,22 @@ if(BUILD_TESTING)
         NAME Orbit.VolumeAuthoringWorkflow
         COMMAND OrbitVolumeAuthoringWorkflowTests
     )
+
+    add_executable(OrbitStudioLightingOverlayGeometryTests
+        tests/StudioLightingOverlayGeometryTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioLightingOverlayGeometryTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitStudioLightingOverlayGeometryTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioLightingOverlayGeometryTests)
+
+    add_test(
+        NAME Orbit.StudioLightingOverlayGeometry
+        COMMAND OrbitStudioLightingOverlayGeometryTests
+    )
 endif()
