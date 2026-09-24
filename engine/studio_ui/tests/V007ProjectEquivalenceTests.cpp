@@ -418,14 +418,14 @@ int main()
             reopenedEmission->intensityScale,
             authoredVolumeEmission.intensityScale));
         Check(Near(
-            reopenedEmission->colorLinear.x,
-            authoredVolumeEmission.colorLinear.x));
+            reopenedEmission->emissionLinear.x,
+            authoredVolumeEmission.emissionLinear.x));
         Check(Near(
-            reopenedEmission->colorLinear.y,
-            authoredVolumeEmission.colorLinear.y));
+            reopenedEmission->emissionLinear.y,
+            authoredVolumeEmission.emissionLinear.y));
         Check(Near(
-            reopenedEmission->colorLinear.z,
-            authoredVolumeEmission.colorLinear.z));
+            reopenedEmission->emissionLinear.z,
+            authoredVolumeEmission.emissionLinear.z));
 
         content::ContentService reopenedContent(root);
         reopenedContent.Scan();
