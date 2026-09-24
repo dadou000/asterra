@@ -51,6 +51,7 @@
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/world_model/CelestialLightingService.hpp>
 
+#include <array>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -279,25 +280,20 @@ struct StudioSurfaceGlobeTransitionDiagnostics
         celestial_representation::Representation::ProductionSurface};
     celestial_representation::Representation lowerFidelityNeighbor{
         celestial_representation::Representation::MacroDisplacedGlobe};
-
     f64 richerWeight{1.0};
     f64 lowerWeight{0.0};
     f64 productionSurfaceWeight{1.0};
     f64 macroGlobeWeight{0.0};
-
     f64 projectedRadiusPixels{0.0};
     f64 productionDetailErrorPixels{0.0};
     f64 macroDisplacementErrorPixels{0.0};
-
     u64 directLightingFingerprint{0U};
     u64 emissionAuthorityFingerprint{0U};
-
     bool directLightingCoherent{true};
     bool emissionAuthorityCoherent{true};
     bool broadIndirectCoherent{true};
     bool continuityPassed{true};
     bool radianceCacheRefreshRequested{false};
-
     bool hysteresisHeld{false};
     bool overlapping{false};
 };
@@ -312,9 +308,6 @@ enum class StudioViewportPresentation : u8
     TerrainDebugUnavailable
 };
 
-// Debug mode is intentionally exclusive: when the selected physical page or
-// field is unavailable, Studio shows an unavailable debug surface instead of
-// silently falling back to the normal body preview.
 [[nodiscard]] constexpr StudioViewportPresentation
 SelectStudioViewportPresentation(
     const studio_session::ViewportMode mode,
@@ -326,33 +319,23 @@ SelectStudioViewportPresentation(
 {
     if (mode == studio_session::ViewportMode::Debug)
     {
-        return hasLiveDebugPage &&
-                       hasSelectedDebugField
+        return hasLiveDebugPage && hasSelectedDebugField
             ? StudioViewportPresentation::TerrainDebug
             : StudioViewportPresentation::TerrainDebugUnavailable;
     }
-
-    if (mode == studio_session::ViewportMode::Perspective &&
-        hasTerrainRuntime)
+    if (mode == studio_session::ViewportMode::Perspective && hasTerrainRuntime)
     {
         return StudioViewportPresentation::ProductionTerrain;
     }
-
-    if (mode == studio_session::ViewportMode::BodyMap &&
-        hasBody &&
-        hasMacroGlobe)
+    if (mode == studio_session::ViewportMode::BodyMap && hasBody && hasMacroGlobe)
     {
         return StudioViewportPresentation::MacroGlobe;
     }
-
     return hasBody
         ? StudioViewportPresentation::BodyPreview
         : StudioViewportPresentation::Blank;
 }
 
-// Adds one body/path or physical-terrain-debug composition per owned Studio
-// RenderView. Debug textures are persistent derived presentation resources;
-// physical terrain authority stays in TerrainDebugPageData's source products.
 class StudioViewportRenderer
 {
 public:
@@ -362,177 +345,54 @@ public:
         u32 framesInFlight = 1U);
 
     [[nodiscard]] std::optional<StudioMacroGlobeDiagnostics>
-    MacroGlobeDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioSurfaceGlobeTransitionDiagnostics>
-    SurfaceGlobeTransitionDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioVisibilityProxyDiagnostics>
-    VisibilityProxyDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioLuminanceHistogramDiagnostics>
-    LuminanceHistogramDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] rhi::Texture*
-    LuminanceMeteringMask(
-        std::string_view viewportId) noexcept;
-
-    void SetLuminanceHistogramConfig(
-        std::string_view viewportId,
-        post_process::LuminanceHistogramConfig config);
-
-    void SetHumanEyeAdaptationConfig(
-        std::string_view viewportId,
-        post_process::HumanEyeAdaptationConfig config);
-
-    void ResetHumanEyeAdaptation(
-        std::string_view viewportId) noexcept;
-
-    void SetHighlightEffectsConfig(
-        std::string_view viewportId,
-        post_process::HighlightEffectsConfig config);
-
-    void SetToneMappingConfig(
-        std::string_view viewportId,
-        post_process::ToneMappingConfig config);
-
-    void SetLuminanceMeteringOverlay(
-        std::string_view viewportId,
-        bool enabled);
-
-    [[nodiscard]] bool
-    LuminanceMeteringOverlay(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioEmissiveGiDiagnostics>
-    EmissiveGiDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioCelestialLightingDiagnostics>
-    CelestialLightingDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioAtmosphereDiagnostics>
-    AtmosphereDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioCloudDiagnostics>
-    CloudDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioOceanDiagnostics>
-    OceanDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioRingDiagnostics>
-    RingDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioMagnetosphereDiagnostics>
-    MagnetosphereDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioCompactObjectDiagnostics>
-    CompactObjectDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioStellarDiagnostics>
-    StellarDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioGiantDiagnostics>
-    GiantDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] std::optional<
-        StudioSmallBodyDiagnostics>
-    SmallBodyDiagnostics(
-        std::string_view viewportId) const noexcept;
-
-    [[nodiscard]] celestial_scheduler::SchedulerFrameStats
-    CelestialSchedulerStats() const noexcept;
-
-    [[nodiscard]] celestial_scheduler::SchedulerBudget
-    CelestialSchedulerBudget() const noexcept;
-
-    void SetCelestialQualityPolicy(
-        celestial_representation::QualityPolicy policy) noexcept;
-
-    [[nodiscard]] celestial_representation::QualityPolicy
-    CelestialQualityPolicy() const noexcept;
-
-    void SetColorLut(
-        post_process::ColorLutData lut);
-
-    [[nodiscard]] std::vector<std::string>
-    ColorLutAssetPaths() const;
-
-    [[nodiscard]] bool SelectColorLutAsset(
-        std::string_view projectRelativePath);
-
-    [[nodiscard]] bool ImportColorLutFile(
-        std::string_view sourcePath);
-
-    [[nodiscard]] StudioColorLutDiagnostics
-    ColorLutDiagnostics() const;
-
-    [[nodiscard]] post_process::ColorLutSettings
-    ColorLutSettings() const noexcept;
-
-    void SetColorLutSettings(
-        post_process::ColorLutSettings settings) noexcept;
-
-    [[nodiscard]] StudioOutputTransformDiagnostics
-    OutputTransformDiagnostics() const noexcept;
-
-    void SetOutputTransformSettings(
-        post_process::OutputTransformSettings settings) noexcept;
-
-    void SetOutputDisplayCapabilities(
-        post_process::OutputDisplayCapabilities capabilities) noexcept;
-
-    void SetDisplayResolveSettings(
-        post_process::DisplayResolveSettings settings) noexcept;
-
-    void SetContentService(
-        content::ContentService* content) noexcept;
-
-    void SetVolumeFieldStorageService(
-        volume_fields::VolumeFieldStorageService* fields) noexcept;
-
-    void SetSurfaceVolumeSolverService(
-        volume_solver::SurfaceVolumeSolverService* solver) noexcept;
-
-    [[nodiscard]] volume_render::VolumeRenderRuntimeSettings&
-    VolumeRenderSettings(
-        scene::ObjectId volume);
-
-    [[nodiscard]] volume_render::VolumeRenderDiagnostics
-    VolumeRenderDiagnostics(
-        scene::ObjectId volume) const noexcept;
-
-    void SetVolumeSourceDebugVisualization(
-        bool enabled) noexcept;
-
-    [[nodiscard]] bool
-    VolumeSourceDebugVisualization() const noexcept;
+    MacroGlobeDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioSurfaceGlobeTransitionDiagnostics>
+    SurfaceGlobeTransitionDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioVisibilityProxyDiagnostics>
+    VisibilityProxyDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioLuminanceHistogramDiagnostics>
+    LuminanceHistogramDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] rhi::Texture* LuminanceMeteringMask(std::string_view viewportId) noexcept;
+    void SetLuminanceHistogramConfig(std::string_view viewportId, post_process::LuminanceHistogramConfig config);
+    void SetHumanEyeAdaptationConfig(std::string_view viewportId, post_process::HumanEyeAdaptationConfig config);
+    void ResetHumanEyeAdaptation(std::string_view viewportId) noexcept;
+    void SetHighlightEffectsConfig(std::string_view viewportId, post_process::HighlightEffectsConfig config);
+    void SetToneMappingConfig(std::string_view viewportId, post_process::ToneMappingConfig config);
+    void SetLuminanceMeteringOverlay(std::string_view viewportId, bool enabled);
+    [[nodiscard]] bool LuminanceMeteringOverlay(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioEmissiveGiDiagnostics> EmissiveGiDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioCelestialLightingDiagnostics> CelestialLightingDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioAtmosphereDiagnostics> AtmosphereDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioCloudDiagnostics> CloudDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioOceanDiagnostics> OceanDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioRingDiagnostics> RingDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioMagnetosphereDiagnostics> MagnetosphereDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioCompactObjectDiagnostics> CompactObjectDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioStellarDiagnostics> StellarDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioGiantDiagnostics> GiantDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] std::optional<StudioSmallBodyDiagnostics> SmallBodyDiagnostics(std::string_view viewportId) const noexcept;
+    [[nodiscard]] celestial_scheduler::SchedulerFrameStats CelestialSchedulerStats() const noexcept;
+    [[nodiscard]] celestial_scheduler::SchedulerBudget CelestialSchedulerBudget() const noexcept;
+    void SetCelestialQualityPolicy(celestial_representation::QualityPolicy policy) noexcept;
+    [[nodiscard]] celestial_representation::QualityPolicy CelestialQualityPolicy() const noexcept;
+    void SetColorLut(post_process::ColorLutData lut);
+    [[nodiscard]] std::vector<std::string> ColorLutAssetPaths() const;
+    [[nodiscard]] bool SelectColorLutAsset(std::string_view projectRelativePath);
+    [[nodiscard]] bool ImportColorLutFile(std::string_view sourcePath);
+    [[nodiscard]] StudioColorLutDiagnostics ColorLutDiagnostics() const;
+    [[nodiscard]] post_process::ColorLutSettings ColorLutSettings() const noexcept;
+    void SetColorLutSettings(post_process::ColorLutSettings settings) noexcept;
+    [[nodiscard]] StudioOutputTransformDiagnostics OutputTransformDiagnostics() const noexcept;
+    void SetOutputTransformSettings(post_process::OutputTransformSettings settings) noexcept;
+    void SetOutputDisplayCapabilities(post_process::OutputDisplayCapabilities capabilities) noexcept;
+    void SetDisplayResolveSettings(post_process::DisplayResolveSettings settings) noexcept;
+    void SetContentService(content::ContentService* content) noexcept;
+    void SetVolumeFieldStorageService(volume_fields::VolumeFieldStorageService* fields) noexcept;
+    void SetSurfaceVolumeSolverService(volume_solver::SurfaceVolumeSolverService* solver) noexcept;
+    [[nodiscard]] volume_render::VolumeRenderRuntimeSettings& VolumeRenderSettings(scene::ObjectId volume);
+    [[nodiscard]] volume_render::VolumeRenderDiagnostics VolumeRenderDiagnostics(scene::ObjectId volume) const noexcept;
+    void SetVolumeSourceDebugVisualization(bool enabled) noexcept;
+    [[nodiscard]] bool VolumeSourceDebugVisualization() const noexcept;
 
     [[nodiscard]] std::vector<StudioRenderedView> Compose(
         render_graph::RenderGraph& graph,
@@ -547,8 +407,19 @@ public:
         lighting::LightingTimestampRecorder* lightingTimestamps = nullptr);
 
 private:
-    [[nodiscard]] celestial_globe::GpuMacroGlobeProduct*
-    EnsureMacroGlobePresentation(
+    [[nodiscard]] std::vector<StudioRenderedView> ComposeBase(
+        render_graph::RenderGraph& graph,
+        StudioRenderViewSet& views,
+        studio_session::StudioSession& session,
+        studio_session::StudioRuntimeBinding& runtime,
+        const studio_session::StudioRuntimeSnapshot& snapshot,
+        time::SimulationTime atTime,
+        bool drawPathDebug,
+        u32 frameIndex,
+        const lighting::LightingWorkPlan& lightingPlan,
+        lighting::LightingTimestampRecorder* lightingTimestamps);
+
+    [[nodiscard]] celestial_globe::GpuMacroGlobeProduct* EnsureMacroGlobePresentation(
         std::string_view viewportId,
         studio_session::StudioSession& session,
         universe::BodyId body,
@@ -561,37 +432,24 @@ private:
     {
         std::unique_ptr<terrain_debug::TerrainDebugTexture> texture;
         std::shared_ptr<const terrain_debug::TerrainDebugPageData> source;
-        terrain_debug::TerrainDebugField field{
-            terrain_debug::TerrainDebugField::Uplift};
+        terrain_debug::TerrainDebugField field{terrain_debug::TerrainDebugField::Uplift};
         u64 seamFingerprint{0};
     };
-
     struct CloudPresentation
     {
         universe::BodyId body{};
         u64 fingerprint{0};
-        std::unique_ptr<
-            celestial_clouds::CloudFieldProduct>
-            field;
-        std::unique_ptr<
-            celestial_clouds::GpuCloudFieldProduct>
-            gpu;
+        std::unique_ptr<celestial_clouds::CloudFieldProduct> field;
+        std::unique_ptr<celestial_clouds::GpuCloudFieldProduct> gpu;
     };
-
     struct GiantPresentation
     {
         universe::BodyId body{};
         u64 fingerprint{0};
-        celestial_far_render::AppearanceSummary
-            summary{};
-        std::unique_ptr<
-            celestial_appearance::PlanetaryAppearanceProduct>
-            appearance;
-        std::unique_ptr<
-            celestial_appearance::GpuPlanetaryAppearanceProduct>
-            gpuAppearance;
+        celestial_far_render::AppearanceSummary summary{};
+        std::unique_ptr<celestial_appearance::PlanetaryAppearanceProduct> appearance;
+        std::unique_ptr<celestial_appearance::GpuPlanetaryAppearanceProduct> gpuAppearance;
     };
-
     struct SmallBodyPresentation
     {
         universe::BodyId body{};
@@ -599,60 +457,36 @@ private:
         f64 minimumRadiusScale{1.0};
         f64 maximumRadiusScale{1.0};
         celestial_far_render::AppearanceSummary summary{};
-        std::unique_ptr<
-            celestial_appearance::PlanetaryAppearanceProduct>
-            appearance;
-        std::unique_ptr<
-            celestial_appearance::GpuPlanetaryAppearanceProduct>
-            gpuAppearance;
+        std::unique_ptr<celestial_appearance::PlanetaryAppearanceProduct> appearance;
+        std::unique_ptr<celestial_appearance::GpuPlanetaryAppearanceProduct> gpuAppearance;
     };
-
     struct MagnetospherePresentation
     {
         universe::BodyId body{};
         u64 fingerprint{0};
         f64 referenceRadiusMeters{1.0};
-        std::unique_ptr<
-            celestial_magnetosphere_render::GpuAuroraMeshProduct>
-            nearAurora;
-        std::unique_ptr<
-            celestial_magnetosphere_render::GpuAuroraMeshProduct>
-            farAurora;
+        std::unique_ptr<celestial_magnetosphere_render::GpuAuroraMeshProduct> nearAurora;
+        std::unique_ptr<celestial_magnetosphere_render::GpuAuroraMeshProduct> farAurora;
     };
-
     struct RingPresentation
     {
         universe::BodyId body{};
         u64 fingerprint{0};
         f64 referenceRadiusMeters{1.0};
-        std::unique_ptr<
-            celestial_rings::GpuRingMeshProduct>
-            nearMesh;
-        std::unique_ptr<
-            celestial_rings::GpuRingMeshProduct>
-            farMesh;
-        celestial_rings::FarRingProfile
-            farProfile{};
+        std::unique_ptr<celestial_rings::GpuRingMeshProduct> nearMesh;
+        std::unique_ptr<celestial_rings::GpuRingMeshProduct> farMesh;
+        celestial_rings::FarRingProfile farProfile{};
     };
-
     struct AtmospherePresentation
     {
         universe::BodyId body{};
         u64 staticFingerprint{0};
         u64 skyFingerprint{0};
-        celestial_atmosphere::AtmosphereParameters
-            parameters{};
-        std::unique_ptr<
-            celestial_atmosphere::AtmosphereStaticLuts>
-            staticLuts;
-        std::unique_ptr<
-            celestial_atmosphere::AtmosphereSkyView>
-            skyView;
-        std::unique_ptr<
-            celestial_atmosphere::GpuAtmosphereLuts>
-            gpu;
+        celestial_atmosphere::AtmosphereParameters parameters{};
+        std::unique_ptr<celestial_atmosphere::AtmosphereStaticLuts> staticLuts;
+        std::unique_ptr<celestial_atmosphere::AtmosphereSkyView> skyView;
+        std::unique_ptr<celestial_atmosphere::GpuAtmosphereLuts> gpu;
     };
-
     struct MacroGlobePresentation
     {
         universe::BodyId body{};
@@ -664,33 +498,24 @@ private:
         u64 oceanFingerprint{0};
         u64 cachedDiscFingerprint{0};
         u32 appearanceTexels{0};
-        celestial_far_render::AppearanceSummary
-            appearanceSummary{};
-        std::unique_ptr<
-            celestial_appearance::GpuPlanetaryAppearanceProduct>
-            appearanceProduct;
-        std::unique_ptr<
-            celestial_far_render::GpuCachedDiscProduct>
-            cachedDisc;
+        celestial_far_render::AppearanceSummary appearanceSummary{};
+        std::unique_ptr<celestial_appearance::GpuPlanetaryAppearanceProduct> appearanceProduct;
+        std::unique_ptr<celestial_far_render::GpuCachedDiscProduct> cachedDisc;
         std::unique_ptr<celestial_globe::GpuMacroGlobeProduct> product;
     };
-
     struct LuminanceHistogramPresentation
     {
         u32 width{0U};
         u32 height{0U};
         std::unique_ptr<rhi::Texture> meteringMask;
-        std::vector<std::unique_ptr<rhi::Buffer>>
-            histogramReadback;
-        std::vector<std::unique_ptr<rhi::Buffer>>
-            statisticsReadback;
+        std::vector<std::unique_ptr<rhi::Buffer>> histogramReadback;
+        std::vector<std::unique_ptr<rhi::Buffer>> statisticsReadback;
         std::vector<bool> submitted;
         StudioLuminanceHistogramDiagnostics diagnostics{};
         std::chrono::steady_clock::time_point lastEyeUpdate{};
         bool hasEyeUpdateTime{false};
         bool showMeteringOverlay{false};
     };
-
     struct FinalGatherPresentation
     {
         u32 width{0U};
@@ -699,19 +524,14 @@ private:
         bool hasHistory{false};
         lighting::LightingView previousView{};
         u64 lightingFingerprint{0U};
-        lighting::EmissiveInvalidationTracker
-            emissiveInvalidationTracker;
-        std::unique_ptr<
-            lighting::RadianceClipmapResidency>
-            radianceResidency;
-
+        lighting::EmissiveInvalidationTracker emissiveInvalidationTracker;
+        std::unique_ptr<lighting::RadianceClipmapResidency> radianceResidency;
         std::unique_ptr<rhi::Texture> indirectA;
         std::unique_ptr<rhi::Texture> indirectB;
         std::unique_ptr<rhi::Texture> metaA;
         std::unique_ptr<rhi::Texture> metaB;
         std::unique_ptr<rhi::Texture> scratch;
     };
-
     struct VisibilityProxyPresentation
     {
         universe::BodyId body{};
@@ -719,14 +539,9 @@ private:
         u64 semanticRevision{0U};
         bool hasDynamic{false};
         lighting::SoftwareProxyScene scene;
-        std::unique_ptr<
-            lighting::SoftwareProxyVisibilityProvider>
-            provider;
-        std::unique_ptr<
-            lighting::HardwareRayQueryVisibilityBatch>
-            hardware;
+        std::unique_ptr<lighting::SoftwareProxyVisibilityProvider> provider;
+        std::unique_ptr<lighting::HardwareRayQueryVisibilityBatch> hardware;
     };
-
     struct TerrainPresentation
     {
         u64 universeGeneration{0U};
@@ -736,11 +551,8 @@ private:
         world::PlanetId planet{};
         terrain_view::ClipmapConfig clipmap{};
         world::WorldPosition observer{};
-
-        std::unique_ptr<terrain_gpu::GpuFieldGenerator>
-            fieldGenerator;
-        std::unique_ptr<terrain_render::TerrainPreviewRenderer>
-            renderer;
+        std::unique_ptr<terrain_gpu::GpuFieldGenerator> fieldGenerator;
+        std::unique_ptr<terrain_render::TerrainPreviewRenderer> renderer;
     };
 
     rhi::Device* device_{nullptr};
@@ -766,8 +578,7 @@ private:
     math::Double3 particlePresentationOriginMeters_{};
     render_view::CompositeRenderer debugComposite_;
     lighting::DirectLightingRenderer directLightingRenderer_;
-    lighting::MaterialEmissionSurfaceOverrideRenderer
-        materialEmissionSurfaceOverride_;
+    lighting::MaterialEmissionSurfaceOverrideRenderer materialEmissionSurfaceOverride_;
     lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;
     lighting::RadianceCacheSampler radianceCacheSampler_;
     lighting::HybridReflectionRenderer hybridReflectionRenderer_;
@@ -779,176 +590,47 @@ private:
     post_process::ColorLutRenderer colorLutRenderer_;
     post_process::OutputTransformRenderer outputTransformRenderer_;
     std::unique_ptr<post_process::GpuColorLut> colorLut_;
-    post_process::ColorLutData colorLutData_{
-        post_process::BuildIdentityColorLut()};
+    post_process::ColorLutData colorLutData_{post_process::BuildIdentityColorLut()};
     std::string colorLutSourcePath_{"<identity>"};
     std::string colorLutDiagnostic_;
     post_process::ColorLutSettings colorLutSettings_{};
     post_process::OutputTransformSettings outputTransformSettings_{};
     post_process::OutputDisplayCapabilities outputDisplayCapabilities_{};
     post_process::DisplayResolveSettings displayResolveSettings_{};
-    celestial_representation::RepresentationTracker
-        representationTracker_;
-    celestial_representation::QualityPolicy
-        celestialQualityPolicy_{};
-    celestial_scheduler::CelestialWorkScheduler
-        celestialScheduler_{
-            celestial_scheduler::SchedulerBudget{
-                .maxCpuJobsPerFrame = 3U,
-                .maxGpuJobsPerFrame = 2U,
-                .maxCpuCostUnitsPerFrame = 6U,
-                .maxGpuCostUnitsPerFrame = 6U,
-                .maxPendingRequests = 192U
-            }};
+    celestial_representation::RepresentationTracker representationTracker_;
+    celestial_representation::QualityPolicy celestialQualityPolicy_{};
+    celestial_scheduler::CelestialWorkScheduler celestialScheduler_{
+        celestial_scheduler::SchedulerBudget{
+            .maxCpuJobsPerFrame = 3U,
+            .maxGpuJobsPerFrame = 2U,
+            .maxCpuCostUnitsPerFrame = 6U,
+            .maxGpuCostUnitsPerFrame = 6U,
+            .maxPendingRequests = 192U}};
 
-    std::map<
-        std::string,
-        DebugPresentation,
-        std::less<>>
-        debugPresentations_;
-
-    std::map<
-        std::string,
-        StudioGiantDiagnostics,
-        std::less<>>
-        giantDiagnostics_;
-
-    std::map<
-        std::string,
-        GiantPresentation,
-        std::less<>>
-        giantPresentations_;
-
-    std::map<
-        std::string,
-        StudioSmallBodyDiagnostics,
-        std::less<>>
-        smallBodyDiagnostics_;
-
-    std::map<
-        std::string,
-        SmallBodyPresentation,
-        std::less<>>
-        smallBodyPresentations_;
-
-    std::map<
-        std::string,
-        StudioStellarDiagnostics,
-        std::less<>>
-        stellarDiagnostics_;
-
-    std::map<
-        std::string,
-        StudioRingDiagnostics,
-        std::less<>>
-        ringDiagnostics_;
-
-    std::map<
-        std::string,
-        StudioMagnetosphereDiagnostics,
-        std::less<>>
-        magnetosphereDiagnostics_;
-
-    std::map<
-        std::string,
-        StudioCompactObjectDiagnostics,
-        std::less<>>
-        compactObjectDiagnostics_;
-
-    std::map<
-        std::string,
-        RingPresentation,
-        std::less<>>
-        ringPresentations_;
-
-    std::map<
-        std::string,
-        MagnetospherePresentation,
-        std::less<>>
-        magnetospherePresentations_;
-
-    std::map<
-        std::string,
-        StudioOceanDiagnostics,
-        std::less<>>
-        oceanDiagnostics_;
-
-    std::map<
-        std::string,
-        StudioCloudDiagnostics,
-        std::less<>>
-        cloudDiagnostics_;
-
-    std::map<
-        std::string,
-        CloudPresentation,
-        std::less<>>
-        cloudPresentations_;
-
-    std::map<
-        std::string,
-        StudioAtmosphereDiagnostics,
-        std::less<>>
-        atmosphereDiagnostics_;
-
-    std::map<
-        std::string,
-        AtmospherePresentation,
-        std::less<>>
-        atmospherePresentations_;
-
-    std::map<
-        std::string,
-        StudioCelestialLightingDiagnostics,
-        std::less<>>
-        lightingDiagnostics_;
-
-    std::map<
-        std::string,
-        StudioSurfaceGlobeTransitionDiagnostics,
-        std::less<>>
-        transitionDiagnostics_;
-
-    std::map<
-        std::string,
-        StudioVisibilityProxyDiagnostics,
-        std::less<>>
-        visibilityProxyDiagnostics_;
-
-    std::map<
-        std::string,
-        StudioEmissiveGiDiagnostics,
-        std::less<>>
-        emissiveGiDiagnostics_;
-
-    std::map<
-        std::string,
-        VisibilityProxyPresentation,
-        std::less<>>
-        visibilityProxyPresentations_;
-
-    std::map<
-        std::string,
-        FinalGatherPresentation,
-        std::less<>>
-        finalGatherPresentations_;
-
-    std::map<
-        std::string,
-        LuminanceHistogramPresentation,
-        std::less<>>
-        luminanceHistogramPresentations_;
-
-    std::map<
-        std::string,
-        MacroGlobePresentation,
-        std::less<>>
-        macroGlobePresentations_;
-
-    std::map<
-        std::string,
-        TerrainPresentation,
-        std::less<>>
-        terrainPresentations_;
+    std::map<std::string, DebugPresentation, std::less<>> debugPresentations_;
+    std::map<std::string, StudioGiantDiagnostics, std::less<>> giantDiagnostics_;
+    std::map<std::string, GiantPresentation, std::less<>> giantPresentations_;
+    std::map<std::string, StudioSmallBodyDiagnostics, std::less<>> smallBodyDiagnostics_;
+    std::map<std::string, SmallBodyPresentation, std::less<>> smallBodyPresentations_;
+    std::map<std::string, StudioStellarDiagnostics, std::less<>> stellarDiagnostics_;
+    std::map<std::string, StudioRingDiagnostics, std::less<>> ringDiagnostics_;
+    std::map<std::string, StudioMagnetosphereDiagnostics, std::less<>> magnetosphereDiagnostics_;
+    std::map<std::string, StudioCompactObjectDiagnostics, std::less<>> compactObjectDiagnostics_;
+    std::map<std::string, RingPresentation, std::less<>> ringPresentations_;
+    std::map<std::string, MagnetospherePresentation, std::less<>> magnetospherePresentations_;
+    std::map<std::string, StudioOceanDiagnostics, std::less<>> oceanDiagnostics_;
+    std::map<std::string, StudioCloudDiagnostics, std::less<>> cloudDiagnostics_;
+    std::map<std::string, CloudPresentation, std::less<>> cloudPresentations_;
+    std::map<std::string, StudioAtmosphereDiagnostics, std::less<>> atmosphereDiagnostics_;
+    std::map<std::string, AtmospherePresentation, std::less<>> atmospherePresentations_;
+    std::map<std::string, StudioCelestialLightingDiagnostics, std::less<>> lightingDiagnostics_;
+    std::map<std::string, StudioSurfaceGlobeTransitionDiagnostics, std::less<>> transitionDiagnostics_;
+    std::map<std::string, StudioVisibilityProxyDiagnostics, std::less<>> visibilityProxyDiagnostics_;
+    std::map<std::string, StudioEmissiveGiDiagnostics, std::less<>> emissiveGiDiagnostics_;
+    std::map<std::string, VisibilityProxyPresentation, std::less<>> visibilityProxyPresentations_;
+    std::map<std::string, FinalGatherPresentation, std::less<>> finalGatherPresentations_;
+    std::map<std::string, LuminanceHistogramPresentation, std::less<>> luminanceHistogramPresentations_;
+    std::map<std::string, MacroGlobePresentation, std::less<>> macroGlobePresentations_;
+    std::map<std::string, TerrainPresentation, std::less<>> terrainPresentations_;
 };
 } // namespace orbit::studio_ui
