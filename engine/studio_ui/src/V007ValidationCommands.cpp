@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/V007ValidationScenarios.hpp>
 
 #include <orbit/core/Log.hpp>
+#include <orbit/editor_model/CommandSurfaces.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
 #include <exception>
@@ -8,6 +9,13 @@
 
 namespace orbit::studio_ui
 {
+namespace
+{
+constexpr std::string_view kValidationSurface = "explorer";
+constexpr editor_model::CommandSurfaceKind kValidationSurfaceKind =
+    editor_model::CommandSurfaceKind::ContextMenu;
+}
+
 V007ValidationCommandRegistration::V007ValidationCommandRegistration(
     studio_session::StudioSession* const session,
     StudioViewportRenderer* const renderer) noexcept
@@ -21,8 +29,9 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
         return;
     }
 
-    auto& registry =
-        session_->World().CommandRegistry();
+    auto& world = session_->World();
+    auto& registry = world.CommandRegistry();
+    auto& surfaces = world.CommandSurfaces();
 
     try
     {
@@ -44,13 +53,12 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
                 continue;
             }
 
-            const auto scenarioId =
-                scenario.id;
+            const auto scenarioId = scenario.id;
 
             registry.Register({
                 .id = id,
                 .name =
-                    "V0.0.7 Validate - " +
+                    "Validate: " +
                     std::string(scenario.name),
                 .category =
                     "Validation / V0.0.7",
@@ -58,7 +66,9 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
                     std::string(scenario.invariant) +
                     " GPU image acceptance uses the separate visual-tolerance gate.",
                 .parameters = {},
-                .presentationSurfaces = {},
+                .presentationSurfaces = {
+                    "explorer.context"
+                },
                 .automationVisible = true,
                 .enablement =
                     [session = session_]
@@ -88,6 +98,10 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
                     }
             });
 
+            surfaces.Add(
+                kValidationSurface,
+                kValidationSurfaceKind,
+                id);
             owned_[index] = true;
         }
     }
@@ -108,8 +122,9 @@ V007ValidationCommandRegistration::~V007ValidationCommandRegistration()
         return;
     }
 
-    auto& registry =
-        session_->World().CommandRegistry();
+    auto& world = session_->World();
+    auto& registry = world.CommandRegistry();
+    auto& surfaces = world.CommandSurfaces();
 
     for (std::size_t index = 0U;
          index < kV007ValidationScenarios.size();
@@ -120,10 +135,17 @@ V007ValidationCommandRegistration::~V007ValidationCommandRegistration()
             continue;
         }
 
+        const auto id =
+            V007ValidationCommandId(
+                kV007ValidationScenarios[index].id);
+
         static_cast<void>(
-            registry.Unregister(
-                V007ValidationCommandId(
-                    kV007ValidationScenarios[index].id)));
+            surfaces.Remove(
+                kValidationSurface,
+                kValidationSurfaceKind,
+                id));
+        static_cast<void>(
+            registry.Unregister(id));
     }
 }
 } // namespace orbit::studio_ui
