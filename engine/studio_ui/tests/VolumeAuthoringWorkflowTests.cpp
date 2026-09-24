@@ -160,7 +160,7 @@ int main()
             domain,
             0.75F);
     Check(emissive.has_value());
-    Check(emissive->radianceScale > 0.0F);
+    Check(emissive->intensityScale > 0.0F);
 
     volume_representation::VolumeOutputCouplingService output;
     auto& outputSettings = output.Settings(volumeId);
