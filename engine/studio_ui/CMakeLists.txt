@@ -11,6 +11,7 @@ add_library(OrbitStudioUi STATIC
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
+    src/V007PerformanceCapture.cpp
     src/V007ValidationCommands.cpp
     src/V007ValidationScenarios.cpp
     src/VolumeAuthoringM36.cpp
@@ -305,5 +306,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.V007DeterministicValidation
         COMMAND OrbitV007DeterministicValidationTests
+    )
+
+    # M44 pins the durable report schema plus RT/non-RT budget independence and
+    # near/far volume Auto work reduction. Real GPU captures remain a hardware
+    # validation activity and are never fabricated by this CPU regression.
+    add_executable(OrbitV007PerformanceCaptureTests
+        tests/V007PerformanceCaptureTests.cpp
+    )
+
+    target_link_libraries(OrbitV007PerformanceCaptureTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitV007PerformanceCaptureTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitV007PerformanceCaptureTests)
+
+    add_test(
+        NAME Orbit.V007PerformanceCapture
+        COMMAND OrbitV007PerformanceCaptureTests
     )
 endif()
