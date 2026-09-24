@@ -1,6 +1,6 @@
 #pragma once
 
-#include <orbit/scene/ObjectId.hpp>
+#include <orbit/scene/ObjectStore.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
