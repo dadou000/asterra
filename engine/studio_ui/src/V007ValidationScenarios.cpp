@@ -13,6 +13,7 @@
 #include <exception>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace orbit::studio_ui
 {
@@ -174,6 +175,14 @@ void EnableLightingValidationOverlays()
         ? diagnostics->eyeConfig
         : post_process::HumanEyeAdaptationConfig{};
 }
+
+[[nodiscard]] u64 CacheableFieldMask(const u64 fieldMask) noexcept
+{
+    const u64 density = static_cast<u64>(world_model::VolumeField::Density);
+    const u64 emission = static_cast<u64>(world_model::VolumeField::Emission);
+    const u64 supported = fieldMask & (density | emission);
+    return supported != 0U ? supported : density;
+}
 } // namespace
 
 std::string PrepareV007ValidationScenario(
@@ -296,7 +305,7 @@ std::string PrepareV007ValidationScenario(
             const auto inputs = world_model::ResolveVolumeInputs(world.Objects(), *volume);
             const volume_representation::VolumeCacheBakeSettings bake{
                 .resolution = 16U,
-                .fieldMask = domain->fieldMask
+                .fieldMask = CacheableFieldMask(domain->fieldMask)
             };
             auto cache = volume_representation::BakeVolumeCache(*domain, inputs, bake);
             volume_representation::VolumeCaches().Attach(*volume, std::move(cache));
