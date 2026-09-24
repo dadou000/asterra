@@ -40,14 +40,12 @@ void ApplyDisplayDefaults(
             defaults.toneMapping);
     }
 
-    renderer.SetColorLutSettings(
-        defaults.colorLut);
+    renderer.SetColorLutSettings(defaults.colorLut);
 
     if (!defaults.colorLutAsset.empty())
     {
         static_cast<void>(
-            renderer.SelectColorLutAsset(
-                defaults.colorLutAsset));
+            renderer.SelectColorLutAsset(defaults.colorLutAsset));
     }
     else
     {
@@ -55,8 +53,7 @@ void ApplyDisplayDefaults(
             post_process::BuildIdentityColorLut());
     }
 
-    renderer.SetOutputTransformSettings(
-        defaults.output);
+    renderer.SetOutputTransformSettings(defaults.output);
 }
 } // namespace
 
@@ -71,9 +68,7 @@ void DisplayDiagnosticsUi::Register(
             {
                 if (renderer_ != nullptr)
                 {
-                    ApplyDisplayDefaults(
-                        *renderer_,
-                        defaults);
+                    ApplyDisplayDefaults(*renderer_, defaults);
                 }
             });
     }
@@ -82,28 +77,15 @@ void DisplayDiagnosticsUi::Register(
         .id = kPanelId,
         .title = "Display Diagnostics",
         .defaultOpen = false,
-        .defaultDock =
-            editor_ui::DockRegion::Right,
+        .defaultDock = editor_ui::DockRegion::Right,
         .dockOrder = 55,
-        .minSize = {
-            .width = 320.0F,
-            .height = 260.0F
-        },
-        .draw =
-            [this](editor_ui::PanelContext& context)
-            {
-                DrawViewport(
-                    context,
-                    "studio.primary",
-                    "Primary View");
-
-                context.Separator();
-
-                DrawViewport(
-                    context,
-                    "studio.map",
-                    "Body Map");
-            }
+        .minSize = {.width = 320.0F,.height = 260.0F},
+        .draw = [this](editor_ui::PanelContext& context)
+        {
+            DrawViewport(context, "studio.primary", "Primary View");
+            context.Separator();
+            DrawViewport(context, "studio.map", "Body Map");
+        }
     });
 }
 
@@ -112,10 +94,7 @@ void DisplayDiagnosticsUi::DrawViewport(
     const std::string_view viewportId,
     const std::string_view label)
 {
-    DrawViewportBase(
-        context,
-        viewportId,
-        label);
+    DrawViewportBase(context, viewportId, label);
 
     if (viewportId != "studio.primary")
     {
@@ -129,18 +108,13 @@ void DisplayDiagnosticsUi::DrawViewport(
 
     auto config =
         lighting::StudioLightingRuntimeConfig().
-            value_or(
-                lighting::LightingSchedulerConfig{});
+            value_or(lighting::LightingSchedulerConfig{});
 
-    bool hardwareRt =
-        config.hardwareRayQueryEnabled;
-    f64 emissiveQuality =
-        config.emissiveGiQualityScale;
+    bool hardwareRt = config.hardwareRayQueryEnabled;
+    f64 emissiveQuality = config.emissiveGiQualityScale;
 
     bool changed =
-        context.Checkbox(
-            "Hardware Ray Query##m40-hwrt",
-            hardwareRt);
+        context.Checkbox("Hardware Ray Query##m40-hwrt", hardwareRt);
     changed |=
         context.InputDouble(
             "Emissive GI Quality##m40-emissive-quality",
@@ -158,28 +132,18 @@ void DisplayDiagnosticsUi::DrawViewport(
     f64 emissive = config.budget.emissiveMs;
     f64 post = config.budget.postProcessMs;
 
-    changed |= context.InputDouble(
-        "Direct##m40-budget-direct", direct);
-    changed |= context.InputDouble(
-        "Visibility##m40-budget-visibility", visibility);
-    changed |= context.InputDouble(
-        "GI##m40-budget-gi", gi);
-    changed |= context.InputDouble(
-        "Reflections##m40-budget-reflections", reflections);
-    changed |= context.InputDouble(
-        "Emissive##m40-budget-emissive", emissive);
-    changed |= context.InputDouble(
-        "Post Process##m40-budget-post", post);
+    changed |= context.InputDouble("Direct##m40-budget-direct", direct);
+    changed |= context.InputDouble("Visibility##m40-budget-visibility", visibility);
+    changed |= context.InputDouble("GI##m40-budget-gi", gi);
+    changed |= context.InputDouble("Reflections##m40-budget-reflections", reflections);
+    changed |= context.InputDouble("Emissive##m40-budget-emissive", emissive);
+    changed |= context.InputDouble("Post Process##m40-budget-post", post);
 
     if (changed)
     {
         config.hardwareRayQueryEnabled = hardwareRt;
         config.emissiveGiQualityScale =
-            static_cast<f32>(
-                std::clamp(
-                    emissiveQuality,
-                    0.0,
-                    4.0));
+            static_cast<f32>(std::clamp(emissiveQuality, 0.0, 4.0));
         config.budget.directLightingMs =
             static_cast<f32>(std::max(direct, 0.0));
         config.budget.visibilityMs =
@@ -193,12 +157,10 @@ void DisplayDiagnosticsUi::DrawViewport(
         config.budget.postProcessMs =
             static_cast<f32>(std::max(post, 0.0));
 
-        lighting::SetStudioLightingRuntimeConfig(
-            config);
+        lighting::SetStudioLightingRuntimeConfig(config);
     }
 
-    const auto runtime =
-        lighting::StudioLightingRuntimeConfig();
+    const auto runtime = lighting::StudioLightingRuntimeConfig();
     if (runtime.has_value())
     {
         context.MutedText(
@@ -206,18 +168,15 @@ void DisplayDiagnosticsUi::DrawViewport(
                 "Runtime lighting budget {:.2f} ms | emissive quality x{:.2f} | ray query {}",
                 runtime->budget.TotalMs(),
                 runtime->emissiveGiQualityScale,
-                runtime->hardwareRayQueryEnabled
-                    ? "enabled"
-                    : "disabled"));
+                runtime->hardwareRayQueryEnabled ? "enabled" : "disabled"));
     }
 
     context.Separator();
     context.Heading("Viewport Lighting Inspection");
     context.MutedText(
-        "Transient production overlays. They never alter lighting authority, project state, GI cache identity or renderer budgets.");
+        "Transient production inspection state. It never alters lighting authority, project state, GI cache identity or renderer budgets.");
 
-    auto& overlays =
-        StudioLightingOverlays();
+    auto& overlays = StudioLightingOverlays();
 
     bool showGi = overlays.giUpdateCells;
     bool showCache = overlays.radianceCacheRegions;
@@ -225,35 +184,21 @@ void DisplayDiagnosticsUi::DrawViewport(
     bool showEmissive = overlays.emissiveInfluence;
 
     bool overlayChanged =
-        context.Checkbox(
-            "GI Update Cells##m41-gi-cells",
-            showGi);
+        context.Checkbox("GI Update Cells##m41-gi-cells", showGi);
     overlayChanged |=
-        context.Checkbox(
-            "Radiance Cache Regions##m41-cache-regions",
-            showCache);
+        context.Checkbox("Radiance Cache Regions##m41-cache-regions", showCache);
     overlayChanged |=
-        context.Checkbox(
-            "Reflection Inspection##m41-reflections",
-            showReflections);
+        context.Checkbox("Reflection Inspection##m41-reflections", showReflections);
     overlayChanged |=
-        context.Checkbox(
-            "Emissive Affected Cells##m41-emissive",
-            showEmissive);
+        context.Checkbox("Emissive Affected Cells##m41-emissive", showEmissive);
 
-    i64 maximumCells =
-        static_cast<i64>(overlays.maximumGiCells);
-    i64 cacheLevels =
-        static_cast<i64>(overlays.cacheLevels);
+    i64 maximumCells = static_cast<i64>(overlays.maximumGiCells);
+    i64 cacheLevels = static_cast<i64>(overlays.cacheLevels);
 
     overlayChanged |=
-        context.InputInteger(
-            "Maximum GI Cells##m41-max-cells",
-            maximumCells);
+        context.InputInteger("Maximum GI Cells##m41-max-cells", maximumCells);
     overlayChanged |=
-        context.InputInteger(
-            "Cache Levels##m41-cache-levels",
-            cacheLevels);
+        context.InputInteger("Cache Levels##m41-cache-levels", cacheLevels);
 
     if (overlayChanged)
     {
@@ -262,21 +207,41 @@ void DisplayDiagnosticsUi::DrawViewport(
         overlays.reflectionInspection = showReflections;
         overlays.emissiveInfluence = showEmissive;
         overlays.maximumGiCells =
-            static_cast<u32>(
-                std::clamp<i64>(
-                    maximumCells,
-                    1,
-                    256));
+            static_cast<u32>(std::clamp<i64>(maximumCells, 1, 256));
         overlays.cacheLevels =
-            static_cast<u32>(
-                std::clamp<i64>(
-                    cacheLevels,
-                    1,
-                    8));
+            static_cast<u32>(std::clamp<i64>(cacheLevels, 1, 8));
     }
 
-    const auto& interaction =
-        StudioLightingInteractionState();
+    auto& interaction = StudioLightingInteractionState();
+
+    if (renderer_ != nullptr)
+    {
+        if (const auto emissiveDiagnostics =
+                renderer_->EmissiveGiDiagnostics("studio.primary");
+            emissiveDiagnostics.has_value())
+        {
+            interaction.trackedEmissiveSources =
+                emissiveDiagnostics->trackedSources;
+            interaction.invalidationEventsThisFrame =
+                emissiveDiagnostics->invalidationEventsThisFrame;
+            interaction.dirtyRadianceCells =
+                emissiveDiagnostics->dirtyRadianceCells;
+            interaction.scheduledRadianceUpdates =
+                emissiveDiagnostics->scheduledRadianceUpdates;
+        }
+
+        if (const auto visibilityDiagnostics =
+                renderer_->VisibilityProxyDiagnostics("studio.primary");
+            visibilityDiagnostics.has_value())
+        {
+            interaction.hardwareRayQuerySupported =
+                visibilityDiagnostics->hardwareRayQuerySupported;
+            interaction.hardwareRayQueryReady =
+                visibilityDiagnostics->hardwareRayQueryReady;
+            interaction.hardwarePrimitiveCount =
+                visibilityDiagnostics->hardwarePrimitiveCount;
+        }
+    }
 
     context.Text(
         std::format(
@@ -289,19 +254,13 @@ void DisplayDiagnosticsUi::DrawViewport(
     context.Text(
         std::format(
             "Ray query: {} / {} | proxy primitives {}",
-            interaction.hardwareRayQuerySupported
-                ? "supported"
-                : "unsupported",
-            interaction.hardwareRayQueryReady
-                ? "ready"
-                : "not ready",
+            interaction.hardwareRayQuerySupported ? "supported" : "unsupported",
+            interaction.hardwareRayQueryReady ? "ready" : "not ready",
             interaction.hardwarePrimitiveCount));
 
     if (interaction.hasSelection)
     {
-        context.Text(
-            "Selected: " +
-            interaction.selectedObject);
+        context.Text("Selected: " + interaction.selectedObject);
 
         if (interaction.selectedEmissive)
         {
@@ -323,7 +282,7 @@ void DisplayDiagnosticsUi::DrawViewport(
     else
     {
         context.MutedText(
-            "Select an authored object to inspect its emissive GI authority.");
+            "Selected-emissive inspection seam is ready; viewport/session selection binding is the remaining M41 integration step.");
     }
 }
 } // namespace orbit::studio_ui
