@@ -7,24 +7,17 @@
 #include <orbit/world_model/MaterialAssignmentBinding.hpp>
 
 #include <algorithm>
-#include <optional>
+#include <span>
 
 namespace orbit::studio_ui
 {
 [[nodiscard]] inline StudioLightingInteractionDiagnostics
 InspectSelectedLightingAuthority(
-    const studio_session::StudioSession& session,
+    const scene::ObjectStore& objects,
+    std::span<const scene::ObjectId> selection,
     const content::ContentService& content)
 {
     StudioLightingInteractionDiagnostics result{};
-
-    if (!session.World().HasWorld())
-    {
-        return result;
-    }
-
-    const auto& selection =
-        session.World().Selection().Ordered();
 
     if (selection.size() != 1U)
     {
@@ -35,7 +28,7 @@ InspectSelectedLightingAuthority(
         selection.front();
 
     const auto record =
-        session.World().Objects().Find(selected);
+        objects.Find(selected);
 
     if (!record.has_value())
     {
@@ -47,8 +40,13 @@ InspectSelectedLightingAuthority(
 
     const auto assignments =
         world_model::ResolveMaterialAssignments(
-            session.World().Objects(),
+            objects,
             selected);
+
+    if (assignments.empty())
+    {
+        return result;
+    }
 
     const auto assignment =
         std::find_if(
@@ -59,20 +57,21 @@ InspectSelectedLightingAuthority(
             {
                 return
                     item.owner == selected &&
-                    item.slot == "default";
+                    (item.slot == "default" ||
+                     item.slot == "body");
             });
 
-    if (assignment == assignments.end())
-    {
-        return result;
-    }
+    const auto& resolvedAssignment =
+        assignment != assignments.end()
+            ? *assignment
+            : assignments.front();
 
     try
     {
         const auto emission =
             lighting::ResolveRuntimeMaterialEmission(
                 content,
-                assignment->assetId);
+                resolvedAssignment.assetId);
 
         result.emissionLuminanceNits =
             std::max<f64>(
@@ -101,6 +100,27 @@ InspectSelectedLightingAuthority(
     }
 
     return result;
+}
+
+[[nodiscard]] inline StudioLightingInteractionDiagnostics
+InspectSelectedLightingAuthority(
+    const studio_session::StudioSession& session,
+    const content::ContentService& content)
+{
+    if (!session.World().HasWorld())
+    {
+        return {};
+    }
+
+    const auto& selection =
+        session.World().Selection().Ordered();
+
+    return InspectSelectedLightingAuthority(
+        session.World().Objects(),
+        std::span<const scene::ObjectId>(
+            selection.data(),
+            selection.size()),
+        content);
 }
 
 inline void PublishSelectedLightingAuthority(
