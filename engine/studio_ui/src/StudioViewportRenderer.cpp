@@ -4,6 +4,7 @@
 #include <orbit/studio_ui/StudioLightingOverlayGeometry.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -94,7 +95,7 @@ StudioViewportRenderer::Compose(
             // Hybrid/exact reflections consume roughness + metallic as their
             // primary material classification. Reuse the production surface
             // debug presentation for a faithful reflection-input inspection
-            // rather than maintaining a separate debug shading model.
+            // rather than maintaining a second debug shading model.
             view->SetSurfaceDebugMode(
                 lighting::SurfaceDebugMode::NormalMetallic);
         }
@@ -113,6 +114,8 @@ StudioViewportRenderer::Compose(
             lightingPlan,
             lightingTimestamps);
 
+    // Surface debug choice is captured while ComposeBase builds the graph, so
+    // restore the user's persistent viewport mode immediately afterwards.
     for (const auto& [view, previous] :
          restoreSurfaceModes)
     {
@@ -231,9 +234,12 @@ StudioViewportRenderer::Compose(
         const u32 height =
             view->Height();
 
-        graph.AddPass(
+        const std::string passPrefix =
             "Studio." + output.id +
-                ".M41LightingInspection",
+            ".M41LightingInspection";
+
+        graph.AddPass(
+            passPrefix,
             {
                 {
                     .texture = output.targets.display,
@@ -260,6 +266,26 @@ StudioViewportRenderer::Compose(
                     height,
                     camera,
                     overlayLines);
+            });
+
+        // RenderView::Import starts the persistent display target in
+        // ShaderResource next frame. Preserve that cross-frame contract just
+        // like the existing luminance-metering display overlay does.
+        graph.AddPass(
+            passPrefix + ".Restore",
+            {
+                {
+                    .texture = output.targets.display,
+                    .state =
+                        rhi::ResourceState::ShaderResource,
+                    .access =
+                        render_graph::Access::Read
+                }
+            },
+            [](
+                rhi::CommandList&,
+                const render_graph::Resources&)
+            {
             });
     }
 
