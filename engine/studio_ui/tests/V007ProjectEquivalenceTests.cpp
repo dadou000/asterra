@@ -75,7 +75,7 @@ int main()
     u64 cachePayloadFingerprint = 0U;
     content::MaterialEmission authoredMaterialEmission{};
     studio_ui::LightingDisplaySettings authoredDisplay{};
-    volume_render::EmissiveVolumeSource authoredVolumeEmission{};
+    lighting::EmissiveVolumeSource authoredVolumeEmission{};
 
     {
         auto project =
