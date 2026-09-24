@@ -88,6 +88,6 @@ public:
 private:
     studio_session::StudioSession* session_{nullptr};
     StudioViewportRenderer* renderer_{nullptr};
-    bool registered_{false};
+    std::array<bool, kV007ValidationScenarios.size()> owned_{};
 };
 } // namespace orbit::studio_ui
