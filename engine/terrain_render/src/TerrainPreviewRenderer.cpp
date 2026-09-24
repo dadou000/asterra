@@ -61,7 +61,8 @@ namespace
     const world::SurfaceFrame& observerFrame,
     const u32 levelIndex,
     const bool debugLodColorEnabled,
-    const bool debugSideCutEnabled) noexcept
+    const bool debugSideCutEnabled,
+    const bool drySurface) noexcept
 {
     std::array<u32, 56> result{};
 
@@ -187,6 +188,7 @@ namespace
         41,
         static_cast<f32>(
             motion.centerOffsetMeters.y));
+    store(42, drySurface ? 1.0F : 0.0F);
 
     // Body-fixed basis for lighting-facing SurfaceData. Geometry remains in
     // observer-local coordinates for precision, but cache/lighting normals
@@ -254,6 +256,7 @@ struct VSOutput
     float3 worldPosition : TEXCOORD8;
     float3 bodyFixedNormal : TEXCOORD9;
     float3 bodyFixedSurfaceDirection : TEXCOORD10;
+    float drySurface : TEXCOORD11;
     float horizonClip : SV_ClipDistance0;
 };
 
@@ -727,6 +730,7 @@ R"(            colorIndex == 1u ? 1.0 : 0.0,
             g_pc.g_observerEastBody.xyz * surfaceDirection.x +
             g_pc.g_observerUpBody.xyz * surfaceDirection.y +
             g_pc.g_observerNorthBody.xyz * surfaceDirection.z);
+    output.drySurface = g_pc.g_centerOffsetMeters.z;
 
     const float horizonCosine =
         saturate(
@@ -1133,7 +1137,8 @@ public:
                     observerFrame_,
                     levelIndex,
                     debugLodColorEnabled_,
-                    debugSideCutEnabled_);
+                    debugSideCutEnabled_,
+                    config_.drySurface);
 
             commandList.
                 SetGraphicsConstants(

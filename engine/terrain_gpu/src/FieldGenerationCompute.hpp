@@ -88,6 +88,9 @@ static const uint kParamMaximumEjectaExtentRadii = 47;
 static const uint kParamMinimumCraterRadiusMeters = 48;
 static const uint kParamMaximumCraterRadiusMeters = 49;
 static const uint kParamCraterCumulativeExponent = 50;
+static const uint kParamLocalCraterLevels = 51;
+static const uint kParamLocalCraterBaseSpacingMeters = 52;
+static const uint kParamLocalCraterDensity = 53;
 
 static const uint kMaxHotspotAgeSteps = 6u;
 static const uint kPlateStrideBytes = 36u;
@@ -817,6 +820,106 @@ float ProceduralCraterHeight(float3 direction, float footprintMeters)
     }
     return result;
 }
+
+uint64_t LocalCraterCellHash(int3 cell, uint64_t seed)
+{
+    uint64_t x = Mix64(AxisCoord(cell.x) +
+        MakeU64(0x632BE59Bu, 0xD9B4E019u));
+    uint64_t y = Mix64(AxisCoord(cell.y) +
+        MakeU64(0x8CB92BA7u, 0x2F3D8DD7u));
+    uint64_t z = Mix64(AxisCoord(cell.z) +
+        MakeU64(0x58F38DEDu, 0x8C5A935Fu));
+    return Mix64(seed ^ x ^ y ^ z);
+}
+
+float LocalCraterUnit(uint64_t cellHash, uint64_t salt)
+{
+    return HashToUnit(Mix64(cellHash ^ salt)) * 0.5 + 0.5;
+}
+
+float LocalCraterHeight(float3 direction, float footprintMeters)
+{
+    float planetRadius = ParamFloat(kParamPlanetRadiusMeters);
+    float spacingMeters = ParamFloat(kParamLocalCraterBaseSpacingMeters);
+    float density = ParamFloat(kParamLocalCraterDensity);
+    uint levels = ParamUint(kParamLocalCraterLevels);
+    uint64_t topSeed = ParamU64(kParamTopSeedLo, kParamTopSeedHi);
+    uint64_t baseSeed = topSeed ^ MakeU64(0x4C4F4341u, 0x4C435231u);
+    float result = 0.0;
+
+    [loop]
+    for (uint level = 0u; level < levels; ++level)
+    {
+        if (CraterFeatureWeight(spacingMeters * 0.52, footprintMeters) <= 0.0)
+            break;
+
+        float frequency = planetRadius / spacingMeters;
+        float3 lattice = direction * frequency;
+        int3 centerCell = int3(floor(lattice));
+        uint64_t levelSeed = Mix64(baseSeed ^
+            uint64_t(level + 1u) * MakeU64(0x9E3779B9u, 0x7F4A7C15u));
+
+        [unroll]
+        for (int dz = -1; dz <= 1; ++dz)
+        [unroll]
+        for (int dy = -1; dy <= 1; ++dy)
+        [unroll]
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            int3 cell = centerCell + int3(dx, dy, dz);
+            uint64_t cellHash = LocalCraterCellHash(cell, levelSeed);
+            if (LocalCraterUnit(cellHash,
+                    MakeU64(0x41435449u, 0x56455031u)) >= density)
+                continue;
+
+            float3 randomPosition = float3(
+                LocalCraterUnit(cellHash, MakeU64(0x504F5349u, 0x54494F58u)),
+                LocalCraterUnit(cellHash, MakeU64(0x504F5349u, 0x54494F59u)),
+                LocalCraterUnit(cellHash, MakeU64(0x504F5349u, 0x54494F5Au)));
+            float3 candidate = normalize(
+                (float3(cell) + randomPosition) / frequency);
+            float radiusChoice = LocalCraterUnit(
+                cellHash, MakeU64(0x52414449u, 0x55535031u));
+            float craterRadius = spacingMeters *
+                (0.08 + 0.18 * radiusChoice * radiusChoice);
+            float spectralWeight = CraterFeatureWeight(
+                craterRadius * 2.0, footprintMeters);
+            if (spectralWeight <= 0.0) continue;
+
+            float cosine = clamp(dot(candidate, direction), -1.0, 1.0);
+            float boundingCosine = cos(min(
+                craterRadius * 1.55 / planetRadius,
+                3.14159265358979));
+            if (cosine < boundingCosine) continue;
+
+            float craterDistance = acos(cosine) *
+                planetRadius / craterRadius;
+            float age = LocalCraterUnit(
+                cellHash, MakeU64(0x44454752u, 0x41444550u));
+            float preservation = (0.48 + 0.52 * age) * spectralWeight;
+            float delta = 0.0;
+            if (craterDistance < 1.0)
+            {
+                float bowl = max(
+                    0.0, 1.0 - craterDistance * craterDistance);
+                delta -= craterRadius * 0.16 * bowl * bowl;
+            }
+            float rimDistance = (craterDistance - 1.0) / 0.085;
+            delta += craterRadius * 0.030 *
+                exp(-0.5 * rimDistance * rimDistance);
+            if (craterDistance >= 1.0 && craterDistance <= 1.55)
+            {
+                float ejectaT = (craterDistance - 1.0) / 0.55;
+                delta += craterRadius * 0.007 *
+                    pow(craterDistance, -3.0) *
+                    (1.0 - Smooth(ejectaT));
+            }
+            result += delta * preservation;
+        }
+        spacingMeters *= 0.25;
+    }
+    return result;
+}
 )" R"(
 struct FullSample
 {
@@ -864,7 +967,8 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
         elevation += min(global.hotspotElevationMeters, headroom);
     }
 
-    elevation += ProceduralCraterHeight(direction, footprintMeters);
+    elevation += ProceduralCraterHeight(direction, footprintMeters) +
+        LocalCraterHeight(direction, footprintMeters);
 
     float coarseElevation = elevation;
     float detailAmplitude = ParamFloat(kParamDetailAmplitudeMeters);

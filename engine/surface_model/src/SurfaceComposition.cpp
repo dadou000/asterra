@@ -1203,6 +1203,20 @@ ConstraintSetFor(
     result.craters.complexTransitionRadiusMeters = PropertyOr<f64>(
         objects, object, world_model::kTerrainComplexCraterRadiusMeters,
         18'000.0);
+    const i64 localCraterLevels = PropertyOr<i64>(
+        objects, object, world_model::kTerrainLocalCraterLevels, i64{3});
+    if (localCraterLevels < 0 || localCraterLevels > 6)
+    {
+        throw std::runtime_error(
+            "Terrain local crater levels must be between 0 and 6 on object " +
+            object.ToString() + ".");
+    }
+    result.craters.localLevels = static_cast<u32>(localCraterLevels);
+    result.craters.localBaseSpacingMeters = PropertyOr<f64>(
+        objects, object, world_model::kTerrainLocalCraterSpacingMeters,
+        80'000.0);
+    result.craters.localDensity = PropertyOr<f64>(
+        objects, object, world_model::kTerrainLocalCraterDensity, 0.22);
 
     if (result.macroAmplitudeMeters < 0.0 ||
         result.detailAmplitudeMeters < 0.0 ||

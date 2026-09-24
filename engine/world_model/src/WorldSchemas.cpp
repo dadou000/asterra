@@ -257,6 +257,28 @@ void RegisterSchemas(
                 .unit = "m",
                 .defaultValue = 18'000.0,
                 .range = {.minimum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainLocalCraterLevels,
+                .name = "Local Crater Levels",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{3},
+                .range = {.minimum = 0.0, .maximum = 6.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainLocalCraterSpacingMeters,
+                .name = "Local Crater Base Spacing",
+                .kind = schema::PropertyKind::Float,
+                .unit = "m",
+                .defaultValue = 80'000.0,
+                .range = {.minimum = 1.0}
+            },
+            schema::PropertySchema{
+                .id = kTerrainLocalCraterDensity,
+                .name = "Local Crater Density",
+                .kind = schema::PropertyKind::Float,
+                .defaultValue = 0.22,
+                .range = {.minimum = 0.0, .maximum = 1.0}
             }
         }
     });

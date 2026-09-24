@@ -77,6 +77,7 @@ struct TerrainPreviewConfig
     f32 nearPlaneMeters{10.0F};
     f32 farPlaneMeters{12'000'000.0F};
     bool wireframe{false};
+    bool drySurface{false};
     u32 framesInFlight{3};
 };
 

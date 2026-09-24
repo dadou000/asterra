@@ -253,6 +253,21 @@ inline constexpr schema::PropertyId kTerrainComplexCraterRadiusMeters{
     .low = 0x4352415445524358ULL
 };
 
+inline constexpr schema::PropertyId kTerrainLocalCraterLevels{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4c4f4343524c564cULL
+};
+
+inline constexpr schema::PropertyId kTerrainLocalCraterSpacingMeters{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4c4f434352535043ULL
+};
+
+inline constexpr schema::PropertyId kTerrainLocalCraterDensity{
+    .high = 0x4f52424954544552ULL,
+    .low = 0x4c4f43435244454eULL
+};
+
 // M11 authored terrain-process configuration. The semantic record owns
 // service policy; physical pages/products remain derived runtime state.
 inline constexpr schema::PropertyId kProcessStreamPowerEnabled{

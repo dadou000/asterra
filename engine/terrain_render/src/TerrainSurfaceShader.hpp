@@ -20,6 +20,7 @@ struct VSOutput
     float3 worldPosition : TEXCOORD8;
     float3 bodyFixedNormal : TEXCOORD9;
     float3 bodyFixedSurfaceDirection : TEXCOORD10;
+    float drySurface : TEXCOORD11;
     float horizonClip : SV_ClipDistance0;
 };
 
@@ -229,22 +230,42 @@ SurfaceOutputs main(VSOutput input)
             0.27,
             0.22);
 
+    const float drySurface = saturate(input.drySurface);
+
+    const float3 dryOceanColor = float3(0.19, 0.052, 0.012);
+    const float3 dryDesertColor = float3(0.43, 0.17, 0.035);
+    const float3 dryGrasslandColor = float3(0.35, 0.115, 0.018);
+    const float3 dryTemperateColor = float3(0.22, 0.060, 0.012);
+    const float3 dryBorealColor = float3(0.17, 0.045, 0.014);
+    const float3 dryTundraColor = float3(0.38, 0.20, 0.09);
+    const float3 dryAlpineColor = float3(0.47, 0.22, 0.075);
+    const float3 dryWetlandColor = float3(0.31, 0.085, 0.014);
+
+    const float3 resolvedOceanColor = lerp(oceanColor, dryOceanColor, drySurface);
+    const float3 resolvedDesertColor = lerp(desertColor, dryDesertColor, drySurface);
+    const float3 resolvedGrasslandColor = lerp(grasslandColor, dryGrasslandColor, drySurface);
+    const float3 resolvedTemperateColor = lerp(temperateForestColor, dryTemperateColor, drySurface);
+    const float3 resolvedBorealColor = lerp(borealForestColor, dryBorealColor, drySurface);
+    const float3 resolvedTundraColor = lerp(tundraColor, dryTundraColor, drySurface);
+    const float3 resolvedAlpineColor = lerp(alpineColor, dryAlpineColor, drySurface);
+    const float3 resolvedWetlandColor = lerp(wetlandColor, dryWetlandColor, drySurface);
+
     float3 color =
-        oceanColor *
+        resolvedOceanColor *
             biome0.x +
-        desertColor *
+        resolvedDesertColor *
             biome0.y +
-        grasslandColor *
+        resolvedGrasslandColor *
             biome0.z +
-        temperateForestColor *
+        resolvedTemperateColor *
             biome0.w +
-        borealForestColor *
+        resolvedBorealColor *
             biome1.x +
-        tundraColor *
+        resolvedTundraColor *
             biome1.y +
-        alpineColor *
+        resolvedAlpineColor *
             biome1.z +
-        wetlandColor *
+        resolvedWetlandColor *
             biome1.w;
 
     float3 surfaceBaseColor = color;
@@ -274,9 +295,31 @@ SurfaceOutputs main(VSOutput input)
                 terrainNormal,
                 surfaceDirection));
 
-    // M21: do not infer exposed rock from slope in the shader. Physical
-    // exposure is resolved once by M18 and any visual overlay/material
-    // partition is resolved by the shared M21 surface-material path.
+    if (drySurface > 0.5)
+    {
+        // Direction/body-fixed material frequencies remain stable while the
+        // floating origin moves. Broad dust provinces break the uniform red
+        // tint; steep faces expose darker basalt beneath the dust mantle.
+        const float regional = DetailValueNoise(
+            input.worldPosition / 180000.0);
+        const float localDust = DetailValueNoise(
+            input.worldPosition / 8500.0);
+        const float dust = saturate(regional * 0.72 + localDust * 0.28);
+        const float exposedRock = saturate((1.0 - slopeCosine) * 4.5);
+        const float3 dustyRegolith = lerp(
+            float3(0.29, 0.075, 0.012),
+            float3(0.49, 0.205, 0.050),
+            dust);
+        const float3 darkBasalt = float3(0.12, 0.027, 0.010);
+        color = lerp(color, dustyRegolith, 0.38);
+        color = lerp(color, darkBasalt, exposedRock * 0.58);
+        surfaceBaseColor = color;
+        surfaceRoughness = lerp(0.92, 0.72, exposedRock);
+    }
+
+    // Wet worlds continue to rely on M18/M21 physical exposure. The dry-world
+    // branch above is the procedural fallback until crater excavation and
+    // dust thickness are carried as explicit GPU material channels.
 
     const float3 previewLightDirection =
         normalize(
@@ -314,7 +357,8 @@ SurfaceOutputs main(VSOutput input)
 
     // Depth gives a continuous shallow shoreline without a lifted overlay.
     // Use the sphere normal for standing water; bank slopes still shade land.
-    const float waterCoverage = smoothstep(0.0, 0.25, input.waterDepth);
+    const float waterCoverage =
+        (1.0 - drySurface) * smoothstep(0.0, 0.25, input.waterDepth);
     float3 surfaceNormal = bodyFixedNormal;
     if (waterCoverage > 0.0)
     {

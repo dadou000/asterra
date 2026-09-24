@@ -30,6 +30,12 @@ struct ProceduralCraterTerrainDesc
     f64 cumulativeExponent{1.8};
     f64 complexTransitionRadiusMeters{18'000.0};
     f64 maximumEjectaExtentRadii{2.4};
+
+    // Fine impact population is generated from direction-space spatial cells
+    // and therefore does not require a whole-planet crater allocation.
+    u32 localLevels{3};
+    f64 localBaseSpacingMeters{80'000.0};
+    f64 localDensity{0.22};
 };
 
 struct GpuProceduralCrater
@@ -114,6 +120,9 @@ private:
 
     [[nodiscard]] f64 LimitElevation(f64 elevationMeters) const noexcept;
     [[nodiscard]] f64 CraterHeightDelta(
+        const math::Double3& direction,
+        f64 footprintMeters) const noexcept;
+    [[nodiscard]] f64 LocalCraterHeightDelta(
         const math::Double3& direction,
         f64 footprintMeters) const noexcept;
 

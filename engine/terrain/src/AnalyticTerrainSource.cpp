@@ -74,6 +74,12 @@ ResolveGlobalDesc(
     return detail::Smooth((diameterMeters - lower) /
         std::max(upper - lower, 1.0));
 }
+
+[[nodiscard]] f64 HashUnit24(const u64 hash) noexcept
+{
+    constexpr f64 inverse24 = 1.0 / 16'777'216.0;
+    return static_cast<f64>(hash >> 40U) * inverse24;
+}
 } // namespace
 
 AnalyticTerrainSource::AnalyticTerrainSource(
@@ -123,11 +129,17 @@ AnalyticTerrainSource::AnalyticTerrainSource(
         !std::isfinite(desc.craters.cumulativeExponent) ||
         !std::isfinite(desc.craters.complexTransitionRadiusMeters) ||
         !std::isfinite(desc.craters.maximumEjectaExtentRadii) ||
+        !std::isfinite(desc.craters.localBaseSpacingMeters) ||
+        !std::isfinite(desc.craters.localDensity) ||
         desc.craters.minimumRadiusMeters <= 0.0 ||
         desc.craters.maximumRadiusMeters < desc.craters.minimumRadiusMeters ||
         desc.craters.cumulativeExponent <= 0.0 ||
         desc.craters.complexTransitionRadiusMeters <= 0.0 ||
-        desc.craters.maximumEjectaExtentRadii < 1.0)
+        desc.craters.maximumEjectaExtentRadii < 1.0 ||
+        desc.craters.localLevels > 6U ||
+        desc.craters.localBaseSpacingMeters <= 0.0 ||
+        desc.craters.localDensity < 0.0 ||
+        desc.craters.localDensity > 1.0)
     {
         throw std::invalid_argument("Orbit procedural crater recipe is invalid.");
     }
@@ -230,6 +242,7 @@ AnalyticTerrainSource::AnalyticTerrainSource(
     mix(desc.global.tectonic.rainShadowSteps);
     mix(desc.craters.enabled ? 1U : 0U);
     mix(desc.craters.count);
+    mix(desc.craters.localLevels);
     for (const f64 value : {planet.radiusMeters, desc.macroAmplitudeMeters,
              desc.macroWavelengthMeters, desc.detailAmplitudeMeters, desc.detailWavelengthMeters,
              desc.mountains.reliefMeters, desc.mountains.wavelengthMeters,
@@ -261,10 +274,105 @@ AnalyticTerrainSource::AnalyticTerrainSource(
     for (const f64 value : {desc.craters.minimumRadiusMeters,
              desc.craters.maximumRadiusMeters, desc.craters.cumulativeExponent,
              desc.craters.complexTransitionRadiusMeters,
-             desc.craters.maximumEjectaExtentRadii})
+             desc.craters.maximumEjectaExtentRadii,
+             desc.craters.localBaseSpacingMeters,
+             desc.craters.localDensity})
     {
         mix(std::bit_cast<u64>(value));
     }
+}
+
+f64 AnalyticTerrainSource::LocalCraterHeightDelta(
+    const math::Double3& direction,
+    const f64 footprintMeters) const noexcept
+{
+    f64 result = 0.0;
+    f64 spacingMeters = desc_.craters.localBaseSpacingMeters;
+    const u64 baseSeed = desc_.seed ^ 0x4C4F43414C435231ULL;
+
+    for (u32 level = 0; level < desc_.craters.localLevels; ++level)
+    {
+        // The largest diameter in this level is 0.52 * spacing. Because
+        // levels only shrink, all finer levels can be skipped together.
+        if (FeatureWeight(spacingMeters * 0.52, footprintMeters) <= 0.0)
+        {
+            break;
+        }
+
+        const f64 frequency = planet_.radiusMeters / spacingMeters;
+        const math::Double3 lattice = direction * frequency;
+        const i64 cellX = static_cast<i64>(std::floor(lattice.x));
+        const i64 cellY = static_cast<i64>(std::floor(lattice.y));
+        const i64 cellZ = static_cast<i64>(std::floor(lattice.z));
+        const u64 levelSeed = detail::Mix64(
+            baseSeed ^ (static_cast<u64>(level) + 1ULL) *
+                0x9E3779B97F4A7C15ULL);
+
+        for (i64 z = cellZ - 1; z <= cellZ + 1; ++z)
+        for (i64 y = cellY - 1; y <= cellY + 1; ++y)
+        for (i64 x = cellX - 1; x <= cellX + 1; ++x)
+        {
+            const u64 cellHash = detail::HashLattice(x, y, z, levelSeed);
+            if (HashUnit24(detail::Mix64(
+                    cellHash ^ 0x4143544956455031ULL)) >=
+                desc_.craters.localDensity)
+            {
+                continue;
+            }
+
+            const f64 rx = HashUnit24(detail::Mix64(
+                cellHash ^ 0x504F534954494F58ULL));
+            const f64 ry = HashUnit24(detail::Mix64(
+                cellHash ^ 0x504F534954494F59ULL));
+            const f64 rz = HashUnit24(detail::Mix64(
+                cellHash ^ 0x504F534954494F5AULL));
+            const math::Double3 candidate = math::Normalize(math::Double3{
+                (static_cast<f64>(x) + rx) / frequency,
+                (static_cast<f64>(y) + ry) / frequency,
+                (static_cast<f64>(z) + rz) / frequency});
+
+            const f64 radiusChoice = HashUnit24(detail::Mix64(
+                cellHash ^ 0x5241444955535031ULL));
+            const f64 craterRadius = spacingMeters *
+                (0.08 + 0.18 * radiusChoice * radiusChoice);
+            const f64 spectralWeight = FeatureWeight(
+                craterRadius * 2.0, footprintMeters);
+            if (spectralWeight <= 0.0) continue;
+
+            const f64 cosine = std::clamp(
+                math::Dot(candidate, direction), -1.0, 1.0);
+            const f64 boundingCosine = std::cos(std::min(
+                craterRadius * 1.55 / planet_.radiusMeters,
+                std::numbers::pi_v<f64>));
+            if (cosine < boundingCosine) continue;
+
+            const f64 craterDistance = std::acos(cosine) *
+                planet_.radiusMeters / craterRadius;
+            const f64 age = HashUnit24(detail::Mix64(
+                cellHash ^ 0x4445475241444550ULL));
+            const f64 preservation = (0.48 + 0.52 * age) * spectralWeight;
+            f64 delta = 0.0;
+            if (craterDistance < 1.0)
+            {
+                const f64 bowl = std::max(
+                    0.0, 1.0 - craterDistance * craterDistance);
+                delta -= craterRadius * 0.16 * bowl * bowl;
+            }
+            const f64 rimDistance = (craterDistance - 1.0) / 0.085;
+            delta += craterRadius * 0.030 *
+                std::exp(-0.5 * rimDistance * rimDistance);
+            if (craterDistance >= 1.0 && craterDistance <= 1.55)
+            {
+                const f64 ejectaT = (craterDistance - 1.0) / 0.55;
+                delta += craterRadius * 0.007 *
+                    std::pow(craterDistance, -3.0) *
+                    (1.0 - detail::Smooth(ejectaT));
+            }
+            result += delta * preservation;
+        }
+        spacingMeters *= 0.25;
+    }
+    return result;
 }
 
 f64 AnalyticTerrainSource::CraterHeightDelta(
@@ -442,7 +550,9 @@ TerrainSample AnalyticTerrainSource::Sample(
         const f64 headroom = std::max(0.0, ceiling - elevation);
         elevation += std::min(global.hotspotElevationMeters, headroom);
     }
-    const f64 craterDelta = CraterHeightDelta(direction, query.footprintMeters);
+    const f64 craterDelta =
+        CraterHeightDelta(direction, query.footprintMeters) +
+        LocalCraterHeightDelta(direction, query.footprintMeters);
     elevation += craterDelta;
     const f64 coarseElevation = elevation;
     // The full signed fBm sum is bounded by twice its initial amplitude.

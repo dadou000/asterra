@@ -5,14 +5,16 @@ Status: **in progress — first vertical slice implemented**
 Implemented in the first slice:
 
 - deterministic whole-planet crater recipes in `AnalyticTerrainSource`;
+- direction-space cell-generated local crater populations across configurable physical levels;
 - simple/complex displaced crater bowls, rims, peaks, terraces, ejecta, degradation, and footprint filtering;
 - one resolved crater list shared by CPU globe sampling and GPU clipmap generation;
 - persisted terrain-surface crater controls;
 - geology-aligned dry-world appearance variation from displaced curvature and slope;
+- dry-world ground and uniform-globe material paths with water suppression, dust provinces, and exposed basalt;
 - removal of presentation-only crater rings from orbital shading;
 - projected-size macro-globe resolution tiers and corrected exterior winding.
 
-Remaining phases include spatially paged small-crater populations, richer material process channels, long-range horizon shadows, and the final representation-overlap quality gate.
+Remaining phases include richer material process channels, long-range horizon shadows, and the final representation-overlap quality gate.
 
 Primary reference target: **a dry, cratered Mars-like planet**
 

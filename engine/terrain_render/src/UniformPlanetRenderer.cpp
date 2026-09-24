@@ -41,6 +41,7 @@ struct VSOutput
     float3 worldPosition : TEXCOORD8;
     float3 bodyFixedNormal : TEXCOORD9;
     float3 bodyFixedSurfaceDirection : TEXCOORD10;
+    float drySurface : TEXCOORD11;
     float horizonClip : SV_ClipDistance0;
 };
 float3 Direction(uint2 cell)
@@ -100,6 +101,7 @@ VSOutput main(uint id : SV_VertexID)
     output.surfaceDirection = localDir;
     output.bodyFixedNormal = normal;
     output.bodyFixedSurfaceDirection = direction;
+    output.drySurface = g_pc.g_east.w;
     output.waterDepth = asfloat(data.y);
     output.localPosition = local;
     output.worldPosition = direction * g_pc.g_planet.x;
@@ -228,6 +230,7 @@ void UniformPlanetRenderer::Draw(rhi::CommandList& commands, const world::WorldP
     const auto store = [&](const u32 i, const f64 v) { constants[i] = std::bit_cast<u32>(static_cast<f32>(v)); };
     const auto axis = [&](const u32 i, const math::Double3& a) { store(i, a.x); store(i + 1, a.y); store(i + 2, a.z); };
     axis(16, frame.east); axis(20, frame.up); axis(24, frame.north);
+    store(19, impl_->config.drySurface ? 1.0 : 0.0);
     store(28, impl_->planet.radiusMeters);
     store(29, math::Length(observer.meters) - impl_->planet.radiusMeters);
     store(30, impl_->resolution);

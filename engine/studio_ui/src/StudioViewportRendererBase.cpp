@@ -5389,6 +5389,8 @@ StudioViewportRenderer::Compose(
                             100.0F);
                 config.framesInFlight =
                     framesInFlight_;
+                config.drySurface =
+                    !resolvedOceanForView.has_value();
 
                 terrain.fieldGenerator =
                     std::make_unique<
