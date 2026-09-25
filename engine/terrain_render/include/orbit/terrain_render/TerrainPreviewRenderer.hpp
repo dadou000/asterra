@@ -78,6 +78,9 @@ struct TerrainPreviewConfig
     f32 farPlaneMeters{12'000'000.0F};
     bool wireframe{false};
     bool drySurface{false};
+    // CPU command/upload resources may still use this ring depth. Terrain
+    // sample residency itself is persistent per LOD and is not duplicated
+    // across these frame slots.
     u32 framesInFlight{3};
 };
 
