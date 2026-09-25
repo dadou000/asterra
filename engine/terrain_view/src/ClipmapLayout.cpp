@@ -19,6 +19,16 @@ ClipmapLayout BuildClipmapLayout(
     const ClipmapConfig& config,
     const world::WorldPosition& observer)
 {
+    const f64 observerLengthSquared =
+        math::LengthSquared(observer.meters);
+
+    if (!std::isfinite(observerLengthSquared) ||
+        observerLengthSquared <= 0.0)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap layout requires a finite observer direction.");
+    }
+
     if (config.levelCount == 0)
     {
         throw std::invalid_argument(
@@ -32,7 +42,8 @@ ClipmapLayout BuildClipmapLayout(
             "Orbit terrain clipmap grid resolution must be odd and at least 9.");
     }
 
-    if (config.baseSpacingMeters <= 0.0)
+    if (!std::isfinite(config.baseSpacingMeters) ||
+        config.baseSpacingMeters <= 0.0)
     {
         throw std::invalid_argument(
             "Orbit terrain clipmap base spacing must be positive.");
@@ -43,7 +54,8 @@ ClipmapLayout BuildClipmapLayout(
     // share exact lattice coordinates while the finer window scrolls
     // toroidally. Supporting arbitrary ratios would require a different
     // transition topology rather than silently accepting misaligned grids.
-    if (std::abs(config.levelScale - 2.0) >
+    if (!std::isfinite(config.levelScale) ||
+        std::abs(config.levelScale - 2.0) >
         1.0e-12)
     {
         throw std::invalid_argument(
@@ -89,6 +101,14 @@ ClipmapLayout BuildClipmapLayout(
 
         const f64 overlapWidth =
             static_cast<f64>(config.overlapCells) * spacing;
+
+        if (!std::isfinite(spacing) ||
+            !std::isfinite(outerHalfExtent) ||
+            !std::isfinite(overlapWidth))
+        {
+            throw std::overflow_error(
+                "Orbit terrain clipmap layout exceeds finite range.");
+        }
 
         // The parent ring starts only outside the complete finer patch.
         // The finer level performs its geomorph inside its own outer band and

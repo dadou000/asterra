@@ -24,8 +24,11 @@ namespace orbit::studio_session
 struct StudioTerrainRuntimeConfig
 {
     terrain_view::ClipmapConfig clipmap{
-        .levelCount = 12U,
-        .gridResolution = 129U,
+        // A 65x65 grid plus one extra coarse level preserves the prior
+        // 131 km outer coverage of the 129x129/12-level stack while cutting
+        // per-level clipmap generation and draw work by nearly four times.
+        .levelCount = 13U,
+        .gridResolution = 65U,
         .baseSpacingMeters = 1.0,
         .levelScale = 2.0,
         .overlapCells = 6U

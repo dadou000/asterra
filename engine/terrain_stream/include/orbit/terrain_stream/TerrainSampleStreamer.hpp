@@ -158,7 +158,8 @@ private:
         const world::SurfaceFrame& surfaceFrame,
         const math::Double2& offsetMeters,
         f64 footprintMeters,
-        f64 epsilonMeters) const noexcept;
+        f64 epsilonMeters,
+        const terrain::TerrainSample* centerSample = nullptr) const noexcept;
 
     jobs::JobSystem& jobSystem_;
     world::PlanetDefinition planet_;

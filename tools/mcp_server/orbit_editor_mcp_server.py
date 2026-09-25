@@ -116,6 +116,12 @@ def orbit_project_info() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_cpu_timings() -> dict[str, Any]:
+    """Return last and rolling 120-frame CPU timings for the live Studio frame loop."""
+    return _rpc("studio.cpu_timings")
+
+
+@mcp.tool()
 def orbit_build_profiles() -> list[dict[str, Any]]:
     """Return build profiles from the open Project.orbit.toml."""
     return _rpc("build.profiles")

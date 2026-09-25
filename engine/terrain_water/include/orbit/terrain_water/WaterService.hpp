@@ -267,6 +267,8 @@ public:
 private:
     [[nodiscard]] DynamicWaterPage& RequirePage(WaterPageId id);
     [[nodiscard]] InteriorWaterDomain& RequireDomain(WaterDomainId id);
+    void InjectVolumeIntoPage(DynamicWaterPage& page, u32 x, u32 y, f64 volumeCubicMeters);
+    void InjectMomentumIntoPage(DynamicWaterPage& page, u32 x, u32 y, math::Double2 impulseNewtonSeconds);
     void Recount() noexcept;
 
     universe::BodyId body_{};
@@ -280,6 +282,8 @@ private:
     std::unordered_map<HullMaskId, WaterExclusionVolume> exclusions_;
     std::unordered_map<WaterDomainId, InteriorWaterDomain> interiors_;
     WaterServiceCounters counters_{};
+    // Shared solver scratch: pages are advanced serially, so retain one buffer.
+    std::vector<f64> depthDeltas_;
     struct PageConnection
     {
         WaterPageId first{};

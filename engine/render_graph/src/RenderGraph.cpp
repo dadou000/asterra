@@ -89,6 +89,12 @@ TextureHandle RenderGraph::ImportTexture(
             "Imported render texture requires a name.");
     }
 
+    if (const auto found = textureHandles_.find(&texture);
+        found != textureHandles_.end())
+    {
+        return found->second;
+    }
+
     const TextureHandle handle{
         .index =
             static_cast<u32>(
@@ -100,6 +106,7 @@ TextureHandle RenderGraph::ImportTexture(
         .texture = &texture,
         .currentState = currentState
     });
+    textureHandles_.emplace(&texture, handle);
 
     compiled_ = false;
     return handle;
@@ -134,6 +141,7 @@ TextureHandle RenderGraph::CreateTexture(
         .currentState =
             desc.initialState
     });
+    textureHandles_.emplace(pointer, handle);
 
     compiled_ = false;
     return handle;
@@ -150,6 +158,12 @@ BufferHandle RenderGraph::ImportBuffer(
             "Imported render buffer requires a name.");
     }
 
+    if (const auto found = bufferHandles_.find(&buffer);
+        found != bufferHandles_.end())
+    {
+        return found->second;
+    }
+
     const BufferHandle handle{
         .index =
             static_cast<u32>(
@@ -161,6 +175,7 @@ BufferHandle RenderGraph::ImportBuffer(
         .buffer = &buffer,
         .currentState = currentState
     });
+    bufferHandles_.emplace(&buffer, handle);
 
     compiled_ = false;
     return handle;
@@ -195,6 +210,7 @@ BufferHandle RenderGraph::CreateBuffer(
         .currentState =
             desc.initialState
     });
+    bufferHandles_.emplace(pointer, handle);
 
     compiled_ = false;
     return handle;
@@ -340,8 +356,11 @@ void RenderGraph::Compile()
     std::vector<HazardState> bufferHazards(
         buffers_.size());
 
+    // A pass can share many resources with one predecessor. Stamp each
+    // predecessor once instead of linearly searching a growing edge list.
+    std::vector<u32> dependencySeen(passes_.size(), ~0U);
     const auto addDependency =
-        [this](
+        [this, &dependencySeen](
             const u32 passIndex,
             const u32 dependency)
         {
@@ -354,12 +373,9 @@ void RenderGraph::Compile()
                 passes_[passIndex].
                     dependencies;
 
-            if (std::find(
-                    dependencies.begin(),
-                    dependencies.end(),
-                    dependency) ==
-                dependencies.end())
+            if (dependencySeen[dependency] != passIndex)
             {
+                dependencySeen[dependency] = passIndex;
                 dependencies.push_back(
                     dependency);
             }
@@ -534,15 +550,6 @@ void RenderGraph::Execute(
         });
     }
 
-    for (auto& texture : textures_)
-    {
-        texture.lastAccess.reset();
-    }
-    for (auto& buffer : buffers_)
-    {
-        buffer.lastAccess.reset();
-    }
-
     const Resources resources(
         &textureViews,
         &bufferViews);
@@ -575,10 +582,10 @@ void RenderGraph::Execute(
                 use.state ==
                     rhi::ResourceState::
                         UnorderedAccess &&
-                texture.lastAccess.has_value() &&
-                (*texture.lastAccess ==
-                     Access::Write ||
-                 use.access == Access::Write))
+                ((!texture.lastAccess.has_value() && !texture.owned) ||
+                 (texture.lastAccess.has_value() &&
+                  (*texture.lastAccess == Access::Write ||
+                   use.access == Access::Write))))
             {
                 commands.UavBarrier(
                     *texture.texture);
@@ -610,10 +617,10 @@ void RenderGraph::Execute(
                 use.state ==
                     rhi::ResourceState::
                         UnorderedAccess &&
-                buffer.lastAccess.has_value() &&
-                (*buffer.lastAccess ==
-                     Access::Write ||
-                 use.access == Access::Write))
+                ((!buffer.lastAccess.has_value() && !buffer.owned) ||
+                 (buffer.lastAccess.has_value() &&
+                  (*buffer.lastAccess == Access::Write ||
+                   use.access == Access::Write))))
             {
                 commands.UavBarrier(
                     *buffer.buffer);

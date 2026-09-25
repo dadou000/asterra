@@ -76,7 +76,8 @@ public:
         const LightingView& view,
         const math::Double3& observerInFrameMeters,
         u64 sourceRevision,
-        f32 deltaSeconds);
+        f32 deltaSeconds,
+        bool collectStats = true);
 
     void InvalidateSphere(
         const math::Double3& centerInFrameMeters,
@@ -93,7 +94,8 @@ public:
     [[nodiscard]] std::vector<RadianceUpdateCandidate>
     BuildUpdateList(
         const math::Double3& observerInFrameMeters,
-        u32 maximumUpdates) const;
+        u32 maximumUpdates,
+        RadianceResidencyStats* stats = nullptr) const;
 
     [[nodiscard]] bool CommitUpdate(
         const RadianceCellKey& key,
@@ -109,6 +111,14 @@ public:
 
     [[nodiscard]] RadianceGpuSnapshot BuildGpuSnapshot(
         const LightingView& view) const;
+
+    [[nodiscard]] const RadianceGpuSnapshot& BuildGpuSnapshotRef(
+        const LightingView& view) const;
+
+    void ConfigureGpuSnapshotFrameSlots(u32 frameSlots);
+    [[nodiscard]] std::span<const u32> GpuSnapshotDirtyCellIndices(
+        u32 frameSlot) const noexcept;
+    void ClearGpuSnapshotDirtyCellIndices(u32 frameSlot) const noexcept;
 
     [[nodiscard]] const RadianceClipmapConfig& Config() const noexcept;
 
@@ -134,10 +144,19 @@ private:
     [[nodiscard]] bool BelongsToCurrentWindow(
         const RadianceCellKey& key) const noexcept;
 
+    void UpdateGpuSnapshotCell(
+        std::size_t levelIndex,
+        std::size_t slotIndex) const noexcept;
+
     RadianceClipmapConfig config_{};
     frames::FrameId frame_{};
     universe::BodyId body_{};
     u64 sourceRevision_{0U};
+    bool residencyInitialized_{false};
     std::vector<Level> levels_;
+    mutable RadianceGpuSnapshot gpuSnapshotCache_;
+    mutable bool gpuSnapshotCacheInitialized_{false};
+    mutable std::vector<std::vector<u32>> gpuSnapshotDirtyCellIndices_;
+    mutable std::vector<std::vector<u8>> gpuSnapshotCellDirtyFlags_;
 };
 } // namespace orbit::lighting

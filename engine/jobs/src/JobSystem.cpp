@@ -108,40 +108,31 @@ public:
                     Worker>());
         }
 
-        for (u32 index = 0;
-             index < workerCount;
-             ++index)
+        try
         {
-            workers_[index]->thread =
-                std::thread(
-                    [this, index]
-                    {
-                        WorkerLoop(
-                            index);
-                    });
+            for (u32 index = 0;
+                 index < workerCount;
+                 ++index)
+            {
+                workers_[index]->thread =
+                    std::thread(
+                        [this, index]
+                        {
+                            WorkerLoop(index);
+                        });
+            }
+        }
+        catch (...)
+        {
+            StopWorkers();
+            throw;
         }
     }
 
     ~Impl()
     {
         WaitIdle();
-
-        stopping_.store(
-            true,
-            std::memory_order_release);
-
-        wakeCondition_.
-            notify_all();
-
-        for (auto& worker :
-             workers_)
-        {
-            if (worker->thread.
-                    joinable())
-            {
-                worker->thread.join();
-            }
-        }
+        StopWorkers();
     }
 
     void Submit(
@@ -331,6 +322,24 @@ private:
             std::numeric_limits<u32>::
                 max();
 
+    void StopWorkers()
+    {
+        {
+            std::scoped_lock lock(wakeMutex_);
+            stopping_.store(true, std::memory_order_release);
+        }
+
+        wakeCondition_.notify_all();
+
+        for (auto& worker : workers_)
+        {
+            if (worker->thread.joinable())
+            {
+                worker->thread.join();
+            }
+        }
+    }
+
     void Enqueue(JobItem item)
     {
         const u64 ticket =
@@ -364,6 +373,12 @@ private:
                     std::memory_order_release);
         }
 
+        {
+            // Publish the wake generation under the condition-variable mutex
+            // so an enqueue between an empty scan and sleep cannot be lost.
+            std::scoped_lock lock(wakeMutex_);
+            ++workGeneration_;
+        }
         wakeCondition_.notify_one();
     }
 
@@ -543,6 +558,12 @@ private:
     {
         while (true)
         {
+            u64 observedGeneration;
+            {
+                std::scoped_lock lock(wakeMutex_);
+                observedGeneration = workGeneration_;
+            }
+
             if (TryExecuteOne(
                     workerIndex))
             {
@@ -561,10 +582,13 @@ private:
             std::unique_lock lock(
                 wakeMutex_);
 
-            wakeCondition_.wait_for(
+            wakeCondition_.wait(
                 lock,
-                std::chrono::
-                    milliseconds(1));
+                [this, observedGeneration]
+                {
+                    return stopping_.load(std::memory_order_acquire) ||
+                        workGeneration_ != observedGeneration;
+                });
         }
     }
 
@@ -582,6 +606,7 @@ private:
         stopping_{false};
 
     std::mutex wakeMutex_;
+    u64 workGeneration_{0};
     std::condition_variable
         wakeCondition_;
 };

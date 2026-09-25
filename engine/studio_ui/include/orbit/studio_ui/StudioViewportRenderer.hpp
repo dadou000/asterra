@@ -77,6 +77,9 @@ struct StudioRenderedView
     bool targeted{false};
 };
 
+using StudioComposeCpuTimingRecorder =
+    std::function<void(std::string_view, f64)>;
+
 struct StudioMacroGlobeDiagnostics
 {
     universe::BodyId body{};
@@ -406,7 +409,8 @@ public:
         bool drawPathDebug = true,
         u32 frameIndex = 0U,
         const lighting::LightingWorkPlan& lightingPlan = {},
-        lighting::LightingTimestampRecorder* lightingTimestamps = nullptr);
+        lighting::LightingTimestampRecorder* lightingTimestamps = nullptr,
+        const StudioComposeCpuTimingRecorder& cpuTimingRecorder = {});
 
 private:
     [[nodiscard]] std::vector<StudioRenderedView> ComposeBase(
@@ -419,7 +423,8 @@ private:
         bool drawPathDebug,
         u32 frameIndex,
         const lighting::LightingWorkPlan& lightingPlan,
-        lighting::LightingTimestampRecorder* lightingTimestamps);
+        lighting::LightingTimestampRecorder* lightingTimestamps,
+        const StudioComposeCpuTimingRecorder& cpuTimingRecorder);
 
     [[nodiscard]] celestial_globe::GpuMacroGlobeProduct* EnsureMacroGlobePresentation(
         std::string_view viewportId,
@@ -532,6 +537,8 @@ private:
         u64 lightingFingerprint{0U};
         lighting::EmissiveInvalidationTracker emissiveInvalidationTracker;
         std::unique_ptr<lighting::RadianceClipmapResidency> radianceResidency;
+        std::vector<std::unique_ptr<rhi::Buffer>> radianceCellsBuffers;
+        std::vector<std::unique_ptr<rhi::Buffer>> radianceLevelsBuffers;
         std::unique_ptr<rhi::Texture> indirectA;
         std::unique_ptr<rhi::Texture> indirectB;
         std::unique_ptr<rhi::Texture> metaA;

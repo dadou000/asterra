@@ -251,6 +251,7 @@ public:
         SetObserver(observer);
         CreatePipeline(shaderCompiler);
         CreateBuffers();
+        frameNeedsUpload_.assign(config_.framesInFlight, true);
 
         scratchVertices_.reserve(
             (static_cast<std::size_t>(
@@ -290,7 +291,31 @@ public:
             return;
         }
 
-        BuildVisibleVertices();
+        const u64 contentRevision = regionCache_->ContentRevision();
+        const u64 sourceRevision = regionCache_->IdForTile({}).sourceRevision;
+        const u64 fineContentRevision = fineRegionCache_
+            ? fineRegionCache_->ContentRevision() : 0;
+        const u64 fineSourceRevision = fineRegionCache_
+            ? fineRegionCache_->IdForTile({}).sourceRevision : 0;
+
+        if (geometryDirty_ || contentRevision != geometryContentRevision_ ||
+            sourceRevision != geometrySourceRevision_ ||
+            fineContentRevision != geometryFineContentRevision_ ||
+            fineSourceRevision != geometryFineSourceRevision_)
+        {
+            BuildVisibleVertices();
+            geometryStats_ = stats_;
+            geometryContentRevision_ = contentRevision;
+            geometrySourceRevision_ = sourceRevision;
+            geometryFineContentRevision_ = fineContentRevision;
+            geometryFineSourceRevision_ = fineSourceRevision;
+            geometryDirty_ = false;
+            std::fill(frameNeedsUpload_.begin(), frameNeedsUpload_.end(), true);
+        }
+        else
+        {
+            stats_ = geometryStats_;
+        }
 
         if (scratchVertices_.empty())
         {
@@ -301,14 +326,17 @@ public:
             scratchVertices_.size() *
             sizeof(WaterVertex);
 
-        UploadBuffer(
-            *frameVertexBuffers_[
-                frameIndex],
-            scratchVertices_.data(),
-            bytes);
-
-        stats_.uploadedBytesLastFrame =
-            static_cast<u64>(bytes);
+        // Each frame buffer must receive this geometry once before reuse.
+        // Camera rotation changes only constants; stationary water needs no
+        // repeated CPU tessellation or vertex upload after all slots are warm.
+        if (frameNeedsUpload_[frameIndex])
+        {
+            UploadBuffer(
+                *frameVertexBuffers_[frameIndex],
+                scratchVertices_.data(), bytes);
+            frameNeedsUpload_[frameIndex] = false;
+            stats_.uploadedBytesLastFrame = static_cast<u64>(bytes);
+        }
 
         math::Float3 cameraForward =
             math::Normalize(
@@ -435,6 +463,14 @@ private:
     void SetObserver(
         const world::WorldPosition& observer)
     {
+        if (observerFrameInitialized_ &&
+            observer.meters.x == observer_.meters.x &&
+            observer.meters.y == observer_.meters.y &&
+            observer.meters.z == observer_.meters.z)
+        {
+            return;
+        }
+
         if (math::Length(
                 observer.meters) <=
             planet_.radiusMeters)
@@ -444,6 +480,7 @@ private:
         }
 
         observer_ = observer;
+        geometryDirty_ = true;
 
         if (!observerFrameInitialized_)
         {
@@ -1083,6 +1120,13 @@ private:
     std::vector<WaterVertex>
         scratchVertices_;
 
+    bool geometryDirty_{true};
+    u64 geometryContentRevision_{0};
+    u64 geometrySourceRevision_{0};
+    u64 geometryFineContentRevision_{0};
+    u64 geometryFineSourceRevision_{0};
+    std::vector<bool> frameNeedsUpload_;
+    RiverWaterRenderStats geometryStats_{};
     RiverWaterRenderStats stats_{};
 };
 

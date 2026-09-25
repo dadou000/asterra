@@ -95,13 +95,13 @@ void ValidateRequest(
             "Orbit terrain sampling requires at least two samples per axis.");
     }
 
-    if (request.spacingMeters <= 0.0)
+    if (!std::isfinite(request.spacingMeters) || request.spacingMeters <= 0.0)
     {
         throw std::invalid_argument(
             "Orbit terrain sampling spacing must be positive.");
     }
 
-    if (request.footprintMeters <= 0.0)
+    if (!std::isfinite(request.footprintMeters) || request.footprintMeters <= 0.0)
     {
         throw std::invalid_argument(
             "Orbit terrain sampling footprint must be positive.");
@@ -109,19 +109,30 @@ void ValidateRequest(
 
     if (request.morphToCoarser)
     {
-        if (request.coarseSpacingMeters <= 0.0 ||
+        if (!std::isfinite(request.coarseSpacingMeters) ||
+            !std::isfinite(request.coarseFootprintMeters) ||
+            request.coarseSpacingMeters <= 0.0 ||
             request.coarseFootprintMeters <= 0.0)
         {
             throw std::invalid_argument(
                 "Orbit terrain coarse morph sampling requires positive coarse spacing and footprint.");
         }
 
-        if (request.morphEndHalfExtentMeters <=
+        if (!std::isfinite(request.morphStartHalfExtentMeters) ||
+            !std::isfinite(request.morphEndHalfExtentMeters) ||
+            request.morphEndHalfExtentMeters <=
             request.morphStartHalfExtentMeters)
         {
             throw std::invalid_argument(
                 "Orbit terrain coarse morph range must have positive width.");
         }
+    }
+
+    if (!std::isfinite(request.centerOffsetMeters.x) ||
+        !std::isfinite(request.centerOffsetMeters.y))
+    {
+        throw std::invalid_argument(
+            "Orbit terrain sampling center offset must be finite.");
     }
 
     if (request.originX >= request.resolution ||
@@ -155,10 +166,10 @@ void ValidateRequest(
                 "Orbit terrain sampling regions cannot be empty.");
         }
 
-        if (region.x + region.width >
-                request.resolution ||
-            region.y + region.height >
-                request.resolution)
+        if (region.x >= request.resolution ||
+            region.width > request.resolution - region.x ||
+            region.y >= request.resolution ||
+            region.height > request.resolution - region.y)
         {
             throw std::invalid_argument(
                 "Orbit terrain sampling region exceeds the physical sample window.");
@@ -200,7 +211,7 @@ TerrainSampleStreamer::TerrainSampleStreamer(
       planet_(planet),
       terrainSource_(terrainSource)
 {
-    if (planet_.radiusMeters <= 0.0)
+    if (!std::isfinite(planet_.radiusMeters) || planet_.radiusMeters <= 0.0)
     {
         throw std::invalid_argument(
             "Orbit terrain sampling requires a positive planet radius.");
@@ -379,7 +390,8 @@ math::Double2 TerrainSampleStreamer::SampleFineSlope(
     const world::SurfaceFrame& surfaceFrame,
     const math::Double2& offsetMeters,
     const f64 footprintMeters,
-    const f64 epsilonMeters) const noexcept
+    const f64 epsilonMeters,
+    const terrain::TerrainSample* centerSample) const noexcept
 {
     const auto elevationAt =
         [&](const math::Double2& offset) noexcept -> f64
@@ -394,7 +406,8 @@ math::Double2 TerrainSampleStreamer::SampleFineSlope(
             }).elevationMeters;
         };
 
-    const f64 center = elevationAt(offsetMeters);
+    const f64 center = centerSample != nullptr
+        ? centerSample->elevationMeters : elevationAt(offsetMeters);
 
     const f64 east =
         elevationAt(
@@ -512,7 +525,9 @@ TerrainSampleStreamer::GeneratePatch(
                     request.surfaceFrame,
                     surfaceOffsetMeters,
                     fineNormalFootprintMeters,
-                    fineNormalEpsilonMeters);
+                    fineNormalEpsilonMeters,
+                    fineNormalFootprintMeters == request.footprintMeters
+                        ? &sample : nullptr);
 
             if (request.morphToCoarser)
             {
@@ -539,15 +554,6 @@ TerrainSampleStreamer::GeneratePatch(
                             request.
                                 coarseSpacingMeters
                     };
-
-                const math::Double3
-                    coarseDirection =
-                        world::
-                            DirectionAtSurfaceOffset(
-                                planet_,
-                                request.
-                                    surfaceFrame,
-                                snappedCoarseOffset);
 
                 morphTarget =
                     snappedCoarseOffset;
@@ -579,6 +585,10 @@ TerrainSampleStreamer::GeneratePatch(
 
                 if (morph > 0.0)
                 {
+                    const math::Double3 coarseDirection =
+                        world::DirectionAtSurfaceOffset(
+                            planet_, request.surfaceFrame, snappedCoarseOffset);
+
                     const terrain::TerrainSample
                         coarseSample =
                             terrainSource_.Sample({
@@ -602,7 +612,9 @@ TerrainSampleStreamer::GeneratePatch(
                                     surfaceFrame,
                                 snappedCoarseOffset,
                                 fineNormalFootprintMeters,
-                                fineNormalEpsilonMeters);
+                                fineNormalEpsilonMeters,
+                                fineNormalFootprintMeters == request.coarseFootprintMeters
+                                    ? &coarseSample : nullptr);
 
                     fineSlope = {
                         fineSlope.x +

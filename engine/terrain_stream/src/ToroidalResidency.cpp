@@ -120,13 +120,11 @@ ResidencyUpdate ToroidalResidency::Apply(
         const i64 shiftY =
             movement.cellShiftY;
 
+        // Compare before taking an absolute value: abs(INT64_MIN) overflows.
+        const i64 maximumShift = static_cast<i64>(resolution);
         const bool tooLarge =
-            std::abs(shiftX) >=
-                static_cast<i64>(
-                    resolution) ||
-            std::abs(shiftY) >=
-                static_cast<i64>(
-                    resolution);
+            shiftX <= -maximumShift || shiftX >= maximumShift ||
+            shiftY <= -maximumShift || shiftY >= maximumShift;
 
         if (movement.fullRefresh ||
             tooLarge)

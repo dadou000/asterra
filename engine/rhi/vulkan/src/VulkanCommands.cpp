@@ -46,7 +46,8 @@ ImageBarrierInfo ToImageBarrierInfo(
                 : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
+            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
 
     case ResourceState::DepthRead:
         return {
@@ -54,7 +55,10 @@ ImageBarrierInfo ToImageBarrierInfo(
                 ? VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL
                 : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT |
+                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                 VK_ACCESS_2_SHADER_READ_BIT};
 
@@ -62,7 +66,8 @@ ImageBarrierInfo ToImageBarrierInfo(
         return {
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_READ_BIT};
 
     case ResourceState::UnorderedAccess:
@@ -119,7 +124,9 @@ BufferBarrierInfo ToBufferBarrierInfo(const ResourceState state)
     case ResourceState::VertexOrConstantBuffer:
         return {
             VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
-                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
                 VK_ACCESS_2_UNIFORM_READ_BIT};
 
@@ -131,7 +138,8 @@ BufferBarrierInfo ToBufferBarrierInfo(const ResourceState state)
     case ResourceState::ShaderResource:
         return {
             VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_READ_BIT};
 
     case ResourceState::UnorderedAccess:

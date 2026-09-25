@@ -253,8 +253,20 @@ void VulkanBuffer::Unmap()
         return;
     }
 
+    // VMA may select non-coherent host memory. Unmapping does not make
+    // CPU writes visible to the GPU; coherent allocations make this a no-op.
+    const VkResult flushResult =
+        desc_.memory == MemoryUsage::HostVisible
+            ? vmaFlushAllocation(allocator_, allocation_, 0, VK_WHOLE_SIZE)
+            : VK_SUCCESS;
     vmaUnmapMemory(allocator_, allocation_);
     mapped_ = false;
+
+    if (flushResult != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "Orbit failed to flush a Vulkan upload buffer.");
+    }
 }
 
 VkBuffer VulkanBuffer::Native() const noexcept

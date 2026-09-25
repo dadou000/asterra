@@ -18,39 +18,76 @@ namespace
 constexpr const char* kWindowClassName =
     "OrbitWindowClass";
 
-[[nodiscard]] int ToVirtualKey(
-    const Key key)
+[[nodiscard]] wchar_t LogicalCharacter(
+    const Key key) noexcept
 {
     switch (key)
     {
     case Key::W:
-        return 'W';
+        return L'W';
     case Key::A:
-        return 'A';
+        return L'A';
     case Key::S:
-        return 'S';
+        return L'S';
     case Key::D:
-        return 'D';
+        return L'D';
     case Key::Q:
-        return 'Q';
+        return L'Q';
     case Key::E:
-        return 'E';
+        return L'E';
     case Key::C:
-        return 'C';
+        return L'C';
     case Key::G:
-        return 'G';
+        return L'G';
     case Key::L:
-        return 'L';
+        return L'L';
     case Key::M:
-        return 'M';
+        return L'M';
     case Key::V:
-        return 'V';
+        return L'V';
     case Key::X:
-        return 'X';
+        return L'X';
     case Key::Y:
-        return 'Y';
+        return L'Y';
     case Key::Z:
-        return 'Z';
+        return L'Z';
+    default:
+        return L'\0';
+    }
+}
+
+[[nodiscard]] int ToVirtualKey(
+    const Key key,
+    const HKL keyboardLayout)
+{
+    const wchar_t character =
+        LogicalCharacter(key);
+
+    if (character != L'\0')
+    {
+        // Virtual-key codes for alphabetic keys describe US-keyboard
+        // positions. Resolve the logical control character through the
+        // active Windows input locale instead: e.g. W/A/S/D becomes
+        // Z/Q/S/D on an AZERTY layout, while remaining W/A/S/D on QWERTY.
+        // Use the low byte only; any required Shift/AltGr state is a text
+        // input concern and must not be synthesized for a held game key.
+        const SHORT mapped =
+            VkKeyScanExW(
+                character,
+                keyboardLayout);
+
+        if (mapped != -1)
+        {
+            return LOBYTE(mapped);
+        }
+
+        // Keep a predictable fallback for layouts that cannot produce this
+        // particular Latin control character.
+        return static_cast<int>(character);
+    }
+
+    switch (key)
+    {
     case Key::LeftShift:
         return VK_LSHIFT;
     case Key::LeftControl:
@@ -537,9 +574,20 @@ public:
             return false;
         }
 
+        const DWORD windowThreadId =
+            GetWindowThreadProcessId(
+                hwnd_,
+                nullptr);
+
+        const HKL keyboardLayout =
+            GetKeyboardLayout(
+                windowThreadId);
+
         return (
             GetAsyncKeyState(
-                ToVirtualKey(key)) &
+                ToVirtualKey(
+                    key,
+                    keyboardLayout)) &
             0x8000) != 0;
     }
 

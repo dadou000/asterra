@@ -17,14 +17,13 @@ namespace
            std::isfinite(value.z);
 }
 
-[[nodiscard]] std::vector<math::Double3>
-Accelerations(
+void Accelerations(
     const std::vector<OrbitState>& states,
     const std::vector<f64>& masses,
-    const f64 softeningMeters)
+    const f64 softeningMeters,
+    std::vector<math::Double3>& acceleration)
 {
-    std::vector<math::Double3>
-        acceleration(states.size());
+    acceleration.assign(states.size(), math::Double3{});
 
     const f64 epsilon2 =
         softeningMeters * softeningMeters;
@@ -72,22 +71,16 @@ Accelerations(
                 directionScale * masses[i];
         }
     }
-
-    return acceleration;
 }
 
 void VelocityVerletStep(
     std::vector<OrbitState>& states,
     const std::vector<f64>& masses,
     const f64 softeningMeters,
-    const f64 dt)
+    const f64 dt,
+    std::vector<math::Double3>& a0,
+    std::vector<math::Double3>& a1)
 {
-    const auto a0 =
-        Accelerations(
-            states,
-            masses,
-            softeningMeters);
-
     for (std::size_t i = 0;
          i < states.size();
          ++i)
@@ -98,11 +91,7 @@ void VelocityVerletStep(
             a0[i] * (0.5 * dt * dt);
     }
 
-    const auto a1 =
-        Accelerations(
-            states,
-            masses,
-            softeningMeters);
+    Accelerations(states, masses, softeningMeters, a1);
 
     for (std::size_t i = 0;
          i < states.size();
@@ -116,6 +105,10 @@ void VelocityVerletStep(
         states[i].quality =
             OrbitStateQuality::DynamicIntegrated;
     }
+
+    // The next step starts at exactly these positions, so reuse their
+    // accelerations instead of evaluating every pair a second time.
+    a0.swap(a1);
 }
 } // namespace
 
@@ -232,35 +225,11 @@ std::vector<OrbitState>
 NBodyDomain::IntegrateTo(
     const time::SimulationTime atTime) const
 {
-    std::vector<OrbitState> states;
-    states.reserve(members_.size());
-
-    std::vector<f64> masses;
-    masses.reserve(members_.size());
-
-    for (const auto& member : members_)
-    {
-        states.push_back(
-            member.initialState);
-        masses.push_back(
-            member.massKilograms);
-    }
-
     const f64 totalSeconds =
         static_cast<f64>(
-            atTime.microsecondsFromEpoch -
-            epoch_.microsecondsFromEpoch) /
+            static_cast<long double>(atTime.microsecondsFromEpoch) -
+            static_cast<long double>(epoch_.microsecondsFromEpoch)) /
         1'000'000.0;
-
-    if (totalSeconds == 0.0)
-    {
-        for (auto& state : states)
-        {
-            state.quality =
-                OrbitStateQuality::DynamicIntegrated;
-        }
-        return states;
-    }
 
     const f64 direction =
         totalSeconds > 0.0
@@ -271,13 +240,53 @@ NBodyDomain::IntegrateTo(
         settings_.stepSeconds *
         direction;
 
-    const u64 fullSteps =
-        static_cast<u64>(
-            std::floor(
-                std::abs(totalSeconds) /
-                settings_.stepSeconds));
+    const f64 stepCount = std::floor(
+        std::abs(totalSeconds) / settings_.stepSeconds);
+    if (!std::isfinite(stepCount) || stepCount >= std::ldexp(1.0, 64))
+    {
+        throw std::overflow_error(
+            "N-body query exceeds the representable integration step count.");
+    }
+    const u64 fullSteps = static_cast<u64>(stepCount);
+    const bool forward = totalSeconds >= 0.0;
 
-    for (u64 step = 0;
+    std::vector<OrbitState> states;
+    u64 firstStep = 0;
+    if (!checkpointStates_.empty() &&
+        checkpointForward_ == forward && checkpointSteps_ <= fullSteps)
+    {
+        states = checkpointStates_;
+        firstStep = checkpointSteps_;
+    }
+    else
+    {
+        states.reserve(members_.size());
+        for (const auto& member : members_)
+        {
+            states.push_back(member.initialState);
+            states.back().quality = OrbitStateQuality::DynamicIntegrated;
+        }
+    }
+
+    std::vector<f64> masses;
+    masses.reserve(members_.size());
+    for (const auto& member : members_)
+    {
+        masses.push_back(member.massKilograms);
+    }
+
+    const f64 consumed =
+        static_cast<f64>(fullSteps) * settings_.stepSeconds * direction;
+    const f64 remainder = totalSeconds - consumed;
+    std::vector<math::Double3> a0;
+    std::vector<math::Double3> a1;
+    if (firstStep < fullSteps || remainder != 0.0)
+    {
+        Accelerations(states, masses, settings_.softeningMeters, a0);
+        a1.resize(states.size());
+    }
+
+    for (u64 step = firstStep;
          step < fullSteps;
          ++step)
     {
@@ -285,16 +294,14 @@ NBodyDomain::IntegrateTo(
             states,
             masses,
             settings_.softeningMeters,
-            fullStep);
+            fullStep,
+            a0,
+            a1);
     }
 
-    const f64 consumed =
-        static_cast<f64>(fullSteps) *
-        settings_.stepSeconds *
-        direction;
-
-    const f64 remainder =
-        totalSeconds - consumed;
+    checkpointStates_ = states;
+    checkpointSteps_ = fullSteps;
+    checkpointForward_ = forward;
 
     if (remainder != 0.0)
     {
@@ -302,7 +309,9 @@ NBodyDomain::IntegrateTo(
             states,
             masses,
             settings_.softeningMeters,
-            remainder);
+            remainder,
+            a0,
+            a1);
     }
 
     return states;
@@ -321,8 +330,14 @@ OrbitState NBodyDomain::EvaluateMember(
             "N-body member is not part of this domain.");
     }
 
-    return IntegrateTo(atTime)[
-        found->second];
+    std::scoped_lock lock(cacheMutex_);
+    if (!evaluatedTime_.has_value() ||
+        evaluatedTime_->microsecondsFromEpoch != atTime.microsecondsFromEpoch)
+    {
+        evaluatedStates_ = IntegrateTo(atTime);
+        evaluatedTime_ = atTime;
+    }
+    return evaluatedStates_[found->second];
 }
 
 std::shared_ptr<const OrbitStateProvider>

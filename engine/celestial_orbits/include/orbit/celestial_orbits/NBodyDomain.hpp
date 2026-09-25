@@ -4,6 +4,7 @@
 #include <orbit/core/StrongId.hpp>
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -90,6 +91,16 @@ private:
     NBodyIntegrationSettings settings_{};
     std::vector<Member> members_;
     std::unordered_map<NBodyMemberId, std::size_t> indexById_;
+
+    // Disposable integration caches are shared by all member providers.
+    // Checkpoints contain only whole steps from the promotion epoch; query
+    // fractional steps never change the starting state of later queries.
+    mutable std::mutex cacheMutex_;
+    mutable std::vector<OrbitState> checkpointStates_;
+    mutable u64 checkpointSteps_{0};
+    mutable bool checkpointForward_{true};
+    mutable std::optional<time::SimulationTime> evaluatedTime_;
+    mutable std::vector<OrbitState> evaluatedStates_;
 };
 
 inline constexpr f64 kGravitationalConstant =

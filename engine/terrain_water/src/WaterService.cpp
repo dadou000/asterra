@@ -27,6 +27,11 @@ namespace
         ? math::Double2{value.x / length, value.y / length}
         : math::Double2{};
 }
+
+[[nodiscard]] WaterPageSide OppositeSide(const WaterPageSide side) noexcept
+{
+    return static_cast<WaterPageSide>((static_cast<u8>(side) + 2U) % 4U);
+}
 } // namespace
 
 bool FluidDefinition::IsValid() const noexcept
@@ -197,7 +202,7 @@ void WaterService::CreatePage(
             throw std::invalid_argument("WaterService bed elevation is invalid.");
         }
         page.cells[index].bedElevationMeters = bedElevations[index];
-        if (IsOceanConnected(bedElevations[index]))
+        if (definition.fluid == ocean_.fluid && IsOceanConnected(bedElevations[index]))
         {
             page.cells[index].depthMeters = ocean_.datumHeightMeters - bedElevations[index];
         }
@@ -213,12 +218,34 @@ void WaterService::ConnectPages(
 {
     const auto* firstPage = FindPage(first);
     const auto* secondPage = FindPage(second);
-    if (firstPage == nullptr || secondPage == nullptr || first == second ||
+    if (static_cast<u8>(firstSide) > static_cast<u8>(WaterPageSide::West) ||
+        firstPage == nullptr || secondPage == nullptr || first == second ||
         firstPage->definition.resolution != secondPage->definition.resolution ||
         firstPage->definition.spacingMeters != secondPage->definition.spacingMeters ||
         firstPage->definition.fluid != secondPage->definition.fluid)
     {
         throw std::invalid_argument("WaterService page connection is invalid.");
+    }
+
+    const WaterPageSide secondSide = OppositeSide(firstSide);
+    for (const auto& connection : connections_)
+    {
+        if ((connection.first == first && connection.firstSide == firstSide &&
+             connection.second == second) ||
+            (connection.first == second && connection.firstSide == secondSide &&
+             connection.second == first))
+        {
+            return;
+        }
+
+        const WaterPageSide connectedSecondSide = OppositeSide(connection.firstSide);
+        if ((connection.first == first && connection.firstSide == firstSide) ||
+            (connection.second == first && connectedSecondSide == firstSide) ||
+            (connection.first == second && connection.firstSide == secondSide) ||
+            (connection.second == second && connectedSecondSide == secondSide))
+        {
+            throw std::invalid_argument("WaterService page side already has a connection.");
+        }
     }
     connections_.push_back({
         .first = first,
@@ -300,11 +327,20 @@ void WaterService::InjectVolume(
     const u32 y,
     const f64 volumeCubicMeters)
 {
+    InjectVolumeIntoPage(RequirePage(pageId), x, y, volumeCubicMeters);
+    Recount();
+}
+
+void WaterService::InjectVolumeIntoPage(
+    DynamicWaterPage& page,
+    const u32 x,
+    const u32 y,
+    const f64 volumeCubicMeters)
+{
     if (!std::isfinite(volumeCubicMeters))
     {
         throw std::invalid_argument("WaterService volume injection is invalid.");
     }
-    auto& page = RequirePage(pageId);
     auto& cell = page.At(x, y);
     const f64 area = page.definition.spacingMeters * page.definition.spacingMeters;
     if (cell.depthMeters + volumeCubicMeters / area < 0.0)
@@ -314,7 +350,6 @@ void WaterService::InjectVolume(
     cell.depthMeters += volumeCubicMeters / area;
     page.sleeping = false;
     page.physicallyForced = true;
-    Recount();
 }
 
 void WaterService::InjectMomentum(
@@ -323,7 +358,16 @@ void WaterService::InjectMomentum(
     const u32 y,
     const math::Double2 impulseNewtonSeconds)
 {
-    auto& page = RequirePage(pageId);
+    InjectMomentumIntoPage(RequirePage(pageId), x, y, impulseNewtonSeconds);
+    Recount();
+}
+
+void WaterService::InjectMomentumIntoPage(
+    DynamicWaterPage& page,
+    const u32 x,
+    const u32 y,
+    const math::Double2 impulseNewtonSeconds)
+{
     const auto* fluid = FindFluid(page.definition.fluid);
     if (fluid == nullptr || !std::isfinite(impulseNewtonSeconds.x) ||
         !std::isfinite(impulseNewtonSeconds.y))
@@ -337,7 +381,6 @@ void WaterService::InjectMomentum(
     cell.momentumYSquareMetersPerSecond += impulseNewtonSeconds.y / scale;
     page.sleeping = false;
     page.physicallyForced = true;
-    Recount();
 }
 
 void WaterService::InjectAngularMomentum(
@@ -383,7 +426,10 @@ void WaterService::EmitPhysicalWave(
     const math::Double2 direction)
 {
     auto& target = RequirePage(page);
-    if (!FiniteNonNegative(amplitudeMeters) || Length(direction) <= 1.0e-12)
+    if (!FiniteNonNegative(amplitudeMeters) ||
+        !std::isfinite(direction.x) || !std::isfinite(direction.y) ||
+        !std::isfinite(Length(direction)) || Length(direction) <= 1.0e-12 ||
+        FindFluid(target.definition.fluid) == nullptr)
     {
         throw std::invalid_argument("WaterService physical wave is invalid.");
     }
@@ -470,17 +516,17 @@ void WaterService::Step(const f64 seconds, const u32 substeps)
         for (const auto& [id, source] : sources_)
         {
             static_cast<void>(id);
-            if (!source.enabled)
+            if (!source.enabled || source.volumeRateCubicMetersPerSecond == 0.0)
             {
                 continue;
             }
-            InjectVolume(source.page, source.x, source.y,
-                source.volumeRateCubicMetersPerSecond * dt);
             auto& page = RequirePage(source.page);
+            InjectVolumeIntoPage(page, source.x, source.y,
+                source.volumeRateCubicMetersPerSecond * dt);
             const auto* fluid = FindFluid(page.definition.fluid);
             const f64 mass = source.volumeRateCubicMetersPerSecond * dt *
                 fluid->densityKgPerCubicMeter;
-            InjectMomentum(source.page, source.x, source.y,
+            InjectMomentumIntoPage(page, source.x, source.y,
                 {source.velocityMetersPerSecond.x * mass,
                  source.velocityMetersPerSecond.y * mass});
         }
@@ -494,7 +540,8 @@ void WaterService::Step(const f64 seconds, const u32 substeps)
             const u32 n = page.definition.resolution;
             const f64 spacing = page.definition.spacingMeters;
             const f64 area = spacing * spacing;
-            std::vector<f64> delta(page.cells.size(), 0.0);
+            depthDeltas_.assign(page.cells.size(), 0.0);
+            auto& delta = depthDeltas_;
             bool hasBarrier = false;
             f64 permeability = 1.0;
             for (const auto& [barrierId, barrier] : barriers_)
@@ -552,13 +599,36 @@ void WaterService::Step(const f64 seconds, const u32 substeps)
                 page.cells[index].momentumYSquareMetersPerSecond *= 0.995;
             }
 
-            if (ocean_.enabled)
+            if (ocean_.enabled && page.definition.fluid == ocean_.fluid)
             {
+                std::array<bool, 4U> reservoirSides{};
+                for (std::size_t side = 0; side < reservoirSides.size(); ++side)
+                {
+                    const auto boundary = page.definition.boundaries[side];
+                    reservoirSides[side] = boundary == WaterBoundaryType::Open ||
+                        boundary == WaterBoundaryType::Reservoir;
+                }
+                // An explicit neighbor owns this edge's flux. Applying an
+                // ocean reservoir as well would create a second authority.
+                for (const auto& connection : connections_)
+                {
+                    if (connection.first == pageId)
+                    {
+                        reservoirSides[static_cast<u8>(connection.firstSide)] = false;
+                    }
+                    if (connection.second == pageId)
+                    {
+                        reservoirSides[static_cast<u8>(OppositeSide(connection.firstSide))] = false;
+                    }
+                }
                 for (u32 y = 0; y < n; ++y)
                 {
                     for (u32 x = 0; x < n; ++x)
                     {
-                        const bool edge = x == 0U || y == 0U || x + 1U == n || y + 1U == n;
+                        const bool edge = (y == 0U && reservoirSides[0]) ||
+                            (x + 1U == n && reservoirSides[1]) ||
+                            (y + 1U == n && reservoirSides[2]) ||
+                            (x == 0U && reservoirSides[3]);
                         if (!edge)
                         {
                             continue;

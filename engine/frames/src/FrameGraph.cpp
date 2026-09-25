@@ -1,8 +1,6 @@
 #include <orbit/frames/FrameGraph.hpp>
 
-#include <algorithm>
 #include <stdexcept>
-#include <unordered_map>
 #include <utility>
 
 namespace orbit::frames
@@ -104,7 +102,13 @@ void FrameGraph::AddFrame(
             .parent = definition.parent,
             .parentFromFrame =
                 std::move(
-                    definition.parentFromFrame)
+                    definition.parentFromFrame),
+            .depth = definition.parent.has_value()
+                ? frames_.at(*definition.parent).depth + 1
+                : 0,
+            .root = definition.parent.has_value()
+                ? frames_.at(*definition.parent).root
+                : definition.id
         });
 }
 
@@ -127,46 +131,6 @@ std::optional<FrameId> FrameGraph::Parent(
     return found->second.parent;
 }
 
-std::vector<FrameId>
-FrameGraph::AncestorsInclusive(
-    const FrameId frame) const
-{
-    std::vector<FrameId> result;
-
-    auto found = frames_.find(frame);
-    if (found == frames_.end())
-    {
-        return result;
-    }
-
-    FrameId current = frame;
-
-    while (true)
-    {
-        result.push_back(current);
-
-        const auto currentRecord =
-            frames_.find(current);
-
-        if (currentRecord ==
-            frames_.end())
-        {
-            return {};
-        }
-
-        if (!currentRecord->
-                second.parent.has_value())
-        {
-            break;
-        }
-
-        current =
-            *currentRecord->second.parent;
-    }
-
-    return result;
-}
-
 std::optional<math::RigidTransformD>
 FrameGraph::ResolveTransform(
     const FrameId source,
@@ -183,114 +147,49 @@ FrameGraph::ResolveTransform(
         return math::IdentityRigidTransformD();
     }
 
-    const std::vector<FrameId>
-        sourceAncestors =
-            AncestorsInclusive(source);
-    const std::vector<FrameId>
-        targetAncestors =
-            AncestorsInclusive(target);
-
-    if (sourceAncestors.empty() ||
-        targetAncestors.empty())
+    auto sourceRecord = frames_.find(source);
+    auto targetRecord = frames_.find(target);
+    if (sourceRecord == frames_.end() ||
+        targetRecord == frames_.end() ||
+        sourceRecord->second.root != targetRecord->second.root)
     {
         return std::nullopt;
     }
 
-    std::unordered_map<FrameId, std::size_t>
-        targetDepth;
+    math::RigidTransformD
+        commonFromSource =
+            math::IdentityRigidTransformD();
 
-    targetDepth.reserve(
-        targetAncestors.size());
+    math::RigidTransformD
+        commonFromTarget =
+            math::IdentityRigidTransformD();
 
-    for (std::size_t index = 0;
-         index < targetAncestors.size();
-         ++index)
+    // Depth is stable because frames are immutable once inserted. Walking
+    // toward the common ancestor needs no per-query vectors or hash table.
+    while (sourceRecord != targetRecord)
     {
-        targetDepth.emplace(
-            targetAncestors[index],
-            index);
-    }
-
-    std::optional<FrameId>
-        commonAncestor;
-
-    std::size_t sourceToCommonCount = 0;
-    std::size_t targetToCommonCount = 0;
-
-    for (std::size_t sourceIndex = 0;
-         sourceIndex <
-            sourceAncestors.size();
-         ++sourceIndex)
-    {
-        const auto match =
-            targetDepth.find(
-                sourceAncestors[
-                    sourceIndex]);
-
-        if (match != targetDepth.end())
+        if (sourceRecord->second.depth >= targetRecord->second.depth)
         {
-            commonAncestor =
-                sourceAncestors[
-                    sourceIndex];
-            sourceToCommonCount =
-                sourceIndex;
-            targetToCommonCount =
-                match->second;
-            break;
-        }
-    }
-
-    if (!commonAncestor.has_value())
-    {
-        return std::nullopt;
-    }
-
-    math::RigidTransformD
-        commonFromSource =
-            math::IdentityRigidTransformD();
-
-    for (std::size_t index = 0;
-         index < sourceToCommonCount;
-         ++index)
-    {
-        const auto record =
-            frames_.find(
-                sourceAncestors[index]);
-
-        const math::RigidTransformD
-            parentFromCurrent =
-                record->second.
-                    parentFromFrame(
-                        atTime);
-
-        commonFromSource =
-            math::Compose(
-                parentFromCurrent,
+            if (!sourceRecord->second.parent.has_value())
+            {
+                return std::nullopt;
+            }
+            commonFromSource = math::Compose(
+                sourceRecord->second.parentFromFrame(atTime),
                 commonFromSource);
-    }
-
-    math::RigidTransformD
-        commonFromTarget =
-            math::IdentityRigidTransformD();
-
-    for (std::size_t index = 0;
-         index < targetToCommonCount;
-         ++index)
-    {
-        const auto record =
-            frames_.find(
-                targetAncestors[index]);
-
-        const math::RigidTransformD
-            parentFromCurrent =
-                record->second.
-                    parentFromFrame(
-                        atTime);
-
-        commonFromTarget =
-            math::Compose(
-                parentFromCurrent,
+            sourceRecord = frames_.find(*sourceRecord->second.parent);
+        }
+        else
+        {
+            if (!targetRecord->second.parent.has_value())
+            {
+                return std::nullopt;
+            }
+            commonFromTarget = math::Compose(
+                targetRecord->second.parentFromFrame(atTime),
                 commonFromTarget);
+            targetRecord = frames_.find(*targetRecord->second.parent);
+        }
     }
 
     return math::Compose(

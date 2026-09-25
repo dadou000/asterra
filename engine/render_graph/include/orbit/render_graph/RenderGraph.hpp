@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace orbit::render_graph
@@ -110,6 +111,8 @@ public:
     RenderGraph(RenderGraph&&) = delete;
     RenderGraph& operator=(RenderGraph&&) = delete;
 
+    // Reimporting the same resource returns its existing handle. The first
+    // import establishes the state; all passes share one hazard authority.
     [[nodiscard]] TextureHandle ImportTexture(
         std::string_view name,
         rhi::Texture& texture,
@@ -173,6 +176,8 @@ private:
     rhi::Device& device_;
     std::vector<TextureEntry> textures_;
     std::vector<BufferEntry> buffers_;
+    std::unordered_map<rhi::Texture*, TextureHandle> textureHandles_;
+    std::unordered_map<rhi::Buffer*, BufferHandle> bufferHandles_;
     std::vector<PassEntry> passes_;
     std::vector<u32> executionOrder_;
     bool compiled_{false};

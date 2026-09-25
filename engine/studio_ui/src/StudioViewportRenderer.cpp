@@ -66,7 +66,8 @@ StudioViewportRenderer::Compose(
     const bool drawPathDebug,
     const u32 frameIndex,
     const lighting::LightingWorkPlan& lightingPlan,
-    lighting::LightingTimestampRecorder* const lightingTimestamps)
+    lighting::LightingTimestampRecorder* const lightingTimestamps,
+    const StudioComposeCpuTimingRecorder& cpuTimingRecorder)
 {
     const auto overlays =
         StudioLightingOverlays();
@@ -113,7 +114,8 @@ StudioViewportRenderer::Compose(
             drawPathDebug,
             frameIndex,
             lightingPlan,
-            lightingTimestamps);
+            lightingTimestamps,
+            cpuTimingRecorder);
 
     // Surface debug choice is captured while ComposeBase builds the graph, so
     // restore the user's persistent viewport mode immediately afterwards.

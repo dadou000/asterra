@@ -21,7 +21,8 @@ ClipmapTracker::ClipmapTracker(
       config_(config),
       levels_(config.levelCount)
 {
-    if (planet_.radiusMeters <= 0.0)
+    if (!std::isfinite(planet_.radiusMeters) ||
+        planet_.radiusMeters <= 0.0)
     {
         throw std::invalid_argument(
             "Orbit terrain clipmap tracker requires a positive planet radius.");
@@ -38,14 +39,18 @@ ClipmapTracker::ClipmapTracker(
 ClipmapMotionUpdate ClipmapTracker::Update(
     const world::WorldPosition& observer)
 {
-    const math::Double3 observerDirection =
-        math::Normalize(observer.meters);
+    const f64 observerLengthSquared =
+        math::LengthSquared(observer.meters);
 
-    if (math::LengthSquared(observerDirection) <= 0.0)
+    if (!std::isfinite(observerLengthSquared) ||
+        observerLengthSquared <= 0.0)
     {
         throw std::invalid_argument(
-            "Orbit terrain clipmap observer cannot be at the planet center.");
+            "Orbit terrain clipmap observer must have a finite non-zero direction.");
     }
+
+    const math::Double3 observerDirection =
+        math::Normalize(observer.meters);
 
     const ClipmapLayout layout =
         BuildClipmapLayout(config_, observer);
@@ -205,9 +210,18 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         motion.centerOffsetMeters =
             state.centerOffsetMeters;
 
+        // The static lattice is correct, but the live GPU residency path
+        // still exposes stale height/morph payload whenever a ring scrolls.
+        // Rebuild each moved level coherently until partial toroidal updates
+        // are proven against the live GPU buffers.
+        const bool centerMoved =
+            motion.cellShiftX != 0 ||
+            motion.cellShiftY != 0;
+
         motion.fullRefresh =
             rebase ||
-            state.samplesInvalidated;
+            state.samplesInvalidated ||
+            centerMoved;
 
         state.samplesInvalidated = false;
 

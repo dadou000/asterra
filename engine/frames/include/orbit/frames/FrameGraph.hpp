@@ -5,9 +5,9 @@
 #include <orbit/time/SimulationTime.hpp>
 
 #include <functional>
+#include <cstddef>
 #include <optional>
 #include <unordered_map>
-#include <vector>
 
 namespace orbit::frames
 {
@@ -85,10 +85,9 @@ private:
     {
         std::optional<FrameId> parent;
         FrameTransformProvider parentFromFrame;
+        std::size_t depth{0};
+        FrameId root{};
     };
-
-    [[nodiscard]] std::vector<FrameId>
-    AncestorsInclusive(FrameId frame) const;
 
     std::unordered_map<FrameId, FrameRecord> frames_;
 };

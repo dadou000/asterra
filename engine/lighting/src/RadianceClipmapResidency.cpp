@@ -76,6 +76,16 @@ void RadianceClipmapResidency::Reset(
     const math::Double3& observerInFrameMeters,
     const u64 sourceRevision)
 {
+    gpuSnapshotCacheInitialized_ = false;
+    for (auto& indices : gpuSnapshotDirtyCellIndices_)
+    {
+        indices.clear();
+    }
+    for (auto& flags : gpuSnapshotCellDirtyFlags_)
+    {
+        std::fill(flags.begin(), flags.end(), u8{0U});
+    }
+    residencyInitialized_ = false;
     frame_ = view.frame;
     body_ = view.body;
     sourceRevision_ = sourceRevision;
@@ -212,7 +222,8 @@ RadianceClipmapResidency::ScrollTo(
     const LightingView& view,
     const math::Double3& observerInFrameMeters,
     const u64 sourceRevision,
-    const f32 deltaSeconds)
+    const f32 deltaSeconds,
+    const bool collectStats)
 {
     if (!view.frame || !view.body)
     {
@@ -226,6 +237,7 @@ RadianceClipmapResidency::ScrollTo(
 
     if (authorityChanged)
     {
+        residencyInitialized_ = false;
         frame_ = view.frame;
         body_ = view.body;
 
@@ -254,19 +266,57 @@ RadianceClipmapResidency::ScrollTo(
                   0.0F)
             : 0.0F;
 
+    bool centersUnchanged =
+        residencyInitialized_ &&
+        !authorityChanged &&
+        !revisionChanged;
     for (auto& level : levels_)
     {
-        const auto centerKey =
-            RadianceCellForPoint(
-                observerInFrameMeters,
-                config_,
-                level.level,
-                view);
-
+        const auto centerKey = RadianceCellForPoint(
+            observerInFrameMeters,
+            config_,
+            level.level,
+            view);
+        centersUnchanged = centersUnchanged &&
+            level.centerX == centerKey.x &&
+            level.centerY == centerKey.y &&
+            level.centerZ == centerKey.z;
         level.centerX = centerKey.x;
         level.centerY = centerKey.y;
         level.centerZ = centerKey.z;
+    }
 
+    if (centersUnchanged)
+    {
+        for (auto& level : levels_)
+        {
+            for (auto& slot : level.slots)
+            {
+                if (!slot.occupied)
+                {
+                    continue;
+                }
+                if (collectStats)
+                {
+                    ++stats.residentCells;
+                    ++stats.reusedCells;
+                    if (slot.dirty || !slot.cell.valid ||
+                        slot.sourceRevision != sourceRevision_)
+                    {
+                        ++stats.dirtyCells;
+                    }
+                }
+                slot.cell.updateAgeSeconds =
+                    std::max(
+                        slot.cell.updateAgeSeconds + ageDelta,
+                        0.0F);
+            }
+        }
+        return stats;
+    }
+
+    for (auto& level : levels_)
+    {
         const i64 half =
             static_cast<i64>(
                 config_.cellsPerAxis / 2U);
@@ -313,7 +363,10 @@ RadianceClipmapResidency::ScrollTo(
                     if (slot->occupied &&
                         slot->key == desired)
                     {
-                        ++stats.reusedCells;
+                        if (collectStats)
+                        {
+                            ++stats.reusedCells;
+                        }
 
                         slot->cell.updateAgeSeconds =
                             std::max(
@@ -328,11 +381,17 @@ RadianceClipmapResidency::ScrollTo(
                         {
                             slot->dirty = true;
                             slot->cell.valid = false;
+                            UpdateGpuSnapshotCell(
+                                level.level,
+                                PhysicalIndex(desired));
                         }
                     }
                     else
                     {
-                        ++stats.replacedCells;
+                        if (collectStats)
+                        {
+                            ++stats.replacedCells;
+                        }
 
                         *slot = {
                             .key = desired,
@@ -350,35 +409,25 @@ RadianceClipmapResidency::ScrollTo(
                             .occupied = true,
                             .dirty = true
                         };
+                        UpdateGpuSnapshotCell(
+                            level.level,
+                            PhysicalIndex(desired));
+                    }
+                    if (collectStats)
+                    {
+                        ++stats.residentCells;
+                        if (slot->dirty || !slot->cell.valid ||
+                            slot->sourceRevision != sourceRevision_)
+                        {
+                            ++stats.dirtyCells;
+                        }
                     }
                 }
             }
         }
     }
 
-    for (const auto& level : levels_)
-    {
-        for (const auto& slot :
-             level.slots)
-        {
-            if (!slot.occupied ||
-                !BelongsToCurrentWindow(
-                    slot.key))
-            {
-                continue;
-            }
-
-            ++stats.residentCells;
-
-            if (slot.dirty ||
-                !slot.cell.valid ||
-                slot.sourceRevision !=
-                    sourceRevision_)
-            {
-                ++stats.dirtyCells;
-            }
-        }
-    }
+    residencyInitialized_ = true;
 
     return stats;
 }
@@ -468,6 +517,9 @@ void RadianceClipmapResidency::InvalidateSphere(
                     sourceRevision;
                 slot.cell.revision =
                     sourceRevision;
+                UpdateGpuSnapshotCell(
+                    level.level,
+                    PhysicalIndex(slot.key));
             }
             else if (slot.sourceRevision ==
                          previousRevision &&
@@ -478,6 +530,9 @@ void RadianceClipmapResidency::InvalidateSphere(
                     sourceRevision;
                 slot.cell.revision =
                     sourceRevision;
+                UpdateGpuSnapshotCell(
+                    level.level,
+                    PhysicalIndex(slot.key));
             }
         }
     }
@@ -510,15 +565,35 @@ void RadianceClipmapResidency::RequestGlobalRefresh() noexcept
 std::vector<RadianceUpdateCandidate>
 RadianceClipmapResidency::BuildUpdateList(
     const math::Double3& observerInFrameMeters,
-    const u32 maximumUpdates) const
+    const u32 maximumUpdates,
+    RadianceResidencyStats* const outputStats) const
 {
     std::vector<RadianceUpdateCandidate>
         candidates;
+    candidates.reserve(maximumUpdates);
 
-    if (maximumUpdates == 0U)
-    {
-        return candidates;
-    }
+    RadianceResidencyStats stats;
+
+    const auto higherPriority =
+        [](const RadianceUpdateCandidate& a,
+           const RadianceUpdateCandidate& b)
+        {
+            if (a.priority != b.priority)
+            {
+                return a.priority > b.priority;
+            }
+
+            return std::tie(
+                       a.key.level,
+                       a.key.x,
+                       a.key.y,
+                       a.key.z) <
+                   std::tie(
+                       b.key.level,
+                       b.key.x,
+                       b.key.y,
+                       b.key.z);
+        };
 
     for (const auto& level :
          levels_)
@@ -531,34 +606,36 @@ RadianceClipmapResidency::BuildUpdateList(
         for (const auto& slot :
              level.slots)
         {
-            if (!slot.occupied ||
-                !BelongsToCurrentWindow(
-                    slot.key) ||
-                (!slot.dirty &&
-                 slot.cell.valid &&
-                 slot.sourceRevision ==
-                     sourceRevision_))
+            if (!slot.occupied)
             {
                 continue;
             }
 
-            const auto center =
-                RadianceCellCenterInFrame(
-                    slot.key,
-                    config_);
+            ++stats.residentCells;
+            const bool needsUpdate =
+                slot.dirty || !slot.cell.valid ||
+                slot.sourceRevision != sourceRevision_;
+            if (!needsUpdate)
+            {
+                continue;
+            }
+            ++stats.dirtyCells;
+            if (maximumUpdates == 0U)
+            {
+                continue;
+            }
 
-            const f64 distance =
-                std::sqrt(
-                    DistanceSquared(
-                        center,
-                        observerInFrameMeters));
-
-            const f32 normalizedDistance =
-                static_cast<f32>(
-                    distance /
-                    std::max(
-                        cellSize,
-                        1.0e-6));
+            const f64 dx =
+                (static_cast<f64>(slot.key.x) + 0.5) *
+                    cellSize - observerInFrameMeters.x;
+            const f64 dy =
+                (static_cast<f64>(slot.key.y) + 0.5) *
+                    cellSize - observerInFrameMeters.y;
+            const f64 dz =
+                (static_cast<f64>(slot.key.z) + 0.5) *
+                    cellSize - observerInFrameMeters.z;
+            const f64 distanceSquared =
+                dx * dx + dy * dy + dz * dz;
 
             const f32 age =
                 std::isfinite(
@@ -578,11 +655,6 @@ RadianceClipmapResidency::BuildUpdateList(
                  static_cast<f32>(
                      level.level));
 
-            const f32 distanceWeight =
-                1.0F /
-                (1.0F +
-                 normalizedDistance);
-
             const f32 ageWeight =
                 1.0F +
                 std::min(
@@ -590,7 +662,62 @@ RadianceClipmapResidency::BuildUpdateList(
                     60.0F) /
                     60.0F;
 
-            candidates.push_back({
+            const f32 priorityScale =
+                levelWeight *
+                ageWeight *
+                (1.0F +
+                 std::max(
+                     slot.invalidationPriorityBoost,
+                     0.0F));
+
+            // Once the bounded top-K heap is full, most dirty cells cannot
+            // outrank its current worst candidate. Reject those by squared
+            // distance before paying for sqrt/division and constructing a
+            // candidate. The small tolerance makes the prefilter
+            // conservative around f32 priority rounding; the final ordering
+            // below remains unchanged.
+            if (candidates.size() == maximumUpdates)
+            {
+                const f32 cutoff = candidates.front().priority;
+                const f64 cellSizeSafe =
+                    std::max(cellSize, 1.0e-6);
+                if (priorityScale > cutoff)
+                {
+                    const f64 maximumNormalizedDistance =
+                        static_cast<f64>(priorityScale / cutoff) - 1.0;
+                    const f64 maximumDistance =
+                        cellSizeSafe * maximumNormalizedDistance;
+                    const f64 conservativeMaximumDistanceSquared =
+                        maximumDistance * maximumDistance *
+                        (1.0 + 1.0e-5);
+                    if (distanceSquared >
+                        conservativeMaximumDistanceSquared)
+                    {
+                        continue;
+                    }
+                }
+                else if (priorityScale < cutoff &&
+                         cutoff - priorityScale >
+                             std::abs(cutoff) * 1.0e-6F)
+                {
+                    // Even at zero distance this candidate is below the
+                    // cutoff. Keep a narrow f32-rounding band for exact
+                    // comparison below.
+                    continue;
+                }
+            }
+
+            const f32 normalizedDistance =
+                static_cast<f32>(
+                    std::sqrt(distanceSquared) /
+                    std::max(
+                        cellSize,
+                        1.0e-6));
+            const f32 distanceWeight =
+                1.0F /
+                (1.0F + normalizedDistance);
+
+            RadianceUpdateCandidate candidate{
                 .key = slot.key,
                 .physicalIndex =
                     PhysicalIndex(
@@ -601,46 +728,43 @@ RadianceClipmapResidency::BuildUpdateList(
                     ageWeight *
                     (1.0F +
                      std::max(
-                         slot.
-                             invalidationPriorityBoost,
+                         slot.invalidationPriorityBoost,
                          0.0F)),
                 .ageSeconds =
                     age
-            });
+            };
+
+            if (candidates.size() < maximumUpdates)
+            {
+                candidates.push_back(candidate);
+                std::push_heap(
+                    candidates.begin(),
+                    candidates.end(),
+                    higherPriority);
+            }
+            else if (higherPriority(candidate, candidates.front()))
+            {
+                std::pop_heap(
+                    candidates.begin(),
+                    candidates.end(),
+                    higherPriority);
+                candidates.back() = candidate;
+                std::push_heap(
+                    candidates.begin(),
+                    candidates.end(),
+                    higherPriority);
+            }
         }
     }
 
-    std::stable_sort(
+    std::sort(
         candidates.begin(),
         candidates.end(),
-        [](const auto& a,
-           const auto& b)
-        {
-            if (a.priority != b.priority)
-            {
-                return
-                    a.priority >
-                    b.priority;
-            }
+        higherPriority);
 
-            return
-                std::tie(
-                    a.key.level,
-                    a.key.x,
-                    a.key.y,
-                    a.key.z) <
-                std::tie(
-                    b.key.level,
-                    b.key.x,
-                    b.key.y,
-                    b.key.z);
-        });
-
-    if (candidates.size() >
-        maximumUpdates)
+    if (outputStats != nullptr)
     {
-        candidates.resize(
-            maximumUpdates);
+        *outputStats = stats;
     }
 
     return candidates;
@@ -686,6 +810,10 @@ bool RadianceClipmapResidency::CommitUpdate(
         0.0F;
     slot->dirty = false;
 
+    UpdateGpuSnapshotCell(
+        key.level,
+        PhysicalIndex(key));
+
     return true;
 }
 
@@ -722,6 +850,27 @@ RadianceGpuSnapshot
 RadianceClipmapResidency::BuildGpuSnapshot(
     const LightingView& view) const
 {
+    auto snapshot = BuildGpuSnapshotRef(view);
+    std::size_t cellOffset = 0U;
+    for (const auto& level : levels_)
+    {
+        for (std::size_t slotIndex = 0U;
+             slotIndex < level.slots.size();
+             ++slotIndex)
+        {
+            const f32 age = level.slots[slotIndex].cell.updateAgeSeconds;
+            snapshot.cells[cellOffset + slotIndex].irradianceX.w =
+                std::isfinite(age) ? std::max(age, 0.0F) : 0.0F;
+        }
+        cellOffset += level.slots.size();
+    }
+    return snapshot;
+}
+
+const RadianceGpuSnapshot&
+RadianceClipmapResidency::BuildGpuSnapshotRef(
+    const LightingView& view) const
+{
     if (view.frame != frame_ ||
         view.body != body_)
     {
@@ -729,17 +878,16 @@ RadianceClipmapResidency::BuildGpuSnapshot(
             "Radiance GPU snapshot view does not match residency authority.");
     }
 
-    RadianceGpuSnapshot snapshot;
-    snapshot.sourceRevision =
-        sourceRevision_;
-    snapshot.levels.reserve(
-        levels_.size());
-
-    u32 cellOffset = 0U;
-
-    for (const auto& level :
-         levels_)
+    if (!gpuSnapshotCacheInitialized_)
     {
+        RadianceGpuSnapshot snapshot;
+        snapshot.sourceRevision = sourceRevision_;
+        snapshot.levels.reserve(levels_.size());
+        snapshot.cells.reserve(
+            levels_.size() * levels_.front().slots.size());
+        u32 cellOffset = 0U;
+        for (const auto& level : levels_)
+        {
         const RadianceCellKey centerKey{
             .frame = frame_,
             .body = body_,
@@ -795,9 +943,8 @@ RadianceClipmapResidency::BuildGpuSnapshot(
             snapshot.cells.size() +
             level.slots.size());
 
-        for (const auto& slot :
-             level.slots)
-        {
+            for (const auto& slot : level.slots)
+            {
             RadianceCell exportCell =
                 slot.cell;
 
@@ -817,7 +964,7 @@ RadianceClipmapResidency::BuildGpuSnapshot(
             snapshot.cells.push_back(
                 EncodeGpuRadianceCell(
                     exportCell));
-        }
+            }
 
         if (cellOffset >
             std::numeric_limits<u32>::max() -
@@ -829,9 +976,163 @@ RadianceClipmapResidency::BuildGpuSnapshot(
 
         cellOffset +=
             levelCellCount;
-    }
+        }
 
-    return snapshot;
+        gpuSnapshotCache_ = std::move(snapshot);
+        gpuSnapshotCacheInitialized_ = true;
+        if (gpuSnapshotDirtyCellIndices_.empty())
+        {
+            gpuSnapshotDirtyCellIndices_.resize(1U);
+            gpuSnapshotCellDirtyFlags_.resize(1U);
+        }
+        for (std::size_t slot = 0U;
+             slot < gpuSnapshotDirtyCellIndices_.size();
+             ++slot)
+        {
+            auto& indices = gpuSnapshotDirtyCellIndices_[slot];
+            auto& flags = gpuSnapshotCellDirtyFlags_[slot];
+            flags.assign(gpuSnapshotCache_.cells.size(), 1U);
+            indices.resize(gpuSnapshotCache_.cells.size());
+            for (std::size_t index = 0U; index < indices.size(); ++index)
+            {
+                indices[index] = static_cast<u32>(index);
+            }
+        }
+    }
+    else
+    {
+        gpuSnapshotCache_.sourceRevision = sourceRevision_;
+        u32 cellOffset = 0U;
+        for (std::size_t levelIndex = 0U;
+             levelIndex < levels_.size();
+             ++levelIndex)
+        {
+            const auto& level = levels_[levelIndex];
+            const RadianceCellKey centerKey{
+                .frame = frame_, .body = body_, .level = level.level,
+                .x = level.centerX, .y = level.centerY, .z = level.centerZ
+            };
+            const auto centerGpu =
+                RadianceCellGpuCenter(centerKey, config_, view);
+            auto& gpuLevel = gpuSnapshotCache_.levels[levelIndex];
+            gpuLevel.centerCellSize = {
+                centerGpu.x, centerGpu.y, centerGpu.z,
+                static_cast<f32>(RadianceCellSizeMeters(config_, level.level))};
+            gpuLevel.centerModuloX =
+                PositiveModulo(level.centerX, config_.cellsPerAxis);
+            gpuLevel.centerModuloY =
+                PositiveModulo(level.centerY, config_.cellsPerAxis);
+            gpuLevel.centerModuloZ =
+                PositiveModulo(level.centerZ, config_.cellsPerAxis);
+
+            cellOffset += static_cast<u32>(level.slots.size());
+        }
+    }
+    return gpuSnapshotCache_;
+}
+
+void RadianceClipmapResidency::UpdateGpuSnapshotCell(
+    const std::size_t levelIndex,
+    const std::size_t slotIndex) const noexcept
+{
+    if (!gpuSnapshotCacheInitialized_ ||
+        levelIndex >= levels_.size() ||
+        levelIndex >= gpuSnapshotCache_.levels.size())
+    {
+        return;
+    }
+    const auto& level = levels_[levelIndex];
+    if (slotIndex >= level.slots.size())
+    {
+        return;
+    }
+    const auto destination =
+        static_cast<std::size_t>(
+            gpuSnapshotCache_.levels[levelIndex].cellOffset) +
+        slotIndex;
+    if (destination >= gpuSnapshotCache_.cells.size())
+    {
+        return;
+    }
+    const auto& slot = level.slots[slotIndex];
+    RadianceCell exportCell = slot.cell;
+    exportCell.valid = slot.occupied &&
+        BelongsToCurrentWindow(slot.key) && slot.cell.valid &&
+        slot.sourceRevision == sourceRevision_ &&
+        slot.cell.revision == sourceRevision_;
+    gpuSnapshotCache_.cells[destination] =
+        EncodeGpuRadianceCell(exportCell);
+    for (std::size_t frameSlot = 0U;
+         frameSlot < gpuSnapshotCellDirtyFlags_.size();
+         ++frameSlot)
+    {
+        auto& flags = gpuSnapshotCellDirtyFlags_[frameSlot];
+        if (destination < flags.size() && flags[destination] == 0U)
+        {
+            flags[destination] = 1U;
+            gpuSnapshotDirtyCellIndices_[frameSlot].push_back(
+                static_cast<u32>(destination));
+        }
+    }
+}
+
+void RadianceClipmapResidency::ConfigureGpuSnapshotFrameSlots(
+    const u32 frameSlots)
+{
+    if (frameSlots == 0U)
+    {
+        throw std::invalid_argument(
+            "Radiance GPU snapshot requires at least one frame slot.");
+    }
+    if (gpuSnapshotDirtyCellIndices_.size() == frameSlots)
+    {
+        return;
+    }
+    gpuSnapshotDirtyCellIndices_.assign(frameSlots, {});
+    gpuSnapshotCellDirtyFlags_.assign(frameSlots, {});
+    if (!gpuSnapshotCacheInitialized_)
+    {
+        return;
+    }
+    for (std::size_t slot = 0U; slot < frameSlots; ++slot)
+    {
+        auto& flags = gpuSnapshotCellDirtyFlags_[slot];
+        auto& indices = gpuSnapshotDirtyCellIndices_[slot];
+        flags.assign(gpuSnapshotCache_.cells.size(), 1U);
+        indices.resize(gpuSnapshotCache_.cells.size());
+        for (std::size_t index = 0U; index < indices.size(); ++index)
+        {
+            indices[index] = static_cast<u32>(index);
+        }
+    }
+}
+
+std::span<const u32>
+RadianceClipmapResidency::GpuSnapshotDirtyCellIndices(
+    const u32 frameSlot) const noexcept
+{
+    if (frameSlot >= gpuSnapshotDirtyCellIndices_.size())
+    {
+        return {};
+    }
+    return gpuSnapshotDirtyCellIndices_[frameSlot];
+}
+
+void RadianceClipmapResidency::ClearGpuSnapshotDirtyCellIndices(
+    const u32 frameSlot) const noexcept
+{
+    if (frameSlot >= gpuSnapshotDirtyCellIndices_.size())
+    {
+        return;
+    }
+    for (const auto index : gpuSnapshotDirtyCellIndices_[frameSlot])
+    {
+        if (index < gpuSnapshotCellDirtyFlags_[frameSlot].size())
+        {
+            gpuSnapshotCellDirtyFlags_[frameSlot][index] = 0U;
+        }
+    }
+    gpuSnapshotDirtyCellIndices_[frameSlot].clear();
 }
 
 RadianceResidencyStats

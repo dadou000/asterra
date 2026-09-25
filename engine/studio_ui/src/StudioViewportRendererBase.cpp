@@ -3622,10 +3622,10 @@ StudioViewportRenderer::Compose(
     const bool drawPathDebug,
     const u32 frameIndex,
     const lighting::LightingWorkPlan& lightingPlan,
-    lighting::LightingTimestampRecorder* const lightingTimestamps)
+    lighting::LightingTimestampRecorder* const lightingTimestamps,
+    const StudioComposeCpuTimingRecorder& cpuTimingRecorder)
 {
     static_cast<void>(views.Refresh(snapshot));
-    static_cast<void>(drawPathDebug);
 
     const universe::BodyRegistry* bodies = nullptr;
     const frames::FrameGraph* frames = nullptr;
@@ -3721,8 +3721,42 @@ StudioViewportRenderer::Compose(
     const auto catalog = views.Catalog();
     rendered.reserve(catalog.size());
 
+    std::optional<world_model::ResolvedVolumeDomain> selectedVolume;
+    volume_fields::VolumeFieldStorage* sharedVolumeStorage = nullptr;
+    std::optional<volume_fields::ImportedVolumeFields> sharedVolumeFields;
+
+    if (volumeFields_ != nullptr && snapshot.hasWorld &&
+        session.World().Selection().Ordered().size() == 1U)
+    {
+        auto volumeObject = session.World().Selection().Ordered().front();
+        const auto selectedRecord = session.World().Objects().Find(volumeObject);
+        if (selectedRecord.has_value() && selectedRecord->parent.has_value() &&
+            (selectedRecord->type == world_model::kVolumeSourceType ||
+             selectedRecord->type == world_model::kVolumeEffectorType))
+        {
+            volumeObject = *selectedRecord->parent;
+        }
+        selectedVolume = world_model::ResolveVolumeDomain(
+            session.World().Objects(), volumeObject);
+    }
+
     for (const auto& info : catalog)
     {
+        auto composeStageStarted = std::chrono::steady_clock::now();
+        const auto recordComposeStage =
+            [&](const std::string_view stage)
+            {
+                if (!cpuTimingRecorder)
+                {
+                    return;
+                }
+                const auto now = std::chrono::steady_clock::now();
+                cpuTimingRecorder(
+                    stage,
+                    std::chrono::duration<double, std::milli>(
+                        now - composeStageStarted).count());
+                composeStageStarted = now;
+            };
         auto* view = views.Find(info.id);
 
         if (view == nullptr)
@@ -4013,6 +4047,15 @@ StudioViewportRenderer::Compose(
             session.TerrainRuntime().
                 Capture(
                     info.id);
+        if (cpuTimingRecorder)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            cpuTimingRecorder(
+                "early",
+                std::chrono::duration<double, std::milli>(
+                    now - composeStageStarted).count());
+            composeStageStarted = now;
+        }
 
         if (terrainRuntime.has_value() &&
             !session.TerrainRuntime().
@@ -5348,6 +5391,15 @@ StudioViewportRenderer::Compose(
             auto& terrain =
                 terrainPresentations_[
                     info.id];
+            if (cpuTimingRecorder)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                cpuTimingRecorder(
+                    "celestial",
+                    std::chrono::duration<double, std::milli>(
+                        now - composeStageStarted).count());
+                composeStageStarted = now;
+            }
 
             const bool recreate =
                 terrain.renderer == nullptr ||
@@ -5678,6 +5730,7 @@ StudioViewportRenderer::Compose(
             }
 
             // Keep a closed globe behind the local terrain at every altitude.
+            recordComposeStage("terrain");
             if (hasMacroGlobe &&
                 macroGlobeSurface != nullptr &&
                 macroGlobeSurface->terrain != nullptr &&
@@ -8068,8 +8121,12 @@ StudioViewportRenderer::Compose(
                     std::make_unique<
                         lighting::RadianceClipmapResidency>(
                             lighting::RadianceClipmapConfig{});
+                finalGather.radianceResidency->
+                    ConfigureGpuSnapshotFrameSlots(
+                        framesInFlight_);
             }
 
+            recordComposeStage("render");
             // The near-field indirect stack (screen-space final gather,
             // radiance-cache fallback, hybrid and exact reflections) only has
             // data within the camera-centred radiance clipmap. When the
@@ -8125,7 +8182,9 @@ StudioViewportRenderer::Compose(
                     lightingView,
                     lightingView.cameraPositionInFrameMeters,
                     radianceSourceRevision,
-                    1.0F / 60.0F));
+                    1.0F / 60.0F,
+                    false));
+            recordComposeStage("gi_prepare");
 
             lighting::VisibilityRegistry
                 radianceVisibility;
@@ -8190,6 +8249,12 @@ StudioViewportRenderer::Compose(
 
             lighting::RadianceEstimateSettings
                 radianceEstimateSettings{};
+            // Do not invent a direction-independent fill light for a body
+            // with no resolved atmospheric sky. The former scalar fallback
+            // made night-side clipmap cells emit diffuse light even when
+            // terrain correctly occluded the star.
+            radianceEstimateSettings.
+                ambientIrradianceScale = 0.0F;
 
             if (const auto atmosphereFound =
                     atmospherePresentations_.find(
@@ -8575,13 +8640,27 @@ StudioViewportRenderer::Compose(
                     radianceCacheRefreshRequested;
             }
 
+            recordComposeStage("gi_prepare");
+            const auto updateListStarted =
+                std::chrono::steady_clock::now();
+            lighting::RadianceResidencyStats radianceStats;
             const auto radianceUpdates =
                 finalGather.radianceResidency->BuildUpdateList(
                     lightingView.cameraPositionInFrameMeters,
-                    lightingPlan.radianceCacheUpdates);
-
-            const auto radianceStats =
-                finalGather.radianceResidency->Stats();
+                    lightingPlan.radianceCacheUpdates,
+                    &radianceStats);
+            if (cpuTimingRecorder)
+            {
+                cpuTimingRecorder(
+                    "gi_update_count",
+                    static_cast<double>(radianceUpdates.size()));
+                const auto now = std::chrono::steady_clock::now();
+                cpuTimingRecorder(
+                    "gi_update_list",
+                    std::chrono::duration<double, std::milli>(
+                        now - updateListStarted).count());
+                composeStageStarted = now;
+            }
 
             emissiveGiDiagnostics_.insert_or_assign(
                 info.id,
@@ -8621,10 +8700,15 @@ StudioViewportRenderer::Compose(
                         1U,
                         radianceSourceRevision));
             }
+            recordComposeStage("gi_estimate");
 
-            const auto radianceSnapshot =
-                finalGather.radianceResidency->BuildGpuSnapshot(
+            const auto snapshotBuildStarted =
+                std::chrono::steady_clock::now();
+            const auto& radianceSnapshot =
+                finalGather.radianceResidency->BuildGpuSnapshotRef(
                     lightingView);
+            const auto snapshotBuildFinished =
+                std::chrono::steady_clock::now();
 
             const u64 radianceCellBytes =
                 std::max<u64>(
@@ -8640,45 +8724,93 @@ StudioViewportRenderer::Compose(
                         radianceSnapshot.levels.size()) *
                         sizeof(lighting::GpuRadianceLevelInfo));
 
-            const auto radianceCellsHandle =
-                graph.CreateBuffer(
-                    prefix + ".RadianceCacheCells",
-                    {
-                        .sizeBytes = radianceCellBytes,
-                        .usage = rhi::BufferUsage::Structured,
-                        .memory = rhi::MemoryUsage::HostVisible,
-                        .initialState =
-                            rhi::ResourceState::ShaderResource
-                    });
+            if (finalGather.radianceCellsBuffers.size() !=
+                framesInFlight_)
+            {
+                finalGather.radianceCellsBuffers.resize(framesInFlight_);
+            }
+            if (finalGather.radianceLevelsBuffers.size() !=
+                framesInFlight_)
+            {
+                finalGather.radianceLevelsBuffers.resize(framesInFlight_);
+            }
+            const u32 radianceFrameSlot = frameIndex % framesInFlight_;
+            auto& radianceCellsBuffer =
+                finalGather.radianceCellsBuffers[radianceFrameSlot];
+            auto& radianceLevelsBuffer =
+                finalGather.radianceLevelsBuffers[radianceFrameSlot];
+            if (radianceCellsBuffer == nullptr ||
+                radianceCellsBuffer->SizeBytes() != radianceCellBytes)
+            {
+                radianceCellsBuffer = device_->CreateBuffer({
+                    .sizeBytes = radianceCellBytes,
+                    .usage = rhi::BufferUsage::Structured,
+                    .memory = rhi::MemoryUsage::HostVisible,
+                    .initialState = rhi::ResourceState::ShaderResource
+                });
+                finalGather.radianceResidency->
+                    ConfigureGpuSnapshotFrameSlots(framesInFlight_);
+            }
+            if (radianceLevelsBuffer == nullptr ||
+                radianceLevelsBuffer->SizeBytes() != radianceLevelBytes)
+            {
+                radianceLevelsBuffer = device_->CreateBuffer({
+                    .sizeBytes = radianceLevelBytes,
+                    .usage = rhi::BufferUsage::Structured,
+                    .memory = rhi::MemoryUsage::HostVisible,
+                    .initialState = rhi::ResourceState::ShaderResource
+                });
+            }
 
-            const auto radianceLevelsHandle =
-                graph.CreateBuffer(
-                    prefix + ".RadianceCacheLevels",
-                    {
-                        .sizeBytes = radianceLevelBytes,
-                        .usage = rhi::BufferUsage::Structured,
-                        .memory = rhi::MemoryUsage::HostVisible,
-                        .initialState =
-                            rhi::ResourceState::ShaderResource
-                    });
+            const auto radianceCellsHandle = graph.ImportBuffer(
+                prefix + ".RadianceCacheCells",
+                *radianceCellsBuffer,
+                rhi::ResourceState::ShaderResource);
+            const auto radianceLevelsHandle = graph.ImportBuffer(
+                prefix + ".RadianceCacheLevels",
+                *radianceLevelsBuffer,
+                rhi::ResourceState::ShaderResource);
 
-            uploadBuffer(
-                graph.Buffer(radianceCellsHandle),
-                radianceSnapshot.cells.empty()
-                    ? nullptr
-                    : radianceSnapshot.cells.data(),
-                static_cast<u64>(
-                    radianceSnapshot.cells.size()) *
+            auto* radianceCellDestination =
+                radianceCellsBuffer->Map();
+            for (const auto cellIndex :
+                 finalGather.radianceResidency->
+                     GpuSnapshotDirtyCellIndices(radianceFrameSlot))
+            {
+                std::memcpy(
+                    radianceCellDestination +
+                        static_cast<std::size_t>(cellIndex) *
+                            sizeof(lighting::GpuRadianceCell),
+                    radianceSnapshot.cells.data() + cellIndex,
                     sizeof(lighting::GpuRadianceCell));
+            }
+            radianceCellsBuffer->Unmap();
+            finalGather.radianceResidency->
+                ClearGpuSnapshotDirtyCellIndices(radianceFrameSlot);
 
-            uploadBuffer(
-                graph.Buffer(radianceLevelsHandle),
-                radianceSnapshot.levels.empty()
-                    ? nullptr
-                    : radianceSnapshot.levels.data(),
-                static_cast<u64>(
+            auto* radianceLevelDestination =
+                radianceLevelsBuffer->Map();
+            std::memcpy(
+                radianceLevelDestination,
+                radianceSnapshot.levels.data(),
+                static_cast<std::size_t>(
                     radianceSnapshot.levels.size()) *
                     sizeof(lighting::GpuRadianceLevelInfo));
+            radianceLevelsBuffer->Unmap();
+            const auto snapshotUploadFinished =
+                std::chrono::steady_clock::now();
+            if (cpuTimingRecorder)
+            {
+                cpuTimingRecorder(
+                    "gi_snapshot_build",
+                    std::chrono::duration<double, std::milli>(
+                        snapshotBuildFinished - snapshotBuildStarted).count());
+                cpuTimingRecorder(
+                    "gi_snapshot_upload",
+                    std::chrono::duration<double, std::milli>(
+                        snapshotUploadFinished - snapshotBuildFinished).count());
+            }
+            recordComposeStage("gi_snapshot");
 
             const u32 radianceLevelCount =
                 static_cast<u32>(
@@ -8880,17 +9012,13 @@ StudioViewportRenderer::Compose(
                         // irradiance actually reaching this body, so distant
                         // planets are not washed flat by a fixed 3.5% floor.
                         lighting::DirectLightingSettings{
-                            // Sky/ground fill only exists for an observer
-                            // inside the near field; a planet seen from
-                            // space has a black night side.
+                            // Direct sun and resolved atmospheric sky are
+                            // the only non-emissive terms. A uniform ground
+                            // fill leaks daylight onto the clipmap's night
+                            // side, so ambient comes from the atmosphere/GI
+                            // sky summary rather than a constant floor.
                             .ambientIrradianceScale =
-                                nearFieldIndirect
-                                    ? 0.035F *
-                                          std::clamp(
-                                              directLight.irradianceScale,
-                                              0.0F,
-                                              1.0F)
-                                    : 0.0F
+                                0.0F
                         });
 
                     if (lightingTimestamps != nullptr)
@@ -10119,6 +10247,7 @@ StudioViewportRenderer::Compose(
                 finalGather.previousView = {};
             }
 
+            recordComposeStage("gi");
             // Physical atmosphere: attenuate the lit scene along each view
             // ray and add single + multiple in-scattering, for both the
             // limb seen from orbit and aerial perspective near the ground.
@@ -10438,7 +10567,8 @@ StudioViewportRenderer::Compose(
                 });
         }
 
-        if (presentation ==
+        if (drawPathDebug &&
+            presentation ==
                 StudioViewportPresentation::BodyPreview &&
             frames != nullptr &&
             !products.empty())
@@ -10726,36 +10856,11 @@ StudioViewportRenderer::Compose(
             }
         }
 
-        if (volumeFields_ != nullptr &&
-            session.World().HasWorld() &&
-            session.World().Selection().Ordered().size() == 1U)
+        if (selectedVolume.has_value())
         {
-            scene::ObjectId volumeObject =
-                session.World().Selection().Ordered().front();
-
-            if (const auto selectedRecord =
-                    session.World().Objects().Find(
-                        volumeObject);
-                selectedRecord.has_value() &&
-                (selectedRecord->type ==
-                     world_model::kVolumeSourceType ||
-                 selectedRecord->type ==
-                     world_model::kVolumeEffectorType) &&
-                selectedRecord->parent.has_value())
+            if (!sharedVolumeFields.has_value())
             {
-                volumeObject =
-                    *selectedRecord->parent;
-            }
-
-            const auto authoredVolume =
-                world_model::ResolveVolumeDomain(
-                    session.World().Objects(),
-                    volumeObject);
-
-            if (authoredVolume.has_value())
-            {
-                auto runtimeVolume =
-                    *authoredVolume;
+                auto& runtimeVolume = *selectedVolume;
 
                 if (surfaceVolumeSolver_ != nullptr)
                 {
@@ -10770,8 +10875,17 @@ StudioViewportRenderer::Compose(
                                 VolumeSolverPolicy::
                                     Surface2D5D)
                     {
+                        // One camera owns shared simulation residency. A map
+                        // or second viewport must not recenter the same fields
+                        // after the first viewport has queued GPU work.
+                        const auto* followView = views.Find("studio.primary");
+                        if (followView == nullptr ||
+                            !followView->Camera().frame.IsValid())
+                        {
+                            followView = view;
+                        }
                         runtimeVolume.centerMeters =
-                            view->Camera().
+                            followView->Camera().
                                 localPositionMeters;
                     }
                 }
@@ -10779,9 +10893,7 @@ StudioViewportRenderer::Compose(
                 volumeFields_->RemoveMissing(
                     session.World().Objects());
 
-                auto& fieldStorage =
-                    volumeFields_->Ensure(
-                        runtimeVolume);
+                sharedVolumeStorage = &volumeFields_->Ensure(runtimeVolume);
 
                 static_cast<void>(
                     volumeFields_->
@@ -10789,8 +10901,8 @@ StudioViewportRenderer::Compose(
                             session.World().Objects(),
                             runtimeVolume.object));
 
-                auto importedFields =
-                    fieldStorage.Import(
+                sharedVolumeFields =
+                    sharedVolumeStorage->Import(
                         graph,
                         prefix + ".VolumeFields");
 
@@ -10806,15 +10918,26 @@ StudioViewportRenderer::Compose(
                             prefix + ".SurfaceVolumeSolver",
                             session.World().Objects(),
                             runtimeVolume,
-                            fieldStorage,
-                            importedFields,
+                            *sharedVolumeStorage,
+                            *sharedVolumeFields,
                             frameIndex %
                                 framesInFlight_);
 
                     universalVolumeRenderer_.
                         RemoveMissing(
                             session.World().Objects());
+                }
+            }
 
+            // Field allocation, input synchronization and the solver step are
+            // shared by every viewport; only presentation is view-dependent.
+            const auto& runtimeVolume = *selectedVolume;
+            auto& fieldStorage = *sharedVolumeStorage;
+            const auto& importedFields = *sharedVolumeFields;
+
+            {
+                if (surfaceVolumeSolver_ != nullptr)
+                {
                     std::optional<scene::ObjectId>
                         volumeLightRoot;
 
@@ -11224,6 +11347,8 @@ StudioViewportRenderer::Compose(
             const auto particleTerrainCollisionPages =
                 volumeParticleRenderer_.TerrainCollisionPagesSnapshot();
 
+            recordComposeStage("gi_passes");
+            recordComposeStage("atmosphere");
             // M38 particle simulation is shared by all Studio viewports. The
             // authoritative output generation advances GPU state exactly once;
             // later viewports only render that already-advanced state.
@@ -12306,6 +12431,7 @@ StudioViewportRenderer::Compose(
             .targets = targets,
             .targeted = shape.has_value()
         });
+        recordComposeStage("post");
     }
 
     for (auto iterator =

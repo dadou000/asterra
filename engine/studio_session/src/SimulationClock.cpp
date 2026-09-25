@@ -84,7 +84,9 @@ void SimulationClock::StepSeconds(
     const f64 rounded =
         std::trunc(requestedMicroseconds);
 
-    if (rounded >
+    // INT64_MAX rounds up to 2^63 as a double. Reject that upper
+    // endpoint before converting; it is already outside the integer range.
+    if (!std::isfinite(rounded) || rounded >=
             static_cast<f64>(
                 std::numeric_limits<i64>::max()) ||
         rounded <

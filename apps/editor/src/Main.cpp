@@ -68,6 +68,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
@@ -93,6 +94,119 @@ namespace orbit::editor_app
 
 namespace
 {
+struct CpuFrameTelemetry
+{
+    static constexpr std::size_t kWindow = 120U;
+    static constexpr std::size_t kPhaseCount = 23U;
+
+    enum Phase : std::size_t
+    {
+        FenceWait,
+        PreUi,
+        Ui,
+        SceneUpdate,
+        RenderGraphSetup,
+        RenderGraphExecute,
+        ViewportCompose,
+        ComposeEarly,
+        ComposeCelestial,
+        ComposeTerrain,
+        ComposeRender,
+        ComposeGi,
+        ComposeAtmosphere,
+        ComposePost,
+        GiPrepare,
+        GiUpdateList,
+        GiEstimate,
+        GiSnapshot,
+        GiSnapshotBuild,
+        GiSnapshotUpload,
+        GiPasses,
+        SubmitPresent,
+        WholeLoop
+    };
+
+    std::array<std::array<std::atomic<double>, kWindow>, kPhaseCount>
+        samples{};
+    std::array<std::atomic<double>, kPhaseCount> rollingSums{};
+    std::array<std::atomic<double>, kPhaseCount> lastMs{};
+    std::atomic<orbit::u64> frameCount{0U};
+    std::atomic<orbit::u64> radianceUpdatesLastFrame{0U};
+
+    void Record(const Phase phase, const double milliseconds) noexcept
+    {
+        const auto frame = frameCount.load(std::memory_order_relaxed);
+        const auto slot = static_cast<std::size_t>(frame % kWindow);
+        const auto previous = samples[phase][slot].exchange(
+            milliseconds,
+            std::memory_order_relaxed);
+        rollingSums[phase].fetch_add(
+            milliseconds - previous,
+            std::memory_order_relaxed);
+        lastMs[phase].store(milliseconds, std::memory_order_relaxed);
+    }
+
+    void FinishFrame() noexcept
+    {
+        frameCount.fetch_add(1U, std::memory_order_relaxed);
+    }
+
+    void RecordRadianceUpdates(const orbit::u32 count) noexcept
+    {
+        radianceUpdatesLastFrame.store(
+            count,
+            std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] double RollingAverageMs(const Phase phase) const noexcept
+    {
+        const auto frames =
+            std::min<orbit::u64>(
+                frameCount.load(std::memory_order_relaxed),
+                kWindow);
+        return frames == 0U
+            ? 0.0
+            : rollingSums[phase].load(std::memory_order_relaxed) /
+                  static_cast<double>(frames);
+    }
+
+    [[nodiscard]] orbit::rpc::Value Snapshot() const
+    {
+        const auto frames = frameCount.load(std::memory_order_relaxed);
+        const auto windowFrames = std::min<orbit::u64>(frames, kWindow);
+        static constexpr std::array<const char*, kPhaseCount> names{
+            "fence_wait", "pre_ui", "ui", "scene_update",
+            "render_graph_setup", "render_graph_execute",
+            "viewport_compose", "compose_early",
+            "compose_celestial", "compose_terrain", "compose_render",
+            "compose_gi", "compose_atmosphere", "compose_post",
+            "gi_prepare", "gi_update_list", "gi_estimate",
+            "gi_snapshot", "gi_snapshot_build", "gi_snapshot_upload",
+            "gi_passes",
+            "submit_present", "whole_loop"};
+        orbit::rpc::Value::Object timings;
+        for (std::size_t phase = 0; phase < kPhaseCount; ++phase)
+        {
+            timings.emplace(
+                names[phase],
+                orbit::rpc::Value(orbit::rpc::Value::Object{
+                    {"last_ms", lastMs[phase].load(std::memory_order_relaxed)},
+                    {"rolling_120_frame_average_ms",
+                     windowFrames == 0U
+                         ? 0.0
+                         : rollingSums[phase].load(std::memory_order_relaxed) /
+                               static_cast<double>(windowFrames)}}));
+        }
+        return orbit::rpc::Value(orbit::rpc::Value::Object{
+            {"frames", static_cast<orbit::i64>(frames)},
+            {"window_frames", static_cast<orbit::i64>(windowFrames)},
+            {"radiance_updates_last_frame",
+             static_cast<orbit::i64>(radianceUpdatesLastFrame.load(
+                 std::memory_order_relaxed))},
+            {"timings_ms", orbit::rpc::Value(std::move(timings))}});
+    }
+};
+
 [[nodiscard]] orbit::u64
 ContentRevisionKey(
     const orbit::content::ContentHash& hash)
@@ -1385,6 +1499,19 @@ int main(
         auto& rpcHost =
             studioSession.Rpc();
 
+        CpuFrameTelemetry cpuFrameTelemetry;
+        rpcHost.Dispatcher().Register(
+            {
+                .name = "studio.cpu_timings",
+                .description =
+                    "Read last and rolling 120-frame CPU timings for the editor loop.",
+                .mutating = false
+            },
+            [&cpuFrameTelemetry](const orbit::rpc::Value&)
+            {
+                return cpuFrameTelemetry.Snapshot();
+            });
+
         orbit::dev_server::DevServer
             rpcServer({
                 .port = 4320,
@@ -1621,14 +1748,6 @@ int main(
                     orbit::universe::BodyId{});
 
         orbit::render_view::RenderView
-            bodyView(
-                device,
-                {
-                    .width = 960,
-                    .height = 640
-                });
-
-        orbit::render_view::RenderView
             materialView(
                 device,
                 {
@@ -1642,56 +1761,14 @@ int main(
                     : nullptr;
             initialBody != nullptr)
         {
-            const orbit::f64 initialBodyRadius =
-                BodyRadius(
-                    objects(),
-                    bodyObject);
-
-            bodyView.Camera().frame =
+            materialView.Camera().frame =
                 initialBody->frame;
-            bodyView.Camera().
-                localPositionMeters = {
-                    0.0,
-                    0.0,
-                    -initialBodyRadius * 3.2
-                };
-            bodyView.Camera().nearPlaneMeters =
-                static_cast<orbit::f32>(
-                    std::max(
-                        initialBodyRadius *
-                            1.0e-6,
-                        1.0));
-            bodyView.Camera().farPlaneMeters =
-                static_cast<orbit::f32>(
-                    initialBodyRadius * 10.0);
         }
         else
         {
-            bodyView.Camera().
-                localPositionMeters = {
-                    0.0,
-                    0.0,
-                    -3.2
-                };
-            bodyView.Camera().nearPlaneMeters =
-                0.01F;
-            bodyView.Camera().farPlaneMeters =
-                10.0F;
+            materialView.Camera().frame = {};
         }
 
-        bodyView.Camera().forward = {
-            0.0F,
-            0.0F,
-            1.0F
-        };
-        bodyView.Camera().up = {
-            0.0F,
-            1.0F,
-            0.0F
-        };
-
-        materialView.Camera().frame =
-            bodyView.Camera().frame;
         materialView.Camera().localPositionMeters = {
             0.0,
             0.0,
@@ -1713,12 +1790,6 @@ int main(
         orbit::editor_ui::
             BodyPreviewRenderer
                 bodyPreview(
-                    device,
-                    compiler);
-
-        orbit::editor_ui::
-            PathPreviewRenderer
-                pathPreview(
                     device,
                     compiler);
 
@@ -1855,9 +1926,6 @@ int main(
                 device,
                 swapchain.BufferCount());
 
-        std::optional<orbit::u32>
-            completedLightingFrameSlot;
-
         auto* primaryStudioView =
             studioViews.Find(
                 "studio.primary");
@@ -1867,6 +1935,10 @@ int main(
             throw std::logic_error(
                 "Studio primary RenderView was not created.");
         }
+        std::optional<std::pair<orbit::u32, orbit::u32>>
+            pendingPrimaryViewResize;
+        std::optional<std::pair<orbit::u32, orbit::u32>>
+            pendingMaterialViewResize;
 
         rpcHost.AttachViewport({
             .view = primaryStudioView,
@@ -3991,7 +4063,8 @@ int main(
                  &viewportRightGestureDragged,
                  &viewportRightGestureDistance,
                  &viewportHomeWasDown,
-                 &viewportEndWasDown](
+                 &viewportEndWasDown,
+                 &pendingPrimaryViewResize](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -4108,9 +4181,8 @@ int main(
                         height !=
                             primaryView->Height())
                     {
-                        primaryView->Resize(
-                            width,
-                            height);
+                        pendingPrimaryViewResize =
+                            std::pair{width, height};
                     }
 
                     const auto interaction =
@@ -5415,7 +5487,8 @@ int main(
                  &materialEmissiveTextureEdit,
                  &materialEmissionStatus,
                  &studioSession,
-                 &window](
+                 &window,
+                 &pendingMaterialViewResize](
                     orbit::editor_ui::
                         PanelContext& context)
                 {
@@ -5515,9 +5588,10 @@ int main(
                     if (materialView.Width() != previewPixelsWide ||
                         materialView.Height() != previewPixelsHigh)
                     {
-                        materialView.Resize(
-                            previewPixelsWide,
-                            previewPixelsHigh);
+                        pendingMaterialViewResize =
+                            std::pair{
+                                previewPixelsWide,
+                                previewPixelsHigh};
                     }
 
                     context.Text(
@@ -6840,20 +6914,29 @@ int main(
                 project.Manifest().
                     projectId.ToString()));
 
-        auto allocator =
-            device.CreateCommandAllocator(
-                orbit::rhi::QueueType::
-                    Graphics);
-
-        auto commands =
-            device.CreateCommandList(
-                *allocator);
-
         auto fence =
             device.CreateFence(0);
 
         orbit::u64 submittedFence = 0;
         orbit::u64 nextFence = 1;
+
+        struct InFlightFrame
+        {
+            std::unique_ptr<orbit::rhi::CommandAllocator> allocator;
+            std::unique_ptr<orbit::rhi::CommandList> commands;
+            std::unique_ptr<orbit::render_graph::RenderGraph> graph;
+            orbit::u64 fenceValue{0U};
+        };
+        std::vector<InFlightFrame> inFlightFrames(
+            swapchain.BufferCount());
+        for (auto& frame : inFlightFrames)
+        {
+            frame.allocator = device.CreateCommandAllocator(
+                orbit::rhi::QueueType::Graphics);
+            frame.commands = device.CreateCommandList(*frame.allocator);
+        }
+        orbit::u32 nextFrameSlot = 0U;
+        orbit::u32 previousRadianceUpdateCount = 64U;
 
         using Clock =
             std::chrono::steady_clock;
@@ -6877,46 +6960,13 @@ int main(
 
                 if (activeBody.has_value())
                 {
-                    const bool activeIdentityChanged =
-                        bodyObject !=
-                            activeBody->semanticObject ||
-                        bodyId != activeBody->body;
-
                     bodyObject =
                         activeBody->semanticObject;
                     bodyId =
                         activeBody->body;
-
-                    bodyView.Camera().frame =
+                    materialView.Camera().frame =
                         activeBody->frame;
 
-                    const orbit::f64 activeRadius =
-                        std::max(
-                            activeBody->
-                                referenceRadiusMeters,
-                            1.0);
-
-                    bodyView.Camera().
-                        nearPlaneMeters =
-                            static_cast<orbit::f32>(
-                                std::max(
-                                    activeRadius *
-                                        1.0e-6,
-                                    1.0));
-                    bodyView.Camera().
-                        farPlaneMeters =
-                            static_cast<orbit::f32>(
-                                activeRadius * 10.0);
-
-                    if (activeIdentityChanged)
-                    {
-                        bodyView.Camera().
-                            localPositionMeters = {
-                                0.0,
-                                0.0,
-                                -activeRadius * 3.2
-                            };
-                    }
                 }
                 else
                 {
@@ -6925,38 +6975,36 @@ int main(
                 }
             };
 
-        std::unique_ptr<
-            orbit::render_graph::RenderGraph>
-            inFlightGraph;
-
         while (window.PumpEvents())
         {
-            if (submittedFence != 0)
+            const auto loopStarted = Clock::now();
+            const orbit::u32 lightingFrameSlot = nextFrameSlot;
+            auto& frame = inFlightFrames[lightingFrameSlot];
+            if (frame.fenceValue != 0U)
             {
+                const auto fenceWaitStarted = Clock::now();
                 fence->Wait(
-                    submittedFence);
+                    frame.fenceValue);
+                cpuFrameTelemetry.Record(
+                    CpuFrameTelemetry::FenceWait,
+                    std::chrono::duration<double, std::milli>(
+                        Clock::now() - fenceWaitStarted).count());
 
-                if (completedLightingFrameSlot.has_value())
+                if (const auto timings =
+                        lightingTimestamps.ResolveCompletedFrame(
+                            lightingFrameSlot);
+                    timings.has_value())
                 {
-                    if (const auto timings =
-                            lightingTimestamps.
-                                ResolveCompletedFrame(
-                                    *completedLightingFrameSlot);
-                        timings.has_value())
-                    {
-                        lightingScheduler.
-                            RecordGpuTimings(
-                                *timings);
-                    }
-
-                    surfaceVolumeSolver.
-                        ResolveGpuTimingFrame(
-                            *completedLightingFrameSlot);
+                    lightingScheduler.RecordGpuTimings(*timings);
                 }
+                surfaceVolumeSolver.ResolveGpuTimingFrame(
+                    lightingFrameSlot);
             }
+            frame.graph.reset();
 
             const auto frameCpuStarted =
                 Clock::now();
+            const auto preUiStarted = frameCpuStarted;
 
             const auto now =
                 Clock::now();
@@ -6985,9 +7033,44 @@ int main(
                 continue;
             }
 
-            static_cast<void>(
-                runtime.
-                    ResizeSwapchainToWindow());
+            static_cast<void>(runtime.ResizeSwapchainToWindow());
+
+            if (pendingPrimaryViewResize.has_value() ||
+                pendingMaterialViewResize.has_value())
+            {
+                for (orbit::u32 slot = 0U;
+                     slot < inFlightFrames.size();
+                     ++slot)
+                {
+                    auto& pendingFrame = inFlightFrames[slot];
+                    if (pendingFrame.fenceValue != 0U)
+                    {
+                        fence->Wait(pendingFrame.fenceValue);
+                        if (const auto timings =
+                                lightingTimestamps.ResolveCompletedFrame(slot);
+                            timings.has_value())
+                        {
+                            lightingScheduler.RecordGpuTimings(*timings);
+                        }
+                        surfaceVolumeSolver.ResolveGpuTimingFrame(slot);
+                    }
+                    pendingFrame.graph.reset();
+                }
+                if (pendingPrimaryViewResize.has_value())
+                {
+                    primaryStudioView->Resize(
+                        pendingPrimaryViewResize->first,
+                        pendingPrimaryViewResize->second);
+                    pendingPrimaryViewResize.reset();
+                }
+                if (pendingMaterialViewResize.has_value())
+                {
+                    materialView.Resize(
+                        pendingMaterialViewResize->first,
+                        pendingMaterialViewResize->second);
+                    pendingMaterialViewResize.reset();
+                }
+            }
 
             rpcServer.Poll();
 
@@ -7267,11 +7350,21 @@ int main(
             viewportFrameMouseDelta =
                 window.ConsumeMouseDelta();
 
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::PreUi,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - preUiStarted).count());
+            const auto uiStarted = Clock::now();
             ui.BeginFrame(
                 window,
                 deltaSeconds);
 
             ui.DrawStudioShell();
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::Ui,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - uiStarted).count());
+            const auto sceneUpdateStarted = Clock::now();
 
             if (viewportRightGestureActive &&
                 !window.MouseButtonDown(
@@ -7336,17 +7429,19 @@ int main(
                 break;
             }
 
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::SceneUpdate,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - sceneUpdateStarted).count());
+
+            auto* allocator = frame.allocator.get();
+            auto* commands = frame.commands.get();
             allocator->Reset();
-            commands->Reset(
-                *allocator);
+            commands->Reset(*allocator);
 
             auto& backBuffer =
                 swapchain.
                     CurrentBackBuffer();
-
-            const orbit::u32 lightingFrameSlot =
-                swapchain.
-                    CurrentBackBufferIndex();
 
             lightingTimestamps.BeginFrame(
                 *commands,
@@ -7357,20 +7452,15 @@ int main(
                     *commands,
                     lightingFrameSlot);
 
-            // Transient graph buffers/textures must stay alive until the GPU
-            // finishes this frame; the previous frame's graph is released
-            // after the fence wait at the top of the next iteration.
-            auto graphHolder =
+            // Each frame slot retains its graph and command storage until its
+            // timeline fence completes on slot reuse.
+            const auto renderGraphStarted = Clock::now();
+            frame.graph =
                 std::make_unique<
                     orbit::render_graph::RenderGraph>(
                         device);
             orbit::render_graph::RenderGraph& graph =
-                *graphHolder;
-
-            const auto viewTargets =
-                bodyView.Import(
-                    graph,
-                    "StudioBody");
+                *frame.graph;
 
             const auto materialViewTargets =
                 materialView.Import(
@@ -7384,115 +7474,6 @@ int main(
                     orbit::rhi::
                         ResourceState::
                             Present);
-
-            const auto* previewBody =
-                bodyId.IsValid()
-                    ? bodies().FindBody(bodyId)
-                    : nullptr;
-
-            std::vector<
-                const orbit::path_geometry::
-                    PathDerivedProduct*>
-                visiblePathProducts;
-
-            visiblePathProducts.reserve(
-                derivedPaths.size());
-
-            for (const auto&
-                     [edge, product] :
-                 derivedPaths)
-            {
-                static_cast<void>(edge);
-                visiblePathProducts.push_back(
-                    &product);
-            }
-
-            std::sort(
-                visiblePathProducts.begin(),
-                visiblePathProducts.end(),
-                [](const auto* a,
-                   const auto* b)
-                {
-                    if (a->edge.high !=
-                        b->edge.high)
-                    {
-                        return a->edge.high <
-                            b->edge.high;
-                    }
-
-                    return a->edge.low <
-                        b->edge.low;
-                });
-
-            if (previewBody != nullptr)
-            {
-                const orbit::universe::BodyShape
-                    previewShape =
-                        previewBody->shape;
-
-                graph.AddPass(
-                    "Studio.BodyPreview",
-                    {
-                        {
-                            .texture =
-                                viewTargets.color,
-                            .state =
-                                orbit::rhi::
-                                    ResourceState::
-                                        RenderTarget,
-                            .access =
-                                orbit::render_graph::
-                                    Access::Write
-                        }
-                    },
-                    [&, previewShape](
-                        orbit::rhi::CommandList&
-                            commandList,
-                        const orbit::render_graph::
-                            Resources&)
-                    {
-                        bodyPreview.Draw(
-                            commandList,
-                            bodyView.Color(),
-                            bodyView.Width(),
-                            bodyView.Height(),
-                            previewShape,
-                            bodyView.Camera());
-                    });
-            }
-            else
-            {
-                graph.AddPass(
-                    "Studio.BodyPreview.Blank",
-                    {
-                        {
-                            .texture =
-                                viewTargets.color,
-                            .state =
-                                orbit::rhi::
-                                    ResourceState::
-                                        RenderTarget,
-                            .access =
-                                orbit::render_graph::
-                                    Access::Write
-                        }
-                    },
-                    [&bodyView](
-                        orbit::rhi::CommandList&
-                            commandList,
-                        const orbit::render_graph::
-                            Resources&)
-                    {
-                        commandList.ClearColorTarget(
-                            bodyView.Color(),
-                            {
-                                .red = 0.018F,
-                                .green = 0.021F,
-                                .blue = 0.027F,
-                                .alpha = 1.0F
-                            });
-                    });
-            }
 
             graph.AddPass(
                 "Studio.MaterialPreview",
@@ -7523,54 +7504,14 @@ int main(
                         materialPreviewMaterial);
                 });
 
-            if (previewBody != nullptr)
-            {
-                graph.AddPass(
-                "Studio.Paths",
-                {
-                    {
-                        .texture =
-                            viewTargets.color,
-                        .state =
-                            orbit::rhi::
-                                ResourceState::
-                                    RenderTarget,
-                        .access =
-                            orbit::render_graph::
-                                Access::Write
-                    }
-                },
-                [&](orbit::rhi::CommandList&
-                        commandList,
-                    const orbit::render_graph::
-                        Resources&)
-                {
-                    pathPreview.Draw(
-                        commandList,
-                        bodyView.Color(),
-                        bodyView.Width(),
-                        bodyView.Height(),
-                        bodyView.Camera(),
-                        frames(),
-                        {},
-                        std::span<
-                            const orbit::
-                                path_geometry::
-                                    PathDerivedProduct*
-                                    const>(
-                            visiblePathProducts.
-                                data(),
-                            visiblePathProducts.
-                                size()),
-                        pathDebugVisualization);
-                });
-
-            }
-
             const auto studioSnapshot =
                 studioRuntime.Capture();
 
-            const auto lightingPlan =
+            constexpr double kRadianceCpuBudgetMs = 4.0;
+            const double previousGiEstimateMs =
+                cpuFrameTelemetry.RollingAverageMs(
+                    CpuFrameTelemetry::GiEstimate);
+            auto lightingPlan =
                 lightingScheduler.BuildPlan(
                     {
                         .exactVisibilityQueries = 2'048U,
@@ -7578,7 +7519,33 @@ int main(
                         .reflectionQueries = 2'048U
                     },
                     device.Capabilities().rayQuery);
+            if (previousRadianceUpdateCount > 0U &&
+                previousGiEstimateMs > kRadianceCpuBudgetMs)
+            {
+                const auto viewCount = std::max<std::size_t>(
+                    studioViews.Catalog().size(),
+                    1U);
+                const auto totalCpuBudgetedUpdates =
+                    static_cast<orbit::u32>(
+                        kRadianceCpuBudgetMs *
+                        static_cast<double>(previousRadianceUpdateCount) /
+                        previousGiEstimateMs);
+                const orbit::u32 perViewCpuCap =
+                    std::clamp<orbit::u32>(
+                        static_cast<orbit::u32>(
+                            totalCpuBudgetedUpdates / viewCount),
+                        1U,
+                        64U);
+                lightingPlan.radianceCacheUpdates =
+                    std::min(
+                        lightingPlan.radianceCacheUpdates,
+                        perViewCpuCap);
+            }
 
+            const auto viewportComposeStarted = Clock::now();
+            std::array<double, 12U> composeStageTotals{};
+            std::array<double, 2U> giSnapshotStageTotals{};
+            orbit::u32 radianceUpdateCount = 0U;
             const auto renderedStudioViews =
                 studioViewportRenderer.Compose(
                     graph,
@@ -7590,7 +7557,128 @@ int main(
                     pathDebugVisualization,
                     lightingFrameSlot,
                     lightingPlan,
-                    &lightingTimestamps);
+                    &lightingTimestamps,
+                    [&composeStageTotals,
+                     &giSnapshotStageTotals,
+                     &radianceUpdateCount](
+                        const std::string_view stage,
+                        const double milliseconds)
+                    {
+                        if (stage == "early")
+                        {
+                            composeStageTotals[0] += milliseconds;
+                        }
+                        else if (stage == "celestial")
+                        {
+                            composeStageTotals[1] += milliseconds;
+                        }
+                        else if (stage == "terrain")
+                        {
+                            composeStageTotals[2] += milliseconds;
+                        }
+                        else if (stage == "render")
+                        {
+                            composeStageTotals[3] += milliseconds;
+                        }
+                        else if (stage == "gi")
+                        {
+                            composeStageTotals[4] += milliseconds;
+                        }
+                        else if (stage == "atmosphere")
+                        {
+                            composeStageTotals[5] += milliseconds;
+                        }
+                        else if (stage == "post")
+                        {
+                            composeStageTotals[6] += milliseconds;
+                        }
+                        else if (stage == "gi_prepare")
+                        {
+                            composeStageTotals[7] += milliseconds;
+                        }
+                        else if (stage == "gi_update_list")
+                        {
+                            composeStageTotals[8] += milliseconds;
+                        }
+                        else if (stage == "gi_estimate")
+                        {
+                            composeStageTotals[9] += milliseconds;
+                        }
+                        else if (stage == "gi_snapshot")
+                        {
+                            composeStageTotals[10] += milliseconds;
+                        }
+                        else if (stage == "gi_passes")
+                        {
+                            composeStageTotals[11] += milliseconds;
+                        }
+                        else if (stage == "gi_snapshot_build")
+                        {
+                            giSnapshotStageTotals[0] += milliseconds;
+                        }
+                        else if (stage == "gi_snapshot_upload")
+                        {
+                            giSnapshotStageTotals[1] += milliseconds;
+                        }
+                        else if (stage == "gi_update_count")
+                        {
+                            radianceUpdateCount +=
+                                static_cast<orbit::u32>(milliseconds);
+                        }
+                    });
+            previousRadianceUpdateCount = radianceUpdateCount;
+            cpuFrameTelemetry.RecordRadianceUpdates(
+                radianceUpdateCount);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ComposeEarly,
+                composeStageTotals[0]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ComposeCelestial,
+                composeStageTotals[1]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ComposeTerrain,
+                composeStageTotals[2]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ComposeRender,
+                composeStageTotals[3]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ComposeGi,
+                composeStageTotals[7] +
+                    composeStageTotals[8] +
+                    composeStageTotals[9] +
+                    composeStageTotals[10] +
+                    composeStageTotals[11]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ComposeAtmosphere,
+                composeStageTotals[5]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ComposePost,
+                composeStageTotals[6]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::GiPrepare,
+                composeStageTotals[7]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::GiUpdateList,
+                composeStageTotals[8]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::GiEstimate,
+                composeStageTotals[9]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::GiSnapshot,
+                composeStageTotals[10]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::GiSnapshotBuild,
+                giSnapshotStageTotals[0]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::GiSnapshotUpload,
+                giSnapshotStageTotals[1]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::GiPasses,
+                composeStageTotals[11]);
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::ViewportCompose,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - viewportComposeStarted).count());
 
             graph.AddPass(
                 "Studio.Canvas",
@@ -7634,17 +7722,6 @@ int main(
             std::vector<
                 orbit::render_graph::TextureUse>
                 studioUiTextures{
-                    {
-                        .texture =
-                            viewTargets.color,
-                        .state =
-                            orbit::rhi::
-                                ResourceState::
-                                    ShaderResource,
-                        .access =
-                            orbit::render_graph::
-                                Access::Read
-                    },
                     {
                         .texture =
                             materialViewTargets.color,
@@ -7718,9 +7795,18 @@ int main(
                 },
                 {});
 
+            const auto renderGraphExecuteStarted = Clock::now();
             graph.Execute(*commands);
 
             commands->Close();
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::RenderGraphExecute,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - renderGraphExecuteStarted).count());
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::RenderGraphSetup,
+                std::chrono::duration<double, std::milli>(
+                    renderGraphExecuteStarted - renderGraphStarted).count());
 
             studioSession.
                 TerrainPerformance().
@@ -7733,6 +7819,7 @@ int main(
                     studioSession,
                     "studio.primary");
 
+            const auto submitPresentStarted = Clock::now();
             graphicsQueue.Submit(
                 *commands);
 
@@ -7744,12 +7831,20 @@ int main(
             graphicsQueue.Signal(
                 *fence,
                 submittedFence);
+            frame.fenceValue = submittedFence;
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::SubmitPresent,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - submitPresentStarted).count());
+            cpuFrameTelemetry.Record(
+                CpuFrameTelemetry::WholeLoop,
+                std::chrono::duration<double, std::milli>(
+                    Clock::now() - loopStarted).count());
+            cpuFrameTelemetry.FinishFrame();
 
-            inFlightGraph =
-                std::move(graphHolder);
-
-            completedLightingFrameSlot =
-                lightingFrameSlot;
+            nextFrameSlot =
+                (nextFrameSlot + 1U) %
+                static_cast<orbit::u32>(inFlightFrames.size());
 
             if (terrainUiSmoke &&
                 terrainUiSmokeValidated)
