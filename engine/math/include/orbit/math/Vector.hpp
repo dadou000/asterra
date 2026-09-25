@@ -3,6 +3,7 @@
 #include <orbit/core/Types.hpp>
 
 #include <cmath>
+#include <initializer_list>
 #include <type_traits>
 
 namespace orbit::math
@@ -147,6 +148,28 @@ template <typename T>
     }
 
     return value / length;
+}
+
+// Makes float brace literals unambiguous when both Float3 and Double3
+// normalization overloads are visible. This keeps call sites explicit about
+// scalar precision without forcing a temporary variable solely for overload
+// resolution.
+[[nodiscard]] inline Float3 Normalize(
+    const std::initializer_list<f32> values) noexcept
+{
+    if (values.size() != 3U)
+    {
+        return {};
+    }
+
+    auto it = values.begin();
+    const Float3 value{
+        *it,
+        *std::next(it),
+        *std::next(it, 2)
+    };
+
+    return Normalize(value);
 }
 
 [[nodiscard]] inline Double3 Normalize(const Double3& value) noexcept
