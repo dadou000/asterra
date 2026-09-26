@@ -15,7 +15,9 @@ if(WIN32)
     set_target_properties(OrbitStudio PROPERTIES
         WIN32_EXECUTABLE TRUE)
     target_link_options(OrbitStudio PRIVATE
-        /ENTRY:mainCRTStartup)
+        /ENTRY:mainCRTStartup
+        /MANIFEST:EMBED
+        "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/OrbitStudio.manifest")
 endif()
 
 target_link_libraries(OrbitStudio
