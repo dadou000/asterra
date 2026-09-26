@@ -18,6 +18,53 @@ namespace
 constexpr const char* kWindowClassName =
     "OrbitWindowClass";
 
+// Orbit renders directly into a Vulkan swapchain whose extent is expressed
+// in physical pixels. If Windows is allowed to treat the process as
+// DPI-unaware, GetClientRect()/cursor coordinates are virtualized to 96-DPI
+// logical pixels while Vulkan still presents to the monitor's real pixel
+// grid. The editor then sizes its embedded RenderViews from the smaller
+// logical dimensions and DWM stretches the result, which is visibly soft on
+// 4K/high-DPI displays.
+//
+// Establish PMv2 before creating any HWND so Win32 client coordinates,
+// ImGui's display size and the Vulkan surface all describe the same physical
+// pixel space. ERROR_ACCESS_DENIED is benign: it means a manifest or an
+// earlier startup path already selected a DPI-awareness mode.
+void EnsureProcessDpiAwareness()
+{
+    static std::once_flag once;
+
+    std::call_once(
+        once,
+        []
+        {
+#if defined(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+            if (SetProcessDpiAwarenessContext(
+                    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) != FALSE)
+            {
+                log::Info(
+                    "Win32 per-monitor DPI awareness V2 enabled.");
+                return;
+            }
+
+            if (GetLastError() == ERROR_ACCESS_DENIED)
+            {
+                log::Info(
+                    "Win32 DPI awareness was already configured before window creation.");
+                return;
+            }
+#endif
+
+            // Compatibility fallback for older Windows SDK/runtime pairs.
+            // This is not as capable as PMv2, but it still prevents the
+            // DPI-unaware bitmap virtualization that causes the 4K blur.
+            static_cast<void>(
+                SetProcessDPIAware());
+            log::Info(
+                "Win32 system DPI awareness fallback enabled.");
+        });
+}
+
 [[nodiscard]] wchar_t LogicalCharacter(
     const Key key) noexcept
 {
@@ -405,6 +452,34 @@ LRESULT CALLBACK OrbitWindowProc(
                     wParam));
         }
         return 0;
+
+    case WM_DPICHANGED:
+    {
+        // PMv2 supplies a monitor-appropriate outer rect in lParam. Applying
+        // it keeps the client area's physical-pixel size coherent when the
+        // window crosses monitors with different scale factors. The regular
+        // Width()/Height() polling then drives the Vulkan swapchain resize on
+        // the next frame.
+        const auto* suggested =
+            reinterpret_cast<const RECT*>(
+                lParam);
+
+        if (suggested != nullptr)
+        {
+            SetWindowPos(
+                hwnd,
+                nullptr,
+                suggested->left,
+                suggested->top,
+                suggested->right -
+                    suggested->left,
+                suggested->bottom -
+                    suggested->top,
+                SWP_NOZORDER |
+                    SWP_NOACTIVATE);
+        }
+        return 0;
+    }
 
     case WM_CLOSE:
         DestroyWindow(hwnd);
@@ -977,6 +1052,8 @@ private:
 std::unique_ptr<Window> MakeWindow(
     const WindowDesc& desc)
 {
+    EnsureProcessDpiAwareness();
+
     return std::make_unique<
         Win32Window>(desc);
 }
