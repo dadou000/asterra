@@ -1066,6 +1066,30 @@ float4 main(VSOutput input) : SV_Target0
                         z));
         }
 
+        // The impostor rasterises an orthographic sphere in the screen frame
+        // (x right, y up, z toward the camera), but the light direction and
+        // every surface feature live in the body-fixed frame. Rotate the
+        // normal into that frame with the same camera basis the ray-traced
+        // path uses (+p.y is screen-down there), so lighting, photometry and
+        // procedural surfaces agree with it.
+        const float3 viewForward =
+            normalize(g.forward.xyz);
+        const float3 viewRight =
+            normalize(
+                cross(
+                    viewForward,
+                    normalize(g.up.xyz)));
+        const float3 viewUp =
+            normalize(
+                cross(
+                    viewRight,
+                    viewForward));
+        n =
+            normalize(
+                viewRight * n.x +
+                viewUp * n.y -
+                viewForward * n.z);
+
         const float3 l =
             normalize(g.lighting.xyz);
 
@@ -1093,10 +1117,12 @@ float4 main(VSOutput input) : SV_Target0
             giant > 0.5
                 ? 1.0
                 : saturate(g.material.w);
-        const float viewZ =
-            sqrt(max(1.0 - min(r2, 1.0), 0.0));
+        // Direction from the surface toward the camera. The impostor models
+        // the camera at infinity, so this is the same for every pixel; it was
+        // previously the mirrored surface normal, which put phantom opposition
+        // and ocean-glint hotspots wherever that mirrored normal met the light.
         const float3 v =
-            normalize(float3(-q.x, q.y, viewZ));
+            -viewForward;
         const float glint =
             ocean *
             (1.0 - ice) *
@@ -3346,10 +3372,15 @@ void FarBodyRenderer::DrawSurfaceData(
             : draw.giantEnabled
                 ? draw.giantBaseColorLinear.z
                 : draw.appearance.albedoLinear.z),
+        // This slot is the G-buffer PBR roughness. Small bodies must not put
+        // their macroscopic roughness here: that is a Hapke angle in radians
+        // (analytic pass only), and as GGX roughness 0.35 paints a glossy
+        // sun-mirror highlight on what should be dry regolith.
         bits(draw.smallBodyEnabled
-            ? std::max(
-                  draw.smallBodyMacroscopicRoughnessRadians,
-                  0.0F)
+            ? std::clamp(
+                  draw.appearance.roughness,
+                  0.0F,
+                  1.0F)
             : draw.stellar
                 ? std::clamp(
                       draw.stellarLimbDarkening,
