@@ -18,6 +18,7 @@ int main()
 
     if (!Expect("engine/terrain/src/Terrain.cpp", ChangeKind::NativeModule) ||
         !Expect("Content/Shaders/terrain.hlsl", ChangeKind::Shader) ||
+        !Expect("engine/render/shaders/terrain.hlsl", ChangeKind::RestartRequired) ||
         !Expect("Plugins/weather.luau", ChangeKind::Script) ||
         !Expect("Content/Materials/rock.orbitmaterial", ChangeKind::Content) ||
         !Expect("Content/Textures/rock.png", ChangeKind::Content) ||
