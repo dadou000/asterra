@@ -82,11 +82,13 @@ struct MacroGlobeMesh
 
 // The implementation in MacroGlobe.cpp is compiled under this legacy symbol;
 // the public wrapper below registers the terrain authority for the hybrid
-// renderer before forwarding to it.
+// renderer before forwarding to it. The legacy declaration intentionally has
+// no default argument because MacroGlobe.cpp macro-renames the public symbol to
+// this name; repeating the default there is ill-formed in MSVC.
 [[nodiscard]] u64 LegacyMacroGlobeFingerprint(
     const terrain::TerrainSource& source,
     const universe::BodyShape& shape,
-    const MacroGlobeConfig& config = {});
+    const MacroGlobeConfig& config);
 
 [[nodiscard]] u64 MacroGlobeFingerprint(
     const terrain::TerrainSource& source,
