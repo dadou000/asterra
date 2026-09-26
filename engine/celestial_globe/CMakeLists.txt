@@ -1,5 +1,6 @@
 add_library(OrbitCelestialGlobe STATIC
     src/MacroGlobe.cpp
+    src/PlanetPatchHierarchy.cpp
 )
 
 add_library(
@@ -51,5 +52,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.MacroGlobe
         COMMAND OrbitMacroGlobeTests
+    )
+
+    add_executable(
+        OrbitPlanetPatchHierarchyTests
+        tests/PlanetPatchHierarchyTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitPlanetPatchHierarchyTests
+        PRIVATE
+            Orbit::CelestialGlobe
+    )
+
+    target_compile_features(
+        OrbitPlanetPatchHierarchyTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitPlanetPatchHierarchyTests)
+
+    add_test(
+        NAME Orbit.PlanetPatchHierarchy
+        COMMAND OrbitPlanetPatchHierarchyTests
     )
 endif()
