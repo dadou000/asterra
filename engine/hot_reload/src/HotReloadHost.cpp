@@ -1,4 +1,5 @@
 #include <orbit/hot_reload/HotReloadHost.hpp>
+#include <orbit/hot_reload/ChangeClassifier.hpp>
 #include <orbit/hot_reload/ModuleApi.hpp>
 
 #include <orbit/core/Log.hpp>
@@ -59,10 +60,30 @@ void HostLog(const HostLogLevel level, const char* message) noexcept
     }
 }
 
-[[nodiscard]] std::filesystem::file_time_type LatestSourceWrite(
+struct SourceChange
+{
+    std::filesystem::file_time_type writeTime{
+        std::filesystem::file_time_type::min()};
+    std::filesystem::path path;
+};
+
+[[nodiscard]] SourceChange LatestSourceChange(
     const std::vector<std::filesystem::path>& roots)
 {
-    auto latest = std::filesystem::file_time_type::min();
+    SourceChange latest{};
+
+    const auto consider =
+        [&latest](const std::filesystem::path& path)
+        {
+            std::error_code error;
+            const auto write =
+                std::filesystem::last_write_time(path, error);
+            if (!error && write > latest.writeTime)
+            {
+                latest.writeTime = write;
+                latest.path = path;
+            }
+        };
 
     for (const auto& root : roots)
     {
@@ -74,11 +95,7 @@ void HostLog(const HostLogLevel level, const char* message) noexcept
 
         if (std::filesystem::is_regular_file(root, error))
         {
-            const auto write = std::filesystem::last_write_time(root, error);
-            if (!error)
-            {
-                latest = (std::max)(latest, write);
-            }
+            consider(root);
             continue;
         }
 
@@ -93,11 +110,7 @@ void HostLog(const HostLogLevel level, const char* message) noexcept
         {
             if (iterator->is_regular_file(error))
             {
-                const auto write = iterator->last_write_time(error);
-                if (!error)
-                {
-                    latest = (std::max)(latest, write);
-                }
+                consider(iterator->path());
             }
 
             iterator.increment(error);
@@ -124,17 +137,22 @@ public:
 
         if (config_.runtimeCopyRoot.empty())
         {
-            config_.runtimeCopyRoot = config_.binaryRoot / "hot_reload_runtime";
+            config_.runtimeCopyRoot =
+                config_.binaryRoot /
+                "hot_reload_runtime";
         }
 
         runtimeProcessRoot_ =
             config_.runtimeCopyRoot /
-            std::format("process_{}", GetCurrentProcessId());
+            std::format(
+                "process_{}",
+                GetCurrentProcessId());
     }
 
     ~Impl()
     {
         Stop();
+
         std::scoped_lock lock(modulesMutex_);
         for (auto& module : modules_)
         {
@@ -142,12 +160,15 @@ public:
         }
 
         std::error_code error;
-        std::filesystem::remove_all(runtimeProcessRoot_, error);
+        std::filesystem::remove_all(
+            runtimeProcessRoot_,
+            error);
     }
 
     void RegisterModule(ModuleRegistration registration)
     {
-        if (registration.name.empty() || registration.buildTarget.empty())
+        if (registration.name.empty() ||
+            registration.buildTarget.empty())
         {
             throw std::invalid_argument(
                 "Hot-reload modules require a name and build target.");
@@ -155,18 +176,39 @@ public:
 
         if (registration.binaryPath.is_relative())
         {
-            registration.binaryPath = config_.binaryRoot / registration.binaryPath;
+            registration.binaryPath =
+                config_.binaryRoot /
+                registration.binaryPath;
         }
 
         for (auto& sourceRoot : registration.sourceRoots)
         {
             if (sourceRoot.is_relative())
             {
-                sourceRoot = config_.sourceRoot / sourceRoot;
+                sourceRoot =
+                    config_.sourceRoot /
+                    sourceRoot;
             }
         }
 
         std::scoped_lock lock(modulesMutex_);
+
+        const auto duplicate =
+            std::find_if(
+                modules_.begin(),
+                modules_.end(),
+                [&registration](const ModuleRuntime& module)
+                {
+                    return module.registration.name ==
+                        registration.name;
+                });
+
+        if (duplicate != modules_.end())
+        {
+            throw std::invalid_argument(
+                "Hot-reload module names must be unique.");
+        }
+
         modules_.push_back(ModuleRuntime{
             .registration = std::move(registration)
         });
@@ -175,7 +217,9 @@ public:
     void Start()
     {
         bool expected = false;
-        if (!running_.compare_exchange_strong(expected, true))
+        if (!running_.compare_exchange_strong(
+                expected,
+                true))
         {
             return;
         }
@@ -201,16 +245,11 @@ public:
         }
     }
 
-    [[nodiscard]] bool RequestReload(const std::string_view name)
+    [[nodiscard]] bool RequestReload(
+        const std::string_view name)
     {
         std::scoped_lock lock(modulesMutex_);
-        const auto iterator = std::find_if(
-            modules_.begin(),
-            modules_.end(),
-            [name](const ModuleRuntime& module)
-            {
-                return module.registration.name == name;
-            });
+        const auto iterator = FindModule(name);
 
         if (iterator == modules_.end())
         {
@@ -221,13 +260,55 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool VisitInterface(
+        const std::string_view moduleName,
+        const char* interfaceName,
+        const std::uint32_t interfaceVersion,
+        const InterfaceVisitor visitor,
+        void* const userData)
+    {
+        if (interfaceName == nullptr || visitor == nullptr)
+        {
+            return false;
+        }
+
+        std::scoped_lock lock(modulesMutex_);
+        const auto iterator = FindModule(moduleName);
+
+        if (iterator == modules_.end() ||
+            iterator->api == nullptr ||
+            iterator->api->queryInterface == nullptr)
+        {
+            return false;
+        }
+
+        const void* const interfacePointer =
+            iterator->api->queryInterface(
+                interfaceName,
+                interfaceVersion);
+
+        if (interfacePointer == nullptr)
+        {
+            return false;
+        }
+
+        // modulesMutex_ intentionally remains held across this callback. This
+        // pins the generation so the worker cannot unload its DLL while an
+        // engine frame is executing through the interface.
+        visitor(interfacePointer, userData);
+        return true;
+    }
+
 private:
     struct ModuleRuntime
     {
         ModuleRegistration registration;
         std::filesystem::file_time_type lastObservedWrite{
             std::filesystem::file_time_type::min()};
-        std::optional<std::chrono::steady_clock::time_point> pendingSince;
+        std::optional<std::chrono::steady_clock::time_point>
+            pendingSince;
+        ChangeKind pendingKind{ChangeKind::Ignored};
+        std::filesystem::path pendingPath;
         bool forceReload{false};
         std::uint64_t generation{0U};
         HMODULE library{nullptr};
@@ -235,84 +316,204 @@ private:
         std::filesystem::path loadedCopy;
     };
 
+    using ModuleIterator =
+        std::vector<ModuleRuntime>::iterator;
+
+    [[nodiscard]] ModuleIterator FindModule(
+        const std::string_view name)
+    {
+        return std::find_if(
+            modules_.begin(),
+            modules_.end(),
+            [name](const ModuleRuntime& module)
+            {
+                return module.registration.name == name;
+            });
+    }
+
     void WorkerMain(const std::stop_token stopToken)
     {
+        std::error_code directoryError;
+        std::filesystem::create_directories(
+            runtimeProcessRoot_,
+            directoryError);
+
+        std::vector<ModuleRegistration> initialModules;
         {
             std::scoped_lock lock(modulesMutex_);
-            std::error_code directoryError;
-            std::filesystem::create_directories(runtimeProcessRoot_, directoryError);
+            initialModules.reserve(modules_.size());
 
             for (auto& module : modules_)
             {
-                module.lastObservedWrite = LatestSourceWrite(module.registration.sourceRoots);
-
-                if (!std::filesystem::exists(module.registration.binaryPath) &&
-                    config_.automaticBuilds)
-                {
-                    if (!Build(module))
-                    {
-                        continue;
-                    }
-                }
-
-                (void)LoadGeneration(module);
+                const auto latest =
+                    LatestSourceChange(
+                        module.registration.sourceRoots);
+                module.lastObservedWrite =
+                    latest.writeTime;
+                initialModules.push_back(
+                    module.registration);
             }
         }
 
-        orbit::log::Info("Orbit native hot-reload host is active.");
+        // Compile work intentionally happens without modulesMutex_. Existing
+        // generations remain callable while CMake is busy.
+        for (const auto& registration : initialModules)
+        {
+            if (stopToken.stop_requested())
+            {
+                return;
+            }
+
+            if (!std::filesystem::exists(
+                    registration.binaryPath) &&
+                config_.automaticBuilds &&
+                !Build(registration))
+            {
+                continue;
+            }
+
+            std::scoped_lock lock(modulesMutex_);
+            const auto iterator =
+                FindModule(registration.name);
+            if (iterator != modules_.end())
+            {
+                (void)LoadGeneration(*iterator);
+            }
+        }
+
+        orbit::log::Info(
+            "Orbit native hot-reload host is active.");
 
         while (!stopToken.stop_requested())
         {
+            std::vector<ModuleRegistration> buildRequests;
+
             {
                 std::scoped_lock lock(modulesMutex_);
-                const auto now = std::chrono::steady_clock::now();
+                const auto now =
+                    std::chrono::steady_clock::now();
 
                 for (auto& module : modules_)
                 {
-                    const auto latest = LatestSourceWrite(module.registration.sourceRoots);
-                    if (latest > module.lastObservedWrite)
+                    const auto latest =
+                        LatestSourceChange(
+                            module.registration.sourceRoots);
+
+                    if (latest.writeTime >
+                        module.lastObservedWrite)
                     {
-                        module.lastObservedWrite = latest;
+                        module.lastObservedWrite =
+                            latest.writeTime;
                         module.pendingSince = now;
-                        orbit::log::Info(std::format(
-                            "Hot reload detected a change in {}.",
-                            module.registration.name));
+                        module.pendingPath = latest.path;
+                        module.pendingKind =
+                            ClassifyChange(latest.path);
+
+                        orbit::log::Info(
+                            std::format(
+                                "Hot reload detected {} change in {}: {}",
+                                ChangeKindName(
+                                    module.pendingKind),
+                                module.registration.name,
+                                latest.path.string()));
                     }
 
                     const bool debounceElapsed =
                         module.pendingSince.has_value() &&
-                        now - *module.pendingSince >= module.registration.debounce;
+                        now - *module.pendingSince >=
+                            module.registration.debounce;
 
-                    if (!module.forceReload && !debounceElapsed)
+                    if (!module.forceReload &&
+                        !debounceElapsed)
                     {
                         continue;
                     }
 
+                    const bool forced =
+                        module.forceReload;
+                    const ChangeKind kind =
+                        forced
+                            ? ChangeKind::NativeModule
+                            : module.pendingKind;
+                    const auto changedPath =
+                        module.pendingPath;
+
                     module.forceReload = false;
                     module.pendingSince.reset();
+                    module.pendingKind =
+                        ChangeKind::Ignored;
+                    module.pendingPath.clear();
 
-                    if (!config_.automaticBuilds || Build(module))
+                    if (!forced &&
+                        kind == ChangeKind::RestartRequired)
                     {
-                        (void)LoadGeneration(module);
+                        orbit::log::Warning(
+                            std::format(
+                                "{} changed at {}. Orbit keeps the current generation live; rebuild/restart is required.",
+                                module.registration.name,
+                                changedPath.string()));
+                        continue;
                     }
+
+                    if (!forced &&
+                        kind != ChangeKind::NativeModule)
+                    {
+                        orbit::log::Info(
+                            std::format(
+                                "{} change at {} is not routed through the native DLL builder.",
+                                ChangeKindName(kind),
+                                changedPath.string()));
+                        continue;
+                    }
+
+                    buildRequests.push_back(
+                        module.registration);
                 }
             }
 
-            std::this_thread::sleep_for(config_.pollInterval);
+            for (const auto& registration : buildRequests)
+            {
+                if (stopToken.stop_requested())
+                {
+                    break;
+                }
+
+                if (config_.automaticBuilds &&
+                    !Build(registration))
+                {
+                    continue;
+                }
+
+                std::scoped_lock lock(modulesMutex_);
+                const auto iterator =
+                    FindModule(registration.name);
+                if (iterator != modules_.end())
+                {
+                    (void)LoadGeneration(*iterator);
+                }
+            }
+
+            std::this_thread::sleep_for(
+                config_.pollInterval);
         }
     }
 
-    [[nodiscard]] bool Build(const ModuleRuntime& module) const
+    [[nodiscard]] bool Build(
+        const ModuleRegistration& registration) const
     {
-        orbit::log::Info(std::format(
-            "Hot reload building CMake target {}...",
-            module.registration.buildTarget));
+        orbit::log::Info(
+            std::format(
+                "Hot reload building CMake target {}...",
+                registration.buildTarget));
 
         std::error_code error;
-        std::filesystem::create_directories(runtimeProcessRoot_, error);
+        std::filesystem::create_directories(
+            runtimeProcessRoot_,
+            error);
         const auto logPath =
             runtimeProcessRoot_ /
-            (SanitizeName(module.registration.name) + "_build.log");
+            (SanitizeName(registration.name) +
+             "_build.log");
 
         HANDLE logHandle = CreateFileW(
             logPath.c_str(),
@@ -334,7 +535,8 @@ private:
             startup.dwFlags |= STARTF_USESTDHANDLES;
             startup.hStdOutput = logHandle;
             startup.hStdError = logHandle;
-            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+            startup.hStdInput =
+                GetStdHandle(STD_INPUT_HANDLE);
             (void)SetHandleInformation(
                 logHandle,
                 HANDLE_FLAG_INHERIT,
@@ -344,11 +546,16 @@ private:
 
         PROCESS_INFORMATION process{};
         std::wstring command =
-            L"cmake --build " + Quote(config_.binaryRoot) +
+            L"cmake --build " +
+            Quote(config_.binaryRoot) +
             L" --config \"" +
-            std::wstring(config_.buildConfiguration.begin(), config_.buildConfiguration.end()) +
+            std::wstring(
+                config_.buildConfiguration.begin(),
+                config_.buildConfiguration.end()) +
             L"\" --target \"" +
-            std::wstring(module.registration.buildTarget.begin(), module.registration.buildTarget.end()) +
+            std::wstring(
+                registration.buildTarget.begin(),
+                registration.buildTarget.end()) +
             L"\" --parallel";
         command.push_back(L'\0');
 
@@ -371,187 +578,262 @@ private:
 
         if (!created)
         {
-            orbit::log::Error(std::format(
-                "Hot reload could not start CMake for {} (Win32 error {}).",
-                module.registration.name,
-                GetLastError()));
+            orbit::log::Error(
+                std::format(
+                    "Hot reload could not start CMake for {} (Win32 error {}).",
+                    registration.name,
+                    GetLastError()));
             return false;
         }
 
-        WaitForSingleObject(process.hProcess, INFINITE);
+        WaitForSingleObject(
+            process.hProcess,
+            INFINITE);
         DWORD exitCode = 1U;
-        (void)GetExitCodeProcess(process.hProcess, &exitCode);
+        (void)GetExitCodeProcess(
+            process.hProcess,
+            &exitCode);
         CloseHandle(process.hThread);
         CloseHandle(process.hProcess);
 
         if (exitCode != 0U)
         {
-            orbit::log::Error(std::format(
-                "Hot reload build failed for {}. Previous generation remains live. Build log: {}",
-                module.registration.name,
-                logPath.string()));
+            orbit::log::Error(
+                std::format(
+                    "Hot reload build failed for {}. Previous generation remains live. Build log: {}",
+                    registration.name,
+                    logPath.string()));
             return false;
         }
 
-        orbit::log::Info(std::format(
-            "Hot reload build completed for {}.",
-            module.registration.name));
+        orbit::log::Info(
+            std::format(
+                "Hot reload build completed for {}.",
+                registration.name));
         return true;
     }
 
-    [[nodiscard]] bool LoadGeneration(ModuleRuntime& module)
+    [[nodiscard]] bool LoadGeneration(
+        ModuleRuntime& module)
     {
-        if (!std::filesystem::exists(module.registration.binaryPath))
+        if (!std::filesystem::exists(
+                module.registration.binaryPath))
         {
-            orbit::log::Warning(std::format(
-                "Hot reload binary is missing for {}: {}",
-                module.registration.name,
-                module.registration.binaryPath.string()));
+            orbit::log::Warning(
+                std::format(
+                    "Hot reload binary is missing for {}: {}",
+                    module.registration.name,
+                    module.registration.binaryPath.string()));
             return false;
         }
 
-        const auto nextGeneration = module.generation + 1U;
+        const auto nextGeneration =
+            module.generation + 1U;
         const auto moduleDirectory =
-            runtimeProcessRoot_ / SanitizeName(module.registration.name);
+            runtimeProcessRoot_ /
+            SanitizeName(
+                module.registration.name);
         std::error_code error;
-        std::filesystem::create_directories(moduleDirectory, error);
+        std::filesystem::create_directories(
+            moduleDirectory,
+            error);
 
-        const auto generationCopy = moduleDirectory / std::format(
-            "{}_{:06}.dll",
-            SanitizeName(module.registration.name),
-            nextGeneration);
+        const auto generationCopy =
+            moduleDirectory /
+            std::format(
+                "{}_{:06}.dll",
+                SanitizeName(
+                    module.registration.name),
+                nextGeneration);
 
         std::filesystem::copy_file(
             module.registration.binaryPath,
             generationCopy,
-            std::filesystem::copy_options::overwrite_existing,
+            std::filesystem::copy_options::
+                overwrite_existing,
             error);
 
         if (error)
         {
-            orbit::log::Error(std::format(
-                "Hot reload could not stage {}: {}",
-                module.registration.name,
-                error.message()));
+            orbit::log::Error(
+                std::format(
+                    "Hot reload could not stage {}: {}",
+                    module.registration.name,
+                    error.message()));
             return false;
         }
 
-        const HMODULE newLibrary = LoadLibraryW(generationCopy.c_str());
+        const HMODULE newLibrary =
+            LoadLibraryW(
+                generationCopy.c_str());
         if (newLibrary == nullptr)
         {
-            orbit::log::Error(std::format(
-                "Hot reload could not load {} generation {} (Win32 error {}).",
-                module.registration.name,
-                nextGeneration,
-                GetLastError()));
-            std::filesystem::remove(generationCopy, error);
+            orbit::log::Error(
+                std::format(
+                    "Hot reload could not load {} generation {} (Win32 error {}).",
+                    module.registration.name,
+                    nextGeneration,
+                    GetLastError()));
+            std::filesystem::remove(
+                generationCopy,
+                error);
             return false;
         }
 
-        const FARPROC symbol = GetProcAddress(newLibrary, kModuleEntryPoint);
+        const FARPROC symbol =
+            GetProcAddress(
+                newLibrary,
+                kModuleEntryPoint);
         GetModuleApiFn getApi = nullptr;
-        static_assert(sizeof(getApi) == sizeof(symbol));
-        std::memcpy(&getApi, &symbol, sizeof(getApi));
+        static_assert(
+            sizeof(getApi) == sizeof(symbol));
+        std::memcpy(
+            &getApi,
+            &symbol,
+            sizeof(getApi));
 
         if (getApi == nullptr)
         {
-            orbit::log::Error(std::format(
-                "Hot reload rejected {} because {} is not exported.",
-                module.registration.name,
-                kModuleEntryPoint));
+            orbit::log::Error(
+                std::format(
+                    "Hot reload rejected {} because {} is not exported.",
+                    module.registration.name,
+                    kModuleEntryPoint));
             FreeLibrary(newLibrary);
-            std::filesystem::remove(generationCopy, error);
+            std::filesystem::remove(
+                generationCopy,
+                error);
             return false;
         }
 
         const ModuleApi* newApi = getApi();
-        if (newApi == nullptr || newApi->abiVersion != kModuleAbiVersion ||
+        if (newApi == nullptr ||
+            newApi->abiVersion !=
+                kModuleAbiVersion ||
+            newApi->moduleName == nullptr ||
+            module.registration.name !=
+                newApi->moduleName ||
             newApi->onLoad == nullptr)
         {
-            orbit::log::Error(std::format(
-                "Hot reload rejected {} because its module ABI is incompatible.",
-                module.registration.name));
+            orbit::log::Error(
+                std::format(
+                    "Hot reload rejected {} because its module ABI or identity is incompatible.",
+                    module.registration.name));
             FreeLibrary(newLibrary);
-            std::filesystem::remove(generationCopy, error);
+            std::filesystem::remove(
+                generationCopy,
+                error);
             return false;
         }
 
         std::vector<std::byte> savedState;
         StateView previousState{};
-        if (module.api != nullptr && module.api->saveState != nullptr)
+        if (module.api != nullptr &&
+            module.api->saveState != nullptr)
         {
-            const std::size_t required = module.api->saveState(nullptr, 0U);
+            const std::size_t required =
+                module.api->saveState(
+                    nullptr,
+                    0U);
             savedState.resize(required);
+
             if (required != 0U)
             {
                 const std::size_t written =
-                    module.api->saveState(savedState.data(), savedState.size());
-                if (written > savedState.size())
+                    module.api->saveState(
+                        savedState.data(),
+                        savedState.size());
+
+                if (written >
+                    savedState.size())
                 {
-                    orbit::log::Error(std::format(
-                        "Hot reload rejected {} because its previous generation returned an invalid state size.",
-                        module.registration.name));
+                    orbit::log::Error(
+                        std::format(
+                            "Hot reload rejected {} because its previous generation returned an invalid state size.",
+                            module.registration.name));
                     FreeLibrary(newLibrary);
-                    std::filesystem::remove(generationCopy, error);
+                    std::filesystem::remove(
+                        generationCopy,
+                        error);
                     return false;
                 }
+
                 savedState.resize(written);
             }
 
             previousState = {
                 .schema = module.api->stateSchema,
-                .data = savedState.empty() ? nullptr : savedState.data(),
+                .data = savedState.empty()
+                    ? nullptr
+                    : savedState.data(),
                 .size = savedState.size()
             };
         }
 
-        if (!newApi->onLoad(&hostApi_, previousState))
+        if (!newApi->onLoad(
+                &hostApi_,
+                previousState))
         {
-            orbit::log::Error(std::format(
-                "Hot reload generation {} of {} declined activation. Previous generation remains live.",
-                nextGeneration,
-                module.registration.name));
+            orbit::log::Error(
+                std::format(
+                    "Hot reload generation {} of {} declined activation. Previous generation remains live.",
+                    nextGeneration,
+                    module.registration.name));
+
             if (newApi->onUnload != nullptr)
             {
                 newApi->onUnload();
             }
+
             FreeLibrary(newLibrary);
-            std::filesystem::remove(generationCopy, error);
+            std::filesystem::remove(
+                generationCopy,
+                error);
             return false;
         }
 
-        const HMODULE previousLibrary = module.library;
-        const ModuleApi* previousApi = module.api;
-        const auto previousCopy = module.loadedCopy;
+        const HMODULE previousLibrary =
+            module.library;
+        const ModuleApi* previousApi =
+            module.api;
+        const auto previousCopy =
+            module.loadedCopy;
 
         module.library = newLibrary;
         module.api = newApi;
         module.loadedCopy = generationCopy;
         module.generation = nextGeneration;
 
-        if (previousApi != nullptr && previousApi->onUnload != nullptr)
+        if (previousApi != nullptr &&
+            previousApi->onUnload != nullptr)
         {
             previousApi->onUnload();
         }
+
         if (previousLibrary != nullptr)
         {
             FreeLibrary(previousLibrary);
         }
+
         if (!previousCopy.empty())
         {
-            std::filesystem::remove(previousCopy, error);
+            std::filesystem::remove(
+                previousCopy,
+                error);
         }
 
-        orbit::log::Info(std::format(
-            "Hot reload activated {} generation {} without restarting Orbit.",
-            module.registration.name,
-            nextGeneration));
+        orbit::log::Info(
+            std::format(
+                "Hot reload activated {} generation {} without restarting Orbit.",
+                module.registration.name,
+                nextGeneration));
         return true;
     }
 
     void Unload(ModuleRuntime& module) noexcept
     {
-        if (module.api != nullptr && module.api->onUnload != nullptr)
+        if (module.api != nullptr &&
+            module.api->onUnload != nullptr)
         {
             module.api->onUnload();
         }
@@ -566,7 +848,9 @@ private:
         if (!module.loadedCopy.empty())
         {
             std::error_code error;
-            std::filesystem::remove(module.loadedCopy, error);
+            std::filesystem::remove(
+                module.loadedCopy,
+                error);
             module.loadedCopy.clear();
         }
     }
@@ -580,16 +864,21 @@ private:
     std::atomic<bool> running_{false};
 };
 
-HotReloadHost::HotReloadHost(HotReloadHostConfig config)
-    : impl_(std::make_unique<Impl>(std::move(config)))
+HotReloadHost::HotReloadHost(
+    HotReloadHostConfig config)
+    : impl_(
+          std::make_unique<Impl>(
+              std::move(config)))
 {
 }
 
 HotReloadHost::~HotReloadHost() = default;
 
-void HotReloadHost::RegisterModule(ModuleRegistration registration)
+void HotReloadHost::RegisterModule(
+    ModuleRegistration registration)
 {
-    impl_->RegisterModule(std::move(registration));
+    impl_->RegisterModule(
+        std::move(registration));
 }
 
 void HotReloadHost::Start()
@@ -602,8 +891,25 @@ void HotReloadHost::Stop() noexcept
     impl_->Stop();
 }
 
-bool HotReloadHost::RequestReload(const std::string_view moduleName)
+bool HotReloadHost::RequestReload(
+    const std::string_view moduleName)
 {
-    return impl_->RequestReload(moduleName);
+    return impl_->RequestReload(
+        moduleName);
+}
+
+bool HotReloadHost::VisitInterface(
+    const std::string_view moduleName,
+    const char* interfaceName,
+    const std::uint32_t interfaceVersion,
+    const InterfaceVisitor visitor,
+    void* const userData)
+{
+    return impl_->VisitInterface(
+        moduleName,
+        interfaceName,
+        interfaceVersion,
+        visitor,
+        userData);
 }
 } // namespace orbit::hot_reload

@@ -4,9 +4,19 @@ add_executable(OrbitStudio
     src/HotReloadBootstrap.cpp
 )
 
+# Keep the large editor translation unit unchanged while giving the small
+# bootstrap TU ownership of the real process entry point. This guarantees
+# hot-reload startup happens after C++ global initialization has completed.
+set_property(
+    SOURCE src/Main.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+        main=OrbitStudioMain
+)
+
 add_dependencies(OrbitStudio
     OrbitPlayer
     OrbitHotReloadProbe
+    OrbitEyeAdaptationHotReload
 )
 
 # Studio is a windowed application: no console window. Keep the ordinary
@@ -44,6 +54,7 @@ target_link_libraries(OrbitStudio
         Orbit::Paths
         Orbit::Platform
         Orbit::PlatformServices
+        Orbit::PostProcess
         Orbit::RenderGraph
         Orbit::RenderView
         Orbit::RhiVulkan
@@ -66,6 +77,7 @@ target_compile_definitions(OrbitStudio
         ORBIT_BINARY_ROOT="${CMAKE_BINARY_DIR}"
         ORBIT_BUILD_CONFIG="$<CONFIG>"
         ORBIT_HOT_RELOAD_PROBE_BINARY="$<TARGET_FILE:OrbitHotReloadProbe>"
+        ORBIT_EYE_ADAPTATION_HOT_RELOAD_BINARY="$<TARGET_FILE:OrbitEyeAdaptationHotReload>"
 )
 
 set_target_properties(OrbitStudio PROPERTIES

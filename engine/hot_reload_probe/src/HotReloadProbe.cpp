@@ -80,6 +80,7 @@ const orbit::hot_reload::ModuleApi kModuleApi{
     .stateSchema = 1U,
     .onLoad = &OnLoad,
     .saveState = &SaveState,
+    .queryInterface = nullptr,
     .onUnload = &OnUnload
 };
 } // namespace

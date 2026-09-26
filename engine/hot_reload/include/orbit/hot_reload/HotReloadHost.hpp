@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -28,6 +29,9 @@ struct HotReloadHostConfig
     bool automaticBuilds{true};
 };
 
+using InterfaceVisitor =
+    void (*)(const void* interfacePointer, void* userData) noexcept;
+
 class HotReloadHost
 {
 public:
@@ -44,6 +48,15 @@ public:
 
     // Queues a rebuild/reload even when no file-system change was observed.
     [[nodiscard]] bool RequestReload(std::string_view moduleName);
+
+    // Visits an interface while its owning DLL is pinned by the host lock.
+    // The callback must not retain the pointer after it returns.
+    [[nodiscard]] bool VisitInterface(
+        std::string_view moduleName,
+        const char* interfaceName,
+        std::uint32_t interfaceVersion,
+        InterfaceVisitor visitor,
+        void* userData);
 
 private:
     class Impl;

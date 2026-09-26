@@ -67,12 +67,34 @@ struct HumanEyeAdaptationState
     f32 overloadTarget{0.0F};
 };
 
+using HumanEyeAdaptationUpdateOverride =
+    HumanEyeAdaptationState (*)(
+        HumanEyeAdaptationState state,
+        const LuminanceHistogramStatistics& statistics,
+        f32 deltaSeconds,
+        const HumanEyeAdaptationConfig& config) noexcept;
+
+// Production call site. In development Studio builds this may dispatch through
+// the native hot-reload host; packaged/runtime builds remain direct.
 [[nodiscard]] HumanEyeAdaptationState
 UpdateHumanEyeAdaptation(
     HumanEyeAdaptationState state,
     const LuminanceHistogramStatistics& statistics,
     f32 deltaSeconds,
     const HumanEyeAdaptationConfig& config = {}) noexcept;
+
+// Stable built-in implementation used as the fallback and by the reloadable
+// module itself. Keeping state in the caller allows DLL replacement without
+// losing exposure, dark-adaptation, or overload history.
+[[nodiscard]] HumanEyeAdaptationState
+UpdateHumanEyeAdaptationBuiltin(
+    HumanEyeAdaptationState state,
+    const LuminanceHistogramStatistics& statistics,
+    f32 deltaSeconds,
+    const HumanEyeAdaptationConfig& config = {}) noexcept;
+
+void SetHumanEyeAdaptationUpdateOverride(
+    HumanEyeAdaptationUpdateOverride update) noexcept;
 
 void ResetHumanEyeAdaptation(
     HumanEyeAdaptationState& state) noexcept;

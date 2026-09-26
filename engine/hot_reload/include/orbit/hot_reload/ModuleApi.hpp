@@ -6,7 +6,7 @@
 namespace orbit::hot_reload
 {
 inline constexpr std::uint32_t kHostAbiVersion = 1U;
-inline constexpr std::uint32_t kModuleAbiVersion = 1U;
+inline constexpr std::uint32_t kModuleAbiVersion = 2U;
 inline constexpr char kModuleEntryPoint[] = "OrbitHotReloadGetModule";
 
 enum class HostLogLevel : std::uint32_t
@@ -42,6 +42,12 @@ struct ModuleApi
     // Called first with destination == nullptr to query the required byte count.
     // The second call writes at most capacity bytes and returns bytes written.
     std::size_t (*saveState)(void* destination, std::size_t capacity) noexcept{nullptr};
+
+    // Optional interface lookup for live engine services. The host keeps the
+    // owning module pinned while a caller visits a returned interface.
+    const void* (*queryInterface)(
+        const char* interfaceName,
+        std::uint32_t interfaceVersion) noexcept{nullptr};
 
     // Called only after a replacement generation has been accepted, or at host shutdown.
     void (*onUnload)() noexcept{nullptr};

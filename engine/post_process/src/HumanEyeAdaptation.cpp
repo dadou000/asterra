@@ -1,12 +1,16 @@
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace orbit::post_process
 {
 namespace
 {
+std::atomic<HumanEyeAdaptationUpdateOverride>
+    gUpdateOverride{nullptr};
+
 [[nodiscard]] f32 FiniteOr(
     const f32 value,
     const f32 fallback) noexcept
@@ -51,6 +55,32 @@ namespace
 
 HumanEyeAdaptationState
 UpdateHumanEyeAdaptation(
+    HumanEyeAdaptationState state,
+    const LuminanceHistogramStatistics& statistics,
+    const f32 deltaSeconds,
+    const HumanEyeAdaptationConfig& config) noexcept
+{
+    if (const auto update =
+            gUpdateOverride.load(
+                std::memory_order_acquire);
+        update != nullptr)
+    {
+        return update(
+            state,
+            statistics,
+            deltaSeconds,
+            config);
+    }
+
+    return UpdateHumanEyeAdaptationBuiltin(
+        state,
+        statistics,
+        deltaSeconds,
+        config);
+}
+
+HumanEyeAdaptationState
+UpdateHumanEyeAdaptationBuiltin(
     HumanEyeAdaptationState state,
     const LuminanceHistogramStatistics& statistics,
     const f32 deltaSeconds,
@@ -309,6 +339,14 @@ UpdateHumanEyeAdaptation(
             maximumExposure);
 
     return state;
+}
+
+void SetHumanEyeAdaptationUpdateOverride(
+    const HumanEyeAdaptationUpdateOverride update) noexcept
+{
+    gUpdateOverride.store(
+        update,
+        std::memory_order_release);
 }
 
 void ResetHumanEyeAdaptation(
