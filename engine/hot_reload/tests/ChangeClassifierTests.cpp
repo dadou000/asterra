@@ -22,9 +22,14 @@ int main()
         !Expect("Plugins/weather.luau", ChangeKind::Script) ||
         !Expect("Content/Materials/rock.orbitmaterial", ChangeKind::Content) ||
         !Expect("Content/Textures/rock.png", ChangeKind::Content) ||
+        !Expect("Content/ProjectSettings.toml", ChangeKind::Content) ||
         !Expect("engine/hot_reload/include/orbit/hot_reload/ModuleApi.hpp",
                 ChangeKind::RestartRequired) ||
         !Expect("engine/rhi/vulkan/src/VulkanBackend.cpp",
+                ChangeKind::RestartRequired) ||
+        !Expect("apps/editor/OrbitStudio.manifest",
+                ChangeKind::RestartRequired) ||
+        !Expect("engine/terrain/experimental.rules",
                 ChangeKind::RestartRequired) ||
         !Expect("README.md", ChangeKind::Ignored))
     {

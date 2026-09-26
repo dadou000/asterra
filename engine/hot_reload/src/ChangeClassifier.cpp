@@ -43,6 +43,18 @@ namespace
         generic.starts_with("content/") ||
         generic.find("/content/") != std::string_view::npos;
 }
+
+[[nodiscard]] bool IsEngineOwnedPath(
+    const std::string_view generic) noexcept
+{
+    return
+        generic.starts_with("engine/") ||
+        generic.find("/engine/") != std::string_view::npos ||
+        generic.starts_with("apps/") ||
+        generic.find("/apps/") != std::string_view::npos ||
+        generic.starts_with("cmake/") ||
+        generic.find("/cmake/") != std::string_view::npos;
+}
 } // namespace
 
 ChangeKind ClassifyChange(const std::filesystem::path& path)
@@ -101,6 +113,27 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
              ".orbitmaterial", ".orbitdecal", ".orbitmesh", ".orbitcomponent"}))
     {
         return ChangeKind::Content;
+    }
+
+    if (IsContentPath(generic) &&
+        IsOneOf(extension, {".toml", ".json", ".yaml", ".yml"}))
+    {
+        return ChangeKind::Content;
+    }
+
+    if (IsOneOf(extension, {".rc", ".manifest", ".def", ".natvis"}))
+    {
+        return ChangeKind::RestartRequired;
+    }
+
+    // Engine/editor-owned files must never disappear into an "ignored" hole.
+    // Unknown file types are conservatively routed through the seamless Studio
+    // generation refresh. This makes save-to-reflect exhaustive for Orbit code
+    // and build metadata while still leaving unrelated repository documents
+    // alone.
+    if (IsEngineOwnedPath(generic))
+    {
+        return ChangeKind::RestartRequired;
     }
 
     return ChangeKind::Ignored;
