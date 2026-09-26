@@ -1,0 +1,29 @@
+add_library(OrbitHotReloadApi INTERFACE)
+add_library(Orbit::HotReloadApi ALIAS OrbitHotReloadApi)
+
+target_include_directories(OrbitHotReloadApi
+    INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_features(OrbitHotReloadApi INTERFACE cxx_std_23)
+
+add_library(OrbitHotReload STATIC
+    src/HotReloadHost.cpp
+)
+add_library(Orbit::HotReload ALIAS OrbitHotReload)
+
+target_include_directories(OrbitHotReload
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(OrbitHotReload
+    PUBLIC
+        Orbit::HotReloadApi
+    PRIVATE
+        Orbit::Core
+)
+
+target_compile_features(OrbitHotReload PUBLIC cxx_std_23)
+orbit_enable_warnings(OrbitHotReload)

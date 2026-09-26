@@ -1,9 +1,13 @@
 add_executable(OrbitStudio
     src/Main.cpp
     src/RelaunchStudio.cpp
+    src/HotReloadBootstrap.cpp
 )
 
-add_dependencies(OrbitStudio OrbitPlayer)
+add_dependencies(OrbitStudio
+    OrbitPlayer
+    OrbitHotReloadProbe
+)
 
 # Studio is a windowed application: no console window. Keep the ordinary
 # main() entry point so startup code is unchanged.
@@ -29,6 +33,7 @@ target_link_libraries(OrbitStudio
         Orbit::EditorModel
         Orbit::EditorRpc
         Orbit::EditorUi
+        Orbit::HotReload
         Orbit::Plugins
         Orbit::Frames
         Orbit::Jobs
@@ -52,6 +57,14 @@ target_link_libraries(OrbitStudio
 
 target_compile_features(OrbitStudio PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitStudio)
+
+target_compile_definitions(OrbitStudio
+    PRIVATE
+        ORBIT_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+        ORBIT_BINARY_ROOT="${CMAKE_BINARY_DIR}"
+        ORBIT_BUILD_CONFIG="$<CONFIG>"
+        ORBIT_HOT_RELOAD_PROBE_BINARY="$<TARGET_FILE:OrbitHotReloadProbe>"
+)
 
 set_target_properties(OrbitStudio PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"

@@ -1,4 +1,6 @@
 add_subdirectory(core)
+add_subdirectory(hot_reload)
+add_subdirectory(hot_reload_probe)
 add_subdirectory(documents)
 add_subdirectory(schema)
 add_subdirectory(scene)
