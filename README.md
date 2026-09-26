@@ -33,6 +33,24 @@ Hardware ray tracing is an optional visibility accelerator rather than a separat
 
 Read [docs/V0.0.7_SPEC.md](docs/V0.0.7_SPEC.md) before adding lighting/GI/exposure/post-processing/volumetric systems. Progress is tracked in [docs/V0.0.7_PROGRESS.md](docs/V0.0.7_PROGRESS.md). Research baselines are [dynamic lighting / GI / eye response](docs/research/V007_DYNAMIC_LIGHTING_BASELINE.md) and [universal volumetrics](docs/research/V007_UNIVERSAL_VOLUMETRICS.md).
 
+## Hot iteration — save to reflect
+
+Orbit development follows a canonical **save-to-reflect** contract: every Orbit-owned development change must have an automatic reflection path. The ordinary inner loop must not require manually closing Studio, running a full rebuild, locating a new executable, and reopening the project.
+
+Changes are routed to the fastest safe mechanism available:
+
+```text
+content/material/texture/LUT -> live content refresh
+Lua/Luau/plugin             -> script/plugin reload
+shader                       -> shader compile + live pipeline/resource replacement
+reloadable C++ subsystem    -> incremental DLL build + in-process generation swap
+host/ABI/unmigrated native  -> automatic incremental Studio generation handoff
+```
+
+The broad generation-handoff path guarantees coverage while native systems are progressively moved into true in-process hot modules. Failed candidate builds/loads keep the current working generation alive.
+
+The full normative contract, ABI/state/lifetime rules, acceptance checklist, and forbidden patterns are in [docs/ORBIT_HOT_ITERATION.md](docs/ORBIT_HOT_ITERATION.md). Contributors and coding agents must also follow [AGENTS.md](AGENTS.md).
+
 ## Build
 
 ### One-click Windows build
@@ -59,6 +77,8 @@ build_orbit.bat rebuild
 build_orbit.bat release nopause
 ```
 
+For normal local development the build script enables the low-latency hot-iteration configuration. After the initial build/launch, prefer saving files and allowing Orbit's watcher to route the change automatically rather than repeatedly invoking the build script.
+
 ### Manual build
 
 Requirements:
@@ -68,7 +88,7 @@ Requirements:
 - CMake 3.28+
 
 ```powershell
-cmake -S . -B build
+cmake -S . -B build -DORBIT_FAST_HOT_ITERATION=ON
 cmake --build build --config Debug --target OrbitStudio
 .\Orbit.exe
 ```
@@ -157,7 +177,7 @@ already-running process, it doesn't launch one). Screenshots read
 real desktop pixels, so the dev server briefly raises the Orbit
 window's Z-order before capturing to make sure it isn't occluded.
 
-Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) before adding engine systems.
+Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) and [docs/ORBIT_HOT_ITERATION.md](docs/ORBIT_HOT_ITERATION.md) before adding engine systems.
 
 Known issues and their fix status are tracked in [docs/PROBLEMS.md](docs/PROBLEMS.md).
 

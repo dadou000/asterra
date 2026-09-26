@@ -137,3 +137,18 @@ A successful local Orbit build must publish the current unified Studio executabl
 The canonical interactive developer entry point is therefore always easy to find and run from the repository root. Internal CMake output layout may remain configuration-specific, but developers must not need to browse those directories to launch Orbit.
 
 `Orbit.exe` is the Studio application itself, not a launcher for another UI process. Failure to refresh the root executable after a successful build is considered a build failure.
+
+
+## 19. Hot iteration is an engine architecture contract
+
+All Orbit engine, editor, runtime, shader, script, content, and build-system work must follow [ORBIT_HOT_ITERATION.md](ORBIT_HOT_ITERATION.md).
+
+The development invariant is save-to-reflect: every Orbit-owned development change must have an automatic reflection path, using the fastest safe mechanism available. Ordinary iteration must not require manually closing Studio, running a full rebuild, locating a new executable, and reopening the project.
+
+New native subsystems are hot-reloadable by default. Prefer stable host-owned state plus versioned reloadable implementation modules. The immutable process/ABI boundary must stay as small as practical; ordinary systems must not be moved into it merely to avoid hot-module design.
+
+A replacement generation must compile, load, validate, and accept activation before the current generation is retired. Failed patches must leave the running editor and previous generation usable. Code, jobs, and GPU resources from an old generation must remain pinned or deferred until they are no longer in use.
+
+The automatic Studio-generation handoff is the conservative fallback for the tiny immutable host boundary and for systems not yet migrated to in-process modules. It is not the intended steady-state path for frequently edited engine systems.
+
+A new subsystem is not considered complete until its hot-iteration path is classified, documented, and testable.
