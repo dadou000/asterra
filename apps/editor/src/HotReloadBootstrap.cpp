@@ -7,6 +7,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <charconv>
@@ -14,9 +15,12 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
