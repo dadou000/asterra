@@ -55,6 +55,8 @@ jobs:
           cmake --build build-v006 --config Release --parallel --target
           OrbitV006CelestialValidationTests
           OrbitCelestialRepresentationTests
+          OrbitMacroGlobeTests
+          OrbitPlanetPatchHierarchyTests
           OrbitCelestialRotationTests
           OrbitCelestialAtmosphereTests
           OrbitCelestialCloudTests
@@ -96,7 +98,7 @@ jobs:
 
       - name: Run deterministic celestial suite
         shell: pwsh
-        run: ctest --test-dir build-v006 -C Release -R "Orbit\.(V006CelestialValidation|Celestial|PropertyProvenance|PhysicalPropertySolver|ReferenceNodeComposition|AnalyticOrbitComposition|RotationComposition|ImportedEphemerisComposition|NBodyPromotionComposition|GravityComposition|StudioCelestialRoundTripVerifier|StudioCelestialValidationScenario)" --output-on-failure
+        run: ctest --test-dir build-v006 -C Release -R "Orbit\.(V006CelestialValidation|MacroGlobe|PlanetPatchHierarchy|Celestial|PropertyProvenance|PhysicalPropertySolver|ReferenceNodeComposition|AnalyticOrbitComposition|RotationComposition|ImportedEphemerisComposition|NBodyPromotionComposition|GravityComposition|StudioCelestialRoundTripVerifier|StudioCelestialValidationScenario)" --output-on-failure
 
       - name: Record real-device requirement
         shell: pwsh
