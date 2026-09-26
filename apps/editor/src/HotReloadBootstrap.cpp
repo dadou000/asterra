@@ -1,3 +1,4 @@
+#include <orbit/hot_reload/HotIterationService.hpp>
 #include <orbit/hot_reload/HotReloadHost.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 #include <orbit/post_process/HumanEyeAdaptationHotReload.hpp>
@@ -8,12 +9,16 @@
 
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #ifndef ORBIT_SOURCE_ROOT
 #error ORBIT_SOURCE_ROOT must be defined for the Studio hot-reload bootstrap.
@@ -25,6 +30,10 @@
 
 #ifndef ORBIT_BUILD_CONFIG
 #error ORBIT_BUILD_CONFIG must be defined for the Studio hot-reload bootstrap.
+#endif
+
+#ifndef ORBIT_STUDIO_DEVELOPMENT_BINARY
+#error ORBIT_STUDIO_DEVELOPMENT_BINARY must be defined for hot iteration.
 #endif
 
 #ifndef ORBIT_HOT_RELOAD_PROBE_BINARY
@@ -39,8 +48,13 @@ int OrbitStudioMain(int argc, char** argv);
 
 namespace
 {
+constexpr std::string_view kWaitForPreviousProcessArgument =
+    "--orbit-hot-wait-pid";
+
 std::atomic<orbit::hot_reload::HotReloadHost*>
     gEyeAdaptationHost{nullptr};
+std::atomic<orbit::hot_reload::HotIterationService*>
+    gHotIterationService{nullptr};
 
 [[nodiscard]] std::filesystem::path CurrentExecutablePath()
 {
@@ -81,6 +95,94 @@ std::atomic<orbit::hot_reload::HotReloadHost*>
     const auto first = relative.begin();
     return first != relative.end() &&
         *first != std::filesystem::path("..");
+}
+
+struct ForwardedArguments
+{
+    std::vector<std::string> storage;
+    std::vector<char*> pointers;
+};
+
+[[nodiscard]] ForwardedArguments PrepareArguments(
+    const int argc,
+    char** argv)
+{
+    ForwardedArguments result;
+    result.storage.reserve(
+        static_cast<std::size_t>(
+            std::max(argc, 0)));
+
+    std::optional<DWORD> waitForProcess;
+
+    for (int index = 0;
+         index < argc;
+         ++index)
+    {
+        const std::string_view argument =
+            argv[index] != nullptr
+                ? std::string_view(argv[index])
+                : std::string_view{};
+
+        if (index > 0 &&
+            argument == kWaitForPreviousProcessArgument &&
+            index + 1 < argc &&
+            argv[index + 1] != nullptr)
+        {
+            const std::string_view value(
+                argv[index + 1]);
+            std::uint64_t parsed = 0U;
+            const auto parse =
+                std::from_chars(
+                    value.data(),
+                    value.data() + value.size(),
+                    parsed);
+
+            if (parse.ec == std::errc{} &&
+                parse.ptr == value.data() + value.size() &&
+                parsed <=
+                    static_cast<std::uint64_t>(
+                        (std::numeric_limits<DWORD>::max)()))
+            {
+                waitForProcess =
+                    static_cast<DWORD>(parsed);
+            }
+
+            ++index;
+            continue;
+        }
+
+        result.storage.emplace_back(
+            argument);
+    }
+
+    if (waitForProcess.has_value() &&
+        *waitForProcess != 0U &&
+        *waitForProcess != GetCurrentProcessId())
+    {
+        const HANDLE previous =
+            OpenProcess(
+                SYNCHRONIZE,
+                FALSE,
+                *waitForProcess);
+
+        if (previous != nullptr)
+        {
+            (void)WaitForSingleObject(
+                previous,
+                INFINITE);
+            CloseHandle(previous);
+        }
+    }
+
+    result.pointers.reserve(
+        result.storage.size() + 1U);
+    for (auto& argument : result.storage)
+    {
+        result.pointers.push_back(
+            argument.data());
+    }
+    result.pointers.push_back(nullptr);
+    return result;
 }
 
 struct EyeAdaptationInvocation
@@ -188,7 +290,8 @@ UpdateEyeAdaptationThroughHotReload(
 class StudioHotReloadBootstrap
 {
 public:
-    StudioHotReloadBootstrap() noexcept
+    explicit StudioHotReloadBootstrap(
+        std::vector<std::string> relaunchArguments) noexcept
     {
         try
         {
@@ -220,8 +323,9 @@ public:
                     binaryRoot,
                     error);
 
-            // Hot reload belongs to the root development Orbit.exe and
-            // build-tree Studio only. Packaged executables remain self-contained.
+            // Hot iteration belongs to the root development Orbit.exe,
+            // build-tree Studio, and generation copies staged under the build
+            // tree. Packaged executables remain self-contained.
             if (executableDirectory != canonicalSource &&
                 !IsInside(
                     executable,
@@ -235,9 +339,40 @@ public:
                     "CMakeCache.txt"))
             {
                 orbit::log::Warning(
-                    "Orbit hot reload is disabled because the development CMake tree is missing.");
+                    "Orbit hot iteration is disabled because the development CMake tree is missing.");
                 return;
             }
+
+            const auto probeRoot =
+                canonicalSource /
+                "engine" /
+                "hot_reload_probe";
+            const auto eyeSource =
+                canonicalSource /
+                "engine" /
+                "post_process" /
+                "src" /
+                "HumanEyeAdaptation.cpp";
+            const auto eyeHeader =
+                canonicalSource /
+                "engine" /
+                "post_process" /
+                "include" /
+                "orbit" /
+                "post_process" /
+                "HumanEyeAdaptation.hpp";
+            const auto eyeInterface =
+                canonicalSource /
+                "engine" /
+                "post_process" /
+                "include" /
+                "orbit" /
+                "post_process" /
+                "HumanEyeAdaptationHotReload.hpp";
+            const auto eyeModuleRoot =
+                canonicalSource /
+                "engine" /
+                "post_process_hot_reload";
 
             orbit::hot_reload::HotReloadHostConfig config{
                 .sourceRoot = canonicalSource,
@@ -264,9 +399,7 @@ public:
                     std::filesystem::path(
                         ORBIT_HOT_RELOAD_PROBE_BINARY),
                 .sourceRoots = {
-                    canonicalSource /
-                        "engine" /
-                        "hot_reload_probe"
+                    probeRoot
                 },
                 .debounce =
                     std::chrono::milliseconds(250)
@@ -282,58 +415,93 @@ public:
                     std::filesystem::path(
                         ORBIT_EYE_ADAPTATION_HOT_RELOAD_BINARY),
                 .sourceRoots = {
-                    canonicalSource /
-                        "engine" /
-                        "post_process" /
-                        "src" /
-                        "HumanEyeAdaptation.cpp",
-                    canonicalSource /
-                        "engine" /
-                        "post_process" /
-                        "include" /
-                        "orbit" /
-                        "post_process" /
-                        "HumanEyeAdaptation.hpp",
-                    canonicalSource /
-                        "engine" /
-                        "post_process" /
-                        "include" /
-                        "orbit" /
-                        "post_process" /
-                        "HumanEyeAdaptationHotReload.hpp",
-                    canonicalSource /
-                        "engine" /
-                        "post_process_hot_reload"
+                    eyeSource,
+                    eyeHeader,
+                    eyeInterface,
+                    eyeModuleRoot
                 },
                 .debounce =
                     std::chrono::milliseconds(250)
             });
 
+            orbit::hot_reload::HotIterationConfig
+                iterationConfig{
+                    .sourceRoot = canonicalSource,
+                    .binaryRoot = canonicalBinary,
+                    .developmentBinary =
+                        std::filesystem::path(
+                            ORBIT_STUDIO_DEVELOPMENT_BINARY),
+                    .runtimeRoot =
+                        canonicalBinary /
+                        "hot_reload_runtime",
+                    .buildConfiguration =
+                        ORBIT_BUILD_CONFIG,
+                    .fallbackBuildTarget =
+                        "OrbitStudio",
+                    .pollInterval =
+                        std::chrono::milliseconds(50),
+                    .fallbackDebounce =
+                        std::chrono::milliseconds(300),
+                    .automaticFallbackRelaunch = true,
+                    .relaunchArguments =
+                        std::move(relaunchArguments)
+                };
+
+            iteration_ =
+                std::make_unique<
+                    orbit::hot_reload::HotIterationService>(
+                        std::move(iterationConfig));
+
+            iteration_->AddNativeHotRoot(
+                probeRoot);
+            iteration_->AddNativeHotRoot(
+                eyeSource);
+            iteration_->AddNativeHotRoot(
+                eyeHeader);
+            iteration_->AddNativeHotRoot(
+                eyeInterface);
+            iteration_->AddNativeHotRoot(
+                eyeModuleRoot);
+
             gEyeAdaptationHost.store(
                 host_.get(),
                 std::memory_order_release);
+            gHotIterationService.store(
+                iteration_.get(),
+                std::memory_order_release);
+
             orbit::post_process::
                 SetHumanEyeAdaptationUpdateOverride(
                     &UpdateEyeAdaptationThroughHotReload);
 
             host_->Start();
+            iteration_->Start();
         }
         catch (const std::exception& exception)
         {
             orbit::log::Error(
                 std::string(
-                    "Orbit hot-reload bootstrap failed: ") +
+                    "Orbit hot-iteration bootstrap failed: ") +
                 exception.what());
         }
         catch (...)
         {
             orbit::log::Error(
-                "Orbit hot-reload bootstrap failed with an unknown error.");
+                "Orbit hot-iteration bootstrap failed with an unknown error.");
         }
     }
 
     ~StudioHotReloadBootstrap()
     {
+        gHotIterationService.store(
+            nullptr,
+            std::memory_order_release);
+
+        if (iteration_ != nullptr)
+        {
+            iteration_->Stop();
+        }
+
         orbit::post_process::
             SetHumanEyeAdaptationUpdateOverride(
                 nullptr);
@@ -351,15 +519,53 @@ private:
     std::unique_ptr<
         orbit::hot_reload::HotReloadHost>
         host_;
+    std::unique_ptr<
+        orbit::hot_reload::HotIterationService>
+        iteration_;
 };
 } // namespace
+
+namespace orbit::editor_app
+{
+// Main/editor services can register the active game project once it is open so
+// assets and scripts outside the Orbit repository enter the same save-to-reflect
+// pipeline. The function is intentionally a no-op in packaged builds.
+void RegisterHotIterationWatchRoot(
+    const std::filesystem::path& root)
+{
+    if (auto* const service =
+            gHotIterationService.load(
+                std::memory_order_acquire);
+        service != nullptr)
+    {
+        service->AddWatchRoot(root);
+    }
+}
+} // namespace orbit::editor_app
 
 int main(
     const int argc,
     char** argv)
 {
-    StudioHotReloadBootstrap hotReload;
+    auto forwarded =
+        PrepareArguments(
+            argc,
+            argv);
+
+    std::vector<std::string>
+        relaunchArguments;
+    if (forwarded.storage.size() > 1U)
+    {
+        relaunchArguments.assign(
+            forwarded.storage.begin() + 1,
+            forwarded.storage.end());
+    }
+
+    StudioHotReloadBootstrap hotReload(
+        std::move(relaunchArguments));
+
     return OrbitStudioMain(
-        argc,
-        argv);
+        static_cast<int>(
+            forwarded.storage.size()),
+        forwarded.pointers.data());
 }
