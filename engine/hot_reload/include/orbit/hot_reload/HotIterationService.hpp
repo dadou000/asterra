@@ -3,7 +3,9 @@
 #include <orbit/hot_reload/ChangeClassifier.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,6 +23,24 @@ struct HotIterationEvent
 // content, shader, or plugin implementations.
 [[nodiscard]] std::vector<HotIterationEvent>
 DrainHotIterationEvents();
+
+using HotIterationHandlerId = std::uint64_t;
+using HotIterationHandler =
+    std::function<void(const HotIterationEvent&)>;
+
+// Handlers are dispatched only when PumpHotIterationEvents() is called. Studio
+// pumps on its UI thread so content, shader, and editor services never mutate
+// live state from the file-watcher worker thread.
+[[nodiscard]] HotIterationHandlerId
+AddHotIterationHandler(
+    ChangeKind kind,
+    HotIterationHandler handler);
+
+void RemoveHotIterationHandler(
+    HotIterationHandlerId id) noexcept;
+
+[[nodiscard]] std::uint32_t
+PumpHotIterationEvents();
 
 struct HotIterationConfig
 {
@@ -64,4 +84,12 @@ private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+// The Studio bootstrap publishes its active service here. Other engine systems
+// can then register their project roots without depending on the editor app.
+void SetActiveHotIterationService(
+    HotIterationService* service) noexcept;
+
+void AddHotIterationWatchRoot(
+    const std::filesystem::path& root);
 } // namespace orbit::hot_reload
