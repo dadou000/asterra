@@ -28,6 +28,16 @@ target_link_libraries(OrbitHotReload
         Orbit::Core
 )
 
+# windows.h exposes min/max macros unless NOMINMAX is defined. The hot-reload
+# host uses standard-library min()/max() members for filesystem timestamps, so
+# keep those Win32 macros out of this target entirely.
+if(MSVC)
+    target_compile_definitions(OrbitHotReload PRIVATE
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+    )
+endif()
+
 target_compile_features(OrbitHotReload PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitHotReload)
 

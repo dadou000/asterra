@@ -30,6 +30,17 @@ if(WIN32)
         "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/OrbitStudio.manifest")
 endif()
 
+# In the local hot-iteration build, favor incremental linkability over final
+# executable compactness. /OPT:NOREF and /OPT:NOICF keep COMDATs stable enough
+# for LINK's incremental state to remain useful across one-file edits.
+if(MSVC AND ORBIT_FAST_HOT_ITERATION)
+    target_link_options(OrbitStudio PRIVATE
+        /INCREMENTAL
+        /OPT:NOREF
+        /OPT:NOICF
+    )
+endif()
+
 target_link_libraries(OrbitStudio
     PRIVATE
         Orbit::Build

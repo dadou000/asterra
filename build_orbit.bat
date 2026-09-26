@@ -63,6 +63,7 @@ echo ============================================================
 echo   Configuration : %CONFIG%
 echo   Run after build: %DO_RUN%
 echo   Full rebuild   : %DO_REBUILD%
+echo   Hot iteration  : FAST
 echo ============================================================
 echo.
 
@@ -101,7 +102,7 @@ if "%DO_REBUILD%"=="1" (
 
 echo.
 echo [Orbit] Configuring...
-cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
+cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON -DORBIT_FAST_HOT_ITERATION=ON
 if errorlevel 1 (
     echo.
     echo [Orbit] ERROR: CMake configure failed.

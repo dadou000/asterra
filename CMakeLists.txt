@@ -15,6 +15,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(ORBIT_WARNINGS_AS_ERRORS "Treat Orbit warnings as errors" OFF)
+option(
+    ORBIT_FAST_HOT_ITERATION
+    "Favor low-latency incremental compile/link behavior for local Orbit Studio save-to-reflect iteration"
+    OFF
+)
+
+# Local development builds can trade final-link compactness for much faster
+# incremental native iteration. This is intentionally opt-in so CI and shipping
+# builds keep their ordinary link policy.
+if(MSVC AND ORBIT_FAST_HOT_ITERATION)
+    add_compile_options(/MP)
+    message(STATUS "Orbit fast hot iteration is enabled")
+endif()
 
 # M44 performance captures must identify the exact engine revision that
 # produced them. The fallback keeps source archives/builds without .git usable,
