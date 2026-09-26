@@ -51,7 +51,9 @@ int main()
                     .radiusMeters = 1.0e6
                 },
                 {
-                    .faceResolution = 9,
+                    .faceResolution =
+                        orbit::celestial_globe::
+                            MacroGlobeResolution::Fixed(9U),
                     .footprintScale = 1.5
                 });
 
@@ -80,7 +82,9 @@ int main()
                     .radiusMeters = 1.0e6
                 },
                 {
-                    .faceResolution = 9,
+                    .faceResolution =
+                        orbit::celestial_globe::
+                            MacroGlobeResolution::Fixed(9U),
                     .footprintScale = 1.5
                 });
 
@@ -147,7 +151,9 @@ int main()
                     .radiusMeters = 1.0e6
                 },
                 {
-                    .faceResolution = 9,
+                    .faceResolution =
+                        orbit::celestial_globe::
+                            MacroGlobeResolution::Fixed(9U),
                     .footprintScale = 1.5
                 });
 
@@ -169,7 +175,9 @@ int main()
                     }
                 },
                 {
-                    .faceResolution = 5,
+                    .faceResolution =
+                        orbit::celestial_globe::
+                            MacroGlobeResolution::Fixed(5U),
                     .footprintScale = 1.0
                 });
 
