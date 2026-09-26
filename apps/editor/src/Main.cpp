@@ -7358,6 +7358,58 @@ int main(
             ui.BeginFrame(
                 window,
                 deltaSeconds);
+            {
+                // Which project/world am I in? Refreshed a few times a
+                // second; the catalog scan is not free and the values change
+                // only on explicit user action.
+                static orbit::u64 indicatorFrame = 0U;
+                static std::string indicatorWorld;
+                if ((indicatorFrame++ % 15U) == 0U)
+                {
+                    try
+                    {
+                        const auto active =
+                            studioSession.ActiveWorld();
+                        indicatorWorld =
+                            !active.has_value()
+                                ? std::string{}
+                                : active->descriptor.displayName.empty()
+                                    ? active->descriptor.relativePath.
+                                          stem().string()
+                                    : active->descriptor.displayName;
+                    }
+                    catch (const std::exception&)
+                    {
+                        indicatorWorld.clear();
+                    }
+                }
+
+                const auto& manifest = project.Manifest();
+                ui.SetProjectIndicator({
+                    .name = manifest.displayName,
+                    .detail =
+                        indicatorWorld.empty()
+                            ? std::string{}
+                            : "World: " + indicatorWorld,
+                    .tooltip =
+                        project.ManifestPath().string() +
+                        "\nClick to open Project Settings",
+                    .onClick =
+                        [&ui]
+                        {
+                            static_cast<void>(
+                                ui.FocusPanel(
+                                    orbit::studio_ui::
+                                        ProjectSettingsUi::
+                                            kPanelId));
+                        }
+                });
+                projectBrowserUi.SetOpenProject(
+                    manifest.displayName,
+                    project.ManifestPath(),
+                    indicatorWorld);
+            }
+
 
             ui.DrawStudioShell();
             cpuFrameTelemetry.Record(

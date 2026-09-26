@@ -43,6 +43,14 @@ public:
 
     // Window that owns the native folder pickers. Without one, the path
     // fields remain typeable but the Browse buttons are hidden.
+    // The project the running editor is actually bound to. The browser's own
+    // workspace is empty while editing (project switches hand off to a fresh
+    // Studio), so the editor reports the open project here for display.
+    void SetOpenProject(
+        std::string name,
+        std::filesystem::path manifestPath,
+        std::string activeWorld);
+
     void SetDialogOwner(
         const platform::Window* owner) noexcept;
 
@@ -75,6 +83,10 @@ private:
     const platform::Window* dialogOwner_{nullptr};
 
     u64 observedWorkspaceGeneration_{~u64{0}};
+    std::string openProjectName_;
+    std::filesystem::path openProjectManifest_;
+    std::string openProjectWorld_;
+    std::string recentFilter_;
     std::string newProjectRoot_;
     std::string newProjectName_{"New Orbit Project"};
     std::string openProjectPath_;

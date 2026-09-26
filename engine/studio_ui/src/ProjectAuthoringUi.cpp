@@ -3,6 +3,8 @@
 #include <orbit/platform/Paths.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <system_error>
 #include <format>
 #include <stdexcept>
 #include <utility>
@@ -129,27 +131,56 @@ void ProjectAuthoringUi::SetDialogOwner(
     dialogOwner_ = owner;
 }
 
+void ProjectAuthoringUi::SetOpenProject(
+    std::string name,
+    std::filesystem::path manifestPath,
+    std::string activeWorld)
+{
+    openProjectName_ = std::move(name);
+    openProjectManifest_ = std::move(manifestPath);
+    openProjectWorld_ = std::move(activeWorld);
+}
+
 void ProjectAuthoringUi::DrawProjectBrowser(
     editor_ui::PanelContext& context)
 {
     SynchronizeProjectBuffers();
 
-    context.Heading("ORBIT STUDIO");
-    context.MutedText(
-        "Create, open, and return to projects from the same unified Studio "
-        "workspace. Projects open directly into the authoring environment.");
+    // A project can be open in the editor (reported by SetOpenProject) or in
+    // this panel's own workspace (project-browser start view).
+    std::string currentName = openProjectName_;
+    std::filesystem::path currentManifest = openProjectManifest_;
+    const std::string currentWorld = openProjectWorld_;
 
-    if (workspace_->HasProject())
+    if (currentName.empty() &&
+        workspace_->HasProject())
     {
         const auto& project = workspace_->Project();
+        currentName = project.Manifest().displayName;
+        currentManifest = project.ManifestPath();
+    }
 
+    const bool hasCurrent = !currentName.empty();
+
+    context.Heading("ORBIT STUDIO");
+
+    if (hasCurrent)
+    {
         context.Heading("Current Project");
-        context.Text(
-            project.Manifest().displayName);
+        context.Text(currentName);
+        context.KeyValue(
+            "Location",
+            currentManifest.parent_path().generic_string());
+        if (!currentWorld.empty())
+        {
+            context.KeyValue("Active world", currentWorld);
+        }
         context.MutedText(
-            project.ManifestPath().generic_string());
+            "Opening another project below switches Studio to it. Your "
+            "current project and world are saved first.");
 
-        if (context.Button("Close Project"))
+        if (workspace_->HasProject() &&
+            context.Button("Close Project"))
         {
             try
             {
@@ -164,190 +195,247 @@ void ProjectAuthoringUi::DrawProjectBrowser(
             }
         }
     }
-
-    context.Heading("Create Project");
-    context.MutedText(
-        "Start a new Orbit project with a persistent project manifest and "
-        "world-authoring workspace.");
-
-    if (newProjectRoot_.empty())
+    else
     {
-        newProjectRoot_ =
-            (platform::UserDataDirectory() /
-             "Projects").string();
+        context.MutedText(
+            "Pick a recent project, open one from disk, or start a new "
+            "one. Everything opens straight into the authoring workspace.");
     }
 
-    static_cast<void>(
-        context.InputText(
-            "Location##new-project-root",
-            newProjectRoot_));
-
-    if (dialogOwner_ != nullptr)
+    // Feedback stays next to the actions that produce it.
+    if (!status_.empty())
     {
+        context.Text(status_);
+    }
+
+    const auto browseFolder =
+        [&](const char* title,
+            std::string& target,
+            const char* buttonLabel)
+    {
+        if (dialogOwner_ == nullptr)
+        {
+            return;
+        }
+
         context.SameLine();
 
-        if (context.Button("Browse...##new-project-browse"))
+        if (!context.Button(buttonLabel))
         {
-            try
-            {
-                if (const auto folder =
-                        platform::SelectFolder(
-                            *dialogOwner_,
-                            {
-                                .title = "Choose where to create the project",
-                                .initialDirectory =
-                                    std::filesystem::path(
-                                        newProjectRoot_)
-                            });
-                    folder.has_value())
-                {
-                    newProjectRoot_ = folder->string();
-                }
-            }
-            catch (const std::exception& exception)
-            {
-                status_ = exception.what();
-            }
+            return;
         }
-    }
 
-    static_cast<void>(
-        context.InputText(
-            "Project Name##new-project-name",
-            newProjectName_));
-
-    context.MutedText(
-        "The project is created in a new folder named after the project "
-        "inside the chosen location.");
-
-    if (context.PrimaryButton("Create Project"))
-    {
         try
         {
-            projectBrowser_.CreateProject(
-                std::filesystem::path(newProjectRoot_) /
-                    newProjectName_,
-                newProjectName_);
-            status_ = "Project created and opened.";
-            SynchronizeProjectBuffers();
-            NotifyWorkspaceChanged();
+            if (const auto folder =
+                    platform::SelectFolder(
+                        *dialogOwner_,
+                        {
+                            .title = title,
+                            .initialDirectory =
+                                std::filesystem::path(target)
+                        });
+                folder.has_value())
+            {
+                target = folder->string();
+            }
         }
         catch (const std::exception& exception)
         {
             status_ = exception.what();
         }
-    }
+    };
 
-    context.Heading("Open Existing Project");
-    context.MutedText(
-        "Open a Project.orbit.toml manifest or a project folder.");
-
-    static_cast<void>(
-        context.InputText(
-            "Project Path##open-project-path",
-            openProjectPath_));
-
-    if (dialogOwner_ != nullptr)
-    {
-        context.SameLine();
-
-        if (context.Button("Browse...##open-project-browse"))
-        {
-            try
-            {
-                if (const auto folder =
-                        platform::SelectFolder(
-                            *dialogOwner_,
-                            {
-                                .title = "Open Orbit project folder",
-                                .initialDirectory =
-                                    std::filesystem::path(
-                                        openProjectPath_)
-                            });
-                    folder.has_value())
-                {
-                    openProjectPath_ = folder->string();
-                }
-            }
-            catch (const std::exception& exception)
-            {
-                status_ = exception.what();
-            }
-        }
-    }
-
-    if (context.PrimaryButton("Open Project"))
+    const auto openManifest =
+        [&](const std::filesystem::path& manifest,
+            const char* success)
     {
         try
         {
-            projectBrowser_.OpenProject(
-                std::filesystem::path(openProjectPath_));
-            status_ = "Project opened.";
+            projectBrowser_.OpenProject(manifest);
+            status_ = success;
             SynchronizeProjectBuffers();
             NotifyWorkspaceChanged();
         }
         catch (const std::exception& exception)
         {
-            status_ = exception.what();
+            status_ = std::format(
+                "Could not open {}: {}",
+                manifest.generic_string(),
+                exception.what());
         }
-    }
-
-    context.Heading("Recent Projects");
+    };
 
     const auto recentProjects =
         projectBrowser_.RecentProjects();
 
-    if (recentProjects.empty())
+    if (context.Section("Recent Projects", true))
     {
-        context.MutedText(
-            "No recent projects yet.");
-    }
-
-    for (const auto& recent : recentProjects)
-    {
-        std::string label =
-            recent.displayName.empty()
-                ? recent.manifestPath.parent_path().filename().string()
-                : recent.displayName;
-
-        if (!recent.available)
+        if (recentProjects.empty())
         {
-            label += "  - unavailable";
+            context.MutedText(
+                "No recent projects yet. Create or open one below.");
         }
 
-        label += "##recent:";
-        label += recent.manifestPath.generic_string();
-
-        if (context.Selectable(label, false))
+        if (recentProjects.size() > 6U)
         {
-            if (!recent.available)
+            static_cast<void>(
+                context.InputText(
+                    "Filter##recent-filter",
+                    recentFilter_));
+        }
+
+        const auto lower =
+            [](std::string text)
+        {
+            std::ranges::transform(
+                text,
+                text.begin(),
+                [](const unsigned char ch)
+                {
+                    return static_cast<char>(
+                        std::tolower(ch));
+                });
+            return text;
+        };
+        const std::string filter = lower(recentFilter_);
+
+        for (const auto& recent : recentProjects)
+        {
+            const std::string name =
+                recent.displayName.empty()
+                    ? recent.manifestPath.parent_path().
+                          filename().string()
+                    : recent.displayName;
+            const std::string path =
+                recent.manifestPath.parent_path().
+                    generic_string();
+
+            if (!filter.empty() &&
+                lower(name).find(filter) == std::string::npos &&
+                lower(path).find(filter) == std::string::npos)
             {
-                status_ = recent.error;
                 continue;
             }
 
+            std::error_code equivalentError;
+            const bool isCurrent =
+                hasCurrent &&
+                std::filesystem::equivalent(
+                    recent.manifestPath,
+                    currentManifest,
+                    equivalentError);
+
+            std::string label = name;
+            if (isCurrent)
+            {
+                label += "   (open)";
+            }
+            else if (!recent.available)
+            {
+                label += "   (unavailable)";
+            }
+            label += "##recent:";
+            label += recent.manifestPath.generic_string();
+
+            if (context.Selectable(label, isCurrent) &&
+                !isCurrent)
+            {
+                if (recent.available)
+                {
+                    openManifest(
+                        recent.manifestPath,
+                        "Project opened.");
+                }
+                else
+                {
+                    status_ = std::format(
+                        "{} cannot be opened: {}. Check that the "
+                        "folder still exists, or open it again from "
+                        "its new location.",
+                        name,
+                        recent.error.empty()
+                            ? std::string("manifest not found")
+                            : recent.error);
+                }
+            }
+
+            context.MutedText(path);
+        }
+    }
+
+    if (context.Section("New Project", !hasCurrent))
+    {
+        if (newProjectRoot_.empty())
+        {
+            newProjectRoot_ =
+                (platform::UserDataDirectory() /
+                 "Projects").string();
+        }
+
+        static_cast<void>(
+            context.InputText(
+                "Location##new-project-root",
+                newProjectRoot_));
+        browseFolder(
+            "Choose where to create the project",
+            newProjectRoot_,
+            "Browse...##new-project-browse");
+
+        static_cast<void>(
+            context.InputText(
+                "Name##new-project-name",
+                newProjectName_));
+
+        context.MutedText(
+            std::format(
+                "Creates {}",
+                (std::filesystem::path(newProjectRoot_) /
+                 newProjectName_).generic_string()));
+
+        if (context.PrimaryButton("Create Project"))
+        {
             try
             {
-                projectBrowser_.OpenProject(
-                    recent.manifestPath);
-                status_ = "Recent project opened.";
+                projectBrowser_.CreateProject(
+                    std::filesystem::path(newProjectRoot_) /
+                        newProjectName_,
+                    newProjectName_);
+                status_ = "Project created and opened.";
                 SynchronizeProjectBuffers();
                 NotifyWorkspaceChanged();
             }
             catch (const std::exception& exception)
             {
-                status_ = exception.what();
+                status_ = std::format(
+                    "Could not create '{}' in {}: {}",
+                    newProjectName_,
+                    newProjectRoot_,
+                    exception.what());
             }
         }
-
-        context.MutedText(
-            recent.manifestPath.generic_string());
     }
 
-    if (!status_.empty())
+    if (context.Section("Open From Disk", !hasCurrent))
     {
-        context.Heading("Status");
-        context.Text(status_);
+        context.MutedText(
+            "A project folder or its Project.orbit.toml manifest.");
+
+        static_cast<void>(
+            context.InputText(
+                "Path##open-project-path",
+                openProjectPath_));
+        browseFolder(
+            "Open Orbit project folder",
+            openProjectPath_,
+            "Browse...##open-project-browse");
+
+        if (context.PrimaryButton("Open Project"))
+        {
+            openManifest(
+                std::filesystem::path(openProjectPath_),
+                "Project opened.");
+        }
     }
 }
 

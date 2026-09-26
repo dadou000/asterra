@@ -936,6 +936,7 @@ public:
     std::string pendingFocusTitle;
     std::string automationOpenMenu;
 
+    EditorUi::ProjectIndicator projectIndicator;
     std::unique_ptr<rhi::GraphicsPipeline>
         pipeline;
     std::unique_ptr<rhi::Texture>
@@ -990,6 +991,55 @@ void PanelContext::MutedText(
 }
 
 void PanelContext::Heading(
+bool PanelContext::Section(
+    const std::string_view label,
+    const bool defaultOpen)
+{
+    TraceWidget(label);
+    const std::string owned(label);
+
+    if (forceTreeOpen_)
+    {
+        ImGui::SetNextItemOpen(
+            true,
+            ImGuiCond_Always);
+    }
+
+    ImGui::PushStyleColor(
+        ImGuiCol_Text,
+        wavelength::kTextHeading);
+    const bool open =
+        ImGui::CollapsingHeader(
+            owned.c_str(),
+            defaultOpen
+                ? ImGuiTreeNodeFlags_DefaultOpen
+                : ImGuiTreeNodeFlags_None);
+    ImGui::PopStyleColor();
+    return open;
+}
+
+void PanelContext::KeyValue(
+    const std::string_view label,
+    const std::string_view value)
+{
+    ImGui::PushStyleColor(
+        ImGuiCol_Text,
+        wavelength::kTextMuted);
+    ImGui::Text(
+        "%.*s",
+        static_cast<int>(label.size()),
+        label.data());
+    ImGui::PopStyleColor();
+    ImGui::SameLine(
+        ImGui::GetFontSize() * 9.0F);
+    ImGui::PushTextWrapPos(0.0F);
+    ImGui::Text(
+        "%.*s",
+        static_cast<int>(value.size()),
+        value.data());
+    ImGui::PopTextWrapPos();
+}
+
     const std::string_view text)
 {
     ImGui::Dummy(ImVec2(0.0F, 3.0F));
@@ -2091,6 +2141,13 @@ void EditorUi::BeginFrame(
     if (impl_->frameBegun)
     {
         throw std::logic_error(
+void EditorUi::SetProjectIndicator(
+    ProjectIndicator indicator)
+{
+    impl_->projectIndicator =
+        std::move(indicator);
+}
+
             "Editor UI frame already begun.");
     }
 
@@ -2409,6 +2466,56 @@ void EditorUi::DrawStudioShell()
             impl_->panels[index];
 
         bool open =
+        if (!impl_->projectIndicator.name.empty())
+        {
+            const ProjectIndicator& indicator =
+                impl_->projectIndicator;
+            std::string text =
+                "Project: " + indicator.name;
+            if (!indicator.detail.empty())
+            {
+                text += "  |  " + indicator.detail;
+            }
+            text += "##project-indicator";
+
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const f32 width =
+                ImGui::CalcTextSize(
+                    text.c_str(),
+                    nullptr,
+                    true).x +
+                style.FramePadding.x * 2.0F;
+            const f32 x =
+                ImGui::GetWindowWidth() -
+                width -
+                style.ItemSpacing.x;
+            if (x > ImGui::GetCursorPosX())
+            {
+                ImGui::SetCursorPosX(x);
+            }
+
+            ImGui::PushStyleColor(
+                ImGuiCol_Text,
+                wavelength::kAccentLight);
+            ImGui::PushStyleColor(
+                ImGuiCol_Button,
+                Rgb(0x4b, 0x7b, 0xec, 0.14F));
+            if (ImGui::SmallButton(text.c_str()) &&
+                indicator.onClick)
+            {
+                indicator.onClick();
+            }
+            ImGui::PopStyleColor(2);
+
+            if (!indicator.tooltip.empty() &&
+                ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "%s",
+                    indicator.tooltip.c_str());
+            }
+        }
+
             impl_->panelOpen[index] != 0U;
 
         if (!impl_->pendingFocusTitle.empty() &&

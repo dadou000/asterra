@@ -16,6 +16,11 @@ namespace
             ? item.descriptor.relativePath.stem().string()
             : item.descriptor.displayName;
 
+    if (item.active)
+    {
+        label += " [Active]";
+    }
+
     if (item.descriptor.startup)
     {
         label += " [Startup]";
@@ -26,8 +31,6 @@ namespace
         label += " [Invalid]";
     }
 
-    label += "##project-settings-world:";
-    label += item.descriptor.relativePath.generic_string();
     return label;
 }
 } // namespace
@@ -138,243 +141,251 @@ void ProjectSettingsUi::Draw(
     const auto& manifest =
         project_->Manifest();
 
-    context.Text(
-        std::format(
-            "Project ID: {}",
-            manifest.projectId.ToString()));
-    context.Text(
-        std::format(
-            "Root: {}",
-            project_->RootDirectory().
-                generic_string()));
-    context.Text(
-        std::format(
-            "Manifest: {}",
-            project_->ManifestPath().
-                generic_string()));
-    context.Text(
-        std::format(
-            "Engine compatibility: {}",
-            manifest.engineCompatibilityVersion));
-
-    static_cast<void>(
-        context.InputText(
-            "Display Name##project-display-name",
-            displayName_));
-
-    if (context.Button("Save Project Name"))
+    if (context.Section("Project", true))
     {
-        try
+        static_cast<void>(
+            context.InputText(
+                "Name##project-display-name",
+                displayName_));
+
+        if (displayName_ != observedDisplayName_ &&
+            context.PrimaryButton("Save Project Name"))
         {
-            project_->SetDisplayName(
-                displayName_);
-            observedDisplayName_ =
-                project_->Manifest().
-                    displayName;
-            displayName_ =
-                observedDisplayName_;
-            status_ =
-                "Project name saved.";
+            try
+            {
+                project_->SetDisplayName(
+                    displayName_);
+                observedDisplayName_ =
+                    project_->Manifest().
+                        displayName;
+                displayName_ =
+                    observedDisplayName_;
+                status_ =
+                    "Project name saved.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = std::format(
+                    "Could not rename the project: {}",
+                    exception.what());
+            }
         }
-        catch (const std::exception& exception)
-        {
-            status_ = exception.what();
-        }
+
+        context.KeyValue(
+            "Folder",
+            project_->RootDirectory().
+                generic_string());
+        context.KeyValue(
+            "Manifest",
+            project_->ManifestPath().
+                generic_string());
+        context.KeyValue(
+            "Project ID",
+            manifest.projectId.ToString());
+        context.KeyValue(
+            "Engine compat.",
+            std::format(
+                "{}",
+                manifest.engineCompatibilityVersion));
     }
 
-    context.Separator();
-    context.Text(
-        std::format(
-            "Startup world: {}",
-            manifest.startupWorld.
-                generic_string()));
-
-    for (const auto& world :
-         session_->Worlds())
+    if (context.Section("Worlds", true))
     {
-        context.Text(
-            WorldLabel(world));
+        context.KeyValue(
+            "Startup world",
+            manifest.startupWorld.
+                generic_string());
 
-        if (!world.valid)
+        for (const auto& world :
+             session_->Worlds())
         {
             context.Text(
-                std::format(
-                    "  Validation: {}",
-                    world.diagnostic));
-            continue;
-        }
+                WorldLabel(world));
 
-        if (!world.descriptor.startup)
-        {
-            const std::string button =
-                "Set Startup##project-settings:" +
-                world.descriptor.id.ToString();
-
-            if (context.Button(button))
+            if (!world.valid)
             {
-                try
+                context.Text(
+                    std::format(
+                        "  Validation: {}",
+                        world.diagnostic));
+                continue;
+            }
+
+            if (!world.descriptor.startup)
+            {
+                const std::string button =
+                    "Set Startup##project-settings:" +
+                    world.descriptor.id.ToString();
+
+                if (context.Button(button))
                 {
-                    static_cast<void>(
-                        session_->SetStartupWorld(
-                            world.descriptor.
-                                relativePath));
-                    status_ =
-                        "Startup world updated.";
-                }
-                catch (const std::exception&
-                           exception)
-                {
-                    status_ =
-                        exception.what();
+                    try
+                    {
+                        static_cast<void>(
+                            session_->SetStartupWorld(
+                                world.descriptor.
+                                    relativePath));
+                        status_ =
+                            "Startup world updated.";
+                    }
+                    catch (const std::exception&
+                               exception)
+                    {
+                        status_ =
+                            exception.what();
+                    }
                 }
             }
         }
+
     }
 
-    context.Separator();
-    context.Text("Terrain Validation");
-    context.Text(
-        "Checkpoint the active project, reopen it through a fresh StudioWorkspace, "
-        "verify authored identity and fresh derived residency, then regenerate "
-        "the same physical page.");
-
-    if (context.Button(
-            "Save, Reopen & Verify Terrain"))
+    if (context.Section("Developer Validation", false))
     {
-        try
+        context.Text("Terrain Validation");
+        context.Text(
+            "Checkpoint the active project, reopen it through a fresh StudioWorkspace, "
+            "verify authored identity and fresh derived residency, then regenerate "
+            "the same physical page.");
+
+        if (context.Button(
+                "Save, Reopen & Verify Terrain"))
         {
-            static_cast<void>(
-                RunTerrainRoundTripValidation());
+            try
+            {
+                static_cast<void>(
+                    RunTerrainRoundTripValidation());
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+                terrainRoundTripReport_.reset();
+            }
         }
-        catch (const std::exception& exception)
+
+        if (terrainRoundTripReport_.has_value())
         {
-            status_ = exception.what();
-            terrainRoundTripReport_.reset();
-        }
-    }
+            const auto& report =
+                *terrainRoundTripReport_;
 
-    if (terrainRoundTripReport_.has_value())
-    {
-        const auto& report =
-            *terrainRoundTripReport_;
-
-        context.Text(
-            std::format(
-                "Result: {}",
-                report.success
-                    ? "PASS"
-                    : "FAIL"));
-
-        context.Text(
-            std::format(
-                "Semantic fingerprint: {} -> {}",
-                report.semanticFingerprintBefore,
-                report.semanticFingerprintAfter));
-
-        context.Text(
-            std::format(
-                "Terrain source revision: {} -> {}",
-                report.terrainSourceRevisionBefore,
-                report.terrainSourceRevisionAfter));
-
-        context.Text(
-            std::format(
-                "Physical/M29 fingerprint: {} -> {}",
-                report.physicalFingerprintBefore,
-                report.physicalFingerprintAfter));
-
-        context.Text(
-            std::format(
-                "Derived reset: M26 {} | M29 {} | page {}",
-                report.derivedCacheFreshAfterReopen
-                    ? "fresh"
-                    : "stale",
-                report.debugResidencyFreshAfterReopen
-                    ? "fresh"
-                    : "stale",
-                report.comparisonPagePreserved
-                    ? "preserved"
-                    : "changed"));
-
-        if (!report.diagnostic.empty())
-        {
-            context.Text(report.diagnostic);
-        }
-    }
-
-    context.Separator();
-    context.Text("M15 End-to-End Terrain Scenario");
-    context.Text(
-        "Runs the deterministic production-terrain acceptance sequence in an "
-        "isolated scratch Studio project. The currently open project is not modified.");
-
-    if (context.Button(
-            "Run M15 Terrain Validation Scenario"))
-    {
-        try
-        {
-            static_cast<void>(
-                RunTerrainValidationScenario());
-        }
-        catch (const std::exception& exception)
-        {
-            status_ = exception.what();
-            terrainValidationScenarioReport_.reset();
-        }
-    }
-
-    if (terrainValidationScenarioReport_.has_value())
-    {
-        const auto& report =
-            *terrainValidationScenarioReport_;
-
-        context.Text(
-            std::format(
-                "M15 Result: {} | Steps: {}",
-                report.success
-                    ? "PASS"
-                    : "FAIL",
-                report.steps.size()));
-
-        context.Text(
-            std::format(
-                "Scratch project: {}",
-                report.projectRoot.generic_string()));
-
-        context.Text(
-            std::format(
-                "M29 fields: {} | physical LOD {} | biome weights {}",
-                report.debugFieldsAvailable,
-                report.debugPhysicalLodAvailable
-                    ? "yes"
-                    : "no",
-                report.debugBiomeWeightsAvailable
-                    ? "yes"
-                    : "no"));
-
-        context.Text(
-            std::format(
-                "M26 cache: {} pages | {} bytes | hits {} | misses {}",
-                report.cacheStats.residentPages,
-                report.cacheStats.residentBytes,
-                report.cacheStats.hits,
-                report.cacheStats.misses));
-
-        for (const auto& step :
-             report.steps)
-        {
             context.Text(
                 std::format(
-                    "{} {}{}{}",
-                    step.passed
-                        ? "[PASS]"
-                        : "[FAIL]",
-                    step.name,
-                    step.diagnostic.empty()
-                        ? ""
-                        : " | ",
-                    step.diagnostic));
+                    "Result: {}",
+                    report.success
+                        ? "PASS"
+                        : "FAIL"));
+
+            context.Text(
+                std::format(
+                    "Semantic fingerprint: {} -> {}",
+                    report.semanticFingerprintBefore,
+                    report.semanticFingerprintAfter));
+
+            context.Text(
+                std::format(
+                    "Terrain source revision: {} -> {}",
+                    report.terrainSourceRevisionBefore,
+                    report.terrainSourceRevisionAfter));
+
+            context.Text(
+                std::format(
+                    "Physical/M29 fingerprint: {} -> {}",
+                    report.physicalFingerprintBefore,
+                    report.physicalFingerprintAfter));
+
+            context.Text(
+                std::format(
+                    "Derived reset: M26 {} | M29 {} | page {}",
+                    report.derivedCacheFreshAfterReopen
+                        ? "fresh"
+                        : "stale",
+                    report.debugResidencyFreshAfterReopen
+                        ? "fresh"
+                        : "stale",
+                    report.comparisonPagePreserved
+                        ? "preserved"
+                        : "changed"));
+
+            if (!report.diagnostic.empty())
+            {
+                context.Text(report.diagnostic);
+            }
         }
+
+        context.Text("M15 End-to-End Terrain Scenario");
+        context.Text(
+            "Runs the deterministic production-terrain acceptance sequence in an "
+            "isolated scratch Studio project. The currently open project is not modified.");
+
+        if (context.Button(
+                "Run M15 Terrain Validation Scenario"))
+        {
+            try
+            {
+                static_cast<void>(
+                    RunTerrainValidationScenario());
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+                terrainValidationScenarioReport_.reset();
+            }
+        }
+
+        if (terrainValidationScenarioReport_.has_value())
+        {
+            const auto& report =
+                *terrainValidationScenarioReport_;
+
+            context.Text(
+                std::format(
+                    "M15 Result: {} | Steps: {}",
+                    report.success
+                        ? "PASS"
+                        : "FAIL",
+                    report.steps.size()));
+
+            context.Text(
+                std::format(
+                    "Scratch project: {}",
+                    report.projectRoot.generic_string()));
+
+            context.Text(
+                std::format(
+                    "M29 fields: {} | physical LOD {} | biome weights {}",
+                    report.debugFieldsAvailable,
+                    report.debugPhysicalLodAvailable
+                        ? "yes"
+                        : "no",
+                    report.debugBiomeWeightsAvailable
+                        ? "yes"
+                        : "no"));
+
+            context.Text(
+                std::format(
+                    "M26 cache: {} pages | {} bytes | hits {} | misses {}",
+                    report.cacheStats.residentPages,
+                    report.cacheStats.residentBytes,
+                    report.cacheStats.hits,
+                    report.cacheStats.misses));
+
+            for (const auto& step :
+                 report.steps)
+            {
+                context.Text(
+                    std::format(
+                        "{} {}{}{}",
+                        step.passed
+                            ? "[PASS]"
+                            : "[FAIL]",
+                        step.name,
+                        step.diagnostic.empty()
+                            ? ""
+                            : " | ",
+                        step.diagnostic));
+            }
+        }
+
     }
 
     if (!status_.empty())

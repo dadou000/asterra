@@ -74,6 +74,11 @@ public:
     void MutedText(std::string_view text);
     void Heading(std::string_view text);
     void Separator();
+    // Collapsible group. Returns whether the body is open; nothing to pop.
+    // The label doubles as the ImGui ID, so keep labels unique per panel.
+    [[nodiscard]] bool Section(std::string_view label, bool defaultOpen = true);
+    // "Label   value" row with the label muted and the value wrapped.
+    void KeyValue(std::string_view label, std::string_view value);
     [[nodiscard]] bool Button(std::string_view label);
     [[nodiscard]] bool PrimaryButton(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
@@ -280,6 +285,18 @@ public:
 
     void RegisterMenuAction(MenuAction action);
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
+
+    // Persistent "which project am I in" chip drawn at the right edge of the
+    // main menu bar. An empty name hides it. Presentation only: the owner
+    // refreshes it each frame from the authoritative project/world state.
+    struct ProjectIndicator
+    {
+        std::string name;
+        std::string detail;
+        std::string tooltip;
+        std::function<void()> onClick;
+    };
+    void SetProjectIndicator(ProjectIndicator indicator);
     void DrawStudioShell();
     void Render(rhi::CommandList& commands, rhi::Texture& target, u32 targetWidth, u32 targetHeight);
     [[nodiscard]] bool WantsMouse() const noexcept;
