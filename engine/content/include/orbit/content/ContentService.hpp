@@ -207,6 +207,21 @@ public:
         f64 opacity = 1.0);
 
 private:
+    class HotIterationRegistration
+    {
+    public:
+        explicit HotIterationRegistration(ContentService* owner);
+        ~HotIterationRegistration();
+
+        HotIterationRegistration(const HotIterationRegistration&) = delete;
+        HotIterationRegistration& operator=(const HotIterationRegistration&) = delete;
+
+    private:
+        ContentService* owner_{nullptr};
+        u64 contentHandler_{0};
+        u64 shaderHandler_{0};
+    };
+
     [[nodiscard]] AssetRecord BuildRecord(const std::filesystem::path& absolute) const;
     [[nodiscard]] AssetId StableId(const std::filesystem::path& absolute) const;
     [[nodiscard]] std::filesystem::path NormalizeInsideProject(const std::filesystem::path& path) const;
@@ -223,6 +238,11 @@ private:
         dependents_;
     std::vector<ContentDiagnostic> diagnostics_;
     u64 revision_{0};
+
+    // Constructed last so projectRoot_/contentRoot_ are valid before it
+    // registers callbacks. It is destroyed first, preventing callbacks from
+    // observing a partially destroyed ContentService.
+    HotIterationRegistration hotIteration_{this};
 };
 
 [[nodiscard]] std::string_view AssetKindName(AssetKind kind) noexcept;
