@@ -35,6 +35,14 @@ namespace
     }
     return false;
 }
+
+[[nodiscard]] bool IsContentPath(
+    const std::string_view generic) noexcept
+{
+    return
+        generic.starts_with("content/") ||
+        generic.find("/content/") != std::string_view::npos;
+}
 } // namespace
 
 ChangeKind ClassifyChange(const std::filesystem::path& path)
@@ -70,7 +78,14 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
             extension,
             {".hlsl", ".glsl", ".wgsl", ".vert", ".frag", ".comp", ".spv"}))
     {
-        return ChangeKind::Shader;
+        // Project Content shaders already have a live ContentService consumer.
+        // Engine-owned shader sources need Vulkan pipeline replacement before
+        // they can be swapped independently, so for now they use the seamless
+        // incremental Studio generation refresh rather than being consumed by
+        // the direct-resource queue with no effect.
+        return IsContentPath(generic)
+            ? ChangeKind::Shader
+            : ChangeKind::RestartRequired;
     }
 
     if (IsOneOf(extension, {".lua", ".luau"}))
