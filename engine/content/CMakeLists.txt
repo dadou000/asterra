@@ -1,5 +1,6 @@
 add_library(OrbitContent STATIC
     src/ContentService.cpp
+    src/ContentHotReload.cpp
     src/ContentHash.cpp
     src/DerivedDataCache.cpp
     src/AssetPipeline.cpp
@@ -21,6 +22,7 @@ target_link_libraries(OrbitContent
     PUBLIC
         Orbit::Core
     PRIVATE
+        Orbit::HotReload
         tomlplusplus::tomlplusplus
 )
 
