@@ -10,6 +10,7 @@ target_compile_features(OrbitHotReloadApi INTERFACE cxx_std_23)
 
 add_library(OrbitHotReload STATIC
     src/ChangeClassifier.cpp
+    src/HotIterationDispatch.cpp
     src/HotIterationService.cpp
     src/HotReloadHost.cpp
 )
