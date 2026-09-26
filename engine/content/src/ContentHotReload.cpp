@@ -3,6 +3,7 @@
 #include <orbit/core/Log.hpp>
 #include <orbit/hot_reload/HotIterationService.hpp>
 
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <system_error>
