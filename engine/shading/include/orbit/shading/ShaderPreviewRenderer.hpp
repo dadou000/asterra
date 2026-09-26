@@ -4,6 +4,7 @@
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
+#include <orbit/shading/ObjMesh.hpp>
 #include <orbit/shading/ShaderProgram.hpp>
 #include <orbit/shading/ShadingContract.hpp>
 
@@ -43,11 +44,21 @@ public:
         bool replaced{false};
         // Non-empty when `program` could not become a pipeline.
         std::string error;
+        // Non-empty when the mesh could not be uploaded; the previous mesh
+        // stays on screen.
+        std::string meshError;
     };
 
     // Call once per frame before recording. `program` is the workspace's last
     // good program (null for none) and `revision` its ProgramRevision().
-    UpdateResult Update(const ShadingProgram* program, u64 revision);
+    // `mesh` is the preview mesh (null for none) and `meshRevision` its
+    // revision; a new revision uploads new buffers and retires the old ones the
+    // same way as pipelines.
+    UpdateResult Update(
+        const ShadingProgram* program,
+        u64 revision,
+        const MeshData* mesh = nullptr,
+        u64 meshRevision = 0U);
 
     // Records the preview into `color`/`depth`; both must already be bound as
     // render targets by the graph pass (color RGBA16F, depth D32 reverse-Z).
@@ -62,6 +73,8 @@ public:
         f32 timeSeconds);
 
     [[nodiscard]] bool UsingErrorShader() const noexcept;
+    // True when a mesh is uploaded and PreviewShape::Mesh will draw it.
+    [[nodiscard]] bool HasMesh() const noexcept;
     [[nodiscard]] u32 RetiredPipelineCount() const noexcept;
 
 private:

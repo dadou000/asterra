@@ -21,7 +21,9 @@ enum class PreviewShape : u8
 {
     Sphere,
     Plane,
-    Cube
+    Cube,
+    // A Wavefront .obj asset from Content, chosen in PreviewState::mesh.
+    Mesh
 };
 
 enum class LightingPreset : u8
@@ -74,6 +76,9 @@ struct PreviewCamera
 struct PreviewState
 {
     PreviewShape shape{PreviewShape::Sphere};
+    // Project-relative path of the .obj shown by PreviewShape::Mesh. Empty (or
+    // a mesh that failed to load) draws a sphere instead.
+    std::string mesh;
     LightingPreset lighting{LightingPreset::Studio};
     PreviewBackground background{PreviewBackground::Environment};
     PreviewCamera camera{};

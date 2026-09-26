@@ -154,6 +154,7 @@ Value PreviewToValue(const PreviewState& state)
         {"shape", std::string(ShapeKey(state.shape))},
         {"lighting", std::string(LightingKey(state.lighting))},
         {"background", std::string(BackgroundKey(state.background))},
+        {"mesh", state.mesh},
         {"sun_azimuth_degrees", static_cast<f64>(state.sunAzimuthDegrees)},
         {"sun_elevation_degrees", static_cast<f64>(state.sunElevationDegrees)},
         {"exposure", static_cast<f64>(state.exposure)},
@@ -206,6 +207,22 @@ Value ParametersToValue(const ShadingWorkspace& workspace)
     return Value(std::move(parameters));
 }
 
+Value MeshToValue(const ShadingWorkspace& workspace)
+{
+    const MeshStatus& mesh = workspace.PreviewMeshStatus();
+
+    return Value(Value::Object{
+        {"path", Path(mesh.path)},
+        {"loaded", mesh.loaded},
+        {"error", mesh.error},
+        {"vertices", static_cast<i64>(mesh.vertices)},
+        {"triangles", static_cast<i64>(mesh.triangles)},
+        {"source_radius", static_cast<f64>(mesh.sourceRadius)},
+        {"had_normals", mesh.hadNormals},
+        {"had_uvs", mesh.hadUvs},
+        {"revision", static_cast<i64>(mesh.revision)}});
+}
+
 Value StatusToValue(const ShadingWorkspace& workspace)
 {
     const ShaderStatus& status = workspace.Status();
@@ -222,6 +239,7 @@ Value StatusToValue(const ShadingWorkspace& workspace)
         {"changed_on_disk", status.changedOnDisk},
         {"live_compile", workspace.LiveCompile()},
         {"parameters", ParametersToValue(workspace)},
+        {"mesh", MeshToValue(workspace)},
         {"preview", PreviewToValue(workspace.Preview())}});
 }
 
@@ -436,7 +454,7 @@ void RegisterShadingRpc(
         });
 
     add("shading.select",
-        "Opens a shader or shader material in the Shading tab (loads and compiles it). Null clears the selection.",
+        "Opens a shader or shader material in the Shading tab (loads and compiles it). A .obj mesh path instead becomes the preview mesh and leaves the open shader alone. Null clears the selection.",
         true,
         [&workspace](const Value& params)
         {
@@ -541,7 +559,7 @@ void RegisterShadingRpc(
         { return PreviewToValue(workspace.Preview()); });
 
     add("shading.preview_set",
-        "Changes preview settings. Omitted fields keep their value. See shading.options for valid shape/lighting/background keys.",
+        "Changes preview settings. Omitted fields keep their value. See shading.options for valid shape/lighting/background keys. `mesh` (a .obj path, or null to clear) loads a mesh and switches the shape to 'mesh'.",
         true,
         [&workspace](const Value& params)
         {
@@ -551,6 +569,31 @@ void RegisterShadingRpc(
                 {
                     PreviewState& state = workspace.Preview();
                     constexpr f32 kRadians = std::numbers::pi_v<f32> / 180.0F;
+
+                    // A mesh path loads it and switches to the Mesh shape; an
+                    // explicit null clears it. A later "shape" still wins.
+                    if (const auto mesh = values.find("mesh");
+                        mesh != values.end())
+                    {
+                        if (mesh->second.IsNull())
+                        {
+                            workspace.ClearPreviewMesh();
+                            if (state.shape == PreviewShape::Mesh)
+                            {
+                                state.shape = PreviewShape::Sphere;
+                            }
+                        }
+                        else if (mesh->second.IsString() &&
+                                 !mesh->second.AsString().empty())
+                        {
+                            workspace.SetPreviewMesh(mesh->second.AsString());
+                        }
+                        else
+                        {
+                            throw std::invalid_argument(
+                                "mesh must be a Content path or null.");
+                        }
+                    }
 
                     if (const auto key = OptionalString(values, "shape"))
                     {

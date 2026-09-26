@@ -7,6 +7,9 @@
 #include <orbit/shading/ShadingRpc.hpp>
 #include <orbit/shading/ShadingWorkspace.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -318,8 +321,10 @@ void TestRpc(const shader::Compiler& compiler)
         Check(response.has_value());
         return *response;
     };
+    // A JSON-RPC failure carries an error *object*; status results have their
+    // own harmless "error":"" text fields.
     const auto ok = [](const std::string& response)
-    { return response.find("\"error\"") == std::string::npos; };
+    { return response.find("\"error\":{") == std::string::npos; };
 
     // Every documented method is registered.
     for (const auto& name : shading::ShadingRpcMethodNames())
@@ -369,6 +374,214 @@ void TestRpc(const shader::Compiler& compiler)
 
     std::filesystem::remove_all(root);
 }
+constexpr const char* kCubeObj =
+    "# unit cube, quads, negative indices on the last face\n"
+    "v -1 -1 -1\nv 1 -1 -1\nv 1 1 -1\nv -1 1 -1\n"
+    "v -1 -1 1\nv 1 -1 1\nv 1 1 1\nv -1 1 1\n"
+    "f 1 2 3 4\nf 5 8 7 6\nf 1 5 6 2\nf 2 6 7 3\nf 3 7 8 4\nf -4 -1 -5 -8\n";
+
+void TestObjParser()
+{
+    const auto cube = shading::ParseObj(kCubeObj);
+    // 6 quads fan into 12 triangles; corners are shared per (v, vt, vn).
+    Check(cube.TriangleCount() == 12);
+    Check(cube.sourceFaces == 6);
+    Check(!cube.hadNormals && !cube.hadUvs);
+    Check(cube.vertices.size() == 8);
+
+    // Fitted to the preview: centred and inside a unit sphere.
+    Check(std::abs(cube.sourceRadius - std::sqrt(3.0F)) < 1e-4F);
+    float maxLength = 0.0F;
+    for (const auto& vertex : cube.vertices)
+    {
+        const float length = std::sqrt(
+            vertex.position[0] * vertex.position[0] +
+            vertex.position[1] * vertex.position[1] +
+            vertex.position[2] * vertex.position[2]);
+        maxLength = std::max(maxLength, length);
+        // Generated normals are unit length.
+        const float n = std::sqrt(
+            vertex.normal[0] * vertex.normal[0] +
+            vertex.normal[1] * vertex.normal[1] +
+            vertex.normal[2] * vertex.normal[2]);
+        Check(std::abs(n - 1.0F) < 1e-4F);
+    }
+    Check(std::abs(maxLength - 1.0F) < 1e-4F);
+
+    // An off-centre, large model is recentred and scaled.
+    const auto shifted = shading::ParseObj(
+        "v 100 100 100\nv 110 100 100\nv 100 110 100\nf 1 2 3\n");
+    float centreX = 0.0F;
+    for (const auto& vertex : shifted.vertices)
+    {
+        centreX += vertex.position[0];
+        Check(std::abs(vertex.position[0]) <= 1.0001F);
+    }
+    Check(std::abs(centreX / 3.0F) < 0.6F);
+
+    // Explicit normals and UVs are honoured, and vertices split on differing
+    // texcoords.
+    const auto textured = shading::ParseObj(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\n"
+        "vt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\nvn 0 0 1\n"
+        "f 1/1/1 2/2/1 3/3/1\nf 2/2/1 4/4/1 3/3/1\n");
+    Check(textured.hadNormals && textured.hadUvs);
+    Check(textured.vertices.size() == 4);
+    Check(textured.vertices[0].normal[2] == 1.0F);
+
+    // "v//vn" (no texcoord) parses and gets generated UVs.
+    const auto noUv = shading::ParseObj(
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nvn 0 0 1\nf 1//1 2//1 3//1\n");
+    Check(noUv.hadNormals && !noUv.hadUvs);
+
+    // Malformed input names the line.
+    const auto fails = [](const std::string& text, const std::string& contains)
+    {
+        try
+        {
+            (void)shading::ParseObj(text);
+        }
+        catch (const std::runtime_error& error)
+        {
+            return std::string(error.what()).find(contains) != std::string::npos;
+        }
+        return false;
+    };
+    Check(fails("v 0 0 0\n", "no faces"));
+    Check(fails("v 0 0 0\nv 1 0 0\nf 1 2 9\n", "line 3"));
+    Check(fails("v 0 0 0\nv 1 0 0\nf 1 2 9\n", "out of range"));
+    Check(fails("v 0 nan 0\n", "line 1"));
+    Check(fails("v 0 0\n", "line 1"));
+    Check(fails("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 0\n", "line 4"));
+}
+
+void TestMeshWorkspace(const shader::Compiler& compiler)
+{
+    const auto root = MakeProject();
+    content::ContentService content(root);
+    content.Scan();
+    shading::ShadingWorkspace workspace(content, &compiler);
+
+    workspace.CreateFolder("Meshes");
+    content.WriteText("Content/Meshes/Box.obj", kCubeObj);
+    content.WriteText("Content/Meshes/Skin.fbx", "not really");
+
+    // A shader is open; choosing a mesh must not disturb it.
+    workspace.CreateFolder("Shading");
+    const auto shader = workspace.CreateShader("Shading", "S", "lit");
+    workspace.Select(shader);
+    Check(workspace.Status().compiled);
+
+    workspace.Select("Meshes/Box.obj");
+    Check(workspace.Selected() == shader);
+    Check(workspace.Status().shader == shader);
+    Check(workspace.Preview().shape == shading::PreviewShape::Mesh);
+    Check(workspace.Preview().mesh == "Content/Meshes/Box.obj");
+    Check(workspace.PreviewMeshStatus().loaded);
+    Check(workspace.PreviewMeshStatus().triangles == 12);
+    Check(workspace.PreviewMeshData() != nullptr);
+    const auto firstRevision = workspace.PreviewMeshStatus().revision;
+
+    // Only .obj can be previewed; other mesh formats and non-meshes are refused.
+    Check(Throws([&] { workspace.SetPreviewMesh("Meshes/Skin.fbx"); }));
+    Check(Throws([&] { workspace.SetPreviewMesh(shader); }));
+
+    // An external save reloads with no explicit call (hot path).
+    content.WriteText(
+        "Content/Meshes/Box.obj",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+    workspace.Update(0.016);
+    Check(workspace.PreviewMeshStatus().triangles == 1);
+    Check(workspace.PreviewMeshStatus().revision > firstRevision);
+
+    // A save that does not parse keeps the last good mesh and says why.
+    const auto goodRevision = workspace.PreviewMeshStatus().revision;
+    content.WriteText("Content/Meshes/Box.obj", "v 0 0 0\nf 1 2 3\n");
+    workspace.Update(0.016);
+    Check(!workspace.PreviewMeshStatus().error.empty());
+    Check(workspace.PreviewMeshStatus().error.find("Box.obj") != std::string::npos);
+    Check(workspace.PreviewMeshStatus().loaded);
+    Check(workspace.PreviewMeshData() != nullptr);
+    Check(workspace.PreviewMeshData()->TriangleCount() == 1);
+    (void)goodRevision;
+
+    // Fixing it recovers.
+    content.WriteText("Content/Meshes/Box.obj", kCubeObj);
+    workspace.Update(0.016);
+    Check(workspace.PreviewMeshStatus().error.empty());
+    Check(workspace.PreviewMeshStatus().triangles == 12);
+
+    // Rename and move follow the mesh; trash clears it and drops the shape back
+    // to a sphere.
+    const auto renamed = workspace.Rename("Meshes/Box.obj", "Crate.obj");
+    Check(workspace.Preview().mesh == renamed.generic_string());
+    Check(workspace.PreviewMeshStatus().loaded);
+    workspace.CreateFolder("Meshes/Old");
+    const auto moved = workspace.Move(renamed, "Meshes/Old");
+    Check(workspace.Preview().mesh == moved.generic_string());
+    (void)workspace.Trash(moved);
+    Check(workspace.Preview().mesh.empty());
+    Check(!workspace.PreviewMeshStatus().loaded);
+    Check(workspace.PreviewMeshData() == nullptr);
+    Check(workspace.Preview().shape == shading::PreviewShape::Sphere);
+
+    std::filesystem::remove_all(root);
+}
+
+void TestMeshRpc(const shader::Compiler& compiler)
+{
+    const auto root = MakeProject();
+    content::ContentService content(root);
+    content.Scan();
+    shading::ShadingWorkspace workspace(content, &compiler);
+    content.WriteText("Content/Box.obj", kCubeObj);
+
+    rpc::Dispatcher dispatcher;
+    shading::RegisterShadingRpc(dispatcher, workspace);
+
+    const auto call = [&](const std::string& method, const std::string& params)
+    {
+        const auto response = dispatcher.Dispatch(
+            R"({"jsonrpc":"2.0","id":1,"method":")" + method +
+            R"(","params":)" + params + "}");
+        Check(response.has_value());
+        return *response;
+    };
+
+    Check(call("shading.options", "{}").find("\"mesh\"") != std::string::npos);
+
+    const auto set = call("shading.preview_set", R"({"mesh":"Box.obj"})");
+    Check(set.find("\"error\":{") == std::string::npos);
+    Check(set.find("\"shape\":\"mesh\"") != std::string::npos);
+    Check(set.find("Content/Box.obj") != std::string::npos);
+
+    const auto status = call("shading.status", "{}");
+    Check(status.find("\"triangles\":12") != std::string::npos);
+    Check(status.find("\"loaded\":true") != std::string::npos);
+
+    // An explicit shape after a mesh wins; null clears the mesh.
+    Check(call("shading.preview_set", R"({"mesh":"Box.obj","shape":"cube"})")
+              .find("\"shape\":\"cube\"") != std::string::npos);
+
+    // Clearing the mesh while it is the shape falls back to a sphere.
+    Check(call("shading.preview_set", R"({"mesh":"Box.obj"})")
+              .find("\"shape\":\"mesh\"") != std::string::npos);
+    const auto cleared = call("shading.preview_set", R"({"mesh":null})");
+    Check(cleared.find("\"shape\":\"sphere\"") != std::string::npos);
+    Check(cleared.find("\"mesh\":\"\"") != std::string::npos);
+
+    // Choosing the Mesh shape with no mesh is allowed (a sphere stands in).
+    Check(call("shading.preview_set", R"({"shape":"mesh"})")
+              .find("\"shape\":\"mesh\"") != std::string::npos);
+
+    Check(call("shading.preview_set", R"({"mesh":"Nope.obj"})").find("1050") !=
+          std::string::npos);
+    Check(call("shading.preview_set", R"({"mesh":7})").find("1050") !=
+          std::string::npos);
+
+    std::filesystem::remove_all(root);
+}
+
 void TestCapture()
 {
     const auto dir = MakeProject();
@@ -421,6 +634,9 @@ int main()
         TestDiagnosticsPointAtUserFile(compiler);
         TestWorkspace(compiler);
         TestRpc(compiler);
+        TestObjParser();
+        TestMeshWorkspace(compiler);
+        TestMeshRpc(compiler);
         TestCapture();
     }
     catch (const std::exception& exception)

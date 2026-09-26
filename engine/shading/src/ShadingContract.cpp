@@ -9,10 +9,11 @@ namespace orbit::shading
 {
 namespace
 {
-constexpr std::array<EnumEntry, 3> kShapes{{
+constexpr std::array<EnumEntry, 4> kShapes{{
     {static_cast<u8>(PreviewShape::Sphere), "sphere", "Sphere"},
     {static_cast<u8>(PreviewShape::Plane), "plane", "Plane"},
     {static_cast<u8>(PreviewShape::Cube), "cube", "Cube"},
+    {static_cast<u8>(PreviewShape::Mesh), "mesh", "Mesh (.obj)"},
 }};
 
 constexpr std::array<EnumEntry, 5> kLightingPresets{{

@@ -8051,11 +8051,26 @@ int main(
                 // Swap in a newly compiled program (or fall back to the error
                 // shader) at this frame boundary; a failure keeps the working
                 // pipeline and is reported back to the tab.
+                // Held for the statement: the renderer only reads the mesh
+                // while uploading it.
+                const auto shadingMesh =
+                    shadingWorkspace.PreviewMeshData();
+
                 const auto shadingUpdate =
                     shadingRenderer.Update(
                         shadingWorkspace.Program(),
                         shadingWorkspace.Status().
-                            programRevision);
+                            programRevision,
+                        shadingMesh.get(),
+                        shadingWorkspace.PreviewMeshStatus().
+                            revision);
+
+                if (!shadingUpdate.meshError.empty())
+                {
+                    orbit::log::Warning(
+                        "Shading preview could not upload the mesh: " +
+                        shadingUpdate.meshError);
+                }
 
                 if (!shadingUpdate.error.empty())
                 {

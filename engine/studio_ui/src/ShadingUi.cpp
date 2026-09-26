@@ -329,7 +329,12 @@ void ShadingUi::DrawTreeNode(
         label += "   (" + kind + ")";
     }
 
-    if (context.Selectable(label + id, selected))
+    // A mesh is the preview subject rather than the edited asset, so it is
+    // highlighted when it is the current preview mesh.
+    const bool isPreviewMesh = node.kind == content::AssetKind::Mesh &&
+        workspace_->Preview().mesh == node.path.generic_string();
+
+    if (context.Selectable(label + id, selected || isPreviewMesh))
     {
         Run({}, [&] { workspace_->Select(node.path); });
         status_.clear();
@@ -446,6 +451,33 @@ void ShadingUi::DrawPreview(editor_ui::PanelContext& context)
 
     if (context.Combo("Shape##shading-shape", shapes, shape))
         preview.shape = static_cast<shading::PreviewShape>(shape);
+
+    if (preview.shape == shading::PreviewShape::Mesh)
+    {
+        const auto& mesh = workspace_->PreviewMeshStatus();
+
+        if (mesh.path.empty())
+        {
+            context.MutedText(
+                "Select a .obj mesh in the tree to preview it. A sphere is "
+                "drawn until then.");
+        }
+        else if (mesh.loaded)
+        {
+            context.MutedText(std::format(
+                "{}: {} vertices, {} triangles{}{}",
+                mesh.path.filename().string(),
+                mesh.vertices,
+                mesh.triangles,
+                mesh.hadNormals ? "" : ", generated normals",
+                mesh.hadUvs ? "" : ", generated UVs"));
+        }
+
+        if (!mesh.error.empty())
+        {
+            context.ErrorText("Mesh error: " + mesh.error);
+        }
+    }
     if (context.Combo("Lighting##shading-lighting", lights, lighting))
         preview.lighting = static_cast<shading::LightingPreset>(lighting);
     if (context.Combo("Background##shading-background", backgrounds, background))

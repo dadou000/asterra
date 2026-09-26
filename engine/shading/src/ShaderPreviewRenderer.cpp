@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <numbers>
 #include <stdexcept>
 #include <vector>
@@ -20,6 +21,9 @@ struct Vertex
     f32 normal[3];
     f32 uv[2];
 };
+
+static_assert(sizeof(Vertex) == sizeof(MeshVertex),
+              "The OBJ loader must produce the preview vertex layout.");
 
 struct ShapeRange
 {
@@ -277,8 +281,18 @@ public:
     {
         if (pipeline != nullptr)
         {
-            retired.push_back({std::move(pipeline), 0U});
+            retired.push_back({std::move(pipeline), nullptr, nullptr, 0U});
         }
+    }
+
+    void RetireMesh()
+    {
+        if (meshVertices != nullptr || meshIndices != nullptr)
+        {
+            retired.push_back(
+                {nullptr, std::move(meshVertices), std::move(meshIndices), 0U});
+        }
+        meshIndexCount = 0U;
     }
 
     void TickRetirement()
@@ -298,6 +312,8 @@ public:
     struct Retired
     {
         std::unique_ptr<rhi::GraphicsPipeline> pipeline;
+        std::unique_ptr<rhi::Buffer> vertices;
+        std::unique_ptr<rhi::Buffer> indices;
         u32 age{0U};
     };
 
@@ -313,6 +329,12 @@ public:
     std::array<ShapeRange, 3> ranges{};
     std::vector<Retired> retired;
     u64 builtRevision{~0ULL};
+
+    // Preview mesh (PreviewShape::Mesh).
+    std::unique_ptr<rhi::Buffer> meshVertices;
+    std::unique_ptr<rhi::Buffer> meshIndices;
+    u32 meshIndexCount{0U};
+    u64 builtMeshRevision{~0ULL};
 };
 
 ShaderPreviewRenderer::ShaderPreviewRenderer(
@@ -326,10 +348,60 @@ ShaderPreviewRenderer::~ShaderPreviewRenderer() = default;
 
 ShaderPreviewRenderer::UpdateResult ShaderPreviewRenderer::Update(
     const ShadingProgram* const program,
-    const u64 revision)
+    const u64 revision,
+    const MeshData* const mesh,
+    const u64 meshRevision)
 {
     UpdateResult result;
     impl_->TickRetirement();
+
+    if (meshRevision != impl_->builtMeshRevision)
+    {
+        impl_->builtMeshRevision = meshRevision;
+
+        if (mesh == nullptr || mesh->indices.empty() || mesh->vertices.empty())
+        {
+            impl_->RetireMesh();
+        }
+        else
+        {
+            try
+            {
+                auto vertices = impl_->device.CreateBuffer({
+                    .sizeBytes = mesh->vertices.size() * sizeof(MeshVertex),
+                    .usage = rhi::BufferUsage::Vertex,
+                    .memory = rhi::MemoryUsage::HostVisible,
+                    .initialState = rhi::ResourceState::VertexOrConstantBuffer});
+                std::memcpy(
+                    vertices->Map(),
+                    mesh->vertices.data(),
+                    mesh->vertices.size() * sizeof(MeshVertex));
+                vertices->Unmap();
+
+                auto indices = impl_->device.CreateBuffer({
+                    .sizeBytes = mesh->indices.size() * sizeof(u32),
+                    .usage = rhi::BufferUsage::Index,
+                    .memory = rhi::MemoryUsage::HostVisible,
+                    .initialState = rhi::ResourceState::IndexBuffer});
+                std::memcpy(
+                    indices->Map(),
+                    mesh->indices.data(),
+                    mesh->indices.size() * sizeof(u32));
+                indices->Unmap();
+
+                // The previous buffers may still be referenced by frames in
+                // flight: retire them, do not destroy them.
+                impl_->RetireMesh();
+                impl_->meshVertices = std::move(vertices);
+                impl_->meshIndices = std::move(indices);
+                impl_->meshIndexCount = static_cast<u32>(mesh->indices.size());
+            }
+            catch (const std::exception& exception)
+            {
+                result.meshError = exception.what();
+            }
+        }
+    }
 
     if (revision == impl_->builtRevision)
     {
@@ -481,13 +553,30 @@ void ShaderPreviewRenderer::Draw(
     commands.SetGraphicsConstants(background);
     commands.Draw(3);
 
-    const ShapeRange& range =
-        impl_->ranges[static_cast<std::size_t>(state.shape)];
     commands.SetGraphicsPipeline(*impl_->active);
     commands.SetGraphicsConstants(object);
+
+    if (state.shape == PreviewShape::Mesh && impl_->meshIndexCount > 0U)
+    {
+        commands.SetVertexBuffer(*impl_->meshVertices, sizeof(Vertex));
+        commands.SetIndexBuffer(*impl_->meshIndices, rhi::IndexFormat::UInt32);
+        commands.DrawIndexed(impl_->meshIndexCount, 0U, 0);
+        return;
+    }
+
+    // Mesh selected but nothing loaded: a sphere stands in.
+    const std::size_t shapeIndex = state.shape == PreviewShape::Mesh
+        ? 0U
+        : static_cast<std::size_t>(state.shape);
+    const ShapeRange& range = impl_->ranges[shapeIndex];
     commands.SetVertexBuffer(*impl_->vertexBuffer, sizeof(Vertex));
     commands.SetIndexBuffer(*impl_->indexBuffer, rhi::IndexFormat::UInt32);
     commands.DrawIndexed(range.indexCount, range.firstIndex, range.vertexOffset);
+}
+
+bool ShaderPreviewRenderer::HasMesh() const noexcept
+{
+    return impl_->meshIndexCount > 0U;
 }
 
 bool ShaderPreviewRenderer::UsingErrorShader() const noexcept

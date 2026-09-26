@@ -826,13 +826,23 @@ def orbit_shading_preview_set(
     camera_pitch_degrees: float | None = None,
     camera_distance: float | None = None,
     camera_fov_degrees: float | None = None,
+    mesh: str | None = None,
+    clear_mesh: bool = False,
 ) -> dict[str, Any]:
     """Change preview settings; omitted values are unchanged.
 
-    shape: sphere | plane | cube. lighting: studio | sun | overcast | sunset |
-    space. background: environment | gradient | gray | checker.
+    shape: sphere | plane | cube | mesh. lighting: studio | sun | overcast |
+    sunset | space. background: environment | gradient | gray | checker.
+
+    mesh is a Wavefront .obj path under Content: it loads the mesh and switches
+    the shape to 'mesh' (the model is centred and fitted to the preview). A
+    mesh saved elsewhere reloads automatically. clear_mesh=True removes it.
     """
     params: dict[str, Any] = {}
+    if mesh is not None:
+        params["mesh"] = mesh
+    elif clear_mesh:
+        params["mesh"] = None
     for key, value in (
         ("shape", shape),
         ("lighting", lighting),

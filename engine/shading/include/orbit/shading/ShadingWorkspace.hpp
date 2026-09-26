@@ -3,6 +3,7 @@
 #include <orbit/content/ContentService.hpp>
 #include <orbit/core/Types.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
+#include <orbit/shading/ObjMesh.hpp>
 #include <orbit/shading/ShaderProgram.hpp>
 #include <orbit/shading/ShadingContract.hpp>
 
@@ -46,6 +47,23 @@ struct ShaderStatus
     bool dirty{false};
     // The file changed on disk while the buffer had unsaved edits.
     bool changedOnDisk{false};
+};
+
+struct MeshStatus
+{
+    // The .obj the Mesh shape draws (project-relative); empty for none.
+    std::filesystem::path path;
+    // A mesh is available to draw (possibly the last good one, if a newer save
+    // failed to parse).
+    bool loaded{false};
+    std::string error;
+    u32 vertices{0U};
+    u32 triangles{0U};
+    f32 sourceRadius{0.0F};
+    bool hadNormals{false};
+    bool hadUvs{false};
+    // Bumps whenever the mesh the renderer should draw changes.
+    u64 revision{0U};
 };
 
 struct ParameterValue
@@ -152,6 +170,18 @@ public:
     [[nodiscard]] const PreviewState& Preview() const noexcept;
     [[nodiscard]] f32 PreviewTime() const noexcept;
 
+    // ---- Preview mesh ----------------------------------------------------
+    // Chooses the .obj asset the Mesh shape draws, loads it and switches the
+    // preview to the Mesh shape. Selecting a Mesh asset with Select() does the
+    // same and leaves the open shader alone. Like shaders, the mesh reloads
+    // when its file is saved elsewhere, and a save that fails to parse keeps the
+    // last good mesh on screen.
+    void SetPreviewMesh(const std::filesystem::path& mesh);
+    void ClearPreviewMesh();
+    [[nodiscard]] const MeshStatus& PreviewMeshStatus() const noexcept;
+    // Null until a mesh has loaded.
+    [[nodiscard]] std::shared_ptr<const MeshData> PreviewMeshData() const noexcept;
+
     // ---- Per frame -------------------------------------------------------
     // Advances the preview clock, notices external file changes, and runs the
     // debounced live compile. Cheap when nothing changed.
@@ -176,6 +206,11 @@ private:
     void RebuildParameterValues();
     void PersistMaterial();
     void RefreshFromContent();
+    void RefreshMesh();
+    void LoadPreviewMesh(bool changedTarget);
+    void RebaseMesh(
+        const std::filesystem::path& from,
+        const std::optional<std::filesystem::path>& to);
     void RebaseSelection(
         const std::filesystem::path& from,
         const std::optional<std::filesystem::path>& to);
@@ -200,6 +235,10 @@ private:
     // name -> components; overrides the shader's declared defaults. Loaded
     // from the selected material and edited through SetParameter.
     std::map<std::string, std::vector<f64>> overrides_;
+
+    MeshStatus meshStatus_;
+    std::shared_ptr<const MeshData> mesh_;
+    u64 meshDiskHash_{0U};
 
     PreviewState preview_;
     f64 time_{0.0};

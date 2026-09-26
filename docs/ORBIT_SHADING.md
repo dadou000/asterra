@@ -27,8 +27,9 @@ external editor  ─┘        │                      ▲
   in any editor. Edits recompile live and are swapped into the preview.
 - **Bind parameters** with `// @param` lines; the tab builds controls from them
   and a shader material stores overrides.
-- **Preview** on a sphere, plane or cube under a lighting preset with a chosen
-  background, orbiting the camera with the mouse.
+- **Preview** on a sphere, plane, cube or a Wavefront `.obj` mesh from Content,
+  under a lighting preset with a chosen background, orbiting the camera with the
+  mouse.
 
 ## Assets
 
@@ -117,9 +118,36 @@ lighting on a sphere), `debug_normals`.
 
 | Shapes | Lighting presets | Backgrounds |
 | --- | --- | --- |
-| `sphere`, `plane`, `cube` | `studio` (key, fill, rim), `sun` (sun and sky), `overcast`, `sunset`, `space` (one hard sun, no ambient) | `environment`, `gradient`, `gray`, `checker` |
+| `sphere`, `plane`, `cube`, `mesh` | `studio` (key, fill, rim), `sun` (sun and sky), `overcast`, `sunset`, `space` (one hard sun, no ambient) | `environment`, `gradient`, `gray`, `checker` |
 
 The sun direction (azimuth, elevation), exposure and object spin are adjustable.
+
+### Mesh preview
+
+Click a `.obj` in the tree (or `shading.preview_set {"mesh": "<path>"}`) to use
+it as the preview mesh; the shape switches to `mesh` and the open shader is left
+alone. Meshes are a preview subject, not an edited asset.
+
+- **Parsing:** `v`, `vt`, `vn` and `f` (positive or negative indices; polygons
+  fan-triangulate, so they must be convex). `o`, `g`, `s`, `usemtl` and
+  `mtllib` are ignored: the shader under test provides the material.
+- **Fitting:** the model is centred and scaled to fit a unit sphere, so any model
+  lands at a sensible size beside the built-in shapes. Its original radius is in
+  `shading.status.mesh.source_radius`.
+- **Missing data:** without `vn`, smooth area-weighted normals are generated per
+  position (no seams at UV splits); without `vt`, UVs are a spherical projection.
+  `had_normals` / `had_uvs` report which.
+- **Depth:** the preview has a depth buffer, so non-convex models (a knot, a
+  character) draw correctly.
+- **Hot reload:** a mesh saved by another tool reloads in the running Studio
+  (about 0.2 s). A save that does not parse keeps the last good mesh on screen
+  and reports `line N: ...` in `mesh.error`. Rename and move follow the mesh;
+  trashing it returns the preview to a sphere.
+- **Buffers:** a new mesh is a new pair of GPU buffers; the old pair is retired
+  after 8 frames like a replaced pipeline, never destroyed under in-flight
+  frames.
+- **Other formats:** `.fbx`, `.gltf` and `.glb` are indexed as Mesh assets but
+  cannot be previewed yet; the request is refused with a clear message.
 
 ## Hot iteration (no restart)
 
@@ -164,13 +192,13 @@ result with `compiled: false` and `diagnostics`.
 | `orbit_shading_trash(path)` | `shading.trash` | Reversible remove. |
 | `orbit_shading_shader_create(folder, name, template)` | `shading.shader_create` | New shader from a template; opens it. |
 | `orbit_shading_material_create(folder, name, shader)` | `shading.material_create` | New shader material; opens it. |
-| `orbit_shading_select(path)` | `shading.select` | Open a shader or material. |
+| `orbit_shading_select(path)` | `shading.select` | Open a shader or material; a `.obj` becomes the preview mesh. |
 | `orbit_shading_source_read(path)` | `shading.source_read` | Read source. |
 | `orbit_shading_source_write(path, text)` | `shading.source_write` | Write, open, compile live. |
 | `orbit_shading_status` | `shading.status` | Selection, compile state, diagnostics, parameters, preview. |
 | `orbit_shading_param_set(name, value)` | `shading.param_set` | Set a parameter (saved into an open material). |
 | `orbit_shading_param_reset(name)` | `shading.param_reset` | Back to the declared default. |
-| `orbit_shading_preview_get` / `_set` | `shading.preview_get` / `_set` | Shape, lighting, background, sun, exposure, spin, animate, camera. |
+| `orbit_shading_preview_get` / `_set` | `shading.preview_get` / `_set` | Shape, mesh (`.obj` path), lighting, background, sun, exposure, spin, animate, camera. |
 | `orbit_shading_recompile` | `shading.recompile` | Recompile the buffer now. |
 | `orbit_shading_screenshot(path)` | `shading.screenshot` | BMP of the preview. |
 | `orbit_panel_list` / `_focus` / `_close` | `studio.panel_list` / `_focus` / `_close` | Open the Shading tab (or any tab) by title. |
@@ -197,8 +225,8 @@ m.orbit_shading_screenshot("C:/tmp/regolith.bmp")
 Phase 1 (this document) is the authoring loop. Known limits, by design of the
 first slice:
 
-- **Meshes:** an `.obj` preview shape is not implemented (the Mesh asset kind is
-  indexed but not loaded).
+- **Meshes:** only Wavefront `.obj` previews; `.fbx` / `.gltf` are not loaded,
+  and `.obj` materials (`mtllib`) and multiple objects are not distinguished.
 - **Celestial backdrop:** previewing on a real scene from body coordinates is
   not implemented; backgrounds are procedural.
 - **Cooking:** shading shaders are not cooked into builds yet; they are authoring
@@ -216,6 +244,10 @@ first slice:
   workspace edit / external-change / dirty-buffer / live-compile / material /
   rename / move / trash behaviour, the RPC surface and its error codes, and
   screenshot conversion.
+- The mesh tests (in `OrbitShadingTests`): OBJ parsing (quads, negative indices,
+  `v//vn`, generated normals and UVs, fitting), line-numbered errors, choosing a
+  mesh without disturbing the open shader, external reload, keep-last-good on a
+  bad save, rename/move/trash following, and the RPC surface.
 - `OrbitContentTests`: folders, atomic writes, path safety, the new asset kinds
   and dependency on the shader.
 - `OrbitHotReloadChangeClassifierTests`: `.shade.hlsl` routes to Shader,

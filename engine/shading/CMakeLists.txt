@@ -2,6 +2,7 @@ add_library(OrbitShading STATIC
     src/ShadingContract.cpp
     src/ShaderProgram.cpp
     src/ShadingCapture.cpp
+    src/ObjMesh.cpp
     src/ShadingWorkspace.cpp
     src/ShaderPreviewRenderer.cpp
     src/ShadingRpc.cpp

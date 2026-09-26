@@ -224,6 +224,7 @@ std::filesystem::path ShadingWorkspace::Rename(
     const auto from = Normalise(entry);
     const auto to = content_.RenameEntry(from, newName);
     RebaseSelection(from, to);
+    RebaseMesh(from, to);
     RefreshFromContent();
     return to;
 }
@@ -235,6 +236,7 @@ std::filesystem::path ShadingWorkspace::Move(
     const auto from = Normalise(entry);
     const auto to = content_.MoveEntry(from, Normalise(folder));
     RebaseSelection(from, to);
+    RebaseMesh(from, to);
     RefreshFromContent();
     return to;
 }
@@ -245,6 +247,7 @@ std::filesystem::path ShadingWorkspace::Trash(
     const auto from = Normalise(entry);
     const auto to = content_.TrashEntry(from);
     RebaseSelection(from, std::nullopt);
+    RebaseMesh(from, std::nullopt);
     RefreshFromContent();
     return to;
 }
@@ -396,6 +399,14 @@ void ShadingWorkspace::Select(const std::filesystem::path& asset)
             throw std::invalid_argument(
                 "No such Content entry: " + path.generic_string());
         }
+    }
+
+    // A mesh is a preview subject, not something to edit: selecting one
+    // switches the preview to it and leaves the open shader alone.
+    if (record != nullptr && record->kind == content::AssetKind::Mesh)
+    {
+        SetPreviewMesh(path);
+        return;
     }
 
     selected_ = path;
@@ -747,6 +758,157 @@ std::array<f32, kMaxParameterFloats> ShadingWorkspace::PackedParameters() const
 // Preview and per-frame
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Preview mesh
+// ---------------------------------------------------------------------------
+
+void ShadingWorkspace::SetPreviewMesh(const std::filesystem::path& mesh)
+{
+    const auto path = Normalise(mesh);
+    const auto* record = content_.FindByPath(path);
+
+    if (record == nullptr || record->kind != content::AssetKind::Mesh)
+    {
+        throw std::invalid_argument(
+            "Not a mesh asset in Content: " + path.generic_string());
+    }
+
+    if (Lower(path.extension().string()) != ".obj")
+    {
+        throw std::invalid_argument(
+            "Only Wavefront .obj meshes can be previewed (got '" +
+            path.extension().string() + "').");
+    }
+
+    const bool changedTarget = meshStatus_.path != path;
+    meshStatus_.path = path;
+    preview_.mesh = path.generic_string();
+    preview_.shape = PreviewShape::Mesh;
+    LoadPreviewMesh(changedTarget);
+}
+
+void ShadingWorkspace::ClearPreviewMesh()
+{
+    mesh_.reset();
+    meshDiskHash_ = 0U;
+    const u64 revision = meshStatus_.revision + 1U;
+    meshStatus_ = {};
+    meshStatus_.revision = revision;
+    preview_.mesh.clear();
+}
+
+void ShadingWorkspace::LoadPreviewMesh(const bool changedTarget)
+{
+    if (changedTarget)
+    {
+        // A different mesh must not show the previous one while it loads or if
+        // it fails; the same file re-saved with an error keeps the last good.
+        mesh_.reset();
+    }
+
+    try
+    {
+        const std::string text = content_.ReadText(meshStatus_.path);
+        meshDiskHash_ = HashSource(text);
+
+        auto parsed = std::make_shared<MeshData>(ParseObj(text));
+        meshStatus_.vertices = static_cast<u32>(parsed->vertices.size());
+        meshStatus_.triangles = parsed->TriangleCount();
+        meshStatus_.sourceRadius = parsed->sourceRadius;
+        meshStatus_.hadNormals = parsed->hadNormals;
+        meshStatus_.hadUvs = parsed->hadUvs;
+        meshStatus_.error.clear();
+        mesh_ = std::move(parsed);
+    }
+    catch (const std::exception& exception)
+    {
+        meshStatus_.error =
+            meshStatus_.path.filename().string() + ": " + exception.what();
+    }
+
+    meshStatus_.loaded = mesh_ != nullptr;
+    ++meshStatus_.revision;
+}
+
+// A mesh saved elsewhere (an external modelling tool) reloads with no action,
+// like a shader; a deleted file keeps the last good mesh and reports it.
+void ShadingWorkspace::RefreshMesh()
+{
+    if (meshStatus_.path.empty())
+    {
+        return;
+    }
+
+    if (content_.FindByPath(meshStatus_.path) == nullptr)
+    {
+        if (meshStatus_.error.empty())
+        {
+            meshStatus_.error =
+                meshStatus_.path.filename().string() +
+                ": the file is gone; showing the last loaded mesh.";
+            ++meshStatus_.revision;
+        }
+        return;
+    }
+
+    try
+    {
+        if (HashSource(content_.ReadText(meshStatus_.path)) == meshDiskHash_ &&
+            meshStatus_.error.empty())
+        {
+            return;
+        }
+    }
+    catch (const std::exception&)
+    {
+        return;
+    }
+
+    LoadPreviewMesh(false);
+}
+
+void ShadingWorkspace::RebaseMesh(
+    const std::filesystem::path& from,
+    const std::optional<std::filesystem::path>& to)
+{
+    if (meshStatus_.path.empty())
+    {
+        return;
+    }
+
+    const bool isSame =
+        Lower(meshStatus_.path.generic_string()) == Lower(from.generic_string());
+
+    if (!isSame && !IsUnder(meshStatus_.path, from))
+    {
+        return;
+    }
+
+    if (!to.has_value())
+    {
+        ClearPreviewMesh();
+        if (preview_.shape == PreviewShape::Mesh)
+        {
+            preview_.shape = PreviewShape::Sphere;
+        }
+        return;
+    }
+
+    meshStatus_.path =
+        isSame ? *to : *to / meshStatus_.path.lexically_relative(from);
+    preview_.mesh = meshStatus_.path.generic_string();
+}
+
+const MeshStatus& ShadingWorkspace::PreviewMeshStatus() const noexcept
+{
+    return meshStatus_;
+}
+
+std::shared_ptr<const MeshData> ShadingWorkspace::PreviewMeshData() const noexcept
+{
+    return mesh_;
+}
+
 PreviewState& ShadingWorkspace::Preview() noexcept { return preview_; }
 const PreviewState& ShadingWorkspace::Preview() const noexcept
 {
@@ -801,6 +963,7 @@ void ShadingWorkspace::Update(const f64 deltaSeconds)
 void ShadingWorkspace::RefreshFromContent()
 {
     seenContentRevision_ = content_.Revision();
+    RefreshMesh();
 
     if (selected_.empty())
     {
