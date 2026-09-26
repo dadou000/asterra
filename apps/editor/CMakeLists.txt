@@ -76,6 +76,7 @@ target_compile_definitions(OrbitStudio
         ORBIT_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
         ORBIT_BINARY_ROOT="${CMAKE_BINARY_DIR}"
         ORBIT_BUILD_CONFIG="$<CONFIG>"
+        ORBIT_STUDIO_DEVELOPMENT_BINARY="${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/OrbitStudio.exe"
         ORBIT_HOT_RELOAD_PROBE_BINARY="$<TARGET_FILE:OrbitHotReloadProbe>"
         ORBIT_EYE_ADAPTATION_HOT_RELOAD_BINARY="$<TARGET_FILE:OrbitEyeAdaptationHotReload>"
 )
@@ -89,11 +90,13 @@ add_custom_command(TARGET OrbitStudio POST_BUILD
         "${ORBIT_DXCOMPILER_DLL}"
         "$<TARGET_FILE_DIR:OrbitStudio>"
 
-    # Canonical developer entry point: every successful Studio build publishes
-    # the unified application directly at the repository root.
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:OrbitStudio>"
-        "${CMAKE_SOURCE_DIR}/Orbit.exe"
+    # Canonical developer entry point. During hot iteration the root Orbit.exe
+    # is commonly locked by the running process, so publishing it is best-effort
+    # rather than a reason to fail an otherwise valid incremental Studio build.
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE=$<TARGET_FILE:OrbitStudio>"
+        "-DDESTINATION=${CMAKE_SOURCE_DIR}/Orbit.exe"
+        -P "${CMAKE_SOURCE_DIR}/cmake/OrbitPublishIfUnlocked.cmake"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:OrbitPlayer>"
         "${CMAKE_SOURCE_DIR}/OrbitPlayer.exe"
