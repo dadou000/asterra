@@ -85,6 +85,7 @@ void StudioRenderViewSet::Create(
         navigationStates_.emplace(
             targetId,
             StudioTerrainNavigationState{});
+        compositionEnabled_.emplace(targetId, true);
         debugFields_.emplace(
             targetId,
             terrain_debug::TerrainDebugField::Uplift);
@@ -106,6 +107,7 @@ void StudioRenderViewSet::Create(
     catch (...)
     {
         navigationStates_.erase(targetId);
+        compositionEnabled_.erase(targetId);
         debugFields_.erase(targetId);
         debugPhysicalPageLevels_.erase(targetId);
         debugPhysicalPages_.erase(targetId);
@@ -133,6 +135,7 @@ bool StudioRenderViewSet::Destroy(
     const std::string ownedId = found->first;
     views_.erase(found);
     navigationStates_.erase(ownedId);
+    compositionEnabled_.erase(ownedId);
     debugFields_.erase(ownedId);
     debugPhysicalPageLevels_.erase(ownedId);
     debugPhysicalPages_.erase(ownedId);
@@ -166,6 +169,26 @@ void StudioRenderViewSet::Resize(
     view->Resize(
         std::max(width, 1U),
         std::max(height, 1U));
+}
+
+void StudioRenderViewSet::SetCompositionEnabled(
+    const std::string_view id,
+    const bool enabled)
+{
+    const auto found = compositionEnabled_.find(id);
+    if (found == compositionEnabled_.end())
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+    found->second = enabled;
+}
+
+bool StudioRenderViewSet::CompositionEnabled(
+    const std::string_view id) const noexcept
+{
+    const auto found = compositionEnabled_.find(id);
+    return found != compositionEnabled_.end() && found->second;
 }
 
 void StudioRenderViewSet::SetNavigationSpeedScale(

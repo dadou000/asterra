@@ -112,6 +112,13 @@ public:
         u32 width,
         u32 height);
 
+    void SetCompositionEnabled(
+        std::string_view id,
+        bool enabled);
+
+    [[nodiscard]] bool CompositionEnabled(
+        std::string_view id) const noexcept;
+
     void SetNavigationSpeedScale(
         std::string_view id,
         f64 scale);
@@ -235,6 +242,8 @@ private:
         StudioTerrainNavigationState,
         std::less<>>
         navigationStates_;
+
+    std::map<std::string, bool, std::less<>> compositionEnabled_;
 
     std::map<
         std::string,

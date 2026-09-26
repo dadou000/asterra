@@ -141,7 +141,7 @@ struct ForwardedArguments
     ForwardedArguments result;
     result.storage.reserve(
         static_cast<std::size_t>(
-            std::max(argc, 0)));
+            (std::max)(argc, 0)));
 
     std::optional<DWORD> waitForProcess;
 

@@ -34,6 +34,12 @@ namespace
 [[nodiscard]] AssetKind KindFromExtension(const std::filesystem::path& path)
 {
     const std::string extension = Lower(path.extension().string());
+    // `*.shade.hlsl` is a Shading-tab shader (Shade() against the Orbit shading
+    // contract), not a standalone HLSL stage; it must be recognised before the
+    // generic `.hlsl` => Shader rule below.
+    if (Lower(path.filename().string()).ends_with(".shade.hlsl"))
+        return AssetKind::ShadingShader;
+    if (extension == ".orbitshadermaterial") return AssetKind::ShaderMaterial;
     if (extension == ".orbitmaterial") return AssetKind::Material;
     if (extension == ".orbitmaterialinstance") return AssetKind::MaterialInstance;
     if (extension == ".orbitcomponent") return AssetKind::Component;
@@ -845,6 +851,120 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
         result.tags.push_back(
             Lower(*profileKind));
     }
+    else if (result.kind == AssetKind::ShadingShader)
+    {
+        // Name shows without the double extension: "Lunar" for Lunar.shade.hlsl.
+        result.name =
+            std::filesystem::path(absolute.stem()).stem().string();
+        result.tags.push_back("shading");
+        result.tags.push_back("shader");
+    }
+    else if (result.kind == AssetKind::ShaderMaterial)
+    {
+        const toml::table document =
+            toml::parse_file(
+                absolute.string());
+
+        const toml::table* material =
+            document["shader_material"].as_table();
+
+        if (material == nullptr)
+        {
+            throw std::runtime_error(
+                "Shader material is missing [shader_material]: " +
+                absolute.string());
+        }
+
+        const auto shader =
+            (*material)["shader"].value<std::string>();
+
+        if (!shader.has_value() || shader->empty())
+        {
+            throw std::runtime_error(
+                "Shader material requires a shader path.");
+        }
+
+        if (const auto name =
+                (*material)["name"].value<std::string>();
+            name.has_value() && !name->empty())
+        {
+            result.name = *name;
+        }
+
+        ShaderMaterialData data;
+        data.shader = std::filesystem::path(*shader);
+
+        if (const toml::array* parameters =
+                (*material)["parameter"].as_array())
+        {
+            for (const auto& node : *parameters)
+            {
+                const toml::table* entry = node.as_table();
+                const auto parameterName =
+                    entry != nullptr
+                        ? (*entry)["name"].value<std::string>()
+                        : std::nullopt;
+                const toml::node* rawValue =
+                    entry != nullptr ? entry->get("value") : nullptr;
+
+                if (!parameterName.has_value() ||
+                    parameterName->empty() ||
+                    rawValue == nullptr)
+                {
+                    throw std::runtime_error(
+                        "Each [[shader_material.parameter]] needs a name and a value.");
+                }
+
+                ShaderMaterialParameter parameter;
+                parameter.name = *parameterName;
+
+                if (const auto scalar = rawValue->value<f64>();
+                    scalar.has_value())
+                {
+                    parameter.values.push_back(*scalar);
+                }
+                else if (const toml::array* array = rawValue->as_array())
+                {
+                    for (const auto& component : *array)
+                    {
+                        const auto number = component.value<f64>();
+                        if (!number.has_value())
+                        {
+                            throw std::runtime_error(
+                                "Shader material parameter '" +
+                                parameter.name +
+                                "' must be numeric.");
+                        }
+                        parameter.values.push_back(*number);
+                    }
+                }
+
+                if (parameter.values.empty() ||
+                    parameter.values.size() > 4U ||
+                    !std::ranges::all_of(
+                        parameter.values,
+                        [](const f64 v) { return std::isfinite(v); }))
+                {
+                    throw std::runtime_error(
+                        "Shader material parameter '" + parameter.name +
+                        "' must be one to four finite numbers.");
+                }
+
+                data.parameters.push_back(std::move(parameter));
+            }
+        }
+
+        // The shader path is relative to the material's folder; expose it in
+        // project-relative form so the dependency graph (and the hot refresh
+        // of dependents) sees it.
+        result.dependencyPaths.push_back(
+            (result.sourcePath.parent_path() / data.shader)
+                .lexically_normal());
+
+        result.shaderMaterial = std::move(data);
+        result.tags.push_back("shading");
+        result.tags.push_back("material");
+    }
     else if (result.kind == AssetKind::Shader)
     {
         std::filesystem::path sidecar =
@@ -969,6 +1089,8 @@ std::string_view AssetKindName(const AssetKind kind) noexcept
     case AssetKind::PathProfile: return "Path Profile";
     case AssetKind::Shader: return "Shader";
     case AssetKind::ColorLut: return "Color LUT";
+    case AssetKind::ShadingShader: return "Shader";
+    case AssetKind::ShaderMaterial: return "Shader Material";
     case AssetKind::Unknown: return "Unknown";
     }
     return "Unknown";

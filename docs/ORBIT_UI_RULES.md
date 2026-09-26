@@ -280,6 +280,26 @@ Maintain readable contrast, usable hit targets, sensible text sizing, keyboard n
 
 Dense expert interfaces may exist, but density must come from useful information rather than visual noise.
 
+## 23a. Keyboard input follows the user's layout
+
+Orbit must work on AZERTY, QWERTZ, Dvorak and other layouts, not only QWERTY.
+`platform::Key` therefore has two kinds of letter keys, on purpose:
+
+- **W A S D Q E name physical positions** (the QWERTY reference cluster). They
+  stay under the player's fingers, so movement is ZQSD on AZERTY. Use them for
+  movement and other position-based controls.
+- **Every other letter key names the letter** the key types on the active layout
+  (`C G L M V X Y Z`, plus `LetterA`). Use them for mnemonic and text-editing
+  shortcuts: Ctrl+Z is the key labelled Z, wherever it is. Select-all is
+  `LetterA`, not `A`.
+
+Text entry uses UTF-16 `WM_CHAR` from a Unicode window, never virtual keys. Text
+fields must be told about AltGr (`Key::RightAlt`): Windows reports it as
+Left-Ctrl plus Right-Alt, and without both modifiers a text field mistakes
+braces, brackets, pipe, backslash, at, hash and tilde for Ctrl shortcuts and
+drops them. `OrbitKeyboardLayoutTests` checks the translation against the real
+French and German layouts.
+
 ## 24. Performance is part of usability
 
 Opening a panel, selecting an object, searching commands, dragging controls, navigating the viewport, and editing properties should remain responsive even when expensive engine work is running.

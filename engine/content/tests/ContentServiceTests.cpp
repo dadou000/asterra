@@ -470,6 +470,112 @@ int main()
         cachedThumbnail.key ==
         thumbnail.key);
 
+    // ---- Shading tab: folders, shaders, shader materials ------------------
+    using orbit::content::AssetKind;
+
+    const auto revisionBeforeFolder = content.Revision();
+    content.CreateFolder("Content/Shading");
+    content.CreateFolder("Content/Shading/Lunar");
+    Check(content.Revision() > revisionBeforeFolder);
+    Check(std::filesystem::is_directory(root / "Content" / "Shading" / "Lunar"));
+
+    bool sawLunarFolder = false;
+    for (const auto& folder : content.Folders())
+    {
+        sawLunarFolder |= folder.generic_string() == "Content/Shading/Lunar";
+    }
+    Check(sawLunarFolder);
+
+    // Duplicate, escaping and reserved-name creation is refused.
+    bool refused = false;
+    try { content.CreateFolder("Content/Shading"); }
+    catch (const std::invalid_argument&) { refused = true; }
+    Check(refused);
+    refused = false;
+    try { content.CreateFolder("Content/../Escape"); }
+    catch (const std::invalid_argument&) { refused = true; }
+    Check(refused);
+    refused = false;
+    try { content.CreateFolder("Content/Shading/bad:name"); }
+    catch (const std::invalid_argument&) { refused = true; }
+    Check(refused);
+
+    content.WriteText(
+        "Content/Shading/Lunar/Regolith.shade.hlsl",
+        "float4 Shade(OrbitSurface s, OrbitLighting l) { return 1; }\n");
+    Check(content.ReadText("Content/Shading/Lunar/Regolith.shade.hlsl")
+              .find("Shade(") != std::string::npos);
+
+    const auto* shadingShader =
+        content.FindByPath("Content/Shading/Lunar/Regolith.shade.hlsl");
+    Check(shadingShader != nullptr);
+    Check(shadingShader->kind == AssetKind::ShadingShader);
+    Check(shadingShader->name == "Regolith");
+    // Not a standalone HLSL stage: no sidecar required, no diagnostic raised.
+    for (const auto& diagnostic : content.Diagnostics())
+    {
+        Check(diagnostic.sourcePath.generic_string().find("Regolith") ==
+              std::string::npos);
+    }
+
+    content.WriteText(
+        "Content/Shading/Lunar/Regolith.orbitshadermaterial",
+        "[shader_material]\n"
+        "name = \"Lunar Regolith\"\n"
+        "shader = \"Regolith.shade.hlsl\"\n"
+        "\n"
+        "[[shader_material.parameter]]\n"
+        "name = \"tint\"\n"
+        "value = [0.5, 0.5, 0.45]\n"
+        "\n"
+        "[[shader_material.parameter]]\n"
+        "name = \"roughness\"\n"
+        "value = 0.9\n");
+
+    const auto* shaderMaterial =
+        content.FindByPath("Content/Shading/Lunar/Regolith.orbitshadermaterial");
+    Check(shaderMaterial != nullptr);
+    Check(shaderMaterial->kind == AssetKind::ShaderMaterial);
+    Check(shaderMaterial->name == "Lunar Regolith");
+    Check(shaderMaterial->shaderMaterial.has_value());
+    // Parameter declaration order is preserved (it is the packing order).
+    Check(shaderMaterial->shaderMaterial->parameters.size() == 2);
+    Check(shaderMaterial->shaderMaterial->parameters[0].name == "tint");
+    Check(shaderMaterial->shaderMaterial->parameters[0].values.size() == 3);
+    Check(shaderMaterial->shaderMaterial->parameters[1].values[0] == 0.9);
+    // It depends on its shader, so a shader edit refreshes dependents.
+    Check(shaderMaterial->dependencies.size() == 1);
+    Check(shaderMaterial->dependencies[0] == shadingShader->id);
+
+    // Rename and move keep files inside Content and refuse collisions.
+    const auto renamed = content.RenameEntry(
+        "Content/Shading/Lunar/Regolith.shade.hlsl", "Dust.shade.hlsl");
+    Check(renamed.generic_string() == "Content/Shading/Lunar/Dust.shade.hlsl");
+    Check(content.FindByPath(renamed) != nullptr);
+    Check(content.FindByPath("Content/Shading/Lunar/Regolith.shade.hlsl") == nullptr);
+
+    content.CreateFolder("Content/Shading/Archive");
+    const auto moved = content.MoveEntry(renamed, "Content/Shading/Archive");
+    Check(moved.generic_string() == "Content/Shading/Archive/Dust.shade.hlsl");
+
+    refused = false;
+    try { content.MoveEntry("Content/Shading", "Content/Shading/Lunar"); }
+    catch (const std::invalid_argument&) { refused = true; }
+    Check(refused);
+
+    // Trash is reversible: the file lands under .orbit/Trash, not deleted.
+    const auto trashed = content.TrashEntry(moved);
+    Check(!std::filesystem::exists(root / moved));
+    Check(std::filesystem::is_regular_file(root / trashed));
+    Check(trashed.generic_string().starts_with(".orbit/Trash/"));
+
+    // Atomic write leaves no temporary file behind.
+    for (const auto& item :
+         std::filesystem::recursive_directory_iterator(root / "Content"))
+    {
+        Check(item.path().extension() != ".tmp");
+    }
+
     std::filesystem::remove_all(root);
     return 0;
 }

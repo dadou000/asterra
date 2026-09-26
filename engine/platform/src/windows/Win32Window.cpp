@@ -7,6 +7,8 @@
 #include <orbit/platform/AppResources.hpp>
 #include <orbit/platform/Window.hpp>
 
+#include "Win32Keyboard.hpp"
+
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -15,8 +17,8 @@ namespace orbit::platform
 {
 namespace
 {
-constexpr const char* kWindowClassName =
-    "OrbitWindowClass";
+constexpr const wchar_t* kWindowClassName =
+    L"OrbitWindowClass";
 
 // Orbit renders directly into a Vulkan swapchain whose extent is expressed
 // in physical pixels. If Windows is allowed to treat the process as
@@ -65,122 +67,29 @@ void EnsureProcessDpiAwareness()
         });
 }
 
-[[nodiscard]] wchar_t LogicalCharacter(
-    const Key key) noexcept
+// The window is a Unicode (UTF-16) window: with the ANSI API, WM_CHAR delivers
+// characters in the system ANSI code page, which mangles anything outside it
+// (and disagrees with UTF-16 for 0x80-0x9F, for example the euro sign).
+[[nodiscard]] std::wstring Widen(const std::string_view utf8)
 {
-    switch (key)
+    if (utf8.empty())
     {
-    case Key::W:
-        return L'W';
-    case Key::A:
-        return L'A';
-    case Key::S:
-        return L'S';
-    case Key::D:
-        return L'D';
-    case Key::Q:
-        return L'Q';
-    case Key::E:
-        return L'E';
-    case Key::C:
-        return L'C';
-    case Key::G:
-        return L'G';
-    case Key::L:
-        return L'L';
-    case Key::M:
-        return L'M';
-    case Key::V:
-        return L'V';
-    case Key::X:
-        return L'X';
-    case Key::Y:
-        return L'Y';
-    case Key::Z:
-        return L'Z';
-    default:
-        return L'\0';
-    }
-}
-
-[[nodiscard]] int ToVirtualKey(
-    const Key key,
-    const HKL keyboardLayout)
-{
-    const wchar_t character =
-        LogicalCharacter(key);
-
-    if (character != L'\0')
-    {
-        // Virtual-key codes for alphabetic keys describe US-keyboard
-        // positions. Resolve the logical control character through the
-        // active Windows input locale instead: e.g. W/A/S/D becomes
-        // Z/Q/S/D on an AZERTY layout, while remaining W/A/S/D on QWERTY.
-        // Use the low byte only; any required Shift/AltGr state is a text
-        // input concern and must not be synthesized for a held game key.
-        const SHORT mapped =
-            VkKeyScanExW(
-                character,
-                keyboardLayout);
-
-        if (mapped != -1)
-        {
-            return LOBYTE(mapped);
-        }
-
-        // Keep a predictable fallback for layouts that cannot produce this
-        // particular Latin control character.
-        return static_cast<int>(character);
+        return {};
     }
 
-    switch (key)
+    const int length = MultiByteToWideChar(
+        CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+
+    if (length <= 0)
     {
-    case Key::LeftShift:
-        return VK_LSHIFT;
-    case Key::LeftControl:
-        return VK_LCONTROL;
-    case Key::LeftAlt:
-        return VK_LMENU;
-    case Key::Escape:
-        return VK_ESCAPE;
-    case Key::Tab:
-        return VK_TAB;
-    case Key::Enter:
-        return VK_RETURN;
-    case Key::Space:
-        return VK_SPACE;
-    case Key::Backspace:
-        return VK_BACK;
-    case Key::Delete:
-        return VK_DELETE;
-    case Key::Insert:
-        return VK_INSERT;
-    case Key::Home:
-        return VK_HOME;
-    case Key::End:
-        return VK_END;
-    case Key::PageUp:
-        return VK_PRIOR;
-    case Key::PageDown:
-        return VK_NEXT;
-    case Key::F2:
-        return VK_F2;
-    case Key::F3:
-        return VK_F3;
-    case Key::F4:
-        return VK_F4;
-    case Key::ArrowLeft:
-        return VK_LEFT;
-    case Key::ArrowRight:
-        return VK_RIGHT;
-    case Key::ArrowUp:
-        return VK_UP;
-    case Key::ArrowDown:
-        return VK_DOWN;
+        return {};
     }
 
-    throw std::invalid_argument(
-        "Orbit received an invalid platform key.");
+    std::wstring wide(static_cast<std::size_t>(length), L'\0');
+    MultiByteToWideChar(
+        CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
+        wide.data(), length);
+    return wide;
 }
 
 [[nodiscard]] bool WriteWindowBmp(
@@ -413,10 +322,10 @@ LRESULT CALLBACK OrbitWindowProc(
     {
         const auto* create =
             reinterpret_cast<
-                const CREATESTRUCTA*>(
+                const CREATESTRUCTW*>(
                     lParam);
 
-        SetWindowLongPtrA(
+        SetWindowLongPtrW(
             hwnd,
             GWLP_USERDATA,
             reinterpret_cast<LONG_PTR>(
@@ -425,7 +334,7 @@ LRESULT CALLBACK OrbitWindowProc(
 
     auto* events =
         reinterpret_cast<WindowEventState*>(
-            GetWindowLongPtrA(
+            GetWindowLongPtrW(
                 hwnd,
                 GWLP_USERDATA));
 
@@ -490,7 +399,7 @@ LRESULT CALLBACK OrbitWindowProc(
         return 0;
 
     default:
-        return DefWindowProcA(
+        return DefWindowProcW(
             hwnd,
             message,
             wParam,
@@ -506,7 +415,7 @@ void EnsureWindowClassRegistered()
         once,
         []
         {
-            WNDCLASSEXA windowClass{};
+            WNDCLASSEXW windowClass{};
             windowClass.cbSize =
                 sizeof(windowClass);
             windowClass.style =
@@ -515,24 +424,24 @@ void EnsureWindowClassRegistered()
             windowClass.lpfnWndProc =
                 OrbitWindowProc;
             windowClass.hInstance =
-                GetModuleHandleA(nullptr);
+                GetModuleHandleW(nullptr);
             windowClass.hCursor =
-                LoadCursorA(
+                LoadCursorW(
                     nullptr,
-                    IDC_ARROW);
+                    MAKEINTRESOURCEW(32512)); // IDC_ARROW
             windowClass.lpszClassName =
                 kWindowClassName;
 
             windowClass.hIcon =
-                LoadIconA(
+                LoadIconW(
                     windowClass.hInstance,
-                    MAKEINTRESOURCEA(
+                    MAKEINTRESOURCEW(
                         ORBIT_RESOURCE_ICON));
 
             windowClass.hIconSm =
                 windowClass.hIcon;
 
-            if (RegisterClassExA(
+            if (RegisterClassExW(
                     &windowClass) == 0)
             {
                 throw std::runtime_error(
@@ -653,10 +562,10 @@ public:
                 rect.bottom - rect.top;
         }
 
-        const std::string title(
-            desc.title);
+        const std::wstring title =
+            Widen(desc.title);
 
-        hwnd_ = CreateWindowExA(
+        hwnd_ = CreateWindowExW(
             0,
             kWindowClassName,
             title.c_str(),
@@ -667,7 +576,7 @@ public:
             windowHeight,
             nullptr,
             nullptr,
-            GetModuleHandleA(nullptr),
+            GetModuleHandleW(nullptr),
             &eventState_);
 
         if (hwnd_ == nullptr)
@@ -713,7 +622,7 @@ public:
     {
         MSG message{};
 
-        while (PeekMessageA(
+        while (PeekMessageW(
                    &message,
                    nullptr,
                    0,
@@ -729,7 +638,7 @@ public:
             TranslateMessage(
                 &message);
 
-            DispatchMessageA(
+            DispatchMessageW(
                 &message);
         }
 
@@ -757,7 +666,7 @@ public:
 
         return (
             GetAsyncKeyState(
-                ToVirtualKey(
+                VirtualKeyFor(
                     key,
                     keyboardLayout)) &
             0x8000) != 0;
@@ -825,9 +734,9 @@ public:
     {
         if (hwnd_ != nullptr)
         {
-            SetWindowTextA(
+            SetWindowTextW(
                 hwnd_,
-                std::string(title).c_str());
+                Widen(title).c_str());
         }
     }
 

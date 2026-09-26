@@ -3718,7 +3718,16 @@ StudioViewportRenderer::Compose(
         };
 
     std::vector<StudioRenderedView> rendered;
-    const auto catalog = views.Catalog();
+    auto catalog = views.Catalog();
+    std::stable_sort(
+        catalog.begin(),
+        catalog.end(),
+        [](const StudioRenderViewInfo& a,
+           const StudioRenderViewInfo& b)
+        {
+            return a.id == "studio.primary" &&
+                b.id != "studio.primary";
+        });
     rendered.reserve(catalog.size());
 
     std::optional<world_model::ResolvedVolumeDomain> selectedVolume;
@@ -3742,6 +3751,11 @@ StudioViewportRenderer::Compose(
 
     for (const auto& info : catalog)
     {
+        if (!views.CompositionEnabled(info.id))
+        {
+            continue;
+        }
+
         auto composeStageStarted = std::chrono::steady_clock::now();
         const auto recordComposeStage =
             [&](const std::string_view stage)

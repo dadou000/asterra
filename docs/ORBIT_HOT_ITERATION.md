@@ -227,6 +227,14 @@ During a running hot session Windows may lock that file. Incremental builds must
 
 This does not permit a separate user-facing launcher.
 
+### Running Studio for hot iteration
+
+Launch from `Orbit.exe` (a copy) or a staged generation. A process launched
+directly from `build/apps/editor/Release/OrbitStudio.exe` locks the very file
+the fallback build must overwrite, so the automatic rebuild compiles and then
+fails at link (`LNK1168`); the running generation stays live but cannot be
+replaced.
+
 ## 17. Generation handoff is the fallback, not the target for everything
 
 Automatic Studio-generation replacement gives every native file an immediate reflection route today. It is intentionally broader than the in-process DLL coverage.
@@ -302,6 +310,7 @@ Primary implementation points:
 - `apps/editor/src/HotReloadBootstrap.cpp` — Studio integration;
 - `engine/post_process_hot_reload/` — first production native hot-module seam;
 - `engine/content/src/ContentHotReload.cpp` — content refresh integration;
+- `engine/shading/` — Shading tab: `ShadingWorkspace` consumes content refreshes, recompiles user shaders (`CompileShadingProgram`) and `ShaderPreviewRenderer` swaps the live pipeline with deferred retirement; see [ORBIT_SHADING.md](ORBIT_SHADING.md);
 - `build_orbit.bat` and `ORBIT_FAST_HOT_ITERATION` — low-latency local build mode.
 
 These paths may evolve, but the rules above remain the contract.

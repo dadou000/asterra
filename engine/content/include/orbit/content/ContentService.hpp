@@ -29,7 +29,28 @@ enum class AssetKind : u8
     PathProfile,
     Shader,
     ColorLut,
+    // Shading-tab assets. A ShadingShader is a `*.shade.hlsl` file holding the
+    // Orbit shading contract's `Shade()` function (see docs/ORBIT_SHADING.md);
+    // it is not a standalone HLSL stage, so it needs no `.orbitshader.toml`
+    // sidecar and is not cooked as a Shader. A ShaderMaterial binds a
+    // ShadingShader to named parameter values.
+    ShadingShader,
+    ShaderMaterial,
     Unknown
+};
+
+struct ShaderMaterialParameter
+{
+    std::string name;
+    // One to four scalar components (float, vec2, vec3 or vec4).
+    std::vector<f64> values;
+};
+
+struct ShaderMaterialData
+{
+    // Project-relative or material-folder-relative path of the shader.
+    std::filesystem::path shader;
+    std::vector<ShaderMaterialParameter> parameters;
 };
 
 struct MaterialEmission
@@ -105,6 +126,8 @@ struct AssetRecord
     std::optional<DecalData> decal;
     std::optional<ShaderAssetData>
         shader;
+    std::optional<ShaderMaterialData>
+        shaderMaterial;
 };
 
 struct ContentDiagnostic
@@ -206,6 +229,50 @@ public:
         f64 heightMeters = 1.0,
         f64 opacity = 1.0);
 
+    // ---- Content organisation -------------------------------------------
+    //
+    // Every path below is project-relative and must lie inside the Content
+    // mount (for example `Content/Shaders/Lunar.shade.hlsl`). Folders are real
+    // directories, so an external file manager or editor sees the same tree.
+    // Each mutating call rescans, so it is reflected by Find/Search/Revision
+    // immediately and by the hot-iteration refresh with no restart.
+    //
+    // Moving or renaming an asset changes its path-derived AssetId; references
+    // stored as paths (for example a shader material's `shader`) are not
+    // rewritten.
+
+    // All folders under Content (empty ones included), project-relative,
+    // sorted, excluding the Content root itself.
+    [[nodiscard]] std::vector<std::filesystem::path> Folders() const;
+
+    void CreateFolder(const std::filesystem::path& folder);
+
+    // Renames a file or folder in place. `newName` is a single path component.
+    // Returns the new project-relative path.
+    std::filesystem::path RenameEntry(
+        const std::filesystem::path& entry,
+        std::string_view newName);
+
+    // Moves a file or folder into an existing destination folder. Refuses to
+    // overwrite or to move a folder into itself. Returns the new path.
+    std::filesystem::path MoveEntry(
+        const std::filesystem::path& entry,
+        const std::filesystem::path& destinationFolder);
+
+    // Reversible removal: the entry moves to `.orbit/Trash/<stamp>/...` inside
+    // the project instead of being deleted. Returns the trashed location.
+    std::filesystem::path TrashEntry(
+        const std::filesystem::path& entry);
+
+    // UTF-8 text files inside Content (shader sources and small TOML assets).
+    [[nodiscard]] std::string ReadText(
+        const std::filesystem::path& file) const;
+    // Creates or replaces the file atomically (temp file + rename) so a
+    // hot-reload watcher never observes a half-written shader.
+    void WriteText(
+        const std::filesystem::path& file,
+        std::string_view text);
+
 private:
     class HotIterationRegistration
     {
@@ -221,6 +288,12 @@ private:
         u64 contentHandler_{0};
         u64 shaderHandler_{0};
     };
+
+    // Validates a project-relative Content path and returns its absolute form.
+    // Throws when it escapes the Content mount or (mustExist) is missing.
+    [[nodiscard]] std::filesystem::path ResolveContentEntry(
+        const std::filesystem::path& entry,
+        bool mustExist) const;
 
     [[nodiscard]] AssetRecord BuildRecord(const std::filesystem::path& absolute) const;
     [[nodiscard]] AssetId StableId(const std::filesystem::path& absolute) const;

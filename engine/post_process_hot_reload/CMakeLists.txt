@@ -12,6 +12,8 @@ target_link_libraries(OrbitEyeAdaptationHotReload
     PRIVATE
         Orbit::Core
         Orbit::HotReloadApi
+        Orbit::RHI
+        Orbit::Shader
 )
 
 target_compile_features(OrbitEyeAdaptationHotReload PRIVATE cxx_std_23)

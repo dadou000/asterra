@@ -8,6 +8,11 @@
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
 #include <orbit/dev_server/DevServer.hpp>
+#include <orbit/shading/ShaderPreviewRenderer.hpp>
+#include <orbit/shading/ShadingCapture.hpp>
+#include <orbit/shading/ShadingRpc.hpp>
+#include <orbit/shading/ShadingWorkspace.hpp>
+#include <orbit/studio_ui/ShadingUi.hpp>
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 #include <orbit/editor_model/CommandSurfaces.hpp>
@@ -19,7 +24,6 @@
 #include <orbit/editor_rpc/EditorRpcService.hpp>
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
-#include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
@@ -1223,6 +1227,107 @@ FindPlayerExecutable()
     throw std::runtime_error(
         "OrbitPlayer.exe was not found beside OrbitStudio or in the development build tree.");
 }
+
+// Turns one automation (MCP/RPC) exchange into user-facing toasts. Mutating
+// commands are always announced; read-only queries only surface when they
+// fail, so polling clients do not flood the screen.
+void RecordRpcNotifications(
+    const orbit::rpc::Dispatcher& dispatcher,
+    const std::string_view message,
+    const std::optional<std::string>& response,
+    std::vector<orbit::editor_ui::EditorUi::Notification>& out)
+{
+    using orbit::editor_ui::EditorUi;
+
+    try
+    {
+        const orbit::rpc::Value request =
+            orbit::rpc::ParseValue(message);
+
+        std::optional<orbit::rpc::Value> reply;
+        if (response.has_value())
+        {
+            reply = orbit::rpc::ParseValue(*response);
+        }
+
+        const auto describeOne =
+            [&](const orbit::rpc::Value& call,
+                const orbit::rpc::Value* result)
+        {
+            if (!call.IsObject())
+            {
+                return;
+            }
+
+            const auto* method = call.Find("method");
+            if (method == nullptr || !method->IsString())
+            {
+                return;
+            }
+
+            const std::string& name = method->AsString();
+            const auto* error =
+                result != nullptr && result->IsObject()
+                    ? result->Find("error")
+                    : nullptr;
+
+            if (error != nullptr)
+            {
+                const auto* text =
+                    error->IsObject()
+                        ? error->Find("message")
+                        : nullptr;
+                out.push_back({
+                    .title = "MCP command failed: " + name,
+                    .detail =
+                        text != nullptr && text->IsString()
+                            ? text->AsString()
+                            : std::string{},
+                    .severity =
+                        EditorUi::NotificationSeverity::Error,
+                    .seconds = 6.0F});
+                return;
+            }
+
+            bool mutating = false;
+            for (const auto& descriptor : dispatcher.Catalog())
+            {
+                if (descriptor.name == name)
+                {
+                    mutating = descriptor.mutating;
+                    break;
+                }
+            }
+
+            if (mutating)
+            {
+                out.push_back({
+                    .title = "MCP: " + name});
+            }
+        };
+
+        if (request.IsArray())
+        {
+            // Batch responses are not guaranteed to be in request order, so
+            // batch entries are announced without per-call error matching.
+            for (const auto& call : request.AsArray())
+            {
+                describeOne(call, nullptr);
+            }
+        }
+        else
+        {
+            describeOne(
+                request,
+                reply.has_value() ? &*reply : nullptr);
+        }
+    }
+    catch (...)
+    {
+        // Malformed traffic gets its JSON-RPC error from the dispatcher; the
+        // toast layer must never affect the response.
+    }
+}
 } // namespace
 
 int main(
@@ -1519,12 +1624,25 @@ int main(
                     1024U * 1024U
             });
 
+        // Filled from the RPC handler and drained into the UI each frame; both
+        // run on the main thread (DevServer::Poll is frame-driven).
+        std::vector<orbit::editor_ui::EditorUi::Notification>
+            pendingRpcNotifications;
+
         rpcServer.SetMessageHandler(
-            [&studioSession](
+            [&studioSession,
+             &pendingRpcNotifications](
                 const std::string_view message)
             {
-                return studioSession.DispatchRpc(
-                    message);
+                auto response =
+                    studioSession.DispatchRpc(
+                        message);
+                RecordRpcNotifications(
+                    studioSession.Rpc().Dispatcher(),
+                    message,
+                    response,
+                    pendingRpcNotifications);
+                return response;
             });
 
         commandSurfaces().Set(
@@ -1793,6 +1911,27 @@ int main(
                     device,
                     compiler);
 
+        // Shading tab. The workspace is the model that both the panel and the
+        // shading.* RPC/MCP methods drive; the view and renderer draw the
+        // preview. A shader edit reaches the renderer as a new pipeline at a
+        // frame boundary - Studio is never restarted for it.
+        orbit::shading::ShadingWorkspace
+            shadingWorkspace(
+                content,
+                &compiler);
+        orbit::render_view::RenderView
+            shadingView(
+                device,
+                {
+                    .width = 640,
+                    .height = 384
+                });
+        orbit::shading::ShaderPreviewRenderer
+            shadingRenderer(
+                device,
+                compiler);
+        bool shadingRenderedOnce = false;
+
         // Smoke runs use a throwaway project, so their layout must not
         // accumulate in the user's real EditorLayouts directory (and must
         // always start from the default arrangement).
@@ -1838,6 +1977,152 @@ int main(
                                 ManifestPath();
                     }
                 });
+
+        // Project lifetime over RPC/MCP. These drive the very same
+        // ProjectAuthoringUi operations as the Project Browser buttons, so a
+        // switch hands off to a fresh Studio process exactly as it does from
+        // the UI; clients reconnect once the new process answers project.info.
+        {
+            using orbit::rpc::Value;
+
+            const auto requireString =
+                [](const Value& params,
+                   const std::string_view key)
+            {
+                const Value* value =
+                    params.IsObject()
+                        ? params.Find(key)
+                        : nullptr;
+                if (value == nullptr ||
+                    !value->IsString() ||
+                    value->AsString().empty())
+                {
+                    throw orbit::rpc::Error(
+                        -32602,
+                        std::string(key) +
+                            " must be a non-empty string.");
+                }
+                return value->AsString();
+            };
+
+            const auto switchResult =
+                [](const std::filesystem::path& manifestPath)
+            {
+                const auto manifest =
+                    orbit::documents::LoadProjectManifest(
+                        manifestPath);
+                return Value(
+                    Value::Object{
+                        {"id", manifest.projectId.ToString()},
+                        {"name", manifest.displayName},
+                        {
+                            "root",
+                            manifestPath.parent_path().
+                                generic_string()
+                        },
+                        {
+                            "manifest",
+                            manifestPath.generic_string()
+                        },
+                        {"relaunching", true}
+                    });
+            };
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "project.create",
+                    .description =
+                        "Creates a new Orbit project in `root` named `name` and switches Studio to it. Studio relaunches into the new project; reconnect and poll project.info until its id matches.",
+                    .mutating = true
+                },
+                [&projectBrowserUi, requireString, switchResult](
+                    const Value& params)
+                {
+                    const std::string name =
+                        requireString(params, "name");
+                    const std::filesystem::path root =
+                        std::filesystem::absolute(
+                            requireString(params, "root"));
+
+                    try
+                    {
+                        return switchResult(
+                            projectBrowserUi.CreateProject(
+                                root,
+                                name));
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        throw orbit::rpc::Error(
+                            1042,
+                            exception.what());
+                    }
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "project.open",
+                    .description =
+                        "Opens an existing Orbit project directory or Project.orbit.toml and switches Studio to it. Studio relaunches into that project; reconnect and poll project.info until its id matches.",
+                    .mutating = true
+                },
+                [&projectBrowserUi, requireString, switchResult](
+                    const Value& params)
+                {
+                    try
+                    {
+                        return switchResult(
+                            projectBrowserUi.OpenProject(
+                                std::filesystem::absolute(
+                                    requireString(
+                                        params,
+                                        "path"))));
+                    }
+                    catch (const orbit::rpc::Error&)
+                    {
+                        throw;
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        throw orbit::rpc::Error(
+                            1042,
+                            exception.what());
+                    }
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "project.recent",
+                    .description =
+                        "Lists recently opened Orbit projects, most recent first.",
+                    .mutating = false
+                },
+                [&projectBrowserUi](const Value&)
+                {
+                    Value::Array items;
+                    for (const auto& item :
+                         projectBrowserUi.RecentProjects())
+                    {
+                        items.push_back(
+                            Value(
+                                Value::Object{
+                                    {
+                                        "manifest",
+                                        item.manifestPath.
+                                            generic_string()
+                                    },
+                                    {"name", item.displayName},
+                                    {
+                                        "id",
+                                        item.projectId.ToString()
+                                    },
+                                    {"available", item.available},
+                                    {"error", item.error}
+                                }));
+                    }
+                    return Value(std::move(items));
+                });
+        }
 
         orbit::editor_ui::EditorUi ui(
             device,
@@ -1984,6 +2269,174 @@ int main(
 
         studioViewportPanels.
             RegisterSecondary(ui);
+
+        orbit::studio_ui::ShadingUi
+            shadingUi(
+                shadingWorkspace,
+                [&shadingView]()
+                    -> orbit::rhi::Texture*
+                {
+                    return &shadingView.Color();
+                });
+        shadingUi.Register(ui);
+
+        // Panels are reachable by title so an agent can open any tab (the
+        // Shading tab included) without simulating input.
+        {
+            using orbit::rpc::Value;
+
+            const auto panelTitle =
+                [](const Value& params)
+                {
+                    const Value* title =
+                        params.IsObject()
+                            ? params.Find("title")
+                            : nullptr;
+                    if (title == nullptr ||
+                        !title->IsString() ||
+                        title->AsString().empty())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "title must be a non-empty string.");
+                    }
+                    return title->AsString();
+                };
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "studio.panel_list",
+                    .description =
+                        "Lists every editor panel (tab) with whether it is open and currently visible.",
+                    .mutating = false
+                },
+                [&ui](const Value&)
+                {
+                    Value::Array panels;
+                    for (const auto& panel : ui.Panels())
+                    {
+                        panels.emplace_back(
+                            Value::Object{
+                                {"title", panel.title},
+                                {"open", panel.open},
+                                {"visible", panel.visible}
+                            });
+                    }
+                    return Value(std::move(panels));
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "studio.panel_focus",
+                    .description =
+                        "Opens a panel by title (case-insensitive) and brings its tab to the front.",
+                    .mutating = true
+                },
+                [&ui, panelTitle](const Value& params)
+                {
+                    const std::string title =
+                        panelTitle(params);
+                    if (!ui.FocusPanelByTitle(title))
+                    {
+                        throw orbit::rpc::Error(
+                            1060,
+                            "No panel is titled '" +
+                                title +
+                                "'. See studio.panel_list.");
+                    }
+                    return Value(
+                        Value::Object{
+                            {"title", title},
+                            {"focused", true}
+                        });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "studio.panel_close",
+                    .description =
+                        "Closes a panel by title (case-insensitive); it can be reopened with studio.panel_focus.",
+                    .mutating = true
+                },
+                [&ui, panelTitle](const Value& params)
+                {
+                    const std::string title =
+                        panelTitle(params);
+                    if (!ui.ClosePanelByTitle(title))
+                    {
+                        throw orbit::rpc::Error(
+                            1060,
+                            "No panel is titled '" +
+                                title +
+                                "'. See studio.panel_list.");
+                    }
+                    return Value(
+                        Value::Object{
+                            {"title", title},
+                            {"closed", true}
+                        });
+                });
+        }
+
+        orbit::shading::RegisterShadingRpc(
+            rpcHost.Dispatcher(),
+            shadingWorkspace,
+            {
+                .screenshot =
+                    [&device,
+                     &graphicsQueue,
+                     &shadingView,
+                     &shadingRenderedOnce](
+                        const std::filesystem::path& path)
+                    {
+                        if (!shadingRenderedOnce)
+                        {
+                            throw std::runtime_error(
+                                "The Shading preview has not rendered yet: open the Shading tab or select a shader first.");
+                        }
+
+                        // The preview target is float scene colour that the
+                        // shading wrapper has already display-encoded; dump
+                        // it exactly and convert to a BMP.
+                        auto dump = path;
+                        dump += ".ofb";
+
+                        const auto captured =
+                            orbit::render_view::
+                                CaptureFloatBuffer(
+                                    device,
+                                    graphicsQueue,
+                                    shadingView,
+                                    orbit::render_view::
+                                        CaptureBuffer::
+                                            SceneColor,
+                                    dump);
+                        const auto image =
+                            orbit::shading::
+                                ReadFloatCapture(
+                                    captured.path);
+                        std::filesystem::remove(
+                            captured.path);
+                        orbit::shading::WriteBmp32(
+                            path,
+                            image);
+
+                        return orbit::rpc::Value(
+                            orbit::rpc::Value::Object{
+                                {"path", path.generic_string()},
+                                {"width",
+                                 static_cast<orbit::i64>(
+                                     image.width)},
+                                {"height",
+                                 static_cast<orbit::i64>(
+                                     image.height)},
+                                {"file_bytes",
+                                 static_cast<orbit::i64>(
+                                     std::filesystem::
+                                         file_size(path))}
+                            });
+                    }
+            });
 
         orbit::studio_ui::WorldDocumentsUi
             worldDocumentsUi(
@@ -7070,6 +7523,14 @@ int main(
                         pendingMaterialViewResize->second);
                     pendingMaterialViewResize.reset();
                 }
+                if (const auto shadingResize =
+                        shadingUi.TakePreviewResizeRequest();
+                    shadingResize.has_value())
+                {
+                    shadingView.Resize(
+                        shadingResize->first,
+                        shadingResize->second);
+                }
             }
 
             rpcServer.Poll();
@@ -7345,6 +7806,11 @@ int main(
 
             publishAutomationChanges();
 
+            // Shading: notice external shader/material saves, run the
+            // debounced live compile and advance the preview clock.
+            shadingWorkspace.Update(
+                deltaSeconds);
+
             viewportFrameDeltaSeconds =
                 deltaSeconds;
             viewportFrameMouseDelta =
@@ -7358,6 +7824,7 @@ int main(
             ui.BeginFrame(
                 window,
                 deltaSeconds);
+
             {
                 // Which project/world am I in? Refreshed a few times a
                 // second; the catalog scan is not free and the values change
@@ -7410,8 +7877,19 @@ int main(
                     indicatorWorld);
             }
 
+            if (!pendingRpcNotifications.empty())
+            for (auto& notification : pendingRpcNotifications)
+            {
+                ui.PushNotification(
+                    std::move(notification));
+            }
+            pendingRpcNotifications.clear();
 
             ui.DrawStudioShell();
+            studioViews.SetCompositionEnabled(
+                "studio.map",
+                ui.PanelVisible(
+                    orbit::studio_ui::kSecondaryViewportPanel));
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::Ui,
                 std::chrono::duration<double, std::milli>(
@@ -7555,6 +8033,77 @@ int main(
                         materialView.Camera(),
                         materialPreviewMaterial);
                 });
+
+            // Shading preview. Rendered while its tab is visible or a shader
+            // is open (so agents can screenshot it), skipped otherwise.
+            std::optional<orbit::render_view::ImportedTargets>
+                shadingTargets;
+
+            if (ui.PanelVisible(
+                    orbit::studio_ui::ShadingUi::kPanelId) ||
+                !shadingWorkspace.Status().shader.empty())
+            {
+                shadingTargets =
+                    shadingView.Import(
+                        graph,
+                        "StudioShading");
+
+                // Swap in a newly compiled program (or fall back to the error
+                // shader) at this frame boundary; a failure keeps the working
+                // pipeline and is reported back to the tab.
+                const auto shadingUpdate =
+                    shadingRenderer.Update(
+                        shadingWorkspace.Program(),
+                        shadingWorkspace.Status().
+                            programRevision);
+
+                if (!shadingUpdate.error.empty())
+                {
+                    shadingWorkspace.ReportPipelineFailure(
+                        shadingWorkspace.Status().
+                            programRevision,
+                        shadingUpdate.error);
+                }
+
+                const auto shadingParameters =
+                    shadingWorkspace.PackedParameters();
+
+                graph.AddPass(
+                    "Studio.Shading",
+                    {
+                        {
+                            .texture =
+                                shadingTargets->color,
+                            .state =
+                                orbit::rhi::ResourceState::RenderTarget,
+                            .access =
+                                orbit::render_graph::Access::Write
+                        },
+                        {
+                            .texture =
+                                shadingTargets->depth,
+                            .state =
+                                orbit::rhi::ResourceState::DepthWrite,
+                            .access =
+                                orbit::render_graph::Access::Write
+                        }
+                    },
+                    [&, shadingParameters](
+                        orbit::rhi::CommandList& commandList,
+                        const orbit::render_graph::Resources&)
+                    {
+                        shadingRenderer.Draw(
+                            commandList,
+                            shadingView.Color(),
+                            shadingView.Depth(),
+                            shadingView.Width(),
+                            shadingView.Height(),
+                            shadingWorkspace.Preview(),
+                            shadingParameters,
+                            shadingWorkspace.PreviewTime());
+                        shadingRenderedOnce = true;
+                    });
+            }
 
             const auto studioSnapshot =
                 studioRuntime.Capture();
@@ -7804,6 +8353,21 @@ int main(
                 studioUiTextures.push_back({
                     .texture =
                         renderedView.targets.display,
+                    .state =
+                        orbit::rhi::
+                            ResourceState::
+                                ShaderResource,
+                    .access =
+                        orbit::render_graph::
+                            Access::Read
+                });
+            }
+
+            if (shadingTargets.has_value())
+            {
+                studioUiTextures.push_back({
+                    .texture =
+                        shadingTargets->color,
                     .state =
                         orbit::rhi::
                             ResourceState::

@@ -648,10 +648,20 @@ void UniversalVolumeRenderer::AddPasses(
             runtime.passiveRaymarchSteps
     };
 
-    volume_representation::PublishAllocationPolicy(
-        domain.object,
-        decision,
-        policy);
+    // The field store and solver are shared by all Studio viewports. Use the
+    // primary viewport as their single representation/allocation authority;
+    // secondary views may choose cheaper shading locally but must not replace
+    // the primary view's field layout or center.
+    const bool ownsSharedVolumeFields =
+        viewportId == "studio.primary";
+
+    if (ownsSharedVolumeFields)
+    {
+        volume_representation::PublishAllocationPolicy(
+            domain.object,
+            decision,
+            policy);
+    }
 
     auto renderDomain = domain;
     renderDomain.centerMeters =
@@ -666,7 +676,7 @@ void UniversalVolumeRenderer::AddPasses(
          decision.representation ==
              ResolvedRepresentation::Baked);
 
-    if (proceduralAggregate)
+    if (proceduralAggregate && ownsSharedVolumeFields)
     {
         AddProceduralFieldUpload(
             graph,

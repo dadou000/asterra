@@ -29,6 +29,13 @@ Before changing engine/editor/runtime architecture, read:
 17. The automatic process-generation fallback is acceptable for the minimal host/ABI boundary and as a temporary migration path, but frequently edited systems should move to true in-process hot modules.
 18. A new subsystem is not complete until its hot-iteration path is documented and testable.
 
+## MCP parity
+
+Read `docs/ORBIT_MCP.md` before adding or changing editor capabilities.
+
+- Anything reachable in Orbit Studio must also be reachable over RPC and MCP. If a workflow step exists only as a UI click, extract the operation the button runs, make the button call it, register an RPC method for it, add a dedicated tool in `tools/mcp_server/orbit_editor_mcp_server.py`, and document it in `docs/ORBIT_MCP.md` in the same change.
+- Do not drive Studio by simulating mouse or keyboard input to reach a goal. A missing RPC/MCP path is a gap to implement.
+
 ## Completion check for code changes
 
 Before considering a feature complete, verify:

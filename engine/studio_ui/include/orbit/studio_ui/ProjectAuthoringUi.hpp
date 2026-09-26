@@ -12,6 +12,8 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace orbit::studio_ui
 {
@@ -40,6 +42,18 @@ public:
     // the same UI frame before any other panel can observe stale references.
     void SetWorkspaceChangedCallback(
         std::function<void()> callback);
+
+    // The Create Project / Open Project actions as callable operations, so the
+    // buttons, RPC and MCP all run one code path (recents, status line and the
+    // workspace-changed hand-off included). Both throw on failure and return
+    // the manifest path of the project now bound to the browser workspace.
+    [[nodiscard]] std::filesystem::path CreateProject(
+        const std::filesystem::path& rootDirectory,
+        std::string_view displayName);
+    [[nodiscard]] std::filesystem::path OpenProject(
+        const std::filesystem::path& path);
+    [[nodiscard]] std::vector<studio_session::RecentProjectItem>
+    RecentProjects() const;
 
     // Window that owns the native folder pickers. Without one, the path
     // fields remain typeable but the Browse buttons are hidden.

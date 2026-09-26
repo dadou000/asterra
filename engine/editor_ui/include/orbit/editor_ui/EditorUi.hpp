@@ -44,6 +44,12 @@ struct ImageInteraction
     bool rightClicked{false};
     f32 u{0.0F};
     f32 v{0.0F};
+    // Only filled by InteractiveImage: a left-drag that started on the image
+    // (delta since the previous frame, in pixels) and the wheel over it.
+    bool dragging{false};
+    f32 dragDeltaX{0.0F};
+    f32 dragDeltaY{0.0F};
+    f32 wheel{0.0F};
 };
 
 struct CanvasInteraction
@@ -82,11 +88,43 @@ public:
     [[nodiscard]] bool Button(std::string_view label);
     [[nodiscard]] bool PrimaryButton(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
+    // Multi-line editor for code. The string grows as the user types; Tab
+    // inserts a tab. Returns true on the frame it changed.
+    [[nodiscard]] bool InputTextMultiline(
+        std::string_view label,
+        std::string& value,
+        UiSize size);
+    // Drop-down selecting one of `items`; `index` is the current choice.
+    [[nodiscard]] bool Combo(
+        std::string_view label,
+        std::span<const std::string_view> items,
+        i32& index);
+    [[nodiscard]] bool SliderDouble(
+        std::string_view label,
+        f64& value,
+        f64 minimum,
+        f64 maximum);
+    // Wrapped text in the error colour (never the only cue: callers also say
+    // "error" or "failed" in the text itself).
+    void ErrorText(std::string_view text);
+    // A scrollable sub-region. Always pair with EndChild, even when it
+    // returns false.
+    [[nodiscard]] bool BeginChild(
+        std::string_view id,
+        UiSize size,
+        bool border = false);
+    void EndChild();
     [[nodiscard]] UiSize ContentAvailable() const;
     [[nodiscard]] bool Selectable(std::string_view label, bool selected);
     [[nodiscard]] TreeItemInteraction TreeItem(std::string_view label, bool selected);
     void TreePop();
     [[nodiscard]] ImageInteraction Image(rhi::Texture& texture, UiSize size);
+    // An image that captures drags and the mouse wheel (for orbiting a
+    // preview). `id` must be unique in the panel.
+    [[nodiscard]] ImageInteraction InteractiveImage(
+        std::string_view id,
+        rhi::Texture& texture,
+        UiSize size);
     [[nodiscard]] CanvasInteraction Canvas(std::string_view id, UiSize size);
     void CanvasLine(math::Float2 a, math::Float2 b, math::Float4 color, f32 thickness = 1.0F);
     void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
@@ -150,6 +188,11 @@ struct PanelDefinition
     // Hard lower bound on the panel's size, in logical pixels. Zero leaves
     // that axis unconstrained.
     UiSize minSize{};
+    // Size used the first time the panel appears when it has no saved size
+    // (for example a new panel opened in a project whose saved layout predates
+    // it, where it floats). Zero leaves ImGui's default. Docked panels ignore
+    // it; the user's own resizing always wins.
+    UiSize defaultSize{};
     std::function<void(PanelContext&)> draw;
 };
 
@@ -256,8 +299,24 @@ public:
     [[nodiscard]] bool HasPanel(PanelId id) const noexcept;
     [[nodiscard]] bool SetPanelOpen(PanelId id, bool open) noexcept;
     [[nodiscard]] bool PanelOpen(PanelId id) const noexcept;
+    [[nodiscard]] bool PanelVisible(PanelId id) const noexcept;
     // Opens the panel if needed and brings it to the front of its tab group.
     [[nodiscard]] bool FocusPanel(PanelId id) noexcept;
+
+    // Automation surface (studio.panel_* RPC): every panel with its state,
+    // and title-based open/focus/close so an agent can reach any tab.
+    struct PanelSummary
+    {
+        PanelId id{};
+        std::string title;
+        bool open{false};
+        bool visible{false};
+        DockRegion region{DockRegion::Auto};
+    };
+    [[nodiscard]] std::vector<PanelSummary> Panels() const;
+    // Case-insensitive title match. False when no panel has that title.
+    [[nodiscard]] bool FocusPanelByTitle(std::string_view title) noexcept;
+    [[nodiscard]] bool ClosePanelByTitle(std::string_view title) noexcept;
 
     // Deterministic real-UI validation seam. Normal Studio leaves this off.
     // Smoke mode can expand tree nodes and record controls that actually pass
@@ -284,7 +343,6 @@ public:
     void ResetLayout() noexcept;
 
     void RegisterMenuAction(MenuAction action);
-    void BeginFrame(platform::Window& window, f64 deltaSeconds);
 
     // Persistent "which project am I in" chip drawn at the right edge of the
     // main menu bar. An empty name hides it. Presentation only: the owner
@@ -297,6 +355,26 @@ public:
         std::function<void()> onClick;
     };
     void SetProjectIndicator(ProjectIndicator indicator);
+
+    // Transient, non-modal, click-through popup stacked in the lower-right of
+    // the main viewport. Presentation only: it never gates the operation it
+    // reports. Safe to call any time on the UI thread; the toast is created on
+    // the next DrawStudioShell and fades out after `seconds`.
+    enum class NotificationSeverity : u8
+    {
+        Info,
+        Error
+    };
+    struct Notification
+    {
+        std::string title;
+        std::string detail;
+        NotificationSeverity severity{NotificationSeverity::Info};
+        f32 seconds{4.0F};
+    };
+    void PushNotification(Notification notification);
+
+    void BeginFrame(platform::Window& window, f64 deltaSeconds);
     void DrawStudioShell();
     void Render(rhi::CommandList& commands, rhi::Texture& target, u32 targetWidth, u32 targetHeight);
     [[nodiscard]] bool WantsMouse() const noexcept;

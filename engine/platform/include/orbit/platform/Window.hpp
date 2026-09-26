@@ -9,6 +9,14 @@
 
 namespace orbit::platform
 {
+// Letter keys come in two kinds, on purpose:
+//  - W A S D Q E are *positions* (the QWERTY reference cluster), for movement.
+//    They stay under the player's fingers on AZERTY, QWERTZ, Dvorak...
+//  - C G L M V X Y Z (and LetterA) name the *letter* that key types on the
+//    active layout, for mnemonic and text-editing shortcuts (Ctrl+Z is the key
+//    labelled Z, wherever it is).
+// `A` is the movement position; text shortcuts that mean the letter A (select
+// all) use LetterA.
 enum class Key : u8
 {
     W,
@@ -45,7 +53,14 @@ enum class Key : u8
     ArrowLeft,
     ArrowRight,
     ArrowUp,
-    ArrowDown
+    ArrowDown,
+    // The key that types the letter A on the active layout (Ctrl+A).
+    LetterA,
+    // Right Alt / AltGr. On layouts with AltGr (French, German, ...) it is how
+    // braces, brackets, pipe, backslash, at, hash and tilde are typed, and
+    // Windows reports it as Left-Ctrl plus Right-Alt, so text input must see it
+    // to accept those characters.
+    RightAlt
 };
 
 enum class MouseButton : u8

@@ -46,7 +46,7 @@ bool OnLoad(
     std::snprintf(
         message,
         sizeof(message),
-        "Orbit hot-reload probe is live; activation count = %llu.",
+        "Orbit hot-reload probe is live after automatic patch; activation count = %llu.",
         static_cast<unsigned long long>(gState.reloadCount));
     Log(message);
     return true;

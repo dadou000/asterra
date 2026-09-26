@@ -252,10 +252,8 @@ void ProjectAuthoringUi::DrawProjectBrowser(
     {
         try
         {
-            projectBrowser_.OpenProject(manifest);
+            static_cast<void>(OpenProject(manifest));
             status_ = success;
-            SynchronizeProjectBuffers();
-            NotifyWorkspaceChanged();
         }
         catch (const std::exception& exception)
         {
@@ -397,13 +395,11 @@ void ProjectAuthoringUi::DrawProjectBrowser(
         {
             try
             {
-                projectBrowser_.CreateProject(
-                    std::filesystem::path(newProjectRoot_) /
-                        newProjectName_,
-                    newProjectName_);
-                status_ = "Project created and opened.";
-                SynchronizeProjectBuffers();
-                NotifyWorkspaceChanged();
+                static_cast<void>(
+                    CreateProject(
+                        std::filesystem::path(newProjectRoot_) /
+                            newProjectName_,
+                        newProjectName_));
             }
             catch (const std::exception& exception)
             {
@@ -945,6 +941,39 @@ void ProjectAuthoringUi::SynchronizeProjectBuffers()
 
     projectDisplayName_ =
         workspace_->Project().Manifest().displayName;
+}
+
+std::filesystem::path ProjectAuthoringUi::CreateProject(
+    const std::filesystem::path& rootDirectory,
+    const std::string_view displayName)
+{
+    projectBrowser_.CreateProject(
+        rootDirectory,
+        displayName);
+    status_ = "Project created and opened.";
+    SynchronizeProjectBuffers();
+    std::filesystem::path manifest =
+        workspace_->Project().ManifestPath();
+    NotifyWorkspaceChanged();
+    return manifest;
+}
+
+std::filesystem::path ProjectAuthoringUi::OpenProject(
+    const std::filesystem::path& path)
+{
+    projectBrowser_.OpenProject(path);
+    status_ = "Project opened.";
+    SynchronizeProjectBuffers();
+    std::filesystem::path manifest =
+        workspace_->Project().ManifestPath();
+    NotifyWorkspaceChanged();
+    return manifest;
+}
+
+std::vector<studio_session::RecentProjectItem>
+ProjectAuthoringUi::RecentProjects() const
+{
+    return projectBrowser_.RecentProjects();
 }
 
 void ProjectAuthoringUi::NotifyWorkspaceChanged()

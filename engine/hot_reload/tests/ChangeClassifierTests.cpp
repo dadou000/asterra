@@ -21,6 +21,11 @@ int main()
         !Expect("engine/render/shaders/terrain.hlsl", ChangeKind::RestartRequired) ||
         !Expect("Plugins/weather.luau", ChangeKind::Script) ||
         !Expect("Content/Materials/rock.orbitmaterial", ChangeKind::Content) ||
+        // Shading tab: shaders hot-compile through the Shader path, shader
+        // materials refresh through the Content path, neither restarts Studio.
+        !Expect("Content/Shading/Lunar.shade.hlsl", ChangeKind::Shader) ||
+        !Expect("Content/Shading/Lunar.orbitshadermaterial", ChangeKind::Content) ||
+        !Expect("Content/Shading/Lunar.shade.hlsl.orbit-write.tmp", ChangeKind::Ignored) ||
         !Expect("Content/Textures/rock.png", ChangeKind::Content) ||
         !Expect("Content/ProjectSettings.toml", ChangeKind::Content) ||
         !Expect("engine/hot_reload/include/orbit/hot_reload/ModuleApi.hpp",

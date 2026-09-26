@@ -7,6 +7,7 @@
 #include <orbit/rhi/Resource.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <bit>
 #include <cfloat>
@@ -928,6 +929,7 @@ public:
 
     std::vector<PanelDefinition> panels;
     std::vector<u8> panelOpen;
+    std::vector<u8> panelVisible;
     std::vector<MenuAction> menuActions;
     bool automationExpandTrees{false};
     bool automationTraceWidgets{false};
@@ -935,8 +937,159 @@ public:
     bool layoutBuildPending{false};
     std::string pendingFocusTitle;
     std::string automationOpenMenu;
-
     EditorUi::ProjectIndicator projectIndicator;
+
+    struct ActiveNotification
+    {
+        EditorUi::Notification notification;
+        f32 age{0.0F};
+        u32 repeats{1};
+    };
+    std::vector<ActiveNotification> notifications;
+
+    // Toasts are painted onto the foreground draw list rather than into ImGui
+    // windows, so they always sit above docked panels and never take part in
+    // window focus/ordering.
+    void DrawNotifications(
+        const ImGuiViewport& viewport,
+        const f32 deltaSeconds)
+    {
+        using namespace wavelength;
+
+        constexpr f32 kFadeSeconds = 0.35F;
+        constexpr f32 kWidth = 340.0F;
+        constexpr f32 kMargin = 16.0F;
+        constexpr f32 kGap = 8.0F;
+        constexpr f32 kPadX = 14.0F;
+        constexpr f32 kPadY = 10.0F;
+        constexpr f32 kRounding = 6.0F;
+
+        std::erase_if(
+            notifications,
+            [](const ActiveNotification& active)
+            {
+                return active.age >=
+                    active.notification.seconds;
+            });
+
+        if (notifications.empty())
+        {
+            return;
+        }
+
+        ImDrawList* const list =
+            ImGui::GetForegroundDrawList(
+                const_cast<ImGuiViewport*>(&viewport));
+        const f32 lineHeight =
+            ImGui::GetTextLineHeight();
+        const f32 wrapWidth =
+            kWidth - kPadX * 2.0F - 3.0F;
+
+        const f32 right =
+            viewport.WorkPos.x +
+            viewport.WorkSize.x -
+            kMargin;
+        f32 cursorY =
+            viewport.WorkPos.y +
+            viewport.WorkSize.y -
+            kMargin;
+
+        const auto tint =
+            [](ImVec4 color, const f32 alpha)
+        {
+            color.w *= alpha;
+            return ImGui::GetColorU32(color);
+        };
+
+        // Newest toast sits at the bottom; older ones stack upward.
+        for (std::size_t index = notifications.size();
+             index-- > 0;)
+        {
+            ActiveNotification& active =
+                notifications[index];
+            active.age += deltaSeconds;
+
+            const f32 remaining =
+                active.notification.seconds - active.age;
+            const f32 alpha = std::clamp(
+                std::min(
+                    active.age / kFadeSeconds,
+                    remaining / kFadeSeconds),
+                0.0F,
+                1.0F);
+
+            const bool error =
+                active.notification.severity ==
+                EditorUi::NotificationSeverity::Error;
+            const ImVec4 stripe = error
+                ? Rgb(0xe5, 0x5b, 0x5b)
+                : kAccentLight;
+
+            std::string title = active.notification.title;
+            if (active.repeats > 1U)
+            {
+                title +=
+                    "  x" + std::to_string(active.repeats);
+            }
+
+            const std::string& detail =
+                active.notification.detail;
+            const ImVec2 detailSize = detail.empty()
+                ? ImVec2(0.0F, 0.0F)
+                : ImGui::CalcTextSize(
+                      detail.c_str(),
+                      nullptr,
+                      false,
+                      wrapWidth);
+
+            const f32 height =
+                kPadY * 2.0F +
+                lineHeight +
+                (detail.empty()
+                    ? 0.0F
+                    : 2.0F + detailSize.y);
+
+            const ImVec2 max(right, cursorY);
+            const ImVec2 min(right - kWidth, cursorY - height);
+
+            list->AddRectFilled(
+                min,
+                max,
+                tint(Rgb(0x16, 0x1d, 0x35, 0.97F), alpha),
+                kRounding);
+            list->AddRectFilled(
+                min,
+                ImVec2(min.x + 3.0F, max.y),
+                tint(stripe, alpha),
+                kRounding,
+                ImDrawFlags_RoundCornersLeft);
+            list->AddRect(
+                min,
+                max,
+                tint(kBorderStrong, alpha),
+                kRounding);
+            list->AddText(
+                ImVec2(min.x + kPadX, min.y + kPadY),
+                tint(kTextHeading, alpha),
+                title.c_str());
+            if (!detail.empty())
+            {
+                list->AddText(
+                    nullptr,
+                    0.0F,
+                    ImVec2(
+                        min.x + kPadX,
+                        min.y + kPadY + lineHeight + 2.0F),
+                    tint(kTextMuted, alpha),
+                    detail.c_str(),
+                    nullptr,
+                    wrapWidth);
+            }
+
+            cursorY = min.y - kGap;
+        }
+    }
+
     std::unique_ptr<rhi::GraphicsPipeline>
         pipeline;
     std::unique_ptr<rhi::Texture>
@@ -990,7 +1143,6 @@ void PanelContext::MutedText(
     ImGui::PopStyleColor();
 }
 
-void PanelContext::Heading(
 bool PanelContext::Section(
     const std::string_view label,
     const bool defaultOpen)
@@ -1040,6 +1192,7 @@ void PanelContext::KeyValue(
     ImGui::PopTextWrapPos();
 }
 
+void PanelContext::Heading(
     const std::string_view text)
 {
     ImGui::Dummy(ImVec2(0.0F, 3.0F));
@@ -1139,6 +1292,173 @@ bool PanelContext::InputText(
     value.assign(
         buffer.data());
     return true;
+}
+
+namespace
+{
+int StringResizeCallback(ImGuiInputTextCallbackData* data)
+{
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
+    {
+        auto* text = static_cast<std::string*>(data->UserData);
+        text->resize(static_cast<std::size_t>(data->BufTextLen));
+        data->Buf = text->data();
+    }
+    return 0;
+}
+} // namespace
+
+bool PanelContext::InputTextMultiline(
+    const std::string_view label,
+    std::string& value,
+    const UiSize size)
+{
+    TraceWidget(label);
+    const std::string ownedLabel(label);
+
+    return ImGui::InputTextMultiline(
+        ownedLabel.c_str(),
+        value.data(),
+        value.capacity() + 1U,
+        ImVec2(size.width, size.height),
+        ImGuiInputTextFlags_CallbackResize |
+            ImGuiInputTextFlags_AllowTabInput,
+        StringResizeCallback,
+        &value);
+}
+
+bool PanelContext::Combo(
+    const std::string_view label,
+    const std::span<const std::string_view> items,
+    i32& index)
+{
+    TraceWidget(label);
+    const std::string ownedLabel(label);
+
+    if (items.empty())
+    {
+        return false;
+    }
+
+    index = std::clamp(index, 0, static_cast<i32>(items.size()) - 1);
+    const std::string preview(items[static_cast<std::size_t>(index)]);
+    bool changed = false;
+
+    if (ImGui::BeginCombo(ownedLabel.c_str(), preview.c_str()))
+    {
+        for (std::size_t item = 0U; item < items.size(); ++item)
+        {
+            const bool selected = static_cast<i32>(item) == index;
+            const std::string itemLabel(items[item]);
+
+            if (ImGui::Selectable(itemLabel.c_str(), selected))
+            {
+                index = static_cast<i32>(item);
+                changed = true;
+            }
+
+            if (selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    return changed;
+}
+
+bool PanelContext::SliderDouble(
+    const std::string_view label,
+    f64& value,
+    const f64 minimum,
+    const f64 maximum)
+{
+    TraceWidget(label);
+    const std::string ownedLabel(label);
+
+    return ImGui::SliderScalar(
+        ownedLabel.c_str(),
+        ImGuiDataType_Double,
+        &value,
+        &minimum,
+        &maximum,
+        "%.4g");
+}
+
+void PanelContext::ErrorText(const std::string_view text)
+{
+    const std::string owned(text);
+    ImGui::PushStyleColor(ImGuiCol_Text, Rgb(0xe5, 0x5b, 0x5b));
+    ImGui::TextWrapped("%s", owned.c_str());
+    ImGui::PopStyleColor();
+}
+
+bool PanelContext::BeginChild(
+    const std::string_view id,
+    const UiSize size,
+    const bool border)
+{
+    const std::string owned(id);
+    return ImGui::BeginChild(
+        owned.c_str(),
+        ImVec2(size.width, size.height),
+        border ? ImGuiChildFlags_Borders : ImGuiChildFlags_None);
+}
+
+void PanelContext::EndChild()
+{
+    ImGui::EndChild();
+}
+
+ImageInteraction PanelContext::InteractiveImage(
+    const std::string_view id,
+    rhi::Texture& texture,
+    const UiSize size)
+{
+    const std::string ownedId(id);
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+
+    ImGui::Image(ToTextureId(texture), ImVec2(size.width, size.height));
+    const ImVec2 after = ImGui::GetCursorScreenPos();
+
+    // An invisible button over the image gives it an ID so drags and the
+    // wheel can be tracked; the cursor is then restored below the image.
+    ImGui::SetCursorScreenPos(origin);
+    ImGui::InvisibleButton(
+        ownedId.c_str(),
+        ImVec2(std::max(size.width, 1.0F), std::max(size.height, 1.0F)),
+        ImGuiButtonFlags_MouseButtonLeft |
+            ImGuiButtonFlags_MouseButtonRight);
+    ImGui::SetCursorScreenPos(after);
+
+    ImageInteraction result;
+    result.hovered = ImGui::IsItemHovered();
+    result.clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    result.rightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+
+    if (ImGui::IsItemActive() &&
+        ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0F))
+    {
+        const ImVec2 delta = ImGui::GetIO().MouseDelta;
+        result.dragging = true;
+        result.dragDeltaX = delta.x;
+        result.dragDeltaY = delta.y;
+    }
+
+    if (result.hovered)
+    {
+        result.wheel = ImGui::GetIO().MouseWheel;
+
+        if (size.width > 0.0F && size.height > 0.0F)
+        {
+            const ImVec2 mouse = ImGui::GetMousePos();
+            result.u = std::clamp((mouse.x - origin.x) / size.width, 0.0F, 1.0F);
+            result.v = std::clamp((mouse.y - origin.y) / size.height, 0.0F, 1.0F);
+        }
+    }
+
+    return result;
 }
 
 UiSize PanelContext::ContentAvailable() const
@@ -1892,6 +2212,7 @@ void EditorUi::RegisterPanel(
 
     impl_->panelOpen.push_back(
         panel.defaultOpen ? 1U : 0U);
+    impl_->panelVisible.push_back(0U);
     impl_->panels.push_back(
         std::move(panel));
 }
@@ -1924,6 +2245,7 @@ void EditorUi::UpsertPanel(
 
     impl_->panelOpen.push_back(
         panel.defaultOpen ? 1U : 0U);
+    impl_->panelVisible.push_back(0U);
     impl_->panels.push_back(
         std::move(panel));
 }
@@ -1945,6 +2267,9 @@ bool EditorUi::UnregisterPanel(
             static_cast<std::ptrdiff_t>(index));
         impl_->panelOpen.erase(
             impl_->panelOpen.begin() +
+            static_cast<std::ptrdiff_t>(index));
+        impl_->panelVisible.erase(
+            impl_->panelVisible.begin() +
             static_cast<std::ptrdiff_t>(index));
         return true;
     }
@@ -2000,6 +2325,22 @@ bool EditorUi::PanelOpen(
     return false;
 }
 
+bool EditorUi::PanelVisible(
+    const PanelId id) const noexcept
+{
+    for (std::size_t index = 0U;
+         index < impl_->panels.size();
+         ++index)
+    {
+        if (impl_->panels[index].id == id)
+        {
+            return impl_->panelVisible[index] != 0U;
+        }
+    }
+
+    return false;
+}
+
 bool EditorUi::FocusPanel(
     const PanelId id) noexcept
 {
@@ -2018,6 +2359,64 @@ bool EditorUi::FocusPanel(
         return true;
     }
 
+    return false;
+}
+
+namespace
+{
+[[nodiscard]] bool TitlesMatch(
+    const std::string_view a,
+    const std::string_view b) noexcept
+{
+    return std::ranges::equal(
+        a,
+        b,
+        [](const char x, const char y)
+        {
+            return std::tolower(static_cast<unsigned char>(x)) ==
+                std::tolower(static_cast<unsigned char>(y));
+        });
+}
+} // namespace
+
+std::vector<EditorUi::PanelSummary> EditorUi::Panels() const
+{
+    std::vector<PanelSummary> result;
+
+    for (std::size_t index = 0; index < impl_->panels.size(); ++index)
+    {
+        result.push_back({
+            .id = impl_->panels[index].id,
+            .title = impl_->panels[index].title,
+            .open = impl_->panelOpen[index] != 0U,
+            .visible = impl_->panelVisible[index] != 0U,
+            .region = impl_->panels[index].defaultDock});
+    }
+
+    return result;
+}
+
+bool EditorUi::FocusPanelByTitle(const std::string_view title) noexcept
+{
+    for (const auto& panel : impl_->panels)
+    {
+        if (TitlesMatch(panel.title, title))
+        {
+            return FocusPanel(panel.id);
+        }
+    }
+    return false;
+}
+
+bool EditorUi::ClosePanelByTitle(const std::string_view title) noexcept
+{
+    for (const auto& panel : impl_->panels)
+    {
+        if (TitlesMatch(panel.title, title))
+        {
+            return SetPanelOpen(panel.id, false);
+        }
+    }
     return false;
 }
 
@@ -2119,6 +2518,45 @@ void EditorUi::ResetLayout() noexcept
     impl_->layoutBuildPending = true;
 }
 
+void EditorUi::SetProjectIndicator(
+    ProjectIndicator indicator)
+{
+    impl_->projectIndicator =
+        std::move(indicator);
+}
+
+void EditorUi::PushNotification(
+    Notification notification)
+{
+    constexpr std::size_t kMaxVisible = 6;
+
+    // A burst of identical commands refreshes and counts one toast instead of
+    // stacking duplicates.
+    for (auto& active : impl_->notifications)
+    {
+        if (active.notification.title ==
+                notification.title &&
+            active.notification.detail ==
+                notification.detail &&
+            active.notification.severity ==
+                notification.severity)
+        {
+            active.age = 0.0F;
+            ++active.repeats;
+            return;
+        }
+    }
+
+    impl_->notifications.push_back(
+        {.notification = std::move(notification)});
+
+    if (impl_->notifications.size() > kMaxVisible)
+    {
+        impl_->notifications.erase(
+            impl_->notifications.begin());
+    }
+}
+
 void EditorUi::RegisterMenuAction(
     MenuAction action)
 {
@@ -2141,13 +2579,6 @@ void EditorUi::BeginFrame(
     if (impl_->frameBegun)
     {
         throw std::logic_error(
-void EditorUi::SetProjectIndicator(
-    ProjectIndicator indicator)
-{
-    impl_->projectIndicator =
-        std::move(indicator);
-}
-
             "Editor UI frame already begun.");
     }
 
@@ -2224,7 +2655,8 @@ void EditorUi::SetProjectIndicator(
     FeedKey(io, ImGuiKey_Space, window, platform::Key::Space);
     FeedKey(io, ImGuiKey_Enter, window, platform::Key::Enter);
     FeedKey(io, ImGuiKey_Escape, window, platform::Key::Escape);
-    FeedKey(io, ImGuiKey_A, window, platform::Key::A);
+    // Select-all is the key that types the letter A, not the WASD position.
+    FeedKey(io, ImGuiKey_A, window, platform::Key::LetterA);
     FeedKey(io, ImGuiKey_C, window, platform::Key::C);
     FeedKey(io, ImGuiKey_V, window, platform::Key::V);
     FeedKey(io, ImGuiKey_X, window, platform::Key::X);
@@ -2237,9 +2669,14 @@ void EditorUi::SetProjectIndicator(
     const bool shift =
         window.KeyDown(
             platform::Key::LeftShift);
+    // AltGr (French/German/... layouts) is Left-Ctrl + Right-Alt. Reporting
+    // both Ctrl and Alt is what lets ImGui accept the characters it types
+    // ({ } [ ] | \\ @ # ~); Ctrl alone would swallow them as a shortcut.
     const bool alt =
         window.KeyDown(
-            platform::Key::LeftAlt);
+            platform::Key::LeftAlt) ||
+        window.KeyDown(
+            platform::Key::RightAlt);
 
     io.AddKeyEvent(
         ImGuiMod_Ctrl,
@@ -2444,28 +2881,6 @@ void EditorUi::DrawStudioShell()
             ImGui::EndMenu();
         }
 
-        ImGui::EndMainMenuBar();
-    }
-
-    PanelContext context(
-        impl_->automationExpandTrees,
-        impl_->automationTraceWidgets
-            ? &impl_->automationTrace
-            : nullptr);
-
-    for (std::size_t index = 0;
-         index < impl_->panels.size();
-         ++index)
-    {
-        if (impl_->panelOpen[index] == 0U)
-        {
-            continue;
-        }
-
-        PanelDefinition& panel =
-            impl_->panels[index];
-
-        bool open =
         if (!impl_->projectIndicator.name.empty())
         {
             const ProjectIndicator& indicator =
@@ -2516,6 +2931,29 @@ void EditorUi::DrawStudioShell()
             }
         }
 
+        ImGui::EndMainMenuBar();
+    }
+
+    PanelContext context(
+        impl_->automationExpandTrees,
+        impl_->automationTraceWidgets
+            ? &impl_->automationTrace
+            : nullptr);
+
+    for (std::size_t index = 0;
+         index < impl_->panels.size();
+         ++index)
+    {
+        impl_->panelVisible[index] = 0U;
+        if (impl_->panelOpen[index] == 0U)
+        {
+            continue;
+        }
+
+        PanelDefinition& panel =
+            impl_->panels[index];
+
+        bool open =
             impl_->panelOpen[index] != 0U;
 
         if (!impl_->pendingFocusTitle.empty() &&
@@ -2537,6 +2975,16 @@ void EditorUi::DrawStudioShell()
                     FLT_MAX));
         }
 
+        if (panel.defaultSize.width > 0.0F &&
+            panel.defaultSize.height > 0.0F)
+        {
+            ImGui::SetNextWindowSize(
+                ImVec2(
+                    panel.defaultSize.width,
+                    panel.defaultSize.height),
+                ImGuiCond_FirstUseEver);
+        }
+
         if (panel.dockToMainViewport)
         {
             ImGui::SetNextWindowDockID(
@@ -2544,9 +2992,11 @@ void EditorUi::DrawStudioShell()
                 ImGuiCond_Always);
         }
 
-        if (ImGui::Begin(
-                panel.title.c_str(),
-                &open))
+        const bool visible = ImGui::Begin(
+            panel.title.c_str(),
+            &open);
+        impl_->panelVisible[index] = visible ? 1U : 0U;
+        if (visible)
         {
             panel.draw(context);
         }
@@ -2556,6 +3006,10 @@ void EditorUi::DrawStudioShell()
         impl_->panelOpen[index] =
             open ? 1U : 0U;
     }
+
+    impl_->DrawNotifications(
+        *mainViewport,
+        ImGui::GetIO().DeltaTime);
 }
 
 void EditorUi::Render(

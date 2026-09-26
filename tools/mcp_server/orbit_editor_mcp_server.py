@@ -15,6 +15,7 @@ import itertools
 import json
 import os
 import socket
+import time
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,169 @@ def _rpc(method: str, params: dict[str, Any] | list[Any] | None = None) -> Any:
 def orbit_project_info() -> dict[str, Any]:
     """Return the open Orbit Studio project ID, name, root and startup world."""
     return _rpc("project.info")
+
+
+def _wait_for_project(project_id: str, timeout_seconds: float) -> dict[str, Any]:
+    """Poll project.info until Studio has relaunched into project_id.
+
+    Switching projects hands off to a fresh Studio process, so the RPC port
+    briefly goes away. The old process can also still answer for a moment, which
+    is why the project ID (not mere reachability) is what is awaited.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "no reply yet"
+
+    while time.monotonic() < deadline:
+        try:
+            info = _rpc("project.info")
+            if isinstance(info, dict) and info.get("id") == project_id:
+                return info
+            last_error = "Studio still reports another project"
+        except RuntimeError as error:
+            last_error = str(error)
+        time.sleep(0.5)
+
+    raise RuntimeError(
+        f"Studio did not relaunch into project {project_id} within "
+        f"{timeout_seconds:.0f}s ({last_error})."
+    )
+
+
+@mcp.tool()
+def orbit_project_create(
+    root: str,
+    name: str,
+    wait: bool = True,
+    timeout_seconds: float = 120.0,
+) -> dict[str, Any]:
+    """Create a new Orbit project and switch Studio to it.
+
+    root is the new project's directory (created if missing; relative paths are
+    resolved by Studio's working directory, so prefer an absolute path). Studio
+    relaunches into the project; with wait=True this returns once the new
+    Studio answers project.info for the new project ID.
+    """
+    result = _rpc("project.create", {"root": root, "name": name})
+    if wait:
+        _wait_for_project(result["id"], timeout_seconds)
+    return result
+
+
+@mcp.tool()
+def orbit_project_open(
+    path: str,
+    wait: bool = True,
+    timeout_seconds: float = 120.0,
+) -> dict[str, Any]:
+    """Open an existing Orbit project (directory or Project.orbit.toml).
+
+    Studio saves the current project, then relaunches into the target.
+    """
+    result = _rpc("project.open", {"path": path})
+    if wait:
+        _wait_for_project(result["id"], timeout_seconds)
+    return result
+
+
+@mcp.tool()
+def orbit_project_recent() -> list[dict[str, Any]]:
+    """List recently opened projects (most recent first) with availability."""
+    return _rpc("project.recent")
+
+
+@mcp.tool()
+def orbit_world_active() -> dict[str, Any]:
+    """Return the open authoring world and session generation."""
+    return _rpc("world.active")
+
+
+@mcp.tool()
+def orbit_world_list() -> list[dict[str, Any]]:
+    """Return the project's world-document catalog."""
+    return _rpc("world.list")
+
+
+@mcp.tool()
+def orbit_world_describe(path: str) -> dict[str, Any]:
+    """Describe one project world document by relative path."""
+    return _rpc("world.describe", {"path": path})
+
+
+@mcp.tool()
+def orbit_world_create(path: str, display_name: str) -> dict[str, Any]:
+    """Create a versioned world document, e.g. path='Worlds/Moon.orbitworld'."""
+    return _rpc("world.create", {"path": path, "display_name": display_name})
+
+
+@mcp.tool()
+def orbit_world_open(path: str) -> dict[str, Any]:
+    """Atomically switch the authoring session to another project world."""
+    return _rpc("world.open", {"path": path})
+
+
+@mcp.tool()
+def orbit_world_close() -> dict[str, Any]:
+    """Close the active world; project-level RPC stays available."""
+    return _rpc("world.close")
+
+
+@mcp.tool()
+def orbit_world_set_startup(path: str) -> dict[str, Any]:
+    """Persist which world opens first, without opening it."""
+    return _rpc("world.set_startup", {"path": path})
+
+
+@mcp.tool()
+def orbit_world_set_display_name(path: str, display_name: str) -> dict[str, Any]:
+    """Change a world's display name without renaming its file."""
+    return _rpc(
+        "world.set_display_name",
+        {"path": path, "display_name": display_name},
+    )
+
+
+@mcp.tool()
+def orbit_body_list() -> list[dict[str, Any]]:
+    """List celestial body objects in the active world."""
+    return _rpc("body.list")
+
+
+@mcp.tool()
+def orbit_body_create(parent_id: str, name: str | None = None) -> dict[str, Any]:
+    """Create a celestial body under a Celestial System through the shared command.
+
+    Returns the body with Earth-like defaults; author it with orbit_property_set
+    (see docs/ORBIT_MCP.md for the body property IDs and a Moon recipe).
+    """
+    params: dict[str, Any] = {"parent": parent_id}
+    if name is not None:
+        params["name"] = name
+    return _rpc("body.create", params)
+
+
+@mcp.tool()
+def orbit_body_capabilities(body_id: str) -> list[dict[str, Any]]:
+    """Return the real capability domains registered for one body."""
+    return _rpc("body.capabilities", {"body": body_id})
+
+
+@mcp.tool()
+def orbit_body_set_capability(
+    body_id: str,
+    capability: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Enable or disable a body capability (currently 'surface.terrain')."""
+    return _rpc(
+        "body.set_capability",
+        {"body": body_id, "capability": capability, "enabled": enabled},
+    )
+
+
+@mcp.tool()
+def orbit_viewport_focus_body() -> dict[str, Any]:
+    """Frame the primary viewport on its current target body (the selection)."""
+    return _rpc("viewport.focus_body")
 
 
 @mcp.tool()
@@ -500,6 +664,218 @@ def orbit_events_since(sequence: int = 0) -> dict[str, Any]:
     semantic object changes, selection, content, plugins and viewport changes.
     """
     return _rpc("event.since", {"sequence": sequence})
+
+
+# ---------------------------------------------------------------------------
+# Studio panels
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def orbit_panel_list() -> list[dict[str, Any]]:
+    """List every editor panel (tab) with whether it is open and visible."""
+    return _rpc("studio.panel_list")
+
+
+@mcp.tool()
+def orbit_panel_focus(title: str) -> dict[str, Any]:
+    """Open a panel by title (case-insensitive) and bring its tab to the front."""
+    return _rpc("studio.panel_focus", {"title": title})
+
+
+@mcp.tool()
+def orbit_panel_close(title: str) -> dict[str, Any]:
+    """Close a panel by title; reopen it with orbit_panel_focus."""
+    return _rpc("studio.panel_close", {"title": title})
+
+
+# ---------------------------------------------------------------------------
+# Shading tab: content tree, shaders, materials, preview
+#
+# Paths may be project-relative ("Content/Shading/Lunar.shade.hlsl") or
+# content-relative ("Shading/Lunar.shade.hlsl"). Shader edits are compiled
+# live inside the running Studio; nothing here restarts it. See
+# docs/ORBIT_SHADING.md.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def orbit_shading_options() -> dict[str, Any]:
+    """List preview shapes, lighting presets, backgrounds and shader templates."""
+    return _rpc("shading.options")
+
+
+@mcp.tool()
+def orbit_shading_tree() -> dict[str, Any]:
+    """Return the Content tree (folders and assets, nested) shown in the tab."""
+    return _rpc("shading.tree")
+
+
+@mcp.tool()
+def orbit_shading_folder_create(path: str) -> dict[str, Any]:
+    """Create a folder under Content."""
+    return _rpc("shading.folder_create", {"path": path})
+
+
+@mcp.tool()
+def orbit_shading_rename(path: str, name: str) -> dict[str, Any]:
+    """Rename a file or folder in place (name is a single path component)."""
+    return _rpc("shading.rename", {"path": path, "name": name})
+
+
+@mcp.tool()
+def orbit_shading_move(path: str, folder: str) -> dict[str, Any]:
+    """Move a file or folder into an existing folder."""
+    return _rpc("shading.move", {"path": path, "folder": folder})
+
+
+@mcp.tool()
+def orbit_shading_trash(path: str) -> dict[str, Any]:
+    """Reversibly remove a file or folder (it moves to .orbit/Trash)."""
+    return _rpc("shading.trash", {"path": path})
+
+
+@mcp.tool()
+def orbit_shading_shader_create(
+    folder: str,
+    name: str,
+    template: str = "lit",
+) -> dict[str, Any]:
+    """Create <folder>/<name>.shade.hlsl from a template and open it.
+
+    Templates: lit, unlit, lunar_regolith, debug_normals (see orbit_shading_options).
+    """
+    return _rpc(
+        "shading.shader_create",
+        {"folder": folder, "name": name, "template": template},
+    )
+
+
+@mcp.tool()
+def orbit_shading_material_create(
+    folder: str,
+    name: str,
+    shader: str,
+) -> dict[str, Any]:
+    """Create <folder>/<name>.orbitshadermaterial bound to a shader and open it."""
+    return _rpc(
+        "shading.material_create",
+        {"folder": folder, "name": name, "shader": shader},
+    )
+
+
+@mcp.tool()
+def orbit_shading_select(path: str | None = None) -> dict[str, Any]:
+    """Open a shader or shader material in the tab (null clears the selection)."""
+    return _rpc("shading.select", {"path": path})
+
+
+@mcp.tool()
+def orbit_shading_source_read(path: str) -> dict[str, Any]:
+    """Read the text of a shader source file."""
+    return _rpc("shading.source_read", {"path": path})
+
+
+@mcp.tool()
+def orbit_shading_source_write(path: str, text: str) -> dict[str, Any]:
+    """Write a *.shade.hlsl file, open it, and compile it live.
+
+    A compile error is a normal result: check `compiled` and `diagnostics`
+    (they name the shader file and line). The preview keeps the last working
+    shader while there are errors.
+    """
+    return _rpc("shading.source_write", {"path": path, "text": text})
+
+
+@mcp.tool()
+def orbit_shading_status() -> dict[str, Any]:
+    """Return selection, compile status/diagnostics, parameters and preview settings."""
+    return _rpc("shading.status")
+
+
+@mcp.tool()
+def orbit_shading_param_set(name: str, value: Any) -> dict[str, Any]:
+    """Set a shader parameter (number or list). Saved into an open shader material."""
+    return _rpc("shading.param_set", {"name": name, "value": value})
+
+
+@mcp.tool()
+def orbit_shading_param_reset(name: str) -> dict[str, Any]:
+    """Remove a parameter override so the shader's declared default applies."""
+    return _rpc("shading.param_reset", {"name": name})
+
+
+@mcp.tool()
+def orbit_shading_preview_get() -> dict[str, Any]:
+    """Return the preview settings (shape, lighting, background, sun, camera)."""
+    return _rpc("shading.preview_get")
+
+
+@mcp.tool()
+def orbit_shading_preview_set(
+    shape: str | None = None,
+    lighting: str | None = None,
+    background: str | None = None,
+    sun_azimuth_degrees: float | None = None,
+    sun_elevation_degrees: float | None = None,
+    exposure: float | None = None,
+    model_yaw_degrees: float | None = None,
+    animate: bool | None = None,
+    live_compile: bool | None = None,
+    camera_yaw_degrees: float | None = None,
+    camera_pitch_degrees: float | None = None,
+    camera_distance: float | None = None,
+    camera_fov_degrees: float | None = None,
+) -> dict[str, Any]:
+    """Change preview settings; omitted values are unchanged.
+
+    shape: sphere | plane | cube. lighting: studio | sun | overcast | sunset |
+    space. background: environment | gradient | gray | checker.
+    """
+    params: dict[str, Any] = {}
+    for key, value in (
+        ("shape", shape),
+        ("lighting", lighting),
+        ("background", background),
+        ("sun_azimuth_degrees", sun_azimuth_degrees),
+        ("sun_elevation_degrees", sun_elevation_degrees),
+        ("exposure", exposure),
+        ("model_yaw_degrees", model_yaw_degrees),
+        ("animate", animate),
+        ("live_compile", live_compile),
+    ):
+        if value is not None:
+            params[key] = value
+
+    camera: dict[str, Any] = {}
+    for key, value in (
+        ("yaw_degrees", camera_yaw_degrees),
+        ("pitch_degrees", camera_pitch_degrees),
+        ("distance", camera_distance),
+        ("fov_degrees", camera_fov_degrees),
+    ):
+        if value is not None:
+            camera[key] = value
+    if camera:
+        params["camera"] = camera
+
+    return _rpc("shading.preview_set", params)
+
+
+@mcp.tool()
+def orbit_shading_recompile() -> dict[str, Any]:
+    """Recompile the open shader from the editor buffer and return the status."""
+    return _rpc("shading.recompile")
+
+
+@mcp.tool()
+def orbit_shading_screenshot(path: str) -> dict[str, Any]:
+    """Capture the Shading preview to a BMP.
+
+    The tab must have rendered at least once: open it with orbit_panel_focus
+    or select a shader first.
+    """
+    return _rpc("shading.screenshot", {"path": path})
 
 
 @mcp.tool()

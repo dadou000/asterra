@@ -9,6 +9,7 @@ add_library(OrbitContent STATIC
     src/MaterialInstance.cpp
     src/Decal.cpp
     src/RuntimeTexture.cpp
+    src/ContentOrganization.cpp
 )
 
 add_library(Orbit::Content ALIAS OrbitContent)

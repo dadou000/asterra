@@ -152,7 +152,8 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
             extension,
             {".png", ".jpg", ".jpeg", ".tga", ".dds", ".exr", ".hdr",
              ".cube", ".fbx", ".gltf", ".glb", ".obj", ".wav", ".ogg",
-             ".orbitmaterial", ".orbitdecal", ".orbitmesh", ".orbitcomponent"}))
+             ".orbitmaterial", ".orbitshadermaterial", ".orbitdecal", ".orbitmesh",
+             ".orbitcomponent"}))
     {
         return ChangeKind::Content;
     }
