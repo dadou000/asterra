@@ -55,6 +55,43 @@ namespace
         generic.starts_with("cmake/") ||
         generic.find("/cmake/") != std::string_view::npos;
 }
+
+// Editors and tools write saves through short-lived sibling files (sed -i,
+// vim, Emacs, VS Code, Word-style ~$ locks, browser .part downloads). They are
+// never source, so the conservative unknown-file fallback must not rebuild
+// Studio for them; the real file's own event carries the change.
+[[nodiscard]] bool IsTransientEditorFile(
+    const std::string& filename,
+    const std::string& extension) noexcept
+{
+    if (filename.empty())
+    {
+        return false;
+    }
+
+    if (IsOneOf(
+            extension,
+            {".tmp", ".temp", ".swp", ".swx", ".swo", ".bak", ".orig",
+             ".part", ".crdownload", ".lock"}))
+    {
+        return true;
+    }
+
+    if (filename.starts_with(".#") ||
+        filename.starts_with("~$") ||
+        filename.starts_with(".~lock") ||
+        filename.ends_with("~") ||
+        (filename.starts_with("#") && filename.ends_with("#")) ||
+        filename == "4913")
+    {
+        return true;
+    }
+
+    // GNU sed -i / mktemp style: "sed" + six random characters, no extension.
+    return extension.empty() &&
+        filename.size() == 9U &&
+        filename.starts_with("sed");
+}
 } // namespace
 
 ChangeKind ClassifyChange(const std::filesystem::path& path)
@@ -65,6 +102,11 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
         Lower(path.filename().string());
     const std::string extension =
         Lower(path.extension().string());
+
+    if (IsTransientEditorFile(filename, extension))
+    {
+        return ChangeKind::Ignored;
+    }
 
     if (filename == "cmakelists.txt" ||
         extension == ".cmake" ||

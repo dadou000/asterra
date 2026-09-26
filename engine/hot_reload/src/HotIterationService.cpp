@@ -639,6 +639,19 @@ private:
                         continue;
                     }
 
+                    // Directory-level notifications (a save touching its
+                    // parent folder) carry no content; the changed file
+                    // reports itself.
+                    {
+                        std::error_code directoryError;
+                        if (std::filesystem::is_directory(
+                                path,
+                                directoryError))
+                        {
+                            continue;
+                        }
+                    }
+
                     if (kind == ChangeKind::NativeModule &&
                         IsNativeHotPath(path))
                     {

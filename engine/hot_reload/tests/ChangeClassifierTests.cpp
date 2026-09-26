@@ -31,6 +31,14 @@ int main()
                 ChangeKind::RestartRequired) ||
         !Expect("engine/terrain/experimental.rules",
                 ChangeKind::RestartRequired) ||
+        !Expect("engine/hot_reload_probe/src/sedvPxcPy", ChangeKind::Ignored) ||
+        !Expect("engine/terrain/src/Terrain.cpp.swp", ChangeKind::Ignored) ||
+        !Expect("engine/terrain/src/.#Terrain.cpp", ChangeKind::Ignored) ||
+        !Expect("engine/terrain/src/Terrain.cpp~", ChangeKind::Ignored) ||
+        !Expect("engine/terrain/src/Terrain.cpp.tmp", ChangeKind::Ignored) ||
+        !Expect("engine/terrain/src/4913", ChangeKind::Ignored) ||
+        !Expect("engine/terrain/src/sedimentation", ChangeKind::RestartRequired) ||
+        !Expect("engine/hot_reload_probe/src/HotReloadProbe.cpp", ChangeKind::NativeModule) ||
         !Expect("README.md", ChangeKind::Ignored))
     {
         return 1;
