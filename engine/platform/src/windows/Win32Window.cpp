@@ -554,17 +554,104 @@ public:
 
         EnsureWindowClassRegistered();
 
-        RECT rect{
-            0,
-            0,
-            static_cast<LONG>(width_),
-            static_cast<LONG>(height_)
-        };
+        DWORD windowStyle =
+            WS_OVERLAPPEDWINDOW;
+        int windowX =
+            CW_USEDEFAULT;
+        int windowY =
+            CW_USEDEFAULT;
+        int windowWidth =
+            static_cast<int>(width_);
+        int windowHeight =
+            static_cast<int>(height_);
 
-        AdjustWindowRect(
-            &rect,
-            WS_OVERLAPPEDWINDOW,
-            FALSE);
+        if (desc.startMaximized)
+        {
+            // Orbit Studio requests startMaximized today. Treat that startup
+            // mode as borderless fullscreen: cover the primary monitor's full
+            // physical pixel rectangle without changing the desktop display
+            // mode. This keeps Vulkan/DWM/Alt-Tab behavior predictable while
+            // giving Studio true edge-to-edge native-resolution output.
+            MONITORINFO monitorInfo{};
+            monitorInfo.cbSize =
+                sizeof(monitorInfo);
+
+            const POINT primaryPoint{
+                0,
+                0
+            };
+
+            const HMONITOR monitor =
+                MonitorFromPoint(
+                    primaryPoint,
+                    MONITOR_DEFAULTTOPRIMARY);
+
+            if (monitor != nullptr &&
+                GetMonitorInfoA(
+                    monitor,
+                    &monitorInfo) != FALSE)
+            {
+                windowStyle =
+                    WS_POPUP;
+                windowX =
+                    monitorInfo.rcMonitor.left;
+                windowY =
+                    monitorInfo.rcMonitor.top;
+                windowWidth =
+                    monitorInfo.rcMonitor.right -
+                    monitorInfo.rcMonitor.left;
+                windowHeight =
+                    monitorInfo.rcMonitor.bottom -
+                    monitorInfo.rcMonitor.top;
+
+                width_ =
+                    static_cast<u32>(
+                        windowWidth);
+                height_ =
+                    static_cast<u32>(
+                        windowHeight);
+            }
+            else
+            {
+                // If monitor discovery ever fails, retain the old maximized
+                // window behavior rather than failing Studio startup.
+                RECT rect{
+                    0,
+                    0,
+                    static_cast<LONG>(width_),
+                    static_cast<LONG>(height_)
+                };
+
+                AdjustWindowRect(
+                    &rect,
+                    WS_OVERLAPPEDWINDOW,
+                    FALSE);
+
+                windowWidth =
+                    rect.right - rect.left;
+                windowHeight =
+                    rect.bottom - rect.top;
+            }
+        }
+        else
+        {
+            RECT rect{
+                0,
+                0,
+                static_cast<LONG>(width_),
+                static_cast<LONG>(height_)
+            };
+
+            AdjustWindowRect(
+                &rect,
+                windowStyle,
+                FALSE);
+
+            windowWidth =
+                rect.right - rect.left;
+            windowHeight =
+                rect.bottom - rect.top;
+        }
 
         const std::string title(
             desc.title);
@@ -573,11 +660,11 @@ public:
             0,
             kWindowClassName,
             title.c_str(),
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            rect.right - rect.left,
-            rect.bottom - rect.top,
+            windowStyle,
+            windowX,
+            windowY,
+            windowWidth,
+            windowHeight,
             nullptr,
             nullptr,
             GetModuleHandleA(nullptr),
@@ -589,16 +676,26 @@ public:
                 "Orbit failed to create a Win32 window.");
         }
 
-        ShowWindow(
-            hwnd_,
-            desc.startMaximized
-                ? SW_SHOWMAXIMIZED
-                : SW_SHOW);
+        if (desc.startMaximized &&
+            windowStyle != WS_POPUP)
+        {
+            ShowWindow(
+                hwnd_,
+                SW_SHOWMAXIMIZED);
+        }
+        else
+        {
+            ShowWindow(
+                hwnd_,
+                SW_SHOW);
+        }
 
         UpdateWindow(hwnd_);
 
         log::Info(
-            "Win32 window created.");
+            windowStyle == WS_POPUP
+                ? "Win32 borderless fullscreen window created."
+                : "Win32 window created.");
     }
 
     ~Win32Window() override
