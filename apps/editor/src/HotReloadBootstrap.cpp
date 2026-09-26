@@ -59,6 +59,33 @@ std::atomic<orbit::hot_reload::HotReloadHost*>
     gEyeAdaptationHost{nullptr};
 std::atomic<orbit::hot_reload::HotIterationService*>
     gHotIterationService{nullptr};
+UINT_PTR gHotIterationTimerId{0U};
+
+void CALLBACK HotIterationTimerProc(
+    HWND,
+    UINT,
+    UINT_PTR,
+    DWORD) noexcept
+{
+    try
+    {
+        static_cast<void>(
+            orbit::hot_reload::
+                PumpHotIterationEvents());
+    }
+    catch (const std::exception& exception)
+    {
+        orbit::log::Error(
+            std::string(
+                "Hot iteration main-thread dispatch failed: ") +
+            exception.what());
+    }
+    catch (...)
+    {
+        orbit::log::Error(
+            "Hot iteration main-thread dispatch failed with an unknown error.");
+    }
+}
 
 [[nodiscard]] std::filesystem::path CurrentExecutablePath()
 {
@@ -473,6 +500,9 @@ public:
             gHotIterationService.store(
                 iteration_.get(),
                 std::memory_order_release);
+            orbit::hot_reload::
+                SetActiveHotIterationService(
+                    iteration_.get());
 
             orbit::post_process::
                 SetHumanEyeAdaptationUpdateOverride(
@@ -480,6 +510,19 @@ public:
 
             host_->Start();
             iteration_->Start();
+
+            gHotIterationTimerId =
+                SetTimer(
+                    nullptr,
+                    0U,
+                    50U,
+                    &HotIterationTimerProc);
+
+            if (gHotIterationTimerId == 0U)
+            {
+                orbit::log::Warning(
+                    "Orbit hot iteration could not install the UI-thread event pump; native hot modules remain active.");
+            }
         }
         catch (const std::exception& exception)
         {
@@ -497,6 +540,17 @@ public:
 
     ~StudioHotReloadBootstrap()
     {
+        if (gHotIterationTimerId != 0U)
+        {
+            (void)KillTimer(
+                nullptr,
+                gHotIterationTimerId);
+            gHotIterationTimerId = 0U;
+        }
+
+        orbit::hot_reload::
+            SetActiveHotIterationService(
+                nullptr);
         gHotIterationService.store(
             nullptr,
             std::memory_order_release);
@@ -537,13 +591,8 @@ namespace orbit::editor_app
 void RegisterHotIterationWatchRoot(
     const std::filesystem::path& root)
 {
-    if (auto* const service =
-            gHotIterationService.load(
-                std::memory_order_acquire);
-        service != nullptr)
-    {
-        service->AddWatchRoot(root);
-    }
+    orbit::hot_reload::
+        AddHotIterationWatchRoot(root);
 }
 } // namespace orbit::editor_app
 
