@@ -17,14 +17,17 @@ public:
 
     void Register(editor_ui::EditorUi& ui);
 
+    // The same authoring surface can be hosted inside the contextual
+    // Properties inspector. Keeping one draw path prevents the standalone
+    // expert panel and the progressive-disclosure inspector from drifting.
+    void Draw(editor_ui::PanelContext& context);
+
     inline static constexpr editor_ui::PanelId kPanel{
         .high = 0x4f52424954535455ULL,
         .low = 0x43454c4553544941ULL
     };
 
 private:
-    void Draw(editor_ui::PanelContext& context);
-
     studio_session::StudioSession& session_;
     std::string newSystemName_{"Celestial System"};
     std::string newBodyName_{"Celestial Body"};
