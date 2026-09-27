@@ -1,7 +1,20 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
+#include <orbit/editor_model/CelestialAuthoringModel.hpp>
+#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
+#include <orbit/studio_ui/CelestialAuthoringUi.hpp>
+#include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
+
+#include <exception>
+#include <format>
 #include <initializer_list>
+#include <memory>
 #include <string_view>
+#include <type_traits>
+#include <utility>
+#include <variant>
 
 #define Register RegisterBase
 #define RegisterSecondary RegisterSecondaryBase
@@ -42,6 +55,7 @@ void CloseSpecialistPanels(editor_ui::EditorUi& ui)
     ClosePanels(
         ui,
         {
+            "Inspector",
             "Body Map / Debug View",
             "System View",
             "Shading",
@@ -81,10 +95,10 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
             CloseSpecialistPanels(ui);
             ClosePanels(
                 ui,
-                {"Material Service", "Build", "Output"});
+                {"Properties", "Material Service", "Build", "Output"});
             OpenPanels(
                 ui,
-                {"Explorer", "Viewport", "Properties", "Surface Authoring"});
+                {"Explorer", "Viewport", "Inspector"});
         }
     });
 
@@ -96,10 +110,10 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
             CloseSpecialistPanels(ui);
             ClosePanels(
                 ui,
-                {"Viewport", "Material Service", "Build", "Output"});
+                {"Viewport", "Properties", "Material Service", "Build", "Output"});
             OpenPanels(
                 ui,
-                {"Explorer", "System View", "Properties", "Celestial"});
+                {"Explorer", "System View", "Inspector"});
         }
     });
 
@@ -119,6 +133,342 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
     });
 }
 } // namespace
+
+StudioViewportPanels::~StudioViewportPanels() = default;
+
+void StudioViewportPanels::EnsureContextAuthoring()
+{
+    if (session_ == nullptr)
+    {
+        contextualSurface_.reset();
+        contextualCelestial_.reset();
+        contextualSession_ = nullptr;
+        return;
+    }
+
+    if (contextualSession_ == session_ &&
+        contextualSurface_ != nullptr &&
+        contextualCelestial_ != nullptr)
+    {
+        return;
+    }
+
+    contextualSurface_ =
+        std::make_unique<SurfaceAuthoringUi>(
+            *session_);
+    contextualCelestial_ =
+        std::make_unique<CelestialAuthoringUi>(
+            *session_);
+    contextualSession_ =
+        session_;
+    contextualAdvancedProperties_ =
+        false;
+}
+
+void StudioViewportPanels::RegisterContextInspector(
+    editor_ui::EditorUi& ui)
+{
+    if (ui.HasPanel(kContextInspectorPanel))
+    {
+        return;
+    }
+
+    ui.RegisterPanel({
+        .id = kContextInspectorPanel,
+        .title = "Inspector",
+        .defaultOpen = false,
+        .defaultDock = editor_ui::DockRegion::Right,
+        .dockOrder = 1,
+        .minSize = {
+            .width = 300.0F,
+            .height = 300.0F
+        },
+        .defaultSize = {
+            .width = 390.0F,
+            .height = 820.0F
+        },
+        .draw =
+            [this](editor_ui::PanelContext& context)
+            {
+                DrawContextInspector(context);
+            }
+    });
+}
+
+void StudioViewportPanels::DrawContextInspector(
+    editor_ui::PanelContext& context)
+{
+    EnsureContextAuthoring();
+
+    if (session_ == nullptr ||
+        !session_->World().HasWorld())
+    {
+        context.Text(
+            "Open a world to inspect authored objects.");
+        return;
+    }
+
+    auto& world =
+        session_->World();
+    auto& inspector =
+        world.Inspector();
+
+    const auto selected =
+        inspector.SelectedObjects();
+
+    context.Heading("Inspector");
+
+    if (selected.empty())
+    {
+        context.Text("No selection");
+        context.MutedText(
+            "Select an object in Explorer or the active workspace. Relevant authoring controls appear here automatically.");
+        return;
+    }
+
+    if (selected.size() == 1U)
+    {
+        const auto record =
+            world.Objects().Find(
+                selected.front());
+
+        if (record.has_value())
+        {
+            context.Text(record->name);
+            context.MutedText(
+                record->type.ToString());
+        }
+    }
+    else
+    {
+        context.Text(
+            std::format(
+                "{} objects selected",
+                selected.size()));
+    }
+
+    if (context.Section(
+            "Properties##context-inspector-properties",
+            true))
+    {
+        static_cast<void>(
+            context.Checkbox(
+                "Advanced##context-inspector-advanced",
+                contextualAdvancedProperties_));
+
+        if (!contextualAdvancedProperties_)
+        {
+            context.MutedText(
+                "Advanced schema fields stay available here without becoming the default editing surface.");
+        }
+
+        context.Separator();
+
+        for (auto property :
+             inspector.CommonProperties())
+        {
+            if (property.schema.advanced &&
+                !contextualAdvancedProperties_)
+            {
+                continue;
+            }
+
+            context.Text(
+                std::format(
+                    "{}{}{}",
+                    property.schema.name,
+                    property.schema.unit.empty()
+                        ? ""
+                        : " [",
+                    property.schema.unit.empty()
+                        ? ""
+                        : property.schema.unit + "]"));
+
+            if (property.mixed)
+            {
+                context.MutedText("<mixed>");
+            }
+
+            if (property.schema.readOnly)
+            {
+                context.MutedText("<read only>");
+                context.Separator();
+                continue;
+            }
+
+            const std::string label =
+                "##context-property-" +
+                property.schema.id.ToString();
+
+            bool changed = false;
+
+            std::visit(
+                [&](auto& value)
+                {
+                    using Value =
+                        std::decay_t<
+                            decltype(value)>;
+
+                    if constexpr (
+                        std::is_same_v<Value, bool>)
+                    {
+                        changed =
+                            context.Checkbox(
+                                label,
+                                value);
+                    }
+                    else if constexpr (
+                        std::is_same_v<Value, i64>)
+                    {
+                        changed =
+                            context.InputInteger(
+                                label,
+                                value);
+                    }
+                    else if constexpr (
+                        std::is_same_v<Value, f64>)
+                    {
+                        changed =
+                            context.InputDouble(
+                                label,
+                                value);
+                    }
+                    else if constexpr (
+                        std::is_same_v<Value, std::string>)
+                    {
+                        changed =
+                            context.InputText(
+                                label,
+                                value);
+                    }
+                    else if constexpr (
+                        std::is_same_v<
+                            Value,
+                            math::Double3>)
+                    {
+                        changed =
+                            context.InputDouble3(
+                                label,
+                                value);
+                    }
+                    else
+                    {
+                        const scene::ObjectId id{
+                            .high = value.high,
+                            .low = value.low
+                        };
+
+                        context.MutedText(
+                            id.IsValid()
+                                ? id.ToString()
+                                : "<none>");
+                    }
+                },
+                property.value);
+
+            if (changed)
+            {
+                try
+                {
+                    inspector.SetForSelection(
+                        property.schema.id,
+                        property.value);
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ =
+                        exception.what();
+                }
+            }
+
+            context.Separator();
+        }
+    }
+
+    bool surfaceRelevant = false;
+    bool celestialRelevant = false;
+
+    if (selected.size() == 1U)
+    {
+        try
+        {
+            editor_model::SurfaceAuthoringModel
+                surfaceModel(
+                    world.Objects(),
+                    world.Commands(),
+                    world.Selection());
+
+            surfaceRelevant =
+                surfaceModel.SelectedRockyBody().
+                    has_value();
+        }
+        catch (const std::exception&)
+        {
+            surfaceRelevant = false;
+        }
+
+        try
+        {
+            editor_model::CelestialAuthoringModel
+                celestialModel(
+                    world.Objects(),
+                    world.Schemas(),
+                    world.Commands(),
+                    world.Selection());
+
+            const auto primary =
+                celestialModel.PrimarySelection();
+
+            celestialRelevant =
+                celestialModel.SelectedBody().
+                    has_value() ||
+                (primary.has_value() &&
+                 (primary->type ==
+                      world_model::kCelestialSystemType ||
+                  primary->type ==
+                      world_model::kCelestialReferenceNodeType ||
+                  primary->type ==
+                      world_model::kRingBandType ||
+                  celestialModel.IsCapabilityType(
+                      primary->type)));
+        }
+        catch (const std::exception&)
+        {
+            celestialRelevant = false;
+        }
+    }
+
+    if (surfaceRelevant &&
+        contextualSurface_ != nullptr &&
+        context.Section(
+            "Surface##context-inspector-surface",
+            true))
+    {
+        contextualSurface_->Draw(context);
+    }
+
+    if (celestialRelevant &&
+        contextualCelestial_ != nullptr &&
+        context.Section(
+            "Celestial##context-inspector-celestial",
+            !surfaceRelevant))
+    {
+        contextualCelestial_->Draw(context);
+    }
+
+    if (!surfaceRelevant &&
+        !celestialRelevant)
+    {
+        context.MutedText(
+            "No specialized authoring section is needed for this selection. Common schema properties remain fully editable above.");
+    }
+
+    if (!status_.empty())
+    {
+        context.Separator();
+        context.Text(status_);
+    }
+}
 
 void StudioViewportPanels::Register(
     editor_ui::EditorUi& ui)
@@ -158,6 +508,7 @@ void StudioViewportPanels::Register(
             }
     });
 
+    RegisterContextInspector(ui);
     RegisterWorkspaceActions(ui);
 }
 
@@ -177,6 +528,7 @@ void StudioViewportPanels::RegisterSecondary(
             }
     });
 
+    RegisterContextInspector(ui);
     RegisterWorkspaceActions(ui);
 }
 
