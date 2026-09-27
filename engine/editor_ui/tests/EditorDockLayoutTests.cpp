@@ -240,6 +240,21 @@ void SplitFractionsAreOfTheWholeDockSpace()
     Check(centerWidth > 0.4F, "centre keeps most of the width");
 }
 
+void DefaultLayoutKeepsTheWorkspaceDominant()
+{
+    const orbit::editor_ui::DockLayoutFractions fractions{};
+
+    Check(fractions.left <= 0.18F, "default hierarchy strip stays compact");
+    Check(fractions.right <= 0.22F, "default inspector strip stays compact");
+    Check(fractions.bottom <= 0.15F, "default activity strip stays compact");
+
+    const float centerWidth =
+        1.0F - fractions.left - fractions.right;
+    Check(
+        centerWidth >= 0.60F,
+        "default viewport keeps at least sixty percent of editor width");
+}
+
 void OversizedFractionsCannotSwallowTheCentre()
 {
     const std::vector<DockAssignment> everything{
@@ -314,6 +329,7 @@ int main()
     LowerDockOrderComesFirstAndTiesKeepRegistrationOrder();
     SplitPlanOnlySplitsRegionsThatHavePanels();
     SplitFractionsAreOfTheWholeDockSpace();
+    DefaultLayoutKeepsTheWorkspaceDominant();
     OversizedFractionsCannotSwallowTheCentre();
     RealWorldFloatingLayoutIsTreatedAsUnset();
     PopulatedLayoutIsKept();
