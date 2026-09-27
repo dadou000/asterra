@@ -1,0 +1,15 @@
+[shader_material]
+name = "Diamond"
+shader = "Glass_High.shade.hlsl"
+
+[[shader_material.parameter]]
+name = "tint"
+value = [1.0, 1.0, 1.0]
+
+[[shader_material.parameter]]
+name = "ior"
+value = 2.4
+
+[[shader_material.parameter]]
+name = "dispersion"
+value = 0.07

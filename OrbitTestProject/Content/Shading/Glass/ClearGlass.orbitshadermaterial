@@ -1,0 +1,3 @@
+[shader_material]
+name = "ClearGlass"
+shader = "Glass_Medium.shade.hlsl"

@@ -35,12 +35,73 @@ float3 OrbitParam3(uint i) { return float3(OrbitParam(i), OrbitParam(i + 1u), Or
 float2 OrbitParam2(uint i) { return float2(OrbitParam(i), OrbitParam(i + 1u)); }
 float4 OrbitParam4(uint i) { return float4(OrbitParam(i), OrbitParam(i + 1u), OrbitParam(i + 2u), OrbitParam(i + 3u)); }
 
+// The background shown behind the object (see OrbitBackdropFor).
+float3 OrbitBackdrop(float3 d)
+{
+    return OrbitBackdropFor(
+        d,
+        (uint)(g_orbit.misc.x + 0.5),
+        (uint)(g_orbit.lightState.x + 0.5),
+        OrbitSunDirection(g_orbit.lightState.y, g_orbit.lightState.z));
+}
+
 float3 OrbitEnvironment(float3 d)
 {
     return OrbitEnvironmentFor(
         d,
         (uint)(g_orbit.lightState.x + 0.5),
         OrbitSunDirection(g_orbit.lightState.y, g_orbit.lightState.z));
+}
+
+// The preview shape being drawn: 0 Sphere, 1 Plane, 2 Cube, 3 Mesh (see
+// PreviewShape in ShadingContract.hpp). A refractive shader needs this to
+// know whether it has a real, closed-form volume to push a ray through.
+uint OrbitShapeId() { return (uint)(g_orbit.model.w + 0.5); }
+
+// The preview object is centred on the origin and only ever yawed, never
+// translated or non-uniformly scaled, so object <-> world is a pure
+// rotation and the same transform inverts both positions and directions.
+float3 OrbitToLocal(float3 worldVector)
+{
+    const float c = g_orbit.model.x;
+    const float s = g_orbit.model.y;
+    return float3(
+        worldVector.x * c - worldVector.z * s,
+        worldVector.y,
+        worldVector.x * s + worldVector.z * c);
+}
+float3 OrbitToWorld(float3 localVector)
+{
+    const float c = g_orbit.model.x;
+    const float s = g_orbit.model.y;
+    return float3(
+        localVector.x * c + localVector.z * s,
+        localVector.y,
+        -localVector.x * s + localVector.z * c);
+}
+
+// Exact distance to where a ray leaves a unit-radius sphere centred on the
+// origin, given a point `p` already ON that sphere (|p| == radius) and a
+// unit direction `d` heading into it. |p + t*d|^2 = |p|^2 exactly when
+// t*(t + 2*dot(p,d)) = 0, so the non-trivial root is t = -2*dot(p,d); no
+// per-radius division needed.
+float OrbitSphereExitDistance(float3 p, float3 d)
+{
+    return max(-2.0 * dot(p, d), 0.0);
+}
+
+// Exact distance to where a ray leaves an axis-aligned cube of half-extent
+// `h` centred on the origin, given a point on its surface and a unit
+// direction heading inward (the standard per-axis slab test, keeping only
+// the face the ray is travelling toward on each axis).
+float OrbitBoxExitDistance(float3 p, float3 d, float h)
+{
+    const float3 safeD = float3(
+        abs(d.x) > 1.0e-6 ? d.x : 1.0e-6,
+        abs(d.y) > 1.0e-6 ? d.y : 1.0e-6,
+        abs(d.z) > 1.0e-6 ? d.z : 1.0e-6);
+    const float3 texit = (sign(safeD) * h - p) / safeD;
+    return max(min(min(texit.x, texit.y), texit.z), 0.0);
 }
 )";
 
@@ -185,26 +246,7 @@ float4 main(BgInput input) : SV_Target0
     const uint preset = (uint)(g_bg.params.w + 0.5);
     const float3 sun = OrbitSunDirection(g_bg.sun.x, g_bg.sun.y);
 
-    float3 color;
-
-    if (mode == 0u)
-    {
-        color = OrbitEnvironmentFor(ray, preset, sun);
-    }
-    else if (mode == 1u)
-    {
-        color = lerp(float3(0.006, 0.008, 0.014), float3(0.035, 0.045, 0.070), saturate(ndc.y * 0.5 + 0.5));
-    }
-    else if (mode == 2u)
-    {
-        color = float3(0.18, 0.18, 0.18);
-    }
-    else
-    {
-        const float2 cell = floor(input.position.xy / 24.0);
-        const float parity = fmod(cell.x + cell.y, 2.0);
-        color = lerp(float3(0.10, 0.10, 0.10), float3(0.16, 0.16, 0.16), parity);
-    }
+    const float3 color = OrbitBackdropFor(ray, mode, preset, sun);
 
     return float4(OrbitDisplayEncode(color * g_bg.sun.z), 1.0);
 }

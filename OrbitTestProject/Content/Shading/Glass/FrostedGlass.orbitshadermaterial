@@ -1,0 +1,7 @@
+[shader_material]
+name = "FrostedGlass"
+shader = "Glass_Medium.shade.hlsl"
+
+[[shader_material.parameter]]
+name = "frost"
+value = 0.55

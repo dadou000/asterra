@@ -510,6 +510,8 @@ void ShaderPreviewRenderer::Draw(
     {
         object[28U + index] = Bits(parameters[index]);
     }
+    // misc.x: the background mode, so OrbitBackdrop() matches what is drawn.
+    object[36] = Bits(static_cast<f32>(static_cast<u8>(state.background)));
 
     std::array<u32, 24> background{};
     const auto setVec3 = [&](const u32 slot, const math::Float3& v)

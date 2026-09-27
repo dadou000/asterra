@@ -36,3 +36,7 @@ __pycache__/
 # Runtime diagnostics
 /logs/
 *.dmp
+
+# Per-project Orbit derived/trash data (DerivedData, Intermediate, Logs,
+# Trash from shading.trash) under any Orbit project root in this repo.
+.orbit/

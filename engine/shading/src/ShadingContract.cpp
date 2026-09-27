@@ -432,6 +432,29 @@ float3 OrbitEnvironmentFor(float3 d, uint preset, float3 sun)
     return sky;
 }
 
+// What is behind the object under the preview's background setting (0 lighting
+// environment, 1 dark gradient, 2 neutral gray, 3 checker). The background pass
+// draws exactly this, so a glass shader that refracts it distorts what the
+// viewer actually sees around the object.
+float3 OrbitBackdropFor(float3 d, uint mode, uint preset, float3 sun)
+{
+    if (mode == 0u)
+        return OrbitEnvironmentFor(d, preset, sun);
+
+    if (mode == 1u)
+        return lerp(float3(0.006, 0.008, 0.014), float3(0.035, 0.045, 0.070), saturate(d.y * 0.5 + 0.5));
+
+    if (mode == 2u)
+        return float3(0.18, 0.18, 0.18);
+
+    // Checker: cells of longitude and latitude on the sphere of directions.
+    const float2 cell = floor(float2(
+        atan2(d.x, d.z) * (18.0 / ORBIT_PI),
+        asin(clamp(d.y, -1.0, 1.0)) * (18.0 / ORBIT_PI)));
+    const float parity = fmod(cell.x + cell.y + 128.0, 2.0);
+    return lerp(float3(0.05, 0.05, 0.055), float3(0.32, 0.32, 0.34), parity);
+}
+
 OrbitLighting OrbitMakeLightingFor(uint preset, float3 sun)
 {
     OrbitLighting l;
@@ -635,8 +658,364 @@ float4 Shade(OrbitSurface s, OrbitLighting l)
 }
 )";
 
-constexpr std::array<std::string_view, 4> kTemplateNames{
-    "lit", "unlit", "lunar_regolith", "debug_normals"};
+constexpr std::string_view kGlassLowTemplate = R"TPL(// Glass — Low (LOD2, the cheap tier). No shape query, no local-space volume
+// trace: a single reflection sample and a single naive one-bounce refraction
+// sample, blended by Fresnel, tinted by a flat authored `thickness` instead
+// of a real path length. That is a fixed 2 OrbitBackdrop samples per pixel
+// (a little more with `frost`, see below) on every shape, including Plane
+// and Mesh where Glass_Medium/Glass_High have no real geometry to fall back
+// on either — this tier never branches on the shape at all. Use it for
+// background glass and anything off a hero object; step up to
+// Glass_Medium.shade.hlsl for correct edge bending on Sphere/Cube, or
+// Glass_High.shade.hlsl for dispersion.
+//
+// The naive refraction assumes the far face is parallel to the near one (a
+// thin-slab approximation, same idea as the Plane/Mesh fallback in the other
+// tiers) so it barely deflects the transmitted ray and mostly just tints it —
+// correct for a window pane, an approximation everywhere else, and the
+// reason this tier is for background objects, not the one glass the camera
+// is looking straight at.
+//
+// @param tint       color3 0.88 0.96 1.00
+// @param ior        float  1.50 | 1.0 2.4
+// @param absorption float  0.35 | 0 4
+// @param thickness  float  0.6 | 0.05 3
+// @param frost      float  0.0 | 0 1
+
+float4 Shade(OrbitSurface s, OrbitLighting l)
+{
+    const float3 n = s.normalWS;
+    const float3 v = s.viewWS;
+    const float ior = max(Param_ior(), 1.0);
+    const float cosi = saturate(dot(n, v));
+
+    const float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    const float fresnel = f0 + (1.0 - f0) * pow(1.0 - cosi, 5.0);
+
+    // A single extra jitter tap stands in for frost here instead of an
+    // averaged blur: cheap, but grainier than Glass_Medium/Glass_High.
+    const float frost = Param_frost();
+    float3 jitter = float3(0.0, 0.0, 0.0);
+    if (frost > 0.01)
+        jitter = (OrbitHash3(s.positionWS * 61.0) - 0.5) * frost * 1.6;
+
+    const float3 reflected = OrbitBackdrop(normalize(reflect(-v, n) + jitter));
+
+    const float eta = 1.0 / ior;
+    const float3 entered = refract(-v, n, eta);
+    float3 exited = dot(entered, entered) < 1.0e-6
+        ? reflect(-v, n) // total internal reflection
+        : refract(entered, n, ior);
+    if (dot(exited, exited) < 1.0e-6)
+        exited = reflect(entered, -n);
+    float3 transmitted = OrbitBackdrop(normalize(exited + jitter));
+
+    transmitted *= exp(-(1.0 - Param_tint()) * Param_absorption() * Param_thickness());
+
+    float3 color = lerp(transmitted, reflected, fresnel);
+
+    // One cheap highlight instead of the three-light rig the other tiers sum.
+    color += l.key.radiance * pow(saturate(dot(n, normalize(l.key.directionWS + v))), 200.0) * (0.25 + fresnel);
+
+    return float4(color, 1.0);
+}
+)TPL";
+
+constexpr std::string_view kGlassMediumTemplate = R"TPL(// Glass — Medium (LOD1, the balanced tier). Keeps the exact ray-traced
+// entry-to-exit path on Sphere and Cube (correct edge bending, correct
+// per-pixel absorption thickness) but drops the two priciest parts of
+// Glass_High.shade.hlsl: no per-channel dispersion trace (one refraction
+// instead of three) and a 3-tap frost blur instead of 6. Worst case that is
+// 6 OrbitBackdrop samples per pixel instead of High's 24 — no rainbow
+// fringing, but a correctly bent, correctly tinted piece of glass. This is
+// the right default for most glass in a scene; reach for Glass_High.shade.hlsl
+// only for a hero object and Glass_Low.shade.hlsl for background dressing.
+//
+// Plane and Mesh have no known back-face to ray-trace against, so this falls
+// back to a thin parallel-faced slab there, same as the other tiers: it barely
+// deflects the transmitted ray and only tints it by the authored `thickness`.
+//
+// @param tint       color3 0.88 0.96 1.00
+// @param ior        float  1.50 | 1.0 2.4
+// @param absorption float  0.35 | 0 4
+// @param frost      float  0.0 | 0 1
+// @param thickness  float  0.6 | 0.05 3
+
+// Backdrop lookup, blurred by `frost` (3-tap jittered average).
+float3 GlassSee(float3 d, float frost, float3 seed)
+{
+    if (frost < 0.01)
+        return OrbitBackdrop(d);
+
+    float3 sum = float3(0.0, 0.0, 0.0);
+    [unroll]
+    for (int i = 0; i < 3; ++i)
+    {
+        const float3 j = OrbitHash3(seed * 61.0 + (float)i * 11.7) - 0.5;
+        sum += OrbitBackdrop(normalize(d + j * frost * 1.6));
+    }
+    return sum / 3.0;
+}
+
+// Exact single-channel refraction through a solid Sphere or Cube (see
+// Glass_High.shade.hlsl for the per-channel dispersive version).
+float3 GlassThroughSolid(uint shape, float3 posWS, float3 nWS, float3 v, float eta, out float thickness)
+{
+    const float3 entered = refract(-v, nWS, eta);
+    if (dot(entered, entered) < 1.0e-6)
+    {
+        thickness = 0.0;
+        return reflect(-v, nWS);
+    }
+
+    const float3 localP = OrbitToLocal(posWS);
+    const float3 localD = OrbitToLocal(entered);
+    float3 localExit;
+    float3 exitN;
+
+    if (shape == 0u) // Sphere: radius 1 (AddSphere).
+    {
+        thickness = OrbitSphereExitDistance(localP, localD);
+        localExit = localP + localD * thickness;
+        exitN = normalize(localExit);
+    }
+    else // Cube: half-extent 0.85 (AddCube).
+    {
+        thickness = OrbitBoxExitDistance(localP, localD, 0.85);
+        localExit = localP + localD * thickness;
+        const float3 a = abs(localExit);
+        exitN = (a.x >= a.y && a.x >= a.z) ? float3(sign(localExit.x), 0.0, 0.0)
+              : (a.y >= a.z)               ? float3(0.0, sign(localExit.y), 0.0)
+                                           : float3(0.0, 0.0, sign(localExit.z));
+    }
+
+    float3 exited = refract(localD, -exitN, 1.0 / eta);
+    if (dot(exited, exited) < 1.0e-6)
+        exited = reflect(localD, exitN);
+    return OrbitToWorld(exited);
+}
+
+// Plane / Mesh fallback: a thin parallel-faced slab (see Glass_High.shade.hlsl).
+float3 GlassThroughThin(float3 nWS, float3 v, float eta)
+{
+    const float3 entered = refract(-v, nWS, eta);
+    if (dot(entered, entered) < 1.0e-6)
+        return reflect(-v, nWS);
+    float3 exited = refract(entered, nWS, 1.0 / eta);
+    if (dot(exited, exited) < 1.0e-6)
+        exited = reflect(entered, -nWS);
+    return exited;
+}
+
+float4 Shade(OrbitSurface s, OrbitLighting l)
+{
+    const float3 n = s.normalWS;
+    const float3 v = s.viewWS;
+    const float ior = max(Param_ior(), 1.0);
+    const float cosi = saturate(dot(n, v));
+
+    const float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    const float fresnel = f0 + (1.0 - f0) * pow(1.0 - cosi, 5.0);
+
+    const float frost = Param_frost();
+    const float3 seed = s.positionWS;
+    const uint shape = OrbitShapeId();
+    const bool solid = (shape == 0u) || (shape == 2u);
+
+    const float3 reflected = GlassSee(reflect(-v, n), frost, seed);
+
+    const float eta = 1.0 / ior;
+    float3 transmitted;
+    float thickness;
+    if (solid)
+    {
+        transmitted = GlassSee(GlassThroughSolid(shape, s.positionWS, n, v, eta, thickness), frost, seed);
+    }
+    else
+    {
+        transmitted = GlassSee(GlassThroughThin(n, v, eta), frost, seed);
+        thickness = Param_thickness();
+    }
+
+    const float3 absorb = exp(-(1.0 - Param_tint()) * Param_absorption() * thickness);
+    transmitted *= absorb;
+
+    float3 color = lerp(transmitted, reflected, fresnel);
+
+    const float shininess = lerp(300.0, 30.0, frost);
+    float3 highlights = float3(0.0, 0.0, 0.0);
+    highlights += l.key.radiance * pow(saturate(dot(n, normalize(l.key.directionWS + v))), shininess);
+    highlights += l.fill.radiance * pow(saturate(dot(n, normalize(l.fill.directionWS + v))), shininess);
+    color += highlights * (0.25 + fresnel);
+
+    return float4(color, 1.0);
+}
+)TPL";
+
+constexpr std::string_view kGlassHighTemplate = R"TPL(// Glass — High (LOD0, the hero tier). Ray-traces the *exact* entry-to-exit
+// path through the medium on the Sphere and Cube preview shapes (they are
+// analytic primitives centred on the origin, so OrbitSphereExitDistance /
+// OrbitBoxExitDistance give the real path length), traces that path three
+// times for per-channel dispersion, and blurs both the reflection and the
+// transmission with a 6-tap jittered average for frost. Worst case (frost
+// and dispersion both active) that is up to 24 OrbitBackdrop samples per
+// pixel — use this tier for a hero shot or a close-up gem, not for a scene
+// full of glass. See Glass_Medium.shade.hlsl and Glass_Low.shade.hlsl for
+// cheaper tiers, and pick per-material, not by editing this file down.
+//
+// Plane and Mesh have no known back-face to ray-trace against, so this falls
+// back to a thin parallel-faced slab there: parallel faces barely deflect the
+// transmitted ray (correctly — a window pane doesn't either), only tinting it
+// by the authored `thickness`.
+//
+// The preview blends opaquely and cannot read the scene behind the object, so
+// even the exact path refracts into OrbitBackdrop() — the environment or the
+// checker behind the object — not other objects in front of it.
+//
+// @param tint       color3 0.88 0.96 1.00
+// @param ior        float  1.50 | 1.0 2.4
+// @param absorption float  0.35 | 0 4
+// @param dispersion float  0.015 | 0 0.08
+// @param frost      float  0.0 | 0 1
+// @param thickness  float  0.6 | 0.05 3
+
+// Backdrop lookup, blurred by `frost` (6-tap jittered average).
+float3 GlassSee(float3 d, float frost, float3 seed)
+{
+    if (frost < 0.01)
+        return OrbitBackdrop(d);
+
+    float3 sum = float3(0.0, 0.0, 0.0);
+    [unroll]
+    for (int i = 0; i < 6; ++i)
+    {
+        const float3 j = OrbitHash3(seed * 61.0 + (float)i * 7.13) - 0.5;
+        sum += OrbitBackdrop(normalize(d + j * frost * 1.6));
+    }
+    return sum / 6.0;
+}
+
+// Exact double refraction through a solid Sphere or Cube: bend on entry,
+// ray-trace to the real exit point, bend again there. `eta` is n_air/n_glass
+// for this colour channel (dispersion perturbs it per channel).
+float3 GlassThroughSolid(uint shape, float3 posWS, float3 nWS, float3 v, float eta, out float thickness)
+{
+    const float3 entered = refract(-v, nWS, eta);
+    if (dot(entered, entered) < 1.0e-6)
+    {
+        thickness = 0.0;
+        return reflect(-v, nWS); // total internal reflection on entry
+    }
+
+    const float3 localP = OrbitToLocal(posWS);
+    const float3 localD = OrbitToLocal(entered);
+    float3 localExit;
+    float3 exitN; // outward normal at the exit point, in local space
+
+    if (shape == 0u) // Sphere: radius 1 (AddSphere).
+    {
+        thickness = OrbitSphereExitDistance(localP, localD);
+        localExit = localP + localD * thickness;
+        exitN = normalize(localExit);
+    }
+    else // Cube: half-extent 0.85 (AddCube).
+    {
+        thickness = OrbitBoxExitDistance(localP, localD, 0.85);
+        localExit = localP + localD * thickness;
+        const float3 a = abs(localExit);
+        exitN = (a.x >= a.y && a.x >= a.z) ? float3(sign(localExit.x), 0.0, 0.0)
+              : (a.y >= a.z)               ? float3(0.0, sign(localExit.y), 0.0)
+                                           : float3(0.0, 0.0, sign(localExit.z));
+    }
+
+    // Exit is glass -> air, the reverse of entry's eta.
+    float3 exited = refract(localD, -exitN, 1.0 / eta);
+    if (dot(exited, exited) < 1.0e-6)
+        exited = reflect(localD, exitN); // total internal reflection on exit
+    return OrbitToWorld(exited);
+}
+
+// Plane / Mesh fallback: no known back-face to ray-trace against, so this
+// treats the medium as a thin slab with the entry face's own normal on both
+// sides. Parallel faces barely deflect the transmitted ray (correctly, for a
+// window pane); `thickness` still drives absorption below.
+float3 GlassThroughThin(float3 nWS, float3 v, float eta)
+{
+    const float3 entered = refract(-v, nWS, eta);
+    if (dot(entered, entered) < 1.0e-6)
+        return reflect(-v, nWS);
+    float3 exited = refract(entered, nWS, 1.0 / eta);
+    if (dot(exited, exited) < 1.0e-6)
+        exited = reflect(entered, -nWS);
+    return exited;
+}
+
+float4 Shade(OrbitSurface s, OrbitLighting l)
+{
+    const float3 n = s.normalWS;
+    const float3 v = s.viewWS;
+    const float ior = max(Param_ior(), 1.0);
+    const float cosi = saturate(dot(n, v));
+
+    // Fresnel (Schlick with the dielectric F0 from the index of refraction).
+    const float f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    const float fresnel = f0 + (1.0 - f0) * pow(1.0 - cosi, 5.0);
+
+    const float frost = Param_frost();
+    const float3 seed = s.positionWS;
+    const uint shape = OrbitShapeId();
+    const bool solid = (shape == 0u) || (shape == 2u); // Sphere or Cube
+
+    // Reflection off the front face.
+    const float3 reflected = GlassSee(reflect(-v, n), frost, seed);
+
+    // Refraction with per-channel dispersion, and per-channel path length
+    // through the medium for absorption.
+    const float d = Param_dispersion();
+    const float eta = 1.0 / ior;
+    float3 transmitted;
+    float3 thicknessRGB;
+    if (solid)
+    {
+        transmitted.r = GlassSee(GlassThroughSolid(shape, s.positionWS, n, v, eta * (1.0 - d), thicknessRGB.r), frost, seed).r;
+        transmitted.g = GlassSee(GlassThroughSolid(shape, s.positionWS, n, v, eta,             thicknessRGB.g), frost, seed).g;
+        transmitted.b = GlassSee(GlassThroughSolid(shape, s.positionWS, n, v, eta * (1.0 + d), thicknessRGB.b), frost, seed).b;
+    }
+    else
+    {
+        transmitted.r = GlassSee(GlassThroughThin(n, v, eta * (1.0 - d)), frost, seed).r;
+        transmitted.g = GlassSee(GlassThroughThin(n, v, eta),             frost, seed).g;
+        transmitted.b = GlassSee(GlassThroughThin(n, v, eta * (1.0 + d)), frost, seed).b;
+        thicknessRGB = Param_thickness().xxx;
+    }
+
+    // Beer-Lambert absorption over the real path length.
+    const float3 absorb = exp(-(1.0 - Param_tint()) * Param_absorption() * thicknessRGB);
+    transmitted *= absorb;
+
+    float3 color = lerp(transmitted, reflected, fresnel);
+
+    // Sharp highlights from the rig; frost widens them.
+    const float shininess = lerp(400.0, 30.0, frost);
+    float3 highlights = float3(0.0, 0.0, 0.0);
+    highlights += l.key.radiance * pow(saturate(dot(n, normalize(l.key.directionWS + v))), shininess);
+    highlights += l.fill.radiance * pow(saturate(dot(n, normalize(l.fill.directionWS + v))), shininess);
+    highlights += l.rim.radiance * pow(saturate(dot(n, normalize(l.rim.directionWS + v))), shininess);
+    color += highlights * (0.25 + fresnel);
+
+    // Light focused through the body lands on the far side: a soft bright
+    // spot opposite the key light, seen through the glass.
+    const float3 focus = normalize(-l.key.directionWS + n * 0.35);
+    color += l.key.radiance * Param_tint() * pow(saturate(dot(focus, v)), 20.0)
+        * 0.12 * (1.0 - fresnel);
+
+    return float4(color, 1.0);
+}
+)TPL";
+
+constexpr std::array<std::string_view, 7> kTemplateNames{
+    "lit", "unlit", "glass_low", "glass_medium", "glass_high",
+    "lunar_regolith", "debug_normals"};
 } // namespace
 
 std::span<const std::string_view> ShaderTemplateNames() noexcept
@@ -649,6 +1028,9 @@ std::optional<std::string_view> ShaderTemplateSource(
 {
     if (name == "lit") return kLitTemplate;
     if (name == "unlit") return kUnlitTemplate;
+    if (name == "glass_low") return kGlassLowTemplate;
+    if (name == "glass_medium") return kGlassMediumTemplate;
+    if (name == "glass_high") return kGlassHighTemplate;
     if (name == "lunar_regolith") return kRegolithTemplate;
     if (name == "debug_normals") return kNormalsTemplate;
     return std::nullopt;

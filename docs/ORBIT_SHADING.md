@@ -81,6 +81,10 @@ Helpers available to your code:
 | Function | Purpose |
 | --- | --- |
 | `OrbitEnvironment(float3 dirWS)` | Sky radiance for a world direction under the current preset (reflections). |
+| `OrbitBackdrop(float3 dirWS)` | What the preview background shows in that direction (environment, gradient, gray or checker). Refract into this for glass that visibly distorts what is behind it. |
+| `OrbitShapeId()` | The preview shape being drawn: 0 Sphere, 1 Plane, 2 Cube, 3 Mesh. |
+| `OrbitToLocal/OrbitToWorld(float3)` | Rotate a world position or direction into/out of the preview object's local space (it is only ever yawed about the origin, never translated or scaled). |
+| `OrbitSphereExitDistance(p, d)` / `OrbitBoxExitDistance(p, d, h)` | Exact distance a unit ray travels before leaving a unit-radius sphere / a half-extent-`h` cube centred on the origin, given a start point already on its surface. The real volume a refractive shader needs on the Sphere and Cube preview shapes. |
 | `OrbitSunDirection(az, el)` | Unit sun vector from radians. |
 | `OrbitHash(float3)`, `OrbitHash3(float3)` | Cheap hash noise. |
 | `OrbitParam(i)`, `OrbitParam2/3/4(i)` | Raw parameter slots. |
@@ -112,7 +116,40 @@ file and your line numbers**, for example
 
 `lit` (Lambert + GGX, three parameters), `unlit`, `lunar_regolith`
 (Lommel-Seeliger with an opposition surge and procedural craters; try Space
-lighting on a sphere), `debug_normals`.
+lighting on a sphere), `debug_normals`, `glass_low`, `glass_medium`,
+`glass_high`. The preview is opaque, so glass sees the backdrop
+(environment/gradient/gray/checker), not other objects.
+
+#### Glass: three cost tiers, not one shader
+
+There is no single "glass" template, on purpose: a shader that ray-traces an
+exact refraction path, disperses it into three colour channels and blurs both
+the reflection and the transmission for frost costs a lot more per pixel than
+one that doesn't, and a scene with more than one or two pieces of glass in it
+needs to be able to choose. Pick per-material, not by editing a shader down:
+
+| Template | Worst-case `OrbitBackdrop` samples/pixel | What it does |
+| --- | --- | --- |
+| `glass_low` | 2 (a little more with `frost`) | No shape query at all: one reflection sample, one naive front-face-only refraction sample, flat authored `thickness` for absorption. Works identically (and identically cheaply) on every shape, including Plane and Mesh. For background glass. |
+| `glass_medium` | 6 | Exact ray-traced entry-to-exit path on Sphere/Cube (correct edge bending, correct per-pixel absorption thickness), single refraction (no dispersion), 3-tap frost blur. The right default for most glass in a scene. |
+| `glass_high` | 24 | `glass_medium`'s exact path traced three times for per-channel dispersion, plus a 6-tap frost blur. For a hero object or a close-up gem, not a scene full of glass. |
+
+Sphere and Cube are analytic primitives centred on the origin, so
+`glass_medium`/`glass_high` can query their exact volume with
+`OrbitShapeId`, `OrbitToLocal`/`OrbitToWorld` and
+`OrbitSphereExitDistance`/`OrbitBoxExitDistance`. Plane and Mesh have no such
+geometry (no back-face to ray-trace against, and no depth-peel pass exists to
+provide one), so every tier falls back to treating them as a thin
+parallel-faced slab there: parallel faces barely deflect the transmitted ray
+(correctly — a window pane doesn't either) and only tint it by the authored
+`thickness`. All three take `tint`, `ior`, `absorption`; `glass_medium`/`glass_high`
+add `frost`, and `glass_high` alone adds `dispersion`. `thickness` exists on
+all three but only does anything on Plane/Mesh (or on every shape, for
+`glass_low`, which never queries the real geometry).
+
+The project ships ClearGlass/FrostedGlass (`glass_medium`), AmberGlass
+(`glass_low`) and Diamond (`glass_high`) — render them on the Cube shape to
+see each tier's edge behaviour clearly.
 
 ### Shapes, lighting, backgrounds
 

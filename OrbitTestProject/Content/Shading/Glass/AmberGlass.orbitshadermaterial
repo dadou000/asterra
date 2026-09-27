@@ -1,0 +1,11 @@
+[shader_material]
+name = "AmberGlass"
+shader = "Glass_Low.shade.hlsl"
+
+[[shader_material.parameter]]
+name = "tint"
+value = [1.0, 0.62, 0.18]
+
+[[shader_material.parameter]]
+name = "absorption"
+value = 1.6
