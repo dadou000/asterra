@@ -140,7 +140,7 @@ void SystemViewUi::Register(
     ui.RegisterPanel({
         .id = kPanel,
         .title = "System View",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = editor_ui::DockRegion::Center,
         .dockOrder = 20,
         .minSize = {.width = 460.0F, .height = 360.0F},
