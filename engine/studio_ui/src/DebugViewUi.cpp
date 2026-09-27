@@ -48,7 +48,7 @@ void DebugViewUi::Register(editor_ui::EditorUi& ui)
     ui.RegisterPanel({
         .id = kPanelId,
         .title = "Debug",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = editor_ui::DockRegion::Right,
         .dockOrder = 60,
         .minSize = {.width = 260.0F, .height = 160.0F},
