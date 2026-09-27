@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
 #include <orbit/editor_model/CelestialAuthoringModel.hpp>
+#include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
@@ -11,6 +12,7 @@
 #include <format>
 #include <initializer_list>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -114,6 +116,21 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
             OpenPanels(
                 ui,
                 {"Explorer", "System View", "Inspector"});
+        }
+    });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Simulation",
+        .invoke = [&ui]
+        {
+            CloseSpecialistPanels(ui);
+            ClosePanels(
+                ui,
+                {"Properties", "Material Service", "Build", "Output"});
+            OpenPanels(
+                ui,
+                {"Explorer", "Viewport", "Volumes"});
         }
     });
 
@@ -228,16 +245,12 @@ void StudioViewportPanels::DrawContextInspector(
 
     if (selected.size() == 1U)
     {
-        const auto record =
-            world.Objects().Find(
-                selected.front());
+        const auto& record =
+            selected.front();
 
-        if (record.has_value())
-        {
-            context.Text(record->name);
-            context.MutedText(
-                record->type.ToString());
-        }
+        context.Text(record.name);
+        context.MutedText(
+            record.type.ToString());
     }
     else
     {
