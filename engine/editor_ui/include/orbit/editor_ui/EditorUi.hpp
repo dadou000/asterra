@@ -206,9 +206,13 @@ struct PanelDefinition
 
 struct DockLayoutFractions
 {
-    f32 left{0.20F};
-    f32 right{0.26F};
-    f32 bottom{0.22F};
+    // Keep the main workspace visually dominant on a fresh/reset layout.
+    // Side panels remain large enough for hierarchy/properties work, while
+    // the activity/output strip no longer consumes nearly a quarter of the
+    // editor before the user asks for it.
+    f32 left{0.18F};
+    f32 right{0.22F};
+    f32 bottom{0.15F};
 };
 
 struct DockAssignment
