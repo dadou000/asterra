@@ -24,6 +24,11 @@ public:
     void Register(
         editor_ui::EditorUi& ui);
 
+    // Shared draw path for contextual Properties hosting. The standalone
+    // Volumes panel remains available for dedicated simulation workspaces.
+    void Draw(
+        editor_ui::PanelContext& context);
+
     inline static constexpr editor_ui::PanelId kPanel{
         .high = 0x4f52424954535455ULL,
         .low = 0x564f4c554d455330ULL
@@ -37,8 +42,6 @@ private:
     void DrawBase(
         editor_ui::PanelContext& context);
 
-    void Draw(
-        editor_ui::PanelContext& context);
     void DrawRepresentationPolicy(
         editor_ui::PanelContext& context);
 
