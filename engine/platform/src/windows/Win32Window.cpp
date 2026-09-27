@@ -853,6 +853,18 @@ public:
         return height_;
     }
 
+    [[nodiscard]] f32
+    DpiScale() const override
+    {
+        // Per-monitor: reads the DPI of whichever monitor the window
+        // currently sits on, not just the one it was created on.
+        const UINT dpi = GetDpiForWindow(hwnd_);
+        return dpi > 0
+            ? static_cast<f32>(dpi) /
+                  static_cast<f32>(USER_DEFAULT_SCREEN_DPI)
+            : 1.0F;
+    }
+
     [[nodiscard]] bool
     CaptureScreenshotBmp(
         const std::string_view path)

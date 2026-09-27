@@ -20,6 +20,14 @@
 
 namespace orbit::editor_ui
 {
+// The UI scale the running EditorUi was built with (see EditorUi's `uiScale`
+// constructor parameter): 1.0 unless the window's DpiScale() was above 1.0 at
+// startup. ImGui's own font size and style metrics already scale with it;
+// this is for a panel's *own* hardcoded pixel constants (a thumbnail size, a
+// preview width clamp) that would otherwise stay tiny on a high-DPI display.
+// Valid only after an EditorUi has been constructed.
+[[nodiscard]] f32 CurrentUiScale() noexcept;
+
 struct PanelIdTag;
 using PanelId = core::StrongId<PanelIdTag>;
 
@@ -277,11 +285,16 @@ struct PanelMenuEntry
 class EditorUi
 {
 public:
+    // `uiScale` is the window's DPI scale (Window::DpiScale(): 1.0 at 100%,
+    // 2.0 at Windows' 200%); it sizes the loaded font and every style metric
+    // (padding, rounding, scrollbar/grab size) so the editor stays legible on
+    // a high-DPI display instead of rendering pixel-perfect-but-tiny.
     EditorUi(
         rhi::Device& device,
         rhi::Queue& graphicsQueue,
         const shader::Compiler& compiler,
-        std::filesystem::path layoutPath);
+        std::filesystem::path layoutPath,
+        f32 uiScale = 1.0F);
 
     ~EditorUi();
 

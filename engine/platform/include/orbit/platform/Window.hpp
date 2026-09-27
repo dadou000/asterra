@@ -130,6 +130,14 @@ public:
     [[nodiscard]] virtual u32 Width() const = 0;
     [[nodiscard]] virtual u32 Height() const = 0;
 
+    // The window's current monitor scale factor: 1.0 at 100% (96 DPI), 2.0 at
+    // Windows' 200% setting, and so on. Width()/Height() are already
+    // physical pixels (see EnsureProcessDpiAwareness), so this exists purely
+    // for UI layers that draw at a fixed logical size (ImGui's font/style
+    // metrics) and need to scale up to stay legible rather than rendering
+    // pixel-perfect-but-tiny on a high-DPI display.
+    [[nodiscard]] virtual f32 DpiScale() const = 0;
+
     [[nodiscard]] virtual bool CaptureScreenshotBmp(
         std::string_view path) const = 0;
 

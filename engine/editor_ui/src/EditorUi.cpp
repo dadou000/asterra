@@ -24,6 +24,12 @@ namespace orbit::editor_ui
 {
 namespace
 {
+// Set once by EditorUi::Impl's constructor; read by CurrentUiScale() below.
+// One EditorUi per process (Orbit Studio's single window), so a plain
+// global is the pragmatic choice over threading a reference through every
+// PanelContext.
+f32 g_uiScale = 1.0F;
+
 struct UiVertex
 {
     math::Float2 position{};
@@ -345,9 +351,10 @@ void ApplyWavelengthTheme()
 // stock editor look like a debug overlay. Falls back to the built-in font
 // when Segoe UI is not installed (non-Windows or stripped images).
 void LoadStudioFont(
-    ImGuiIO& io)
+    ImGuiIO& io,
+    const f32 uiScale)
 {
-    constexpr f32 kFontPixels = 16.0F;
+    const f32 kFontPixels = 16.0F * uiScale;
 
     // The stock Windows install location; anything else falls back below.
     const std::filesystem::path candidate =
@@ -465,6 +472,11 @@ void DrawWavelengthCanvas(
 }
 } // namespace
 
+f32 CurrentUiScale() noexcept
+{
+    return g_uiScale;
+}
+
 class EditorUi::Impl
 {
 public:
@@ -472,7 +484,8 @@ public:
         rhi::Device& device,
         rhi::Queue& graphicsQueue,
         const shader::Compiler& compiler,
-        std::filesystem::path layoutPath)
+        std::filesystem::path layoutPath,
+        const f32 uiScale)
         : device(device),
           graphicsQueue(graphicsQueue),
           layoutPath(
@@ -512,9 +525,17 @@ public:
                 ReadLayoutText(
                     this->layoutPath));
 
+        g_uiScale = uiScale > 0.0F ? uiScale : 1.0F;
+
         ImGui::StyleColorsDark();
         ApplyWavelengthTheme();
-        LoadStudioFont(io);
+        // Style metrics above are authored at 100% (96 DPI); scale them and
+        // the font together so a 200%-scaled Windows display isn't tiny.
+        if (uiScale > 1.0F)
+        {
+            ImGui::GetStyle().ScaleAllSizes(uiScale);
+        }
+        LoadStudioFont(io, uiScale);
 
         const shader::Binary vertex =
             compiler.Compile({
@@ -2177,13 +2198,15 @@ EditorUi::EditorUi(
     rhi::Device& device,
     rhi::Queue& graphicsQueue,
     const shader::Compiler& compiler,
-    std::filesystem::path layoutPath)
+    std::filesystem::path layoutPath,
+    const f32 uiScale)
     : impl_(
           std::make_unique<Impl>(
               device,
               graphicsQueue,
               compiler,
-              std::move(layoutPath)))
+              std::move(layoutPath),
+              uiScale))
 {
 }
 

@@ -2140,7 +2140,8 @@ int main(
             device,
             graphicsQueue,
             compiler,
-            layoutPath);
+            layoutPath,
+            window.DpiScale());
 
         projectBrowserUi.SetDialogOwner(&window);
         projectBrowserUi.RegisterProjectBrowser(ui);
