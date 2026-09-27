@@ -5,6 +5,7 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,9 +13,17 @@
 
 namespace orbit::studio_ui
 {
+class CelestialAuthoringUi;
+class SurfaceAuthoringUi;
+
 inline constexpr editor_ui::PanelId kPrimaryViewportPanel{
     .high = 0x4f52424954535455ULL,
     .low = 0x44494f5657455750ULL
+};
+
+inline constexpr editor_ui::PanelId kContextInspectorPanel{
+    .high = 0x4f52424954535455ULL,
+    .low = 0x434f4e54494e5350ULL
 };
 
 enum class StudioTerrainAuthoringTool : u8
@@ -48,6 +57,8 @@ public:
         StudioRenderViewSet& views,
         studio_session::StudioSession& session) noexcept;
 
+    ~StudioViewportPanels();
+
     void Rebind(
         StudioRenderViewSet& views,
         studio_session::StudioSession& session);
@@ -67,6 +78,12 @@ private:
     void DrawView(
         editor_ui::PanelContext& context,
         std::string_view id);
+
+    void RegisterContextInspector(
+        editor_ui::EditorUi& ui);
+    void DrawContextInspector(
+        editor_ui::PanelContext& context);
+    void EnsureContextAuthoring();
 
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
@@ -96,5 +113,12 @@ private:
     bool biomeAutomaticOverlay_{false};
     std::optional<f64> hoveredBiomeAuthoredWeight_;
     std::optional<f64> hoveredBiomeAutomaticWeight_;
+
+    // MUI contextual-inspector bridge. These own only presentation state;
+    // semantic authority stays in StudioSession and the shared editor models.
+    studio_session::StudioSession* contextualSession_{nullptr};
+    std::unique_ptr<CelestialAuthoringUi> contextualCelestial_;
+    std::unique_ptr<SurfaceAuthoringUi> contextualSurface_;
+    bool contextualAdvancedProperties_{false};
 };
 } // namespace orbit::studio_ui
