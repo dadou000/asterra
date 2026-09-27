@@ -52,7 +52,7 @@ void WorldDocumentsUi::Register(
     ui.RegisterPanel({
         .id = kPanelId,
         .title = "World Documents",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = orbit::editor_ui::DockRegion::Left,
         .dockOrder = 10,
         .draw =
