@@ -620,6 +620,35 @@ StudioRenderViewSet::DebugField(
     return found->second;
 }
 
+void StudioRenderViewSet::SetSurfaceDebugMode(
+    const std::string_view id,
+    const lighting::SurfaceDebugMode mode)
+{
+    auto* view = Find(id);
+
+    if (view == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    view->SetSurfaceDebugMode(mode);
+}
+
+lighting::SurfaceDebugMode StudioRenderViewSet::SurfaceDebugMode(
+    const std::string_view id) const
+{
+    const auto* view = Find(id);
+
+    if (view == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    return view->SurfaceDebugMode();
+}
+
 void StudioRenderViewSet::SetDebugPhysicalPageLevel(
     const std::string_view id,
     const u8 level)
@@ -926,6 +955,8 @@ StudioRenderViewSet::Catalog() const
             .hasTarget =
                 target != nullptr &&
                 target->target.has_value(),
+            .surfaceDebugMode =
+                SurfaceDebugMode(id),
             .debugField =
                 DebugField(id),
             .debugPhysicalPageLevel =

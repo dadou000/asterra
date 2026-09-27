@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/lighting/SurfaceDebugRenderer.hpp>
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -72,6 +73,8 @@ struct StudioRenderViewInfo
     u32 width{1};
     u32 height{1};
     bool hasTarget{false};
+    lighting::SurfaceDebugMode surfaceDebugMode{
+        lighting::SurfaceDebugMode::Lit};
     terrain_debug::TerrainDebugField debugField{
         terrain_debug::TerrainDebugField::Uplift};
     u8 debugPhysicalPageLevel{8};
@@ -184,6 +187,15 @@ public:
 
     [[nodiscard]] terrain_debug::TerrainDebugField
     DebugField(std::string_view id) const;
+
+    // GBuffer-channel debug view. Transient RenderView presentation state,
+    // same as SetDebugField above.
+    void SetSurfaceDebugMode(
+        std::string_view id,
+        lighting::SurfaceDebugMode mode);
+
+    [[nodiscard]] lighting::SurfaceDebugMode
+    SurfaceDebugMode(std::string_view id) const;
 
     void SetDebugPhysicalPageLevel(
         std::string_view id,

@@ -1,9 +1,11 @@
 add_library(OrbitStudioUi STATIC
     src/CelestialAuthoringUi.cpp
+    src/DebugViewUi.cpp
     src/DisplayDiagnosticsUi.cpp
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
     src/ShadingUi.cpp
+    src/StudioRenderViewRpc.cpp
     src/StudioRenderViewSet.cpp
     src/StudioSurfacePicking.cpp
     src/StudioTerrainDiagnosticOverlayGeometry.cpp
@@ -55,6 +57,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::PostProcess
         Orbit::RenderGraph
         Orbit::RenderView
+        Orbit::Rpc
         Orbit::Shading
         Orbit::StudioSession
         Orbit::TerrainDebug

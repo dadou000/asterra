@@ -101,6 +101,19 @@ scriptable through `shading.*`; see [ORBIT_SHADING.md](ORBIT_SHADING.md) for the
 contract, the hot path (shader edits never restart Studio) and the complete
 tool list.
 
+## Debug tab
+
+One toolbar switching which GBuffer channel every Studio viewport ("Viewport"
+and "Body Map / Debug View") renders. The same operation is reachable three
+ways: the Debug tab's own toolbar, each Viewport panel's "Surface View"
+button row, and `view.surface_debug_*` below — all three drive the same
+`StudioRenderViewSet` setter (ORBIT_UI_RULES.md section 13).
+
+| MCP tool | RPC method | Notes |
+| --- | --- | --- |
+| `orbit_view_surface_debug_get(view_id)` | `view.surface_debug_get` | `view_id` defaults to `"studio.primary"`; the other slot is `"studio.map"`. |
+| `orbit_view_surface_debug_set(surface_debug_mode, view_id)` | `view.surface_debug_set` | `surface_debug_mode`: `lit` \| `base_color_roughness` \| `normal_metallic` \| `emission_metadata`. |
+
 ## Objects, bodies and properties
 
 | MCP tool | RPC method |

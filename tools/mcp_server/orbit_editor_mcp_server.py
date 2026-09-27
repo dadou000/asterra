@@ -690,6 +690,40 @@ def orbit_panel_close(title: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Debug tab: which GBuffer channel each Studio viewport renders
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def orbit_view_surface_debug_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Return which GBuffer channel a Studio viewport is currently showing.
+
+    view_id is a RenderView slot: "studio.primary" (Viewport) or
+    "studio.map" (Body Map / Debug View).
+    """
+    return _rpc("view.surface_debug_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_view_surface_debug_set(
+    surface_debug_mode: str,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Switch which GBuffer channel a Studio viewport renders.
+
+    surface_debug_mode: lit | base_color_roughness | normal_metallic |
+    emission_metadata. view_id is a RenderView slot: "studio.primary"
+    (Viewport) or "studio.map" (Body Map / Debug View). This is the same
+    switch as the Debug tab's toolbar and each Viewport panel's own
+    "Surface View" buttons.
+    """
+    return _rpc(
+        "view.surface_debug_set",
+        {"id": view_id, "surface_debug_mode": surface_debug_mode},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Shading tab: content tree, shaders, materials, preview
 #
 # Paths may be project-relative ("Content/Shading/Lunar.shade.hlsl") or

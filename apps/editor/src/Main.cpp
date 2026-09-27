@@ -54,9 +54,11 @@
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
+#include <orbit/studio_ui/DebugViewUi.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
+#include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
@@ -2215,6 +2217,15 @@ int main(
             displayDiagnosticsUi(
                 studioViewportRenderer);
         displayDiagnosticsUi.Register(ui);
+
+        orbit::studio_ui::DebugViewUi
+            debugViewUi(
+                studioViews);
+        debugViewUi.Register(ui);
+
+        orbit::studio_ui::RegisterStudioRenderViewRpc(
+            rpcHost.Dispatcher(),
+            studioViews);
 
         orbit::lighting::LightingScheduler
             lightingScheduler;
