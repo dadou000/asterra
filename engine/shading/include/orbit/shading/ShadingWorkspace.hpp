@@ -32,6 +32,44 @@ struct TreeNode
     std::vector<TreeNode> children;
 };
 
+// A compiled, fully resolved snapshot of a *specific* shader or shader
+// material asset -- independent of whatever is currently open in a
+// ShadingWorkspace. Used to render a thumbnail for a tree entry without
+// disturbing the live editor's selection.
+struct MaterialPreview
+{
+    ShadingProgram program;
+    std::array<f32, kMaxParameterFloats> parameters{};
+    // Owns the decoded pixels the packed pointers below refer to.
+    std::array<std::optional<content::RuntimeTexture>, kMaxShaderTextures>
+        textureStorage{};
+
+    [[nodiscard]] std::array<const content::RuntimeTexture*, kMaxShaderTextures>
+    PackedTextures() const noexcept
+    {
+        std::array<const content::RuntimeTexture*, kMaxShaderTextures> packed{};
+        for (u32 slot = 0U; slot < kMaxShaderTextures; ++slot)
+        {
+            packed[slot] = textureStorage[slot].has_value()
+                ? &*textureStorage[slot]
+                : nullptr;
+        }
+        return packed;
+    }
+};
+
+// Resolves and compiles `path` (a ShadingShader or ShaderMaterial asset) on
+// its own, reading defaults/overrides straight from ContentService: no
+// ShadingWorkspace selection is touched. std::nullopt for anything else (a
+// folder, an unreadable file, a kind this tab doesn't preview). A shader
+// that fails to compile still comes back with `program.ok == false` and
+// its diagnostics, rather than std::nullopt, so a caller can render an
+// error tile instead of nothing.
+[[nodiscard]] std::optional<MaterialPreview> ComputeMaterialPreview(
+    const content::ContentService& content,
+    const shader::Compiler* compiler,
+    const std::filesystem::path& path);
+
 struct ShaderStatus
 {
     // The shader being edited/previewed and, when a shader material was

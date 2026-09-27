@@ -13,6 +13,9 @@ namespace orbit::studio_ui
 namespace
 {
 constexpr std::string_view kEntryPayload = "ORBIT_SHADING_ENTRY";
+// A small square thumbnail before every previewable row, sized to read at a
+// glance without dominating the tree the way a full preview would.
+constexpr f32 kThumbnailSize = 32.0F;
 
 [[nodiscard]] std::vector<std::string_view> Labels(
     const std::span<const shading::EnumEntry> table)
@@ -32,6 +35,12 @@ constexpr std::string_view kEntryPayload = "ORBIT_SHADING_ENTRY";
         : std::string();
 }
 
+[[nodiscard]] bool IsThumbnailable(const shading::TreeNode& node) noexcept
+{
+    return node.kind == content::AssetKind::ShadingShader ||
+        node.kind == content::AssetKind::ShaderMaterial;
+}
+
 [[nodiscard]] std::vector<std::byte> Bytes(const std::string& text)
 {
     const auto view = std::as_bytes(std::span(text));
@@ -41,26 +50,42 @@ constexpr std::string_view kEntryPayload = "ORBIT_SHADING_ENTRY";
 
 ShadingUi::ShadingUi(
     shading::ShadingWorkspace& workspace,
-    std::function<rhi::Texture*()> previewColor)
+    std::function<rhi::Texture*()> previewColor,
+    std::function<rhi::Texture*(const std::filesystem::path&)> thumbnailFor)
     : workspace_(&workspace),
-      previewColor_(std::move(previewColor))
+      previewColor_(std::move(previewColor)),
+      thumbnailFor_(std::move(thumbnailFor))
 {
 }
 
 void ShadingUi::Register(editor_ui::EditorUi& ui)
 {
     ui.RegisterPanel({
+        .id = kBrowserPanelId,
+        .title = "Shading Materials",
+        .defaultOpen = true,
+        .defaultDock = editor_ui::DockRegion::Right,
+        .dockOrder = 25,
+        .minSize = {.width = 260.0F, .height = 300.0F},
+        .defaultSize = {.width = 340.0F, .height = 820.0F},
+        .draw =
+            [this](editor_ui::PanelContext& context)
+            {
+                DrawBrowser(context);
+            }});
+
+    ui.RegisterPanel({
         .id = kPanelId,
         .title = "Shading",
         .defaultOpen = true,
         .defaultDock = editor_ui::DockRegion::Center,
         .dockOrder = 25,
-        .minSize = {.width = 640.0F, .height = 420.0F},
-        .defaultSize = {.width = 1280.0F, .height = 900.0F},
+        .minSize = {.width = 480.0F, .height = 420.0F},
+        .defaultSize = {.width = 960.0F, .height = 900.0F},
         .draw =
             [this](editor_ui::PanelContext& context)
             {
-                Draw(context);
+                DrawWorkArea(context);
             }});
 }
 
@@ -103,38 +128,12 @@ std::string ShadingUi::TargetFolder() const
         : selected.parent_path().generic_string();
 }
 
-void ShadingUi::Draw(editor_ui::PanelContext& context)
-{
-    const auto available = context.ContentAvailable();
-    constexpr f32 kTreeWidth = 300.0F;
-
-    if (context.BeginChild(
-            "##shading-tree",
-            {.width = kTreeWidth, .height = available.height},
-            true))
-    {
-        DrawTree(context);
-    }
-    context.EndChild();
-
-    context.SameLine();
-
-    if (context.BeginChild(
-            "##shading-work",
-            {.width = std::max(available.width - kTreeWidth - 12.0F, 100.0F),
-             .height = available.height},
-            false))
-    {
-        DrawWorkArea(context);
-    }
-    context.EndChild();
-}
-
 // ---------------------------------------------------------------------------
-// Content tree
+// "Shading Materials": the right-docked browser. Selection only -- editing
+// and the live preview live in the "Shading" centre panel below.
 // ---------------------------------------------------------------------------
 
-void ShadingUi::DrawTree(editor_ui::PanelContext& context)
+void ShadingUi::DrawBrowser(editor_ui::PanelContext& context)
 {
     context.Heading("Material Service");
 
@@ -253,6 +252,24 @@ void ShadingUi::DrawTree(editor_ui::PanelContext& context)
     }
 }
 
+void ShadingUi::DrawEntryThumbnail(
+    editor_ui::PanelContext& context,
+    const shading::TreeNode& node)
+{
+    if (!IsThumbnailable(node) || !thumbnailFor_)
+    {
+        return;
+    }
+
+    if (rhi::Texture* const thumbnail = thumbnailFor_(node.path))
+    {
+        static_cast<void>(context.InteractiveImage(
+            "##thumb-" + node.path.generic_string(), *thumbnail,
+            {.width = kThumbnailSize, .height = kThumbnailSize}));
+        context.SameLine();
+    }
+}
+
 void ShadingUi::DrawTreeNode(
     editor_ui::PanelContext& context,
     const shading::TreeNode& node)
@@ -334,6 +351,7 @@ void ShadingUi::DrawTreeNode(
     const bool isPreviewMesh = node.kind == content::AssetKind::Mesh &&
         workspace_->Preview().mesh == node.path.generic_string();
 
+    DrawEntryThumbnail(context, node);
     if (context.Selectable(label + id, selected || isPreviewMesh))
     {
         Run({}, [&] { workspace_->Select(node.path); });
@@ -357,7 +375,8 @@ void ShadingUi::DrawTreeNode(
 }
 
 // ---------------------------------------------------------------------------
-// Work area
+// "Shading": the centre panel. Editing and the live preview for whatever is
+// selected in the browser -- it never changes the selection itself.
 // ---------------------------------------------------------------------------
 
 void ShadingUi::DrawWorkArea(editor_ui::PanelContext& context)
@@ -368,8 +387,8 @@ void ShadingUi::DrawWorkArea(editor_ui::PanelContext& context)
     {
         context.Heading("Shading");
         context.Text(
-            "Select a shader (*.shade.hlsl) or a shader material in the tree, "
-            "or create one with New Shader.");
+            "Select a shader (*.shade.hlsl) or a shader material in the "
+            "Shading Materials panel, or create one there with New Shader.");
         context.MutedText(
             "Edits recompile live and are swapped into the preview with no "
             "restart. Files saved by an external editor reload automatically.");
@@ -459,8 +478,8 @@ void ShadingUi::DrawPreview(editor_ui::PanelContext& context)
         if (mesh.path.empty())
         {
             context.MutedText(
-                "Select a .obj mesh in the tree to preview it. A sphere is "
-                "drawn until then.");
+                "Drag a .obj mesh from Shading Materials to preview it. A "
+                "sphere is drawn until then.");
         }
         else if (mesh.loaded)
         {
@@ -503,12 +522,14 @@ void ShadingUi::DrawPreview(editor_ui::PanelContext& context)
 void ShadingUi::DrawParameters(editor_ui::PanelContext& context)
 {
     const auto parameters = workspace_->Parameters();
+    const auto textures = workspace_->TextureParameters();
 
-    if (parameters.empty())
+    if (parameters.empty() && textures.empty())
     {
         context.MutedText(
             "This shader declares no parameters. Add lines such as "
-            "'// @param tint color3 0.8 0.8 0.8' to expose some.");
+            "'// @param tint color3 0.8 0.8 0.8' or "
+            "'// @param albedo texture2d Content/...' to expose some.");
         return;
     }
 
@@ -572,6 +593,57 @@ void ShadingUi::DrawParameters(editor_ui::PanelContext& context)
             }
         }
     }
+
+    if (!textures.empty())
+    {
+        DrawTextureParameters(context);
+    }
+}
+
+void ShadingUi::DrawTextureParameters(editor_ui::PanelContext& context)
+{
+    for (const auto& texture : workspace_->TextureParameters())
+    {
+        const std::string base = texture.declaration.name;
+
+        context.Text(base + " (texture2d)");
+        if (texture.loaded)
+        {
+            context.SameLine();
+            context.MutedText(std::format("{}x{}", texture.width, texture.height));
+        }
+
+        // A drop target the size of the path text, so dragging a Texture
+        // row from Shading Materials to here reassigns it -- typing a path
+        // is not exposed; the browser tree is the picker.
+        context.MutedText(texture.path.empty() ? "(none)" : texture.path);
+        if (const auto payload = context.AcceptDragPayload(kEntryPayload))
+        {
+            const std::string source(
+                reinterpret_cast<const char*>(payload->data()), payload->size());
+            Run("Texture set.",
+                [&] { workspace_->SetTextureParameter(texture.declaration.name, source); });
+        }
+
+        if (texture.overridden)
+        {
+            context.SameLine();
+            if (context.Button("Reset##" + base + "-tex"))
+            {
+                Run("Reset to the shader default.",
+                    [&] { workspace_->ResetTextureParameter(texture.declaration.name); });
+            }
+        }
+
+        if (!texture.error.empty())
+        {
+            context.ErrorText(texture.error);
+        }
+    }
+
+    context.MutedText(
+        "Drag a texture asset from Shading Materials onto a path above to "
+        "assign it.");
 }
 
 void ShadingUi::DrawEditor(editor_ui::PanelContext& context, const f32 height)

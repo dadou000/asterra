@@ -1303,4 +1303,140 @@ const content::ContentService& ShadingWorkspace::Content() const noexcept
 {
     return content_;
 }
+
+// ---------------------------------------------------------------------------
+// Standalone material preview (thumbnails)
+// ---------------------------------------------------------------------------
+
+std::optional<MaterialPreview> ComputeMaterialPreview(
+    const content::ContentService& content,
+    const shader::Compiler* const compiler,
+    const std::filesystem::path& path)
+{
+    const auto* record = content.FindByPath(path);
+    if (record == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    std::filesystem::path shaderPath;
+    std::map<std::string, std::vector<f64>> overrides;
+    std::map<std::string, std::string> textureOverrides;
+
+    if (record->kind == content::AssetKind::ShadingShader)
+    {
+        shaderPath = record->sourcePath;
+    }
+    else if (record->kind == content::AssetKind::ShaderMaterial &&
+             record->shaderMaterial.has_value())
+    {
+        shaderPath = (record->sourcePath.parent_path() /
+                      record->shaderMaterial->shader)
+                         .lexically_normal();
+
+        for (const auto& parameter : record->shaderMaterial->parameters)
+        {
+            overrides[parameter.name] = parameter.values;
+        }
+        for (const auto& texture : record->shaderMaterial->textures)
+        {
+            textureOverrides[texture.name] = texture.path;
+        }
+    }
+    else
+    {
+        return std::nullopt;
+    }
+
+    if (compiler == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    std::string source;
+    try
+    {
+        source = content.ReadText(shaderPath);
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+
+    MaterialPreview preview;
+    preview.program =
+        CompileShadingProgram(*compiler, shaderPath.filename().string(), source);
+
+    if (!preview.program.ok)
+    {
+        // Still a usable result: the caller can render an error tile from
+        // program.diagnostics rather than treating this asset as absent.
+        return preview;
+    }
+
+    for (const auto& declaration : preview.program.layout.parameters)
+    {
+        std::array<f64, 4> value = declaration.defaults;
+
+        if (const auto found = overrides.find(declaration.name);
+            found != overrides.end() &&
+            found->second.size() == declaration.components)
+        {
+            for (u32 component = 0U; component < declaration.components;
+                 ++component)
+            {
+                value[component] = found->second[component];
+            }
+        }
+
+        for (u32 component = 0U; component < declaration.components;
+             ++component)
+        {
+            const u32 slot = declaration.offset + component;
+            if (slot < kMaxParameterFloats)
+            {
+                preview.parameters[slot] = static_cast<f32>(value[component]);
+            }
+        }
+    }
+
+    for (const auto& textureDeclaration : preview.program.layout.textures)
+    {
+        if (textureDeclaration.slot >= kMaxShaderTextures)
+        {
+            continue;
+        }
+
+        std::string effectivePath = textureDeclaration.defaultPath;
+        if (const auto found = textureOverrides.find(textureDeclaration.name);
+            found != textureOverrides.end())
+        {
+            effectivePath = found->second;
+        }
+        if (effectivePath.empty())
+        {
+            continue;
+        }
+
+        const auto* textureRecord = content.FindByPath(effectivePath);
+        if (textureRecord == nullptr)
+        {
+            continue;
+        }
+
+        try
+        {
+            preview.textureStorage[textureDeclaration.slot] =
+                content_wic::DecodeTextureFile(
+                    content.AbsolutePath(textureRecord->id));
+        }
+        catch (const std::exception&)
+        {
+            // Leave this slot empty; the thumbnail still renders with
+            // whatever else compiled.
+        }
+    }
+
+    return preview;
+}
 } // namespace orbit::shading

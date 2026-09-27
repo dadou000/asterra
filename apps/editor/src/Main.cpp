@@ -12,6 +12,7 @@
 #include <orbit/shading/ShadingCapture.hpp>
 #include <orbit/shading/ShadingRpc.hpp>
 #include <orbit/shading/ShadingWorkspace.hpp>
+#include <orbit/shading/MaterialThumbnailCache.hpp>
 #include <orbit/studio_ui/ShadingUi.hpp>
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
@@ -1931,6 +1932,16 @@ int main(
                 device,
                 compiler,
                 graphicsQueue);
+        // Small static sphere-preview thumbnails for the Shading tree's
+        // rows, rendered on demand with its own dedicated
+        // ShaderPreviewRenderer/targets -- independent of whatever is
+        // currently open in shadingWorkspace/shadingRenderer above.
+        orbit::shading::MaterialThumbnailCache
+            shadingThumbnails(
+                device,
+                compiler,
+                graphicsQueue,
+                content);
         bool shadingRenderedOnce = false;
 
         // Smoke runs use a throwaway project, so their layout must not
@@ -2278,6 +2289,12 @@ int main(
                     -> orbit::rhi::Texture*
                 {
                     return &shadingView.Color();
+                },
+                [&shadingThumbnails](
+                    const std::filesystem::path& path)
+                    -> orbit::rhi::Texture*
+                {
+                    return shadingThumbnails.Get(path);
                 });
         shadingUi.Register(ui);
 

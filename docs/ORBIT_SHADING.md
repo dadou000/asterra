@@ -3,10 +3,20 @@
 Status: **Canonical contract for the Shading tab**
 
 The Shading tab is where shaders and shader materials are authored and tested.
-It is one panel in Orbit Studio (a tab beside Viewport), driven by the same
-`ShadingWorkspace` model as the `shading.*` RPC methods and MCP tools, so
-everything a person can do in the tab an agent can do too
-([ORBIT_UI_RULES.md](ORBIT_UI_RULES.md) sections 13 and 22, [ORBIT_MCP.md](ORBIT_MCP.md)).
+It is two panels in Orbit Studio, both driven by the same `ShadingWorkspace`
+model as the `shading.*` RPC methods and MCP tools, so everything a person
+can do in either panel an agent can do too
+([ORBIT_UI_RULES.md](ORBIT_UI_RULES.md) sections 13 and 22, [ORBIT_MCP.md](ORBIT_MCP.md)):
+
+- **"Shading Materials"** (docked Right): the Content tree, organisation
+  (New Folder/Shader/Material, rename, move, trash) and *selection only* --
+  every shader and shader material row shows a small live sphere-preview
+  thumbnail (`MaterialThumbnailCache`), so browsing reads like Blender's or
+  Unreal's material list rather than a bare file tree.
+- **"Shading"** (docked Center): the selected shader/material's live preview,
+  parameters (including `texture2d` ones, settable by dragging a texture
+  asset from Shading Materials) and HLSL editor. It never changes what is
+  selected; it only edits and visualizes it.
 
 ```text
 Shading tab (UI) ─┐
@@ -30,6 +40,12 @@ external editor  ─┘        │                      ▲
 - **Preview** on a sphere, plane, cube or a Wavefront `.obj` mesh from Content,
   under a lighting preset with a chosen background, orbiting the camera with the
   mouse.
+- **Browse by thumbnail**: every shader and shader material in Shading
+  Materials shows a small static sphere-preview render, not just a file name.
+  It re-renders when that asset (or, for a material, the shader it resolves
+  to) actually changes; a shader that fails to compile still gets a thumbnail
+  (the shared error checker), so a broken material reads as broken rather
+  than disappearing.
 
 ## Assets
 

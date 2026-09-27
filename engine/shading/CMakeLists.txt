@@ -5,6 +5,7 @@ add_library(OrbitShading STATIC
     src/ObjMesh.cpp
     src/ShadingWorkspace.cpp
     src/ShaderPreviewRenderer.cpp
+    src/MaterialThumbnailCache.cpp
     src/ShadingRpc.cpp
 )
 
