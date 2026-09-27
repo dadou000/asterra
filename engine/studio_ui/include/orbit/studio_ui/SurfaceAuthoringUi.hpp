@@ -21,6 +21,10 @@ public:
 
     void Register(editor_ui::EditorUi& ui);
 
+    // Shared draw path for the standalone expert panel and the contextual
+    // Properties inspector. Progressive disclosure is decided by the host.
+    void Draw(editor_ui::PanelContext& context);
+
     // Used by the real-device Studio smoke gate to render the complete
     // advanced authoring surface deterministically. Normal Studio leaves this
     // disabled and preserves the user's progressive-disclosure choices.
@@ -33,8 +37,6 @@ public:
     };
 
 private:
-    void Draw(editor_ui::PanelContext& context);
-
     studio_session::StudioWorkspace* workspace_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     std::optional<scene::ObjectId> selectedBiome_;
