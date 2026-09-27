@@ -1,5 +1,8 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
+#include <initializer_list>
+#include <string_view>
+
 #define Register RegisterBase
 #define RegisterSecondary RegisterSecondaryBase
 #define DrawView DrawViewBase
@@ -10,6 +13,113 @@
 
 namespace orbit::studio_ui
 {
+namespace
+{
+void ClosePanels(
+    editor_ui::EditorUi& ui,
+    const std::initializer_list<std::string_view> titles)
+{
+    for (const std::string_view title : titles)
+    {
+        static_cast<void>(
+            ui.ClosePanelByTitle(title));
+    }
+}
+
+void OpenPanels(
+    editor_ui::EditorUi& ui,
+    const std::initializer_list<std::string_view> titles)
+{
+    for (const std::string_view title : titles)
+    {
+        static_cast<void>(
+            ui.FocusPanelByTitle(title));
+    }
+}
+
+void CloseSpecialistPanels(editor_ui::EditorUi& ui)
+{
+    ClosePanels(
+        ui,
+        {
+            "Body Map / Debug View",
+            "System View",
+            "Shading",
+            "Shading Materials",
+            "Celestial",
+            "Surface Authoring",
+            "Volumes",
+            "Debug",
+            "Display Diagnostics",
+            "World Documents",
+            "Project Settings"
+        });
+}
+
+void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
+{
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Scene",
+        .invoke = [&ui]
+        {
+            CloseSpecialistPanels(ui);
+            ClosePanels(
+                ui,
+                {"Material Service", "Build", "Output"});
+            OpenPanels(
+                ui,
+                {"Explorer", "Viewport", "Properties"});
+        }
+    });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Planet",
+        .invoke = [&ui]
+        {
+            CloseSpecialistPanels(ui);
+            ClosePanels(
+                ui,
+                {"Material Service", "Build", "Output"});
+            OpenPanels(
+                ui,
+                {"Explorer", "Viewport", "Properties", "Surface Authoring"});
+        }
+    });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Celestial",
+        .invoke = [&ui]
+        {
+            CloseSpecialistPanels(ui);
+            ClosePanels(
+                ui,
+                {"Viewport", "Material Service", "Build", "Output"});
+            OpenPanels(
+                ui,
+                {"Explorer", "System View", "Properties", "Celestial"});
+        }
+    });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Shading",
+        .invoke = [&ui]
+        {
+            CloseSpecialistPanels(ui);
+            ClosePanels(
+                ui,
+                {"Viewport", "Explorer", "Properties", "Material Service", "Build", "Output"});
+            OpenPanels(
+                ui,
+                {"Shading", "Shading Materials"});
+        }
+    });
+}
+} // namespace
+
 void StudioViewportPanels::Register(
     editor_ui::EditorUi& ui)
 {
@@ -47,6 +157,8 @@ void StudioViewportPanels::Register(
                 DrawView(context, "studio.map");
             }
     });
+
+    RegisterWorkspaceActions(ui);
 }
 
 void StudioViewportPanels::RegisterSecondary(
@@ -64,6 +176,8 @@ void StudioViewportPanels::RegisterSecondary(
                 DrawView(context, "studio.map");
             }
     });
+
+    RegisterWorkspaceActions(ui);
 }
 
 void StudioViewportPanels::DrawView(
