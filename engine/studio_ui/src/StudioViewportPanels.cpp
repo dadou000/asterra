@@ -32,10 +32,13 @@ void StudioViewportPanels::Register(
             }
     });
 
+    // Keep the main scene as the only first-run centre workspace. The map /
+    // debug view remains registered and docked with the viewport when opened
+    // from View, but no longer competes for attention on a fresh layout.
     ui.RegisterPanel({
         .id = kSecondaryViewportPanel,
         .title = "Body Map / Debug View",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = editor_ui::DockRegion::Center,
         .dockOrder = 10,
         .draw =
@@ -52,7 +55,7 @@ void StudioViewportPanels::RegisterSecondary(
     ui.RegisterPanel({
         .id = kSecondaryViewportPanel,
         .title = "Body Map / Debug View",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = editor_ui::DockRegion::Center,
         .dockOrder = 10,
         .draw =
