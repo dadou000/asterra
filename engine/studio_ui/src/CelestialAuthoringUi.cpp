@@ -30,7 +30,7 @@ void CelestialAuthoringUi::Register(
     ui.RegisterPanel({
         .id = kPanel,
         .title = "Celestial",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock =
             editor_ui::DockRegion::Right,
         .dockOrder = 5,
@@ -368,7 +368,6 @@ void CelestialAuthoringUi::Draw(
                 derivedAuthority,
                 explicitAuthority,
                 importedAuthority));
-
 
         for (std::size_t index = 0;
              index < presets.size();
