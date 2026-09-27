@@ -1,10 +1,13 @@
 #include <orbit/shading/ShadingWorkspace.hpp>
 
+#include <orbit/content_wic/WicTextureImporter.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <format>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_map>
 
 namespace orbit::shading
@@ -63,7 +66,8 @@ constexpr f64 kLiveCompileDebounceSeconds = 0.35;
     const std::string_view name,
     const std::string_view shader,
     const ShaderParameterLayout& layout,
-    const std::map<std::string, std::vector<f64>>& overrides)
+    const std::map<std::string, std::vector<f64>>& overrides,
+    const std::map<std::string, std::string>& textureOverrides)
 {
     std::string text = "[shader_material]\n";
     text += std::format("name = \"{}\"\n", name);
@@ -105,6 +109,31 @@ constexpr f64 kLiveCompileDebounceSeconds = 0.35;
         if (layout.Find(parameterName) == nullptr)
         {
             emit(parameterName, values);
+        }
+    }
+
+    const auto emitTexture = [&](const std::string& textureName,
+                                 const std::string& path)
+    {
+        text += "\n[[shader_material.texture]]\n";
+        text += std::format("name = \"{}\"\n", textureName);
+        text += std::format("path = \"{}\"\n", path);
+    };
+
+    for (const auto& declaration : layout.textures)
+    {
+        if (const auto found = textureOverrides.find(declaration.name);
+            found != textureOverrides.end())
+        {
+            emitTexture(found->first, found->second);
+        }
+    }
+
+    for (const auto& [textureName, path] : textureOverrides)
+    {
+        if (layout.FindTexture(textureName) == nullptr)
+        {
+            emitTexture(textureName, path);
         }
     }
 
@@ -349,7 +378,7 @@ std::filesystem::path ShadingWorkspace::CreateShaderMaterial(
 
     content_.WriteText(
         file,
-        MaterialText(baseName, relativeShader, {}, {}));
+        MaterialText(baseName, relativeShader, {}, {}, {}));
     RefreshFromContent();
     return file;
 }
@@ -433,6 +462,7 @@ void ShadingWorkspace::LoadSelection()
     status_.dirty = false;
     status_.changedOnDisk = false;
     overrides_.clear();
+    textureOverrides_.clear();
     editPending_ = false;
 
     const content::AssetRecord* record =
@@ -447,6 +477,7 @@ void ShadingWorkspace::LoadSelection()
         status_.compiled = false;
         status_.diagnostics.clear();
         ++status_.programRevision;
+        RefreshTextures(true);
         return;
     }
 
@@ -461,6 +492,10 @@ void ShadingWorkspace::LoadSelection()
             for (const auto& parameter : record->shaderMaterial->parameters)
             {
                 overrides_[parameter.name] = parameter.values;
+            }
+            for (const auto& texture : record->shaderMaterial->textures)
+            {
+                textureOverrides_[texture.name] = texture.path;
             }
         }
     }
@@ -612,6 +647,7 @@ void ShadingWorkspace::CompileBuffer()
         status_.compiled = true;
         status_.diagnostics.clear();
         ++status_.programRevision;
+        RefreshTextures(false);
         return;
     }
 
@@ -730,7 +766,8 @@ void ShadingWorkspace::PersistMaterial()
             record->name,
             record->shaderMaterial->shader.generic_string(),
             layout_,
-            overrides_));
+            overrides_,
+            textureOverrides_));
     seenContentRevision_ = content_.Revision();
 }
 
@@ -752,6 +789,187 @@ std::array<f32, kMaxParameterFloats> ShadingWorkspace::PackedParameters() const
     }
 
     return packed;
+}
+
+// ---------------------------------------------------------------------------
+// Texture parameters
+// ---------------------------------------------------------------------------
+
+std::vector<TextureParameterValue> ShadingWorkspace::TextureParameters() const
+{
+    std::vector<TextureParameterValue> result;
+
+    for (const auto& declaration : layout_.textures)
+    {
+        TextureParameterValue value;
+        value.declaration = declaration;
+        value.path = declaration.defaultPath;
+
+        if (const auto found = textureOverrides_.find(declaration.name);
+            found != textureOverrides_.end())
+        {
+            value.path = found->second;
+            value.overridden = true;
+        }
+
+        if (declaration.slot < kMaxShaderTextures)
+        {
+            const auto& state = textureSlots_[declaration.slot];
+            value.loaded = state.data.has_value();
+            value.error = state.error;
+            if (state.data.has_value())
+            {
+                value.width = state.data->width;
+                value.height = state.data->height;
+            }
+        }
+
+        result.push_back(std::move(value));
+    }
+
+    return result;
+}
+
+void ShadingWorkspace::SetTextureParameter(
+    const std::string_view name, std::string path)
+{
+    if (layout_.FindTexture(name) == nullptr)
+    {
+        throw std::invalid_argument(
+            "The shader declares no texture2d parameter named '" +
+            std::string(name) + "'.");
+    }
+
+    textureOverrides_[std::string(name)] = std::move(path);
+    PersistMaterial();
+    RefreshTextures(true);
+}
+
+void ShadingWorkspace::ResetTextureParameter(const std::string_view name)
+{
+    textureOverrides_.erase(std::string(name));
+    PersistMaterial();
+    RefreshTextures(true);
+}
+
+std::array<const content::RuntimeTexture*, kMaxShaderTextures>
+ShadingWorkspace::PackedTextures() const noexcept
+{
+    std::array<const content::RuntimeTexture*, kMaxShaderTextures> packed{};
+    for (u32 slot = 0U; slot < kMaxShaderTextures; ++slot)
+    {
+        packed[slot] = textureSlots_[slot].data.has_value()
+            ? &*textureSlots_[slot].data
+            : nullptr;
+    }
+    return packed;
+}
+
+std::array<u64, kMaxShaderTextures> ShadingWorkspace::TextureRevisions() const noexcept
+{
+    std::array<u64, kMaxShaderTextures> revisions{};
+    for (u32 slot = 0U; slot < kMaxShaderTextures; ++slot)
+    {
+        revisions[slot] = textureSlots_[slot].revision;
+    }
+    return revisions;
+}
+
+void ShadingWorkspace::RefreshTextures(const bool force)
+{
+    const u32 activeCount =
+        std::min(static_cast<u32>(layout_.textures.size()), kMaxShaderTextures);
+
+    for (u32 slot = 0U; slot < activeCount; ++slot)
+    {
+        const auto& declaration = layout_.textures[slot];
+        TextureSlotState& state = textureSlots_[slot];
+
+        std::string effectivePath = declaration.defaultPath;
+        if (const auto found = textureOverrides_.find(declaration.name);
+            found != textureOverrides_.end())
+        {
+            effectivePath = found->second;
+        }
+
+        const bool identityChanged = state.textureName != declaration.name ||
+            state.resolvedPath != effectivePath;
+        state.textureName = declaration.name;
+
+        if (effectivePath.empty())
+        {
+            if (!state.resolvedPath.empty() || state.data.has_value() ||
+                !state.error.empty())
+            {
+                state.resolvedPath.clear();
+                state.data.reset();
+                state.error.clear();
+                state.lastWriteTime = {};
+                ++state.revision;
+            }
+            continue;
+        }
+
+        state.resolvedPath = effectivePath;
+
+        const auto* record = content_.FindByPath(effectivePath);
+        if (record == nullptr)
+        {
+            if (identityChanged || force || state.error.empty())
+            {
+                state.error = effectivePath + ": no such file in Content.";
+                ++state.revision;
+            }
+            continue;
+        }
+
+        const auto absolute = content_.AbsolutePath(record->id);
+        std::error_code errorCode;
+        const auto writeTime =
+            std::filesystem::last_write_time(absolute, errorCode);
+
+        if (!force && !identityChanged && !errorCode &&
+            writeTime == state.lastWriteTime && state.data.has_value())
+        {
+            continue;
+        }
+
+        if (errorCode)
+        {
+            if (identityChanged || force)
+            {
+                state.error = effectivePath + ": " + errorCode.message();
+                ++state.revision;
+            }
+            continue;
+        }
+
+        try
+        {
+            state.data = content_wic::DecodeTextureFile(absolute);
+            state.error.clear();
+            state.lastWriteTime = writeTime;
+        }
+        catch (const std::exception& exception)
+        {
+            // Keep the last good decode on screen (same contract as
+            // RefreshMesh): only the error is updated.
+            state.error = effectivePath + ": " + exception.what();
+        }
+        ++state.revision;
+    }
+
+    for (u32 slot = activeCount; slot < kMaxShaderTextures; ++slot)
+    {
+        TextureSlotState& state = textureSlots_[slot];
+        if (!state.textureName.empty() || state.data.has_value() ||
+            !state.error.empty())
+        {
+            const u64 revision = state.revision + 1U;
+            state = {};
+            state.revision = revision;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -964,6 +1182,7 @@ void ShadingWorkspace::RefreshFromContent()
 {
     seenContentRevision_ = content_.Revision();
     RefreshMesh();
+    RefreshTextures(false);
 
     if (selected_.empty())
     {
@@ -1016,6 +1235,14 @@ void ShadingWorkspace::RefreshFromContent()
             fromDisk[parameter.name] = parameter.values;
         }
         overrides_ = std::move(fromDisk);
+
+        std::map<std::string, std::string> texturesFromDisk;
+        for (const auto& texture : record->shaderMaterial->textures)
+        {
+            texturesFromDisk[texture.name] = texture.path;
+        }
+        textureOverrides_ = std::move(texturesFromDisk);
+        RefreshTextures(false);
     }
 
     std::string onDisk;

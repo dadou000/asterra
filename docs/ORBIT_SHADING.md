@@ -97,14 +97,49 @@ Helpers available to your code:
 // @param tint      color3 0.80 0.80 0.80
 // @param roughness float  0.55 | 0.03 1        (| min max = slider range)
 // @param uvScale   float2 1 1
+// @param albedo    texture2d Content/Textures/RockGround/RockGround_Diffuse.jpg
 ```
 
-Types: `float`, `float2`, `float3`, `float4`, `color3`. Declaration order is the
-packing order. A shader may declare at most **8 scalar values** in total: that is
-the push-constant budget of the preview pipeline (an engine limit, reported
-with a clear message rather than silently truncated). Problems (bad type,
-duplicate name, over budget) are reported with the line number and stop the
-compile before it starts.
+Types: `float`, `float2`, `float3`, `float4`, `color3` (default values,
+optionally range-limited) and `texture2d` (a single content-relative path
+token in place of numeric defaults; no range, and `shading.param_set` takes a
+path *string* for it rather than a number). Numeric parameters pack in
+declaration order into the push-constant budget: **8 scalar values** in
+total (an engine limit, reported with a clear message rather than silently
+truncated). `texture2d` parameters pack separately into **2 texture slots**
+(same reporting). Problems (bad type, duplicate name, over either budget) are
+reported with the line number and stop the compile before it starts.
+
+#### Textures
+
+`Sample_<name>(uv)` (pixel stage only, implicit-derivative filtering) and
+`SampleLevel_<name>(uv, lod)` (any stage) read a `texture2d` parameter.
+Content recognises `.png`/`.jpg`/`.jpeg`/`.bmp` (decoded through Windows
+Imaging Component, the same decoder `PbrSetImport` uses for material sets) —
+drop one under `Content/` and point a `texture2d` default or
+`shading.param_set` at its project-relative path. A save to that file (from
+any tool) reloads it live, keeping the last good upload if the new one fails
+to decode, the same contract as the mesh preview.
+
+**Real vertex displacement.** A `texture2d` parameter named exactly `height`
+together with a `float` parameter named exactly `displacement` is a reserved
+pair the engine recognises (`ShaderParameterLayout::HasDisplacement`): the
+preview compiles a second, displacement-aware vertex stage that samples
+`height` and moves the actual vertex position along its normal by
+`(height - 0.5) * displacement`, world units. This is genuine geometry
+displacement, not a pixel-shader parallax fake — it changes the silhouette,
+and it needs enough vertices to show: the Plane shape is a 96x96 grid (not a
+single quad) for exactly this reason, and Sphere/Cube/Mesh all displace too,
+using their own vertices. Nothing else about a shader using this pair is
+special; `height` can still be sampled for ordinary pixel-shading (a detail
+normal from its own gradient, for instance) alongside its displacement role.
+
+The project ships `Content/Shading/Ground/RockGround.shade.hlsl` (and a
+`RockGround` shader material of it) as the worked example: `albedo` +
+`height` textures imported from a CC0 Poly Haven photo-scan, real
+displacement on the Plane shape, and a tangent-space detail normal from
+`height`'s own gradient for the fine surface detail the 96x96 grid can't
+carry by itself.
 
 ### Diagnostics
 
@@ -233,7 +268,7 @@ result with `compiled: false` and `diagnostics`.
 | `orbit_shading_source_read(path)` | `shading.source_read` | Read source. |
 | `orbit_shading_source_write(path, text)` | `shading.source_write` | Write, open, compile live. |
 | `orbit_shading_status` | `shading.status` | Selection, compile state, diagnostics, parameters, preview. |
-| `orbit_shading_param_set(name, value)` | `shading.param_set` | Set a parameter (saved into an open material). |
+| `orbit_shading_param_set(name, value)` | `shading.param_set` | Set a parameter (saved into an open material): a number or array for float/color3, a content-relative path string for `texture2d`. |
 | `orbit_shading_param_reset(name)` | `shading.param_reset` | Back to the declared default. |
 | `orbit_shading_preview_get` / `_set` | `shading.preview_get` / `_set` | Shape, mesh (`.obj` path), lighting, background, sun, exposure, spin, animate, camera. |
 | `orbit_shading_recompile` | `shading.recompile` | Recompile the buffer now. |
@@ -272,7 +307,10 @@ first slice:
   needs a per-frame buffer ring.
 - **Compile thread:** compiles run on the UI thread (typically 15 to 100 ms);
   moving them to the job system is the next improvement.
-- **Textures:** shaders cannot yet sample project textures.
+- **Textures:** 2 `texture2d` slots per shader, no mipmaps beyond what WIC's
+  decode gives (a single full-resolution level), no texture arrays, and the
+  vertex-stage `height` role is a single reserved name (one displacement
+  source per shader, not a stack of them).
 
 ## Verification
 
@@ -285,6 +323,12 @@ first slice:
   `v//vn`, generated normals and UVs, fitting), line-numbered errors, choosing a
   mesh without disturbing the open shader, external reload, keep-last-good on a
   bad save, rename/move/trash following, and the RPC surface.
+- The texture tests (in `OrbitShadingTests`): `texture2d` parsing and its
+  budget, the `height`+`displacement` convention, a real WIC decode of a
+  hand-encoded BMP end to end through the workspace (default path, override,
+  a missing file's keep-last-good error, reset) and through the RPC layer
+  (`shading.param_set` with a path string, rejecting a number for a texture
+  parameter, `shading.status`'s `textures` array).
 - `OrbitContentTests`: folders, atomic writes, path safety, the new asset kinds
   and dependency on the shader.
 - `OrbitHotReloadChangeClassifierTests`: `.shade.hlsl` routes to Shader,

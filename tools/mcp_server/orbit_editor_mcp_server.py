@@ -795,7 +795,9 @@ def orbit_shading_status() -> dict[str, Any]:
 
 @mcp.tool()
 def orbit_shading_param_set(name: str, value: Any) -> dict[str, Any]:
-    """Set a shader parameter (number or list). Saved into an open shader material."""
+    """Set a shader parameter: a number or list for float/color3, or a
+    content-relative path string (e.g. "Content/Textures/Rock.jpg") for a
+    texture2d parameter. Saved into an open shader material."""
     return _rpc("shading.param_set", {"name": name, "value": value})
 
 

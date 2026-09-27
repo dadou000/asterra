@@ -86,16 +86,51 @@ void AddSphere(Geometry& geometry, ShapeRange& range)
 
 void AddPlane(Geometry& geometry, ShapeRange& range)
 {
+    // A flat-shaded grid, not a single quad: visually identical to the old
+    // single quad for every existing flat-shading material (same normal,
+    // same 0..1 UV), but a shader using the `height`+`displacement`
+    // convention (see ShaderParameterLayout::HasDisplacement) needs enough
+    // vertices to actually show a displaced ground's silhouette, not just a
+    // per-pixel bump.
     constexpr f32 kExtent = 1.8F;
+    constexpr u32 kSegments = 96U;
+
     range.vertexOffset = static_cast<i32>(geometry.vertices.size());
     range.firstIndex = static_cast<u32>(geometry.indices.size());
+    // Indices are local to this shape (see AddSphere): DrawIndexed's base
+    // vertex offset (range.vertexOffset, above) is what places them in the
+    // shared buffer. Baking the absolute offset into the indices too would
+    // double it, reading vertices from well past this shape's own range.
+    const u32 base = 0U;
 
-    geometry.vertices.push_back({{-kExtent, 0.0F, -kExtent}, {0, 1, 0}, {0, 0}});
-    geometry.vertices.push_back({{-kExtent, 0.0F, kExtent}, {0, 1, 0}, {0, 1}});
-    geometry.vertices.push_back({{kExtent, 0.0F, kExtent}, {0, 1, 0}, {1, 1}});
-    geometry.vertices.push_back({{kExtent, 0.0F, -kExtent}, {0, 1, 0}, {1, 0}});
-    geometry.indices.insert(geometry.indices.end(), {0, 1, 2, 0, 2, 3});
-    range.indexCount = 6U;
+    for (u32 row = 0U; row <= kSegments; ++row)
+    {
+        const f32 v = static_cast<f32>(row) / static_cast<f32>(kSegments);
+        const f32 z = (v * 2.0F - 1.0F) * kExtent;
+
+        for (u32 column = 0U; column <= kSegments; ++column)
+        {
+            const f32 u = static_cast<f32>(column) / static_cast<f32>(kSegments);
+            const f32 x = (u * 2.0F - 1.0F) * kExtent;
+            geometry.vertices.push_back({{x, 0.0F, z}, {0, 1, 0}, {u, v}});
+        }
+    }
+
+    const u32 stride = kSegments + 1U;
+    for (u32 row = 0U; row < kSegments; ++row)
+    {
+        for (u32 column = 0U; column < kSegments; ++column)
+        {
+            const u32 a = base + row * stride + column;
+            const u32 b = a + stride;
+            geometry.indices.insert(
+                geometry.indices.end(),
+                {a, b, a + 1U, a + 1U, b, b + 1U});
+        }
+    }
+
+    range.indexCount =
+        static_cast<u32>(geometry.indices.size()) - range.firstIndex;
 }
 
 void AddCube(Geometry& geometry, ShapeRange& range)
@@ -167,13 +202,20 @@ void PushRow(std::array<u32, 40>& out, const u32 row, const math::Mat4& m)
 class ShaderPreviewRenderer::Impl
 {
 public:
-    Impl(rhi::Device& deviceRef, const shader::Compiler& compilerRef)
-        : device(deviceRef), compiler(compilerRef)
+    Impl(
+        rhi::Device& deviceRef,
+        const shader::Compiler& compilerRef,
+        rhi::Queue& graphicsQueueRef)
+        : device(deviceRef), compiler(compilerRef), graphicsQueue(graphicsQueueRef)
     {
         vertexShader = compiler.Compile({
             .source = PreviewVertexSource(),
             .entryPoint = "main",
             .stage = shader::Stage::Vertex});
+
+        uploadAllocator = device.CreateCommandAllocator(rhi::QueueType::Graphics);
+        uploadCommands = device.CreateCommandList(*uploadAllocator);
+        uploadFence = device.CreateFence(0);
 
         const auto backgroundVertex = compiler.Compile({
             .source = BackgroundVertexSource(),
@@ -207,8 +249,9 @@ public:
             .source = errorSource,
             .entryPoint = "main",
             .stage = shader::Stage::Pixel});
-        errorPipeline = MakeObjectPipeline(errorPixel);
+        errorPipeline = MakeObjectPipeline(errorPixel, nullptr, 0U);
         active = errorPipeline.get();
+        activeSampledTextures = 0U;
 
         BuildGeometry();
     }
@@ -219,8 +262,12 @@ public:
         return {binary.bytecode.data(), binary.bytecode.size()};
     }
 
+    // `displacementVertex` is null for the common case (the plain fixed
+    // vertex shader); non-null when the program's layout.HasDisplacement().
     [[nodiscard]] std::unique_ptr<rhi::GraphicsPipeline> MakeObjectPipeline(
-        const shader::Binary& pixel)
+        const shader::Binary& pixel,
+        const shader::Binary* const displacementVertex,
+        const u32 sampledTextures)
     {
         static constexpr std::array<rhi::VertexAttribute, 3> kAttributes{{
             {0U, rhi::VertexFormat::Float3, 0U},
@@ -229,11 +276,14 @@ public:
         }};
 
         return device.CreateGraphicsPipeline({
-            .vertexShader = View(vertexShader),
+            .vertexShader = View(
+                displacementVertex != nullptr ? *displacementVertex
+                                               : vertexShader),
             .pixelShader = View(pixel),
             .vertexAttributes = kAttributes,
             .vertexStrideBytes = sizeof(Vertex),
             .pushConstantDwords = kPreviewPushDwords,
+            .sampledTextures = sampledTextures,
             .topology = rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
             .cullMode = rhi::CullMode::None,
@@ -281,7 +331,7 @@ public:
     {
         if (pipeline != nullptr)
         {
-            retired.push_back({std::move(pipeline), nullptr, nullptr, 0U});
+            retired.push_back({std::move(pipeline), nullptr, nullptr, nullptr, 0U});
         }
     }
 
@@ -290,9 +340,18 @@ public:
         if (meshVertices != nullptr || meshIndices != nullptr)
         {
             retired.push_back(
-                {nullptr, std::move(meshVertices), std::move(meshIndices), 0U});
+                {nullptr, std::move(meshVertices), std::move(meshIndices),
+                 nullptr, 0U});
         }
         meshIndexCount = 0U;
+    }
+
+    void RetireTexture(std::unique_ptr<rhi::Texture> texture)
+    {
+        if (texture != nullptr)
+        {
+            retired.push_back({nullptr, nullptr, nullptr, std::move(texture), 0U});
+        }
     }
 
     void TickRetirement()
@@ -309,21 +368,74 @@ public:
             });
     }
 
+    // Decodes-nothing, GPU-only: uploads pixels already decoded on the CPU
+    // (by ShadingWorkspace, via content_wic) into a sampled Vulkan texture,
+    // synchronously, on the shared graphics queue. Rare (a texture2d
+    // parameter change or a hot-reloaded image), never per-frame.
+    [[nodiscard]] std::unique_ptr<rhi::Texture> UploadTexture(
+        const content::RuntimeTexture& data)
+    {
+        if (data.format != content::RuntimeTextureFormat::Rgba8Unorm)
+        {
+            throw std::runtime_error(
+                "Only RGBA8 runtime textures are supported today.");
+        }
+        if (data.width == 0U || data.height == 0U || data.pixels.empty())
+        {
+            throw std::runtime_error("Empty texture.");
+        }
+
+        auto texture = device.CreateTexture({
+            .width = data.width,
+            .height = data.height,
+            .format = rhi::TextureFormat::RGBA8_UNorm,
+            .initialState = rhi::ResourceState::Common});
+
+        auto staging = device.CreateBuffer({
+            .sizeBytes = data.pixels.size(),
+            .usage = rhi::BufferUsage::Generic,
+            .memory = rhi::MemoryUsage::HostVisible,
+            .initialState = rhi::ResourceState::Common});
+        std::memcpy(staging->Map(), data.pixels.data(), data.pixels.size());
+        staging->Unmap();
+
+        uploadAllocator->Reset();
+        uploadCommands->Reset(*uploadAllocator);
+        uploadCommands->Transition(
+            *texture, rhi::ResourceState::Common,
+            rhi::ResourceState::CopyDestination);
+        uploadCommands->CopyBufferToTexture(*staging, 0, *texture);
+        uploadCommands->Transition(
+            *texture, rhi::ResourceState::CopyDestination,
+            rhi::ResourceState::ShaderResource);
+        uploadCommands->Close();
+
+        graphicsQueue.Submit(*uploadCommands);
+        graphicsQueue.Signal(*uploadFence, ++uploadFenceValue);
+        uploadFence->Wait(uploadFenceValue);
+
+        return texture;
+    }
+
     struct Retired
     {
         std::unique_ptr<rhi::GraphicsPipeline> pipeline;
         std::unique_ptr<rhi::Buffer> vertices;
         std::unique_ptr<rhi::Buffer> indices;
+        std::unique_ptr<rhi::Texture> texture;
         u32 age{0U};
     };
 
     rhi::Device& device;
     const shader::Compiler& compiler;
+    rhi::Queue& graphicsQueue;
     shader::Binary vertexShader;
     std::unique_ptr<rhi::GraphicsPipeline> background;
     std::unique_ptr<rhi::GraphicsPipeline> errorPipeline;
     std::unique_ptr<rhi::GraphicsPipeline> userPipeline;
     rhi::GraphicsPipeline* active{nullptr};
+    // How many of the active pipeline's texture slots Draw() must bind.
+    u32 activeSampledTextures{0U};
     std::unique_ptr<rhi::Buffer> vertexBuffer;
     std::unique_ptr<rhi::Buffer> indexBuffer;
     std::array<ShapeRange, 3> ranges{};
@@ -335,13 +447,37 @@ public:
     std::unique_ptr<rhi::Buffer> meshIndices;
     u32 meshIndexCount{0U};
     u64 builtMeshRevision{~0ULL};
+
+    // texture2d parameters, indexed by ShaderTextureDecl::slot.
+    std::array<std::unique_ptr<rhi::Texture>, kMaxShaderTextures> textures{};
+    std::array<u64, kMaxShaderTextures> builtTextureRevisions{~0ULL, ~0ULL};
+    // Bound in a slot whose real texture hasn't uploaded yet (or failed).
+    std::unique_ptr<rhi::Texture> dummyTexture;
+
+    // One-shot command recording reused for every texture upload.
+    std::unique_ptr<rhi::CommandAllocator> uploadAllocator;
+    std::unique_ptr<rhi::CommandList> uploadCommands;
+    std::unique_ptr<rhi::Fence> uploadFence;
+    u64 uploadFenceValue{0U};
 };
 
 ShaderPreviewRenderer::ShaderPreviewRenderer(
     rhi::Device& device,
-    const shader::Compiler& compiler)
-    : impl_(std::make_unique<Impl>(device, compiler))
+    const shader::Compiler& compiler,
+    rhi::Queue& graphicsQueue)
+    : impl_(std::make_unique<Impl>(device, compiler, graphicsQueue))
 {
+    // Bound in place of a texture2d parameter's slot when the real upload
+    // hasn't completed yet (or failed): a valid 1x1 texture rather than a
+    // null binding.
+    const std::array<std::byte, 4> white{
+        std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}};
+    const content::RuntimeTexture whiteTexture{
+        .width = 1U,
+        .height = 1U,
+        .format = content::RuntimeTextureFormat::Rgba8Unorm,
+        .pixels = {white.begin(), white.end()}};
+    impl_->dummyTexture = impl_->UploadTexture(whiteTexture);
 }
 
 ShaderPreviewRenderer::~ShaderPreviewRenderer() = default;
@@ -350,10 +486,43 @@ ShaderPreviewRenderer::UpdateResult ShaderPreviewRenderer::Update(
     const ShadingProgram* const program,
     const u64 revision,
     const MeshData* const mesh,
-    const u64 meshRevision)
+    const u64 meshRevision,
+    const std::array<const content::RuntimeTexture*, kMaxShaderTextures>
+        textures,
+    const std::array<u64, kMaxShaderTextures> textureRevisions)
 {
     UpdateResult result;
     impl_->TickRetirement();
+
+    for (u32 slot = 0U; slot < kMaxShaderTextures; ++slot)
+    {
+        if (textureRevisions[slot] == impl_->builtTextureRevisions[slot])
+        {
+            continue;
+        }
+        impl_->builtTextureRevisions[slot] = textureRevisions[slot];
+
+        if (textures[slot] == nullptr)
+        {
+            impl_->RetireTexture(std::move(impl_->textures[slot]));
+            continue;
+        }
+
+        try
+        {
+            auto uploaded = impl_->UploadTexture(*textures[slot]);
+            // The previous texture may still be referenced by frames in
+            // flight: retire it, do not destroy it.
+            impl_->RetireTexture(std::move(impl_->textures[slot]));
+            impl_->textures[slot] = std::move(uploaded);
+        }
+        catch (const std::exception& exception)
+        {
+            // Keep whatever was bound in this slot (the dummy texture, if
+            // nothing has ever loaded here).
+            result.textureErrors[slot] = exception.what();
+        }
+    }
 
     if (meshRevision != impl_->builtMeshRevision)
     {
@@ -418,16 +587,23 @@ ShaderPreviewRenderer::UpdateResult ShaderPreviewRenderer::Update(
             impl_->Retire(std::move(impl_->userPipeline));
         }
         impl_->active = impl_->errorPipeline.get();
+        impl_->activeSampledTextures = 0U;
         result.replaced = true;
         return result;
     }
 
     try
     {
-        auto pipeline = impl_->MakeObjectPipeline(program->pixel);
+        const bool displaced = program->layout.HasDisplacement();
+        auto pipeline = impl_->MakeObjectPipeline(
+            program->pixel,
+            displaced ? &program->vertex : nullptr,
+            static_cast<u32>(program->layout.textures.size()));
         impl_->Retire(std::move(impl_->userPipeline));
         impl_->userPipeline = std::move(pipeline);
         impl_->active = impl_->userPipeline.get();
+        impl_->activeSampledTextures =
+            static_cast<u32>(program->layout.textures.size());
         result.replaced = true;
     }
     catch (const std::exception& exception)
@@ -557,6 +733,14 @@ void ShaderPreviewRenderer::Draw(
 
     commands.SetGraphicsPipeline(*impl_->active);
     commands.SetGraphicsConstants(object);
+
+    for (u32 slot = 0U; slot < impl_->activeSampledTextures; ++slot)
+    {
+        rhi::Texture& bound = impl_->textures[slot] != nullptr
+            ? *impl_->textures[slot]
+            : *impl_->dummyTexture;
+        commands.SetGraphicsTexture(slot, bound);
+    }
 
     if (state.shape == PreviewShape::Mesh && impl_->meshIndexCount > 0U)
     {

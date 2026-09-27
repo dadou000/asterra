@@ -1929,7 +1929,8 @@ int main(
         orbit::shading::ShaderPreviewRenderer
             shadingRenderer(
                 device,
-                compiler);
+                compiler,
+                graphicsQueue);
         bool shadingRenderedOnce = false;
 
         // Smoke runs use a throwaway project, so their layout must not
@@ -8063,13 +8064,25 @@ int main(
                             programRevision,
                         shadingMesh.get(),
                         shadingWorkspace.PreviewMeshStatus().
-                            revision);
+                            revision,
+                        shadingWorkspace.PackedTextures(),
+                        shadingWorkspace.TextureRevisions());
 
                 if (!shadingUpdate.meshError.empty())
                 {
                     orbit::log::Warning(
                         "Shading preview could not upload the mesh: " +
                         shadingUpdate.meshError);
+                }
+
+                for (const auto& textureError : shadingUpdate.textureErrors)
+                {
+                    if (!textureError.empty())
+                    {
+                        orbit::log::Warning(
+                            "Shading preview could not upload a texture2d "
+                            "parameter: " + textureError);
+                    }
                 }
 
                 if (!shadingUpdate.error.empty())

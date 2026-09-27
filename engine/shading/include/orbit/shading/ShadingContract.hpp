@@ -96,6 +96,12 @@ struct PreviewState
 // declare (see ShaderParameterLayout). It is an engine limit, not a UI one.
 inline constexpr u32 kMaxParameterFloats = 8U;
 
+// Separate, much smaller budget for `texture2d` parameters: each one is a
+// combined-image-sampler binding (see ShaderProgram's register(tN)/register
+// (sN) declarations), not a push-constant float, and the preview only ever
+// binds this many at once.
+inline constexpr u32 kMaxShaderTextures = 2U;
+
 struct ShaderParameterDecl
 {
     std::string name;
@@ -111,9 +117,26 @@ struct ShaderParameterDecl
     u32 offset{0U};
 };
 
+// `@param <name> texture2d <default content-relative path>`. Declaration
+// order assigns `slot` (0 or 1, see kMaxShaderTextures), which is also the
+// HLSL register index (t<slot>/s<slot>) ShaderProgram declares it at and the
+// CommandList::SetGraphicsTexture slot the renderer binds it to.
+//
+// Reserved names: a texture2d parameter named exactly `height` together with
+// a float parameter named exactly `displacement` makes the preview's vertex
+// stage sample it and actually displace the geometry along its normal (see
+// docs/ORBIT_SHADING.md) -- the only two names the contract treats specially.
+struct ShaderTextureDecl
+{
+    std::string name;
+    std::string defaultPath;
+    u32 slot{0U};
+};
+
 struct ShaderParameterLayout
 {
     std::vector<ShaderParameterDecl> parameters;
+    std::vector<ShaderTextureDecl> textures;
     u32 totalFloats{0U};
     // One line per problem (unknown type, duplicate name, budget exceeded...),
     // each prefixed with the source line number.
@@ -121,15 +144,27 @@ struct ShaderParameterLayout
 
     [[nodiscard]] const ShaderParameterDecl* Find(
         std::string_view name) const noexcept;
+    [[nodiscard]] const ShaderTextureDecl* FindTexture(
+        std::string_view name) const noexcept;
+
+    // True when this shader uses the `height` + `displacement` convention;
+    // the preview's vertex stage then needs a matching displacement-capable
+    // pipeline/vertex shader instead of the plain fixed one.
+    [[nodiscard]] bool HasDisplacement() const noexcept;
 };
 
 // Parses `// @param <name> <type> <defaults...> [| <min> <max>]` lines.
 //
 //   // @param tint    color3 0.8 0.8 0.8
 //   // @param rough   float  0.6 | 0 1
+//   // @param albedo  texture2d Content/Textures/RockGround/RockGround_Diffuse.jpg
 //
-// Types: float, float2, float3, float4, color3. Parameters pack in declaration
-// order into kMaxParameterFloats scalar slots.
+// Types: float, float2, float3, float4, color3 (default values, optionally
+// range-limited) and texture2d (a single content-relative path token in
+// place of numeric defaults; no range). Numeric parameters pack in
+// declaration order into kMaxParameterFloats scalar slots; texture2d
+// parameters separately into kMaxShaderTextures slots (see
+// ShaderTextureDecl).
 [[nodiscard]] ShaderParameterLayout ParseShaderParameters(
     std::string_view source);
 

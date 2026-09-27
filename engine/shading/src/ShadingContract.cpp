@@ -178,6 +178,24 @@ const ShaderParameterDecl* ShaderParameterLayout::Find(
     return nullptr;
 }
 
+const ShaderTextureDecl* ShaderParameterLayout::FindTexture(
+    const std::string_view name) const noexcept
+{
+    for (const auto& texture : textures)
+    {
+        if (texture.name == name)
+        {
+            return &texture;
+        }
+    }
+    return nullptr;
+}
+
+bool ShaderParameterLayout::HasDisplacement() const noexcept
+{
+    return FindTexture("height") != nullptr && Find("displacement") != nullptr;
+}
+
 ShaderParameterLayout ParseShaderParameters(const std::string_view source)
 {
     ShaderParameterLayout layout;
@@ -223,13 +241,35 @@ ShaderParameterLayout ParseShaderParameters(const std::string_view source)
             continue;
         }
 
-        if (layout.Find(declaration.name) != nullptr)
+        if (layout.Find(declaration.name) != nullptr ||
+            layout.FindTexture(declaration.name) != nullptr)
         {
             problem("'" + declaration.name + "' is declared twice.");
             continue;
         }
 
         const std::string_view type = tokens[3];
+        if (type == "texture2d")
+        {
+            if (layout.textures.size() >= kMaxShaderTextures)
+            {
+                problem(
+                    "'" + declaration.name + "' does not fit: a shader can "
+                    "declare at most " + std::to_string(kMaxShaderTextures) +
+                    " texture2d parameters.");
+                continue;
+            }
+
+            ShaderTextureDecl texture;
+            texture.name = declaration.name;
+            texture.defaultPath = tokens.size() > 4U
+                ? std::string(tokens[4])
+                : std::string();
+            texture.slot = static_cast<u32>(layout.textures.size());
+            layout.textures.push_back(std::move(texture));
+            continue;
+        }
+
         if (type == "float") declaration.components = 1U;
         else if (type == "float2") declaration.components = 2U;
         else if (type == "float3") declaration.components = 3U;

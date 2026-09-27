@@ -954,12 +954,45 @@ AssetRecord ContentService::BuildRecord(const std::filesystem::path& absolute) c
             }
         }
 
+        if (const toml::array* textures =
+                (*material)["texture"].as_array())
+        {
+            for (const auto& node : *textures)
+            {
+                const toml::table* entry = node.as_table();
+                const auto textureName =
+                    entry != nullptr
+                        ? (*entry)["name"].value<std::string>()
+                        : std::nullopt;
+                const auto texturePath =
+                    entry != nullptr
+                        ? (*entry)["path"].value<std::string>()
+                        : std::nullopt;
+
+                if (!textureName.has_value() || textureName->empty() ||
+                    !texturePath.has_value() || texturePath->empty())
+                {
+                    throw std::runtime_error(
+                        "Each [[shader_material.texture]] needs a name and a path.");
+                }
+
+                data.textures.push_back(
+                    {.name = *textureName, .path = *texturePath});
+            }
+        }
+
         // The shader path is relative to the material's folder; expose it in
         // project-relative form so the dependency graph (and the hot refresh
         // of dependents) sees it.
         result.dependencyPaths.push_back(
             (result.sourcePath.parent_path() / data.shader)
                 .lexically_normal());
+
+        for (const auto& texture : data.textures)
+        {
+            result.dependencyPaths.push_back(
+                std::filesystem::path(texture.path).lexically_normal());
+        }
 
         result.shaderMaterial = std::move(data);
         result.tags.push_back("shading");

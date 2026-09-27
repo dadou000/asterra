@@ -11,12 +11,14 @@
 #include <cmath>
 #include <stdexcept>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <source_location>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -95,6 +97,101 @@ void TestEnumsAndParameters()
     Check(over.problems[0].find("at most 8") != std::string::npos);
 }
 
+void TestTextureParametersAndDisplacement(const shader::Compiler& compiler)
+{
+    // texture2d takes a single path token in place of numeric defaults, and
+    // doesn't consume the scalar push-constant budget.
+    const auto layout = shading::ParseShaderParameters(
+        "// @param albedo texture2d Content/Textures/Rock/Albedo.jpg\n"
+        "// @param tint   color3 1 1 1\n");
+    Check(layout.problems.empty());
+    Check(layout.parameters.size() == 1 && layout.totalFloats == 3);
+    Check(layout.textures.size() == 1);
+    Check(layout.textures[0].name == "albedo");
+    Check(layout.textures[0].defaultPath == "Content/Textures/Rock/Albedo.jpg");
+    Check(layout.textures[0].slot == 0);
+    Check(layout.FindTexture("albedo") != nullptr);
+    Check(!layout.HasDisplacement());
+
+    // Two textures fit; a third does not, and is reported like the scalar
+    // budget is.
+    const auto twoTextures = shading::ParseShaderParameters(
+        "// @param a texture2d a.jpg\n"
+        "// @param b texture2d b.jpg\n"
+        "// @param c texture2d c.jpg\n");
+    Check(twoTextures.textures.size() == 2);
+    Check(twoTextures.textures[1].slot == 1);
+    Check(twoTextures.problems.size() == 1);
+    Check(twoTextures.problems[0].find("at most 2 texture2d") != std::string::npos);
+
+    // A name can't be both a texture and a scalar parameter.
+    const auto collision = shading::ParseShaderParameters(
+        "// @param a texture2d a.jpg\n"
+        "// @param a float 1\n");
+    Check(collision.textures.size() == 1 && collision.parameters.empty());
+    Check(collision.problems.size() == 1);
+    Check(collision.problems[0].find("declared twice") != std::string::npos);
+
+    // `height` (texture2d) + `displacement` (float) together, and only
+    // together, enable the reserved displacement convention.
+    const auto heightOnly = shading::ParseShaderParameters(
+        "// @param height texture2d Height.jpg\n");
+    Check(!heightOnly.HasDisplacement());
+
+    const auto displaced = shading::ParseShaderParameters(
+        "// @param height       texture2d Content/Textures/Rock/Height.jpg\n"
+        "// @param displacement float 0.15 | 0 1\n");
+    Check(displaced.HasDisplacement());
+
+    // A shader with a plain (non-reserved-name) texture compiles as an
+    // ordinary pixel-only program: no vertex binary.
+    const auto textured = shading::CompileShadingProgram(
+        compiler, "textured.shade.hlsl",
+        "// @param albedo texture2d Content/Textures/Rock/Albedo.jpg\n"
+        "float4 Shade(OrbitSurface s, OrbitLighting l)\n"
+        "{\n"
+        "    return float4(Sample_albedo(s.uv).rgb, 1.0);\n"
+        "}\n");
+    if (!textured.ok)
+    {
+        std::cerr << "Textured program failed:\n" << textured.diagnostics << '\n';
+    }
+    Check(textured.ok);
+    Check(!textured.pixel.bytecode.empty());
+    Check(textured.vertex.bytecode.empty());
+
+    // The height+displacement convention compiles a matching vertex binary
+    // too, and BuildObjectVertexSource can be exercised directly.
+    const auto displacedProgram = shading::CompileShadingProgram(
+        compiler, "rock_ground.shade.hlsl",
+        "// @param height       texture2d Content/Textures/Rock/Height.jpg\n"
+        "// @param displacement float 0.15 | 0 1\n"
+        "// @param albedo       texture2d Content/Textures/Rock/Albedo.jpg\n"
+        "float4 Shade(OrbitSurface s, OrbitLighting l)\n"
+        "{\n"
+        "    return float4(Sample_albedo(s.uv).rgb, 1.0);\n"
+        "}\n");
+    if (!displacedProgram.ok)
+    {
+        std::cerr << "Displaced program failed:\n" << displacedProgram.diagnostics << '\n';
+    }
+    Check(displacedProgram.ok);
+    Check(!displacedProgram.pixel.bytecode.empty());
+    Check(!displacedProgram.vertex.bytecode.empty());
+
+    const std::string vertexSource =
+        shading::BuildObjectVertexSource(displacedProgram.layout);
+    Check(vertexSource.find("SampleLevel_height") != std::string::npos);
+    Check(vertexSource.find("Param_displacement") != std::string::npos);
+    // Only the reserved texture is declared in the vertex stage, not every
+    // texture2d parameter the shader happens to have.
+    Check(vertexSource.find("SampleLevel_albedo") == std::string::npos);
+
+    // BuildObjectVertexSource refuses a layout without the convention rather
+    // than emitting HLSL that references an undeclared texture.
+    Check(Throws([&] { (void)shading::BuildObjectVertexSource(layout); }));
+}
+
 void TestTemplatesCompile(const shader::Compiler& compiler)
 {
     // Every shipped template must compile against the contract; this is what
@@ -163,6 +260,50 @@ std::filesystem::path MakeProject()
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root / "Content");
     return root;
+}
+
+// A minimal uncompressed 24bpp BMP, small enough to hand-encode without a
+// PNG/JPEG library -- content_wic (WIC) decodes it exactly like the .jpg
+// files an artist actually imports.
+void WriteTestBmp(const std::filesystem::path& path, const u32 width, const u32 height)
+{
+    const u32 rowBytes = ((width * 3U + 3U) / 4U) * 4U;
+    const u32 pixelBytes = rowBytes * height;
+    const u32 fileSize = 54U + pixelBytes;
+
+    std::vector<u8> bytes(fileSize, 0U);
+    const auto put16 = [&](const std::size_t offset, const u16 value)
+    { std::memcpy(bytes.data() + offset, &value, sizeof(value)); };
+    const auto put32 = [&](const std::size_t offset, const u32 value)
+    { std::memcpy(bytes.data() + offset, &value, sizeof(value)); };
+
+    bytes[0] = 'B';
+    bytes[1] = 'M';
+    put32(2, fileSize);
+    put32(10, 54U); // pixel data offset
+    put32(14, 40U); // DIB header size
+    put32(18, width);
+    put32(22, height); // positive: bottom-up rows
+    put16(26, 1U);      // planes
+    put16(28, 24U);     // bits per pixel
+    put32(30, 0U);      // BI_RGB, uncompressed
+
+    for (u32 row = 0U; row < height; ++row)
+    {
+        for (u32 column = 0U; column < width; ++column)
+        {
+            const std::size_t at = 54U + row * rowBytes + column * 3U;
+            // B, G, R -- a different colour per pixel so a real decode (not a
+            // solid-fill accident) is what makes the test pass.
+            bytes[at + 0] = static_cast<u8>(row * 64U);
+            bytes[at + 1] = static_cast<u8>(column * 64U);
+            bytes[at + 2] = 200U;
+        }
+    }
+
+    std::ofstream file(path, std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
 }
 
 void TestWorkspace(const shader::Compiler& compiler)
@@ -355,6 +496,40 @@ void TestRpc(const shader::Compiler& compiler)
     Check(broken.find("\"compiled\":false") != std::string::npos);
     Check(broken.find("Mirror.shade.hlsl") != std::string::npos);
 
+    // texture2d parameters over RPC: declared, listed in status, set by a
+    // path string (not a number), reported loaded with real dimensions, and
+    // rejected with a clear message if given a number instead.
+    std::filesystem::create_directories(root / "Content" / "Textures");
+    WriteTestBmp(root / "Content" / "Textures" / "Rock.bmp", 3U, 2U);
+    content.Scan();
+
+    const auto texturedWritten = call(
+        "shading.source_write",
+        R"({"path":"Shading/Mirror.shade.hlsl","text":"// @param albedo texture2d Content/Textures/Rock.bmp\nfloat4 Shade(OrbitSurface s, OrbitLighting l) { return Sample_albedo(s.uv); }\n"})");
+    Check(ok(texturedWritten));
+    Check(texturedWritten.find("\"compiled\":true") != std::string::npos);
+    Check(texturedWritten.find("\"name\":\"albedo\"") != std::string::npos);
+    Check(texturedWritten.find("\"loaded\":true") != std::string::npos);
+    Check(texturedWritten.find("\"width\":3") != std::string::npos);
+
+    const auto rejectedNumber =
+        call("shading.param_set", R"({"name":"albedo","value":1.0})");
+    Check(rejectedNumber.find("-32602") != std::string::npos);
+    Check(rejectedNumber.find("texture2d") != std::string::npos);
+
+    WriteTestBmp(root / "Content" / "Textures" / "Rock2.bmp", 5U, 4U);
+    content.Scan();
+    const auto retextured = call(
+        "shading.param_set",
+        R"({"name":"albedo","value":"Content/Textures/Rock2.bmp"})");
+    Check(ok(retextured));
+    Check(retextured.find("\"width\":5") != std::string::npos);
+    Check(retextured.find("\"overridden\":true") != std::string::npos);
+
+    const auto textureReset = call("shading.param_reset", R"({"name":"albedo"})");
+    Check(ok(textureReset));
+    Check(textureReset.find("\"width\":3") != std::string::npos);
+
     Check(ok(call("shading.preview_set",
                   R"({"shape":"cube","lighting":"space","background":"checker","exposure":2,"camera":{"yaw_degrees":30,"distance":5}})")));
     Check(workspace.Preview().shape == shading::PreviewShape::Cube);
@@ -453,6 +628,102 @@ void TestObjParser()
     Check(fails("v 0 nan 0\n", "line 1"));
     Check(fails("v 0 0\n", "line 1"));
     Check(fails("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 0\n", "line 4"));
+}
+
+void TestTextureWorkspace(const shader::Compiler& compiler)
+{
+    const auto root = MakeProject();
+    content::ContentService content(root);
+    content.Scan();
+    shading::ShadingWorkspace workspace(content, &compiler);
+
+    std::filesystem::create_directories(root / "Content" / "Textures");
+    WriteTestBmp(root / "Content" / "Textures" / "Albedo.bmp", 4U, 3U);
+    WriteTestBmp(root / "Content" / "Textures" / "Height.bmp", 2U, 2U);
+    content.Scan();
+
+    workspace.CreateFolder("Ground");
+    workspace.WriteSource(
+        "Ground/Rock.shade.hlsl",
+        "// @param albedo       texture2d Content/Textures/Albedo.bmp\n"
+        "// @param height       texture2d Content/Textures/Height.bmp\n"
+        "// @param displacement float 0.15 | 0 1\n"
+        "float4 Shade(OrbitSurface s, OrbitLighting l)\n"
+        "{\n"
+        "    return float4(Sample_albedo(s.uv).rgb, 1.0);\n"
+        "}\n");
+    Check(workspace.Status().compiled);
+    Check(workspace.Program()->layout.HasDisplacement());
+    Check(!workspace.Program()->vertex.bytecode.empty());
+
+    // Both texture2d parameters resolved to their declared defaults and
+    // decoded without SetTextureParameter ever being called.
+    {
+        const auto textures = workspace.TextureParameters();
+        Check(textures.size() == 2);
+        Check(textures[0].declaration.name == "albedo" &&
+              textures[0].declaration.slot == 0);
+        Check(textures[1].declaration.name == "height" &&
+              textures[1].declaration.slot == 1);
+        Check(!textures[0].overridden && !textures[1].overridden);
+        Check(textures[0].loaded && textures[0].error.empty());
+        Check(textures[0].width == 4 && textures[0].height == 3);
+        Check(textures[1].loaded && textures[1].width == 2 && textures[1].height == 2);
+
+        const auto packed = workspace.PackedTextures();
+        Check(packed[0] != nullptr && packed[0]->width == 4);
+        Check(packed[1] != nullptr && packed[1]->width == 2);
+        const auto revisions = workspace.TextureRevisions();
+        Check(revisions[0] != 0 && revisions[1] != 0);
+    }
+
+    // Make a shader material and override one texture; the override
+    // persists to the .orbitshadermaterial and PackedTextures reflects it.
+    const auto materialPath = workspace.CreateShaderMaterial(
+        "Ground", "RockGround", "Ground/Rock.shade.hlsl");
+    workspace.Select(materialPath);
+    Check(workspace.TextureParameters()[0].loaded);
+
+    std::filesystem::create_directories(root / "Content" / "Textures" / "Variant");
+    WriteTestBmp(
+        root / "Content" / "Textures" / "Variant" / "Albedo2.bmp", 6U, 5U);
+    content.Scan();
+
+    workspace.SetTextureParameter(
+        "albedo", "Content/Textures/Variant/Albedo2.bmp");
+    {
+        const auto textures = workspace.TextureParameters();
+        Check(textures[0].overridden);
+        Check(textures[0].path == "Content/Textures/Variant/Albedo2.bmp");
+        Check(textures[0].loaded && textures[0].width == 6 && textures[0].height == 5);
+    }
+    {
+        std::ifstream materialFile(root / materialPath);
+        const std::string materialText(
+            (std::istreambuf_iterator<char>(materialFile)),
+            std::istreambuf_iterator<char>());
+        Check(materialText.find("[[shader_material.texture]]") != std::string::npos);
+        Check(materialText.find("Content/Textures/Variant/Albedo2.bmp") !=
+              std::string::npos);
+    }
+
+    // A missing file keeps the last good texture and reports an error,
+    // exactly like a mesh that fails to reparse.
+    workspace.SetTextureParameter("albedo", "Content/Textures/NoSuchFile.bmp");
+    {
+        const auto textures = workspace.TextureParameters();
+        Check(!textures[0].error.empty());
+    }
+
+    // Resetting drops back to the shader's declared default.
+    workspace.ResetTextureParameter("albedo");
+    {
+        const auto textures = workspace.TextureParameters();
+        Check(!textures[0].overridden);
+        Check(textures[0].path == "Content/Textures/Albedo.bmp");
+    }
+
+    std::filesystem::remove_all(root);
 }
 
 void TestMeshWorkspace(const shader::Compiler& compiler)
@@ -630,9 +901,11 @@ int main()
         shader::dxc::DxcShaderCompiler compiler;
 
         TestEnumsAndParameters();
+        TestTextureParametersAndDisplacement(compiler);
         TestTemplatesCompile(compiler);
         TestDiagnosticsPointAtUserFile(compiler);
         TestWorkspace(compiler);
+        TestTextureWorkspace(compiler);
         TestRpc(compiler);
         TestObjParser();
         TestMeshWorkspace(compiler);

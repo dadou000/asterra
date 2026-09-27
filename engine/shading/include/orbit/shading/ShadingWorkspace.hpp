@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/content/ContentService.hpp>
+#include <orbit/content/RuntimeTexture.hpp>
 #include <orbit/core/Types.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 #include <orbit/shading/ObjMesh.hpp>
@@ -72,6 +73,23 @@ struct ParameterValue
     std::array<f64, 4> value{};
     // Differs from the shader's declared default.
     bool overridden{false};
+};
+
+struct TextureParameterValue
+{
+    ShaderTextureDecl declaration;
+    // Content-relative; the override if one is set, else the declared
+    // default. Empty means "no image" (the renderer binds nothing there).
+    std::string path;
+    bool overridden{false};
+    // The image at `path` decoded successfully (possibly a stale, previously
+    // good decode -- see `error`).
+    bool loaded{false};
+    u32 width{0U};
+    u32 height{0U};
+    // Set when `path` failed to resolve/decode; `loaded` still reflects
+    // whatever was last uploaded, same contract as MeshStatus.
+    std::string error;
 };
 
 // The Shading tab's model. The UI panel and the RPC/MCP methods are both thin
@@ -165,6 +183,21 @@ public:
     // The packed block the preview pipeline consumes.
     [[nodiscard]] std::array<f32, kMaxParameterFloats> PackedParameters() const;
 
+    // ---- Texture parameters -----------------------------------------------
+    // texture2d parameters (see ShaderTextureDecl), by declaration order.
+    // Like SetParameter, an override is written back to the selected shader
+    // material immediately.
+    [[nodiscard]] std::vector<TextureParameterValue> TextureParameters() const;
+    void SetTextureParameter(std::string_view name, std::string path);
+    void ResetTextureParameter(std::string_view name);
+    // Decoded pixels for the renderer to upload, by ShaderTextureDecl::slot;
+    // null for an empty or not-yet-loaded slot.
+    [[nodiscard]] std::array<const content::RuntimeTexture*, kMaxShaderTextures>
+        PackedTextures() const noexcept;
+    // Bumps whenever a slot's GPU texture should be re-uploaded.
+    [[nodiscard]] std::array<u64, kMaxShaderTextures>
+        TextureRevisions() const noexcept;
+
     // ---- Preview ---------------------------------------------------------
     [[nodiscard]] PreviewState& Preview() noexcept;
     [[nodiscard]] const PreviewState& Preview() const noexcept;
@@ -206,6 +239,12 @@ private:
     void RebuildParameterValues();
     void PersistMaterial();
     void RefreshFromContent();
+    // Re-resolves and, if the effective path or the file on disk changed (or
+    // `force`), re-decodes each texture2d parameter the current layout
+    // declares. Like RefreshMesh: a failed decode keeps the last good pixels
+    // and reports the error; the last texture in a slot the shader no longer
+    // declares is dropped.
+    void RefreshTextures(bool force);
     void RefreshMesh();
     void LoadPreviewMesh(bool changedTarget);
     void RebaseMesh(
@@ -235,6 +274,23 @@ private:
     // name -> components; overrides the shader's declared defaults. Loaded
     // from the selected material and edited through SetParameter.
     std::map<std::string, std::vector<f64>> overrides_;
+    // name -> content-relative path; overrides a texture2d parameter's
+    // declared default. Loaded from the selected material and edited through
+    // SetTextureParameter.
+    std::map<std::string, std::string> textureOverrides_;
+
+    struct TextureSlotState
+    {
+        // layout_.textures[slot].name at the last refresh; empty when the
+        // current shader doesn't use this slot.
+        std::string textureName;
+        std::string resolvedPath;
+        std::optional<content::RuntimeTexture> data;
+        std::string error;
+        std::filesystem::file_time_type lastWriteTime{};
+        u64 revision{0U};
+    };
+    std::array<TextureSlotState, kMaxShaderTextures> textureSlots_;
 
     MeshStatus meshStatus_;
     std::shared_ptr<const MeshData> mesh_;

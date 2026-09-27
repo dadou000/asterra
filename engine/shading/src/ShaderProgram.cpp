@@ -141,6 +141,94 @@ float4 main(OrbitPSInput input) : SV_Target0
 }
 )";
 
+// One combined-image-sampler binding at register(t<slot>)/register(s<slot>);
+// paired by [[vk::combinedImageSampler]] into a single Vulkan descriptor
+// (see CommandList::SetGraphicsTexture, bound at the same slot). Declaring
+// explicit matching registers, rather than relying on declaration-order
+// pairing, keeps two textures' t/s pairs from being mismatched.
+//
+// `Sample_<name>` (implicit-derivative, pixel-stage only) is only emitted
+// when `forVertexStage` is false; `SampleLevel_<name>` (explicit LOD, legal
+// in any stage -- the vertex stage has no screen-space derivatives for an
+// implicit one) is always emitted.
+[[nodiscard]] std::string TextureBinding(
+    const ShaderTextureDecl& texture, const bool forVertexStage)
+{
+    std::string text = std::format(
+        "[[vk::combinedImageSampler]]\n"
+        "Texture2D {0}_Tex : register(t{1});\n"
+        "[[vk::combinedImageSampler]]\n"
+        "SamplerState {0}_Samp : register(s{1});\n"
+        "float4 SampleLevel_{0}(float2 uv, float lod) {{ return {0}_Tex.SampleLevel({0}_Samp, uv, lod); }}\n",
+        texture.name, texture.slot);
+
+    if (!forVertexStage)
+    {
+        text += std::format(
+            "float4 Sample_{0}(float2 uv) {{ return {0}_Tex.Sample({0}_Samp, uv); }}\n",
+            texture.name);
+    }
+    return text;
+}
+
+[[nodiscard]] std::string TextureBindings(const ShaderParameterLayout& layout)
+{
+    std::string text = "\n// Generated from // @param ... texture2d annotations.\n";
+    for (const auto& texture : layout.textures)
+    {
+        text += TextureBinding(texture, /*forVertexStage=*/false);
+    }
+    return text;
+}
+
+// The vertex stage compiled in place of kPreviewVertex when
+// layout.HasDisplacement() -- real per-vertex displacement along the normal
+// from the `height` texture and the `displacement` parameter, not a
+// pixel-shader parallax fake, so it actually changes the silhouette and
+// needs no screen-space-derivative trick. See docs/ORBIT_SHADING.md.
+constexpr std::string_view kDisplacedVertexBody = R"(
+struct VSInput
+{
+    [[vk::location(0)]] float3 position : POSITION;
+    [[vk::location(1)]] float3 normal : NORMAL;
+    [[vk::location(2)]] float2 uv : TEXCOORD0;
+};
+
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float3 worldPos : TEXCOORD0;
+    float3 worldNormal : TEXCOORD1;
+    float2 uv : TEXCOORD2;
+};
+
+VSOutput main(VSInput v)
+{
+    const float c = g_orbit.model.x;
+    const float s = g_orbit.model.y;
+    const float scale = g_orbit.model.z;
+
+    float3 p = float3(
+        v.position.x * c + v.position.z * s,
+        v.position.y,
+        -v.position.x * s + v.position.z * c) * scale;
+    const float3 n = float3(
+        v.normal.x * c + v.normal.z * s,
+        v.normal.y,
+        -v.normal.x * s + v.normal.z * c);
+
+    p += n * (SampleLevel_height(v.uv, 0.0).r - 0.5) * Param_displacement();
+
+    VSOutput o;
+    o.worldPos = p;
+    o.worldNormal = n;
+    o.uv = v.uv;
+    o.position =
+        p.x * g_orbit.vp0 + p.y * g_orbit.vp1 + p.z * g_orbit.vp2 + g_orbit.vp3;
+    return o;
+}
+)";
+
 constexpr std::string_view kPreviewVertex = R"(
 struct OrbitPush
 {
@@ -330,6 +418,7 @@ std::string BuildObjectPixelSource(
     source += kObjectPush;
     source += kObjectHelpers;
     source += ParameterAccessors(layout);
+    source += TextureBindings(layout);
 
     // Everything above is engine text; restart line numbering so compiler
     // messages point at the user's own file and lines.
@@ -337,6 +426,25 @@ std::string BuildObjectPixelSource(
     source += userSource;
     source += "\n#line 1 \"orbit-shading-wrapper\"\n";
     source += kObjectWrapper;
+    return source;
+}
+
+std::string BuildObjectVertexSource(const ShaderParameterLayout& layout)
+{
+    const ShaderTextureDecl* const height = layout.FindTexture("height");
+    if (height == nullptr)
+    {
+        // Only called when layout.HasDisplacement(), which requires this.
+        throw std::logic_error(
+            "BuildObjectVertexSource requires a 'height' texture2d parameter.");
+    }
+
+    std::string source(ShadingPreludeCommon());
+    source += kObjectPush;
+    source += kObjectHelpers;
+    source += ParameterAccessors(layout);
+    source += TextureBinding(*height, /*forVertexStage=*/true);
+    source += kDisplacedVertexBody;
     return source;
 }
 
@@ -370,6 +478,22 @@ ShadingProgram CompileShadingProgram(
             .entryPoint = "main",
             .stage = shader::Stage::Pixel,
             .debug = false});
+
+        // A candidate generation must fully compile before it can replace
+        // the working one (docs/ORBIT_HOT_ITERATION.md #5): if the
+        // displacement vertex stage fails, program.ok never becomes true and
+        // the caller keeps the last good pipeline, pixel stage included.
+        if (program.layout.HasDisplacement())
+        {
+            const std::string vertexSource =
+                BuildObjectVertexSource(program.layout);
+            program.vertex = compiler.Compile({
+                .source = vertexSource,
+                .entryPoint = "main",
+                .stage = shader::Stage::Vertex,
+                .debug = false});
+        }
+
         program.ok = true;
     }
     catch (const std::exception& exception)

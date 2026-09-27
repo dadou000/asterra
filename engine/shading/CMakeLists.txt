@@ -18,6 +18,7 @@ target_include_directories(OrbitShading
 target_link_libraries(OrbitShading
     PUBLIC
         Orbit::Content
+        Orbit::ContentWic
         Orbit::Core
         Orbit::Math
         Orbit::RHI

@@ -46,11 +46,19 @@ struct ShaderMaterialParameter
     std::vector<f64> values;
 };
 
+struct ShaderMaterialTexture
+{
+    std::string name;
+    // Project-relative path of the image (e.g. "Content/Textures/Rock.jpg").
+    std::string path;
+};
+
 struct ShaderMaterialData
 {
     // Project-relative or material-folder-relative path of the shader.
     std::filesystem::path shader;
     std::vector<ShaderMaterialParameter> parameters;
+    std::vector<ShaderMaterialTexture> textures;
 };
 
 struct MaterialEmission

@@ -23,6 +23,11 @@ struct ShadingProgram
     // user's own file) and parameter-annotation problems. Empty when ok.
     std::string diagnostics;
     shader::Binary pixel;
+    // Non-empty only when layout.HasDisplacement(): a vertex stage that
+    // samples the `height` texture and displaces along the normal, compiled
+    // from the same layout alongside the pixel stage. Empty otherwise -- the
+    // renderer then uses its plain fixed vertex shader instead.
+    shader::Binary vertex;
     ShaderParameterLayout layout;
     u64 sourceHash{0};
     f64 compileMilliseconds{0.0};
@@ -40,6 +45,12 @@ struct ShadingProgram
 [[nodiscard]] std::string BuildObjectPixelSource(
     std::string_view assetName,
     std::string_view userSource,
+    const ShaderParameterLayout& layout);
+
+// The displacement vertex stage compiled alongside the pixel stage when
+// layout.HasDisplacement(). Throws if it doesn't (no `height` texture2d
+// parameter to sample).
+[[nodiscard]] std::string BuildObjectVertexSource(
     const ShaderParameterLayout& layout);
 
 // Fixed engine stages, compiled once by the renderer.

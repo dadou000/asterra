@@ -216,4 +216,17 @@ void RegisterTextureImporters(
             }
     });
 }
+
+content::RuntimeTexture DecodeTextureFile(
+    const std::filesystem::path& path)
+{
+    const content::ImportOutput output =
+        ImportTexture(
+            content::ImportRequest{
+                .sourcePath = path
+            });
+
+    return content::DecodeRuntimeTexture(
+        output.artifacts.at(0).bytes);
+}
 } // namespace orbit::content_wic

@@ -207,6 +207,27 @@ Value ParametersToValue(const ShadingWorkspace& workspace)
     return Value(std::move(parameters));
 }
 
+Value TexturesToValue(const ShadingWorkspace& workspace)
+{
+    Value::Array textures;
+
+    for (const auto& texture : workspace.TextureParameters())
+    {
+        textures.emplace_back(Value::Object{
+            {"name", texture.declaration.name},
+            {"slot", static_cast<i64>(texture.declaration.slot)},
+            {"default", texture.declaration.defaultPath},
+            {"path", texture.path},
+            {"overridden", texture.overridden},
+            {"loaded", texture.loaded},
+            {"width", static_cast<i64>(texture.width)},
+            {"height", static_cast<i64>(texture.height)},
+            {"error", texture.error}});
+    }
+
+    return Value(std::move(textures));
+}
+
 Value MeshToValue(const ShadingWorkspace& workspace)
 {
     const MeshStatus& mesh = workspace.PreviewMeshStatus();
@@ -239,6 +260,7 @@ Value StatusToValue(const ShadingWorkspace& workspace)
         {"changed_on_disk", status.changedOnDisk},
         {"live_compile", workspace.LiveCompile()},
         {"parameters", ParametersToValue(workspace)},
+        {"textures", TexturesToValue(workspace)},
         {"mesh", MeshToValue(workspace)},
         {"preview", PreviewToValue(workspace.Preview())}});
 }
@@ -517,7 +539,7 @@ void RegisterShadingRpc(
         [&workspace](const Value&) { return StatusToValue(workspace); });
 
     add("shading.param_set",
-        "Sets a shader parameter by name (number or array). With a shader material open the override is saved into the material.",
+        "Sets a shader parameter by name: a number or array of numbers for float/color3 parameters, or a content-relative path string for a texture2d parameter. With a shader material open the override is saved into the material.",
         true,
         [&workspace](const Value& params)
         {
@@ -528,6 +550,31 @@ void RegisterShadingRpc(
             {
                 throw rpc::Error(-32602, "value is required.");
             }
+
+            const bool isTexture = std::ranges::any_of(
+                workspace.TextureParameters(),
+                [&](const TextureParameterValue& texture)
+                { return texture.declaration.name == name; });
+
+            if (isTexture)
+            {
+                if (!found->second.IsString())
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "'" + name +
+                            "' is a texture2d parameter: value must be a "
+                            "content-relative path string.");
+                }
+                return Guard(
+                    [&]
+                    {
+                        workspace.SetTextureParameter(
+                            name, found->second.AsString());
+                        return StatusToValue(workspace);
+                    });
+            }
+
             const auto numbers = ParameterNumbers(found->second);
             return Guard(
                 [&]
@@ -538,16 +585,29 @@ void RegisterShadingRpc(
         });
 
     add("shading.param_reset",
-        "Removes a parameter override so the shader's declared default applies.",
+        "Removes a parameter override (numeric or texture2d) so the shader's declared default applies.",
         true,
         [&workspace](const Value& params)
         {
             const auto& values = Params(params);
             const auto name = RequireString(values, "name");
+
+            const bool isTexture = std::ranges::any_of(
+                workspace.TextureParameters(),
+                [&](const TextureParameterValue& texture)
+                { return texture.declaration.name == name; });
+
             return Guard(
                 [&]
                 {
-                    workspace.ResetParameter(name);
+                    if (isTexture)
+                    {
+                        workspace.ResetTextureParameter(name);
+                    }
+                    else
+                    {
+                        workspace.ResetParameter(name);
+                    }
                     return StatusToValue(workspace);
                 });
         });
