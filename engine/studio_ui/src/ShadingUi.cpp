@@ -63,7 +63,7 @@ void ShadingUi::Register(editor_ui::EditorUi& ui)
     ui.RegisterPanel({
         .id = kBrowserPanelId,
         .title = "Shading Materials",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = editor_ui::DockRegion::Right,
         .dockOrder = 25,
         .minSize = {.width = 260.0F, .height = 300.0F},
@@ -77,7 +77,7 @@ void ShadingUi::Register(editor_ui::EditorUi& ui)
     ui.RegisterPanel({
         .id = kPanelId,
         .title = "Shading",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = editor_ui::DockRegion::Center,
         .dockOrder = 25,
         .minSize = {.width = 480.0F, .height = 420.0F},
