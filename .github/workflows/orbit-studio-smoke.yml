@@ -55,27 +55,46 @@ jobs:
           OrbitStudio
           OrbitPlayer
 
-      - name: Test Studio seam
+      - name: Test editor session RPC host
+        run: build-studio-smoke/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe
+
+      - name: Test Studio session
+        run: build-studio-smoke/engine/studio_session/Release/OrbitStudioSessionTests.exe
+
+      - name: Test terrain runtime bridge
+        run: build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainRuntimeBridgeTests.exe
+
+      - name: Test terrain rebuild scheduler
+        run: build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainRebuildSchedulerTests.exe
+
+      - name: Test terrain physical pages
+        run: build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainPhysicalPageServiceTests.exe
+
+      - name: Test Bezier handle editor
+        run: build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe
+
+      - name: Test terrain diagnostic overlay geometry
+        run: build-studio-smoke/engine/studio_ui/Release/OrbitStudioTerrainDiagnosticOverlayGeometryTests.exe
+
+      - name: Test viewport camera
+        run: build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe
+
+      - name: Test viewport navigation
+        run: build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportNavigationTests.exe
+
+      - name: Test viewport presentation
+        run: build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe
+
+      - name: Verify Studio executable
         shell: pwsh
         run: |
-          $tests = @(
-            "build-studio-smoke/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe",
-            "build-studio-smoke/engine/studio_session/Release/OrbitStudioSessionTests.exe",
-            "build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainRuntimeBridgeTests.exe",
-            "build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainRebuildSchedulerTests.exe",
-            "build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainPhysicalPageServiceTests.exe",
-            "build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe",
-            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioTerrainDiagnosticOverlayGeometryTests.exe",
-            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe",
-            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportNavigationTests.exe",
-            "build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
-          )
-          foreach ($test in $tests) {
-            & $test
-            if ($LASTEXITCODE -ne 0) {
-              throw "$test failed with exit code $LASTEXITCODE"
-            }
-          }
           if (-not (Test-Path "build-studio-smoke/apps/editor/Release/OrbitStudio.exe")) {
             throw "OrbitStudio.exe was not produced."
+          }
+
+      - name: Verify Player executable
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "build-studio-smoke/apps/player/Release/OrbitPlayer.exe")) {
+            throw "OrbitPlayer.exe was not produced."
           }
