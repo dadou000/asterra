@@ -51,7 +51,11 @@ inline constexpr editor_ui::PanelId kSecondaryViewportPanel{
 class StudioViewportPanels
 {
 public:
-    StudioViewportPanels() = default;
+    // Kept out-of-line because this class owns unique_ptr members whose UI
+    // types are intentionally forward-declared here. Defining the constructor
+    // in the .cpp keeps MSVC from instantiating incomplete-type cleanup paths
+    // in every translation unit that includes this header.
+    StudioViewportPanels();
 
     StudioViewportPanels(
         StudioRenderViewSet& views,
