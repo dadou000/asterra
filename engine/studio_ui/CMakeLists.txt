@@ -397,6 +397,24 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioShellModelTests
     )
 
+    add_executable(OrbitStudioInspectorExtensionTests
+        tests/StudioInspectorExtensionTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioInspectorExtensionTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitStudioInspectorExtensionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioInspectorExtensionTests)
+
+    add_test(
+        NAME Orbit.StudioInspectorExtension
+        COMMAND OrbitStudioInspectorExtensionTests
+    )
+
     set_tests_properties(
         Orbit.V007IntegrationGate
         PROPERTIES
