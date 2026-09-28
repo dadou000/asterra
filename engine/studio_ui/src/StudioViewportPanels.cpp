@@ -5,6 +5,7 @@
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
+#include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -72,6 +73,25 @@ void CloseSpecialistPanels(editor_ui::EditorUi& ui)
         });
 }
 
+void OpenStandardInspectorWorkspace(
+    editor_ui::EditorUi& ui,
+    const std::initializer_list<std::string_view> centerPanels)
+{
+    CloseSpecialistPanels(ui);
+    ClosePanels(
+        ui,
+        {
+            "Properties",
+            "Material Service",
+            "Build",
+            "Output"
+        });
+
+    OpenPanels(ui, {"Explorer"});
+    OpenPanels(ui, centerPanels);
+    OpenPanels(ui, {"Inspector"});
+}
+
 void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
 {
     ui.RegisterMenuAction({
@@ -79,13 +99,9 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Scene",
         .invoke = [&ui]
         {
-            CloseSpecialistPanels(ui);
-            ClosePanels(
+            OpenStandardInspectorWorkspace(
                 ui,
-                {"Material Service", "Build", "Output"});
-            OpenPanels(
-                ui,
-                {"Explorer", "Viewport", "Properties"});
+                {"Viewport"});
         }
     });
 
@@ -94,13 +110,9 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Planet",
         .invoke = [&ui]
         {
-            CloseSpecialistPanels(ui);
-            ClosePanels(
+            OpenStandardInspectorWorkspace(
                 ui,
-                {"Properties", "Material Service", "Build", "Output"});
-            OpenPanels(
-                ui,
-                {"Explorer", "Viewport", "Inspector"});
+                {"Viewport"});
         }
     });
 
@@ -112,7 +124,13 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
             CloseSpecialistPanels(ui);
             ClosePanels(
                 ui,
-                {"Viewport", "Properties", "Material Service", "Build", "Output"});
+                {
+                    "Viewport",
+                    "Properties",
+                    "Material Service",
+                    "Build",
+                    "Output"
+                });
             OpenPanels(
                 ui,
                 {"Explorer", "System View", "Inspector"});
@@ -124,13 +142,9 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Simulation",
         .invoke = [&ui]
         {
-            CloseSpecialistPanels(ui);
-            ClosePanels(
+            OpenStandardInspectorWorkspace(
                 ui,
-                {"Properties", "Material Service", "Build", "Output"});
-            OpenPanels(
-                ui,
-                {"Explorer", "Viewport", "Volumes"});
+                {"Viewport"});
         }
     });
 
@@ -142,7 +156,14 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
             CloseSpecialistPanels(ui);
             ClosePanels(
                 ui,
-                {"Viewport", "Explorer", "Properties", "Material Service", "Build", "Output"});
+                {
+                    "Viewport",
+                    "Explorer",
+                    "Properties",
+                    "Material Service",
+                    "Build",
+                    "Output"
+                });
             OpenPanels(
                 ui,
                 {"Shading", "Shading Materials"});
@@ -193,9 +214,9 @@ void StudioViewportPanels::RegisterContextInspector(
     ui.RegisterPanel({
         .id = kContextInspectorPanel,
         .title = "Inspector",
-        .defaultOpen = false,
+        .defaultOpen = true,
         .defaultDock = editor_ui::DockRegion::Right,
-        .dockOrder = 1,
+        .dockOrder = -100,
         .minSize = {
             .width = 300.0F,
             .height = 300.0F
@@ -451,6 +472,12 @@ void StudioViewportPanels::DrawContextInspector(
         }
     }
 
+    VolumeAuthoringUi* const volumeAuthoring =
+        VolumeAuthoringUi::ContextInstance();
+    const bool volumeRelevant =
+        volumeAuthoring != nullptr &&
+        volumeAuthoring->RelevantToSelection();
+
     if (surfaceRelevant &&
         contextualSurface_ != nullptr &&
         context.Section(
@@ -469,8 +496,18 @@ void StudioViewportPanels::DrawContextInspector(
         contextualCelestial_->Draw(context);
     }
 
+    if (volumeRelevant &&
+        context.Section(
+            "Volume##context-inspector-volume",
+            !surfaceRelevant &&
+                !celestialRelevant))
+    {
+        volumeAuthoring->Draw(context);
+    }
+
     if (!surfaceRelevant &&
-        !celestialRelevant)
+        !celestialRelevant &&
+        !volumeRelevant)
     {
         context.MutedText(
             "No specialized authoring section is needed for this selection. Common schema properties remain fully editable above.");
