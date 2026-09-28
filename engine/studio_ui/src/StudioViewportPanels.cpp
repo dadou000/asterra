@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
+#include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/CelestialAuthoringModel.hpp>
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
@@ -31,6 +32,18 @@ namespace orbit::studio_ui
 {
 namespace
 {
+enum class WorkspaceMode : u8
+{
+    Scene,
+    Planet,
+    Celestial,
+    Simulation,
+    Shading
+};
+
+editor_ui::EditorUi* g_workspaceUi = nullptr;
+WorkspaceMode g_workspaceMode = WorkspaceMode::Scene;
+
 void ClosePanels(
     editor_ui::EditorUi& ui,
     const std::initializer_list<std::string_view> titles)
@@ -92,16 +105,110 @@ void OpenStandardInspectorWorkspace(
     OpenPanels(ui, {"Inspector"});
 }
 
+void ActivateWorkspace(
+    editor_ui::EditorUi& ui,
+    const WorkspaceMode mode)
+{
+    g_workspaceMode = mode;
+
+    switch (mode)
+    {
+    case WorkspaceMode::Scene:
+    case WorkspaceMode::Planet:
+    case WorkspaceMode::Simulation:
+        OpenStandardInspectorWorkspace(
+            ui,
+            {"Viewport"});
+        break;
+
+    case WorkspaceMode::Celestial:
+        CloseSpecialistPanels(ui);
+        ClosePanels(
+            ui,
+            {
+                "Viewport",
+                "Properties",
+                "Material Service",
+                "Build",
+                "Output"
+            });
+        OpenPanels(
+            ui,
+            {"Explorer", "System View", "Inspector"});
+        break;
+
+    case WorkspaceMode::Shading:
+        CloseSpecialistPanels(ui);
+        ClosePanels(
+            ui,
+            {
+                "Viewport",
+                "Explorer",
+                "Properties",
+                "Material Service",
+                "Build",
+                "Output"
+            });
+        // Inspector stays available as the persistent workspace switcher and
+        // contextual object surface even when Shading owns the center.
+        OpenPanels(
+            ui,
+            {"Shading", "Shading Materials", "Inspector"});
+        break;
+    }
+}
+
+void DrawWorkspaceStrip(
+    editor_ui::PanelContext& context)
+{
+    if (g_workspaceUi == nullptr)
+    {
+        return;
+    }
+
+    const auto button =
+        [&context](
+            const char* name,
+            const WorkspaceMode mode)
+        {
+            std::string label =
+                g_workspaceMode == mode
+                    ? std::string{"["} + name + "]"
+                    : std::string{name};
+            label += "##workspace-strip-";
+            label += name;
+
+            if (context.Button(label))
+            {
+                ActivateWorkspace(
+                    *g_workspaceUi,
+                    mode);
+            }
+        };
+
+    button("Scene", WorkspaceMode::Scene);
+    context.SameLine();
+    button("Planet", WorkspaceMode::Planet);
+    context.SameLine();
+    button("Celestial", WorkspaceMode::Celestial);
+    context.SameLine();
+    button("Simulation", WorkspaceMode::Simulation);
+    context.SameLine();
+    button("Shading", WorkspaceMode::Shading);
+}
+
 void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
 {
+    g_workspaceUi = &ui;
+
     ui.RegisterMenuAction({
         .menu = "Home",
         .label = "Workspace: Scene",
         .invoke = [&ui]
         {
-            OpenStandardInspectorWorkspace(
+            ActivateWorkspace(
                 ui,
-                {"Viewport"});
+                WorkspaceMode::Scene);
         }
     });
 
@@ -110,9 +217,9 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Planet",
         .invoke = [&ui]
         {
-            OpenStandardInspectorWorkspace(
+            ActivateWorkspace(
                 ui,
-                {"Viewport"});
+                WorkspaceMode::Planet);
         }
     });
 
@@ -121,19 +228,9 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Celestial",
         .invoke = [&ui]
         {
-            CloseSpecialistPanels(ui);
-            ClosePanels(
+            ActivateWorkspace(
                 ui,
-                {
-                    "Viewport",
-                    "Properties",
-                    "Material Service",
-                    "Build",
-                    "Output"
-                });
-            OpenPanels(
-                ui,
-                {"Explorer", "System View", "Inspector"});
+                WorkspaceMode::Celestial);
         }
     });
 
@@ -142,9 +239,9 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Simulation",
         .invoke = [&ui]
         {
-            OpenStandardInspectorWorkspace(
+            ActivateWorkspace(
                 ui,
-                {"Viewport"});
+                WorkspaceMode::Simulation);
         }
     });
 
@@ -153,20 +250,9 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Shading",
         .invoke = [&ui]
         {
-            CloseSpecialistPanels(ui);
-            ClosePanels(
+            ActivateWorkspace(
                 ui,
-                {
-                    "Viewport",
-                    "Explorer",
-                    "Properties",
-                    "Material Service",
-                    "Build",
-                    "Output"
-                });
-            OpenPanels(
-                ui,
-                {"Shading", "Shading Materials"});
+                WorkspaceMode::Shading);
         }
     });
 }
@@ -237,6 +323,15 @@ void StudioViewportPanels::DrawContextInspector(
     editor_ui::PanelContext& context)
 {
     EnsureContextAuthoring();
+
+    // Celestial and Shading replace the normal scene viewport, so keep the
+    // workspace switcher visible at the top of Inspector in those modes.
+    if (g_workspaceMode == WorkspaceMode::Celestial ||
+        g_workspaceMode == WorkspaceMode::Shading)
+    {
+        DrawWorkspaceStrip(context);
+        context.Separator();
+    }
 
     if (session_ == nullptr ||
         !session_->World().HasWorld())
@@ -586,6 +681,149 @@ void StudioViewportPanels::DrawView(
     editor_ui::PanelContext& context,
     const std::string_view id)
 {
+    // The primary viewport carries the persistent workspace strip for normal
+    // scene/planet/simulation editing. The strip moves to Inspector when the
+    // center is replaced by System View or Shading.
+    if (id == "studio.primary" &&
+        g_workspaceMode != WorkspaceMode::Celestial &&
+        g_workspaceMode != WorkspaceMode::Shading)
+    {
+        DrawWorkspaceStrip(context);
+        context.Separator();
+
+        if (session_ != nullptr &&
+            session_->World().HasWorld())
+        {
+            context.Text("Context Tools");
+
+            const auto invokeAuthoringCommand =
+                [this](const commands::CommandId command)
+                {
+                    try
+                    {
+                        session_->World().CommandRegistry().Invoke(
+                            command,
+                            {});
+                        status_.clear();
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ = exception.what();
+                    }
+                };
+
+            if (g_workspaceMode == WorkspaceMode::Planet)
+            {
+                const auto setTerrainTool =
+                    [this, id](
+                        const StudioTerrainAuthoringTool tool)
+                    {
+                        if (terrainTool_ != tool &&
+                            (IsSplineTool(terrainTool_) ||
+                             IsSplineTool(tool)))
+                        {
+                            terrainSplinePoints_.clear();
+                            terrainSplineTerrain_.reset();
+                        }
+
+                        terrainTool_ = tool;
+
+                        if (views_ != nullptr)
+                        {
+                            views_->ClearTerrainAuthoringOverlay(id);
+                        }
+                    };
+
+                if (context.Button("Select##quick-terrain-select"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Select);
+                context.SameLine();
+                if (context.Button("Raise##quick-terrain-raise"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Raise);
+                context.SameLine();
+                if (context.Button("Lower##quick-terrain-lower"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Lower);
+                context.SameLine();
+                if (context.Button("Protect##quick-terrain-protect"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Protection);
+                context.SameLine();
+                if (context.Button("Drainage##quick-terrain-drainage"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Drainage);
+
+                if (context.Button("Canyon##quick-terrain-canyon"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Canyon);
+                context.SameLine();
+                if (context.Button("Ridge##quick-terrain-ridge"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Ridge);
+                context.SameLine();
+                if (context.Button("Geology##quick-terrain-material"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Material);
+                context.SameLine();
+                if (context.Button("Biome Paint##quick-terrain-biome"))
+                    setTerrainTool(StudioTerrainAuthoringTool::BiomePaint);
+            }
+            else if (g_workspaceMode == WorkspaceMode::Simulation)
+            {
+                VolumeAuthoringUi* const volumeAuthoring =
+                    VolumeAuthoringUi::ContextInstance();
+
+                if (volumeAuthoring != nullptr &&
+                    volumeAuthoring->RelevantToSelection())
+                {
+                    if (context.Button("Add Source##quick-volume-source"))
+                    {
+                        invokeAuthoringCommand(
+                            editor_model::authoring_commands::
+                                kAddVolumeSource);
+                    }
+                    context.SameLine();
+                    if (context.Button("Add Effector##quick-volume-effector"))
+                    {
+                        invokeAuthoringCommand(
+                            editor_model::authoring_commands::
+                                kAddVolumeEffector);
+                    }
+                    context.SameLine();
+                }
+
+                if (context.Button("Volume Expert##quick-volume-expert") &&
+                    g_workspaceUi != nullptr)
+                {
+                    static_cast<void>(
+                        g_workspaceUi->FocusPanelByTitle(
+                            "Volumes"));
+                }
+            }
+            else
+            {
+                // Scene workspace keeps high-frequency path connection tools
+                // directly under the workspace strip. The command registry
+                // validates whether the current selection is a valid node pair.
+                if (context.Button("Path Direct##quick-path-direct"))
+                {
+                    invokeAuthoringCommand(
+                        editor_model::authoring_commands::
+                            kConnectPathDirect);
+                }
+                context.SameLine();
+                if (context.Button("Path Bezier##quick-path-bezier"))
+                {
+                    invokeAuthoringCommand(
+                        editor_model::authoring_commands::
+                            kConnectPathBezier);
+                }
+                context.SameLine();
+                if (context.Button("Path Routed##quick-path-routed"))
+                {
+                    invokeAuthoringCommand(
+                        editor_model::authoring_commands::
+                            kConnectPathRouted);
+                }
+            }
+
+            context.Separator();
+        }
+    }
+
     DrawViewBase(context, id);
 
     if (views_ == nullptr ||
