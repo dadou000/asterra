@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace orbit::studio_ui
@@ -91,6 +93,8 @@ StudioExpansionShell::StudioExpansionShell(
 
 StudioExpansionShell::~StudioExpansionShell()
 {
+    SavePersistentStateIfChanged();
+
     if (!attached_)
     {
         return;
@@ -100,6 +104,111 @@ StudioExpansionShell::~StudioExpansionShell()
         editor_ui::RemoveShellBand("orbit.navigation"));
     static_cast<void>(
         editor_ui::RemoveShellBand("orbit.viewport-authoring"));
+}
+
+void StudioExpansionShell::SavePersistentStateIfChanged() noexcept
+{
+    if (!persistentStateLoaded_ ||
+        persistentStatePath_.empty())
+    {
+        return;
+    }
+
+    persistentState_.viewport = viewportState_;
+    if (owner_ != nullptr)
+    {
+        persistentState_.inspectorAdvanced =
+            owner_->contextualAdvancedProperties_;
+    }
+
+    const std::string serialized =
+        SerializeStudioPersistentState(
+            persistentState_);
+
+    if (serialized == persistentSnapshot_)
+    {
+        return;
+    }
+
+    try
+    {
+        SaveStudioPersistentState(
+            persistentStatePath_,
+            persistentState_);
+        persistentSnapshot_ = serialized;
+    }
+    catch (const std::exception& exception)
+    {
+        if (owner_ != nullptr)
+        {
+            owner_->status_ =
+                std::string{"Studio state save failed: "} +
+                exception.what();
+        }
+    }
+}
+
+void StudioExpansionShell::SyncPersistentState() noexcept
+{
+    studio_session::StudioSession* const session =
+        owner_ != nullptr
+            ? owner_->session_
+            : nullptr;
+
+    if (session == persistentSession_ &&
+        persistentStateLoaded_)
+    {
+        SavePersistentStateIfChanged();
+        return;
+    }
+
+    // Rebinding projects is a normal Studio operation. Persist the old
+    // project before swapping the presentation binding.
+    SavePersistentStateIfChanged();
+
+    persistentSession_ = session;
+    persistentStatePath_.clear();
+    persistentState_ = {};
+    persistentSnapshot_.clear();
+    persistentStateLoaded_ = false;
+
+    if (session == nullptr)
+    {
+        return;
+    }
+
+    try
+    {
+        persistentStatePath_ =
+            session->World().Project().RootDirectory() /
+            ".orbit" /
+            "StudioState.ini";
+
+        persistentState_ =
+            LoadStudioPersistentState(
+                persistentStatePath_);
+
+        viewportState_ = persistentState_.viewport;
+        if (owner_ != nullptr)
+        {
+            owner_->contextualAdvancedProperties_ =
+                persistentState_.inspectorAdvanced;
+        }
+
+        persistentSnapshot_ =
+            SerializeStudioPersistentState(
+                persistentState_);
+        persistentStateLoaded_ = true;
+    }
+    catch (const std::exception& exception)
+    {
+        if (owner_ != nullptr)
+        {
+            owner_->status_ =
+                std::string{"Studio state load failed: "} +
+                exception.what();
+        }
+    }
 }
 
 void StudioExpansionShell::DrawContributions(
@@ -168,6 +277,8 @@ void StudioExpansionShell::DrawContributions(
 void StudioExpansionShell::DrawNavigationBand(
     editor_ui::PanelContext& context)
 {
+    SyncPersistentState();
+
     context.Text("Navigate");
 
     if (owner_ == nullptr ||
@@ -355,6 +466,8 @@ void StudioExpansionShell::DrawNavigationBand(
 void StudioExpansionShell::DrawViewportBand(
     editor_ui::PanelContext& context)
 {
+    SyncPersistentState();
+
     context.Text("Viewport");
     context.SameLine();
 
