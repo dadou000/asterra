@@ -273,15 +273,22 @@ struct MenuAction
     std::string shortcut;
 };
 
+enum class ShellBandEdge : u8
+{
+    Top,
+    Bottom
+};
+
 // Persistent, non-dockable row attached directly to the Studio shell. Bands
-// are ordered top-to-bottom by `order`, live below the main menu bar and
-// reserve work-area height so docked panels never sit underneath them. The
-// draw callback uses the same presentation surface as ordinary panels.
+// reserve viewport work-area space on the requested edge so docked panels
+// never sit underneath them. Ordering is stable within each edge, and the draw
+// callback uses the same presentation surface as ordinary panels.
 struct ShellBandDefinition
 {
     std::string id;
     i32 order{0};
     f32 height{40.0F};
+    ShellBandEdge edge{ShellBandEdge::Top};
     std::function<void(PanelContext&)> draw;
 };
 
