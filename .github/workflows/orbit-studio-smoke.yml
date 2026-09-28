@@ -8,6 +8,7 @@ on:
       - 'apps/editor/**'
       - 'engine/editor_rpc/**'
       - 'engine/editor_session/**'
+      - 'engine/editor_ui/**'
       - 'engine/studio_session/**'
       - 'engine/studio_ui/**'
       - 'engine/world_model/**'
@@ -52,6 +53,7 @@ jobs:
           OrbitStudioViewportCameraTests
           OrbitStudioViewportNavigationTests
           OrbitStudioViewportPresentationTests
+          OrbitStudioShellModelTests
           OrbitStudio
           OrbitPlayer
 
@@ -84,6 +86,9 @@ jobs:
 
       - name: Test viewport presentation
         run: build-studio-smoke/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe
+
+      - name: Test Studio shell model
+        run: build-studio-smoke/engine/studio_ui/Release/OrbitStudioShellModelTests.exe
 
       - name: Verify Studio executable
         shell: pwsh
