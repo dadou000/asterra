@@ -53,6 +53,14 @@ public:
         return viewportState_;
     }
 
+    // Presentation extensions use the exact same focus-aware target as the
+    // built-in shell. This does not expose or duplicate viewport runtime state.
+    [[nodiscard]] std::string_view
+    ControlledViewportId() const noexcept
+    {
+        return SelectedViewportId();
+    }
+
 private:
     void DrawNavigationBand(editor_ui::PanelContext& context);
     void DrawViewportBand(editor_ui::PanelContext& context);
