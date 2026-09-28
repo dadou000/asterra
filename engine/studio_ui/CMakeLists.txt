@@ -181,6 +181,24 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioViewportPresentationTests
     )
 
+    add_executable(OrbitStudioShellModelTests
+        tests/StudioShellModelTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioShellModelTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitStudioShellModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioShellModelTests)
+
+    add_test(
+        NAME Orbit.StudioShellModel
+        COMMAND OrbitStudioShellModelTests
+    )
+
     add_executable(OrbitVolumeSurfaceEffectRenderBridgeTests
         tests/VolumeSurfaceEffectRenderBridgeTests.cpp
     )
