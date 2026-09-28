@@ -25,17 +25,17 @@ void Check(const bool condition, const std::string_view what)
     }
 }
 
-void WorldAssetsPanelOwnsTheCompactLeftFrontDoor()
+void WorldAssetsPanelIsAnOptionalCompatibilitySurface()
 {
     const auto& contract = kWorldAssetsBrowserContract;
     Check(contract.panel.IsValid(), "browser panel id is stable and valid");
-    Check(contract.defaultOpen, "browser opens by default");
+    Check(!contract.defaultOpen, "composite browser is not part of the default shell");
     Check(
         contract.defaultDock == editor_ui::DockRegion::Left,
-        "browser belongs to the left dock");
-    Check(contract.dockOrder < 0, "browser is the first left-dock tab");
+        "browser remains available in the left dock when explicitly opened");
+    Check(contract.dockOrder < 0, "browser keeps a deterministic dock position");
     Check(contract.minSize.width >= 240.0F, "browser keeps a usable minimum width");
-    Check(contract.defaultSize.width <= 360.0F, "browser stays compact by default");
+    Check(contract.defaultSize.width <= 360.0F, "browser stays compact when opened");
 }
 
 void WorkspacesChooseTheExpectedBrowserSurface()
@@ -46,10 +46,24 @@ void WorkspacesChooseTheExpectedBrowserSurface()
     Check(DefaultBrowserMode(StudioWorkspaceMode::Simulation) == StudioBrowserMode::World, "Simulation starts on World");
     Check(DefaultBrowserMode(StudioWorkspaceMode::Shading) == StudioBrowserMode::Assets, "Shading starts on Assets");
 
-    Check(BrowserSourcePanelTitle(StudioBrowserMode::World) == std::string_view{"Explorer"}, "World composes Explorer");
-    Check(BrowserSourcePanelTitle(StudioBrowserMode::Assets) == std::string_view{"Material Service"}, "Assets composes Material Service");
+    Check(BrowserSourcePanelTitle(StudioBrowserMode::World) == std::string_view{"Explorer"}, "World maps to Explorer");
+    Check(BrowserSourcePanelTitle(StudioBrowserMode::Assets) == std::string_view{"Material Service"}, "Assets map to Material Service");
     Check(StudioWorkspaceName(StudioWorkspaceMode::Scene) == "Scene", "Scene name stable");
     Check(StudioWorkspaceName(StudioWorkspaceMode::Shading) == "Shading", "Shading name stable");
+}
+
+void WorkspacesShareOneCanonicalSpatialShell()
+{
+    Check(UsesCanonicalViewportWorkspace(StudioWorkspaceMode::Scene), "Scene uses canonical viewport shell");
+    Check(UsesCanonicalViewportWorkspace(StudioWorkspaceMode::Planet), "Planet uses canonical viewport shell");
+    Check(UsesCanonicalViewportWorkspace(StudioWorkspaceMode::Celestial), "Celestial uses canonical viewport shell");
+    Check(UsesCanonicalViewportWorkspace(StudioWorkspaceMode::Simulation), "Simulation uses canonical viewport shell");
+    Check(!UsesCanonicalViewportWorkspace(StudioWorkspaceMode::Shading), "Shading is the explicit specialist center surface");
+
+    Check(WorkspaceCenterPanelTitle(StudioWorkspaceMode::Scene) == "Viewport", "Scene center is Viewport");
+    Check(WorkspaceCenterPanelTitle(StudioWorkspaceMode::Celestial) == "Viewport", "Celestial keeps Viewport center");
+    Check(WorkspaceCenterPanelTitle(StudioWorkspaceMode::Simulation) == "Viewport", "Simulation keeps Viewport center");
+    Check(WorkspaceCenterPanelTitle(StudioWorkspaceMode::Shading) == "Shading", "Shading swaps only the center surface");
 }
 
 void InspectorProvidersAreOrderedAndOwnerScoped()
@@ -260,8 +274,9 @@ void PersistentStateRoundTrips()
 
 int main()
 {
-    WorldAssetsPanelOwnsTheCompactLeftFrontDoor();
+    WorldAssetsPanelIsAnOptionalCompatibilitySurface();
     WorkspacesChooseTheExpectedBrowserSurface();
+    WorkspacesShareOneCanonicalSpatialShell();
     InspectorProvidersAreOrderedAndOwnerScoped();
     ContributionsAreStableAndOwnerScoped();
     CommandPaletteRanksUsefulMatches();
