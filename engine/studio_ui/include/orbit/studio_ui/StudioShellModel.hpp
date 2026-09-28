@@ -24,7 +24,10 @@ enum class StudioBrowserMode : u8
 struct WorldAssetsBrowserContract
 {
     editor_ui::PanelId panel{};
-    bool defaultOpen{true};
+    // Compatibility/expert composite only. The normal Studio front door is
+    // Explorer + center workspace + Properties, so this must not compete with
+    // Explorer for the default left dock.
+    bool defaultOpen{false};
     editor_ui::DockRegion defaultDock{editor_ui::DockRegion::Left};
     i32 dockOrder{-100};
     editor_ui::UiSize minSize{260.0F, 300.0F};
@@ -52,6 +55,23 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
     return mode == StudioBrowserMode::World
         ? std::string_view{"Explorer"}
         : std::string_view{"Material Service"};
+}
+
+// The common authoring modes deliberately share one spatial shell. Switching
+// between Scene, Planet, Celestial and Simulation changes contextual tools,
+// not the user's navigation model or panel geography.
+[[nodiscard]] constexpr bool UsesCanonicalViewportWorkspace(
+    const StudioWorkspaceMode workspace) noexcept
+{
+    return workspace != StudioWorkspaceMode::Shading;
+}
+
+[[nodiscard]] constexpr std::string_view WorkspaceCenterPanelTitle(
+    const StudioWorkspaceMode workspace) noexcept
+{
+    return UsesCanonicalViewportWorkspace(workspace)
+        ? std::string_view{"Viewport"}
+        : std::string_view{"Shading"};
 }
 
 [[nodiscard]] constexpr std::string_view StudioWorkspaceName(
