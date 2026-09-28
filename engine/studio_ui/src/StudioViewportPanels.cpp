@@ -290,10 +290,8 @@ StudioViewportPanels::~StudioViewportPanels()
 {
     if (g_shellPanels == this)
     {
-        static_cast<void>(
-            editor_ui::RemoveShellBand("orbit.workspace"));
-        static_cast<void>(
-            editor_ui::RemoveShellBand("orbit.context"));
+        // The expansion object owns and unregisters the two top rows. This
+        // class owns only the persistent bottom activity/status strip.
         static_cast<void>(
             editor_ui::RemoveShellBand("orbit.activity"));
         g_shellPanels = nullptr;
@@ -307,34 +305,9 @@ void StudioViewportPanels::RegisterShellBands(
     g_shellPanels = this;
     g_workspaceUi = &ui;
 
-    editor_ui::UpsertShellBand({
-        .id = "orbit.workspace",
-        .order = 0,
-        .height = 40.0F,
-        .draw =
-            [](editor_ui::PanelContext& context)
-            {
-                if (g_shellPanels != nullptr)
-                {
-                    g_shellPanels->DrawWorkspaceBand(context);
-                }
-            }
-    });
-
-    editor_ui::UpsertShellBand({
-        .id = "orbit.context",
-        .order = 10,
-        .height = 42.0F,
-        .draw =
-            [](editor_ui::PanelContext& context)
-            {
-                if (g_shellPanels != nullptr)
-                {
-                    g_shellPanels->DrawContextBand(context);
-                }
-            }
-    });
-
+    // Top rows are registered once by StudioExpansionShell and consume the
+    // DrawWorkspaceBand / DrawContextBand fragments below. Keep only the
+    // bottom activity strip here to avoid four stacked permanent toolbars.
     editor_ui::UpsertShellBand({
         .id = "orbit.activity",
         .order = 0,
@@ -359,7 +332,7 @@ void StudioViewportPanels::DrawWorkspaceBand(
         return;
     }
 
-    context.Text("Workspace");
+    context.Text("Mode");
     context.SameLine();
 
     const auto button =
