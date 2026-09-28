@@ -857,347 +857,105 @@ void StudioViewportPanels::DrawView(
         }
     }
 
+    // Tool selection and authoring parameters belong to the contextual shell
+    // and Properties. The viewport keeps only a transient action strip while
+    // an authored spline is actively being collected so explicit commit/cancel
+    // remains available next to the geometry being edited.
     if (target->mode !=
-        studio_session::ViewportMode::Debug)
+            studio_session::ViewportMode::Debug &&
+        IsSplineTool(terrainTool_) &&
+        !terrainSplinePoints_.empty())
     {
         context.Separator();
         context.Text(
             std::format(
-                "Terrain Tool: {}",
-                TerrainToolName(
-                    terrainTool_)));
+                "{} spline · {} points",
+                TerrainToolName(terrainTool_),
+                terrainSplinePoints_.size()));
+        context.SameLine();
 
-        const auto setTool =
-            [this, id](
-                const StudioTerrainAuthoringTool tool)
+        const std::string commitLabel =
+            "Commit##terrain-spline-commit:" +
+            std::string(id);
+        const std::string cancelLabel =
+            "Cancel##terrain-spline-cancel:" +
+            std::string(id);
+
+        if (context.Button(commitLabel))
+        {
+            if (terrainSplinePoints_.size() < 2U ||
+                !terrainSplineTerrain_.has_value())
             {
-                if (terrainTool_ != tool &&
-                    (IsSplineTool(terrainTool_) ||
-                     IsSplineTool(tool)))
-                {
-                    terrainSplinePoints_.clear();
-                    terrainSplineTerrain_.reset();
-                }
-                terrainTool_ = tool;
-                views_->ClearTerrainAuthoringOverlay(id);
-            };
-
-        const std::string selectTool =
-            "Select##terrain-tool-select:" +
-            std::string(id);
-        const std::string raiseTool =
-            "Raise##terrain-tool-raise:" +
-            std::string(id);
-        const std::string lowerTool =
-            "Lower##terrain-tool-lower:" +
-            std::string(id);
-        const std::string protectTool =
-            "Protect##terrain-tool-protect:" +
-            std::string(id);
-        const std::string drainageTool =
-            "Drainage##terrain-tool-drainage:" +
-            std::string(id);
-        const std::string canyonTool =
-            "Canyon##terrain-tool-canyon:" +
-            std::string(id);
-        const std::string ridgeTool =
-            "Ridge##terrain-tool-ridge:" +
-            std::string(id);
-        const std::string materialTool =
-            "Geology##terrain-tool-material:" +
-            std::string(id);
-        const std::string biomePaintTool =
-            "Biome Paint##terrain-tool-biome:" +
-            std::string(id);
-
-        if (context.Button(selectTool))
-            setTool(StudioTerrainAuthoringTool::Select);
-        context.SameLine();
-        if (context.Button(raiseTool))
-            setTool(StudioTerrainAuthoringTool::Raise);
-        context.SameLine();
-        if (context.Button(lowerTool))
-            setTool(StudioTerrainAuthoringTool::Lower);
-        context.SameLine();
-        if (context.Button(protectTool))
-            setTool(StudioTerrainAuthoringTool::Protection);
-
-        if (context.Button(drainageTool))
-            setTool(StudioTerrainAuthoringTool::Drainage);
-        context.SameLine();
-        if (context.Button(canyonTool))
-            setTool(StudioTerrainAuthoringTool::Canyon);
-        context.SameLine();
-        if (context.Button(ridgeTool))
-            setTool(StudioTerrainAuthoringTool::Ridge);
-        context.SameLine();
-        if (context.Button(materialTool))
-            setTool(StudioTerrainAuthoringTool::Material);
-
-        context.SameLine();
-        if (context.Button(biomePaintTool))
-            setTool(StudioTerrainAuthoringTool::BiomePaint);
-
-        if (terrainTool_ !=
-                StudioTerrainAuthoringTool::Select &&
-            terrainTool_ !=
-                StudioTerrainAuthoringTool::BiomePaint)
-        {
-            static_cast<void>(
-                context.InputDouble(
-                    "Inner Radius (m)##terrain-brush-inner",
-                    terrainBrushInnerRadiusMeters_));
-            static_cast<void>(
-                context.InputDouble(
-                    "Outer Radius (m)##terrain-brush-outer",
-                    terrainBrushOuterRadiusMeters_));
-        }
-
-        if (terrainTool_ ==
-                StudioTerrainAuthoringTool::Raise ||
-            terrainTool_ ==
-                StudioTerrainAuthoringTool::Lower)
-        {
-            static_cast<void>(
-                context.InputDouble(
-                    "Height Delta (m)##terrain-brush-height",
-                    terrainBrushHeightMeters_));
-        }
-        else if (
-            terrainTool_ ==
-                StudioTerrainAuthoringTool::Protection)
-        {
-            static_cast<void>(
-                context.InputDouble(
-                    "Protection [0..1]##terrain-protection",
-                    terrainProtection_));
-        }
-        else if (
-            terrainTool_ ==
-                StudioTerrainAuthoringTool::Drainage)
-        {
-            static_cast<void>(
-                context.InputDouble(
-                    "Drainage Guidance##terrain-drainage",
-                    terrainDrainageGuidance_));
-        }
-
-        if (terrainTool_ ==
-            StudioTerrainAuthoringTool::BiomePaint)
-        {
-            const auto selectedBiome =
-                SelectedBiomeObject(*session_);
-
-            if (selectedBiome.has_value())
-            {
-                const auto record =
-                    session_->World().Objects().Find(
-                        *selectedBiome);
-
-                context.Text(
-                    std::format(
-                        "Biome: {}",
-                        record.has_value()
-                            ? record->name
-                            : std::string("<missing>")));
+                status_ =
+                    "A terrain spline requires at least two picked control points.";
             }
             else
             {
-                context.Text(
-                    "Biome: <select a Biome or one of its authored children>");
-            }
-
-            context.Text(
-                std::format(
-                    "Operation: {}",
-                    BiomeOperationName(
-                        biomePaintOperation_)));
-
-            const std::string add =
-                "Add##biome-paint-add:" +
-                std::string(id);
-            const std::string subtract =
-                "Subtract##biome-paint-subtract:" +
-                std::string(id);
-            const std::string replace =
-                "Replace##biome-paint-replace:" +
-                std::string(id);
-
-            if (context.Button(add))
-            {
-                biomePaintOperation_ =
-                    terrain_biome::
-                        BiomeAuthoredWeightOperation::Add;
-            }
-            context.SameLine();
-            if (context.Button(subtract))
-            {
-                biomePaintOperation_ =
-                    terrain_biome::
-                        BiomeAuthoredWeightOperation::Subtract;
-            }
-            context.SameLine();
-            if (context.Button(replace))
-            {
-                biomePaintOperation_ =
-                    terrain_biome::
-                        BiomeAuthoredWeightOperation::Replace;
-            }
-
-            static_cast<void>(
-                context.InputDouble(
-                    "Inner Radius (m)##biome-brush-inner",
-                    biomeBrushInnerRadiusMeters_));
-            static_cast<void>(
-                context.InputDouble(
-                    "Outer Radius (m)##biome-brush-outer",
-                    biomeBrushOuterRadiusMeters_));
-            static_cast<void>(
-                context.InputDouble(
-                    "Strength##biome-brush-value",
-                    biomeBrushValue_));
-            static_cast<void>(
-                context.InputDouble(
-                    "Opacity##biome-brush-opacity",
-                    biomeBrushOpacity_));
-
-            static_cast<void>(
-                context.Checkbox(
-                    "Automatic Placement Inspection##biome-auto-overlay",
-                    biomeAutomaticOverlay_));
-
-            if (hoveredBiomeAuthoredWeight_.has_value())
-            {
-                context.Text(
-                    std::format(
-                        "Authored weight under cursor: {:.4f}",
-                        *hoveredBiomeAuthoredWeight_));
-            }
-
-            if (biomeAutomaticOverlay_)
-            {
-                if (hoveredBiomeAutomaticWeight_.has_value())
+                try
                 {
-                    context.Text(
-                        std::format(
-                            "Automatic weight under cursor: {:.4f}",
-                            *hoveredBiomeAutomaticWeight_));
+                    editor_model::SurfaceAuthoringModel model(
+                        session_->World().Objects(),
+                        session_->World().Commands(),
+                        session_->World().Selection());
+
+                    const auto constraint =
+                        terrainTool_ ==
+                                StudioTerrainAuthoringTool::Canyon
+                            ? model.AddCanyonSpline(
+                                  *terrainSplineTerrain_,
+                                  terrainSplinePoints_,
+                                  terrainSplineHalfWidthMeters_,
+                                  terrainSplineFalloffMeters_,
+                                  terrainSplineHeightMeters_)
+                            : model.AddRidgeSpline(
+                                  *terrainSplineTerrain_,
+                                  terrainSplinePoints_,
+                                  terrainSplineHalfWidthMeters_,
+                                  terrainSplineFalloffMeters_,
+                                  terrainSplineHeightMeters_);
+
+                    model.SelectObject(constraint);
+
+                    const auto body =
+                        session_->World().
+                            Surfaces().
+                            BodyForTerrainObject(
+                                *terrainSplineTerrain_);
+
+                    if (!body.has_value())
+                    {
+                        throw std::runtime_error(
+                            "Committed terrain spline lost its target body.");
+                    }
+
+                    queueTerrainAuthoringInvalidation(
+                        *body,
+                        terrainSplinePoints_,
+                        terrainSplineHalfWidthMeters_ +
+                            terrainSplineFalloffMeters_,
+                        3U);
+
+                    terrainSplinePoints_.clear();
+                    terrainSplineTerrain_.reset();
+                    views_->ClearTerrainAuthoringOverlay(id);
+                    status_ =
+                        "Terrain spline committed with bounded M27 invalidation.";
                 }
-                else
+                catch (const std::exception& exception)
                 {
-                    context.Text(
-                        "Automatic weight: unavailable when enabled selectors require unpublished physical fields.");
+                    status_ = exception.what();
                 }
             }
         }
 
-        if (IsSplineTool(terrainTool_))
+        context.SameLine();
+        if (context.Button(cancelLabel))
         {
-            static_cast<void>(
-                context.InputDouble(
-                    "Spline Half Width (m)##terrain-spline-width",
-                    terrainSplineHalfWidthMeters_));
-            static_cast<void>(
-                context.InputDouble(
-                    "Spline Falloff (m)##terrain-spline-falloff",
-                    terrainSplineFalloffMeters_));
-            static_cast<void>(
-                context.InputDouble(
-                    terrainTool_ ==
-                            StudioTerrainAuthoringTool::Canyon
-                        ? "Canyon Depth (m)##terrain-spline-height"
-                        : "Ridge Height (m)##terrain-spline-height",
-                    terrainSplineHeightMeters_));
-
-            context.Text(
-                std::format(
-                    "Control Points: {} (click terrain; double-click or Commit to finish)",
-                    terrainSplinePoints_.size()));
-
-            const std::string commitLabel =
-                "Commit Spline##terrain-spline-commit:" +
-                std::string(id);
-            const std::string cancelLabel =
-                "Cancel Spline##terrain-spline-cancel:" +
-                std::string(id);
-
-            if (context.Button(commitLabel))
-            {
-                if (terrainSplinePoints_.size() < 2U ||
-                    !terrainSplineTerrain_.has_value())
-                {
-                    status_ =
-                        "A terrain spline requires at least two picked control points.";
-                }
-                else
-                {
-                    try
-                    {
-                        editor_model::SurfaceAuthoringModel model(
-                            session_->World().Objects(),
-                            session_->World().Commands(),
-                            session_->World().Selection());
-
-                        const auto constraint =
-                            terrainTool_ ==
-                                    StudioTerrainAuthoringTool::Canyon
-                                ? model.AddCanyonSpline(
-                                      *terrainSplineTerrain_,
-                                      terrainSplinePoints_,
-                                      terrainSplineHalfWidthMeters_,
-                                      terrainSplineFalloffMeters_,
-                                      terrainSplineHeightMeters_)
-                                : model.AddRidgeSpline(
-                                      *terrainSplineTerrain_,
-                                      terrainSplinePoints_,
-                                      terrainSplineHalfWidthMeters_,
-                                      terrainSplineFalloffMeters_,
-                                      terrainSplineHeightMeters_);
-
-                        model.SelectObject(
-                            constraint);
-
-                        const auto body =
-                            session_->World().
-                                Surfaces().
-                                BodyForTerrainObject(
-                                    *terrainSplineTerrain_);
-
-                        if (!body.has_value())
-                        {
-                            throw std::runtime_error(
-                                "Committed terrain spline lost its target body.");
-                        }
-
-                        queueTerrainAuthoringInvalidation(
-                            *body,
-                            terrainSplinePoints_,
-                            terrainSplineHalfWidthMeters_ +
-                                terrainSplineFalloffMeters_,
-                            3U);
-
-                        terrainSplinePoints_.clear();
-                        terrainSplineTerrain_.reset();
-                        status_ =
-                            "Terrain spline committed with bounded M27 invalidation.";
-                    }
-                    catch (const std::exception& exception)
-                    {
-                        status_ = exception.what();
-                    }
-                }
-            }
-
-            context.SameLine();
-
-            if (context.Button(cancelLabel))
-            {
-                terrainSplinePoints_.clear();
-                terrainSplineTerrain_.reset();
-                views_->ClearTerrainAuthoringOverlay(id);
-                status_ =
-                    "Transient terrain spline cancelled.";
-            }
+            terrainSplinePoints_.clear();
+            terrainSplineTerrain_.reset();
+            views_->ClearTerrainAuthoringOverlay(id);
+            status_ =
+                "Transient terrain spline cancelled.";
         }
     }
 
