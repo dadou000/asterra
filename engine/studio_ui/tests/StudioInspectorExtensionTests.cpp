@@ -32,10 +32,10 @@ int main()
     auto& registry = StudioInspectorProviders();
     registry.Clear();
 
-    // This executable intentionally has no EditorUi/ImGui host. Authoring UI
-    // construction must therefore degrade to registry-only operation instead
-    // of throwing while trying to attach to the production Properties panel.
-    Check(!TryEnsureStudioInspectorExtension());
+    // The built-in helper must be the same authority exposed to plugin-facing
+    // StudioExpansionShell contributions. This is the architectural invariant
+    // that keeps Properties on one contextual-extension pipeline.
+    Check(&registry == &GlobalInspectorProviders());
 
     const auto revisionBefore = registry.Revision();
 
@@ -64,7 +64,8 @@ int main()
     }
 
     // RAII lifetime is what keeps plugin reloads and production authoring UI
-    // destruction from leaving callbacks that target dead objects.
+    // destruction from leaving callbacks that target dead objects. This must
+    // remain safe even when the test has no live EditorUi/ImGui host.
     Check(registry.Relevant().empty());
 
     registry.Clear();
