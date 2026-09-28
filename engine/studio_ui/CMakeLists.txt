@@ -5,6 +5,7 @@ add_library(OrbitStudioUi STATIC
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
     src/ShadingUi.cpp
+    src/StudioExpansionShell.cpp
     src/StudioRenderViewRpc.cpp
     src/StudioRenderViewSet.cpp
     src/StudioSurfacePicking.cpp
@@ -179,24 +180,6 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioViewportPresentation
         COMMAND OrbitStudioViewportPresentationTests
-    )
-
-    add_executable(OrbitStudioShellModelTests
-        tests/StudioShellModelTests.cpp
-    )
-
-    target_link_libraries(OrbitStudioShellModelTests
-        PRIVATE
-            Orbit::StudioUi
-    )
-
-    target_compile_features(
-        OrbitStudioShellModelTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitStudioShellModelTests)
-
-    add_test(
-        NAME Orbit.StudioShellModel
-        COMMAND OrbitStudioShellModelTests
     )
 
     add_executable(OrbitVolumeSurfaceEffectRenderBridgeTests
@@ -394,6 +377,24 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.V007IntegrationGate
         COMMAND OrbitV007IntegrationGateTests
+    )
+
+    add_executable(OrbitStudioShellModelTests
+        tests/StudioShellModelTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioShellModelTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(
+        OrbitStudioShellModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioShellModelTests)
+
+    add_test(
+        NAME Orbit.StudioShellModel
+        COMMAND OrbitStudioShellModelTests
     )
 
     set_tests_properties(
