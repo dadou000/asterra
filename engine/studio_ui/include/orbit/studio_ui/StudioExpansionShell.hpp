@@ -60,6 +60,14 @@ private:
         editor_ui::PanelContext& context,
         StudioContributionSurface surface);
 
+    // Terrain is the densest contextual tool family. Keep the permanent shell
+    // to one selector while the canonical Properties panel exposes only the
+    // active tool's parameters. The underlying authoring state remains owned
+    // by StudioViewportPanels and its production viewport implementation.
+    [[nodiscard]] bool TerrainContextRelevant() const noexcept;
+    void DrawTerrainContext(editor_ui::PanelContext& context);
+    void DrawTerrainToolProperties(editor_ui::PanelContext& context);
+
     // Loads when the bound project changes and writes only when one of the
     // expansion-owned fields changes. Workspace/browser/activity fields are
     // preserved verbatim so the same StudioPersistentState file can become
