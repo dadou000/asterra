@@ -2,6 +2,7 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_session/VolumeParticleOutputState.hpp>
 #include <orbit/studio_session/VolumeSurfaceEffectState.hpp>
 #include <orbit/studio_session/VolumeSurfaceOutputResolver.hpp>
 #include <orbit/volume_representation/VolumeCache.hpp>
@@ -14,15 +15,24 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <source_location>
 #include <string>
 
 namespace
 {
-void Check(const bool condition)
+void Check(
+    const bool condition,
+    const std::source_location location =
+        std::source_location::current())
 {
     if (!condition)
     {
-        std::cerr << "Studio session test failed.\n";
+        std::cerr
+            << "Studio session test failed at "
+            << location.file_name()
+            << ':'
+            << location.line()
+            << '\n';
         std::exit(1);
     }
 }
@@ -102,6 +112,7 @@ void CheckVolumeOutputSimulationCadence(
     orbit::studio_session::StudioSession& studio)
 {
     using namespace orbit;
+    using namespace orbit::studio_session;
     using namespace orbit::volume_representation;
 
     auto roots = studio.World().Objects().Roots();
@@ -176,16 +187,25 @@ void CheckVolumeOutputSimulationCadence(
 
     studio.Clock().Advance(0.5);
     static_cast<void>(studio.Tick(false));
-    Check(VolumeParticleRequests().Pending().size() == 5U);
+
+    // StudioSession owns the production handoff: raw requests are transient
+    // transport only and are drained exactly once into VolumeParticleOutputs.
+    Check(VolumeParticleRequests().Pending().empty());
     Check(
         VolumeOutputRuntimeService().Diagnostics().
             dispatchedParticleRequests == 5U);
+    Check(
+        VolumeParticleOutputs().Diagnostics().submitted ==
+            5U);
 
     static_cast<void>(studio.Tick(false));
     Check(VolumeParticleRequests().Pending().empty());
     Check(
         VolumeOutputRuntimeService().Diagnostics().
             dispatchedParticleRequests == 0U);
+    Check(
+        VolumeParticleOutputs().Diagnostics().submitted ==
+            0U);
 
     VolumeCaches().Detach(volume);
     VolumeOutputs().Reset(volume);
