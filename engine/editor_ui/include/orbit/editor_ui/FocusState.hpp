@@ -1,11 +1,11 @@
 #pragma once
 
-#include <string>
+#include <string_view>
 
 namespace orbit::editor_ui
 {
 // Returns the visible title of the Dear ImGui root window that currently owns
-// navigation/focus. Empty when no UI context/window is focused. Studio uses
-// this only as presentation state; project/runtime state must not depend on it.
-[[nodiscard]] std::string FocusedWindowTitle();
+// navigation/focus. The view aliases ImGui-owned window-name storage and is
+// valid until that window is destroyed or renamed. Empty when nothing is focused.
+[[nodiscard]] std::string_view FocusedWindowTitle() noexcept;
 } // namespace orbit::editor_ui
