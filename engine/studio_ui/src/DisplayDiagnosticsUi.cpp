@@ -86,8 +86,8 @@ void DisplayDiagnosticsUi::Register(
         .id = kPanelId,
         .title = "Display Diagnostics",
         .defaultOpen = false,
-        .defaultDock = editor_ui::DockRegion::Right,
-        .dockOrder = 55,
+        .defaultDock = editor_ui::DockRegion::Bottom,
+        .dockOrder = 20,
         .minSize = {.width = 320.0F,.height = 260.0F},
         .draw = [this](editor_ui::PanelContext& context)
         {
