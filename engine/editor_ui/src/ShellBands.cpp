@@ -57,6 +57,11 @@ public:
             [](const ShellBandDefinition& a,
                const ShellBandDefinition& b)
             {
+                if (a.edge != b.edge)
+                {
+                    return a.edge < b.edge;
+                }
+
                 if (a.order != b.order)
                 {
                     return a.order < b.order;
@@ -150,8 +155,7 @@ private:
         // ##MainMenuBar window here: it reserves the canonical menu row now,
         // then DrawStudioShell appends the actual menus to that same window
         // later in the frame without reserving it a second time. This lets the
-        // bands sit below File/Home/View while the dockspace sees all reserved
-        // rows before it is created.
+        // shell bands reserve their edges before the dockspace is created.
         if (ImGui::BeginMainMenuBar())
         {
             ImGui::EndMainMenuBar();
@@ -193,11 +197,16 @@ private:
                 ImGui::GetStyle().Colors[
                     ImGuiCol_MenuBarBg]);
 
+            const ImGuiDir direction =
+                band.edge == ShellBandEdge::Bottom
+                    ? ImGuiDir_Down
+                    : ImGuiDir_Up;
+
             const bool visible =
                 ImGui::BeginViewportSideBar(
                     windowName.c_str(),
                     viewport,
-                    ImGuiDir_Up,
+                    direction,
                     band.height * scale,
                     flags);
 
