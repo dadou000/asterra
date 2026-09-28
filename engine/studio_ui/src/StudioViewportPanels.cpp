@@ -11,6 +11,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <format>
 #include <initializer_list>
@@ -860,6 +861,61 @@ void StudioViewportPanels::DrawActivityBand(
         return;
     }
 
+    // Measure the cadence of this persistent shell band itself. It is drawn
+    // once per Studio UI frame, so this remains real runtime telemetry without
+    // coupling studio_ui to the app host or renderer internals. A short EMA
+    // removes the unreadable frame-to-frame jitter while still reacting fast.
+    using StatusClock = std::chrono::steady_clock;
+    static StatusClock::time_point previousFrame{};
+    static f64 smoothedFrameSeconds = 0.0;
+
+    const auto now = StatusClock::now();
+    if (previousFrame != StatusClock::time_point{})
+    {
+        const f64 elapsed =
+            std::chrono::duration<f64>(
+                now - previousFrame).count();
+
+        if (elapsed > 0.0 && elapsed < 1.0)
+        {
+            constexpr f64 kSmoothing = 0.10;
+            smoothedFrameSeconds =
+                smoothedFrameSeconds <= 0.0
+                    ? elapsed
+                    : smoothedFrameSeconds +
+                        (elapsed - smoothedFrameSeconds) *
+                            kSmoothing;
+        }
+    }
+    previousFrame = now;
+
+    const bool hasWorld =
+        session_ != nullptr &&
+        session_->World().HasWorld();
+    const std::string_view state =
+        !status_.empty()
+            ? std::string_view{"Attention"}
+            : hasWorld
+                ? std::string_view{"Ready"}
+                : std::string_view{"No world"};
+
+    context.Text(state);
+    context.SameLine();
+    context.MutedText("|");
+    context.SameLine();
+    context.Text("Vulkan");
+
+    if (smoothedFrameSeconds > 0.0)
+    {
+        context.SameLine();
+        context.MutedText("|");
+        context.SameLine();
+        context.Text(
+            std::format(
+                "{:.0f} FPS",
+                1.0 / smoothedFrameSeconds));
+    }
+
     const auto panels =
         g_workspaceUi->Panels();
 
@@ -930,15 +986,13 @@ void StudioViewportPanels::DrawActivityBand(
     appendPanel("Tasks", "Tasks");
     appendPanel("Display Diagnostics", "Diagnostics");
 
-    context.Text("Activity");
-
     if (actions.empty())
     {
-        context.SameLine();
-        context.MutedText("No activity views registered.");
         return;
     }
 
+    context.SameLine();
+    context.MutedText("|");
     context.SameLine();
     context.Toolbar(actions);
 }
