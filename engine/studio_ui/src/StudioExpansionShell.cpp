@@ -81,10 +81,14 @@ StudioExpansionShell::StudioExpansionShell(
                 }
         });
 
+        // Plugin/context providers extend the same canonical Properties panel
+        // as built-in authoring tools. The legacy Inspector remains available
+        // as an expert compatibility surface, but it is no longer a second
+        // default property-editing destination.
         editor_ui::UpsertPanelExtension({
             .id = "orbit.inspector.providers",
-            .targetTitle = "Inspector",
-            .order = 1'000,
+            .targetTitle = "Properties",
+            .order = 1'100,
             .draw =
                 [this](editor_ui::PanelContext& context)
                 {
