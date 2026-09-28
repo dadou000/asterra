@@ -247,7 +247,14 @@ StudioViewportPanels::~StudioViewportPanels()
 {
     if (g_shellPanels == this)
     {
+        static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.workspace"));
+        static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.context"));
+        static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.activity"));
         g_shellPanels = nullptr;
+        g_workspaceUi = nullptr;
     }
 }
 
@@ -309,6 +316,21 @@ void StudioViewportPanels::RegisterShellBands(
                 if (g_shellPanels != nullptr)
                 {
                     g_shellPanels->DrawContextBand(context);
+                }
+            }
+    });
+
+    editor_ui::UpsertShellBand({
+        .id = "orbit.activity",
+        .order = 0,
+        .height = 34.0F,
+        .edge = editor_ui::ShellBandEdge::Bottom,
+        .draw =
+            [](editor_ui::PanelContext& context)
+            {
+                if (g_shellPanels != nullptr)
+                {
+                    g_shellPanels->DrawActivityBand(context);
                 }
             }
     });
@@ -828,6 +850,95 @@ void StudioViewportPanels::DrawContextBand(
                 WorkspaceName(g_workspaceMode)));
         break;
     }
+}
+
+void StudioViewportPanels::DrawActivityBand(
+    editor_ui::PanelContext& context)
+{
+    if (g_workspaceUi == nullptr)
+    {
+        return;
+    }
+
+    const auto panels =
+        g_workspaceUi->Panels();
+
+    std::vector<editor_ui::ActionPresentation> actions;
+
+    const auto appendPanel =
+        [&panels, &actions](
+            const std::string_view title,
+            const std::string_view display)
+        {
+            const auto panel =
+                std::ranges::find_if(
+                    panels,
+                    [title](
+                        const editor_ui::EditorUi::PanelSummary& candidate)
+                    {
+                        return candidate.title == title;
+                    });
+
+            if (panel == panels.end())
+            {
+                return;
+            }
+
+            const bool visible = panel->visible;
+            std::string label =
+                visible
+                    ? std::string{"["} +
+                          std::string(display) + "]"
+                    : std::string(display);
+            label += "##activity-";
+            label += std::string(title);
+
+            actions.push_back({
+                .label = std::move(label),
+                .enabled = true,
+                .invoke =
+                    [title, visible]
+                    {
+                        if (g_workspaceUi == nullptr)
+                        {
+                            return;
+                        }
+
+                        if (visible)
+                        {
+                            static_cast<void>(
+                                g_workspaceUi->ClosePanelByTitle(
+                                    title));
+                        }
+                        else
+                        {
+                            static_cast<void>(
+                                g_workspaceUi->FocusPanelByTitle(
+                                    title));
+                        }
+                    }
+            });
+        };
+
+    // These labels are intentionally presentation aliases. Output remains the
+    // authoritative log panel and Build remains the authoritative build view;
+    // the activity strip only opens/focuses/collapses them.
+    appendPanel("Output", "Console");
+    appendPanel("Build", "Build");
+    appendPanel("Tasks", "Tasks");
+    appendPanel("Display Diagnostics", "Diagnostics");
+
+    context.Text("Activity");
+
+    if (actions.empty())
+    {
+        context.SameLine();
+        context.MutedText("No activity views registered.");
+        return;
+    }
+
+    context.SameLine();
+    context.Toolbar(actions);
 }
 
 void StudioViewportPanels::RegisterContextInspector(
