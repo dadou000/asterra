@@ -32,15 +32,40 @@ bool PanelContext::SegmentedControl(
     const f32 totalGap =
         kSegmentGap *
         static_cast<f32>(items.size() - 1U);
+
+    // Segmented controls are used both in full panels and in the permanent
+    // Studio shell. Stretching every instance across the entire remaining
+    // content region makes a four-item toolbar consume the rest of the row and
+    // pushes unrelated controls onto the next line. Size the group from its
+    // widest label instead, while still shrinking equally when the parent is
+    // genuinely narrower than the natural control width.
+    f32 widestLabel = 0.0F;
+    for (const std::string_view item : items)
+    {
+        const ImVec2 text =
+            ImGui::CalcTextSize(
+                item.data(),
+                item.data() + item.size());
+        widestLabel = std::max(widestLabel, text.x);
+    }
+
+    const f32 naturalSegmentWidth =
+        std::max(
+            widestLabel + style.FramePadding.x * 2.0F,
+            1.0F);
     const f32 available =
         std::max(
             ImGui::GetContentRegionAvail().x,
             static_cast<f32>(items.size()));
-    const f32 width =
+    const f32 constrainedSegmentWidth =
         std::max(
             (available - totalGap) /
                 static_cast<f32>(items.size()),
             1.0F);
+    const f32 width =
+        std::min(
+            naturalSegmentWidth,
+            constrainedSegmentWidth);
 
     const ImVec4 selectedColor =
         ImGui::GetStyleColorVec4(
