@@ -116,39 +116,67 @@ public:
         return revision_;
     }
 
-    // Lightweight read-only view for diagnostics/tests. Callers must not
-    // retain the returned pointers across registry mutation.
+    // Lightweight read-only view for diagnostics/tests. Relevance callbacks
+    // are evaluated from value snapshots, so a provider may trigger its own
+    // reload/removal without invalidating this traversal. Returned pointers
+    // refer to the providers that still exist after those callbacks finish and
+    // must not be retained across later registry mutation.
     [[nodiscard]] std::vector<const InspectorProviderDefinition*>
     Relevant() const
     {
-        std::vector<const Entry*> relevant;
-        relevant.reserve(providers_.size());
-
-        for (const Entry& entry : providers_)
-        {
-            if (!entry.definition.relevant ||
-                entry.definition.relevant())
+        std::vector<Entry> snapshot = providers_;
+        std::ranges::stable_sort(
+            snapshot,
+            [](const Entry& left, const Entry& right)
             {
-                relevant.push_back(&entry);
+                if (left.definition.order != right.definition.order)
+                {
+                    return left.definition.order < right.definition.order;
+                }
+                return left.sequence < right.sequence;
+            });
+
+        std::vector<std::string> relevantIds;
+        relevantIds.reserve(snapshot.size());
+
+        for (const Entry& entry : snapshot)
+        {
+            bool relevant = true;
+            try
+            {
+                if (entry.definition.relevant)
+                {
+                    relevant = entry.definition.relevant();
+                }
+            }
+            catch (...)
+            {
+                // DrawRelevant reports provider faults in the UI. A read-only
+                // relevance query simply treats a failed provider as hidden.
+                relevant = false;
+            }
+
+            if (relevant)
+            {
+                relevantIds.push_back(entry.definition.id);
             }
         }
 
-        std::ranges::stable_sort(
-            relevant,
-            [](const Entry* left, const Entry* right)
-            {
-                if (left->definition.order != right->definition.order)
-                {
-                    return left->definition.order < right->definition.order;
-                }
-                return left->sequence < right->sequence;
-            });
-
         std::vector<const InspectorProviderDefinition*> result;
-        result.reserve(relevant.size());
-        for (const Entry* entry : relevant)
+        result.reserve(relevantIds.size());
+        for (const std::string& id : relevantIds)
         {
-            result.push_back(&entry->definition);
+            const auto current = std::ranges::find_if(
+                providers_,
+                [&id](const Entry& entry)
+                {
+                    return entry.definition.id == id;
+                });
+
+            if (current != providers_.end())
+            {
+                result.push_back(&current->definition);
+            }
         }
         return result;
     }
