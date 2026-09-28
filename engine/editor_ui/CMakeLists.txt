@@ -49,4 +49,22 @@ if(BUILD_TESTING)
         NAME Orbit.EditorDockLayout
         COMMAND OrbitEditorDockLayoutTests
     )
+
+    add_executable(OrbitEditorPanelExtensionTests
+        tests/PanelExtensionTests.cpp
+    )
+
+    target_link_libraries(OrbitEditorPanelExtensionTests
+        PRIVATE
+            Orbit::EditorUi
+            Orbit::ThirdPartyImGui
+    )
+
+    target_compile_features(OrbitEditorPanelExtensionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitEditorPanelExtensionTests)
+
+    add_test(
+        NAME Orbit.EditorPanelExtensions
+        COMMAND OrbitEditorPanelExtensionTests
+    )
 endif()
