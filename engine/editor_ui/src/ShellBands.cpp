@@ -343,13 +343,18 @@ private:
                 ImGui::FindWindowByName(
                     target.c_str());
 
-            // `Active` means EditorUi actually began this panel in the current
-            // frame. Closed, hidden-tab and collapsed panels therefore retain
-            // their normal behavior and do not get resurrected by extensions.
+            // Active windows may still represent a background dock tab. Keep
+            // extensions aligned with EditorUi's actual visible-tab contract.
+            const bool visibleDockTab =
+                window != nullptr &&
+                (window->DockNode == nullptr ||
+                 window->DockTabIsVisible);
+
             if (window != nullptr &&
                 window->Active &&
                 !window->Hidden &&
-                !window->Collapsed)
+                !window->Collapsed &&
+                visibleDockTab)
             {
                 const bool visible =
                     ImGui::Begin(
