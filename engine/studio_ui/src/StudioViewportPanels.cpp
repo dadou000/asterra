@@ -876,7 +876,9 @@ void StudioViewportPanels::DrawActivityBand(
                     [title](
                         const editor_ui::EditorUi::PanelSummary& candidate)
                     {
-                        return candidate.title == title;
+                        return candidate.title == title &&
+                            candidate.region ==
+                                editor_ui::DockRegion::Bottom;
                     });
 
             if (panel == panels.end())
@@ -922,7 +924,7 @@ void StudioViewportPanels::DrawActivityBand(
 
     // These labels are intentionally presentation aliases. Output remains the
     // authoritative log panel and Build remains the authoritative build view;
-    // the activity strip only opens/focuses/collapses them.
+    // the activity strip only opens/focuses/collapses bottom-docked views.
     appendPanel("Output", "Console");
     appendPanel("Build", "Build");
     appendPanel("Tasks", "Tasks");
