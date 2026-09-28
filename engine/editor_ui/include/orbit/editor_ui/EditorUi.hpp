@@ -363,6 +363,15 @@ public:
     [[nodiscard]] bool FocusPanelByTitle(std::string_view title) noexcept;
     [[nodiscard]] bool ClosePanelByTitle(std::string_view title) noexcept;
 
+    // Reuses an already-registered panel's presentation body inside the
+    // caller's current panel without changing the source panel's docking/open
+    // state. Composite Studio surfaces therefore keep one authoritative set of
+    // callbacks for selection, drag/drop, thumbnails and context actions.
+    // Recursive composition is rejected and returns false.
+    [[nodiscard]] bool DrawPanelContentsByTitle(
+        std::string_view title,
+        PanelContext& context);
+
     // Deterministic real-UI validation seam. Normal Studio leaves this off.
     // Smoke mode can expand tree nodes and record controls that actually pass
     // through the live Dear ImGui draw path.
