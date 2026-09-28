@@ -3,6 +3,7 @@ add_library(OrbitEditorUi STATIC
     src/PathPreviewRenderer.cpp
     src/DockLayout.cpp
     src/EditorUi.cpp
+    src/FocusState.cpp
     src/SegmentedControl.cpp
     src/ShellBands.cpp
 )
