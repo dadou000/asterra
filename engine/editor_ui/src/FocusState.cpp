@@ -3,12 +3,11 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
-#include <string>
 #include <string_view>
 
 namespace orbit::editor_ui
 {
-std::string FocusedWindowTitle()
+std::string_view FocusedWindowTitle() noexcept
 {
     ImGuiContext* const context = ImGui::GetCurrentContext();
     if (context == nullptr || context->NavWindow == nullptr)
@@ -34,6 +33,6 @@ std::string FocusedWindowTitle()
         title = title.substr(0U, separator);
     }
 
-    return std::string{title};
+    return title;
 }
 } // namespace orbit::editor_ui
