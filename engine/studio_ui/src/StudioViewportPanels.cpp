@@ -43,9 +43,21 @@ enum class WorkspaceMode : u8
     Shading
 };
 
+enum class BrowserMode : u8
+{
+    World,
+    Assets
+};
+
+constexpr editor_ui::PanelId kWorldAssetsPanel{
+    .high = 0x4f52424954535455ULL,
+    .low = 0x574f524c44415354ULL
+};
+
 editor_ui::EditorUi* g_workspaceUi = nullptr;
 StudioViewportPanels* g_shellPanels = nullptr;
 WorkspaceMode g_workspaceMode = WorkspaceMode::Scene;
+BrowserMode g_browserMode = BrowserMode::World;
 
 void ClosePanels(
     editor_ui::EditorUi& ui,
@@ -97,13 +109,14 @@ void OpenStandardInspectorWorkspace(
     ClosePanels(
         ui,
         {
+            "Explorer",
             "Properties",
             "Material Service",
             "Build",
             "Output"
         });
 
-    OpenPanels(ui, {"Explorer"});
+    OpenPanels(ui, {"World / Assets"});
     OpenPanels(ui, centerPanels);
     OpenPanels(ui, {"Inspector"});
 }
@@ -113,6 +126,10 @@ void ActivateWorkspace(
     const WorkspaceMode mode)
 {
     g_workspaceMode = mode;
+    g_browserMode =
+        mode == WorkspaceMode::Shading
+            ? BrowserMode::Assets
+            : BrowserMode::World;
 
     switch (mode)
     {
@@ -130,6 +147,7 @@ void ActivateWorkspace(
             ui,
             {
                 "Viewport",
+                "Explorer",
                 "Properties",
                 "Material Service",
                 "Build",
@@ -137,7 +155,7 @@ void ActivateWorkspace(
             });
         OpenPanels(
             ui,
-            {"Explorer", "System View", "Inspector"});
+            {"World / Assets", "System View", "Inspector"});
         break;
 
     case WorkspaceMode::Shading:
@@ -154,7 +172,7 @@ void ActivateWorkspace(
             });
         OpenPanels(
             ui,
-            {"Shading", "Shading Materials", "Inspector"});
+            {"World / Assets", "Shading", "Shading Materials", "Inspector"});
         break;
     }
 }
@@ -223,6 +241,80 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
                 ui,
                 WorkspaceMode::Shading);
         }
+    });
+}
+
+void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
+{
+    if (ui.HasPanel(kWorldAssetsPanel))
+    {
+        return;
+    }
+
+    ui.RegisterPanel({
+        .id = kWorldAssetsPanel,
+        .title = "World / Assets",
+        .defaultOpen = true,
+        .defaultDock = editor_ui::DockRegion::Left,
+        .dockOrder = -100,
+        .minSize = {
+            .width = 260.0F,
+            .height = 300.0F
+        },
+        .defaultSize = {
+            .width = 340.0F,
+            .height = 820.0F
+        },
+        .draw =
+            [&ui](editor_ui::PanelContext& context)
+            {
+                // While the composite browser is visible it owns presentation
+                // of these two source surfaces. Closing this panel restores
+                // the legacy View-menu panels as expert/compatibility fallbacks.
+                static_cast<void>(
+                    ui.ClosePanelByTitle("Explorer"));
+                static_cast<void>(
+                    ui.ClosePanelByTitle("Material Service"));
+
+                context.Text("Browse");
+                context.SameLine();
+
+                const std::string worldLabel =
+                    g_browserMode == BrowserMode::World
+                        ? "[World]##world-assets-world"
+                        : "World##world-assets-world";
+                if (context.Button(worldLabel))
+                {
+                    g_browserMode = BrowserMode::World;
+                }
+
+                context.SameLine();
+                const std::string assetsLabel =
+                    g_browserMode == BrowserMode::Assets
+                        ? "[Assets]##world-assets-assets"
+                        : "Assets##world-assets-assets";
+                if (context.Button(assetsLabel))
+                {
+                    g_browserMode = BrowserMode::Assets;
+                }
+
+                context.Separator();
+
+                const std::string_view sourceTitle =
+                    g_browserMode == BrowserMode::World
+                        ? std::string_view{"Explorer"}
+                        : std::string_view{"Material Service"};
+
+                if (!ui.DrawPanelContentsByTitle(
+                        sourceTitle,
+                        context))
+                {
+                    context.MutedText(
+                        g_browserMode == BrowserMode::World
+                            ? "World hierarchy is not registered in this Studio configuration."
+                            : "Asset service is not registered in this Studio configuration.");
+                }
+            }
     });
 }
 
@@ -1050,7 +1142,7 @@ void StudioViewportPanels::DrawContextInspector(
     {
         context.Text("No selection");
         context.MutedText(
-            "Select an object in Explorer or the active workspace. Relevant authoring controls appear here automatically.");
+            "Select an object in World or the active workspace. Relevant authoring controls appear here automatically.");
         return;
     }
 
@@ -1332,6 +1424,7 @@ void StudioViewportPanels::Register(
             }
     });
 
+    RegisterWorldAssetsBrowser(ui);
     RegisterContextInspector(ui);
     RegisterWorkspaceActions(ui);
     RegisterShellBands(ui);
@@ -1353,6 +1446,7 @@ void StudioViewportPanels::RegisterSecondary(
             }
     });
 
+    RegisterWorldAssetsBrowser(ui);
     RegisterContextInspector(ui);
     RegisterWorkspaceActions(ui);
     RegisterShellBands(ui);
