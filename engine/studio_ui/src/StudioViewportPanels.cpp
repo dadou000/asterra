@@ -2,7 +2,6 @@
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/InspectorModel.hpp>
-#include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/studio_ui/StudioShellModel.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
@@ -14,11 +13,13 @@
 #include <exception>
 #include <format>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #define Register RegisterBase
 #define RegisterSecondary RegisterSecondaryBase
@@ -87,10 +88,6 @@ void OpenCanonicalWorkspace(
     editor_ui::EditorUi& ui,
     const std::initializer_list<std::string_view> centerPanels)
 {
-    // One stable spatial model for normal authoring: hierarchy on the left,
-    // active viewport/work surface in the middle, properties on the right.
-    // Specialist/composite panels remain available from View/Home commands
-    // but do not replace these canonical surfaces when switching domains.
     CloseSpecialistPanels(ui);
     ClosePanels(
         ui,
@@ -142,8 +139,6 @@ void ActivateWorkspace(
 
 void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
 {
-    // Register() and RegisterSecondary() can both be used by the same Studio
-    // shell. Keep one command surface instead of duplicating menu entries.
     if (g_workspaceUi == &ui)
     {
         return;
@@ -156,9 +151,7 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Scene",
         .invoke = [&ui]
         {
-            ActivateWorkspace(
-                ui,
-                WorkspaceMode::Scene);
+            ActivateWorkspace(ui, WorkspaceMode::Scene);
         }
     });
 
@@ -167,9 +160,7 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Planet",
         .invoke = [&ui]
         {
-            ActivateWorkspace(
-                ui,
-                WorkspaceMode::Planet);
+            ActivateWorkspace(ui, WorkspaceMode::Planet);
         }
     });
 
@@ -178,9 +169,7 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Celestial",
         .invoke = [&ui]
         {
-            ActivateWorkspace(
-                ui,
-                WorkspaceMode::Celestial);
+            ActivateWorkspace(ui, WorkspaceMode::Celestial);
         }
     });
 
@@ -189,9 +178,7 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Simulation",
         .invoke = [&ui]
         {
-            ActivateWorkspace(
-                ui,
-                WorkspaceMode::Simulation);
+            ActivateWorkspace(ui, WorkspaceMode::Simulation);
         }
     });
 
@@ -200,9 +187,7 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .label = "Workspace: Shading",
         .invoke = [&ui]
         {
-            ActivateWorkspace(
-                ui,
-                WorkspaceMode::Shading);
+            ActivateWorkspace(ui, WorkspaceMode::Shading);
         }
     });
 }
@@ -228,9 +213,6 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
         .draw =
             [&ui](editor_ui::PanelContext& context)
             {
-                // Expert/compatibility composite. While explicitly visible it
-                // owns presentation of the two source surfaces; closing it
-                // returns Studio to the normal Explorer/Material panels.
                 static_cast<void>(
                     ui.ClosePanelByTitle("Explorer"));
                 static_cast<void>(
@@ -261,8 +243,7 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
                 context.Separator();
 
                 const std::string_view sourceTitle =
-                    BrowserSourcePanelTitle(
-                        g_browserMode);
+                    BrowserSourcePanelTitle(g_browserMode);
 
                 if (!ui.DrawPanelContentsByTitle(
                         sourceTitle,
@@ -290,8 +271,6 @@ StudioViewportPanels::~StudioViewportPanels()
 {
     if (g_shellPanels == this)
     {
-        // The expansion object owns and unregisters the two top rows. This
-        // class owns only the persistent bottom activity/status strip.
         static_cast<void>(
             editor_ui::RemoveShellBand("orbit.activity"));
         g_shellPanels = nullptr;
@@ -305,9 +284,6 @@ void StudioViewportPanels::RegisterShellBands(
     g_shellPanels = this;
     g_workspaceUi = &ui;
 
-    // Top rows are registered once by StudioExpansionShell and consume the
-    // DrawWorkspaceBand / DrawContextBand fragments below. Keep only the
-    // bottom activity strip here to avoid four stacked permanent toolbars.
     editor_ui::UpsertShellBand({
         .id = "orbit.activity",
         .order = 0,
@@ -349,9 +325,7 @@ void StudioViewportPanels::DrawWorkspaceBand(
 
             if (context.Button(label))
             {
-                ActivateWorkspace(
-                    *g_workspaceUi,
-                    mode);
+                ActivateWorkspace(*g_workspaceUi, mode);
             }
         };
 
@@ -375,7 +349,8 @@ void StudioViewportPanels::DrawContextBand(
     if (session_ == nullptr ||
         !session_->World().HasWorld())
     {
-        context.MutedText("Open a world to expose contextual tools.");
+        context.MutedText(
+            "Open a world to expose contextual tools.");
         return;
     }
 
@@ -392,33 +367,12 @@ void StudioViewportPanels::DrawContextBand(
         {
             try
             {
-                session_->World().CommandRegistry().Invoke(
-                    command);
+                session_->World().CommandRegistry().Invoke(command);
                 status_.clear();
             }
             catch (const std::exception& exception)
             {
                 status_ = exception.what();
-            }
-        };
-
-    const auto setTerrainTool =
-        [this](const StudioTerrainAuthoringTool tool)
-        {
-            if (terrainTool_ != tool &&
-                (IsSplineTool(terrainTool_) ||
-                 IsSplineTool(tool)))
-            {
-                terrainSplinePoints_.clear();
-                terrainSplineTerrain_.reset();
-            }
-
-            terrainTool_ = tool;
-
-            if (views_ != nullptr)
-            {
-                views_->ClearTerrainAuthoringOverlay(
-                    "studio.primary");
             }
         };
 
@@ -431,15 +385,12 @@ void StudioViewportPanels::DrawContextBand(
 
     const bool lightRelevant =
         selectedRecord.has_value() &&
-        (selectedRecord->type ==
-             world_model::kPointLightType ||
-         selectedRecord->type ==
-             world_model::kSpotLightType);
+        (selectedRecord->type == world_model::kPointLightType ||
+         selectedRecord->type == world_model::kSpotLightType);
 
     const bool pathPairRelevant =
         world.CommandRegistry().Enablement(
-            editor_model::authoring_commands::
-                kConnectPathDirect).
+            editor_model::authoring_commands::kConnectPathDirect).
             enabled;
 
     VolumeAuthoringUi* const volumeAuthoring =
@@ -448,39 +399,19 @@ void StudioViewportPanels::DrawContextBand(
         volumeAuthoring != nullptr &&
         volumeAuthoring->RelevantToSelection();
 
-    bool surfaceRelevant = false;
-    try
-    {
-        editor_model::SurfaceAuthoringModel surfaceModel(
-            world.Objects(),
-            world.Commands(),
-            world.Selection());
-
-        surfaceRelevant =
-            surfaceModel.SelectedRockyBody().has_value();
-    }
-    catch (const std::exception&)
-    {
-        surfaceRelevant = false;
-    }
-
     if (lightRelevant && renderView != nullptr)
     {
-        const scene::ObjectId lightId =
-            selectedRecord->id;
+        const scene::ObjectId lightId = selectedRecord->id;
         const bool spot =
-            selectedRecord->type ==
-            world_model::kSpotLightType;
+            selectedRecord->type == world_model::kSpotLightType;
 
         f64 intensity = 1'000.0;
-        if (const auto value =
-                world.Objects().GetProperty(
-                    lightId,
-                    world_model::kLightIntensityLumens);
+        if (const auto value = world.Objects().GetProperty(
+                lightId,
+                world_model::kLightIntensityLumens);
             value.has_value())
         {
-            if (const auto* stored =
-                    std::get_if<f64>(&*value);
+            if (const auto* stored = std::get_if<f64>(&*value);
                 stored != nullptr)
             {
                 intensity = *stored;
@@ -488,14 +419,12 @@ void StudioViewportPanels::DrawContextBand(
         }
 
         bool enabled = true;
-        if (const auto value =
-                world.Objects().GetProperty(
-                    lightId,
-                    world_model::kLightEnabled);
+        if (const auto value = world.Objects().GetProperty(
+                lightId,
+                world_model::kLightEnabled);
             value.has_value())
         {
-            if (const auto* stored =
-                    std::get_if<bool>(&*value);
+            if (const auto* stored = std::get_if<bool>(&*value);
                 stored != nullptr)
             {
                 enabled = *stored;
@@ -514,10 +443,8 @@ void StudioViewportPanels::DrawContextBand(
                 const std::string_view name,
                 const auto& mutation)
             {
-                auto& commands =
-                    session_->World().Commands();
-                commands.BeginTransaction(
-                    std::string(name));
+                auto& commands = session_->World().Commands();
+                commands.BeginTransaction(std::string(name));
 
                 try
                 {
@@ -540,8 +467,7 @@ void StudioViewportPanels::DrawContextBand(
         {
             try
             {
-                const auto& camera =
-                    renderView->Camera();
+                const auto& camera = renderView->Camera();
                 const math::Double3 position{
                     camera.localPositionMeters.x +
                         static_cast<f64>(camera.forward.x) * 5.0,
@@ -575,8 +501,7 @@ void StudioViewportPanels::DrawContextBand(
             {
                 try
                 {
-                    const auto forward =
-                        renderView->Camera().forward;
+                    const auto forward = renderView->Camera().forward;
                     mutateLight(
                         "Aim Spot Light Along View",
                         [&](commands::CommandService& commands)
@@ -604,8 +529,7 @@ void StudioViewportPanels::DrawContextBand(
         {
             try
             {
-                const f64 next =
-                    std::max(0.0, intensity / 1.25);
+                const f64 next = std::max(0.0, intensity / 1.25);
                 mutateLight(
                     "Reduce Light Intensity",
                     [&](commands::CommandService& commands)
@@ -681,28 +605,22 @@ void StudioViewportPanels::DrawContextBand(
         context.Text("2 Path Nodes · Connect");
         context.SameLine();
 
-        if (context.Button(
-                "Direct##quick-path-direct"))
+        if (context.Button("Direct##quick-path-direct"))
         {
             invokeAuthoringCommand(
-                editor_model::authoring_commands::
-                    kConnectPathDirect);
+                editor_model::authoring_commands::kConnectPathDirect);
         }
         context.SameLine();
-        if (context.Button(
-                "Bezier##quick-path-bezier"))
+        if (context.Button("Bezier##quick-path-bezier"))
         {
             invokeAuthoringCommand(
-                editor_model::authoring_commands::
-                    kConnectPathBezier);
+                editor_model::authoring_commands::kConnectPathBezier);
         }
         context.SameLine();
-        if (context.Button(
-                "Routed##quick-path-routed"))
+        if (context.Button("Routed##quick-path-routed"))
         {
             invokeAuthoringCommand(
-                editor_model::authoring_commands::
-                    kConnectPathRouted);
+                editor_model::authoring_commands::kConnectPathRouted);
         }
         return;
     }
@@ -714,12 +632,10 @@ void StudioViewportPanels::DrawContextBand(
 
         const auto sourceEnablement =
             world.CommandRegistry().Enablement(
-                editor_model::authoring_commands::
-                    kAddVolumeSource);
+                editor_model::authoring_commands::kAddVolumeSource);
         const auto effectorEnablement =
             world.CommandRegistry().Enablement(
-                editor_model::authoring_commands::
-                    kAddVolumeEffector);
+                editor_model::authoring_commands::kAddVolumeEffector);
 
         bool drewButton = false;
         if (sourceEnablement.enabled)
@@ -728,8 +644,7 @@ void StudioViewportPanels::DrawContextBand(
                     "Add Source##quick-volume-source"))
             {
                 invokeAuthoringCommand(
-                    editor_model::authoring_commands::
-                        kAddVolumeSource);
+                    editor_model::authoring_commands::kAddVolumeSource);
             }
             drewButton = true;
         }
@@ -744,8 +659,7 @@ void StudioViewportPanels::DrawContextBand(
                     "Add Effector##quick-volume-effector"))
             {
                 invokeAuthoringCommand(
-                    editor_model::authoring_commands::
-                        kAddVolumeEffector);
+                    editor_model::authoring_commands::kAddVolumeEffector);
             }
             drewButton = true;
         }
@@ -759,55 +673,14 @@ void StudioViewportPanels::DrawContextBand(
             g_workspaceUi != nullptr)
         {
             static_cast<void>(
-                g_workspaceUi->FocusPanelByTitle(
-                    "Volumes"));
+                g_workspaceUi->FocusPanelByTitle("Volumes"));
         }
         return;
     }
 
-    if (surfaceRelevant)
-    {
-        context.Text("Terrain");
-        context.SameLine();
-
-        if (context.Button(
-                "Select##quick-terrain-select"))
-            setTerrainTool(StudioTerrainAuthoringTool::Select);
-        context.SameLine();
-        if (context.Button(
-                "Raise##quick-terrain-raise"))
-            setTerrainTool(StudioTerrainAuthoringTool::Raise);
-        context.SameLine();
-        if (context.Button(
-                "Lower##quick-terrain-lower"))
-            setTerrainTool(StudioTerrainAuthoringTool::Lower);
-        context.SameLine();
-        if (context.Button(
-                "Protect##quick-terrain-protect"))
-            setTerrainTool(StudioTerrainAuthoringTool::Protection);
-        context.SameLine();
-        if (context.Button(
-                "Drainage##quick-terrain-drainage"))
-            setTerrainTool(StudioTerrainAuthoringTool::Drainage);
-        context.SameLine();
-        if (context.Button(
-                "Canyon##quick-terrain-canyon"))
-            setTerrainTool(StudioTerrainAuthoringTool::Canyon);
-        context.SameLine();
-        if (context.Button(
-                "Ridge##quick-terrain-ridge"))
-            setTerrainTool(StudioTerrainAuthoringTool::Ridge);
-        context.SameLine();
-        if (context.Button(
-                "Geology##quick-terrain-material"))
-            setTerrainTool(StudioTerrainAuthoringTool::Material);
-        context.SameLine();
-        if (context.Button(
-                "Biome Paint##quick-terrain-biome"))
-            setTerrainTool(StudioTerrainAuthoringTool::BiomePaint);
-        return;
-    }
-
+    // Terrain context is owned exclusively by StudioExpansionShell. Keeping a
+    // second terrain branch here used to duplicate the same tool choices and
+    // made future toolbar changes easy to desynchronize.
     switch (g_workspaceMode)
     {
     case WorkspaceMode::Scene:
@@ -826,8 +699,7 @@ void StudioViewportPanels::DrawContextBand(
                 "Open Volume Expert##quick-volume-fallback"))
         {
             static_cast<void>(
-                g_workspaceUi->FocusPanelByTitle(
-                    "Volumes"));
+                g_workspaceUi->FocusPanelByTitle("Volumes"));
         }
         break;
     case WorkspaceMode::Celestial:
@@ -848,10 +720,6 @@ void StudioViewportPanels::DrawActivityBand(
         return;
     }
 
-    // Measure the cadence of this persistent shell band itself. It is drawn
-    // once per Studio UI frame, so this remains real runtime telemetry without
-    // coupling studio_ui to the app host or renderer internals. A short EMA
-    // removes the unreadable frame-to-frame jitter while still reacting fast.
     using StatusClock = std::chrono::steady_clock;
     static StatusClock::time_point previousFrame{};
     static f64 smoothedFrameSeconds = 0.0;
@@ -903,9 +771,7 @@ void StudioViewportPanels::DrawActivityBand(
                 1.0 / smoothedFrameSeconds));
     }
 
-    const auto panels =
-        g_workspaceUi->Panels();
-
+    const auto panels = g_workspaceUi->Panels();
     std::vector<editor_ui::ActionPresentation> actions;
 
     const auto appendPanel =
@@ -920,8 +786,7 @@ void StudioViewportPanels::DrawActivityBand(
                         const editor_ui::EditorUi::PanelSummary& candidate)
                     {
                         return candidate.title == title &&
-                            candidate.region ==
-                                editor_ui::DockRegion::Bottom;
+                            candidate.region == editor_ui::DockRegion::Bottom;
                     });
 
             if (panel == panels.end())
@@ -952,22 +817,17 @@ void StudioViewportPanels::DrawActivityBand(
                         if (visible)
                         {
                             static_cast<void>(
-                                g_workspaceUi->ClosePanelByTitle(
-                                    title));
+                                g_workspaceUi->ClosePanelByTitle(title));
                         }
                         else
                         {
                             static_cast<void>(
-                                g_workspaceUi->FocusPanelByTitle(
-                                    title));
+                                g_workspaceUi->FocusPanelByTitle(title));
                         }
                     }
             });
         };
 
-    // These labels are intentionally presentation aliases. Output remains the
-    // authoritative log panel and Build remains the authoritative build view;
-    // the activity strip only opens/focuses/collapses bottom-docked views.
     appendPanel("Output", "Console");
     appendPanel("Build", "Build");
     appendPanel("Tasks", "Tasks");
@@ -1115,38 +975,27 @@ void StudioViewportPanels::DrawContextInspector(
                     using Value =
                         std::decay_t<decltype(value)>;
 
-                    if constexpr (
-                        std::is_same_v<Value, bool>)
+                    if constexpr (std::is_same_v<Value, bool>)
                     {
-                        changed =
-                            context.Checkbox(label, value);
+                        changed = context.Checkbox(label, value);
                     }
-                    else if constexpr (
-                        std::is_same_v<Value, i64>)
+                    else if constexpr (std::is_same_v<Value, i64>)
                     {
-                        changed =
-                            context.InputInteger(label, value);
+                        changed = context.InputInteger(label, value);
                     }
-                    else if constexpr (
-                        std::is_same_v<Value, f64>)
+                    else if constexpr (std::is_same_v<Value, f64>)
                     {
-                        changed =
-                            context.InputDouble(label, value);
+                        changed = context.InputDouble(label, value);
                     }
-                    else if constexpr (
-                        std::is_same_v<Value, std::string>)
+                    else if constexpr (std::is_same_v<Value, std::string>)
                     {
-                        changed =
-                            context.InputText(label, value);
+                        changed = context.InputText(label, value);
                     }
-                    else if constexpr (
-                        std::is_same_v<Value, math::Double3>)
+                    else if constexpr (std::is_same_v<Value, math::Double3>)
                     {
-                        changed =
-                            context.InputDouble3(label, value);
+                        changed = context.InputDouble3(label, value);
                     }
-                    else if constexpr (
-                        requires { value.high; value.low; })
+                    else if constexpr (requires { value.high; value.low; })
                     {
                         const scene::ObjectId id{
                             .high = value.high,
@@ -1192,8 +1041,7 @@ void StudioViewportPanels::DrawContextInspector(
         context.Separator();
         context.MutedText("Contextual Tools");
         static_cast<void>(
-            GlobalInspectorProviders().DrawRelevant(
-                context));
+            GlobalInspectorProviders().DrawRelevant(context));
     }
     else
     {
@@ -1278,9 +1126,6 @@ void StudioViewportPanels::DrawView(
     editor_ui::PanelContext& context,
     const std::string_view id)
 {
-    // Camera, picking, terrain painting, overlays and detailed viewport state
-    // stay in the production viewport implementation. Workspace navigation and
-    // high-frequency selection actions now live permanently in shell bands.
     DrawViewBase(context, id);
 }
 } // namespace orbit::studio_ui
