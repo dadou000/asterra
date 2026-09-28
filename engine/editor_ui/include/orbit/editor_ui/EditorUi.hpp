@@ -109,6 +109,12 @@ public:
         std::string_view label,
         std::span<const std::string_view> items,
         i32& index);
+    // Equal-width one-row choice surface for a small mutually exclusive set.
+    // `id` is an automation/ImGui identity and is not rendered as a label.
+    [[nodiscard]] bool SegmentedControl(
+        std::string_view id,
+        std::span<const std::string_view> items,
+        i32& index);
     [[nodiscard]] bool SliderDouble(
         std::string_view label,
         f64& value,
