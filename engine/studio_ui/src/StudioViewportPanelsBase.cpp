@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <format>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -17,23 +18,20 @@ namespace orbit::studio_ui
 {
 namespace
 {
-[[nodiscard]] const char* ModeName(
-    const studio_session::ViewportMode mode) noexcept
-{
-    switch (mode)
-    {
-    case studio_session::ViewportMode::Perspective:
-        return "Perspective";
-    case studio_session::ViewportMode::BodyMap:
-        return "Body Map";
-    case studio_session::ViewportMode::Debug:
-        return "Debug";
-    case studio_session::ViewportMode::System:
-        return "System";
-    }
+constexpr commands::CommandId kViewportPerspectiveCommand{
+    .high = 0x4f52424954564d4fULL,
+    .low = 0x0000000000000001ULL
+};
 
-    return "Perspective";
-}
+constexpr commands::CommandId kViewportBodyMapCommand{
+    .high = 0x4f52424954564d4fULL,
+    .low = 0x0000000000000002ULL
+};
+
+constexpr commands::CommandId kViewportDebugCommand{
+    .high = 0x4f52424954564d4fULL,
+    .low = 0x0000000000000003ULL
+};
 
 [[nodiscard]] const char* TerrainToolName(
     const StudioTerrainAuthoringTool tool) noexcept
@@ -146,6 +144,191 @@ SelectedBiomeObject(
 }
 } // namespace
 
+struct StudioViewportPanels::ViewportModeCommandState
+{
+    StudioViewportPanels* owner{nullptr};
+    bool contributionsRegistered{false};
+};
+
+void StudioViewportPanels::UnregisterViewportModeCommands() noexcept
+{
+    try
+    {
+        if (session_ == nullptr ||
+            !session_->World().HasWorld())
+        {
+            return;
+        }
+
+        auto& registry = session_->World().CommandRegistry();
+        static_cast<void>(
+            registry.Unregister(kViewportPerspectiveCommand));
+        static_cast<void>(
+            registry.Unregister(kViewportBodyMapCommand));
+        static_cast<void>(
+            registry.Unregister(kViewportDebugCommand));
+    }
+    catch (...)
+    {
+        // World teardown may already have replaced its command graph. There is
+        // nothing left to unregister in that case.
+    }
+}
+
+void StudioViewportPanels::EnsureViewportModeCommands()
+{
+    if (session_ == nullptr ||
+        !session_->World().HasWorld())
+    {
+        return;
+    }
+
+    if (!viewportModeCommandState_)
+    {
+        viewportModeCommandState_ =
+            std::make_shared<ViewportModeCommandState>();
+    }
+    viewportModeCommandState_->owner = this;
+
+    const std::weak_ptr<ViewportModeCommandState> weakState{
+        viewportModeCommandState_};
+    auto& registry = session_->World().CommandRegistry();
+
+    const auto registerMode =
+        [&registry, weakState](
+            const commands::CommandId command,
+            const std::string_view name,
+            const studio_session::ViewportMode mode)
+        {
+            if (registry.Find(command) != nullptr)
+            {
+                return;
+            }
+
+            registry.Register({
+                .id = command,
+                .name = std::string{name},
+                .category = "Viewport",
+                .description =
+                    "Switch the focus-aware Studio viewport to " +
+                    std::string{name} + ".",
+                .presentationSurfaces = {
+                    std::string{kStudioContextCommandSurface}
+                },
+                .automationVisible = true,
+                .enablement =
+                    [weakState, mode]() -> commands::CommandEnablement
+                    {
+                        const auto state = weakState.lock();
+                        if (!state ||
+                            state->owner == nullptr ||
+                            state->owner->session_ == nullptr ||
+                            !state->owner->session_->World().HasWorld())
+                        {
+                            return {
+                                .enabled = false,
+                                .reason = "No active Studio world."
+                            };
+                        }
+
+                        const std::string_view id =
+                            state->owner->expansion_.ControlledViewportId();
+                        const auto* viewport =
+                            state->owner->session_->Viewports().Find(id);
+                        if (viewport == nullptr)
+                        {
+                            return {
+                                .enabled = false,
+                                .reason = "Controlled viewport is unavailable."
+                            };
+                        }
+
+                        if (viewport->mode == mode)
+                        {
+                            return {
+                                .enabled = false,
+                                .reason = "Already active."
+                            };
+                        }
+
+                        return {};
+                    },
+                .invoke =
+                    [weakState, mode](
+                        const commands::CommandArguments&)
+                    {
+                        const auto state = weakState.lock();
+                        if (!state ||
+                            state->owner == nullptr ||
+                            state->owner->session_ == nullptr ||
+                            !state->owner->session_->World().HasWorld())
+                        {
+                            throw std::logic_error(
+                                "Viewport mode command lost its Studio session.");
+                        }
+
+                        const std::string_view id =
+                            state->owner->expansion_.ControlledViewportId();
+                        if (state->owner->session_->Viewports().Find(id) == nullptr)
+                        {
+                            throw std::logic_error(
+                                "Controlled viewport is unavailable.");
+                        }
+
+                        state->owner->session_->Viewports().SetMode(
+                            id,
+                            mode);
+                    }
+            });
+        };
+
+    registerMode(
+        kViewportPerspectiveCommand,
+        "Perspective",
+        studio_session::ViewportMode::Perspective);
+    registerMode(
+        kViewportBodyMapCommand,
+        "Body Map",
+        studio_session::ViewportMode::BodyMap);
+    registerMode(
+        kViewportDebugCommand,
+        "Debug",
+        studio_session::ViewportMode::Debug);
+
+    if (!viewportModeCommandState_->contributionsRegistered)
+    {
+        auto& contributions = GlobalStudioUiContributions();
+        contributions.Upsert({
+            .id = "orbit.viewport.mode.perspective",
+            .owner = "orbit",
+            .label = "Perspective",
+            .surface = StudioContributionSurface::ContextToolbar,
+            .kind = StudioContributionKind::Command,
+            .order = 10,
+            .command = kViewportPerspectiveCommand
+        });
+        contributions.Upsert({
+            .id = "orbit.viewport.mode.body-map",
+            .owner = "orbit",
+            .label = "Body Map",
+            .surface = StudioContributionSurface::ContextToolbar,
+            .kind = StudioContributionKind::Command,
+            .order = 20,
+            .command = kViewportBodyMapCommand
+        });
+        contributions.Upsert({
+            .id = "orbit.viewport.mode.debug",
+            .owner = "orbit",
+            .label = "Debug",
+            .surface = StudioContributionSurface::ContextToolbar,
+            .kind = StudioContributionKind::Command,
+            .order = 30,
+            .command = kViewportDebugCommand
+        });
+        viewportModeCommandState_->contributionsRegistered = true;
+    }
+}
+
 StudioViewportPanels::StudioViewportPanels(
     StudioRenderViewSet& views,
     studio_session::StudioSession& session) noexcept
@@ -157,6 +340,8 @@ void StudioViewportPanels::Rebind(
     StudioRenderViewSet& views,
     studio_session::StudioSession& session)
 {
+    UnregisterViewportModeCommands();
+
     views_ = &views;
     session_ = &session;
     views_->CreateDefaults();
@@ -169,6 +354,8 @@ void StudioViewportPanels::Rebind(
 
 void StudioViewportPanels::ClearBinding() noexcept
 {
+    UnregisterViewportModeCommands();
+
     views_ = nullptr;
     session_ = nullptr;
     status_.clear();
@@ -238,6 +425,8 @@ void StudioViewportPanels::DrawView(
         context.Text("Open or create a project to activate this viewport.");
         return;
     }
+
+    EnsureViewportModeCommands();
 
     auto* renderView = views_->Find(id);
     const auto* target = session_->Viewports().Find(id);
@@ -404,53 +593,17 @@ void StudioViewportPanels::DrawView(
                     automaticWeight;
         };
 
-    // The viewport body now owns only view mode, the rendered scene and
-    // transient manipulation actions. Surface presentation, creation, target
-    // selection, Bezier editing and diagnostics live in the unified shell /
-    // Properties surfaces instead of consuming scene space here.
-    context.Text(
-        std::format(
-            "Mode: {}",
-            ModeName(target->mode)));
+    // Permanent view mode and presentation controls live in row 2. The
+    // viewport body owns only the rendered scene and transient actions tied to
+    // geometry currently being manipulated inside that scene.
+    bool transientChrome = false;
 
-    const std::string perspectiveButton =
-        "Perspective##" + std::string(id);
-    const std::string mapButton =
-        "Body Map##" + std::string(id);
-    const std::string debugButton =
-        "Debug##" + std::string(id);
-
-    if (context.Button(perspectiveButton))
-    {
-        session_->Viewports().SetMode(
-            id,
-            studio_session::ViewportMode::Perspective);
-    }
-    context.SameLine();
-    if (context.Button(mapButton))
-    {
-        session_->Viewports().SetMode(
-            id,
-            studio_session::ViewportMode::BodyMap);
-    }
-    context.SameLine();
-    if (context.Button(debugButton))
-    {
-        session_->Viewports().SetMode(
-            id,
-            studio_session::ViewportMode::Debug);
-    }
-
-    // Explicit spline commit/cancel is intentionally transient viewport chrome
-    // because it acts on geometry currently being placed in the scene.
     if (target->mode !=
             studio_session::ViewportMode::Debug &&
         IsSplineTool(terrainTool_) &&
         !terrainSplinePoints_.empty())
     {
-        context.SameLine();
-        context.MutedText("|");
-        context.SameLine();
+        transientChrome = true;
         context.Text(
             std::format(
                 "{} · {} pts",
@@ -545,10 +698,15 @@ void StudioViewportPanels::DrawView(
 
     if (!status_.empty())
     {
+        transientChrome = true;
         context.MutedText(status_);
     }
 
-    context.Separator();
+    if (transientChrome)
+    {
+        context.Separator();
+    }
+
     const auto available = context.ContentAvailable();
     const u32 width =
         static_cast<u32>(
@@ -697,7 +855,6 @@ void StudioViewportPanels::DrawView(
             {
                 const auto page =
                     views_->DebugPhysicalPage(id);
-
                 if (page.has_value())
                 {
                     const auto& tile =
