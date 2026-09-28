@@ -24,6 +24,14 @@ enum class JobPriority : u8
     Low
 };
 
+struct JobSystemTelemetry
+{
+    u32 workers{0};
+    u64 outstanding{0};
+    u64 queued{0};
+    u64 running{0};
+};
+
 class JobGroup
 {
 public:
@@ -142,6 +150,12 @@ public:
 
     [[nodiscard]] u32
     WorkerCount() const noexcept;
+
+    // Lock-free approximate snapshot suitable for UI/profiling. `outstanding`
+    // includes queued + running work; queued is derived from those atomics and
+    // may differ by one while a worker transitions between states.
+    [[nodiscard]] JobSystemTelemetry
+    Telemetry() const noexcept;
 
 private:
     class Impl;
