@@ -1,66 +1,26 @@
 #pragma once
 
-#include <orbit/editor_ui/PanelExtensions.hpp>
-#include <orbit/studio_ui/InspectorProviderRegistry.hpp>
+#include <orbit/studio_ui/StudioExpansionShell.hpp>
 
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
 namespace orbit::studio_ui
 {
-// One contextual authoring lane is appended to the production Properties
-// panel. Built-in tools and plugins contribute providers to the registry rather
-// than creating more permanent side panels. The existing dedicated panels stay
-// available as expert workspaces; this bridge only adds progressive disclosure
-// to the normal selection workflow.
+// Built-in authoring tools and hot-reloadable plugins share one registry and
+// one Properties-panel extension owned by StudioExpansionShell. This prevents
+// two visually identical contextual-inspector pipelines from drifting apart.
 [[nodiscard]] inline InspectorProviderRegistry&
 StudioInspectorProviders() noexcept
 {
-    static InspectorProviderRegistry registry;
-    return registry;
-}
-
-inline void EnsureStudioInspectorExtension()
-{
-    editor_ui::UpsertPanelExtension({
-        .id = "orbit.studio.properties.contextual-authoring",
-        .targetTitle = "Properties",
-        .order = 1'000,
-        .draw =
-            [](editor_ui::PanelContext& context)
-            {
-                static_cast<void>(
-                    StudioInspectorProviders().
-                        DrawRelevant(context));
-            }
-    });
-}
-
-// Authoring models are also instantiated by headless/unit workflows where an
-// EditorUi context intentionally does not exist. Contextual inspection is an
-// optional shell enhancement there, so lack of a shell host must not make the
-// underlying authoring object unconstructible.
-[[nodiscard]] inline bool
-TryEnsureStudioInspectorExtension() noexcept
-{
-    try
-    {
-        EnsureStudioInspectorExtension();
-        return true;
-    }
-    catch (const std::logic_error&)
-    {
-        return false;
-    }
+    return GlobalInspectorProviders();
 }
 
 // Owns one registry contribution for exactly as long as its authoring UI
-// instance is alive. Production Studio constructs these instances after
-// EditorUi and destroys them before EditorUi, so callbacks never outlive their
-// owners. Headless callers still get the registry contribution but simply do
-// not install the Properties-panel bridge.
+// instance is alive. Headless/model workflows may populate the same registry
+// without an EditorUi host; StudioExpansionShell attaches it to Properties only
+// when the live unified Studio shell exists.
 class StudioInspectorProviderRegistration
 {
 public:
@@ -68,8 +28,6 @@ public:
         InspectorProviderDefinition provider)
         : id_(provider.id)
     {
-        static_cast<void>(
-            TryEnsureStudioInspectorExtension());
         StudioInspectorProviders().Upsert(
             std::move(provider));
     }
