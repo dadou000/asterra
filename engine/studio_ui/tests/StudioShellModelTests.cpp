@@ -1,19 +1,22 @@
+#include <orbit/studio_ui/CommandPaletteModel.hpp>
+#include <orbit/studio_ui/InspectorProviderRegistry.hpp>
+#include <orbit/studio_ui/StudioPersistentState.hpp>
 #include <orbit/studio_ui/StudioShellModel.hpp>
+#include <orbit/studio_ui/StudioUiContributions.hpp>
+#include <orbit/studio_ui/ViewportAuthoringState.hpp>
+#include <orbit/studio_ui/WorldAssetsBrowserModel.hpp>
 
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
+#include <vector>
 
 namespace
 {
-using orbit::studio_ui::BrowserSourcePanelTitle;
-using orbit::studio_ui::DefaultBrowserMode;
-using orbit::studio_ui::StudioBrowserMode;
-using orbit::studio_ui::StudioWorkspaceMode;
-using orbit::studio_ui::StudioWorkspaceName;
-using orbit::studio_ui::kWorldAssetsBrowserContract;
+using namespace orbit;
+using namespace orbit::studio_ui;
 
-void Check(const bool condition, const char* what)
+void Check(const bool condition, const std::string_view what)
 {
     if (!condition)
     {
@@ -24,13 +27,11 @@ void Check(const bool condition, const char* what)
 
 void WorldAssetsPanelOwnsTheCompactLeftFrontDoor()
 {
-    const auto& contract =
-        kWorldAssetsBrowserContract;
-
+    const auto& contract = kWorldAssetsBrowserContract;
     Check(contract.panel.IsValid(), "browser panel id is stable and valid");
     Check(contract.defaultOpen, "browser opens by default");
     Check(
-        contract.defaultDock == orbit::editor_ui::DockRegion::Left,
+        contract.defaultDock == editor_ui::DockRegion::Left,
         "browser belongs to the left dock");
     Check(contract.dockOrder < 0, "browser is the first left-dock tab");
     Check(contract.minSize.width >= 240.0F, "browser keeps a usable minimum width");
@@ -39,47 +40,221 @@ void WorldAssetsPanelOwnsTheCompactLeftFrontDoor()
 
 void WorkspacesChooseTheExpectedBrowserSurface()
 {
-    Check(
-        DefaultBrowserMode(StudioWorkspaceMode::Scene) ==
-            StudioBrowserMode::World,
-        "Scene starts on World");
-    Check(
-        DefaultBrowserMode(StudioWorkspaceMode::Planet) ==
-            StudioBrowserMode::World,
-        "Planet starts on World");
-    Check(
-        DefaultBrowserMode(StudioWorkspaceMode::Celestial) ==
-            StudioBrowserMode::World,
-        "Celestial starts on World");
-    Check(
-        DefaultBrowserMode(StudioWorkspaceMode::Simulation) ==
-            StudioBrowserMode::World,
-        "Simulation starts on World");
-    Check(
-        DefaultBrowserMode(StudioWorkspaceMode::Shading) ==
-            StudioBrowserMode::Assets,
-        "Shading starts on Assets");
+    Check(DefaultBrowserMode(StudioWorkspaceMode::Scene) == StudioBrowserMode::World, "Scene starts on World");
+    Check(DefaultBrowserMode(StudioWorkspaceMode::Planet) == StudioBrowserMode::World, "Planet starts on World");
+    Check(DefaultBrowserMode(StudioWorkspaceMode::Celestial) == StudioBrowserMode::World, "Celestial starts on World");
+    Check(DefaultBrowserMode(StudioWorkspaceMode::Simulation) == StudioBrowserMode::World, "Simulation starts on World");
+    Check(DefaultBrowserMode(StudioWorkspaceMode::Shading) == StudioBrowserMode::Assets, "Shading starts on Assets");
+
+    Check(BrowserSourcePanelTitle(StudioBrowserMode::World) == std::string_view{"Explorer"}, "World composes Explorer");
+    Check(BrowserSourcePanelTitle(StudioBrowserMode::Assets) == std::string_view{"Material Service"}, "Assets composes Material Service");
+    Check(StudioWorkspaceName(StudioWorkspaceMode::Scene) == "Scene", "Scene name stable");
+    Check(StudioWorkspaceName(StudioWorkspaceMode::Shading) == "Shading", "Shading name stable");
 }
 
-void BrowserModesComposeTheAuthoritativeLegacySurfaces()
+void InspectorProvidersAreOrderedAndOwnerScoped()
 {
-    Check(
-        BrowserSourcePanelTitle(StudioBrowserMode::World) ==
-            std::string_view{"Explorer"},
-        "World composes Explorer");
-    Check(
-        BrowserSourcePanelTitle(StudioBrowserMode::Assets) ==
-            std::string_view{"Material Service"},
-        "Assets composes Material Service");
+    InspectorProviderRegistry registry;
+    bool surfaceRelevant = true;
+
+    registry.Upsert({
+        .id = "surface",
+        .title = "Surface",
+        .order = 20,
+        .relevant = [&surfaceRelevant] { return surfaceRelevant; },
+        .draw = [](editor_ui::PanelContext&) {}
+    });
+    registry.Upsert({
+        .id = "properties",
+        .title = "Properties",
+        .order = 0,
+        .defaultOpen = true,
+        .draw = [](editor_ui::PanelContext&) {}
+    });
+    registry.Upsert({
+        .id = "plugin.weather",
+        .owner = "weather.plugin",
+        .title = "Weather",
+        .order = 10,
+        .draw = [](editor_ui::PanelContext&) {}
+    });
+
+    auto relevant = registry.Relevant();
+    Check(relevant.size() == 3U, "all relevant providers returned");
+    Check(relevant[0]->id == "properties", "provider order begins with properties");
+    Check(relevant[1]->id == "plugin.weather", "plugin provider order respected");
+    Check(relevant[2]->id == "surface", "surface provider follows plugin");
+
+    surfaceRelevant = false;
+    Check(registry.Relevant().size() == 2U, "irrelevant providers are hidden");
+    Check(registry.RemoveOwner("weather.plugin") == 1U, "plugin providers remove by owner");
+    Check(registry.Relevant().size() == 1U, "owner removal leaves built-in provider");
 }
 
-void WorkspaceNamesRemainStableForShellAndAutomation()
+void ContributionsAreStableAndOwnerScoped()
 {
-    Check(StudioWorkspaceName(StudioWorkspaceMode::Scene) == "Scene", "Scene name");
-    Check(StudioWorkspaceName(StudioWorkspaceMode::Planet) == "Planet", "Planet name");
-    Check(StudioWorkspaceName(StudioWorkspaceMode::Celestial) == "Celestial", "Celestial name");
-    Check(StudioWorkspaceName(StudioWorkspaceMode::Simulation) == "Simulation", "Simulation name");
-    Check(StudioWorkspaceName(StudioWorkspaceMode::Shading) == "Shading", "Shading name");
+    StudioUiContributionRegistry registry;
+    registry.Upsert({
+        .id = "plugin.create",
+        .owner = "plugin",
+        .label = "Create Thing",
+        .surface = StudioContributionSurface::QuickCreate,
+        .kind = StudioContributionKind::Command,
+        .order = 20,
+        .command = {.high = 1, .low = 1}
+    });
+    registry.Upsert({
+        .id = "orbit.create",
+        .label = "Create Object",
+        .surface = StudioContributionSurface::QuickCreate,
+        .kind = StudioContributionKind::Command,
+        .order = 0,
+        .command = {.high = 1, .low = 2}
+    });
+
+    const auto catalog = registry.Catalog(StudioContributionSurface::QuickCreate);
+    Check(catalog.size() == 2U, "quick-create contributions catalogued");
+    Check(catalog[0].id == "orbit.create", "contribution order stable");
+    Check(registry.RemoveOwner("plugin") == 1U, "plugin contributions remove by owner");
+}
+
+void CommandPaletteRanksUsefulMatches()
+{
+    const std::vector<commands::CommandCatalogEntry> catalog{
+        {
+            .id = {.high = 2, .low = 1},
+            .name = "Add Point Light",
+            .category = "Lighting",
+            .description = "Creates a point light"
+        },
+        {
+            .id = {.high = 2, .low = 2},
+            .name = "Build Project",
+            .category = "Build",
+            .description = "Builds the active project"
+        },
+        {
+            .id = {.high = 2, .low = 3},
+            .name = "Connect Path Bezier",
+            .category = "Path",
+            .description = "Connect two path nodes",
+            .parameters = {{.name = "mode", .kind = commands::CommandValueKind::String}}
+        }
+    };
+
+    const auto entries = BuildCommandPalette(catalog);
+    const auto light = SearchCommandPalette(entries, "point light");
+    Check(!light.empty() && light.front().label == "Add Point Light", "palette ranks point light first");
+
+    const auto build = SearchCommandPalette(entries, "Build");
+    Check(!build.empty() && build.front().label == "Build Project", "palette prefix ranking works");
+
+    const auto path = SearchCommandPalette(entries, "Bezier");
+    Check(!path.empty() && path.front().requiresArguments, "palette exposes commands needing arguments");
+}
+
+void ViewportLayoutsClampAndRetainGizmoState()
+{
+    ViewportAuthoringState state;
+    Check(state.SlotCount() == 1U, "single layout has one slot");
+
+    state.SetLayout(ViewportLayout::Quad);
+    state.SetActiveSlot(3U);
+    Check(state.SlotCount() == 4U && state.activeSlot == 3U, "quad exposes four slots");
+
+    state.SetLayout(ViewportLayout::VerticalSplit);
+    Check(state.activeSlot == 1U, "layout reduction clamps active slot");
+
+    state.gizmo.tool = GizmoTool::Translate;
+    state.gizmo.space = GizmoSpace::Local;
+    state.gizmo.surfaceSnap = true;
+    Check(state.gizmo.tool == GizmoTool::Translate, "translate gizmo retained");
+    Check(state.gizmo.space == GizmoSpace::Local, "local gizmo space retained");
+    Check(state.gizmo.surfaceSnap, "surface snap retained");
+}
+
+content::AssetRecord Asset(
+    const u64 low,
+    const content::AssetKind kind,
+    std::string name,
+    std::string path,
+    std::vector<std::string> tags = {})
+{
+    return {
+        .id = {.high = 0xA55E7, .low = low},
+        .kind = kind,
+        .name = std::move(name),
+        .sourcePath = std::move(path),
+        .tags = std::move(tags)
+    };
+}
+
+void AssetBrowserSupportsCollectionsAndSearch()
+{
+    const auto vehicle = Asset(
+        1,
+        content::AssetKind::Component,
+        "Harlow Coupe",
+        "Content/Vehicles/HarlowCoupe.component",
+        {"vehicle", "blueprint", "v8"});
+    const auto material = Asset(
+        2,
+        content::AssetKind::Material,
+        "Paint Blue",
+        "Content/Materials/PaintBlue.material",
+        {"paint"});
+
+    WorldAssetsBrowserModel browser;
+    browser.SetCategory(AssetBrowserCategory::Vehicles);
+    Check(browser.Matches(vehicle), "vehicle category uses tags");
+    Check(!browser.Matches(material), "vehicle category rejects material");
+
+    browser.SetCategory(AssetBrowserCategory::All);
+    browser.SetQuery("harlow");
+    Check(browser.Matches(vehicle), "asset query searches names");
+
+    browser.SetQuery({});
+    browser.SetSearchChips({"v8"});
+    Check(browser.Matches(vehicle), "search chips search asset tags");
+
+    browser.SetSearchChips({});
+    browser.ToggleFavorite(vehicle.id);
+    browser.SetCategory(AssetBrowserCategory::Favorites);
+    Check(browser.Matches(vehicle), "favorites collection works");
+
+    browser.RecordRecent(material.id);
+    browser.RecordRecent(vehicle.id);
+    browser.SetCategory(AssetBrowserCategory::Recent);
+    Check(browser.Matches(vehicle) && browser.Matches(material), "recent collection works");
+    Check(browser.Recent().front() == vehicle.id, "most recent asset comes first");
+}
+
+void PersistentStateRoundTrips()
+{
+    StudioPersistentState state;
+    state.workspace = StudioWorkspaceMode::Shading;
+    state.browser = StudioBrowserMode::Assets;
+    state.activityPanel = "Build";
+    state.inspectorAdvanced = true;
+    state.viewport.SetLayout(ViewportLayout::Quad);
+    state.viewport.SetActiveSlot(3U);
+    state.viewport.gizmo.tool = GizmoTool::Rotate;
+    state.viewport.gizmo.rotationSnap = true;
+    state.viewport.gizmo.rotationSnapDegrees = 22.5;
+    state.viewport.gizmo.surfaceSnap = true;
+
+    const auto parsed = ParseStudioPersistentState(
+        SerializeStudioPersistentState(state));
+
+    Check(parsed.workspace == StudioWorkspaceMode::Shading, "workspace persists");
+    Check(parsed.browser == StudioBrowserMode::Assets, "browser tab persists");
+    Check(parsed.activityPanel == "Build", "activity panel persists");
+    Check(parsed.inspectorAdvanced, "Inspector advanced state persists");
+    Check(parsed.viewport.layout == ViewportLayout::Quad, "viewport layout persists");
+    Check(parsed.viewport.activeSlot == 3U, "active viewport persists");
+    Check(parsed.viewport.gizmo.tool == GizmoTool::Rotate, "gizmo tool persists");
+    Check(parsed.viewport.gizmo.rotationSnapDegrees == 22.5, "gizmo snap value persists");
+    Check(parsed.viewport.gizmo.surfaceSnap, "surface snap persists");
 }
 } // namespace
 
@@ -87,7 +262,11 @@ int main()
 {
     WorldAssetsPanelOwnsTheCompactLeftFrontDoor();
     WorkspacesChooseTheExpectedBrowserSurface();
-    BrowserModesComposeTheAuthoritativeLegacySurfaces();
-    WorkspaceNamesRemainStableForShellAndAutomation();
+    InspectorProvidersAreOrderedAndOwnerScoped();
+    ContributionsAreStableAndOwnerScoped();
+    CommandPaletteRanksUsefulMatches();
+    ViewportLayoutsClampAndRetainGizmoState();
+    AssetBrowserSupportsCollectionsAndSearch();
+    PersistentStateRoundTrips();
     return EXIT_SUCCESS;
 }
