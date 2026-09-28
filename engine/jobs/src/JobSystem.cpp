@@ -47,37 +47,28 @@ PriorityIndex(
     return 1;
 }
 
-constexpr std::array<
-    JobPriority,
-    3>
-    kPriorityOrder{
-        JobPriority::High,
-        JobPriority::Normal,
-        JobPriority::Low
-    };
+constexpr std::array<JobPriority, 3> kPriorityOrder{
+    JobPriority::High,
+    JobPriority::Normal,
+    JobPriority::Low
+};
 } // namespace
 
 JobGroup::JobGroup()
-    : state_(
-        std::make_shared<
-            detail::JobGroupState>())
+    : state_(std::make_shared<detail::JobGroupState>())
 {
 }
 
 JobGroup::~JobGroup() = default;
 
-JobGroup::JobGroup(
-    JobGroup&&) noexcept = default;
+JobGroup::JobGroup(JobGroup&&) noexcept = default;
 
-JobGroup& JobGroup::operator=(
-    JobGroup&&) noexcept = default;
+JobGroup& JobGroup::operator=(JobGroup&&) noexcept = default;
 
 bool JobGroup::IsComplete() const noexcept
 {
     return !state_ ||
-        state_->remaining.load(
-            std::memory_order_acquire) ==
-            0;
+        state_->remaining.load(std::memory_order_acquire) == 0;
 }
 
 class JobSystem::Impl
@@ -88,38 +79,28 @@ public:
         if (workerCount == 0)
         {
             const u32 hardwareThreads =
-                std::thread::
-                    hardware_concurrency();
+                std::thread::hardware_concurrency();
 
-            workerCount =
-                hardwareThreads > 1
-                    ? hardwareThreads - 1
-                    : 1;
+            workerCount = hardwareThreads > 1
+                ? hardwareThreads - 1
+                : 1;
         }
 
         workers_.reserve(workerCount);
-
-        for (u32 index = 0;
-             index < workerCount;
-             ++index)
+        for (u32 index = 0; index < workerCount; ++index)
         {
-            workers_.push_back(
-                std::make_unique<
-                    Worker>());
+            workers_.push_back(std::make_unique<Worker>());
         }
 
         try
         {
-            for (u32 index = 0;
-                 index < workerCount;
-                 ++index)
+            for (u32 index = 0; index < workerCount; ++index)
             {
                 workers_[index]->thread =
-                    std::thread(
-                        [this, index]
-                        {
-                            WorkerLoop(index);
-                        });
+                    std::thread([this, index]
+                    {
+                        WorkerLoop(index);
+                    });
             }
         }
         catch (...)
@@ -146,17 +127,14 @@ public:
         }
 
         Enqueue({
-            .function =
-                std::move(job),
+            .function = std::move(job),
             .group = {},
             .priority = priority
         });
     }
 
     void Submit(
-        const std::shared_ptr<
-            detail::JobGroupState>&
-            group,
+        const std::shared_ptr<detail::JobGroupState>& group,
         const JobPriority priority,
         Job job)
     {
@@ -172,155 +150,125 @@ public:
                 "Orbit cannot submit an empty job.");
         }
 
-        group->remaining.
-            fetch_add(
-                1,
-                std::memory_order_acq_rel);
+        group->remaining.fetch_add(1, std::memory_order_acq_rel);
 
         try
         {
             Enqueue({
-                .function =
-                    std::move(job),
+                .function = std::move(job),
                 .group = group,
                 .priority = priority
             });
         }
         catch (...)
         {
-            group->remaining.
-                fetch_sub(
-                    1,
-                    std::memory_order_acq_rel);
-
+            group->remaining.fetch_sub(1, std::memory_order_acq_rel);
             throw;
         }
     }
 
     void Wait(
-        const std::shared_ptr<
-            detail::JobGroupState>&
-            group)
+        const std::shared_ptr<detail::JobGroupState>& group)
     {
         if (!group)
         {
             return;
         }
 
-        while (group->remaining.load(
-                   std::memory_order_acquire) !=
-               0)
+        while (group->remaining.load(std::memory_order_acquire) != 0)
         {
-            if (TryExecuteOne(
-                    kExternalThread))
+            if (TryExecuteOne(kExternalThread))
             {
                 continue;
             }
 
-            std::unique_lock lock(
-                group->mutex);
-
+            std::unique_lock lock(group->mutex);
             group->condition.wait_for(
                 lock,
-                std::chrono::
-                    milliseconds(1),
+                std::chrono::milliseconds(1),
                 [&group]
                 {
-                    return group->
-                               remaining.load(
-                                   std::memory_order_acquire) ==
-                        0;
+                    return group->remaining.load(
+                        std::memory_order_acquire) == 0;
                 });
         }
 
         std::exception_ptr exception;
-
         {
-            std::scoped_lock lock(
-                group->mutex);
-
-            exception =
-                group->firstException;
-
-            group->firstException =
-                nullptr;
+            std::scoped_lock lock(group->mutex);
+            exception = group->firstException;
+            group->firstException = nullptr;
         }
 
         if (exception)
         {
-            std::rethrow_exception(
-                exception);
+            std::rethrow_exception(exception);
         }
     }
 
     void WaitIdle()
     {
-        while (outstandingJobs_.load(
-                   std::memory_order_acquire) !=
-               0)
+        while (outstandingJobs_.load(std::memory_order_acquire) != 0)
         {
-            if (TryExecuteOne(
-                    kExternalThread))
+            if (TryExecuteOne(kExternalThread))
             {
                 continue;
             }
 
-            std::unique_lock lock(
-                wakeMutex_);
-
+            std::unique_lock lock(wakeMutex_);
             wakeCondition_.wait_for(
                 lock,
-                std::chrono::
-                    milliseconds(1),
+                std::chrono::milliseconds(1),
                 [this]
                 {
                     return
-                        outstandingJobs_.
-                                load(
-                                    std::memory_order_acquire) ==
-                            0 ||
-                        stopping_.
-                            load(
-                                std::memory_order_acquire);
+                        outstandingJobs_.load(
+                            std::memory_order_acquire) == 0 ||
+                        stopping_.load(
+                            std::memory_order_acquire);
                 });
         }
     }
 
-    [[nodiscard]] u32
-    WorkerCount() const noexcept
+    [[nodiscard]] u32 WorkerCount() const noexcept
     {
-        return static_cast<u32>(
-            workers_.size());
+        return static_cast<u32>(workers_.size());
+    }
+
+    [[nodiscard]] JobSystemTelemetry Telemetry() const noexcept
+    {
+        const u64 outstanding =
+            outstandingJobs_.load(std::memory_order_acquire);
+        const u64 running =
+            runningJobs_.load(std::memory_order_acquire);
+
+        return {
+            .workers = static_cast<u32>(workers_.size()),
+            .outstanding = outstanding,
+            .queued = outstanding > running
+                ? outstanding - running
+                : 0,
+            .running = running
+        };
     }
 
 private:
     struct JobItem
     {
         Job function;
-        std::shared_ptr<
-            detail::JobGroupState>
-            group;
-
-        JobPriority priority{
-            JobPriority::Normal};
+        std::shared_ptr<detail::JobGroupState> group;
+        JobPriority priority{JobPriority::Normal};
     };
 
     struct Worker
     {
         std::mutex mutex;
-
-        std::array<
-            std::deque<JobItem>,
-            3>
-            queues;
-
+        std::array<std::deque<JobItem>, 3> queues;
         std::thread thread;
     };
 
-    static constexpr u32
-        kExternalThread =
-            std::numeric_limits<u32>::
-                max();
+    static constexpr u32 kExternalThread =
+        std::numeric_limits<u32>::max();
 
     void StopWorkers()
     {
@@ -330,7 +278,6 @@ private:
         }
 
         wakeCondition_.notify_all();
-
         for (auto& worker : workers_)
         {
             if (worker->thread.joinable())
@@ -343,34 +290,18 @@ private:
     void Enqueue(JobItem item)
     {
         const u64 ticket =
-            nextWorker_.
-                fetch_add(
-                    1,
-                    std::memory_order_relaxed);
-
-        const u32 workerIndex =
-            static_cast<u32>(
-                ticket %
-                static_cast<u64>(
-                    workers_.size()));
+            nextWorker_.fetch_add(1, std::memory_order_relaxed);
+        const u32 workerIndex = static_cast<u32>(
+            ticket % static_cast<u64>(workers_.size()));
 
         {
-            Worker& worker =
-                *workers_[workerIndex];
-
-            std::scoped_lock lock(
-                worker.mutex);
-
-            worker.queues[
-                PriorityIndex(
-                    item.priority)].
-                push_back(
-                    std::move(item));
-
-            outstandingJobs_.
-                fetch_add(
-                    1,
-                    std::memory_order_release);
+            Worker& worker = *workers_[workerIndex];
+            std::scoped_lock lock(worker.mutex);
+            worker.queues[PriorityIndex(item.priority)].push_back(
+                std::move(item));
+            outstandingJobs_.fetch_add(
+                1,
+                std::memory_order_release);
         }
 
         {
@@ -387,32 +318,20 @@ private:
         const JobPriority priority,
         JobItem& item)
     {
-        if (workerIndex >=
-            workers_.size())
+        if (workerIndex >= workers_.size())
         {
             return false;
         }
 
-        Worker& worker =
-            *workers_[workerIndex];
-
-        std::scoped_lock lock(
-            worker.mutex);
-
-        auto& queue =
-            worker.queues[
-                PriorityIndex(
-                    priority)];
-
+        Worker& worker = *workers_[workerIndex];
+        std::scoped_lock lock(worker.mutex);
+        auto& queue = worker.queues[PriorityIndex(priority)];
         if (queue.empty())
         {
             return false;
         }
 
-        item =
-            std::move(
-                queue.back());
-
+        item = std::move(queue.back());
         queue.pop_back();
         return true;
     }
@@ -422,71 +341,43 @@ private:
         const JobPriority priority,
         JobItem& item)
     {
-        Worker& worker =
-            *workers_[victimIndex];
-
-        std::scoped_lock lock(
-            worker.mutex);
-
-        auto& queue =
-            worker.queues[
-                PriorityIndex(
-                    priority)];
-
+        Worker& worker = *workers_[victimIndex];
+        std::scoped_lock lock(worker.mutex);
+        auto& queue = worker.queues[PriorityIndex(priority)];
         if (queue.empty())
         {
             return false;
         }
 
-        item =
-            std::move(
-                queue.front());
-
+        item = std::move(queue.front());
         queue.pop_front();
         return true;
     }
 
-    bool TryExecuteOne(
-        const u32 workerIndex)
+    bool TryExecuteOne(const u32 workerIndex)
     {
         JobItem item{};
-
-        for (const JobPriority priority :
-             kPriorityOrder)
+        for (const JobPriority priority : kPriorityOrder)
         {
-            if (workerIndex !=
-                    kExternalThread &&
-                TryTakeOwn(
-                    workerIndex,
-                    priority,
-                    item))
+            if (workerIndex != kExternalThread &&
+                TryTakeOwn(workerIndex, priority, item))
             {
-                Execute(
-                    std::move(item));
-
+                Execute(std::move(item));
                 return true;
             }
 
             for (u32 victim = 0;
-                 victim <
-                    static_cast<u32>(
-                        workers_.size());
+                 victim < static_cast<u32>(workers_.size());
                  ++victim)
             {
-                if (victim ==
-                    workerIndex)
+                if (victim == workerIndex)
                 {
                     continue;
                 }
 
-                if (TrySteal(
-                        victim,
-                        priority,
-                        item))
+                if (TrySteal(victim, priority, item))
                 {
-                    Execute(
-                        std::move(item));
-
+                    Execute(std::move(item));
                     return true;
                 }
             }
@@ -495,9 +386,10 @@ private:
         return false;
     }
 
-    void Execute(
-        JobItem item)
+    void Execute(JobItem item)
     {
+        runningJobs_.fetch_add(1, std::memory_order_acq_rel);
+
         try
         {
             item.function();
@@ -506,15 +398,11 @@ private:
         {
             if (item.group)
             {
-                std::scoped_lock lock(
-                    item.group->mutex);
-
-                if (!item.group->
-                        firstException)
+                std::scoped_lock lock(item.group->mutex);
+                if (!item.group->firstException)
                 {
-                    item.group->
-                        firstException =
-                            std::current_exception();
+                    item.group->firstException =
+                        std::current_exception();
                 }
             }
             else
@@ -527,34 +415,28 @@ private:
         if (item.group)
         {
             const u64 previous =
-                item.group->remaining.
-                    fetch_sub(
-                        1,
-                        std::memory_order_acq_rel);
-
+                item.group->remaining.fetch_sub(
+                    1,
+                    std::memory_order_acq_rel);
             if (previous == 1)
             {
-                item.group->
-                    condition.
-                    notify_all();
+                item.group->condition.notify_all();
             }
         }
 
+        runningJobs_.fetch_sub(1, std::memory_order_acq_rel);
         const u64 previousOutstanding =
-            outstandingJobs_.
-                fetch_sub(
-                    1,
-                    std::memory_order_acq_rel);
+            outstandingJobs_.fetch_sub(
+                1,
+                std::memory_order_acq_rel);
 
         if (previousOutstanding == 1)
         {
-            wakeCondition_.
-                notify_all();
+            wakeCondition_.notify_all();
         }
     }
 
-    void WorkerLoop(
-        const u32 workerIndex)
+    void WorkerLoop(const u32 workerIndex)
     {
         while (true)
         {
@@ -564,24 +446,18 @@ private:
                 observedGeneration = workGeneration_;
             }
 
-            if (TryExecuteOne(
-                    workerIndex))
+            if (TryExecuteOne(workerIndex))
             {
                 continue;
             }
 
-            if (stopping_.load(
-                    std::memory_order_acquire) &&
-                outstandingJobs_.load(
-                    std::memory_order_acquire) ==
-                    0)
+            if (stopping_.load(std::memory_order_acquire) &&
+                outstandingJobs_.load(std::memory_order_acquire) == 0)
             {
                 return;
             }
 
-            std::unique_lock lock(
-                wakeMutex_);
-
+            std::unique_lock lock(wakeMutex_);
             wakeCondition_.wait(
                 lock,
                 [this, observedGeneration]
@@ -592,50 +468,33 @@ private:
         }
     }
 
-    std::vector<
-        std::unique_ptr<Worker>>
-        workers_;
-
-    std::atomic<u64>
-        outstandingJobs_{0};
-
-    std::atomic<u64>
-        nextWorker_{0};
-
-    std::atomic<bool>
-        stopping_{false};
-
+    std::vector<std::unique_ptr<Worker>> workers_;
+    std::atomic<u64> outstandingJobs_{0};
+    std::atomic<u64> runningJobs_{0};
+    std::atomic<u64> nextWorker_{0};
+    std::atomic<bool> stopping_{false};
     std::mutex wakeMutex_;
     u64 workGeneration_{0};
-    std::condition_variable
-        wakeCondition_;
+    std::condition_variable wakeCondition_;
 };
 
-JobSystem::JobSystem(
-    const u32 workerCount)
-    : impl_(
-        std::make_unique<Impl>(
-            workerCount))
+JobSystem::JobSystem(const u32 workerCount)
+    : impl_(std::make_unique<Impl>(workerCount))
 {
 }
 
 JobSystem::~JobSystem() = default;
 
-void JobSystem::Submit(
-    Job job)
+void JobSystem::Submit(Job job)
 {
-    impl_->Submit(
-        JobPriority::Normal,
-        std::move(job));
+    impl_->Submit(JobPriority::Normal, std::move(job));
 }
 
 void JobSystem::Submit(
     const JobPriority priority,
     Job job)
 {
-    impl_->Submit(
-        priority,
-        std::move(job));
+    impl_->Submit(priority, std::move(job));
 }
 
 void JobSystem::Submit(
@@ -659,11 +518,9 @@ void JobSystem::Submit(
         std::move(job));
 }
 
-void JobSystem::Wait(
-    JobGroup& group)
+void JobSystem::Wait(JobGroup& group)
 {
-    impl_->Wait(
-        group.state_);
+    impl_->Wait(group.state_);
 }
 
 void JobSystem::WaitIdle()
@@ -671,9 +528,13 @@ void JobSystem::WaitIdle()
     impl_->WaitIdle();
 }
 
-u32 JobSystem::WorkerCount()
-    const noexcept
+u32 JobSystem::WorkerCount() const noexcept
 {
     return impl_->WorkerCount();
+}
+
+JobSystemTelemetry JobSystem::Telemetry() const noexcept
+{
+    return impl_->Telemetry();
 }
 } // namespace orbit::jobs
