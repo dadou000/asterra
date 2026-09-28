@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioExpansionShell.hpp>
 
+#include <orbit/editor_ui/PanelExtensions.hpp>
 #include <orbit/studio_ui/CommandPaletteModel.hpp>
 #include <orbit/studio_ui/SelectionBreadcrumbs.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
@@ -80,13 +81,34 @@ StudioExpansionShell::StudioExpansionShell(
                 }
         });
 
+        editor_ui::UpsertPanelExtension({
+            .id = "orbit.inspector.providers",
+            .targetTitle = "Inspector",
+            .order = 1'000,
+            .draw =
+                [this](editor_ui::PanelContext& context)
+                {
+                    DrawInspectorExtension(context);
+                }
+        });
+
         attached_ = true;
     }
     catch (...)
     {
+        // Registration is transactional from the shell owner's point of view:
+        // never leave callbacks retaining this object after a partial setup.
+        static_cast<void>(
+            editor_ui::RemovePanelExtension(
+                "orbit.inspector.providers"));
+        static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.navigation"));
+        static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.viewport-authoring"));
+
         // Some headless/model tests construct StudioViewportPanels without an
         // active EditorUi/ImGui context. The model remains usable there and
-        // the live app attaches these bands through normal construction.
+        // the live app attaches these surfaces through normal construction.
         attached_ = false;
     }
 }
@@ -100,6 +122,9 @@ StudioExpansionShell::~StudioExpansionShell()
         return;
     }
 
+    static_cast<void>(
+        editor_ui::RemovePanelExtension(
+            "orbit.inspector.providers"));
     static_cast<void>(
         editor_ui::RemoveShellBand("orbit.navigation"));
     static_cast<void>(
@@ -272,6 +297,26 @@ void StudioExpansionShell::DrawContributions(
         context.SameLine();
         context.Toolbar(actions);
     }
+}
+
+void StudioExpansionShell::DrawInspectorExtension(
+    editor_ui::PanelContext& context)
+{
+    SyncPersistentState();
+
+    const auto providers =
+        GlobalInspectorProviders().Relevant();
+
+    if (providers.empty())
+    {
+        return;
+    }
+
+    context.Separator();
+    context.MutedText("Extensions");
+    static_cast<void>(
+        GlobalInspectorProviders().DrawRelevant(
+            context));
 }
 
 void StudioExpansionShell::DrawNavigationBand(
