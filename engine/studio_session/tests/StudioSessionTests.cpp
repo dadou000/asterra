@@ -198,7 +198,9 @@ void CheckVolumeOutputSimulationCadence(
     Check(!cache.density.empty());
     VolumeCaches().Attach(volume, std::move(cache));
 
-    studio.Clock().Advance(0.5);
+    // Advance simulation time directly. Advance() follows the play state and
+    // the Studio test clock is intentionally paused by default.
+    studio.Clock().StepSeconds(0.5);
     static_cast<void>(studio.Tick(false));
 
     // StudioSession owns the production handoff: raw requests are transient
