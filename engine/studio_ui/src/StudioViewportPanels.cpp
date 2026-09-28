@@ -5,12 +5,14 @@
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
+#include <orbit/studio_ui/StudioShellModel.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <exception>
 #include <format>
@@ -34,25 +36,8 @@ namespace orbit::studio_ui
 {
 namespace
 {
-enum class WorkspaceMode : u8
-{
-    Scene,
-    Planet,
-    Celestial,
-    Simulation,
-    Shading
-};
-
-enum class BrowserMode : u8
-{
-    World,
-    Assets
-};
-
-constexpr editor_ui::PanelId kWorldAssetsPanel{
-    .high = 0x4f52424954535455ULL,
-    .low = 0x574f524c44415354ULL
-};
+using WorkspaceMode = StudioWorkspaceMode;
+using BrowserMode = StudioBrowserMode;
 
 editor_ui::EditorUi* g_workspaceUi = nullptr;
 StudioViewportPanels* g_shellPanels = nullptr;
@@ -126,10 +111,7 @@ void ActivateWorkspace(
     const WorkspaceMode mode)
 {
     g_workspaceMode = mode;
-    g_browserMode =
-        mode == WorkspaceMode::Shading
-            ? BrowserMode::Assets
-            : BrowserMode::World;
+    g_browserMode = DefaultBrowserMode(mode);
 
     switch (mode)
     {
@@ -246,25 +228,22 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
 
 void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
 {
-    if (ui.HasPanel(kWorldAssetsPanel))
+    const auto& contract =
+        kWorldAssetsBrowserContract;
+
+    if (ui.HasPanel(contract.panel))
     {
         return;
     }
 
     ui.RegisterPanel({
-        .id = kWorldAssetsPanel,
+        .id = contract.panel,
         .title = "World / Assets",
-        .defaultOpen = true,
-        .defaultDock = editor_ui::DockRegion::Left,
-        .dockOrder = -100,
-        .minSize = {
-            .width = 260.0F,
-            .height = 300.0F
-        },
-        .defaultSize = {
-            .width = 340.0F,
-            .height = 820.0F
-        },
+        .defaultOpen = contract.defaultOpen,
+        .defaultDock = contract.defaultDock,
+        .dockOrder = contract.dockOrder,
+        .minSize = contract.minSize,
+        .defaultSize = contract.defaultSize,
         .draw =
             [&ui](editor_ui::PanelContext& context)
             {
@@ -276,34 +255,33 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
                 static_cast<void>(
                     ui.ClosePanelByTitle("Material Service"));
 
-                context.Text("Browse");
-                context.SameLine();
+                static constexpr std::array<std::string_view, 2>
+                    kBrowserModes{
+                        "World",
+                        "Assets"
+                    };
 
-                const std::string worldLabel =
+                i32 browserIndex =
                     g_browserMode == BrowserMode::World
-                        ? "[World]##world-assets-world"
-                        : "World##world-assets-world";
-                if (context.Button(worldLabel))
-                {
-                    g_browserMode = BrowserMode::World;
-                }
+                        ? 0
+                        : 1;
 
-                context.SameLine();
-                const std::string assetsLabel =
-                    g_browserMode == BrowserMode::Assets
-                        ? "[Assets]##world-assets-assets"
-                        : "Assets##world-assets-assets";
-                if (context.Button(assetsLabel))
+                if (context.SegmentedControl(
+                        "world-assets-mode",
+                        kBrowserModes,
+                        browserIndex))
                 {
-                    g_browserMode = BrowserMode::Assets;
+                    g_browserMode =
+                        browserIndex == 0
+                            ? BrowserMode::World
+                            : BrowserMode::Assets;
                 }
 
                 context.Separator();
 
                 const std::string_view sourceTitle =
-                    g_browserMode == BrowserMode::World
-                        ? std::string_view{"Explorer"}
-                        : std::string_view{"Material Service"};
+                    BrowserSourcePanelTitle(
+                        g_browserMode);
 
                 if (!ui.DrawPanelContentsByTitle(
                         sourceTitle,
@@ -321,16 +299,7 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
 [[nodiscard]] const char* WorkspaceName(
     const WorkspaceMode mode) noexcept
 {
-    switch (mode)
-    {
-    case WorkspaceMode::Scene: return "Scene";
-    case WorkspaceMode::Planet: return "Planet";
-    case WorkspaceMode::Celestial: return "Celestial";
-    case WorkspaceMode::Simulation: return "Simulation";
-    case WorkspaceMode::Shading: return "Shading";
-    }
-
-    return "Scene";
+    return StudioWorkspaceName(mode).data();
 }
 } // namespace
 
