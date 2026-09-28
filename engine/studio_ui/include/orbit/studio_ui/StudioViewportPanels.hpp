@@ -89,6 +89,16 @@ private:
         editor_ui::PanelContext& context);
     void EnsureContextAuthoring();
 
+    // Permanent Studio shell rows. Workspace navigation and selection-driven
+    // quick actions live here rather than inside whichever center panel happens
+    // to be visible, so Celestial/Shading/viewport changes never hide them.
+    void RegisterShellBands(
+        editor_ui::EditorUi& ui);
+    void DrawWorkspaceBand(
+        editor_ui::PanelContext& context);
+    void DrawContextBand(
+        editor_ui::PanelContext& context);
+
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     std::string status_;
