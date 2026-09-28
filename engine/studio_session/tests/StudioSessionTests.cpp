@@ -132,6 +132,26 @@ void CheckVolumeOutputSimulationCadence(
         volume,
         world_model::kVolumeFieldMask,
         static_cast<i64>(world_model::VolumeField::Density));
+    commands.SetProperty(
+        volume,
+        world_model::kVolumeOutputParticlesEnabled,
+        true);
+    commands.SetProperty(
+        volume,
+        world_model::kVolumeOutputSurfaceDepositsEnabled,
+        false);
+    commands.SetProperty(
+        volume,
+        world_model::kVolumeOutputFieldThreshold,
+        0.1);
+    commands.SetProperty(
+        volume,
+        world_model::kVolumeOutputParticleRate,
+        10.0);
+    commands.SetProperty(
+        volume,
+        world_model::kVolumeOutputParticleBudget,
+        static_cast<i64>(10));
 
     const auto source = commands.CreateObject(
         world_model::kVolumeSourceType,
@@ -177,13 +197,6 @@ void CheckVolumeOutputSimulationCadence(
         bakeSettings);
     Check(!cache.density.empty());
     VolumeCaches().Attach(volume, std::move(cache));
-
-    auto& settings = VolumeOutputs().Settings(volume);
-    settings.particlesEnabled = true;
-    settings.surfaceDepositsEnabled = false;
-    settings.fieldThreshold = 0.1F;
-    settings.particleRatePerSecond = 10.0F;
-    settings.particleBudgetPerStep = 10U;
 
     studio.Clock().Advance(0.5);
     static_cast<void>(studio.Tick(false));
