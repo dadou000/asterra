@@ -1,4 +1,5 @@
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/editor_ui/PanelExtensions.hpp>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -16,8 +17,10 @@ namespace
 {
 ImGuiContext* g_shellContext = nullptr;
 ImGuiID g_newFrameHookId = 0;
+ImGuiID g_endFrameHookId = 0;
 ImGuiID g_shutdownHookId = 0;
 std::vector<ShellBandDefinition> g_shellBands;
+std::vector<PanelExtensionDefinition> g_panelExtensions;
 } // namespace
 
 class ShellBandRegistry
@@ -91,6 +94,76 @@ public:
         return true;
     }
 
+    static void UpsertExtension(
+        PanelExtensionDefinition extension)
+    {
+        if (extension.id.empty() ||
+            extension.targetTitle.empty() ||
+            !extension.draw)
+        {
+            throw std::invalid_argument(
+                "Editor panel extension requires a stable ID, target title and draw callback.");
+        }
+
+        EnsureHooks();
+
+        const auto existing =
+            std::ranges::find_if(
+                g_panelExtensions,
+                [&extension](const PanelExtensionDefinition& candidate)
+                {
+                    return candidate.id == extension.id;
+                });
+
+        if (existing != g_panelExtensions.end())
+        {
+            *existing = std::move(extension);
+        }
+        else
+        {
+            g_panelExtensions.push_back(
+                std::move(extension));
+        }
+
+        std::ranges::sort(
+            g_panelExtensions,
+            [](const PanelExtensionDefinition& a,
+               const PanelExtensionDefinition& b)
+            {
+                if (a.targetTitle != b.targetTitle)
+                {
+                    return a.targetTitle < b.targetTitle;
+                }
+
+                if (a.order != b.order)
+                {
+                    return a.order < b.order;
+                }
+
+                return a.id < b.id;
+            });
+    }
+
+    [[nodiscard]] static bool RemoveExtension(
+        const std::string_view id) noexcept
+    {
+        const auto existing =
+            std::ranges::find_if(
+                g_panelExtensions,
+                [id](const PanelExtensionDefinition& candidate)
+                {
+                    return candidate.id == id;
+                });
+
+        if (existing == g_panelExtensions.end())
+        {
+            return false;
+        }
+
+        g_panelExtensions.erase(existing);
+        return true;
+    }
+
 private:
     static void EnsureHooks()
     {
@@ -100,11 +173,12 @@ private:
         if (context == nullptr)
         {
             throw std::logic_error(
-                "Studio shell bands require an active EditorUi context.");
+                "Studio shell extensions require an active EditorUi context.");
         }
 
         if (g_shellContext == context &&
             g_newFrameHookId != 0 &&
+            g_endFrameHookId != 0 &&
             g_shutdownHookId != 0)
         {
             return;
@@ -114,7 +188,9 @@ private:
         // defensively if a test destroys one context and creates another.
         g_shellContext = context;
         g_shellBands.clear();
+        g_panelExtensions.clear();
         g_newFrameHookId = 0;
+        g_endFrameHookId = 0;
         g_shutdownHookId = 0;
 
         ImGuiContextHook newFrameHook{};
@@ -126,6 +202,20 @@ private:
             ImGui::AddContextHook(
                 context,
                 &newFrameHook);
+
+        // EditorUi has finished drawing registered panels before ImGui's
+        // EndFrame phase. Re-opening an already-active window here appends to
+        // the same ImGui window, which lets extension providers participate in
+        // the real panel without owning its docking or visibility state.
+        ImGuiContextHook endFrameHook{};
+        endFrameHook.Type =
+            ImGuiContextHookType_EndFramePre;
+        endFrameHook.Callback =
+            &ShellBandRegistry::EndFrameHook;
+        g_endFrameHookId =
+            ImGui::AddContextHook(
+                context,
+                &endFrameHook);
 
         ImGuiContextHook shutdownHook{};
         shutdownHook.Type =
@@ -221,6 +311,68 @@ private:
         }
     }
 
+    static void EndFrameHook(
+        ImGuiContext* context,
+        ImGuiContextHook*)
+    {
+        if (context != g_shellContext ||
+            g_panelExtensions.empty())
+        {
+            return;
+        }
+
+        ImGui::SetCurrentContext(context);
+        PanelContext panelContext(
+            false,
+            nullptr);
+
+        std::size_t begin = 0U;
+        while (begin < g_panelExtensions.size())
+        {
+            const std::string& target =
+                g_panelExtensions[begin].targetTitle;
+
+            std::size_t end = begin + 1U;
+            while (end < g_panelExtensions.size() &&
+                   g_panelExtensions[end].targetTitle == target)
+            {
+                ++end;
+            }
+
+            ImGuiWindow* const window =
+                ImGui::FindWindowByName(
+                    target.c_str());
+
+            // `Active` means EditorUi actually began this panel in the current
+            // frame. Closed, hidden-tab and collapsed panels therefore retain
+            // their normal behavior and do not get resurrected by extensions.
+            if (window != nullptr &&
+                window->Active &&
+                !window->Hidden &&
+                !window->Collapsed)
+            {
+                const bool visible =
+                    ImGui::Begin(
+                        target.c_str());
+
+                if (visible)
+                {
+                    for (std::size_t index = begin;
+                         index < end;
+                         ++index)
+                    {
+                        g_panelExtensions[index].draw(
+                            panelContext);
+                    }
+                }
+
+                ImGui::End();
+            }
+
+            begin = end;
+        }
+    }
+
     static void ShutdownHook(
         ImGuiContext* context,
         ImGuiContextHook*)
@@ -231,8 +383,10 @@ private:
         }
 
         g_shellBands.clear();
+        g_panelExtensions.clear();
         g_shellContext = nullptr;
         g_newFrameHookId = 0;
+        g_endFrameHookId = 0;
         g_shutdownHookId = 0;
     }
 };
@@ -248,5 +402,18 @@ bool RemoveShellBand(
     const std::string_view id) noexcept
 {
     return ShellBandRegistry::Remove(id);
+}
+
+void UpsertPanelExtension(
+    PanelExtensionDefinition extension)
+{
+    ShellBandRegistry::UpsertExtension(
+        std::move(extension));
+}
+
+bool RemovePanelExtension(
+    const std::string_view id) noexcept
+{
+    return ShellBandRegistry::RemoveExtension(id);
 }
 } // namespace orbit::editor_ui
