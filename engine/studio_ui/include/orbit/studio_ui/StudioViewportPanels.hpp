@@ -83,10 +83,10 @@ private:
     void DrawContextInspector(
         editor_ui::PanelContext& context);
 
-    // Permanent Studio shell rows. Workspace navigation and selection-driven
-    // quick actions stay at the top; the activity row stays at the bottom and
-    // controls the existing bottom-docked views without duplicating their
-    // build/log/diagnostic state.
+    // StudioExpansionShell owns the two permanent top rows and calls the
+    // workspace/context fragments below. This class registers only the bottom
+    // activity/status strip, which controls existing bottom-docked views
+    // without duplicating their build/log/diagnostic state.
     void RegisterShellBands(
         editor_ui::EditorUi& ui);
     void DrawWorkspaceBand(
@@ -130,8 +130,8 @@ private:
     // shared provider registry used by canonical Properties.
     bool contextualAdvancedProperties_{false};
 
-    // Kept separate from the already-large viewport implementation. It owns
-    // only shell presentation state and plugin contribution registries.
+    // Owns navigation/command + contextual/viewport presentation rows,
+    // project-local shell persistence and plugin contribution registries.
     StudioExpansionShell expansion_{*this};
 };
 } // namespace orbit::studio_ui
