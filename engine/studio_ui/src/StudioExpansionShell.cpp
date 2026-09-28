@@ -3,17 +3,23 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/editor_ui/PanelExtensions.hpp>
+#include <orbit/paths/PathNetwork.hpp>
 #include <orbit/studio_ui/CommandPaletteModel.hpp>
 #include <orbit/studio_ui/SelectionBreadcrumbs.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
+#include <orbit/terrain_debug/TerrainDebugField.hpp>
+#include <orbit/terrain_debug/TerrainDebugSeam.hpp>
+#include <orbit/world_model/VisibilityProxyBinding.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
 #include <array>
 #include <exception>
 #include <format>
+#include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,6 +53,18 @@ constexpr std::array<std::string_view, 6> kBiomeOperations{
     "Max"
 };
 
+constexpr std::array<std::string_view, 2> kControlledViewports{
+    "Primary",
+    "Body Map"
+};
+
+constexpr std::array<std::string_view, 4> kSurfaceViews{
+    "Lit",
+    "Albedo",
+    "Normal",
+    "Emission"
+};
+
 [[nodiscard]] bool IsQuickCreateLabel(
     const std::string_view label) noexcept
 {
@@ -61,7 +79,246 @@ constexpr std::array<std::string_view, 6> kBiomeOperations{
     return tool == StudioTerrainAuthoringTool::Canyon ||
         tool == StudioTerrainAuthoringTool::Ridge;
 }
+
+[[nodiscard]] const char* ViewportModeName(
+    const studio_session::ViewportMode mode) noexcept
+{
+    switch (mode)
+    {
+    case studio_session::ViewportMode::Perspective: return "Perspective";
+    case studio_session::ViewportMode::BodyMap: return "Body Map";
+    case studio_session::ViewportMode::Debug: return "Debug";
+    case studio_session::ViewportMode::System: return "System";
+    }
+    return "Perspective";
+}
+
+[[nodiscard]] const char* EdgeName(
+    const world::TileEdge edge) noexcept
+{
+    switch (edge)
+    {
+    case world::TileEdge::North: return "N";
+    case world::TileEdge::East: return "E";
+    case world::TileEdge::South: return "S";
+    case world::TileEdge::West: return "W";
+    }
+    return "?";
+}
+
+[[nodiscard]] const char* CubeFaceName(
+    const world::CubeFace face) noexcept
+{
+    switch (face)
+    {
+    case world::CubeFace::PositiveX: return "+X";
+    case world::CubeFace::NegativeX: return "-X";
+    case world::CubeFace::PositiveY: return "+Y";
+    case world::CubeFace::NegativeY: return "-Y";
+    case world::CubeFace::PositiveZ: return "+Z";
+    case world::CubeFace::NegativeZ: return "-Z";
+    }
+    return "?";
+}
 } // namespace
+
+bool StudioViewportPanels::CanCreateAtViewport(
+    const std::string_view id) const noexcept
+{
+    if (views_ == nullptr ||
+        session_ == nullptr ||
+        !session_->World().HasWorld() ||
+        views_->Find(id) == nullptr)
+    {
+        return false;
+    }
+
+    const auto* target =
+        session_->Viewports().Find(id);
+    return target != nullptr &&
+        target->target.has_value();
+}
+
+void StudioViewportPanels::CreateLocalLightAtViewport(
+    const std::string_view id,
+    const bool spot)
+{
+    if (!CanCreateAtViewport(id))
+    {
+        throw std::runtime_error(
+            "A targeted viewport is required to add a local light.");
+    }
+
+    auto* renderView = views_->Find(id);
+    const auto* target = session_->Viewports().Find(id);
+    auto& world = session_->World();
+
+    const auto bodyObject =
+        world.Universe().ObjectForBody(
+            target->target->body);
+
+    if (!bodyObject.has_value())
+    {
+        throw std::runtime_error(
+            "Target body has no semantic object for local-light parenting.");
+    }
+
+    auto& commands = world.Commands();
+    commands.BeginTransaction(
+        spot ? "Add Spot Light" : "Add Point Light");
+
+    scene::ObjectId created{};
+    try
+    {
+        created = commands.CreateObject(
+            spot
+                ? world_model::kSpotLightType
+                : world_model::kPointLightType,
+            spot ? "Spot Light" : "Point Light",
+            *bodyObject);
+
+        const auto& camera = renderView->Camera();
+        const math::Double3 position{
+            camera.localPositionMeters.x +
+                static_cast<f64>(camera.forward.x) * 5.0,
+            camera.localPositionMeters.y +
+                static_cast<f64>(camera.forward.y) * 5.0,
+            camera.localPositionMeters.z +
+                static_cast<f64>(camera.forward.z) * 5.0
+        };
+
+        commands.SetProperty(
+            created,
+            world_model::kLightPositionMeters,
+            position);
+
+        if (spot)
+        {
+            commands.SetProperty(
+                created,
+                world_model::kLightDirection,
+                math::Double3{
+                    static_cast<f64>(camera.forward.x),
+                    static_cast<f64>(camera.forward.y),
+                    static_cast<f64>(camera.forward.z)
+                });
+        }
+
+        commands.CommitTransaction();
+    }
+    catch (...)
+    {
+        if (commands.HasActiveTransaction())
+        {
+            commands.RollbackTransaction();
+        }
+        throw;
+    }
+
+    const std::array selected{created};
+    world.Selection().Set(
+        std::span<const scene::ObjectId>(selected));
+    status_ = spot
+        ? "Spot light created and selected."
+        : "Point light created and selected.";
+}
+
+void StudioViewportPanels::CreateVisibilityProxyAtViewport(
+    const std::string_view id,
+    const bool box)
+{
+    if (!CanCreateAtViewport(id))
+    {
+        throw std::runtime_error(
+            "A targeted viewport is required to add a visibility proxy.");
+    }
+
+    auto* renderView = views_->Find(id);
+    const auto* target = session_->Viewports().Find(id);
+    auto& world = session_->World();
+
+    const auto bodyObject =
+        world.Universe().ObjectForBody(
+            target->target->body);
+
+    if (!bodyObject.has_value())
+    {
+        throw std::runtime_error(
+            "Target body has no semantic object for visibility-proxy parenting.");
+    }
+
+    auto& commands = world.Commands();
+    commands.BeginTransaction(
+        box
+            ? "Add Box Visibility Proxy"
+            : "Add Sphere Visibility Proxy");
+
+    scene::ObjectId created{};
+    try
+    {
+        created = commands.CreateObject(
+            world_model::kVisibilityProxyType,
+            box
+                ? "Box Visibility Proxy"
+                : "Sphere Visibility Proxy",
+            *bodyObject);
+
+        const auto& camera = renderView->Camera();
+        const math::Double3 position{
+            camera.localPositionMeters.x +
+                static_cast<f64>(camera.forward.x) * 5.0,
+            camera.localPositionMeters.y +
+                static_cast<f64>(camera.forward.y) * 5.0,
+            camera.localPositionMeters.z +
+                static_cast<f64>(camera.forward.z) * 5.0
+        };
+
+        commands.SetProperty(
+            created,
+            world_model::kVisibilityProxyPositionMeters,
+            position);
+
+        if (box)
+        {
+            commands.SetProperty(
+                created,
+                world_model::kVisibilityProxyShape,
+                i64{1});
+            commands.SetProperty(
+                created,
+                world_model::kVisibilityProxyHalfExtentsMeters,
+                math::Double3{1.0, 1.0, 1.0});
+        }
+        else
+        {
+            commands.SetProperty(
+                created,
+                world_model::kVisibilityProxyShape,
+                i64{0});
+            commands.SetProperty(
+                created,
+                world_model::kVisibilityProxyRadiusMeters,
+                1.0);
+        }
+
+        commands.CommitTransaction();
+    }
+    catch (...)
+    {
+        if (commands.HasActiveTransaction())
+        {
+            commands.RollbackTransaction();
+        }
+        throw;
+    }
+
+    const std::array selected{created};
+    world.Selection().Set(
+        std::span<const scene::ObjectId>(selected));
+    status_ = box
+        ? "Box visibility proxy created and selected."
+        : "Sphere visibility proxy created and selected.";
+}
 
 InspectorProviderRegistry& GlobalInspectorProviders() noexcept
 {
@@ -119,6 +376,42 @@ StudioExpansionShell::StudioExpansionShell(
                 }
         });
 
+        GlobalInspectorProviders().Upsert({
+            .id = "orbit.viewport.target",
+            .owner = "orbit",
+            .title = "Viewport Target",
+            .order = 20,
+            .defaultOpen = false,
+            .relevant =
+                [this]
+                {
+                    return ViewportControlsRelevant();
+                },
+            .draw =
+                [this](editor_ui::PanelContext& context)
+                {
+                    DrawViewportTargetProperties(context);
+                }
+        });
+
+        GlobalInspectorProviders().Upsert({
+            .id = "orbit.path.bezier",
+            .owner = "orbit",
+            .title = "Bezier Path",
+            .order = 60,
+            .defaultOpen = true,
+            .relevant =
+                [this]
+                {
+                    return BezierContextRelevant();
+                },
+            .draw =
+                [this](editor_ui::PanelContext& context)
+                {
+                    DrawBezierProperties(context);
+                }
+        });
+
         // Terrain used to occupy most of the permanent context row with nine
         // buttons. Keep one selector in the shell and move only the active
         // tool's parameters into canonical Properties.
@@ -140,6 +433,24 @@ StudioExpansionShell::StudioExpansionShell(
                 }
         });
 
+        GlobalInspectorProviders().Upsert({
+            .id = "orbit.viewport.diagnostics",
+            .owner = "orbit",
+            .title = "Viewport Diagnostics",
+            .order = 120,
+            .defaultOpen = false,
+            .relevant =
+                [this]
+                {
+                    return ViewportControlsRelevant();
+                },
+            .draw =
+                [this](editor_ui::PanelContext& context)
+                {
+                    DrawViewportDiagnosticsProperties(context);
+                }
+        });
+
         attached_ = true;
     }
     catch (...)
@@ -148,7 +459,16 @@ StudioExpansionShell::StudioExpansionShell(
         // never leave callbacks retaining this object after a partial setup.
         static_cast<void>(
             GlobalInspectorProviders().Remove(
+                "orbit.viewport.diagnostics"));
+        static_cast<void>(
+            GlobalInspectorProviders().Remove(
                 "orbit.terrain.active-tool"));
+        static_cast<void>(
+            GlobalInspectorProviders().Remove(
+                "orbit.path.bezier"));
+        static_cast<void>(
+            GlobalInspectorProviders().Remove(
+                "orbit.viewport.target"));
         static_cast<void>(
             editor_ui::RemovePanelExtension(
                 "orbit.inspector.providers"));
@@ -175,7 +495,16 @@ StudioExpansionShell::~StudioExpansionShell()
 
     static_cast<void>(
         GlobalInspectorProviders().Remove(
+            "orbit.viewport.diagnostics"));
+    static_cast<void>(
+        GlobalInspectorProviders().Remove(
             "orbit.terrain.active-tool"));
+    static_cast<void>(
+        GlobalInspectorProviders().Remove(
+            "orbit.path.bezier"));
+    static_cast<void>(
+        GlobalInspectorProviders().Remove(
+            "orbit.viewport.target"));
     static_cast<void>(
         editor_ui::RemovePanelExtension(
             "orbit.inspector.providers"));
@@ -371,6 +700,567 @@ void StudioExpansionShell::DrawInspectorExtension(
     static_cast<void>(
         GlobalInspectorProviders().DrawRelevant(
             context));
+}
+
+std::string_view StudioExpansionShell::SelectedViewportId() const noexcept
+{
+    return viewportControlIndex_ == 1
+        ? std::string_view{"studio.map"}
+        : std::string_view{"studio.primary"};
+}
+
+bool StudioExpansionShell::ViewportControlsRelevant() const noexcept
+{
+    if (owner_ == nullptr ||
+        owner_->views_ == nullptr ||
+        owner_->session_ == nullptr ||
+        !owner_->session_->World().HasWorld())
+    {
+        return false;
+    }
+
+    const std::string_view id = SelectedViewportId();
+    return owner_->views_->Find(id) != nullptr &&
+        owner_->session_->Viewports().Find(id) != nullptr;
+}
+
+bool StudioExpansionShell::BezierContextRelevant() const noexcept
+{
+    if (owner_ == nullptr ||
+        owner_->session_ == nullptr ||
+        !owner_->session_->World().HasWorld())
+    {
+        return false;
+    }
+
+    auto& paths = owner_->session_->PathNetwork().Service();
+    for (const auto object :
+         owner_->session_->World().Selection().Ordered())
+    {
+        const auto edge = paths.FindEdge(object);
+        if (edge.has_value() &&
+            edge->mode == paths::EdgeMode::Bezier)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void StudioExpansionShell::DrawBuiltInQuickCreate(
+    editor_ui::PanelContext& context)
+{
+    if (owner_ == nullptr)
+    {
+        return;
+    }
+
+    const std::string viewportId{SelectedViewportId()};
+    const bool enabled =
+        owner_->CanCreateAtViewport(viewportId);
+    const std::string disabledReason =
+        enabled
+            ? std::string{}
+            : std::string{
+                "The controlled viewport must target a world body."};
+
+    std::vector<editor_ui::ActionPresentation> actions;
+    actions.reserve(4U);
+
+    actions.push_back({
+        .label = "Point Light##quick-add-point-light",
+        .enabled = enabled,
+        .disabledReason = disabledReason,
+        .invoke =
+            [this, viewportId]
+            {
+                try
+                {
+                    owner_->CreateLocalLightAtViewport(
+                        viewportId,
+                        false);
+                    quickCreateOpen_ = false;
+                }
+                catch (const std::exception& exception)
+                {
+                    owner_->status_ = exception.what();
+                }
+            }
+    });
+    actions.push_back({
+        .label = "Spot Light##quick-add-spot-light",
+        .enabled = enabled,
+        .disabledReason = disabledReason,
+        .invoke =
+            [this, viewportId]
+            {
+                try
+                {
+                    owner_->CreateLocalLightAtViewport(
+                        viewportId,
+                        true);
+                    quickCreateOpen_ = false;
+                }
+                catch (const std::exception& exception)
+                {
+                    owner_->status_ = exception.what();
+                }
+            }
+    });
+    actions.push_back({
+        .label = "Sphere Proxy##quick-add-sphere-proxy",
+        .enabled = enabled,
+        .disabledReason = disabledReason,
+        .invoke =
+            [this, viewportId]
+            {
+                try
+                {
+                    owner_->CreateVisibilityProxyAtViewport(
+                        viewportId,
+                        false);
+                    quickCreateOpen_ = false;
+                }
+                catch (const std::exception& exception)
+                {
+                    owner_->status_ = exception.what();
+                }
+            }
+    });
+    actions.push_back({
+        .label = "Box Proxy##quick-add-box-proxy",
+        .enabled = enabled,
+        .disabledReason = disabledReason,
+        .invoke =
+            [this, viewportId]
+            {
+                try
+                {
+                    owner_->CreateVisibilityProxyAtViewport(
+                        viewportId,
+                        true);
+                    quickCreateOpen_ = false;
+                }
+                catch (const std::exception& exception)
+                {
+                    owner_->status_ = exception.what();
+                }
+            }
+    });
+
+    context.SameLine();
+    context.Toolbar(actions);
+}
+
+void StudioExpansionShell::DrawViewportTargetProperties(
+    editor_ui::PanelContext& context)
+{
+    if (!ViewportControlsRelevant())
+    {
+        return;
+    }
+
+    const std::string_view id = SelectedViewportId();
+    auto& session = *owner_->session_;
+    const auto* target = session.Viewports().Find(id);
+
+    context.Text(
+        viewportControlIndex_ == 1
+            ? "Controlled viewport: Body Map / Debug View"
+            : "Controlled viewport: Primary");
+    context.MutedText(
+        std::format(
+            "Mode: {}",
+            ViewportModeName(target->mode)));
+
+    if (context.Button("Follow Active Body##viewport-follow-active"))
+    {
+        try
+        {
+            session.Viewports().FollowActiveBody(id);
+            owner_->status_ =
+                "Controlled viewport now follows the shared active body.";
+        }
+        catch (const std::exception& exception)
+        {
+            owner_->status_ = exception.what();
+        }
+    }
+
+    if (target->target.has_value())
+    {
+        context.KeyValue("Target", target->target->name);
+        context.KeyValue("Body", target->target->body.ToString());
+        context.KeyValue("Frame", target->target->frame.ToString());
+
+        const auto bodyObject =
+            session.World().Universe().ObjectForBody(
+                target->target->body);
+        if (bodyObject.has_value())
+        {
+            const auto proxies =
+                world_model::ResolveVisibilityProxies(
+                    session.World().Objects(),
+                    *bodyObject);
+            const auto dynamicCount =
+                std::count_if(
+                    proxies.begin(),
+                    proxies.end(),
+                    [](const auto& proxy)
+                    {
+                        return proxy.dynamic;
+                    });
+            context.KeyValue(
+                "Visibility proxies",
+                std::format(
+                    "{} authored · {} dynamic",
+                    proxies.size(),
+                    dynamicCount));
+        }
+    }
+    else
+    {
+        context.MutedText("Target: none");
+    }
+
+    context.Separator();
+    context.MutedText("Pin body");
+
+    const auto& universe = session.World().Universe();
+    const auto& bodies = universe.Bodies();
+    for (const auto systemId : bodies.Systems())
+    {
+        const auto* system = bodies.FindSystem(systemId);
+        if (system != nullptr)
+        {
+            context.Text(system->name);
+        }
+
+        for (const auto bodyId : bodies.Bodies(systemId))
+        {
+            const auto* body = bodies.FindBody(bodyId);
+            const auto semantic = universe.ObjectForBody(bodyId);
+            if (body == nullptr || !semantic.has_value())
+            {
+                continue;
+            }
+
+            const bool selected =
+                target->target.has_value() &&
+                target->target->semanticObject == *semantic;
+            std::string label = body->name;
+            label += "##viewport-target-body:";
+            label += semantic->ToString();
+
+            if (context.Selectable(label, selected))
+            {
+                try
+                {
+                    session.Viewports().PinToObject(
+                        id,
+                        *semantic);
+                    owner_->status_ =
+                        "Viewport pinned to " + body->name + ".";
+                }
+                catch (const std::exception& exception)
+                {
+                    owner_->status_ = exception.what();
+                }
+            }
+        }
+    }
+}
+
+void StudioExpansionShell::DrawBezierProperties(
+    editor_ui::PanelContext& context)
+{
+    if (!BezierContextRelevant())
+    {
+        return;
+    }
+
+    auto& paths = owner_->session_->PathNetwork().Service();
+    for (const auto object :
+         owner_->session_->World().Selection().Ordered())
+    {
+        const auto edge = paths.FindEdge(object);
+        if (!edge.has_value() ||
+            edge->mode != paths::EdgeMode::Bezier)
+        {
+            continue;
+        }
+
+        math::Double3 startHandle = edge->startHandleMeters;
+        math::Double3 endHandle = edge->endHandleMeters;
+
+        bool changed = context.InputDouble3(
+            "Start Handle (m)##bezier-start-handle",
+            startHandle);
+        changed = context.InputDouble3(
+            "End Handle (m)##bezier-end-handle",
+            endHandle) || changed;
+
+        if (changed)
+        {
+            try
+            {
+                paths.SetBezierHandles(
+                    edge->id,
+                    startHandle,
+                    endHandle);
+                owner_->status_ =
+                    "Bezier handles updated. Undo/redo uses the shared command transaction stack.";
+            }
+            catch (const std::exception& exception)
+            {
+                owner_->status_ = exception.what();
+            }
+        }
+        return;
+    }
+}
+
+void StudioExpansionShell::DrawViewportDiagnosticsProperties(
+    editor_ui::PanelContext& context)
+{
+    if (!ViewportControlsRelevant())
+    {
+        return;
+    }
+
+    const std::string_view id = SelectedViewportId();
+    const auto* target = owner_->session_->Viewports().Find(id);
+
+    context.Text(
+        viewportControlIndex_ == 1
+            ? "Diagnostics: Body Map / Debug View"
+            : "Diagnostics: Primary");
+
+    if (target->mode == studio_session::ViewportMode::Perspective)
+    {
+        auto diagnostics =
+            owner_->views_->TerrainDiagnosticOverlays(id);
+        bool changed = false;
+
+        const auto toggle =
+            [&context, &changed](
+                const char* label,
+                bool& value)
+            {
+                changed =
+                    context.Checkbox(label, value) || changed;
+            };
+
+        toggle(
+            "Dirty page bounds##diag-dirty",
+            diagnostics.dirtyPageBounds);
+        toggle(
+            "Build / upload states##diag-build",
+            diagnostics.buildStates);
+        toggle(
+            "Physical LOD##diag-physical-lod",
+            diagnostics.physicalLod);
+        toggle(
+            "Clipmap rings##diag-clipmap-rings",
+            diagnostics.clipmapRings);
+        toggle(
+            "Cache status##diag-cache",
+            diagnostics.cacheStatus);
+        toggle(
+            "Authored constraints##diag-constraints",
+            diagnostics.authoredConstraints);
+        toggle(
+            "Biome weights##diag-biome",
+            diagnostics.biomeWeights);
+        toggle(
+            "Process masks##diag-process",
+            diagnostics.processMasks);
+        toggle(
+            "Drainage vectors##diag-drainage",
+            diagnostics.drainageVectors);
+
+        if (changed)
+        {
+            owner_->views_->SetTerrainDiagnosticOverlays(
+                id,
+                diagnostics);
+        }
+
+        if (diagnostics.cacheStatus)
+        {
+            const auto runtime =
+                owner_->session_->TerrainRuntime().Capture(id);
+            if (runtime.has_value())
+            {
+                const auto* services =
+                    owner_->session_->World().Surfaces().ServicesForBody(
+                        runtime->body);
+                if (services != nullptr)
+                {
+                    const auto stats = services->Cache().Stats();
+                    context.Text(
+                        std::format(
+                            "M26 cache: {} pages · {} bytes · hits {} · misses {} · evictions {}",
+                            stats.residentPages,
+                            stats.residentBytes,
+                            stats.hits,
+                            stats.misses,
+                            stats.evictions));
+                }
+
+                const auto rebuild =
+                    owner_->session_->TerrainPhysicalPages().BodyStatus(
+                        runtime->planet.id);
+                if (rebuild.has_value())
+                {
+                    context.Text(
+                        std::format(
+                            "M06 pages: {} dirty · {} queued · {} building · {} uploading · {} ready",
+                            rebuild->dirtyPages,
+                            rebuild->queuedPages,
+                            rebuild->buildingPages,
+                            rebuild->uploadingPages,
+                            rebuild->readyPages));
+                }
+            }
+        }
+        return;
+    }
+
+    if (target->mode != studio_session::ViewportMode::Debug)
+    {
+        context.MutedText(
+            "Terrain diagnostics are available in Perspective or Debug mode.");
+        return;
+    }
+
+    const auto catalog = terrain_debug::FieldCatalog();
+    std::vector<std::string_view> fieldNames;
+    fieldNames.reserve(catalog.size());
+
+    i32 selectedFieldIndex = 0;
+    const auto selectedField = owner_->views_->DebugField(id);
+    for (std::size_t index = 0U; index < catalog.size(); ++index)
+    {
+        fieldNames.push_back(catalog[index].name);
+        if (catalog[index].field == selectedField)
+        {
+            selectedFieldIndex = static_cast<i32>(index);
+        }
+    }
+
+    if (!fieldNames.empty() &&
+        context.Combo(
+            "Field##viewport-debug-field",
+            fieldNames,
+            selectedFieldIndex))
+    {
+        selectedFieldIndex = std::clamp<i32>(
+            selectedFieldIndex,
+            0,
+            static_cast<i32>(catalog.size()) - 1);
+        owner_->views_->SetDebugField(
+            id,
+            catalog[static_cast<std::size_t>(selectedFieldIndex)].field);
+    }
+
+    i64 pageLevel = static_cast<i64>(
+        owner_->views_->DebugPhysicalPageLevel(id));
+    if (context.InputInteger(
+            "Physical page tile level##viewport-debug-page-level",
+            pageLevel))
+    {
+        pageLevel = std::clamp<i64>(pageLevel, 0, 30);
+        owner_->views_->SetDebugPhysicalPageLevel(
+            id,
+            static_cast<u8>(pageLevel));
+        owner_->status_ =
+            "Physical page level changed; the center page will be reselected.";
+    }
+
+    const auto selectedPage = owner_->views_->DebugPhysicalPage(id);
+    if (selectedPage.has_value())
+    {
+        const auto& tile = selectedPage->address.tile;
+        context.Text(
+            std::format(
+                "Physical page: {} L{} ({}, {})",
+                CubeFaceName(tile.face),
+                tile.level,
+                tile.x,
+                tile.y));
+    }
+    else
+    {
+        context.MutedText(
+            "Physical page: none · click terrain in the debug viewport.");
+    }
+
+    const auto livePage = owner_->views_->LiveDebugPage(id);
+    if (livePage == nullptr)
+    {
+        context.MutedText(
+            "Live products: no physical-page snapshot published yet.");
+        return;
+    }
+
+    const auto field = owner_->views_->DebugField(id);
+    context.Text(
+        std::format(
+            "Live products: ready · physical LOD {} · {}x{}",
+            livePage->Stamp().physicalLod,
+            livePage->Width(),
+            livePage->Height()));
+    context.Text(
+        livePage->Has(field)
+            ? "Selected field: available"
+            : "Selected field: not published by the live page producer");
+
+    if (!livePage->Has(field))
+    {
+        return;
+    }
+
+    const auto seams =
+        terrain_debug::InspectTerrainDebugSeams(
+            *livePage,
+            field,
+            owner_->session_->TerrainDebugPages());
+
+    context.MutedText("Physical page seams");
+    for (const auto& seam : seams)
+    {
+        if (seam.state ==
+            terrain_debug::TerrainDebugSeamState::ValueMismatch)
+        {
+            context.Text(
+                std::format(
+                    "{}: {} ({}/{} samples, max diff {:.6g})",
+                    EdgeName(seam.edge),
+                    terrain_debug::TerrainDebugSeamStateName(seam.state),
+                    seam.comparison.mismatchedSamples,
+                    seam.comparison.samplesCompared,
+                    seam.comparison.maximumDifference));
+        }
+        else
+        {
+            context.Text(
+                std::format(
+                    "{}: {}",
+                    EdgeName(seam.edge),
+                    terrain_debug::TerrainDebugSeamStateName(seam.state)));
+        }
+    }
+
+    const auto& descriptor = terrain_debug::Descriptor(field);
+    context.MutedText("Upstream provenance");
+    for (const auto stage : descriptor.upstream)
+    {
+        context.Text(
+            std::format(
+                "- {}",
+                terrain_debug::StageName(stage)));
+    }
 }
 
 bool StudioExpansionShell::TerrainContextRelevant() const noexcept
@@ -862,6 +1752,8 @@ void StudioExpansionShell::DrawNavigationBand(
 
     if (quickCreateOpen_)
     {
+        DrawBuiltInQuickCreate(context);
+
         std::size_t shown = 0U;
         for (const auto& entry : palette)
         {
@@ -896,7 +1788,7 @@ void StudioExpansionShell::DrawNavigationBand(
                 }
             }
 
-            if (++shown >= 3U)
+            if (++shown >= 2U)
             {
                 break;
             }
@@ -941,6 +1833,71 @@ void StudioExpansionShell::DrawViewportBand(
     context.MutedText("|");
     context.SameLine();
     context.Text("View");
+    context.SameLine();
+
+    viewportControlIndex_ = std::clamp(viewportControlIndex_, 0, 1);
+    static_cast<void>(
+        context.Combo(
+            "##controlled-viewport",
+            kControlledViewports,
+            viewportControlIndex_));
+
+    if (ViewportControlsRelevant())
+    {
+        const std::string_view id = SelectedViewportId();
+        const auto* target = owner_->session_->Viewports().Find(id);
+
+        context.SameLine();
+        if (target != nullptr &&
+            target->mode == studio_session::ViewportMode::Debug)
+        {
+            const auto catalog = terrain_debug::FieldCatalog();
+            std::vector<std::string_view> names;
+            names.reserve(catalog.size());
+
+            i32 selected = 0;
+            const auto field = owner_->views_->DebugField(id);
+            for (std::size_t index = 0U; index < catalog.size(); ++index)
+            {
+                names.push_back(catalog[index].name);
+                if (catalog[index].field == field)
+                {
+                    selected = static_cast<i32>(index);
+                }
+            }
+
+            if (!names.empty() &&
+                context.Combo(
+                    "##viewport-debug-field-compact",
+                    names,
+                    selected))
+            {
+                selected = std::clamp<i32>(
+                    selected,
+                    0,
+                    static_cast<i32>(catalog.size()) - 1);
+                owner_->views_->SetDebugField(
+                    id,
+                    catalog[static_cast<std::size_t>(selected)].field);
+            }
+        }
+        else
+        {
+            i32 surface = static_cast<i32>(
+                owner_->views_->SurfaceDebugMode(id));
+            if (context.Combo(
+                    "##surface-debug-mode",
+                    kSurfaceViews,
+                    surface))
+            {
+                surface = std::clamp(surface, 0, 3);
+                owner_->views_->SetSurfaceDebugMode(
+                    id,
+                    static_cast<lighting::SurfaceDebugMode>(surface));
+            }
+        }
+    }
+
     context.SameLine();
 
     static constexpr std::array<std::string_view, 4>
