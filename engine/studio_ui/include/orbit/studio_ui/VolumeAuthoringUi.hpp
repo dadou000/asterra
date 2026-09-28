@@ -2,6 +2,7 @@
 
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/StudioInspectorExtension.hpp>
 #include <orbit/studio_ui/V007ValidationScenarios.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
@@ -142,6 +143,25 @@ private:
     };
 
     ContextRegistration contextRegistration_{this};
+
+    StudioInspectorProviderRegistration inspectorProvider_{
+        InspectorProviderDefinition{
+            .id = "orbit.volume-authoring",
+            .owner = "orbit",
+            .title = "Volume Tools",
+            .order = 120,
+            .defaultOpen = true,
+            .relevant =
+                [this]()
+                {
+                    return RelevantToSelection();
+                },
+            .draw =
+                [this](editor_ui::PanelContext& context)
+                {
+                    Draw(context);
+                }
+        }};
 
     // M43 extends the normal Studio command catalog/palette with the named
     // validation scenarios. Member order follows session_/renderer_ so the
