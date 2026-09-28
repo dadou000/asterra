@@ -10,6 +10,7 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
+#include <algorithm>
 #include <exception>
 #include <format>
 #include <initializer_list>
@@ -149,8 +150,6 @@ void ActivateWorkspace(
                 "Build",
                 "Output"
             });
-        // Inspector stays available as the persistent workspace switcher and
-        // contextual object surface even when Shading owns the center.
         OpenPanels(
             ui,
             {"Shading", "Shading Materials", "Inspector"});
@@ -199,6 +198,13 @@ void DrawWorkspaceStrip(
 
 void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
 {
+    // Register() and RegisterSecondary() can both be used by the same Studio
+    // shell. Keep one command surface instead of duplicating menu entries.
+    if (g_workspaceUi == &ui)
+    {
+        return;
+    }
+
     g_workspaceUi = &ui;
 
     ui.RegisterMenuAction({
@@ -256,8 +262,24 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         }
     });
 }
+
+[[nodiscard]] const char* WorkspaceName(
+    const WorkspaceMode mode) noexcept
+{
+    switch (mode)
+    {
+    case WorkspaceMode::Scene: return "Scene";
+    case WorkspaceMode::Planet: return "Planet";
+    case WorkspaceMode::Celestial: return "Celestial";
+    case WorkspaceMode::Simulation: return "Simulation";
+    case WorkspaceMode::Shading: return "Shading";
+    }
+
+    return "Scene";
+}
 } // namespace
 
+StudioViewportPanels::StudioViewportPanels() = default;
 StudioViewportPanels::~StudioViewportPanels() = default;
 
 void StudioViewportPanels::EnsureContextAuthoring()
@@ -285,8 +307,7 @@ void StudioViewportPanels::EnsureContextAuthoring()
             *session_);
     contextualSession_ =
         session_;
-    contextualAdvancedProperties_ =
-        false;
+    contextualAdvancedProperties_ = false;
 }
 
 void StudioViewportPanels::RegisterContextInspector(
@@ -324,8 +345,6 @@ void StudioViewportPanels::DrawContextInspector(
 {
     EnsureContextAuthoring();
 
-    // Celestial and Shading replace the normal scene viewport, so keep the
-    // workspace switcher visible at the top of Inspector in those modes.
     if (g_workspaceMode == WorkspaceMode::Celestial ||
         g_workspaceMode == WorkspaceMode::Shading)
     {
@@ -341,13 +360,9 @@ void StudioViewportPanels::DrawContextInspector(
         return;
     }
 
-    auto& world =
-        session_->World();
-    auto& inspector =
-        world.Inspector();
-
-    const auto selected =
-        inspector.SelectedObjects();
+    auto& world = session_->World();
+    auto& inspector = world.Inspector();
+    const auto selected = inspector.SelectedObjects();
 
     context.Heading("Inspector");
 
@@ -361,12 +376,9 @@ void StudioViewportPanels::DrawContextInspector(
 
     if (selected.size() == 1U)
     {
-        const auto& record =
-            selected.front();
-
+        const auto& record = selected.front();
         context.Text(record.name);
-        context.MutedText(
-            record.type.ToString());
+        context.MutedText(record.type.ToString());
     }
     else
     {
@@ -393,8 +405,7 @@ void StudioViewportPanels::DrawContextInspector(
 
         context.Separator();
 
-        for (auto property :
-             inspector.CommonProperties())
+        for (auto property : inspector.CommonProperties())
         {
             if (property.schema.advanced &&
                 !contextualAdvancedProperties_)
@@ -435,50 +446,37 @@ void StudioViewportPanels::DrawContextInspector(
                 [&](auto& value)
                 {
                     using Value =
-                        std::decay_t<
-                            decltype(value)>;
+                        std::decay_t<decltype(value)>;
 
                     if constexpr (
                         std::is_same_v<Value, bool>)
                     {
                         changed =
-                            context.Checkbox(
-                                label,
-                                value);
+                            context.Checkbox(label, value);
                     }
                     else if constexpr (
                         std::is_same_v<Value, i64>)
                     {
                         changed =
-                            context.InputInteger(
-                                label,
-                                value);
+                            context.InputInteger(label, value);
                     }
                     else if constexpr (
                         std::is_same_v<Value, f64>)
                     {
                         changed =
-                            context.InputDouble(
-                                label,
-                                value);
+                            context.InputDouble(label, value);
                     }
                     else if constexpr (
                         std::is_same_v<Value, std::string>)
                     {
                         changed =
-                            context.InputText(
-                                label,
-                                value);
+                            context.InputText(label, value);
                     }
                     else if constexpr (
-                        std::is_same_v<
-                            Value,
-                            math::Double3>)
+                        std::is_same_v<Value, math::Double3>)
                     {
                         changed =
-                            context.InputDouble3(
-                                label,
-                                value);
+                            context.InputDouble3(label, value);
                     }
                     else
                     {
@@ -505,8 +503,7 @@ void StudioViewportPanels::DrawContextInspector(
                 }
                 catch (const std::exception& exception)
                 {
-                    status_ =
-                        exception.what();
+                    status_ = exception.what();
                 }
             }
 
@@ -521,15 +518,13 @@ void StudioViewportPanels::DrawContextInspector(
     {
         try
         {
-            editor_model::SurfaceAuthoringModel
-                surfaceModel(
-                    world.Objects(),
-                    world.Commands(),
-                    world.Selection());
+            editor_model::SurfaceAuthoringModel surfaceModel(
+                world.Objects(),
+                world.Commands(),
+                world.Selection());
 
             surfaceRelevant =
-                surfaceModel.SelectedRockyBody().
-                    has_value();
+                surfaceModel.SelectedRockyBody().has_value();
         }
         catch (const std::exception&)
         {
@@ -538,19 +533,17 @@ void StudioViewportPanels::DrawContextInspector(
 
         try
         {
-            editor_model::CelestialAuthoringModel
-                celestialModel(
-                    world.Objects(),
-                    world.Schemas(),
-                    world.Commands(),
-                    world.Selection());
+            editor_model::CelestialAuthoringModel celestialModel(
+                world.Objects(),
+                world.Schemas(),
+                world.Commands(),
+                world.Selection());
 
             const auto primary =
                 celestialModel.PrimarySelection();
 
             celestialRelevant =
-                celestialModel.SelectedBody().
-                    has_value() ||
+                celestialModel.SelectedBody().has_value() ||
                 (primary.has_value() &&
                  (primary->type ==
                       world_model::kCelestialSystemType ||
@@ -629,7 +622,10 @@ void StudioViewportPanels::Register(
         .defaultOpen = true,
         .defaultDock = editor_ui::DockRegion::Center,
         .dockOrder = 0,
-        .minSize = {.width = 320.0F, .height = 200.0F},
+        .minSize = {
+            .width = 320.0F,
+            .height = 200.0F
+        },
         .draw =
             [this](editor_ui::PanelContext& context)
             {
@@ -637,9 +633,6 @@ void StudioViewportPanels::Register(
             }
     });
 
-    // Keep the main scene as the only first-run centre workspace. The map /
-    // debug view remains registered and docked with the viewport when opened
-    // from View, but no longer competes for attention on a fresh layout.
     ui.RegisterPanel({
         .id = kSecondaryViewportPanel,
         .title = "Body Map / Debug View",
@@ -681,9 +674,6 @@ void StudioViewportPanels::DrawView(
     editor_ui::PanelContext& context,
     const std::string_view id)
 {
-    // The primary viewport carries the persistent workspace strip for normal
-    // scene/planet/simulation editing. The strip moves to Inspector when the
-    // center is replaced by System View or Shading.
     if (id == "studio.primary" &&
         g_workspaceMode != WorkspaceMode::Celestial &&
         g_workspaceMode != WorkspaceMode::Shading)
@@ -694,6 +684,14 @@ void StudioViewportPanels::DrawView(
         if (session_ != nullptr &&
             session_->World().HasWorld())
         {
+            auto& world = session_->World();
+            const auto& selection =
+                world.Selection().Ordered();
+            auto* renderView =
+                views_ != nullptr
+                    ? views_->Find(id)
+                    : nullptr;
+
             context.Text("Context Tools");
 
             const auto invokeAuthoringCommand =
@@ -702,8 +700,7 @@ void StudioViewportPanels::DrawView(
                     try
                     {
                         session_->World().CommandRegistry().Invoke(
-                            command,
-                            {});
+                            command);
                         status_.clear();
                     }
                     catch (const std::exception& exception)
@@ -712,80 +709,353 @@ void StudioViewportPanels::DrawView(
                     }
                 };
 
-            if (g_workspaceMode == WorkspaceMode::Planet)
-            {
-                const auto setTerrainTool =
-                    [this, id](
-                        const StudioTerrainAuthoringTool tool)
+            const auto setTerrainTool =
+                [this, id](
+                    const StudioTerrainAuthoringTool tool)
+                {
+                    if (terrainTool_ != tool &&
+                        (IsSplineTool(terrainTool_) ||
+                         IsSplineTool(tool)))
                     {
-                        if (terrainTool_ != tool &&
-                            (IsSplineTool(terrainTool_) ||
-                             IsSplineTool(tool)))
+                        terrainSplinePoints_.clear();
+                        terrainSplineTerrain_.reset();
+                    }
+
+                    terrainTool_ = tool;
+
+                    if (views_ != nullptr)
+                    {
+                        views_->ClearTerrainAuthoringOverlay(id);
+                    }
+                };
+
+            std::optional<scene::ObjectRecord> selectedRecord;
+            if (selection.size() == 1U)
+            {
+                selectedRecord =
+                    world.Objects().Find(selection.front());
+            }
+
+            const bool lightRelevant =
+                selectedRecord.has_value() &&
+                (selectedRecord->type ==
+                     world_model::kPointLightType ||
+                 selectedRecord->type ==
+                     world_model::kSpotLightType);
+
+            const bool pathPairRelevant =
+                world.CommandRegistry().Enablement(
+                    editor_model::authoring_commands::
+                        kConnectPathDirect).
+                    enabled;
+
+            VolumeAuthoringUi* const volumeAuthoring =
+                VolumeAuthoringUi::ContextInstance();
+            const bool volumeRelevant =
+                volumeAuthoring != nullptr &&
+                volumeAuthoring->RelevantToSelection();
+
+            bool surfaceRelevant = false;
+            try
+            {
+                editor_model::SurfaceAuthoringModel surfaceModel(
+                    world.Objects(),
+                    world.Commands(),
+                    world.Selection());
+
+                surfaceRelevant =
+                    surfaceModel.SelectedRockyBody().has_value();
+            }
+            catch (const std::exception&)
+            {
+                surfaceRelevant = false;
+            }
+
+            if (lightRelevant && renderView != nullptr)
+            {
+                const scene::ObjectId lightId =
+                    selectedRecord->id;
+                const bool spot =
+                    selectedRecord->type ==
+                    world_model::kSpotLightType;
+
+                f64 intensity = 1'000.0;
+                if (const auto value =
+                        world.Objects().GetProperty(
+                            lightId,
+                            world_model::kLightIntensityLumens);
+                    value.has_value())
+                {
+                    if (const auto* stored =
+                            std::get_if<f64>(&*value);
+                        stored != nullptr)
+                    {
+                        intensity = *stored;
+                    }
+                }
+
+                bool enabled = true;
+                if (const auto value =
+                        world.Objects().GetProperty(
+                            lightId,
+                            world_model::kLightEnabled);
+                    value.has_value())
+                {
+                    if (const auto* stored =
+                            std::get_if<bool>(&*value);
+                        stored != nullptr)
+                    {
+                        enabled = *stored;
+                    }
+                }
+
+                context.Text(
+                    std::format(
+                        "{} · {:.0f} lm",
+                        spot ? "Spot Light" : "Point Light",
+                        intensity));
+
+                const auto mutateLight =
+                    [this, lightId](
+                        const std::string_view name,
+                        const auto& mutation)
+                    {
+                        auto& commands =
+                            session_->World().Commands();
+                        commands.BeginTransaction(
+                            std::string(name));
+
+                        try
                         {
-                            terrainSplinePoints_.clear();
-                            terrainSplineTerrain_.reset();
+                            mutation(commands);
+                            commands.CommitTransaction();
+                            status_.clear();
                         }
-
-                        terrainTool_ = tool;
-
-                        if (views_ != nullptr)
+                        catch (...)
                         {
-                            views_->ClearTerrainAuthoringOverlay(id);
+                            if (commands.HasActiveTransaction())
+                            {
+                                commands.RollbackTransaction();
+                            }
+                            throw;
                         }
                     };
 
-                if (context.Button("Select##quick-terrain-select"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Select);
-                context.SameLine();
-                if (context.Button("Raise##quick-terrain-raise"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Raise);
-                context.SameLine();
-                if (context.Button("Lower##quick-terrain-lower"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Lower);
-                context.SameLine();
-                if (context.Button("Protect##quick-terrain-protect"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Protection);
-                context.SameLine();
-                if (context.Button("Drainage##quick-terrain-drainage"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Drainage);
-
-                if (context.Button("Canyon##quick-terrain-canyon"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Canyon);
-                context.SameLine();
-                if (context.Button("Ridge##quick-terrain-ridge"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Ridge);
-                context.SameLine();
-                if (context.Button("Geology##quick-terrain-material"))
-                    setTerrainTool(StudioTerrainAuthoringTool::Material);
-                context.SameLine();
-                if (context.Button("Biome Paint##quick-terrain-biome"))
-                    setTerrainTool(StudioTerrainAuthoringTool::BiomePaint);
-            }
-            else if (g_workspaceMode == WorkspaceMode::Simulation)
-            {
-                VolumeAuthoringUi* const volumeAuthoring =
-                    VolumeAuthoringUi::ContextInstance();
-
-                if (volumeAuthoring != nullptr &&
-                    volumeAuthoring->RelevantToSelection())
+                if (context.Button(
+                        "Move To View##quick-light-move"))
                 {
-                    if (context.Button("Add Source##quick-volume-source"))
+                    try
+                    {
+                        const auto& camera =
+                            renderView->Camera();
+                        const math::Double3 position{
+                            camera.localPositionMeters.x +
+                                static_cast<f64>(camera.forward.x) * 5.0,
+                            camera.localPositionMeters.y +
+                                static_cast<f64>(camera.forward.y) * 5.0,
+                            camera.localPositionMeters.z +
+                                static_cast<f64>(camera.forward.z) * 5.0
+                        };
+
+                        mutateLight(
+                            "Move Light To View",
+                            [&](commands::CommandService& commands)
+                            {
+                                commands.SetProperty(
+                                    lightId,
+                                    world_model::kLightPositionMeters,
+                                    position);
+                            });
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ = exception.what();
+                    }
+                }
+
+                if (spot)
+                {
+                    context.SameLine();
+                    if (context.Button(
+                            "Aim Along View##quick-light-aim"))
+                    {
+                        try
+                        {
+                            const auto forward =
+                                renderView->Camera().forward;
+                            mutateLight(
+                                "Aim Spot Light Along View",
+                                [&](commands::CommandService& commands)
+                                {
+                                    commands.SetProperty(
+                                        lightId,
+                                        world_model::kLightDirection,
+                                        math::Double3{
+                                            static_cast<f64>(forward.x),
+                                            static_cast<f64>(forward.y),
+                                            static_cast<f64>(forward.z)
+                                        });
+                                });
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            status_ = exception.what();
+                        }
+                    }
+                }
+
+                context.SameLine();
+                if (context.Button(
+                        "Intensity -##quick-light-intensity-down"))
+                {
+                    try
+                    {
+                        const f64 next =
+                            std::max(0.0, intensity / 1.25);
+                        mutateLight(
+                            "Reduce Light Intensity",
+                            [&](commands::CommandService& commands)
+                            {
+                                commands.SetProperty(
+                                    lightId,
+                                    world_model::kLightIntensityLumens,
+                                    next);
+                            });
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ = exception.what();
+                    }
+                }
+
+                context.SameLine();
+                if (context.Button(
+                        "Intensity +##quick-light-intensity-up"))
+                {
+                    try
+                    {
+                        const f64 next =
+                            intensity <= 0.0
+                                ? 100.0
+                                : intensity * 1.25;
+                        mutateLight(
+                            "Increase Light Intensity",
+                            [&](commands::CommandService& commands)
+                            {
+                                commands.SetProperty(
+                                    lightId,
+                                    world_model::kLightIntensityLumens,
+                                    next);
+                            });
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ = exception.what();
+                    }
+                }
+
+                context.SameLine();
+                if (context.Button(
+                        enabled
+                            ? "Disable##quick-light-enabled"
+                            : "Enable##quick-light-enabled"))
+                {
+                    try
+                    {
+                        mutateLight(
+                            enabled
+                                ? "Disable Light"
+                                : "Enable Light",
+                            [&](commands::CommandService& commands)
+                            {
+                                commands.SetProperty(
+                                    lightId,
+                                    world_model::kLightEnabled,
+                                    !enabled);
+                            });
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ = exception.what();
+                    }
+                }
+            }
+            else if (pathPairRelevant)
+            {
+                context.Text("2 Path Nodes · Connect");
+
+                if (context.Button(
+                        "Direct##quick-path-direct"))
+                {
+                    invokeAuthoringCommand(
+                        editor_model::authoring_commands::
+                            kConnectPathDirect);
+                }
+                context.SameLine();
+                if (context.Button(
+                        "Bezier##quick-path-bezier"))
+                {
+                    invokeAuthoringCommand(
+                        editor_model::authoring_commands::
+                            kConnectPathBezier);
+                }
+                context.SameLine();
+                if (context.Button(
+                        "Routed##quick-path-routed"))
+                {
+                    invokeAuthoringCommand(
+                        editor_model::authoring_commands::
+                            kConnectPathRouted);
+                }
+            }
+            else if (volumeRelevant)
+            {
+                context.Text("Volume");
+
+                const auto sourceEnablement =
+                    world.CommandRegistry().Enablement(
+                        editor_model::authoring_commands::
+                            kAddVolumeSource);
+                const auto effectorEnablement =
+                    world.CommandRegistry().Enablement(
+                        editor_model::authoring_commands::
+                            kAddVolumeEffector);
+
+                bool drewButton = false;
+                if (sourceEnablement.enabled)
+                {
+                    if (context.Button(
+                            "Add Source##quick-volume-source"))
                     {
                         invokeAuthoringCommand(
                             editor_model::authoring_commands::
                                 kAddVolumeSource);
                     }
-                    context.SameLine();
-                    if (context.Button("Add Effector##quick-volume-effector"))
+                    drewButton = true;
+                }
+
+                if (effectorEnablement.enabled)
+                {
+                    if (drewButton)
+                    {
+                        context.SameLine();
+                    }
+                    if (context.Button(
+                            "Add Effector##quick-volume-effector"))
                     {
                         invokeAuthoringCommand(
                             editor_model::authoring_commands::
                                 kAddVolumeEffector);
                     }
-                    context.SameLine();
+                    drewButton = true;
                 }
 
-                if (context.Button("Volume Expert##quick-volume-expert") &&
+                if (drewButton)
+                {
+                    context.SameLine();
+                }
+                if (context.Button(
+                        "Expert##quick-volume-expert") &&
                     g_workspaceUi != nullptr)
                 {
                     static_cast<void>(
@@ -793,30 +1063,77 @@ void StudioViewportPanels::DrawView(
                             "Volumes"));
                 }
             }
+            else if (surfaceRelevant)
+            {
+                context.Text("Terrain");
+
+                if (context.Button(
+                        "Select##quick-terrain-select"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Select);
+                context.SameLine();
+                if (context.Button(
+                        "Raise##quick-terrain-raise"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Raise);
+                context.SameLine();
+                if (context.Button(
+                        "Lower##quick-terrain-lower"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Lower);
+                context.SameLine();
+                if (context.Button(
+                        "Protect##quick-terrain-protect"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Protection);
+                context.SameLine();
+                if (context.Button(
+                        "Drainage##quick-terrain-drainage"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Drainage);
+
+                if (context.Button(
+                        "Canyon##quick-terrain-canyon"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Canyon);
+                context.SameLine();
+                if (context.Button(
+                        "Ridge##quick-terrain-ridge"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Ridge);
+                context.SameLine();
+                if (context.Button(
+                        "Geology##quick-terrain-material"))
+                    setTerrainTool(StudioTerrainAuthoringTool::Material);
+                context.SameLine();
+                if (context.Button(
+                        "Biome Paint##quick-terrain-biome"))
+                    setTerrainTool(StudioTerrainAuthoringTool::BiomePaint);
+            }
             else
             {
-                // Scene workspace keeps high-frequency path connection tools
-                // directly under the workspace strip. The command registry
-                // validates whether the current selection is a valid node pair.
-                if (context.Button("Path Direct##quick-path-direct"))
+                switch (g_workspaceMode)
                 {
-                    invokeAuthoringCommand(
-                        editor_model::authoring_commands::
-                            kConnectPathDirect);
-                }
-                context.SameLine();
-                if (context.Button("Path Bezier##quick-path-bezier"))
-                {
-                    invokeAuthoringCommand(
-                        editor_model::authoring_commands::
-                            kConnectPathBezier);
-                }
-                context.SameLine();
-                if (context.Button("Path Routed##quick-path-routed"))
-                {
-                    invokeAuthoringCommand(
-                        editor_model::authoring_commands::
-                            kConnectPathRouted);
+                case WorkspaceMode::Scene:
+                    context.MutedText(
+                        "Select an object for contextual tools, or select two path nodes in the same network to connect them.");
+                    break;
+                case WorkspaceMode::Planet:
+                    context.MutedText(
+                        "Select a rocky body or terrain surface to expose terrain authoring tools.");
+                    break;
+                case WorkspaceMode::Simulation:
+                    context.MutedText(
+                        "Select a Volume, Source, or Effector to expose simulation tools.");
+                    if (g_workspaceUi != nullptr &&
+                        context.Button(
+                            "Open Volume Expert##quick-volume-fallback"))
+                    {
+                        static_cast<void>(
+                            g_workspaceUi->FocusPanelByTitle(
+                                "Volumes"));
+                    }
+                    break;
+                case WorkspaceMode::Celestial:
+                case WorkspaceMode::Shading:
+                    context.MutedText(
+                        std::format(
+                            "{} tools are available in the active workspace and Inspector.",
+                            WorkspaceName(g_workspaceMode)));
+                    break;
                 }
             }
 
@@ -824,163 +1141,9 @@ void StudioViewportPanels::DrawView(
         }
     }
 
+    // The production viewport remains the single implementation of camera,
+    // terrain painting, picking, overlays and detailed tool settings. The row
+    // above only chooses high-frequency actions from current selection.
     DrawViewBase(context, id);
-
-    if (views_ == nullptr ||
-        session_ == nullptr ||
-        !session_->World().HasWorld())
-    {
-        return;
-    }
-
-    auto* renderView =
-        views_->Find(id);
-
-    if (renderView == nullptr)
-    {
-        return;
-    }
-
-    const auto& selected =
-        session_->World().Selection().Ordered();
-
-    if (selected.size() != 1U)
-    {
-        return;
-    }
-
-    const scene::ObjectId lightId =
-        selected.front();
-    const auto record =
-        session_->World().Objects().Find(lightId);
-
-    if (!record.has_value() ||
-        (record->type != world_model::kPointLightType &&
-         record->type != world_model::kSpotLightType))
-    {
-        return;
-    }
-
-    const bool spot =
-        record->type == world_model::kSpotLightType;
-
-    context.Separator();
-    context.Text("Selected Light Tools");
-    context.MutedText(
-        "Uses the authored light schema and command history; viewport range/cone gizmos update from these same properties.");
-
-    const auto moveToView =
-        [this, renderView, lightId, spot]
-        {
-            auto& commands =
-                session_->World().Commands();
-            const auto& camera =
-                renderView->Camera();
-
-            const math::Double3 position{
-                camera.localPositionMeters.x +
-                    static_cast<f64>(camera.forward.x) * 5.0,
-                camera.localPositionMeters.y +
-                    static_cast<f64>(camera.forward.y) * 5.0,
-                camera.localPositionMeters.z +
-                    static_cast<f64>(camera.forward.z) * 5.0
-            };
-
-            commands.BeginTransaction(
-                spot
-                    ? "Move Spot Light To View"
-                    : "Move Point Light To View");
-
-            try
-            {
-                commands.SetProperty(
-                    lightId,
-                    world_model::kLightPositionMeters,
-                    position);
-                commands.CommitTransaction();
-            }
-            catch (...)
-            {
-                if (commands.HasActiveTransaction())
-                {
-                    commands.RollbackTransaction();
-                }
-                throw;
-            }
-        };
-
-    const auto aimAlongView =
-        [this, renderView, lightId]
-        {
-            auto& commands =
-                session_->World().Commands();
-            const auto& forward =
-                renderView->Camera().forward;
-
-            commands.BeginTransaction(
-                "Aim Spot Light Along View");
-
-            try
-            {
-                commands.SetProperty(
-                    lightId,
-                    world_model::kLightDirection,
-                    math::Double3{
-                        static_cast<f64>(forward.x),
-                        static_cast<f64>(forward.y),
-                        static_cast<f64>(forward.z)
-                    });
-                commands.CommitTransaction();
-            }
-            catch (...)
-            {
-                if (commands.HasActiveTransaction())
-                {
-                    commands.RollbackTransaction();
-                }
-                throw;
-            }
-        };
-
-    const std::string moveLabel =
-        "Move Light To View##m41-light-move:" +
-        std::string(id);
-
-    if (context.Button(moveLabel))
-    {
-        try
-        {
-            moveToView();
-            status_ =
-                "Selected light moved 5 m in front of the active view.";
-        }
-        catch (const std::exception& exception)
-        {
-            status_ = exception.what();
-        }
-    }
-
-    if (spot)
-    {
-        context.SameLine();
-
-        const std::string aimLabel =
-            "Aim Spot Along View##m41-light-aim:" +
-            std::string(id);
-
-        if (context.Button(aimLabel))
-        {
-            try
-            {
-                aimAlongView();
-                status_ =
-                    "Selected spot light aimed along the active view.";
-            }
-            catch (const std::exception& exception)
-            {
-                status_ = exception.what();
-            }
-        }
-    }
 }
 } // namespace orbit::studio_ui
