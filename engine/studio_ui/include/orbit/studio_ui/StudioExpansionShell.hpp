@@ -7,6 +7,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace orbit::studio_session
 {
@@ -68,6 +69,17 @@ private:
     void DrawTerrainContext(editor_ui::PanelContext& context);
     void DrawTerrainToolProperties(editor_ui::PanelContext& context);
 
+    // View presentation is shared by the two production Studio RenderViews.
+    // The compact selector chooses which real view the shell and contextual
+    // Properties sections control; it never creates a parallel viewport state.
+    [[nodiscard]] std::string_view SelectedViewportId() const noexcept;
+    [[nodiscard]] bool ViewportControlsRelevant() const noexcept;
+    [[nodiscard]] bool BezierContextRelevant() const noexcept;
+    void DrawBuiltInQuickCreate(editor_ui::PanelContext& context);
+    void DrawViewportTargetProperties(editor_ui::PanelContext& context);
+    void DrawViewportDiagnosticsProperties(editor_ui::PanelContext& context);
+    void DrawBezierProperties(editor_ui::PanelContext& context);
+
     // Loads when the bound project changes and writes only when one of the
     // expansion-owned fields changes. Workspace/browser/activity fields are
     // preserved verbatim so the same StudioPersistentState file can become
@@ -81,6 +93,7 @@ private:
     bool commandSearchOpen_{false};
     bool quickCreateOpen_{false};
     bool attached_{false};
+    i32 viewportControlIndex_{0};
 
     studio_session::StudioSession* persistentSession_{nullptr};
     std::filesystem::path persistentStatePath_;
