@@ -55,6 +55,7 @@ public:
 private:
     void DrawNavigationBand(editor_ui::PanelContext& context);
     void DrawViewportBand(editor_ui::PanelContext& context);
+    void DrawInspectorExtension(editor_ui::PanelContext& context);
     void DrawContributions(
         editor_ui::PanelContext& context,
         StudioContributionSurface surface);
