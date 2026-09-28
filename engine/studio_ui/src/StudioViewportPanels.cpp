@@ -71,6 +71,7 @@ void CloseSpecialistPanels(editor_ui::EditorUi& ui)
     ClosePanels(
         ui,
         {
+            "World / Assets",
             "Inspector",
             "Body Map / Debug View",
             "System View",
@@ -86,24 +87,26 @@ void CloseSpecialistPanels(editor_ui::EditorUi& ui)
         });
 }
 
-void OpenStandardInspectorWorkspace(
+void OpenCanonicalWorkspace(
     editor_ui::EditorUi& ui,
     const std::initializer_list<std::string_view> centerPanels)
 {
+    // One stable spatial model for normal authoring: hierarchy on the left,
+    // active viewport/work surface in the middle, properties on the right.
+    // Specialist/composite panels remain available from View/Home commands
+    // but do not replace these canonical surfaces when switching domains.
     CloseSpecialistPanels(ui);
     ClosePanels(
         ui,
         {
-            "Explorer",
-            "Properties",
             "Material Service",
             "Build",
             "Output"
         });
 
-    OpenPanels(ui, {"World / Assets"});
+    OpenPanels(ui, {"Explorer"});
     OpenPanels(ui, centerPanels);
-    OpenPanels(ui, {"Inspector"});
+    OpenPanels(ui, {"Properties"});
 }
 
 void ActivateWorkspace(
@@ -117,27 +120,11 @@ void ActivateWorkspace(
     {
     case WorkspaceMode::Scene:
     case WorkspaceMode::Planet:
+    case WorkspaceMode::Celestial:
     case WorkspaceMode::Simulation:
-        OpenStandardInspectorWorkspace(
+        OpenCanonicalWorkspace(
             ui,
             {"Viewport"});
-        break;
-
-    case WorkspaceMode::Celestial:
-        CloseSpecialistPanels(ui);
-        ClosePanels(
-            ui,
-            {
-                "Viewport",
-                "Explorer",
-                "Properties",
-                "Material Service",
-                "Build",
-                "Output"
-            });
-        OpenPanels(
-            ui,
-            {"World / Assets", "System View", "Inspector"});
         break;
 
     case WorkspaceMode::Shading:
@@ -147,14 +134,12 @@ void ActivateWorkspace(
             {
                 "Viewport",
                 "Explorer",
-                "Properties",
-                "Material Service",
                 "Build",
                 "Output"
             });
         OpenPanels(
             ui,
-            {"World / Assets", "Shading", "Shading Materials", "Inspector"});
+            {"Material Service", "Shading", "Properties"});
         break;
     }
 }
@@ -247,9 +232,9 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
         .draw =
             [&ui](editor_ui::PanelContext& context)
             {
-                // While the composite browser is visible it owns presentation
-                // of these two source surfaces. Closing this panel restores
-                // the legacy View-menu panels as expert/compatibility fallbacks.
+                // Expert/compatibility composite. While explicitly visible it
+                // owns presentation of the two source surfaces; closing it
+                // returns Studio to the normal Explorer/Material panels.
                 static_cast<void>(
                     ui.ClosePanelByTitle("Explorer"));
                 static_cast<void>(
@@ -908,7 +893,7 @@ void StudioViewportPanels::DrawContextBand(
     case WorkspaceMode::Shading:
         context.MutedText(
             std::format(
-                "{} tools are available in the active workspace and Inspector.",
+                "{} tools are available contextually in Properties.",
                 WorkspaceName(g_workspaceMode)));
         break;
     }
@@ -1069,7 +1054,7 @@ void StudioViewportPanels::RegisterContextInspector(
     ui.RegisterPanel({
         .id = kContextInspectorPanel,
         .title = "Inspector",
-        .defaultOpen = true,
+        .defaultOpen = false,
         .defaultDock = editor_ui::DockRegion::Right,
         .dockOrder = -100,
         .minSize = {
