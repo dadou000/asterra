@@ -90,13 +90,16 @@ private:
     void EnsureContextAuthoring();
 
     // Permanent Studio shell rows. Workspace navigation and selection-driven
-    // quick actions live here rather than inside whichever center panel happens
-    // to be visible, so Celestial/Shading/viewport changes never hide them.
+    // quick actions stay at the top; the activity row stays at the bottom and
+    // controls the existing bottom-docked views without duplicating their
+    // build/log/diagnostic state.
     void RegisterShellBands(
         editor_ui::EditorUi& ui);
     void DrawWorkspaceBand(
         editor_ui::PanelContext& context);
     void DrawContextBand(
+        editor_ui::PanelContext& context);
+    void DrawActivityBand(
         editor_ui::PanelContext& context);
 
     StudioRenderViewSet* views_{nullptr};
