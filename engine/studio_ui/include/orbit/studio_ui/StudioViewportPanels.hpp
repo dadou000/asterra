@@ -6,6 +6,7 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -67,6 +68,8 @@ public:
 private:
     friend class StudioExpansionShell;
 
+    struct ViewportModeCommandState;
+
     void RegisterBase(editor_ui::EditorUi& ui);
     void RegisterSecondaryBase(editor_ui::EditorUi& ui);
 
@@ -96,6 +99,13 @@ private:
     void DrawActivityBand(
         editor_ui::PanelContext& context);
 
+    // View-mode commands are world-registry commands surfaced through row 2's
+    // existing ContextToolbar extension seam. They are reinstalled after a
+    // world switch because EditorWorldSession intentionally replaces its
+    // complete command graph with the new world state.
+    void EnsureViewportModeCommands();
+    void UnregisterViewportModeCommands() noexcept;
+
     // Built-in quick creation remains presentation-aware because placement is
     // intentionally relative to a viewport camera. StudioExpansionShell calls
     // these from + Add so creation no longer needs permanent viewport chrome.
@@ -111,6 +121,7 @@ private:
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     std::string status_;
+    std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
 
     StudioTerrainAuthoringTool terrainTool_{
         StudioTerrainAuthoringTool::Select};
