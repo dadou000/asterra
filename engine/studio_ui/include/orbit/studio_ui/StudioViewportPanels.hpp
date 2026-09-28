@@ -6,7 +6,6 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,9 +13,6 @@
 
 namespace orbit::studio_ui
 {
-class CelestialAuthoringUi;
-class SurfaceAuthoringUi;
-
 inline constexpr editor_ui::PanelId kPrimaryViewportPanel{
     .high = 0x4f52424954535455ULL,
     .low = 0x44494f5657455750ULL
@@ -52,10 +48,6 @@ inline constexpr editor_ui::PanelId kSecondaryViewportPanel{
 class StudioViewportPanels
 {
 public:
-    // Kept out-of-line because this class owns unique_ptr members whose UI
-    // types are intentionally forward-declared here. Defining the constructor
-    // in the .cpp keeps MSVC from instantiating incomplete-type cleanup paths
-    // in every translation unit that includes this header.
     StudioViewportPanels();
 
     StudioViewportPanels(
@@ -90,7 +82,6 @@ private:
         editor_ui::EditorUi& ui);
     void DrawContextInspector(
         editor_ui::PanelContext& context);
-    void EnsureContextAuthoring();
 
     // Permanent Studio shell rows. Workspace navigation and selection-driven
     // quick actions stay at the top; the activity row stays at the bottom and
@@ -134,11 +125,9 @@ private:
     std::optional<f64> hoveredBiomeAuthoredWeight_;
     std::optional<f64> hoveredBiomeAutomaticWeight_;
 
-    // MUI contextual-inspector bridge. These own only presentation state;
-    // semantic authority stays in StudioSession and the shared editor models.
-    studio_session::StudioSession* contextualSession_{nullptr};
-    std::unique_ptr<CelestialAuthoringUi> contextualCelestial_;
-    std::unique_ptr<SurfaceAuthoringUi> contextualSurface_;
+    // The legacy expert Inspector still owns only its schema presentation
+    // preference. Specialized authoring sections are drawn from the same
+    // shared provider registry used by canonical Properties.
     bool contextualAdvancedProperties_{false};
 
     // Kept separate from the already-large viewport implementation. It owns
