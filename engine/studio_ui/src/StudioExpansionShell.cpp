@@ -2,6 +2,7 @@
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
+#include <orbit/editor_ui/FocusState.hpp>
 #include <orbit/editor_ui/PanelExtensions.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/studio_ui/CommandPaletteModel.hpp>
@@ -53,7 +54,8 @@ constexpr std::array<std::string_view, 6> kBiomeOperations{
     "Max"
 };
 
-constexpr std::array<std::string_view, 2> kControlledViewports{
+constexpr std::array<std::string_view, 3> kViewportControlModes{
+    "Auto",
     "Primary",
     "Body Map"
 };
@@ -704,7 +706,27 @@ void StudioExpansionShell::DrawInspectorExtension(
 
 std::string_view StudioExpansionShell::SelectedViewportId() const noexcept
 {
-    return viewportControlIndex_ == 1
+    if (viewportControlMode_ == 1)
+    {
+        return "studio.primary";
+    }
+    if (viewportControlMode_ == 2)
+    {
+        return "studio.map";
+    }
+
+    const std::string_view focused =
+        editor_ui::FocusedWindowTitle();
+    if (focused == "Viewport")
+    {
+        lastFocusedViewportIndex_ = 0;
+    }
+    else if (focused == "Body Map / Debug View")
+    {
+        lastFocusedViewportIndex_ = 1;
+    }
+
+    return lastFocusedViewportIndex_ == 1
         ? std::string_view{"studio.map"}
         : std::string_view{"studio.primary"};
 }
@@ -860,14 +882,25 @@ void StudioExpansionShell::DrawViewportTargetProperties(
         return;
     }
 
+    viewportControlMode_ = std::clamp(viewportControlMode_, 0, 2);
+    static_cast<void>(
+        context.Combo(
+            "Control##viewport-control-mode",
+            kViewportControlModes,
+            viewportControlMode_));
+
     const std::string_view id = SelectedViewportId();
     auto& session = *owner_->session_;
     const auto* target = session.Viewports().Find(id);
 
     context.Text(
-        viewportControlIndex_ == 1
+        id == "studio.map"
             ? "Controlled viewport: Body Map / Debug View"
             : "Controlled viewport: Primary");
+    context.MutedText(
+        viewportControlMode_ == 0
+            ? "Auto follows the last focused production viewport."
+            : "Viewport control is pinned until Control returns to Auto.");
     context.MutedText(
         std::format(
             "Mode: {}",
@@ -1032,7 +1065,7 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
     const auto* target = owner_->session_->Viewports().Find(id);
 
     context.Text(
-        viewportControlIndex_ == 1
+        id == "studio.map"
             ? "Diagnostics: Body Map / Debug View"
             : "Diagnostics: Primary");
 
@@ -1835,12 +1868,12 @@ void StudioExpansionShell::DrawViewportBand(
     context.Text("View");
     context.SameLine();
 
-    viewportControlIndex_ = std::clamp(viewportControlIndex_, 0, 1);
-    static_cast<void>(
-        context.Combo(
-            "##controlled-viewport",
-            kControlledViewports,
-            viewportControlIndex_));
+    const std::string_view controlledViewport =
+        SelectedViewportId();
+    context.MutedText(
+        controlledViewport == "studio.map"
+            ? "Body Map"
+            : "Primary");
 
     if (ViewportControlsRelevant())
     {
