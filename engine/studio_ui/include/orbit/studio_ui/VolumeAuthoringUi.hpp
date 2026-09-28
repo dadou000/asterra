@@ -5,6 +5,7 @@
 #include <orbit/studio_ui/V007ValidationScenarios.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
+#include <orbit/world_model/VolumeSchemas.hpp>
 
 #include <string>
 
@@ -25,9 +26,71 @@ public:
         editor_ui::EditorUi& ui);
 
     // Shared draw path for contextual Properties hosting. The standalone
-    // Volumes panel remains available for dedicated simulation workspaces.
+    // Volumes panel remains available for dedicated expert workflows.
     void Draw(
         editor_ui::PanelContext& context);
+
+    // Orbit Studio owns one production VolumeAuthoringUi at a time. The
+    // contextual Inspector uses this live instance so it shares the exact
+    // field-storage, solver, renderer, cache and validation state instead of
+    // constructing a second authoring stack.
+    [[nodiscard]] static VolumeAuthoringUi* ContextInstance() noexcept
+    {
+        return contextInstance_;
+    }
+
+    // True when the current single selection is a Volume domain or one of its
+    // direct Source/Effector children. This is the same selection contract
+    // used by the dedicated Volumes panel.
+    [[nodiscard]] bool RelevantToSelection() const
+    {
+        if (session_ == nullptr ||
+            !session_->World().HasWorld())
+        {
+            return false;
+        }
+
+        auto& world = session_->World();
+        const auto& selected =
+            world.Selection().Ordered();
+
+        if (selected.size() != 1U)
+        {
+            return false;
+        }
+
+        const auto record =
+            world.Objects().Find(
+                selected.front());
+
+        if (!record.has_value())
+        {
+            return false;
+        }
+
+        if (record->type ==
+            world_model::kVolumeType)
+        {
+            return true;
+        }
+
+        if ((record->type ==
+                 world_model::kVolumeSourceType ||
+             record->type ==
+                 world_model::kVolumeEffectorType) &&
+            record->parent.has_value())
+        {
+            const auto parent =
+                world.Objects().Find(
+                    *record->parent);
+
+            return parent.has_value() &&
+                   parent->type ==
+                       world_model::kVolumeType;
+        }
+
+        return false;
+    }
 
     inline static constexpr editor_ui::PanelId kPanel{
         .high = 0x4f52424954535455ULL,
@@ -49,6 +112,36 @@ private:
     volume_fields::VolumeFieldStorageService* fields_{nullptr};
     volume_solver::SurfaceVolumeSolverService* solver_{nullptr};
     StudioViewportRenderer* renderer_{nullptr};
+
+    inline static VolumeAuthoringUi* contextInstance_{nullptr};
+
+    // Header-level lifetime bridge: no global service locator and no Main.cpp
+    // wiring is required. The pointer is valid only while the production
+    // authoring surface exists and is cleared automatically on destruction.
+    struct ContextRegistration
+    {
+        VolumeAuthoringUi* owner{nullptr};
+
+        explicit ContextRegistration(
+            VolumeAuthoringUi* value) noexcept
+            : owner(value)
+        {
+            VolumeAuthoringUi::contextInstance_ =
+                value;
+        }
+
+        ~ContextRegistration()
+        {
+            if (VolumeAuthoringUi::contextInstance_ ==
+                owner)
+            {
+                VolumeAuthoringUi::contextInstance_ =
+                    nullptr;
+            }
+        }
+    };
+
+    ContextRegistration contextRegistration_{this};
 
     // M43 extends the normal Studio command catalog/palette with the named
     // validation scenarios. Member order follows session_/renderer_ so the
