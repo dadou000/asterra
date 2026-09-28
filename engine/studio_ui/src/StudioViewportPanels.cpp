@@ -1,12 +1,9 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
-#include <orbit/editor_model/CelestialAuthoringModel.hpp>
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
-#include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/StudioShellModel.hpp>
-#include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -17,7 +14,6 @@
 #include <exception>
 #include <format>
 #include <initializer_list>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -303,34 +299,6 @@ StudioViewportPanels::~StudioViewportPanels()
         g_shellPanels = nullptr;
         g_workspaceUi = nullptr;
     }
-}
-
-void StudioViewportPanels::EnsureContextAuthoring()
-{
-    if (session_ == nullptr)
-    {
-        contextualSurface_.reset();
-        contextualCelestial_.reset();
-        contextualSession_ = nullptr;
-        return;
-    }
-
-    if (contextualSession_ == session_ &&
-        contextualSurface_ != nullptr &&
-        contextualCelestial_ != nullptr)
-    {
-        return;
-    }
-
-    contextualSurface_ =
-        std::make_unique<SurfaceAuthoringUi>(
-            *session_);
-    contextualCelestial_ =
-        std::make_unique<CelestialAuthoringUi>(
-            *session_);
-    contextualSession_ =
-        session_;
-    contextualAdvancedProperties_ = false;
 }
 
 void StudioViewportPanels::RegisterShellBands(
@@ -1076,8 +1044,6 @@ void StudioViewportPanels::RegisterContextInspector(
 void StudioViewportPanels::DrawContextInspector(
     editor_ui::PanelContext& context)
 {
-    EnsureContextAuthoring();
-
     if (session_ == nullptr ||
         !session_->World().HasWorld())
     {
@@ -1091,6 +1057,8 @@ void StudioViewportPanels::DrawContextInspector(
     const auto selected = inspector.SelectedObjects();
 
     context.Heading("Inspector");
+    context.MutedText(
+        "Expert compatibility view · canonical editing lives in Properties.");
 
     if (selected.empty())
     {
@@ -1243,91 +1211,18 @@ void StudioViewportPanels::DrawContextInspector(
         }
     }
 
-    bool surfaceRelevant = false;
-    bool celestialRelevant = false;
+    const auto providers =
+        GlobalInspectorProviders().Relevant();
 
-    if (selected.size() == 1U)
+    if (!providers.empty())
     {
-        try
-        {
-            editor_model::SurfaceAuthoringModel surfaceModel(
-                world.Objects(),
-                world.Commands(),
-                world.Selection());
-
-            surfaceRelevant =
-                surfaceModel.SelectedRockyBody().has_value();
-        }
-        catch (const std::exception&)
-        {
-            surfaceRelevant = false;
-        }
-
-        try
-        {
-            editor_model::CelestialAuthoringModel celestialModel(
-                world.Objects(),
-                world.Schemas(),
-                world.Commands(),
-                world.Selection());
-
-            const auto primary =
-                celestialModel.PrimarySelection();
-
-            celestialRelevant =
-                celestialModel.SelectedBody().has_value() ||
-                (primary.has_value() &&
-                 (primary->type ==
-                      world_model::kCelestialSystemType ||
-                  primary->type ==
-                      world_model::kCelestialReferenceNodeType ||
-                  primary->type ==
-                      world_model::kRingBandType ||
-                  celestialModel.IsCapabilityType(
-                      primary->type)));
-        }
-        catch (const std::exception&)
-        {
-            celestialRelevant = false;
-        }
+        context.Separator();
+        context.MutedText("Contextual Tools");
+        static_cast<void>(
+            GlobalInspectorProviders().DrawRelevant(
+                context));
     }
-
-    VolumeAuthoringUi* const volumeAuthoring =
-        VolumeAuthoringUi::ContextInstance();
-    const bool volumeRelevant =
-        volumeAuthoring != nullptr &&
-        volumeAuthoring->RelevantToSelection();
-
-    if (surfaceRelevant &&
-        contextualSurface_ != nullptr &&
-        context.Section(
-            "Surface##context-inspector-surface",
-            true))
-    {
-        contextualSurface_->Draw(context);
-    }
-
-    if (celestialRelevant &&
-        contextualCelestial_ != nullptr &&
-        context.Section(
-            "Celestial##context-inspector-celestial",
-            !surfaceRelevant))
-    {
-        contextualCelestial_->Draw(context);
-    }
-
-    if (volumeRelevant &&
-        context.Section(
-            "Volume##context-inspector-volume",
-            !surfaceRelevant &&
-                !celestialRelevant))
-    {
-        volumeAuthoring->Draw(context);
-    }
-
-    if (!surfaceRelevant &&
-        !celestialRelevant &&
-        !volumeRelevant)
+    else
     {
         context.MutedText(
             "No specialized authoring section is needed for this selection. Common schema properties remain fully editable above.");
