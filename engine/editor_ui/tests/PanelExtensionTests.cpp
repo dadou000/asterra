@@ -32,12 +32,11 @@ void BeginTestFrame()
 void DrawTargetPanel(
     const bool collapsed = false)
 {
-    if (collapsed)
-    {
-        ImGui::SetNextWindowCollapsed(
-            true,
-            ImGuiCond_Always);
-    }
+    // Set the state every frame so each assertion is independent from the
+    // previous ImGui window state.
+    ImGui::SetNextWindowCollapsed(
+        collapsed,
+        ImGuiCond_Always);
 
     if (ImGui::Begin("Inspector"))
     {
@@ -87,11 +86,11 @@ int main()
 
     drew = false;
     BeginTestFrame();
-    DrawTargetPanel();
+    DrawTargetPanel(false);
     ImGui::EndFrame();
     Check(
         !drew,
-        "removed extension no longer draws");
+        "removed extension no longer draws after target reopens");
 
     ImGui::DestroyContext();
     return EXIT_SUCCESS;
