@@ -21,19 +21,6 @@ namespace
 InspectorProviderRegistry g_inspectorProviders;
 StudioUiContributionRegistry g_uiContributions;
 
-[[nodiscard]] const char* LayoutName(
-    const ViewportLayout layout) noexcept
-{
-    switch (layout)
-    {
-    case ViewportLayout::Single: return "Single";
-    case ViewportLayout::VerticalSplit: return "Vertical";
-    case ViewportLayout::HorizontalSplit: return "Horizontal";
-    case ViewportLayout::Quad: return "Quad";
-    }
-    return "Single";
-}
-
 [[nodiscard]] bool IsQuickCreateLabel(
     const std::string_view label) noexcept
 {
@@ -59,9 +46,12 @@ StudioExpansionShell::StudioExpansionShell(
 {
     try
     {
+        // Two top rows only: workspace/navigation and contextual authoring.
+        // The bottom activity strip is owned by StudioViewportPanels because
+        // it directly controls that object's build/log/diagnostic panels.
         editor_ui::UpsertShellBand({
             .id = "orbit.navigation",
-            .order = 15,
+            .order = 0,
             .height = 40.0F,
             .draw =
                 [this](editor_ui::PanelContext& context)
@@ -72,8 +62,8 @@ StudioExpansionShell::StudioExpansionShell(
 
         editor_ui::UpsertShellBand({
             .id = "orbit.viewport-authoring",
-            .order = 20,
-            .height = 40.0F,
+            .order = 10,
+            .height = 42.0F,
             .draw =
                 [this](editor_ui::PanelContext& context)
                 {
@@ -328,14 +318,27 @@ void StudioExpansionShell::DrawNavigationBand(
 {
     SyncPersistentState();
 
-    context.Text("Navigate");
+    // Workspace selection and navigation are one mental model. The owner draws
+    // the mode selector first; breadcrumbs, quick-create and command search
+    // continue on the same row instead of reserving another strip of viewport.
+    if (owner_ != nullptr)
+    {
+        owner_->DrawWorkspaceBand(context);
+    }
+    else
+    {
+        context.Text("Mode");
+    }
+
+    context.SameLine();
+    context.MutedText("|");
 
     if (owner_ == nullptr ||
         owner_->session_ == nullptr ||
         !owner_->session_->World().HasWorld())
     {
         context.SameLine();
-        context.MutedText("Open a world for breadcrumbs and commands.");
+        context.MutedText("Open a world for navigation and commands.");
         return;
     }
 
@@ -349,9 +352,11 @@ void StudioExpansionShell::DrawNavigationBand(
                 world.Objects(),
                 selection.front());
 
+        // Keep enough ancestry to orient the user without letting a deep
+        // hierarchy consume the entire permanent row.
         const std::size_t first =
-            breadcrumbs.size() > 4U
-                ? breadcrumbs.size() - 4U
+            breadcrumbs.size() > 3U
+                ? breadcrumbs.size() - 3U
                 : 0U;
 
         for (std::size_t index = first;
@@ -381,6 +386,15 @@ void StudioExpansionShell::DrawNavigationBand(
 
     context.SameLine();
     if (context.Button(
+            quickCreateOpen_
+                ? "Close Add##quick-create-toggle"
+                : "+ Add##quick-create-toggle"))
+    {
+        quickCreateOpen_ = !quickCreateOpen_;
+    }
+
+    context.SameLine();
+    if (context.Button(
             commandSearchOpen_
                 ? "Close Commands##command-palette-toggle"
                 : "Commands##command-palette-toggle"))
@@ -390,15 +404,6 @@ void StudioExpansionShell::DrawNavigationBand(
         {
             commandQuery_.clear();
         }
-    }
-
-    context.SameLine();
-    if (context.Button(
-            quickCreateOpen_
-                ? "Close Add##quick-create-toggle"
-                : "+ Add##quick-create-toggle"))
-    {
-        quickCreateOpen_ = !quickCreateOpen_;
     }
 
     auto& registry = world.CommandRegistry();
@@ -453,7 +458,7 @@ void StudioExpansionShell::DrawNavigationBand(
                 }
             }
 
-            if (++shown >= 3U)
+            if (++shown >= 2U)
             {
                 break;
             }
@@ -496,7 +501,7 @@ void StudioExpansionShell::DrawNavigationBand(
                 }
             }
 
-            if (++shown >= 4U)
+            if (++shown >= 3U)
             {
                 break;
             }
@@ -517,14 +522,29 @@ void StudioExpansionShell::DrawViewportBand(
 {
     SyncPersistentState();
 
-    context.Text("Viewport");
+    // Selection-driven authoring is the primary content of row two. Generic
+    // viewport/gizmo state follows it compactly rather than living in a fourth
+    // permanent toolbar.
+    if (owner_ != nullptr)
+    {
+        owner_->DrawContextBand(context);
+    }
+    else
+    {
+        context.Text("Context");
+    }
+
+    context.SameLine();
+    context.MutedText("|");
+    context.SameLine();
+    context.Text("View");
     context.SameLine();
 
     static constexpr std::array<std::string_view, 4>
         kLayouts{"Single", "Vertical", "Horizontal", "Quad"};
     i32 layout = static_cast<i32>(viewportState_.layout);
-    if (context.SegmentedControl(
-            "viewport-layout",
+    if (context.Combo(
+            "##viewport-layout",
             kLayouts,
             layout))
     {
@@ -532,8 +552,6 @@ void StudioExpansionShell::DrawViewportBand(
             static_cast<ViewportLayout>(layout));
     }
 
-    context.SameLine();
-    context.MutedText(LayoutName(viewportState_.layout));
     context.SameLine();
 
     static constexpr std::array<std::string_view, 4>
