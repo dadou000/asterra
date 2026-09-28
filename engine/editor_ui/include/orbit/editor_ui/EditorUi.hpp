@@ -81,6 +81,8 @@ struct ActionPresentation
     std::function<void()> invoke;
 };
 
+class ShellBandRegistry;
+
 class PanelContext
 {
 public:
@@ -166,6 +168,7 @@ private:
     bool canvasActive_{false};
 
     friend class EditorUi;
+    friend class ShellBandRegistry;
 };
 
 // Where a panel lives in the first-run (and Reset Layout) dock arrangement.
@@ -270,6 +273,24 @@ struct MenuAction
     std::string shortcut;
 };
 
+// Persistent, non-dockable row attached directly to the Studio shell. Bands
+// are ordered top-to-bottom by `order`, live below the main menu bar and
+// reserve work-area height so docked panels never sit underneath them. The
+// draw callback uses the same presentation surface as ordinary panels.
+struct ShellBandDefinition
+{
+    std::string id;
+    i32 order{0};
+    f32 height{40.0F};
+    std::function<void(PanelContext&)> draw;
+};
+
+// Upsert/remove apply to the currently active EditorUi/ImGui context. Studio
+// uses stable IDs so hot reload or duplicate registration replaces the band
+// definition instead of creating extra rows.
+void UpsertShellBand(ShellBandDefinition band);
+[[nodiscard]] bool RemoveShellBand(std::string_view id) noexcept;
+
 // One row of the View menu: a panel and whether it is currently open. Rows are
 // ordered by dock region and then tab order so the menu mirrors the layout.
 struct PanelMenuEntry
@@ -346,8 +367,9 @@ public:
         std::string_view label) const;
     [[nodiscard]] std::size_t AutomationUiTraceSize() const noexcept;
     [[nodiscard]] PanelLayoutProbe AutomationPanelLayout(PanelId id) const;
-    // Work area available to docked panels (below the main menu bar), in the
-    // same logical pixels as AutomationPanelLayout.
+    // Work area available to docked panels after the main menu and persistent
+    // shell bands reserve their space, in the same logical pixels as
+    // AutomationPanelLayout.
     [[nodiscard]] UiSize AutomationWorkArea() const;
 
     // Deterministic validation seam: keeps the named main-menu dropdown open
