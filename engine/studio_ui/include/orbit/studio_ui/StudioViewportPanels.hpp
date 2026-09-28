@@ -96,6 +96,18 @@ private:
     void DrawActivityBand(
         editor_ui::PanelContext& context);
 
+    // Built-in quick creation remains presentation-aware because placement is
+    // intentionally relative to a viewport camera. StudioExpansionShell calls
+    // these from + Add so creation no longer needs permanent viewport chrome.
+    [[nodiscard]] bool CanCreateAtViewport(
+        std::string_view id) const noexcept;
+    void CreateLocalLightAtViewport(
+        std::string_view id,
+        bool spot);
+    void CreateVisibilityProxyAtViewport(
+        std::string_view id,
+        bool box);
+
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     std::string status_;
