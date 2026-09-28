@@ -69,9 +69,9 @@ private:
     void DrawTerrainContext(editor_ui::PanelContext& context);
     void DrawTerrainToolProperties(editor_ui::PanelContext& context);
 
-    // View presentation is shared by the two production Studio RenderViews.
-    // The compact selector chooses which real view the shell and contextual
-    // Properties sections control; it never creates a parallel viewport state.
+    // View presentation follows the last production viewport window that held
+    // editor focus. Properties can pin an explicit viewport when needed, but
+    // the permanent shell does not require a manual Primary/Body Map selector.
     [[nodiscard]] std::string_view SelectedViewportId() const noexcept;
     [[nodiscard]] bool ViewportControlsRelevant() const noexcept;
     [[nodiscard]] bool BezierContextRelevant() const noexcept;
@@ -93,7 +93,10 @@ private:
     bool commandSearchOpen_{false};
     bool quickCreateOpen_{false};
     bool attached_{false};
-    i32 viewportControlIndex_{0};
+
+    // 0 = follow focused viewport, 1 = pin Primary, 2 = pin Body Map.
+    i32 viewportControlMode_{0};
+    mutable i32 lastFocusedViewportIndex_{0};
 
     studio_session::StudioSession* persistentSession_{nullptr};
     std::filesystem::path persistentStatePath_;
