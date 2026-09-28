@@ -2443,6 +2443,45 @@ bool EditorUi::ClosePanelByTitle(const std::string_view title) noexcept
     return false;
 }
 
+bool EditorUi::DrawPanelContentsByTitle(
+    const std::string_view title,
+    PanelContext& context)
+{
+    // Composition is synchronous and UI-thread only, but a stack rather than
+    // one active ID also makes legitimate nested composite surfaces safe.
+    static thread_local std::vector<PanelId> drawStack;
+
+    for (PanelDefinition& panel : impl_->panels)
+    {
+        if (!TitlesMatch(panel.title, title))
+        {
+            continue;
+        }
+
+        if (std::ranges::find(
+                drawStack,
+                panel.id) != drawStack.end())
+        {
+            return false;
+        }
+
+        drawStack.push_back(panel.id);
+        try
+        {
+            panel.draw(context);
+        }
+        catch (...)
+        {
+            drawStack.pop_back();
+            throw;
+        }
+        drawStack.pop_back();
+        return true;
+    }
+
+    return false;
+}
+
 void EditorUi::SetAutomationUiProbe(
     const bool expandTrees,
     const bool traceWidgets) noexcept
