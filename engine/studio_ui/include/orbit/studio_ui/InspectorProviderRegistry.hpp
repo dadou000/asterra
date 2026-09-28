@@ -3,6 +3,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 
 #include <algorithm>
+#include <exception>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -115,6 +116,8 @@ public:
         return revision_;
     }
 
+    // Lightweight read-only view for diagnostics/tests. Callers must not
+    // retain the returned pointers across registry mutation.
     [[nodiscard]] std::vector<const InspectorProviderDefinition*>
     Relevant() const
     {
@@ -153,20 +156,84 @@ public:
     [[nodiscard]] std::vector<std::string> DrawRelevant(
         editor_ui::PanelContext& context) const
     {
-        std::vector<std::string> drawn;
-        for (const InspectorProviderDefinition* provider : Relevant())
-        {
-            std::string section = provider->title;
-            section += "##inspector-provider-";
-            section += provider->id;
+        // Draw from value snapshots. A provider is allowed to trigger plugin
+        // reload/unload as a side effect of a command, which can mutate this
+        // registry. Snapshotting avoids dangling pointers for the rest of the
+        // current Inspector frame.
+        std::vector<Entry> snapshot = providers_;
+        std::ranges::stable_sort(
+            snapshot,
+            [](const Entry& left, const Entry& right)
+            {
+                if (left.definition.order != right.definition.order)
+                {
+                    return left.definition.order < right.definition.order;
+                }
+                return left.sequence < right.sequence;
+            });
 
-            if (!context.Section(section, provider->defaultOpen))
+        std::vector<std::string> drawn;
+        for (const Entry& entry : snapshot)
+        {
+            const InspectorProviderDefinition& provider =
+                entry.definition;
+
+            bool relevant = true;
+            try
+            {
+                if (provider.relevant)
+                {
+                    relevant = provider.relevant();
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                context.ErrorText(
+                    provider.title +
+                    " relevance check failed: " +
+                    exception.what());
+                continue;
+            }
+            catch (...)
+            {
+                context.ErrorText(
+                    provider.title +
+                    " relevance check failed with an unknown error.");
+                continue;
+            }
+
+            if (!relevant)
             {
                 continue;
             }
 
-            provider->draw(context);
-            drawn.push_back(provider->id);
+            std::string section = provider.title;
+            section += "##inspector-provider-";
+            section += provider.id;
+
+            if (!context.Section(section, provider.defaultOpen))
+            {
+                continue;
+            }
+
+            try
+            {
+                provider.draw(context);
+                drawn.push_back(provider.id);
+            }
+            catch (const std::exception& exception)
+            {
+                context.ErrorText(
+                    provider.title +
+                    " failed: " +
+                    exception.what());
+            }
+            catch (...)
+            {
+                context.ErrorText(
+                    provider.title +
+                    " failed with an unknown error.");
+            }
         }
         return drawn;
     }
