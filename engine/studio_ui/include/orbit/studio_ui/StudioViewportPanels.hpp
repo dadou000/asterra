@@ -2,6 +2,7 @@
 
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/StudioExpansionShell.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
@@ -72,6 +73,8 @@ public:
     void RegisterSecondary(editor_ui::EditorUi& ui);
 
 private:
+    friend class StudioExpansionShell;
+
     void RegisterBase(editor_ui::EditorUi& ui);
     void RegisterSecondaryBase(editor_ui::EditorUi& ui);
 
@@ -137,5 +140,9 @@ private:
     std::unique_ptr<CelestialAuthoringUi> contextualCelestial_;
     std::unique_ptr<SurfaceAuthoringUi> contextualSurface_;
     bool contextualAdvancedProperties_{false};
+
+    // Kept separate from the already-large viewport implementation. It owns
+    // only shell presentation state and plugin contribution registries.
+    StudioExpansionShell expansion_{*this};
 };
 } // namespace orbit::studio_ui
