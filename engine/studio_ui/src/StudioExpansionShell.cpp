@@ -1939,23 +1939,20 @@ void StudioExpansionShell::DrawViewportBand(
     }
 
     context.SameLine();
-    if (context.Button(
-            viewportState_.gizmo.translationSnap
-                ? "Snap On##gizmo-snap"
-                : "Snap Off##gizmo-snap"))
+    static constexpr std::array<std::string_view, 4>
+        kSnapModes{"Off", "Grid", "Surface", "Both"};
+    i32 snapMode =
+        (viewportState_.gizmo.translationSnap ? 1 : 0) |
+        (viewportState_.gizmo.surfaceSnap ? 2 : 0);
+    if (context.Combo(
+            "##gizmo-snap-mode",
+            kSnapModes,
+            snapMode))
     {
         viewportState_.gizmo.translationSnap =
-            !viewportState_.gizmo.translationSnap;
-    }
-
-    context.SameLine();
-    if (context.Button(
-            viewportState_.gizmo.surfaceSnap
-                ? "Surface On##gizmo-surface"
-                : "Surface Off##gizmo-surface"))
-    {
+            (snapMode & 1) != 0;
         viewportState_.gizmo.surfaceSnap =
-            !viewportState_.gizmo.surfaceSnap;
+            (snapMode & 2) != 0;
     }
 
     DrawContributions(
