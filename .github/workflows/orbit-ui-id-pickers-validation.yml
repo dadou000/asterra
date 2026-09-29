@@ -1,0 +1,39 @@
+name: Orbit UI id picker validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-id-pickers
+
+permissions:
+  contents: write
+
+jobs:
+  id-pickers:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-id-pickers
+      - name: Apply id picker patch
+        run: python3 tools/validation/id_picker_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          grep -q 'quickCreatePickerQuery_' engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          grep -q 'Choose Object' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'world.Explorer().Search' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'world.Explorer().Roots' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Choose Property' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'world.Schemas().Catalog' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'preferredType' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Advanced UUID##quick-create-object-uuid-' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Advanced UUID##quick-create-property-uuid-' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Add contextual command id pickers"
+          git push origin HEAD:orbit-ui-id-pickers
