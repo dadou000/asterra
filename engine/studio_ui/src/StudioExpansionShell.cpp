@@ -2165,35 +2165,61 @@ void StudioExpansionShell::DrawNavigationBand(
                 return left.priority > right.priority;
             });
 
-        std::vector<editor_ui::ActionPresentation> commandActions;
-        commandActions.reserve(4U);
+        std::vector<editor_ui::ActionPresentation> contextualCommandActions;
+        std::vector<editor_ui::ActionPresentation> fallbackCommandActions;
+        contextualCommandActions.reserve(4U);
+        fallbackCommandActions.reserve(3U);
+
         for (auto& ranked : rankedCommandActions)
         {
-            commandActions.push_back(std::move(ranked.action));
-            if (commandActions.size() >= 4U)
+            if (ranked.priority > 1)
             {
-                break;
+                if (contextualCommandActions.size() < 4U)
+                {
+                    contextualCommandActions.push_back(
+                        std::move(ranked.action));
+                }
+            }
+            else if (fallbackCommandActions.size() < 3U)
+            {
+                fallbackCommandActions.push_back(
+                    std::move(ranked.action));
             }
         }
 
         bool drewQuickCreateSection = false;
-        const auto drawCommandActions = [&]
-        {
-            if (commandActions.empty())
+        const auto drawCommandActions =
+            [&](const std::string_view heading,
+                const std::vector<editor_ui::ActionPresentation>& actions)
             {
-                return;
-            }
+                if (actions.empty())
+                {
+                    return;
+                }
 
-            if (drewQuickCreateSection)
-            {
-                context.Separator();
-            }
-            context.MutedText(
+                if (drewQuickCreateSection)
+                {
+                    context.Separator();
+                }
+                context.MutedText(heading);
+                static_cast<void>(context.ActionList(actions));
+                drewQuickCreateSection = true;
+            };
+
+        const auto drawContextualCommands = [&]
+        {
+            drawCommandActions(
                 world.Selection().Ordered().empty()
-                    ? "Available"
-                    : "For Selection");
-            static_cast<void>(context.ActionList(commandActions));
-            drewQuickCreateSection = true;
+                    ? std::string_view{"For Workspace"}
+                    : std::string_view{"For Selection"},
+                contextualCommandActions);
+        };
+
+        const auto drawFallbackCommands = [&]
+        {
+            drawCommandActions(
+                "More",
+                fallbackCommandActions);
         };
 
         const auto drawViewportActions = [&]
@@ -2214,21 +2240,33 @@ void StudioExpansionShell::DrawNavigationBand(
             drewQuickCreateSection = true;
         };
 
-        if (owner_->PreferCommandQuickCreate())
+        const bool hasSelection =
+            !world.Selection().Ordered().empty();
+        if (owner_->PreferCommandQuickCreate() || hasSelection)
         {
-            drawCommandActions();
+            drawContextualCommands();
             drawViewportActions();
         }
         else
         {
             drawViewportActions();
-            drawCommandActions();
+            drawContextualCommands();
         }
+        drawFallbackCommands();
 
         const auto pluginCatalog =
             GlobalStudioUiContributions().Catalog(
                 StudioContributionSurface::QuickCreate);
-        if (!pluginCatalog.empty())
+        const bool hasPluginQuickCreateCommands =
+            std::ranges::any_of(
+                pluginCatalog,
+                [](const StudioUiContribution& contribution)
+                {
+                    return contribution.kind ==
+                               StudioContributionKind::Command &&
+                        contribution.command.IsValid();
+                });
+        if (hasPluginQuickCreateCommands)
         {
             if (drewQuickCreateSection)
             {
