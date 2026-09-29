@@ -17,32 +17,7 @@ jobs:
         with:
           ref: orbit-ui-command-shortcut-hint
       - name: Apply responsive shortcut hint
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('engine/studio_ui/src/StudioExpansionShell.cpp')
-          text = path.read_text(encoding='utf-8')
-          old = '''    context.SameLine();
-    const bool openCommandPalette =
-        context.Button("Commands##command-palette-toggle") ||
-        std::exchange(commandPaletteOpenRequested_, false);
-'''
-          new = '''    context.SameLine();
-    const f32 commandHintThreshold =
-        230.0F * editor_ui::CurrentUiScale();
-    const std::string_view commandButtonLabel =
-        context.ContentAvailable().width >= commandHintThreshold
-            ? "Commands  Ctrl+Shift+P##command-palette-toggle"
-            : "Commands##command-palette-toggle";
-    const bool openCommandPalette =
-        context.Button(commandButtonLabel) ||
-        std::exchange(commandPaletteOpenRequested_, false);
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one command palette button anchor, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
+        run: python3 tools/validation/command_shortcut_hint_patch.py
       - name: Verify and commit
         shell: bash
         run: |
