@@ -1843,14 +1843,18 @@ void StudioExpansionShell::DrawViewportBand(
     context.MutedText("|");
     context.SameLine();
     context.Text("View");
-    context.SameLine();
 
-    const std::string_view controlledViewport =
-        SelectedViewportId();
-    context.MutedText(
-        controlledViewport == "studio.map"
-            ? "Body Map"
-            : "Primary");
+    // Auto mode follows focus, so the target does not need permanent toolbar
+    // chrome. Only surface a compact cue when the user explicitly pins the
+    // control target in Properties.
+    if (viewportControlMode_ != 0)
+    {
+        context.SameLine();
+        context.MutedText(
+            viewportControlMode_ == 2
+                ? "Pinned Map"
+                : "Pinned P");
+    }
 
     if (ViewportControlsRelevant())
     {
