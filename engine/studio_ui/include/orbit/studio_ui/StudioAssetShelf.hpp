@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace orbit::studio_ui
@@ -236,13 +237,21 @@ inline void TouchRecent(const std::string& path)
 [[nodiscard]] inline bool MatchesKind(
     const content::AssetRecord& asset) noexcept
 {
-    if (kindFilter <= 0)
+    switch (kindFilter)
     {
-        return true;
+    case 1: return asset.kind == content::AssetKind::Texture;
+    case 2: return asset.kind == content::AssetKind::Material;
+    case 3: return asset.kind == content::AssetKind::MaterialInstance;
+    case 4: return asset.kind == content::AssetKind::Decal;
+    case 5: return asset.kind == content::AssetKind::Component;
+    case 6: return asset.kind == content::AssetKind::Mesh;
+    case 7: return asset.kind == content::AssetKind::PathProfile;
+    case 8: return asset.kind == content::AssetKind::Shader;
+    case 9: return asset.kind == content::AssetKind::ColorLut;
+    case 10: return asset.kind == content::AssetKind::ShadingShader;
+    case 11: return asset.kind == content::AssetKind::ShaderMaterial;
+    default: return true;
     }
-
-    return content::AssetKindName(asset.kind) ==
-        kKindFilters[static_cast<std::size_t>(kindFilter)];
 }
 
 inline void Draw(editor_ui::PanelContext& context)
@@ -279,12 +288,25 @@ inline void Draw(editor_ui::PanelContext& context)
         context.InputText(
             "Search##asset-shelf-search",
             query));
-    if (!query.empty())
+
+    if (!query.empty() || kindFilter != 0)
     {
         context.SameLine();
-        if (context.Button("Clear##asset-shelf-clear-search"))
+        if (context.Button("Reset##asset-shelf-reset-filters"))
         {
             query.clear();
+            kindFilter = 0;
+            SaveState();
+        }
+    }
+
+    if (mode == 2 && !recents.empty())
+    {
+        context.SameLine();
+        if (context.Button("Clear Recent##asset-shelf-clear-recent"))
+        {
+            recents.clear();
+            SaveState();
         }
     }
 
@@ -365,6 +387,10 @@ inline void Draw(editor_ui::PanelContext& context)
         std::string label = asset.name;
         label += "\n";
         label += content::AssetKindName(asset.kind);
+        if (asset.kind == content::AssetKind::ShadingShader)
+        {
+            label += " (Shading)";
+        }
         label += " · ";
         label += path;
         label += "##asset-shelf-item-";
