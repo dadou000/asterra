@@ -889,6 +889,18 @@ void StudioExpansionShell::DrawViewportTargetProperties(
             kViewportControlModes,
             viewportControlMode_));
 
+    static constexpr std::array<std::string_view, 4>
+        kLayouts{"Single", "Vertical", "Horizontal", "Quad"};
+    i32 layout = static_cast<i32>(viewportState_.layout);
+    if (context.Combo(
+            "Layout##viewport-layout-properties",
+            kLayouts,
+            layout))
+    {
+        viewportState_.SetLayout(
+            static_cast<ViewportLayout>(layout));
+    }
+
     const std::string_view id = SelectedViewportId();
     auto& session = *owner_->session_;
     const auto* target = session.Viewports().Find(id);
@@ -1910,20 +1922,6 @@ void StudioExpansionShell::DrawViewportBand(
                     static_cast<lighting::SurfaceDebugMode>(surface));
             }
         }
-    }
-
-    context.SameLine();
-
-    static constexpr std::array<std::string_view, 4>
-        kLayouts{"Single", "Vertical", "Horizontal", "Quad"};
-    i32 layout = static_cast<i32>(viewportState_.layout);
-    if (context.Combo(
-            "##viewport-layout",
-            kLayouts,
-            layout))
-    {
-        viewportState_.SetLayout(
-            static_cast<ViewportLayout>(layout));
     }
 
     context.SameLine();
