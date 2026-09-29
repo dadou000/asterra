@@ -1389,36 +1389,13 @@ void StudioExpansionShell::DrawTerrainContext(
         }
     }
 
-    context.SameLine();
-
-    switch (owner_->terrainTool_)
+    if (IsTerrainSplineTool(owner_->terrainTool_))
     {
-    case StudioTerrainAuthoringTool::Select:
-        context.MutedText("Pick / inspect");
-        break;
-    case StudioTerrainAuthoringTool::Raise:
-    case StudioTerrainAuthoringTool::Lower:
-        context.MutedText("Height brush · parameters in Properties");
-        break;
-    case StudioTerrainAuthoringTool::Protection:
-        context.MutedText("Protection brush · parameters in Properties");
-        break;
-    case StudioTerrainAuthoringTool::Drainage:
-        context.MutedText("Drainage brush · parameters in Properties");
-        break;
-    case StudioTerrainAuthoringTool::Canyon:
-    case StudioTerrainAuthoringTool::Ridge:
+        context.SameLine();
         context.MutedText(
             std::format(
-                "Spline · {} points · parameters in Properties",
+                "{} pts",
                 owner_->terrainSplinePoints_.size()));
-        break;
-    case StudioTerrainAuthoringTool::Material:
-        context.MutedText("Geology brush · parameters in Properties");
-        break;
-    case StudioTerrainAuthoringTool::BiomePaint:
-        context.MutedText("Biome brush · parameters in Properties");
-        break;
     }
 }
 
