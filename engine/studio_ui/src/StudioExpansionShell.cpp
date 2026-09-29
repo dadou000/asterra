@@ -1966,53 +1966,66 @@ void StudioExpansionShell::DrawViewportBand(
         const std::string_view id = SelectedViewportId();
         const auto* target = owner_->session_->Viewports().Find(id);
 
-        context.SameLine();
-        if (target != nullptr &&
-            target->mode == studio_session::ViewportMode::Debug)
+        if (target != nullptr)
         {
-            const auto catalog = terrain_debug::FieldCatalog();
-            std::vector<std::string_view> names;
-            names.reserve(catalog.size());
-
-            i32 selected = 0;
-            const auto field = owner_->views_->DebugField(id);
-            for (std::size_t index = 0U; index < catalog.size(); ++index)
+            switch (target->mode)
             {
-                names.push_back(catalog[index].name);
-                if (catalog[index].field == field)
+            case studio_session::ViewportMode::Perspective:
+            {
+                context.SameLine();
+                i32 surface = static_cast<i32>(
+                    owner_->views_->SurfaceDebugMode(id));
+                if (context.Combo(
+                        "##surface-debug-mode",
+                        kSurfaceViews,
+                        surface))
                 {
-                    selected = static_cast<i32>(index);
+                    surface = std::clamp(surface, 0, 3);
+                    owner_->views_->SetSurfaceDebugMode(
+                        id,
+                        static_cast<lighting::SurfaceDebugMode>(surface));
                 }
+                break;
             }
 
-            if (!names.empty() &&
-                context.Combo(
-                    "##viewport-debug-field-compact",
-                    names,
-                    selected))
+            case studio_session::ViewportMode::Debug:
             {
-                selected = std::clamp<i32>(
-                    selected,
-                    0,
-                    static_cast<i32>(catalog.size()) - 1);
-                owner_->views_->SetDebugField(
-                    id,
-                    catalog[static_cast<std::size_t>(selected)].field);
+                context.SameLine();
+                const auto catalog = terrain_debug::FieldCatalog();
+                std::vector<std::string_view> names;
+                names.reserve(catalog.size());
+
+                i32 selected = 0;
+                const auto field = owner_->views_->DebugField(id);
+                for (std::size_t index = 0U; index < catalog.size(); ++index)
+                {
+                    names.push_back(catalog[index].name);
+                    if (catalog[index].field == field)
+                    {
+                        selected = static_cast<i32>(index);
+                    }
+                }
+
+                if (!names.empty() &&
+                    context.Combo(
+                        "##viewport-debug-field-compact",
+                        names,
+                        selected))
+                {
+                    selected = std::clamp<i32>(
+                        selected,
+                        0,
+                        static_cast<i32>(catalog.size()) - 1);
+                    owner_->views_->SetDebugField(
+                        id,
+                        catalog[static_cast<std::size_t>(selected)].field);
+                }
+                break;
             }
-        }
-        else
-        {
-            i32 surface = static_cast<i32>(
-                owner_->views_->SurfaceDebugMode(id));
-            if (context.Combo(
-                    "##surface-debug-mode",
-                    kSurfaceViews,
-                    surface))
-            {
-                surface = std::clamp(surface, 0, 3);
-                owner_->views_->SetSurfaceDebugMode(
-                    id,
-                    static_cast<lighting::SurfaceDebugMode>(surface));
+
+            case studio_session::ViewportMode::BodyMap:
+            case studio_session::ViewportMode::System:
+                break;
             }
         }
     }
