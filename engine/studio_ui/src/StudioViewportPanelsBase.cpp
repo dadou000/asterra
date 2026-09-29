@@ -696,12 +696,6 @@ void StudioViewportPanels::DrawView(
         }
     }
 
-    if (!status_.empty())
-    {
-        transientChrome = true;
-        context.MutedText(status_);
-    }
-
     if (transientChrome)
     {
         context.Separator();
@@ -823,7 +817,7 @@ void StudioViewportPanels::DrawView(
                     .controlUnitDirections = terrainSplinePoints_,
                     .influenceRadiusMeters =
                         terrainSplineHalfWidthMeters_ +
-                        terrainSplineFalloffMeters_
+                            terrainSplineFalloffMeters_
                 });
         }
         else
