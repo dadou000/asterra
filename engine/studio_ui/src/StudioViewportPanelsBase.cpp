@@ -817,7 +817,7 @@ void StudioViewportPanels::DrawView(
                     .controlUnitDirections = terrainSplinePoints_,
                     .influenceRadiusMeters =
                         terrainSplineHalfWidthMeters_ +
-                            terrainSplineFalloffMeters_
+                        terrainSplineFalloffMeters_
                 });
         }
         else
