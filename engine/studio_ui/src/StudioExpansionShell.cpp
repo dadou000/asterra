@@ -1880,35 +1880,36 @@ void StudioExpansionShell::DrawNavigationBand(
     }
 
     context.SameLine();
-    if (context.Button(
-            commandSearchOpen_
-                ? "Close Commands##command-palette-toggle"
-                : "Commands##command-palette-toggle"))
+    const bool openCommandPalette =
+        context.Button("Commands##command-palette-toggle");
+    if (openCommandPalette)
     {
-        commandSearchOpen_ = !commandSearchOpen_;
-        if (!commandSearchOpen_)
-        {
-            commandQuery_.clear();
-        }
+        commandQuery_.clear();
     }
 
     auto& registry = world.CommandRegistry();
     const auto palette =
         BuildCommandPalette(registry.Catalog());
 
-    if (commandSearchOpen_)
+    const f32 commandPaletteWidth =
+        520.0F * editor_ui::CurrentUiScale();
+    if (context.BeginPopup(
+            "studio-command-palette-popup",
+            openCommandPalette,
+            {.width = commandPaletteWidth, .height = 0.0F}))
     {
-        context.SameLine();
+        context.Text("Commands");
         static_cast<void>(
             context.InputText(
                 "##studio-command-palette-query",
                 commandQuery_));
+        context.Separator();
 
         const auto matches =
             SearchCommandPalette(
                 palette,
                 commandQuery_,
-                8U);
+                16U);
 
         std::size_t shown = 0U;
         for (const auto& entry : matches)
@@ -1925,18 +1926,17 @@ void StudioExpansionShell::DrawNavigationBand(
                 continue;
             }
 
-            context.SameLine();
             std::string label = entry.label;
             label += "##palette-";
             label += entry.command.ToString();
-            if (context.Button(label))
+            if (context.Selectable(label, false))
             {
                 try
                 {
                     registry.Invoke(entry.command);
                     owner_->status_.clear();
-                    commandSearchOpen_ = false;
                     commandQuery_.clear();
+                    context.CloseCurrentPopup();
                 }
                 catch (const std::exception& exception)
                 {
@@ -1944,11 +1944,18 @@ void StudioExpansionShell::DrawNavigationBand(
                 }
             }
 
-            if (++shown >= 2U)
+            if (++shown >= 8U)
             {
                 break;
             }
         }
+
+        if (shown == 0U)
+        {
+            context.MutedText("No matching enabled commands.");
+        }
+
+        context.EndPopup();
     }
 
     if (quickCreateOpen_)
