@@ -901,6 +901,19 @@ void StudioExpansionShell::DrawViewportTargetProperties(
             static_cast<ViewportLayout>(layout));
     }
 
+    static constexpr std::array<std::string_view, 2>
+        kTransformSpaces{"World", "Local"};
+    i32 transformSpace = static_cast<i32>(viewportState_.gizmo.space);
+    if (context.Combo(
+            "Transform Space##viewport-transform-space-properties",
+            kTransformSpaces,
+            transformSpace))
+    {
+        transformSpace = std::clamp(transformSpace, 0, 1);
+        viewportState_.gizmo.space =
+            static_cast<GizmoSpace>(transformSpace);
+    }
+
     const std::string_view id = SelectedViewportId();
     auto& session = *owner_->session_;
     const auto* target = session.Viewports().Find(id);
@@ -1936,18 +1949,6 @@ void StudioExpansionShell::DrawViewportBand(
     {
         viewportState_.gizmo.tool =
             static_cast<GizmoTool>(tool);
-    }
-
-    context.SameLine();
-    if (context.Button(
-            viewportState_.gizmo.space == GizmoSpace::World
-                ? "World##gizmo-space"
-                : "Local##gizmo-space"))
-    {
-        viewportState_.gizmo.space =
-            viewportState_.gizmo.space == GizmoSpace::World
-                ? GizmoSpace::Local
-                : GizmoSpace::World;
     }
 
     context.SameLine();
