@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: orbit-ui-command-metadata-propagation
+      - run: python3 tools/validation/command_metadata_propagation_patch_fix.py
       - run: python3 tools/validation/command_metadata_propagation_patch.py
       - run: git diff --check
       - run: |
