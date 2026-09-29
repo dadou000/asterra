@@ -7,10 +7,12 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace orbit::content
