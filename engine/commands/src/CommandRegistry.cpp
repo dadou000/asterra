@@ -141,6 +141,34 @@ void CommandRegistry::Register(
                     parameter.name);
             }
         }
+
+        if (!parameter.assetKinds.empty() &&
+            parameter.kind != CommandValueKind::String)
+        {
+            throw std::invalid_argument(
+                "Project-asset command parameters must use string values: " +
+                parameter.name);
+        }
+
+        if (!parameter.assetKinds.empty() &&
+            !parameter.choices.empty())
+        {
+            throw std::invalid_argument(
+                "Command parameter cannot combine enumerated choices and project-asset filters: " +
+                parameter.name);
+        }
+
+        std::unordered_set<std::string> assetKinds;
+        for (const std::string& assetKind : parameter.assetKinds)
+        {
+            if (assetKind.empty() ||
+                !assetKinds.insert(assetKind).second)
+            {
+                throw std::invalid_argument(
+                    "Project-asset filters require unique non-empty kind names: " +
+                    parameter.name);
+            }
+        }
     }
 
     std::unordered_set<std::string>

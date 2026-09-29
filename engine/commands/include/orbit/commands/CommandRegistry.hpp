@@ -63,6 +63,10 @@ struct CommandParameter
     // Enumerated values render as a generated drop-down. Values remain typed
     // CommandValue instances so the same metadata works for string and numeric modes.
     std::vector<CommandChoice> choices;
+    // Optional project-asset filters for generated editor pickers. Values are
+    // opaque presentation keys (for example "Material" or "Decal"); the
+    // command layer remains independent from the content subsystem.
+    std::vector<std::string> assetKinds;
 };
 
 struct CommandEnablement

@@ -875,7 +875,12 @@ void Register(
                 .required = true,
                 .displayName = "Material Asset",
                 .description =
-                    "Project material asset identifier assigned to the selected compatible object."
+                    "Project material asset assigned to the selected compatible object.",
+                .assetKinds = {
+                    "Material",
+                    "Material Instance",
+                    "Shader Material"
+                }
             }
         },
         .enablement =

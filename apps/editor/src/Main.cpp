@@ -2184,6 +2184,7 @@ int main(
             studioViewportPanels(
                 studioViews,
                 studioSession);
+        studioViewportPanels.SetContentService(&content);
 
         shortcuts.RegisterCallback(
             {
