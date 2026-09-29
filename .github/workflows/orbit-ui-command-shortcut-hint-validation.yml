@@ -1,0 +1,61 @@
+name: Orbit UI command shortcut hint validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-command-shortcut-hint
+
+permissions:
+  contents: write
+
+jobs:
+  command-shortcut-hint:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-command-shortcut-hint
+      - name: Apply responsive shortcut hint
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('engine/studio_ui/src/StudioExpansionShell.cpp')
+          text = path.read_text(encoding='utf-8')
+          old = '''    context.SameLine();
+    const bool openCommandPalette =
+        context.Button("Commands##command-palette-toggle") ||
+        std::exchange(commandPaletteOpenRequested_, false);
+'''
+          new = '''    context.SameLine();
+    const f32 commandHintThreshold =
+        230.0F * editor_ui::CurrentUiScale();
+    const std::string_view commandButtonLabel =
+        context.ContentAvailable().width >= commandHintThreshold
+            ? "Commands  Ctrl+Shift+P##command-palette-toggle"
+            : "Commands##command-palette-toggle";
+    const bool openCommandPalette =
+        context.Button(commandButtonLabel) ||
+        std::exchange(commandPaletteOpenRequested_, false);
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one command palette button anchor, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          test "$(git diff --name-only)" = "engine/studio_ui/src/StudioExpansionShell.cpp"
+          grep -q 'commandHintThreshold' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'ContentAvailable().width >= commandHintThreshold' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Commands  Ctrl+Shift+P##command-palette-toggle' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'context.Button(commandButtonLabel)' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'std::exchange(commandPaletteOpenRequested_, false)' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Show responsive command palette shortcut hint"
+          git push origin HEAD:orbit-ui-command-shortcut-hint
