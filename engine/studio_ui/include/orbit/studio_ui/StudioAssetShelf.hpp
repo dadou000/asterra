@@ -226,17 +226,6 @@ inline void TouchRecent(const std::string& path)
     SaveState();
 }
 
-[[nodiscard]] inline bool VisibleInMode(
-    const std::string_view path) noexcept
-{
-    switch (mode)
-    {
-    case 1: return ContainsPath(favorites, path);
-    case 2: return ContainsPath(recents, path);
-    default: return true;
-    }
-}
-
 [[nodiscard]] inline bool MatchesKind(
     const content::AssetRecord& asset) noexcept
 {
@@ -257,6 +246,35 @@ inline void TouchRecent(const std::string& path)
     }
 }
 
+inline void PruneMissingEntries() noexcept
+{
+    if (contentService == nullptr)
+    {
+        return;
+    }
+
+    const auto prune = [](std::vector<std::string>& paths)
+    {
+        std::erase_if(
+            paths,
+            [](const std::string& path)
+            {
+                return contentService->FindByPath(path) == nullptr;
+            });
+    };
+
+    const auto favoritesBefore = favorites.size();
+    const auto recentsBefore = recents.size();
+    prune(favorites);
+    prune(recents);
+
+    if (favorites.size() != favoritesBefore ||
+        recents.size() != recentsBefore)
+    {
+        SaveState();
+    }
+}
+
 inline void WarmThumbnailOnce(const content::AssetRecord& asset) noexcept
 {
     if (contentService == nullptr)
@@ -269,6 +287,7 @@ inline void WarmThumbnailOnce(const content::AssetRecord& asset) noexcept
     {
         thumbnailRevision = revision;
         warmedThumbnails.clear();
+        PruneMissingEntries();
     }
 
     const std::string path = asset.sourcePath.generic_string();
@@ -284,6 +303,41 @@ inline void WarmThumbnailOnce(const content::AssetRecord& asset) noexcept
     catch (...)
     {
         warmedThumbnails.erase(path);
+    }
+}
+
+inline void AppendPinnedAssets(
+    std::vector<content::AssetRecord>& visible,
+    const std::vector<std::string>& paths,
+    const std::vector<content::AssetRecord>& searchResults)
+{
+    for (const std::string& path : paths)
+    {
+        const auto* asset = contentService->FindByPath(path);
+        if (asset == nullptr || !MatchesKind(*asset))
+        {
+            continue;
+        }
+
+        if (!query.empty())
+        {
+            const auto match = std::ranges::find_if(
+                searchResults,
+                [asset](const content::AssetRecord& candidate)
+                {
+                    return candidate.id == asset->id;
+                });
+            if (match == searchResults.end())
+            {
+                continue;
+            }
+        }
+
+        visible.push_back(*asset);
+        if (visible.size() >= 64U)
+        {
+            break;
+        }
     }
 }
 
@@ -343,49 +397,27 @@ inline void Draw(editor_ui::PanelContext& context)
         }
     }
 
-    auto assets = contentService->Search(query);
+    const auto assets = contentService->Search(query);
     std::vector<content::AssetRecord> visible;
     visible.reserve(std::min<std::size_t>(assets.size(), 64U));
 
-    if (mode == 2)
+    if (mode == 1)
     {
-        for (const std::string& recentPath : recents)
-        {
-            const auto* asset = contentService->FindByPath(recentPath);
-            if (asset == nullptr || !MatchesKind(*asset))
-            {
-                continue;
-            }
-            if (!query.empty())
-            {
-                const auto match = std::ranges::find_if(
-                    assets,
-                    [asset](const content::AssetRecord& candidate)
-                    {
-                        return candidate.id == asset->id;
-                    });
-                if (match == assets.end())
-                {
-                    continue;
-                }
-            }
-            visible.push_back(*asset);
-            if (visible.size() >= 64U)
-            {
-                break;
-            }
-        }
+        AppendPinnedAssets(visible, favorites, assets);
+    }
+    else if (mode == 2)
+    {
+        AppendPinnedAssets(visible, recents, assets);
     }
     else
     {
-        for (auto& asset : assets)
+        for (const auto& asset : assets)
         {
-            const std::string path = asset.sourcePath.generic_string();
-            if (!VisibleInMode(path) || !MatchesKind(asset))
+            if (!MatchesKind(asset))
             {
                 continue;
             }
-            visible.push_back(std::move(asset));
+            visible.push_back(asset);
             if (visible.size() >= 64U)
             {
                 break;
@@ -485,6 +517,7 @@ inline void InstallStudioAssetShelf(
         asset_shelf_detail::thumbnailRevision = ~u64{0};
         asset_shelf_detail::warmedThumbnails.clear();
         asset_shelf_detail::LoadState();
+        asset_shelf_detail::PruneMissingEntries();
     }
 
     try
