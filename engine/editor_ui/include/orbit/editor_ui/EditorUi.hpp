@@ -146,6 +146,9 @@ public:
     [[nodiscard]] UiSize ContentAvailable() const;
     [[nodiscard]] bool Selectable(std::string_view label, bool selected);
     [[nodiscard]] TreeItemInteraction TreeItem(std::string_view label, bool selected);
+    // Sets the first-appearance open state for the next TreeItem without
+    // overriding user expansion state on later frames.
+    void SetNextTreeItemOpen(bool open);
     void TreePop();
     [[nodiscard]] ImageInteraction Image(rhi::Texture& texture, UiSize size);
     // An image that captures drags and the mouse wheel (for orbiting a

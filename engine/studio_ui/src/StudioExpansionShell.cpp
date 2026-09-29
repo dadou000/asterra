@@ -2443,6 +2443,7 @@ void StudioExpansionShell::DrawNavigationBand(
             quickCreateArgumentEnabled_.clear();
             quickCreateIdText_.clear();
             quickCreatePickerQuery_.clear();
+            quickCreatePickerSelection_.clear();
             quickCreateArgumentError_.clear();
         };
 
@@ -2619,6 +2620,13 @@ void StudioExpansionShell::DrawNavigationBand(
                                 "Choose…##quick-create-object-picker-" +
                                 parameter.name;
                             const bool openPicker = context.Button(chooseLabel);
+                            const std::string pickerSelectionKey =
+                                "object:" + parameter.name;
+                            if (openPicker)
+                            {
+                                quickCreatePickerQuery_[parameter.name].clear();
+                                quickCreatePickerSelection_[pickerSelectionKey] = 0;
+                            }
                             std::string popupId =
                                 "quick-create-object-picker-popup-" +
                                 parameter.name;
@@ -2629,11 +2637,32 @@ void StudioExpansionShell::DrawNavigationBand(
                                      .height = 0.0F}))
                             {
                                 context.Text("Choose Object");
+                                if (openPicker)
+                                {
+                                    context.FocusNextItem();
+                                }
                                 auto& query =
                                     quickCreatePickerQuery_[parameter.name];
-                                static_cast<void>(context.InputText(
-                                    "Search##quick-create-object-search",
-                                    query));
+                                auto& resultSelection =
+                                    quickCreatePickerSelection_[pickerSelectionKey];
+                                if (context.InputText(
+                                        "Search##quick-create-object-search",
+                                        query))
+                                {
+                                    resultSelection = 0;
+                                }
+                                if (context.KeyPressed(editor_ui::UiKey::Escape))
+                                {
+                                    if (!query.empty())
+                                    {
+                                        query.clear();
+                                        resultSelection = 0;
+                                    }
+                                    else
+                                    {
+                                        context.CloseCurrentPopup();
+                                    }
+                                }
                                 context.Separator();
 
                                 const auto selectedObjectId =
@@ -2647,18 +2676,65 @@ void StudioExpansionShell::DrawNavigationBand(
                                         context.CloseCurrentPopup();
                                     };
 
+                                std::vector<scene::ObjectId> selectedObjectPath;
+                                if (selectedObjectId.has_value())
+                                {
+                                    auto current =
+                                        world.Objects().Find(*selectedObjectId);
+                                    for (u32 depth = 0U;
+                                         current.has_value() && depth < 64U;
+                                         ++depth)
+                                    {
+                                        selectedObjectPath.push_back(current->id);
+                                        if (!current->parent.has_value())
+                                        {
+                                            break;
+                                        }
+                                        current =
+                                            world.Objects().Find(*current->parent);
+                                    }
+                                }
+
                                 if (!query.empty())
                                 {
                                     const auto candidates =
                                         world.Explorer().Search(query, 20U);
                                     if (candidates.empty())
                                     {
+                                        resultSelection = 0;
                                         context.MutedText("No matching objects.");
                                     }
                                     else
                                     {
-                                        for (const auto& candidate : candidates)
+                                        const i32 resultCount =
+                                            static_cast<i32>(candidates.size());
+                                        resultSelection = std::clamp(
+                                            resultSelection,
+                                            0,
+                                            resultCount - 1);
+                                        if (context.KeyPressed(
+                                                editor_ui::UiKey::Down,
+                                                true))
                                         {
+                                            resultSelection =
+                                                (resultSelection + 1) % resultCount;
+                                        }
+                                        if (context.KeyPressed(
+                                                editor_ui::UiKey::Up,
+                                                true))
+                                        {
+                                            resultSelection =
+                                                (resultSelection + resultCount - 1) %
+                                                resultCount;
+                                        }
+
+                                        bool chosenByMouse = false;
+                                        for (i32 index = 0;
+                                             index < resultCount;
+                                             ++index)
+                                        {
+                                            const auto& candidate =
+                                                candidates[static_cast<std::size_t>(index)];
                                             std::string option = candidate.name;
                                             if (const auto* type =
                                                     world.Schemas().FindType(candidate.type);
@@ -2674,11 +2750,22 @@ void StudioExpansionShell::DrawNavigationBand(
 
                                             if (context.Selectable(
                                                     option,
-                                                    selectedObjectId.has_value() &&
-                                                        candidate.id == *selectedObjectId))
+                                                    index == resultSelection))
                                             {
                                                 chooseObject(candidate);
+                                                chosenByMouse = true;
+                                                break;
                                             }
+                                        }
+                                        if (!chosenByMouse &&
+                                            context.KeyPressed(
+                                                editor_ui::UiKey::Enter) &&
+                                            resultSelection >= 0 &&
+                                            resultSelection < resultCount)
+                                        {
+                                            chooseObject(
+                                                candidates[static_cast<std::size_t>(
+                                                    resultSelection)]);
                                         }
                                     }
                                 }
@@ -2742,6 +2829,11 @@ void StudioExpansionShell::DrawNavigationBand(
                                                 const bool isChosen =
                                                     selectedObjectId.has_value() &&
                                                     candidate.id == *selectedObjectId;
+                                                const bool onSelectedPath =
+                                                    std::ranges::find(
+                                                        selectedObjectPath,
+                                                        candidate.id) !=
+                                                    selectedObjectPath.end();
 
                                                 std::string typeName;
                                                 if (const auto* type =
@@ -2776,6 +2868,8 @@ void StudioExpansionShell::DrawNavigationBand(
                                                 }
                                                 nodeLabel += "##object-picker-node-";
                                                 nodeLabel += candidate.id.ToString();
+                                                context.SetNextTreeItemOpen(
+                                                    onSelectedPath);
                                                 const auto interaction =
                                                     context.TreeItem(nodeLabel, isChosen);
                                                 context.SameLine();
@@ -2848,6 +2942,13 @@ void StudioExpansionShell::DrawNavigationBand(
                                 "Choose…##quick-create-property-picker-" +
                                 parameter.name;
                             const bool openPicker = context.Button(chooseLabel);
+                            const std::string pickerSelectionKey =
+                                "property:" + parameter.name;
+                            if (openPicker)
+                            {
+                                quickCreatePickerQuery_[parameter.name].clear();
+                                quickCreatePickerSelection_[pickerSelectionKey] = 0;
+                            }
                             std::string popupId =
                                 "quick-create-property-picker-popup-" +
                                 parameter.name;
@@ -2858,11 +2959,32 @@ void StudioExpansionShell::DrawNavigationBand(
                                      .height = 0.0F}))
                             {
                                 context.Text("Choose Property");
+                                if (openPicker)
+                                {
+                                    context.FocusNextItem();
+                                }
                                 auto& query =
                                     quickCreatePickerQuery_[parameter.name];
-                                static_cast<void>(context.InputText(
-                                    "Search##quick-create-property-search",
-                                    query));
+                                auto& resultSelection =
+                                    quickCreatePickerSelection_[pickerSelectionKey];
+                                if (context.InputText(
+                                        "Search##quick-create-property-search",
+                                        query))
+                                {
+                                    resultSelection = 0;
+                                }
+                                if (context.KeyPressed(editor_ui::UiKey::Escape))
+                                {
+                                    if (!query.empty())
+                                    {
+                                        query.clear();
+                                        resultSelection = 0;
+                                    }
+                                    else
+                                    {
+                                        context.CloseCurrentPopup();
+                                    }
+                                }
                                 context.Separator();
 
                                 std::optional<schema::TypeId> preferredType;
@@ -2917,6 +3039,27 @@ void StudioExpansionShell::DrawNavigationBand(
                                         query.clear();
                                         context.CloseCurrentPopup();
                                     };
+
+                                std::optional<schema::TypeId> selectedPropertyType;
+                                if (selectedPropertyId.has_value())
+                                {
+                                    for (const auto& type : catalog)
+                                    {
+                                        const auto property = std::ranges::find_if(
+                                            type.properties,
+                                            [&selectedPropertyId](
+                                                const schema::PropertySchema& item)
+                                            {
+                                                return item.id ==
+                                                    *selectedPropertyId;
+                                            });
+                                        if (property != type.properties.end())
+                                        {
+                                            selectedPropertyType = type.id;
+                                            break;
+                                        }
+                                    }
+                                }
 
                                 if (!query.empty())
                                 {
@@ -2978,13 +3121,41 @@ void StudioExpansionShell::DrawNavigationBand(
 
                                     if (candidates.empty())
                                     {
+                                        resultSelection = 0;
                                         context.MutedText(
                                             "No matching schema properties.");
                                     }
                                     else
                                     {
-                                        for (const auto& candidate : candidates)
+                                        const i32 resultCount =
+                                            static_cast<i32>(candidates.size());
+                                        resultSelection = std::clamp(
+                                            resultSelection,
+                                            0,
+                                            resultCount - 1);
+                                        if (context.KeyPressed(
+                                                editor_ui::UiKey::Down,
+                                                true))
                                         {
+                                            resultSelection =
+                                                (resultSelection + 1) % resultCount;
+                                        }
+                                        if (context.KeyPressed(
+                                                editor_ui::UiKey::Up,
+                                                true))
+                                        {
+                                            resultSelection =
+                                                (resultSelection + resultCount - 1) %
+                                                resultCount;
+                                        }
+
+                                        bool chosenByMouse = false;
+                                        for (i32 index = 0;
+                                             index < resultCount;
+                                             ++index)
+                                        {
+                                            const auto& candidate =
+                                                candidates[static_cast<std::size_t>(index)];
                                             std::string option =
                                                 candidate.property->name;
                                             option += "\n";
@@ -3001,12 +3172,22 @@ void StudioExpansionShell::DrawNavigationBand(
 
                                             if (context.Selectable(
                                                     option,
-                                                    selectedPropertyId.has_value() &&
-                                                        candidate.property->id ==
-                                                            *selectedPropertyId))
+                                                    index == resultSelection))
                                             {
                                                 chooseProperty(*candidate.property);
+                                                chosenByMouse = true;
+                                                break;
                                             }
+                                        }
+                                        if (!chosenByMouse &&
+                                            context.KeyPressed(
+                                                editor_ui::UiKey::Enter) &&
+                                            resultSelection >= 0 &&
+                                            resultSelection < resultCount)
+                                        {
+                                            chooseProperty(
+                                                *candidates[static_cast<std::size_t>(
+                                                    resultSelection)].property);
                                         }
                                     }
                                 }
@@ -3103,6 +3284,19 @@ void StudioExpansionShell::DrawNavigationBand(
                                             categoryLabel += std::format(
                                                 "##property-picker-category-{}",
                                                 groupIndex);
+                                            const bool categoryContainsSelected =
+                                                selectedPropertyType.has_value() &&
+                                                std::ranges::any_of(
+                                                    group.types,
+                                                    [&selectedPropertyType](
+                                                        const schema::TypeSchema* type)
+                                                    {
+                                                        return type->id ==
+                                                            *selectedPropertyType;
+                                                    });
+                                            context.SetNextTreeItemOpen(
+                                                group.preferred ||
+                                                categoryContainsSelected);
                                             const auto categoryInteraction =
                                                 context.TreeItem(
                                                     categoryLabel,
@@ -3126,6 +3320,12 @@ void StudioExpansionShell::DrawNavigationBand(
                                                 typeLabel +=
                                                     "##property-picker-type-";
                                                 typeLabel += type->id.ToString();
+                                                const bool typeContainsSelected =
+                                                    selectedPropertyType.has_value() &&
+                                                    type->id == *selectedPropertyType;
+                                                context.SetNextTreeItemOpen(
+                                                    typePreferred ||
+                                                    typeContainsSelected);
                                                 const auto typeInteraction =
                                                     context.TreeItem(
                                                         typeLabel,
