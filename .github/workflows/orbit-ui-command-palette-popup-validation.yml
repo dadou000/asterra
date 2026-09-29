@@ -1,0 +1,39 @@
+name: Orbit UI command palette popup validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-command-palette-popup
+
+permissions:
+  contents: write
+
+jobs:
+  command-palette-popup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-command-palette-popup
+      - name: Apply patch
+        run: python3 tools/validation/command_palette_popup_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 4
+          grep -q 'BeginPopup(' engine/editor_ui/include/orbit/editor_ui/EditorUi.hpp
+          grep -q 'CloseCurrentPopup' engine/editor_ui/src/EditorUi.cpp
+          grep -q 'studio-command-palette-popup' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'shown >= 8U' engine/studio_ui/src/StudioExpansionShell.cpp
+          ! grep -q 'commandSearchOpen_' engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          ! grep -q 'Close Commands##command-palette-toggle' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/editor_ui/include/orbit/editor_ui/EditorUi.hpp
+          git add engine/editor_ui/src/EditorUi.cpp
+          git add engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Move command search into popup palette"
+          git push origin HEAD:orbit-ui-command-palette-popup
