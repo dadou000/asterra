@@ -1,0 +1,35 @@
+name: Orbit UI command palette details validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-command-palette-details
+
+permissions:
+  contents: write
+
+jobs:
+  command-palette-details:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-command-palette-details
+      - name: Apply patch
+        run: python3 tools/validation/command_palette_details_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only)" = "engine/studio_ui/src/StudioExpansionShell.cpp"
+          grep -q 'CommandPaletteSecondaryText' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'kMaxSecondaryCharacters = 96U' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'label += "\\n"' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'context.Selectable(' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'index == commandPaletteSelection_' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Enrich command palette results"
+          git push origin HEAD:orbit-ui-command-palette-details
