@@ -534,7 +534,16 @@ void RegisterVolumeCommands(
         .category = "World / Volumetrics",
         .description = "Create one authored universal Volume domain using Empty or a production preset.",
         .parameters = {
-            {.name="preset",.kind=commands::CommandValueKind::String,.required=false}
+            {
+                .name = "preset",
+                .kind = commands::CommandValueKind::String,
+                .required = false,
+                .displayName = "Preset",
+                .description =
+                    "Production preset: Empty, Smoke, Fire, Fog, Dust, Snow, or Surface Flow.",
+                .defaultValue =
+                    commands::CommandValue{std::string{"Empty"}}
+            }
         },
         .presentationSurfaces = {
             "explorer.context",
@@ -730,7 +739,14 @@ void RegisterVolumeCommands(
         .category = "World / Volumetrics",
         .description = "Add one source adapter to the selected universal Volume.",
         .parameters = {
-            {.name="kind",.kind=commands::CommandValueKind::String,.required=true}
+            {
+                .name = "kind",
+                .kind = commands::CommandValueKind::String,
+                .required = true,
+                .displayName = "Source Type",
+                .description =
+                    "Source adapter: Brush, Texture / Mask, Terrain, Spline, Mesh / SDF, Collision Proxy, Particles, Object Motion, or World Motion."
+            }
         },
         .presentationSurfaces = {
             "properties.toolbar",
@@ -800,7 +816,14 @@ void RegisterVolumeCommands(
         .category = "World / Volumetrics",
         .description = "Add one obstacle/force effector to the selected universal Volume.",
         .parameters = {
-            {.name="kind",.kind=commands::CommandValueKind::String,.required=true}
+            {
+                .name = "kind",
+                .kind = commands::CommandValueKind::String,
+                .required = true,
+                .displayName = "Effector Type",
+                .description =
+                    "Effector type: Obstacle, Drag, Wind, Temperature, or Dissipation."
+            }
         },
         .presentationSurfaces = {
             "properties.toolbar",
@@ -961,9 +984,35 @@ void RegisterVolumeCommands(
         .category = "World / Volumetrics",
         .description = "Author one persistent terrain-paint source stroke at a world-space position.",
         .parameters = {
-            {.name="position",.kind=commands::CommandValueKind::Vector3,.required=true},
-            {.name="radius",.kind=commands::CommandValueKind::Float,.required=false},
-            {.name="strength",.kind=commands::CommandValueKind::Float,.required=false}
+            {
+                .name = "position",
+                .kind = commands::CommandValueKind::Vector3,
+                .required = true,
+                .displayName = "World Position",
+                .description =
+                    "World-space center of the persistent terrain-paint source stroke.",
+                .unit = "m"
+            },
+            {
+                .name = "radius",
+                .kind = commands::CommandValueKind::Float,
+                .required = false,
+                .displayName = "Radius",
+                .description =
+                    "Terrain-paint source radius. Negative values are clamped to zero by the command.",
+                .unit = "m",
+                .defaultValue = commands::CommandValue{f64{2.0}},
+                .minimum = 0.0
+            },
+            {
+                .name = "strength",
+                .kind = commands::CommandValueKind::Float,
+                .required = false,
+                .displayName = "Strength",
+                .description =
+                    "Scalar source strength written into the authored terrain-paint stroke.",
+                .defaultValue = commands::CommandValue{f64{1.0}}
+            }
         },
         .presentationSurfaces = {
             "viewport.radial",

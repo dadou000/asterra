@@ -108,37 +108,65 @@ void RegisterMaterialCommands(
             {
                 .name = "decal",
                 .kind = commands::CommandValueKind::String,
-                .required = true
+                .required = true,
+                .displayName = "Decal Asset",
+                .description =
+                    "Project decal asset identifier to attach to the selected celestial body."
             },
             {
                 .name = "latitude",
                 .kind = commands::CommandValueKind::Float,
-                .required = true
+                .required = true,
+                .displayName = "Latitude",
+                .description =
+                    "Surface latitude used to place the decal.",
+                .unit = "rad"
             },
             {
                 .name = "longitude",
                 .kind = commands::CommandValueKind::Float,
-                .required = true
+                .required = true,
+                .displayName = "Longitude",
+                .description =
+                    "Surface longitude used to place the decal.",
+                .unit = "rad"
             },
             {
                 .name = "width",
                 .kind = commands::CommandValueKind::Float,
-                .required = true
+                .required = true,
+                .displayName = "Width",
+                .description =
+                    "Physical decal width. The command requires a positive value.",
+                .unit = "m"
             },
             {
                 .name = "height",
                 .kind = commands::CommandValueKind::Float,
-                .required = true
+                .required = true,
+                .displayName = "Height",
+                .description =
+                    "Physical decal height. The command requires a positive value.",
+                .unit = "m"
             },
             {
                 .name = "rotation",
                 .kind = commands::CommandValueKind::Float,
-                .required = true
+                .required = true,
+                .displayName = "Rotation",
+                .description =
+                    "Rotation around the decal surface normal.",
+                .unit = "deg"
             },
             {
                 .name = "opacity",
                 .kind = commands::CommandValueKind::Float,
-                .required = true
+                .required = true,
+                .displayName = "Opacity",
+                .description =
+                    "Decal opacity from fully transparent (0) to fully opaque (1).",
+                .minimum = 0.0,
+                .maximum = 1.0
             }
         },
         .presentationSurfaces = {

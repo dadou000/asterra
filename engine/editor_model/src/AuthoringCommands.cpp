@@ -872,7 +872,10 @@ void Register(
             commands::CommandParameter{
                 .name = "material",
                 .kind = commands::CommandValueKind::String,
-                .required = true
+                .required = true,
+                .displayName = "Material Asset",
+                .description =
+                    "Project material asset identifier assigned to the selected compatible object."
             }
         },
         .enablement =
@@ -1034,12 +1037,20 @@ void Register(
             {
                 .name = "start_handle",
                 .kind = commands::CommandValueKind::Vector3,
-                .required = false
+                .required = false,
+                .displayName = "Start Handle",
+                .description =
+                    "Cubic Bezier start control-handle offset in path-network space.",
+                .unit = "m"
             },
             {
                 .name = "end_handle",
                 .kind = commands::CommandValueKind::Vector3,
-                .required = false
+                .required = false,
+                .displayName = "End Handle",
+                .description =
+                    "Cubic Bezier end control-handle offset in path-network space.",
+                .unit = "m"
             }
         },
         .enablement =
