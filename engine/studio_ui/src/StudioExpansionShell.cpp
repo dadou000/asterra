@@ -1968,6 +1968,59 @@ void StudioExpansionShell::DrawViewportBand(
 
         if (target != nullptr)
         {
+            static constexpr std::array<std::string_view, 4>
+                kViewportModes{
+                    "Perspective",
+                    "Body Map",
+                    "Debug",
+                    "System"
+                };
+            static constexpr std::array<studio_session::ViewportMode, 4>
+                kViewportModeValues{
+                    studio_session::ViewportMode::Perspective,
+                    studio_session::ViewportMode::BodyMap,
+                    studio_session::ViewportMode::Debug,
+                    studio_session::ViewportMode::System
+                };
+
+            i32 viewportMode = 0;
+            switch (target->mode)
+            {
+            case studio_session::ViewportMode::Perspective:
+                viewportMode = 0;
+                break;
+            case studio_session::ViewportMode::BodyMap:
+                viewportMode = 1;
+                break;
+            case studio_session::ViewportMode::Debug:
+                viewportMode = 2;
+                break;
+            case studio_session::ViewportMode::System:
+                viewportMode = 3;
+                break;
+            }
+
+            context.SameLine();
+            if (context.Combo(
+                    "##viewport-mode-compact",
+                    kViewportModes,
+                    viewportMode))
+            {
+                viewportMode = std::clamp(viewportMode, 0, 3);
+                try
+                {
+                    owner_->InvokeViewportMode(
+                        kViewportModeValues[
+                            static_cast<std::size_t>(viewportMode)]);
+                    owner_->status_.clear();
+                    target = owner_->session_->Viewports().Find(id);
+                }
+                catch (const std::exception& exception)
+                {
+                    owner_->status_ = exception.what();
+                }
+            }
+
             switch (target->mode)
             {
             case studio_session::ViewportMode::Perspective:

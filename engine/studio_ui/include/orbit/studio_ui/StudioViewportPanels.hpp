@@ -99,12 +99,14 @@ private:
     void DrawActivityBand(
         editor_ui::PanelContext& context);
 
-    // View-mode commands are world-registry commands surfaced through row 2's
-    // existing ContextToolbar extension seam. They are reinstalled after a
-    // world switch because EditorWorldSession intentionally replaces its
-    // complete command graph with the new world state.
+    // View-mode commands remain world-registry commands for command search,
+    // MCP and automation. Row 2 invokes the same commands through one compact
+    // selector instead of registering three permanent toolbar contributions.
+    // They are reinstalled after a world switch because EditorWorldSession
+    // intentionally replaces its complete command graph with the new world.
     void EnsureViewportModeCommands();
     void UnregisterViewportModeCommands() noexcept;
+    void InvokeViewportMode(studio_session::ViewportMode mode);
 
     // Built-in quick creation remains presentation-aware because placement is
     // intentionally relative to a viewport camera. StudioExpansionShell calls

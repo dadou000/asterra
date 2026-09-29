@@ -147,7 +147,6 @@ SelectedBiomeObject(
 struct StudioViewportPanels::ViewportModeCommandState
 {
     StudioViewportPanels* owner{nullptr};
-    bool contributionsRegistered{false};
 };
 
 void StudioViewportPanels::UnregisterViewportModeCommands() noexcept
@@ -295,38 +294,56 @@ void StudioViewportPanels::EnsureViewportModeCommands()
         "Debug",
         studio_session::ViewportMode::Debug);
 
-    if (!viewportModeCommandState_->contributionsRegistered)
+    // Row 2 owns the compact presentation; command objects stay registered
+    // independently for automation and command search.
+}
+
+void StudioViewportPanels::InvokeViewportMode(
+    const studio_session::ViewportMode mode)
+{
+    if (session_ == nullptr ||
+        !session_->World().HasWorld())
     {
-        auto& contributions = GlobalStudioUiContributions();
-        contributions.Upsert({
-            .id = "orbit.viewport.mode.perspective",
-            .owner = "orbit",
-            .label = "Perspective",
-            .surface = StudioContributionSurface::ContextToolbar,
-            .kind = StudioContributionKind::Command,
-            .order = 10,
-            .command = kViewportPerspectiveCommand
-        });
-        contributions.Upsert({
-            .id = "orbit.viewport.mode.body-map",
-            .owner = "orbit",
-            .label = "Body Map",
-            .surface = StudioContributionSurface::ContextToolbar,
-            .kind = StudioContributionKind::Command,
-            .order = 20,
-            .command = kViewportBodyMapCommand
-        });
-        contributions.Upsert({
-            .id = "orbit.viewport.mode.debug",
-            .owner = "orbit",
-            .label = "Debug",
-            .surface = StudioContributionSurface::ContextToolbar,
-            .kind = StudioContributionKind::Command,
-            .order = 30,
-            .command = kViewportDebugCommand
-        });
-        viewportModeCommandState_->contributionsRegistered = true;
+        throw std::logic_error(
+            "Viewport mode selection requires an active Studio world.");
     }
+
+    EnsureViewportModeCommands();
+
+    switch (mode)
+    {
+    case studio_session::ViewportMode::Perspective:
+        session_->World().CommandRegistry().Invoke(
+            kViewportPerspectiveCommand);
+        return;
+
+    case studio_session::ViewportMode::BodyMap:
+        session_->World().CommandRegistry().Invoke(
+            kViewportBodyMapCommand);
+        return;
+
+    case studio_session::ViewportMode::Debug:
+        session_->World().CommandRegistry().Invoke(
+            kViewportDebugCommand);
+        return;
+
+    case studio_session::ViewportMode::System:
+    {
+        const std::string_view id =
+            expansion_.ControlledViewportId();
+        if (session_->Viewports().Find(id) == nullptr)
+        {
+            throw std::logic_error(
+                "Controlled viewport is unavailable.");
+        }
+        session_->Viewports().SetMode(
+            id,
+            studio_session::ViewportMode::System);
+        return;
+    }
+    }
+
+    throw std::logic_error("Unsupported viewport mode.");
 }
 
 StudioViewportPanels::StudioViewportPanels(
