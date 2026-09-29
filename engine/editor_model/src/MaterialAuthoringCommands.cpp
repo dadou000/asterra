@@ -111,7 +111,8 @@ void RegisterMaterialCommands(
                 .required = true,
                 .displayName = "Decal Asset",
                 .description =
-                    "Project decal asset identifier to attach to the selected celestial body."
+                    "Project decal asset to attach to the selected celestial body.",
+                .assetKinds = {"Decal"}
             },
             {
                 .name = "latitude",

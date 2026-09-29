@@ -12,6 +12,11 @@
 #include <string_view>
 #include <vector>
 
+namespace orbit::content
+{
+class ContentService;
+}
+
 namespace orbit::studio_ui
 {
 inline constexpr editor_ui::PanelId kPrimaryViewportPanel{
@@ -64,6 +69,11 @@ public:
 
     void Register(editor_ui::EditorUi& ui);
     void RegisterSecondary(editor_ui::EditorUi& ui);
+
+    void SetContentService(content::ContentService* content) noexcept
+    {
+        content_ = content;
+    }
 
     void RequestCommandPaletteOpen() noexcept
     {
@@ -132,6 +142,7 @@ private:
 
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
+    content::ContentService* content_{nullptr};
     std::string status_;
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
 

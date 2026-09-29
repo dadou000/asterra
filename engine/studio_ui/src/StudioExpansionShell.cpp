@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioExpansionShell.hpp>
 
+#include <orbit/content/ContentService.hpp>
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/editor_ui/FocusState.hpp>
@@ -2674,22 +2675,17 @@ void StudioExpansionShell::DrawNavigationBand(
 
                         if (!parameter.choices.empty())
                         {
-                            std::vector<std::string_view> choiceLabels;
-                            choiceLabels.reserve(parameter.choices.size());
-
                             i32 choiceIndex = 0;
                             bool currentChoiceFound = false;
                             for (std::size_t choice = 0U;
                                  choice < parameter.choices.size();
                                  ++choice)
                             {
-                                const auto& commandChoice =
-                                    parameter.choices[choice];
-                                choiceLabels.push_back(commandChoice.label);
-                                if (commandChoice.value == found->second)
+                                if (parameter.choices[choice].value == found->second)
                                 {
                                     choiceIndex = static_cast<i32>(choice);
                                     currentChoiceFound = true;
+                                    break;
                                 }
                             }
 
@@ -2699,11 +2695,183 @@ void StudioExpansionShell::DrawNavigationBand(
                                 found->second = parameter.choices.front().value;
                             }
 
-                            if (context.Combo(label, choiceLabels, choiceIndex))
+                            constexpr std::size_t kSearchableChoiceThreshold = 8U;
+                            if (parameter.choices.size() <= kSearchableChoiceThreshold)
                             {
-                                found->second =
+                                std::vector<std::string_view> choiceLabels;
+                                choiceLabels.reserve(parameter.choices.size());
+                                for (const auto& commandChoice : parameter.choices)
+                                {
+                                    choiceLabels.push_back(commandChoice.label);
+                                }
+
+                                if (context.Combo(label, choiceLabels, choiceIndex))
+                                {
+                                    found->second =
+                                        parameter.choices[
+                                            static_cast<std::size_t>(choiceIndex)].value;
+                                }
+                            }
+                            else
+                            {
+                                std::string choiceDisplayLabel = visibleLabel;
+                                if (parameter.required)
+                                {
+                                    choiceDisplayLabel += " *";
+                                }
+                                context.KeyValue(
+                                    choiceDisplayLabel,
                                     parameter.choices[
-                                        static_cast<std::size_t>(choiceIndex)].value;
+                                        static_cast<std::size_t>(choiceIndex)].label);
+
+                                const std::string pickerKey =
+                                    "choice:" + parameter.name;
+                                std::string chooseLabel =
+                                    "Choose…##quick-create-choice-picker-" +
+                                    parameter.name;
+                                const bool openPicker = context.Button(chooseLabel);
+                                if (openPicker)
+                                {
+                                    quickCreatePickerQuery_[pickerKey].clear();
+                                    quickCreatePickerSelection_[pickerKey] = 0;
+                                }
+
+                                const std::string popupId =
+                                    "quick-create-choice-picker-popup-" +
+                                    parameter.name;
+                                if (context.BeginPopup(
+                                        popupId,
+                                        openPicker,
+                                        {.width = 420.0F * editor_ui::CurrentUiScale(),
+                                         .height = 0.0F}))
+                                {
+                                    context.Text("Choose " + parameterDisplayName);
+                                    if (openPicker)
+                                    {
+                                        context.FocusNextItem();
+                                    }
+
+                                    auto& query = quickCreatePickerQuery_[pickerKey];
+                                    auto& resultSelection =
+                                        quickCreatePickerSelection_[pickerKey];
+                                    if (context.InputText(
+                                            "Search##quick-create-choice-search",
+                                            query))
+                                    {
+                                        resultSelection = 0;
+                                    }
+                                    if (context.KeyPressed(editor_ui::UiKey::Escape))
+                                    {
+                                        if (!query.empty())
+                                        {
+                                            query.clear();
+                                            resultSelection = 0;
+                                        }
+                                        else
+                                        {
+                                            context.CloseCurrentPopup();
+                                        }
+                                    }
+                                    context.Separator();
+
+                                    struct RankedChoice
+                                    {
+                                        std::size_t index{0U};
+                                        i32 score{0};
+                                    };
+                                    std::vector<RankedChoice> matches;
+                                    for (std::size_t choice = 0U;
+                                         choice < parameter.choices.size();
+                                         ++choice)
+                                    {
+                                        const i32 score = PaletteMatchScore(
+                                            parameter.choices[choice].label,
+                                            query);
+                                        if (!query.empty() &&
+                                            score == std::numeric_limits<i32>::min())
+                                        {
+                                            continue;
+                                        }
+                                        matches.push_back({choice, score});
+                                    }
+                                    std::ranges::stable_sort(
+                                        matches,
+                                        [](const RankedChoice& left,
+                                           const RankedChoice& right)
+                                        {
+                                            if (left.score != right.score)
+                                            {
+                                                return left.score > right.score;
+                                            }
+                                            return left.index < right.index;
+                                        });
+
+                                    if (matches.empty())
+                                    {
+                                        resultSelection = 0;
+                                        context.MutedText("No matching choices.");
+                                    }
+                                    else
+                                    {
+                                        const i32 resultCount =
+                                            static_cast<i32>(matches.size());
+                                        resultSelection = std::clamp(
+                                            resultSelection, 0, resultCount - 1);
+                                        if (context.KeyPressed(
+                                                editor_ui::UiKey::Down, true))
+                                        {
+                                            resultSelection =
+                                                (resultSelection + 1) % resultCount;
+                                        }
+                                        if (context.KeyPressed(
+                                                editor_ui::UiKey::Up, true))
+                                        {
+                                            resultSelection =
+                                                (resultSelection + resultCount - 1) %
+                                                resultCount;
+                                        }
+
+                                        const auto chooseChoice =
+                                            [&](const std::size_t resultIndex)
+                                            {
+                                                found->second =
+                                                    parameter.choices[resultIndex].value;
+                                                query.clear();
+                                                context.CloseCurrentPopup();
+                                            };
+
+                                        bool chosenByMouse = false;
+                                        for (i32 index = 0;
+                                             index < resultCount;
+                                             ++index)
+                                        {
+                                            const std::size_t resultIndex =
+                                                matches[static_cast<std::size_t>(index)].index;
+                                            std::string option =
+                                                parameter.choices[resultIndex].label +
+                                                "##quick-create-choice-result-" +
+                                                std::to_string(resultIndex);
+                                            if (context.Selectable(
+                                                    option,
+                                                    parameter.choices[resultIndex].value ==
+                                                        found->second))
+                                            {
+                                                chooseChoice(resultIndex);
+                                                chosenByMouse = true;
+                                                break;
+                                            }
+                                        }
+
+                                        if (!chosenByMouse &&
+                                            context.KeyPressed(editor_ui::UiKey::Enter))
+                                        {
+                                            chooseChoice(
+                                                matches[static_cast<std::size_t>(
+                                                    resultSelection)].index);
+                                        }
+                                    }
+                                    context.EndPopup();
+                                }
                             }
                         }
                         else
@@ -2772,7 +2940,186 @@ void StudioExpansionShell::DrawNavigationBand(
                         case commands::CommandValueKind::String:
                             if (auto* value = std::get_if<std::string>(&found->second))
                             {
-                                static_cast<void>(context.InputText(label, *value));
+                                if (!parameter.assetKinds.empty() &&
+                                    owner_->content_ != nullptr)
+                                {
+                                    auto assetMatchesParameter =
+                                        [&parameter](const content::AssetRecord& asset)
+                                        {
+                                            const std::string_view kind =
+                                                content::AssetKindName(asset.kind);
+                                            return std::ranges::any_of(
+                                                parameter.assetKinds,
+                                                [kind](const std::string& accepted)
+                                                {
+                                                    return accepted == kind;
+                                                });
+                                        };
+
+                                    std::string selected = value->empty()
+                                        ? "None"
+                                        : *value;
+                                    if (!value->empty())
+                                    {
+                                        if (const auto* asset =
+                                                owner_->content_->FindByPath(*value);
+                                            asset != nullptr &&
+                                            assetMatchesParameter(*asset))
+                                        {
+                                            selected = asset->name;
+                                            selected += " · ";
+                                            selected += content::AssetKindName(asset->kind);
+                                        }
+                                    }
+                                    context.KeyValue(parameterDisplayName, selected);
+
+                                    const std::string pickerKey =
+                                        "asset:" + parameter.name;
+                                    std::string chooseLabel =
+                                        "Choose Asset…##quick-create-asset-picker-" +
+                                        parameter.name;
+                                    const bool openPicker = context.Button(chooseLabel);
+                                    if (openPicker)
+                                    {
+                                        quickCreatePickerQuery_[pickerKey].clear();
+                                        quickCreatePickerSelection_[pickerKey] = 0;
+                                    }
+
+                                    const std::string popupId =
+                                        "quick-create-asset-picker-popup-" +
+                                        parameter.name;
+                                    if (context.BeginPopup(
+                                            popupId,
+                                            openPicker,
+                                            {.width = 500.0F * editor_ui::CurrentUiScale(),
+                                             .height = 0.0F}))
+                                    {
+                                        context.Text("Choose " + parameterDisplayName);
+                                        if (openPicker)
+                                        {
+                                            context.FocusNextItem();
+                                        }
+
+                                        auto& query = quickCreatePickerQuery_[pickerKey];
+                                        auto& resultSelection =
+                                            quickCreatePickerSelection_[pickerKey];
+                                        if (context.InputText(
+                                                "Search##quick-create-asset-search",
+                                                query))
+                                        {
+                                            resultSelection = 0;
+                                        }
+                                        if (context.KeyPressed(editor_ui::UiKey::Escape))
+                                        {
+                                            if (!query.empty())
+                                            {
+                                                query.clear();
+                                                resultSelection = 0;
+                                            }
+                                            else
+                                            {
+                                                context.CloseCurrentPopup();
+                                            }
+                                        }
+                                        context.Separator();
+
+                                        std::vector<content::AssetRecord> candidates;
+                                        for (auto asset : owner_->content_->Search(query))
+                                        {
+                                            if (assetMatchesParameter(asset))
+                                            {
+                                                candidates.push_back(std::move(asset));
+                                            }
+                                            if (candidates.size() >= 24U)
+                                            {
+                                                break;
+                                            }
+                                        }
+
+                                        if (candidates.empty())
+                                        {
+                                            resultSelection = 0;
+                                            context.MutedText(
+                                                "No matching project assets.");
+                                        }
+                                        else
+                                        {
+                                            const i32 resultCount =
+                                                static_cast<i32>(candidates.size());
+                                            resultSelection = std::clamp(
+                                                resultSelection, 0, resultCount - 1);
+                                            if (context.KeyPressed(
+                                                    editor_ui::UiKey::Down, true))
+                                            {
+                                                resultSelection =
+                                                    (resultSelection + 1) % resultCount;
+                                            }
+                                            if (context.KeyPressed(
+                                                    editor_ui::UiKey::Up, true))
+                                            {
+                                                resultSelection =
+                                                    (resultSelection + resultCount - 1) %
+                                                    resultCount;
+                                            }
+
+                                            const auto chooseAsset =
+                                                [&](const content::AssetRecord& asset)
+                                                {
+                                                    *value =
+                                                        asset.sourcePath.generic_string();
+                                                    query.clear();
+                                                    context.CloseCurrentPopup();
+                                                };
+
+                                            bool chosenByMouse = false;
+                                            for (i32 index = 0;
+                                                 index < resultCount;
+                                                 ++index)
+                                            {
+                                                const auto& asset =
+                                                    candidates[static_cast<std::size_t>(index)];
+                                                std::string option = asset.name;
+                                                option += "\n";
+                                                option += content::AssetKindName(asset.kind);
+                                                option += " · ";
+                                                option += asset.sourcePath.generic_string();
+                                                option += "##quick-create-asset-result-";
+                                                option += asset.id.ToString();
+                                                if (context.Selectable(
+                                                        option,
+                                                        *value ==
+                                                            asset.sourcePath.generic_string()))
+                                                {
+                                                    chooseAsset(asset);
+                                                    chosenByMouse = true;
+                                                    break;
+                                                }
+                                            }
+
+                                            if (!chosenByMouse &&
+                                                context.KeyPressed(editor_ui::UiKey::Enter))
+                                            {
+                                                chooseAsset(
+                                                    candidates[static_cast<std::size_t>(
+                                                        resultSelection)]);
+                                            }
+                                        }
+                                        context.EndPopup();
+                                    }
+
+                                    std::string advancedLabel =
+                                        "Advanced asset path##quick-create-asset-path-" +
+                                        parameter.name;
+                                    if (context.Section(advancedLabel, false))
+                                    {
+                                        static_cast<void>(
+                                            context.InputText(label, *value));
+                                    }
+                                }
+                                else
+                                {
+                                    static_cast<void>(context.InputText(label, *value));
+                                }
                             }
                             break;
                         case commands::CommandValueKind::Vector3:
