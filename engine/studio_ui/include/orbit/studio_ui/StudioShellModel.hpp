@@ -24,10 +24,10 @@ enum class StudioBrowserMode : u8
 struct WorldAssetsBrowserContract
 {
     editor_ui::PanelId panel{};
-    // Compatibility/expert composite only. The normal Studio front door is
-    // Explorer + center workspace + Properties, so this must not compete with
-    // Explorer for the default left dock.
-    bool defaultOpen{false};
+    // Canonical Studio browser. Explorer and Material Service remain
+    // registered as source implementations only; users interact with this
+    // single left-side surface and switch its content contextually.
+    bool defaultOpen{true};
     editor_ui::DockRegion defaultDock{editor_ui::DockRegion::Left};
     i32 dockOrder{-100};
     editor_ui::UiSize minSize{260.0F, 300.0F};
