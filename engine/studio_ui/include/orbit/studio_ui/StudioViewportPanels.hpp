@@ -75,9 +75,6 @@ private:
 
     struct ViewportModeCommandState;
 
-    void RegisterBase(editor_ui::EditorUi& ui);
-    void RegisterSecondaryBase(editor_ui::EditorUi& ui);
-
     void DrawViewBase(
         editor_ui::PanelContext& context,
         std::string_view id);
