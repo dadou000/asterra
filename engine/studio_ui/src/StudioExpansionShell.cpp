@@ -1932,7 +1932,8 @@ void StudioExpansionShell::DrawNavigationBand(
 
     context.SameLine();
     const bool openCommandPalette =
-        context.Button("Commands##command-palette-toggle");
+        context.Button("Commands##command-palette-toggle") ||
+        std::exchange(commandPaletteOpenRequested_, false);
     if (openCommandPalette)
     {
         commandQuery_.clear();

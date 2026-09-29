@@ -61,6 +61,11 @@ public:
         return SelectedViewportId();
     }
 
+    void RequestCommandPaletteOpen() noexcept
+    {
+        commandPaletteOpenRequested_ = true;
+    }
+
 private:
     void DrawNavigationBand(editor_ui::PanelContext& context);
     void DrawViewportBand(editor_ui::PanelContext& context);
@@ -102,6 +107,7 @@ private:
     ViewportAuthoringState viewportState_{};
     std::string commandQuery_;
     i32 commandPaletteSelection_{0};
+    bool commandPaletteOpenRequested_{false};
     bool attached_{false};
 
     // 0 = follow focused viewport, 1 = pin Primary, 2 = pin Body Map.

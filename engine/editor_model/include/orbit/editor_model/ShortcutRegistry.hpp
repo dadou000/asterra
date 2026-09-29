@@ -3,6 +3,7 @@
 #include <orbit/commands/CommandRegistry.hpp>
 #include <orbit/platform/Window.hpp>
 
+#include <functional>
 #include <vector>
 
 namespace orbit::editor_model
@@ -25,6 +26,11 @@ public:
         ShortcutChord chord,
         commands::CommandId command);
 
+    void RegisterCallback(
+        ShortcutChord chord,
+        std::function<void()> callback,
+        bool allowWhenKeyboardCaptured = false);
+
     void Update(
         platform::Window& window,
         const commands::CommandRegistry& commandRegistry,
@@ -35,6 +41,8 @@ private:
     {
         ShortcutChord chord;
         commands::CommandId command{};
+        std::function<void()> callback;
+        bool allowWhenKeyboardCaptured{false};
         bool wasDown{false};
     };
 

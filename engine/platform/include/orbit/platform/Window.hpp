@@ -12,7 +12,7 @@ namespace orbit::platform
 // Letter keys come in two kinds, on purpose:
 //  - W A S D Q E are *positions* (the QWERTY reference cluster), for movement.
 //    They stay under the player's fingers on AZERTY, QWERTZ, Dvorak...
-//  - C G L M V X Y Z (and LetterA) name the *letter* that key types on the
+//  - C G L M P V X Y Z (and LetterA) name the *letter* that key types on the
 //    active layout, for mnemonic and text-editing shortcuts (Ctrl+Z is the key
 //    labelled Z, wherever it is).
 // `A` is the movement position; text shortcuts that mean the letter A (select
@@ -29,6 +29,7 @@ enum class Key : u8
     G,
     L,
     M,
+    P,
     V,
     X,
     Y,

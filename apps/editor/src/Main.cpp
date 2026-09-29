@@ -2185,6 +2185,19 @@ int main(
                 studioViews,
                 studioSession);
 
+        shortcuts.RegisterCallback(
+            {
+                .key = orbit::platform::Key::P,
+                .control = true,
+                .shift = true
+            },
+            [&studioViewportPanels]
+            {
+                studioViewportPanels.
+                    RequestCommandPaletteOpen();
+            },
+            true);
+
         orbit::volume_fields::
             VolumeFieldStorageService
                 volumeFieldStorage(
