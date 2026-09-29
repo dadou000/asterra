@@ -131,7 +131,7 @@ constexpr std::array<std::string_view, 4> kSurfaceViews{
         tool == StudioTerrainAuthoringTool::Ridge;
 }
 
-[[nodiscard]] const char* ViewportModeName(
+[[nodiscard]] const char* ViewportModeDisplayName(
     const studio_session::ViewportMode mode) noexcept
 {
     switch (mode)
@@ -1106,7 +1106,7 @@ void StudioExpansionShell::DrawViewportTargetProperties(
     context.MutedText(
         std::format(
             "Mode: {}",
-            ViewportModeName(target->mode)));
+            ViewportModeDisplayName(target->mode)));
 
     if (context.Button("Follow Active Body##viewport-follow-active"))
     {
