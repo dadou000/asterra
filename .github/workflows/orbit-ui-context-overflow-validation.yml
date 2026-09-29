@@ -1,0 +1,76 @@
+name: Orbit UI context overflow validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-context-overflow
+
+permissions:
+  contents: write
+
+jobs:
+  context-overflow:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-context-overflow
+
+      - name: Apply responsive context overflow
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          header = Path('engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp')
+          source = Path('engine/studio_ui/src/StudioExpansionShell.cpp')
+
+          h = header.read_text(encoding='utf-8')
+          old_h = '''    void DrawContributions(\n        editor_ui::PanelContext& context,\n        StudioContributionSurface surface);\n'''
+          new_h = '''    void DrawContributions(\n        editor_ui::PanelContext& context,\n        StudioContributionSurface surface,\n        bool responsiveOverflow = false);\n'''
+          if old_h not in h:
+              raise SystemExit('DrawContributions declaration anchor not found')
+          header.write_text(h.replace(old_h, new_h, 1), encoding='utf-8')
+
+          s = source.read_text(encoding='utf-8')
+          old_sig = '''void StudioExpansionShell::DrawContributions(\n    editor_ui::PanelContext& context,\n    const StudioContributionSurface surface)\n'''
+          new_sig = '''void StudioExpansionShell::DrawContributions(\n    editor_ui::PanelContext& context,\n    const StudioContributionSurface surface,\n    const bool responsiveOverflow)\n'''
+          if old_sig not in s:
+              raise SystemExit('DrawContributions definition anchor not found')
+          s = s.replace(old_sig, new_sig, 1)
+
+          old_tail = '''    if (!actions.empty())\n    {\n        context.SameLine();\n        context.Toolbar(actions);\n    }\n}\n'''
+          new_tail = '''    if (actions.empty())\n    {\n        return;\n    }\n\n    context.SameLine();\n\n    // Keep built-in authoring/view/gizmo controls stable. Only extensible\n    // context commands collapse when the row runs short on horizontal space.\n    // ContentAvailable() is evaluated after all high-priority controls have\n    // drawn, so this adapts to both window width and the active context.\n    constexpr f32 kInlineContributionReserve = 300.0F;\n    const bool overflow =\n        responsiveOverflow &&\n        context.ContentAvailable().width <\n            kInlineContributionReserve * editor_ui::CurrentUiScale();\n\n    if (!overflow)\n    {\n        context.Toolbar(actions);\n        return;\n    }\n\n    const bool openOverflow =\n        context.Button("…##studio-context-toolbar-overflow");\n    context.ContextMenu(\n        "studio-context-toolbar-overflow-menu",\n        actions,\n        openOverflow);\n}\n'''
+          if old_tail not in s:
+              raise SystemExit('DrawContributions tail anchor not found')
+          s = s.replace(old_tail, new_tail, 1)
+
+          old_call = '''    DrawContributions(\n        context,\n        StudioContributionSurface::ContextToolbar);\n'''
+          new_call = '''    DrawContributions(\n        context,\n        StudioContributionSurface::ContextToolbar,\n        true);\n'''
+          if old_call not in s:
+              raise SystemExit('ContextToolbar call anchor not found')
+          s = s.replace(old_call, new_call, 1)
+
+          source.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Verify focused diff
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          grep -q 'responsiveOverflow = false' engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          grep -q 'kInlineContributionReserve = 300.0F' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'studio-context-toolbar-overflow-menu' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'StudioContributionSurface::ContextToolbar,' engine/studio_ui/src/StudioExpansionShell.cpp
+
+      - name: Commit validation change
+        shell: bash
+        run: |
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Add responsive context toolbar overflow"
+          git push origin HEAD:orbit-ui-context-overflow
