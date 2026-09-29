@@ -67,7 +67,8 @@ private:
     void DrawInspectorExtension(editor_ui::PanelContext& context);
     void DrawContributions(
         editor_ui::PanelContext& context,
-        StudioContributionSurface surface);
+        StudioContributionSurface surface,
+        bool responsiveOverflow = false);
 
     // Terrain is the densest contextual tool family. Keep the permanent shell
     // to one selector while the canonical Properties panel exposes only the

@@ -623,7 +623,8 @@ void StudioExpansionShell::SyncPersistentState() noexcept
 
 void StudioExpansionShell::DrawContributions(
     editor_ui::PanelContext& context,
-    const StudioContributionSurface surface)
+    const StudioContributionSurface surface,
+    const bool responsiveOverflow)
 {
     if (owner_ == nullptr ||
         owner_->session_ == nullptr ||
@@ -677,11 +678,35 @@ void StudioExpansionShell::DrawContributions(
         });
     }
 
-    if (!actions.empty())
+    if (actions.empty())
     {
-        context.SameLine();
-        context.Toolbar(actions);
+        return;
     }
+
+    context.SameLine();
+
+    // Keep built-in authoring/view/gizmo controls stable. Only extensible
+    // context commands collapse when the row runs short on horizontal space.
+    // ContentAvailable() is evaluated after all high-priority controls have
+    // drawn, so this adapts to both window width and the active context.
+    constexpr f32 kInlineContributionReserve = 300.0F;
+    const bool overflow =
+        responsiveOverflow &&
+        context.ContentAvailable().width <
+            kInlineContributionReserve * editor_ui::CurrentUiScale();
+
+    if (!overflow)
+    {
+        context.Toolbar(actions);
+        return;
+    }
+
+    const bool openOverflow =
+        context.Button("…##studio-context-toolbar-overflow");
+    context.ContextMenu(
+        "studio-context-toolbar-overflow-menu",
+        actions,
+        openOverflow);
 }
 
 void StudioExpansionShell::DrawInspectorExtension(
@@ -2158,6 +2183,7 @@ void StudioExpansionShell::DrawViewportBand(
 
     DrawContributions(
         context,
-        StudioContributionSurface::ContextToolbar);
+        StudioContributionSurface::ContextToolbar,
+        true);
 }
 } // namespace orbit::studio_ui
