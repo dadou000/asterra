@@ -1507,6 +1507,11 @@ bool PanelContext::Selectable(
         selected);
 }
 
+void PanelContext::SetNextTreeItemOpen(const bool open)
+{
+    ImGui::SetNextItemOpen(open, ImGuiCond_Appearing);
+}
+
 TreeItemInteraction PanelContext::TreeItem(
     const std::string_view label,
     const bool selected)
