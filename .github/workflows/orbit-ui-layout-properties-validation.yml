@@ -1,0 +1,49 @@
+name: Orbit UI layout properties validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-layout-properties
+
+permissions:
+  contents: write
+
+jobs:
+  move-layout-control:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-layout-properties
+
+      - name: Move viewport layout into Properties
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('engine/studio_ui/src/StudioExpansionShell.cpp')
+          text = path.read_text(encoding='utf-8')
+
+          anchor = '''    static_cast<void>(\n        context.Combo(\n            "Control##viewport-control-mode",\n            kViewportControlModes,\n            viewportControlMode_));\n\n    const std::string_view id = SelectedViewportId();\n'''
+          insert = '''    static_cast<void>(\n        context.Combo(\n            "Control##viewport-control-mode",\n            kViewportControlModes,\n            viewportControlMode_));\n\n    static constexpr std::array<std::string_view, 4>\n        kLayouts{"Single", "Vertical", "Horizontal", "Quad"};\n    i32 layout = static_cast<i32>(viewportState_.layout);\n    if (context.Combo(\n            "Layout##viewport-layout-properties",\n            kLayouts,\n            layout))\n    {\n        viewportState_.SetLayout(\n            static_cast<ViewportLayout>(layout));\n    }\n\n    const std::string_view id = SelectedViewportId();\n'''
+          row = '''    context.SameLine();\n\n    static constexpr std::array<std::string_view, 4>\n        kLayouts{"Single", "Vertical", "Horizontal", "Quad"};\n    i32 layout = static_cast<i32>(viewportState_.layout);\n    if (context.Combo(\n            "##viewport-layout",\n            kLayouts,\n            layout))\n    {\n        viewportState_.SetLayout(\n            static_cast<ViewportLayout>(layout));\n    }\n\n    context.SameLine();\n\n    static constexpr std::array<std::string_view, 4>\n        kTools{"Select", "Move", "Rotate", "Scale"};\n'''
+          row_new = '''    context.SameLine();\n\n    static constexpr std::array<std::string_view, 4>\n        kTools{"Select", "Move", "Rotate", "Scale"};\n'''
+          if anchor not in text or row not in text:
+              raise SystemExit('layout move anchors not found')
+          text = text.replace(anchor, insert, 1).replace(row, row_new, 1)
+          if '"##viewport-layout"' in text:
+              raise SystemExit('row layout control remains')
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only)" = "engine/studio_ui/src/StudioExpansionShell.cpp"
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Move viewport layout into Properties"
+          git push origin HEAD:orbit-ui-layout-properties
