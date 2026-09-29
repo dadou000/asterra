@@ -2906,82 +2906,256 @@ void StudioExpansionShell::DrawNavigationBand(
                                     }
                                 }
 
-                                struct PropertyCandidate
-                                {
-                                    std::string label;
-                                    schema::PropertyId id{};
-                                    bool preferred{false};
-                                };
-                                std::vector<PropertyCandidate> candidates;
-                                const std::string lowerQuery = PaletteLower(query);
                                 const auto catalog = world.Schemas().Catalog();
-                                for (const auto& type : catalog)
-                                {
-                                    for (const auto& property : type.properties)
+                                const auto selectedPropertyId =
+                                    schema::PropertyId::Parse(idText);
+                                const auto chooseProperty =
+                                    [&](const schema::PropertySchema& property)
                                     {
-                                        std::string searchable =
-                                            property.name + " " +
-                                            type.displayName + " " +
-                                            type.category;
-                                        if (!lowerQuery.empty() &&
-                                            PaletteLower(searchable).find(lowerQuery) ==
+                                        found->second = property.id;
+                                        idText = property.id.ToString();
+                                        query.clear();
+                                        context.CloseCurrentPopup();
+                                    };
+
+                                if (!query.empty())
+                                {
+                                    struct PropertyCandidate
+                                    {
+                                        const schema::TypeSchema* type{nullptr};
+                                        const schema::PropertySchema* property{nullptr};
+                                        bool preferred{false};
+                                    };
+
+                                    std::vector<PropertyCandidate> candidates;
+                                    const std::string lowerQuery = PaletteLower(query);
+                                    for (const auto& type : catalog)
+                                    {
+                                        for (const auto& property : type.properties)
+                                        {
+                                            std::string searchable =
+                                                property.name + " " +
+                                                type.displayName + " " +
+                                                type.category;
+                                            if (PaletteLower(searchable).find(lowerQuery) ==
                                                 std::string::npos)
+                                            {
+                                                continue;
+                                            }
+
+                                            candidates.push_back({
+                                                .type = &type,
+                                                .property = &property,
+                                                .preferred =
+                                                    preferredType.has_value() &&
+                                                    type.id == *preferredType
+                                            });
+                                        }
+                                    }
+
+                                    std::ranges::stable_sort(
+                                        candidates,
+                                        [](const PropertyCandidate& left,
+                                           const PropertyCandidate& right)
+                                        {
+                                            if (left.preferred != right.preferred)
+                                            {
+                                                return left.preferred;
+                                            }
+                                            if (left.type->displayName !=
+                                                right.type->displayName)
+                                            {
+                                                return left.type->displayName <
+                                                    right.type->displayName;
+                                            }
+                                            return left.property->name <
+                                                right.property->name;
+                                        });
+                                    if (candidates.size() > 24U)
+                                    {
+                                        candidates.resize(24U);
+                                    }
+
+                                    if (candidates.empty())
+                                    {
+                                        context.MutedText(
+                                            "No matching schema properties.");
+                                    }
+                                    else
+                                    {
+                                        for (const auto& candidate : candidates)
+                                        {
+                                            std::string option =
+                                                candidate.property->name;
+                                            option += "\n";
+                                            option += candidate.type->displayName;
+                                            if (!candidate.property->unit.empty())
+                                            {
+                                                option += " · ";
+                                                option += candidate.property->unit;
+                                            }
+                                            option += " · ";
+                                            option += candidate.property->id.ToString();
+                                            option += "##property-picker-search-result-";
+                                            option += candidate.property->id.ToString();
+
+                                            if (context.Selectable(
+                                                    option,
+                                                    selectedPropertyId.has_value() &&
+                                                        candidate.property->id ==
+                                                            *selectedPropertyId))
+                                            {
+                                                chooseProperty(*candidate.property);
+                                            }
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    struct PropertyCategoryGroup
+                                    {
+                                        std::string name;
+                                        std::vector<const schema::TypeSchema*> types;
+                                        bool preferred{false};
+                                    };
+
+                                    std::vector<PropertyCategoryGroup> groups;
+                                    for (const auto& type : catalog)
+                                    {
+                                        if (type.properties.empty())
                                         {
                                             continue;
                                         }
 
-                                        std::string option = property.name;
-                                        option += "\n";
-                                        option += type.displayName;
-                                        if (!property.unit.empty())
+                                        const std::string category =
+                                            type.category.empty()
+                                                ? "Uncategorized"
+                                                : type.category;
+                                        auto group = std::ranges::find_if(
+                                            groups,
+                                            [&category](
+                                                const PropertyCategoryGroup& item)
+                                            {
+                                                return item.name == category;
+                                            });
+                                        if (group == groups.end())
                                         {
-                                            option += " · ";
-                                            option += property.unit;
+                                            groups.push_back({
+                                                .name = category
+                                            });
+                                            group = std::prev(groups.end());
                                         }
-                                        option += " · ";
-                                        option += property.id.ToString();
-                                        candidates.push_back({
-                                            .label = std::move(option),
-                                            .id = property.id,
-                                            .preferred =
-                                                preferredType.has_value() &&
-                                                type.id == *preferredType
-                                        });
-                                    }
-                                }
-                                std::ranges::stable_sort(
-                                    candidates,
-                                    [](const PropertyCandidate& left,
-                                       const PropertyCandidate& right)
-                                    {
-                                        if (left.preferred != right.preferred)
-                                        {
-                                            return left.preferred;
-                                        }
-                                        return left.label < right.label;
-                                    });
-                                if (candidates.size() > 24U)
-                                {
-                                    candidates.resize(24U);
-                                }
 
-                                if (candidates.empty())
-                                {
-                                    context.MutedText("No matching schema properties.");
-                                }
-                                else
-                                {
-                                    for (const auto& candidate : candidates)
-                                    {
-                                        std::string option = candidate.label;
-                                        option += "##property-picker-result-";
-                                        option += candidate.id.ToString();
-                                        if (context.Selectable(option, false))
+                                        group->types.push_back(&type);
+                                        if (preferredType.has_value() &&
+                                            type.id == *preferredType)
                                         {
-                                            found->second = candidate.id;
-                                            idText = candidate.id.ToString();
-                                            query.clear();
-                                            context.CloseCurrentPopup();
+                                            group->preferred = true;
+                                        }
+                                    }
+
+                                    std::ranges::stable_sort(
+                                        groups,
+                                        [](const PropertyCategoryGroup& left,
+                                           const PropertyCategoryGroup& right)
+                                        {
+                                            if (left.preferred != right.preferred)
+                                            {
+                                                return left.preferred;
+                                            }
+                                            return left.name < right.name;
+                                        });
+
+                                    if (groups.empty())
+                                    {
+                                        context.MutedText(
+                                            "No schema properties are registered.");
+                                    }
+                                    else
+                                    {
+                                        context.MutedText("Schema");
+                                        for (std::size_t groupIndex = 0;
+                                             groupIndex < groups.size();
+                                             ++groupIndex)
+                                        {
+                                            auto& group = groups[groupIndex];
+                                            std::ranges::stable_sort(
+                                                group.types,
+                                                [&preferredType](
+                                                    const schema::TypeSchema* left,
+                                                    const schema::TypeSchema* right)
+                                                {
+                                                    const bool leftPreferred =
+                                                        preferredType.has_value() &&
+                                                        left->id == *preferredType;
+                                                    const bool rightPreferred =
+                                                        preferredType.has_value() &&
+                                                        right->id == *preferredType;
+                                                    if (leftPreferred != rightPreferred)
+                                                    {
+                                                        return leftPreferred;
+                                                    }
+                                                    return left->displayName <
+                                                        right->displayName;
+                                                });
+
+                                            std::string categoryLabel = group.name;
+                                            categoryLabel += std::format(
+                                                "##property-picker-category-{}",
+                                                groupIndex);
+                                            const auto categoryInteraction =
+                                                context.TreeItem(
+                                                    categoryLabel,
+                                                    group.preferred);
+                                            if (!categoryInteraction.open)
+                                            {
+                                                continue;
+                                            }
+
+                                            for (const auto* type : group.types)
+                                            {
+                                                const bool typePreferred =
+                                                    preferredType.has_value() &&
+                                                    type->id == *preferredType;
+                                                std::string typeLabel =
+                                                    type->displayName;
+                                                typeLabel +=
+                                                    "##property-picker-type-";
+                                                typeLabel += type->id.ToString();
+                                                const auto typeInteraction =
+                                                    context.TreeItem(
+                                                        typeLabel,
+                                                        typePreferred);
+                                                if (!typeInteraction.open)
+                                                {
+                                                    continue;
+                                                }
+
+                                                for (const auto& property :
+                                                     type->properties)
+                                                {
+                                                    std::string option =
+                                                        property.name;
+                                                    if (!property.unit.empty())
+                                                    {
+                                                        option += " · ";
+                                                        option += property.unit;
+                                                    }
+                                                    option +=
+                                                        "##property-picker-property-";
+                                                    option += property.id.ToString();
+                                                    if (context.Selectable(
+                                                            option,
+                                                            selectedPropertyId.has_value() &&
+                                                                property.id ==
+                                                                    *selectedPropertyId))
+                                                    {
+                                                        chooseProperty(property);
+                                                    }
+                                                }
+                                                context.TreePop();
+                                            }
+                                            context.TreePop();
                                         }
                                     }
                                 }
