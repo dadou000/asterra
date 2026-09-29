@@ -550,17 +550,31 @@ void Register(
             commands::CommandParameter{
                 .name = "name",
                 .kind = commands::CommandValueKind::String,
-                .required = false
+                .required = false,
+                .displayName = "Planet Name",
+                .description =
+                    "Optional explicit name. Leave disabled to use Orbit's generated Rocky Planet name."
             },
             commands::CommandParameter{
                 .name = "radiusMeters",
                 .kind = commands::CommandValueKind::Float,
-                .required = false
+                .required = false,
+                .displayName = "Radius",
+                .description =
+                    "Spherical body radius used for both equatorial and polar radius.",
+                .unit = "m",
+                .defaultValue = commands::CommandValue{f64{6'000'000.0}}
             },
             commands::CommandParameter{
                 .name = "massKg",
                 .kind = commands::CommandValueKind::Float,
-                .required = false
+                .required = false,
+                .displayName = "Mass",
+                .description =
+                    "Body mass used by celestial physics.",
+                .unit = "kg",
+                .defaultValue = commands::CommandValue{f64{5.0e24}},
+                .minimum = 0.0
             }
         },
         .presentationSurfaces = {

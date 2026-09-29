@@ -16,9 +16,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <exception>
 #include <format>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -2466,6 +2468,54 @@ void StudioExpansionShell::DrawNavigationBand(
                     quickCreateArgumentEnabled_[parameter.name] =
                         parameter.required;
 
+                    if (parameter.defaultValue.has_value())
+                    {
+                        bool compatible = false;
+                        switch (parameter.kind)
+                        {
+                        case commands::CommandValueKind::Boolean:
+                            compatible = std::holds_alternative<bool>(*parameter.defaultValue);
+                            break;
+                        case commands::CommandValueKind::Integer:
+                            compatible = std::holds_alternative<i64>(*parameter.defaultValue);
+                            break;
+                        case commands::CommandValueKind::Float:
+                            compatible = std::holds_alternative<f64>(*parameter.defaultValue);
+                            break;
+                        case commands::CommandValueKind::String:
+                            compatible = std::holds_alternative<std::string>(*parameter.defaultValue);
+                            break;
+                        case commands::CommandValueKind::Vector3:
+                            compatible = std::holds_alternative<math::Double3>(*parameter.defaultValue);
+                            break;
+                        case commands::CommandValueKind::ObjectId:
+                            compatible = std::holds_alternative<scene::ObjectId>(*parameter.defaultValue);
+                            break;
+                        case commands::CommandValueKind::PropertyId:
+                            compatible = std::holds_alternative<schema::PropertyId>(*parameter.defaultValue);
+                            break;
+                        }
+
+                        if (compatible)
+                        {
+                            quickCreateArguments_[parameter.name] =
+                                *parameter.defaultValue;
+                            if (const auto* object =
+                                    std::get_if<scene::ObjectId>(&*parameter.defaultValue))
+                            {
+                                quickCreateIdText_[parameter.name] =
+                                    object->IsValid() ? object->ToString() : std::string{};
+                            }
+                            else if (const auto* property =
+                                         std::get_if<schema::PropertyId>(&*parameter.defaultValue))
+                            {
+                                quickCreateIdText_[parameter.name] =
+                                    property->IsValid() ? property->ToString() : std::string{};
+                            }
+                            continue;
+                        }
+                    }
+
                     switch (parameter.kind)
                     {
                     case commands::CommandValueKind::Boolean:
@@ -2523,14 +2573,66 @@ void StudioExpansionShell::DrawNavigationBand(
                         context.MutedText(descriptor->description);
                     }
 
+                    std::vector<const commands::CommandParameter*> formParameters;
+                    formParameters.reserve(descriptor->parameters.size());
                     for (const auto& parameter : descriptor->parameters)
                     {
+                        if (parameter.required)
+                        {
+                            formParameters.push_back(&parameter);
+                        }
+                    }
+                    for (const auto& parameter : descriptor->parameters)
+                    {
+                        if (!parameter.required)
+                        {
+                            formParameters.push_back(&parameter);
+                        }
+                    }
+
+                    const bool hasRequiredParameters = std::ranges::any_of(
+                        descriptor->parameters,
+                        [](const commands::CommandParameter& parameter)
+                        {
+                            return parameter.required;
+                        });
+                    if (hasRequiredParameters)
+                    {
+                        context.MutedText("Required inputs");
+                    }
+
+                    bool optionalSectionDrawn = false;
+                    bool optionalSectionOpen = false;
+                    for (const auto* parameterPointer : formParameters)
+                    {
+                        const auto& parameter = *parameterPointer;
+                        const std::string parameterDisplayName =
+                            parameter.displayName.empty()
+                                ? parameter.name
+                                : parameter.displayName;
+
+                        if (!parameter.required && !optionalSectionDrawn)
+                        {
+                            if (hasRequiredParameters)
+                            {
+                                context.Separator();
+                            }
+                            optionalSectionOpen = context.Section(
+                                "Optional inputs##quick-create-optional-inputs",
+                                false);
+                            optionalSectionDrawn = true;
+                        }
+                        if (!parameter.required && !optionalSectionOpen)
+                        {
+                            continue;
+                        }
+
                         bool enabled = parameter.required ||
                             quickCreateArgumentEnabled_[parameter.name];
                         if (!parameter.required)
                         {
                             std::string optionalLabel =
-                                "Set " + parameter.name +
+                                "Set " + parameterDisplayName +
                                 "##quick-create-optional-" + parameter.name;
                             if (context.Checkbox(optionalLabel, enabled))
                             {
@@ -2544,7 +2646,12 @@ void StudioExpansionShell::DrawNavigationBand(
                             continue;
                         }
 
-                        std::string label = parameter.name;
+                        std::string visibleLabel = parameterDisplayName;
+                        if (!parameter.unit.empty())
+                        {
+                            visibleLabel += " (" + parameter.unit + ")";
+                        }
+                        std::string label = visibleLabel;
                         if (parameter.required)
                         {
                             label += " *";
@@ -2570,12 +2677,53 @@ void StudioExpansionShell::DrawNavigationBand(
                             if (auto* value = std::get_if<i64>(&found->second))
                             {
                                 static_cast<void>(context.InputInteger(label, *value));
+                                if (parameter.minimum.has_value())
+                                {
+                                    const f64 bounded = std::clamp(
+                                        std::ceil(*parameter.minimum),
+                                        static_cast<f64>(std::numeric_limits<i64>::min()),
+                                        static_cast<f64>(std::numeric_limits<i64>::max()));
+                                    *value = std::max(*value, static_cast<i64>(bounded));
+                                }
+                                if (parameter.maximum.has_value())
+                                {
+                                    const f64 bounded = std::clamp(
+                                        std::floor(*parameter.maximum),
+                                        static_cast<f64>(std::numeric_limits<i64>::min()),
+                                        static_cast<f64>(std::numeric_limits<i64>::max()));
+                                    *value = std::min(*value, static_cast<i64>(bounded));
+                                }
                             }
                             break;
                         case commands::CommandValueKind::Float:
                             if (auto* value = std::get_if<f64>(&found->second))
                             {
-                                static_cast<void>(context.InputDouble(label, *value));
+                                const bool boundedSlider =
+                                    parameter.minimum.has_value() &&
+                                    parameter.maximum.has_value() &&
+                                    std::isfinite(*parameter.minimum) &&
+                                    std::isfinite(*parameter.maximum) &&
+                                    *parameter.minimum < *parameter.maximum;
+                                if (boundedSlider)
+                                {
+                                    static_cast<void>(context.SliderDouble(
+                                        label,
+                                        *value,
+                                        *parameter.minimum,
+                                        *parameter.maximum));
+                                }
+                                else
+                                {
+                                    static_cast<void>(context.InputDouble(label, *value));
+                                    if (parameter.minimum.has_value())
+                                    {
+                                        *value = std::max(*value, *parameter.minimum);
+                                    }
+                                    if (parameter.maximum.has_value())
+                                    {
+                                        *value = std::min(*value, *parameter.maximum);
+                                    }
+                                }
                             }
                             break;
                         case commands::CommandValueKind::String:
@@ -2588,6 +2736,18 @@ void StudioExpansionShell::DrawNavigationBand(
                             if (auto* value = std::get_if<math::Double3>(&found->second))
                             {
                                 static_cast<void>(context.InputDouble3(label, *value));
+                                if (parameter.minimum.has_value())
+                                {
+                                    value->x = std::max(value->x, *parameter.minimum);
+                                    value->y = std::max(value->y, *parameter.minimum);
+                                    value->z = std::max(value->z, *parameter.minimum);
+                                }
+                                if (parameter.maximum.has_value())
+                                {
+                                    value->x = std::min(value->x, *parameter.maximum);
+                                    value->y = std::min(value->y, *parameter.maximum);
+                                    value->z = std::min(value->z, *parameter.maximum);
+                                }
                             }
                             break;
                         case commands::CommandValueKind::ObjectId:
@@ -2614,7 +2774,7 @@ void StudioExpansionShell::DrawNavigationBand(
                                     selected = parsed->ToString();
                                 }
                             }
-                            context.KeyValue(parameter.name, selected);
+                            context.KeyValue(parameterDisplayName, selected);
 
                             std::string chooseLabel =
                                 "Choose…##quick-create-object-picker-" +
@@ -2936,7 +3096,7 @@ void StudioExpansionShell::DrawNavigationBand(
                                     selected = parsed->ToString();
                                 }
                             }
-                            context.KeyValue(parameter.name, selected);
+                            context.KeyValue(parameterDisplayName, selected);
 
                             std::string chooseLabel =
                                 "Choose…##quick-create-property-picker-" +
@@ -3375,6 +3535,11 @@ void StudioExpansionShell::DrawNavigationBand(
                             }
                             break;
                         }
+                        }
+
+                        if (!parameter.description.empty())
+                        {
+                            context.MutedText(parameter.description);
                         }
                     }
 
