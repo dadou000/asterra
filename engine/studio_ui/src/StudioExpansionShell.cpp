@@ -2107,6 +2107,7 @@ void StudioExpansionShell::DrawNavigationBand(
     }
 
     bool openQuickCreateBrowser = false;
+    bool openQuickCreateForm = false;
     const f32 quickCreateWidth =
         360.0F * editor_ui::CurrentUiScale();
     if (context.BeginPopup(
@@ -2451,8 +2452,7 @@ void StudioExpansionShell::DrawNavigationBand(
                     {
                         return entry.command == command.id;
                     });
-            if (paletteEntry == palette.end() ||
-                paletteEntry->requiresArguments)
+            if (paletteEntry == palette.end())
             {
                 continue;
             }
@@ -2478,7 +2478,6 @@ void StudioExpansionShell::DrawNavigationBand(
                         return entry.command == contribution.command;
                     });
             if (paletteEntry == palette.end() ||
-                paletteEntry->requiresArguments ||
                 std::ranges::any_of(
                     creationEntries,
                     [&contribution](const CommandPaletteEntry& entry)
@@ -2526,6 +2525,38 @@ void StudioExpansionShell::DrawNavigationBand(
         const auto invokeCreation =
             [&](const CommandPaletteEntry& entry)
             {
+                const auto command =
+                    std::ranges::find_if(
+                        commandCatalog,
+                        [&entry](const commands::CommandCatalogEntry& candidate)
+                        {
+                            return candidate.id == entry.command;
+                        });
+
+                if (command != commandCatalog.end() &&
+                    !command->parameters.empty())
+                {
+                    quickCreateFormCommand_ = command->id;
+                    quickCreateFormArguments_.clear();
+                    quickCreateFormArguments_.reserve(
+                        command->parameters.size());
+                    for (const auto& parameter : command->parameters)
+                    {
+                        quickCreateFormArguments_.push_back({
+                            .name = parameter.name,
+                            .kind = parameter.kind,
+                            .required = parameter.required,
+                            .supplied = parameter.required
+                        });
+                    }
+                    quickCreateFormError_.clear();
+                    quickCreateBrowseQuery_.clear();
+                    quickCreateBrowseSelection_ = 0;
+                    openQuickCreateForm = true;
+                    context.CloseCurrentPopup();
+                    return true;
+                }
+
                 try
                 {
                     registry.Invoke(entry.command);
@@ -2611,6 +2642,201 @@ void StudioExpansionShell::DrawNavigationBand(
                     invokeCreation(
                         visibleMatches[static_cast<std::size_t>(
                             quickCreateBrowseSelection_)]));
+            }
+        }
+
+        context.EndPopup();
+    }
+
+    const f32 quickCreateFormWidth =
+        480.0F * editor_ui::CurrentUiScale();
+    if (context.BeginPopup(
+            "studio-quick-create-argument-popup",
+            openQuickCreateForm,
+            {.width = quickCreateFormWidth, .height = 0.0F}))
+    {
+        const auto command =
+            quickCreateFormCommand_.has_value()
+                ? std::ranges::find_if(
+                    commandCatalog,
+                    [this](const commands::CommandCatalogEntry& candidate)
+                    {
+                        return candidate.id == *quickCreateFormCommand_;
+                    })
+                : commandCatalog.end();
+
+        if (command == commandCatalog.end())
+        {
+            context.ErrorText(
+                "Creation command is no longer registered.");
+            if (context.Button("Close##quick-create-form-missing-close"))
+            {
+                quickCreateFormCommand_.reset();
+                quickCreateFormArguments_.clear();
+                quickCreateFormError_.clear();
+                context.CloseCurrentPopup();
+            }
+        }
+        else
+        {
+            context.Text(std::string{"Add · "} + command->name);
+            if (!command->description.empty())
+            {
+                context.MutedText(command->description);
+            }
+            context.Separator();
+
+            for (auto& argument : quickCreateFormArguments_)
+            {
+                const std::string baseId =
+                    "##quick-create-argument-" + argument.name;
+
+                if (!argument.required)
+                {
+                    bool supplied = argument.supplied;
+                    if (context.Checkbox(
+                            std::string{"Use "} + argument.name + baseId + "-use",
+                            supplied))
+                    {
+                        argument.supplied = supplied;
+                        quickCreateFormError_.clear();
+                    }
+                    if (!argument.supplied)
+                    {
+                        continue;
+                    }
+                }
+
+                std::string label = argument.name;
+                if (argument.required)
+                {
+                    label += " *";
+                }
+                label += baseId;
+
+                switch (argument.kind)
+                {
+                case commands::CommandValueKind::Boolean:
+                    static_cast<void>(
+                        context.Checkbox(label, argument.booleanValue));
+                    break;
+                case commands::CommandValueKind::Integer:
+                    static_cast<void>(
+                        context.InputInteger(label, argument.integerValue));
+                    break;
+                case commands::CommandValueKind::Float:
+                    static_cast<void>(
+                        context.InputDouble(label, argument.floatValue));
+                    break;
+                case commands::CommandValueKind::String:
+                    static_cast<void>(
+                        context.InputText(label, argument.textValue));
+                    break;
+                case commands::CommandValueKind::Vector3:
+                    static_cast<void>(
+                        context.InputDouble3(label, argument.vectorValue));
+                    break;
+                case commands::CommandValueKind::ObjectId:
+                case commands::CommandValueKind::PropertyId:
+                    static_cast<void>(
+                        context.InputText(label, argument.textValue));
+                    context.MutedText(
+                        "UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx");
+                    break;
+                }
+            }
+
+            if (!quickCreateFormError_.empty())
+            {
+                context.ErrorText(quickCreateFormError_);
+            }
+
+            context.Separator();
+            if (context.PrimaryButton("Create##quick-create-form-submit"))
+            {
+                try
+                {
+                    commands::CommandArguments arguments;
+                    for (const auto& argument : quickCreateFormArguments_)
+                    {
+                        if (!argument.required && !argument.supplied)
+                        {
+                            continue;
+                        }
+
+                        switch (argument.kind)
+                        {
+                        case commands::CommandValueKind::Boolean:
+                            arguments.emplace(
+                                argument.name, argument.booleanValue);
+                            break;
+                        case commands::CommandValueKind::Integer:
+                            arguments.emplace(
+                                argument.name, argument.integerValue);
+                            break;
+                        case commands::CommandValueKind::Float:
+                            arguments.emplace(
+                                argument.name, argument.floatValue);
+                            break;
+                        case commands::CommandValueKind::String:
+                            arguments.emplace(
+                                argument.name, argument.textValue);
+                            break;
+                        case commands::CommandValueKind::Vector3:
+                            arguments.emplace(
+                                argument.name, argument.vectorValue);
+                            break;
+                        case commands::CommandValueKind::ObjectId:
+                        {
+                            const auto parsed =
+                                scene::ObjectId::Parse(argument.textValue);
+                            if (!parsed.has_value() || !parsed->IsValid())
+                            {
+                                throw std::invalid_argument(
+                                    argument.name +
+                                    " must be a valid non-zero ObjectId UUID.");
+                            }
+                            arguments.emplace(argument.name, *parsed);
+                            break;
+                        }
+                        case commands::CommandValueKind::PropertyId:
+                        {
+                            const auto parsed =
+                                schema::PropertyId::Parse(argument.textValue);
+                            if (!parsed.has_value() || !parsed->IsValid())
+                            {
+                                throw std::invalid_argument(
+                                    argument.name +
+                                    " must be a valid non-zero PropertyId UUID.");
+                            }
+                            arguments.emplace(argument.name, *parsed);
+                            break;
+                        }
+                        }
+                    }
+
+                    registry.Invoke(command->id, arguments);
+                    owner_->status_.clear();
+                    quickCreateFormCommand_.reset();
+                    quickCreateFormArguments_.clear();
+                    quickCreateFormError_.clear();
+                    context.CloseCurrentPopup();
+                }
+                catch (const std::exception& exception)
+                {
+                    quickCreateFormError_ = exception.what();
+                    owner_->status_ = exception.what();
+                }
+            }
+
+            context.SameLine();
+            if (context.Button("Cancel##quick-create-form-cancel") ||
+                context.KeyPressed(editor_ui::UiKey::Escape))
+            {
+                quickCreateFormCommand_.reset();
+                quickCreateFormArguments_.clear();
+                quickCreateFormError_.clear();
+                context.CloseCurrentPopup();
             }
         }
 

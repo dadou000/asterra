@@ -6,8 +6,10 @@
 #include <orbit/studio_ui/ViewportAuthoringState.hpp>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace orbit::studio_session
 {
@@ -108,8 +110,24 @@ private:
     std::string commandQuery_;
     i32 commandPaletteSelection_{0};
     bool commandPaletteOpenRequested_{false};
+    struct QuickCreateArgumentState
+    {
+        std::string name;
+        commands::CommandValueKind kind{commands::CommandValueKind::String};
+        bool required{true};
+        bool supplied{true};
+        bool booleanValue{false};
+        i64 integerValue{0};
+        f64 floatValue{0.0};
+        std::string textValue;
+        math::Double3 vectorValue{};
+    };
+
     std::string quickCreateBrowseQuery_;
     i32 quickCreateBrowseSelection_{0};
+    std::optional<commands::CommandId> quickCreateFormCommand_;
+    std::vector<QuickCreateArgumentState> quickCreateFormArguments_;
+    std::string quickCreateFormError_;
     bool attached_{false};
 
     // 0 = follow focused viewport, 1 = pin Primary, 2 = pin Body Map.
