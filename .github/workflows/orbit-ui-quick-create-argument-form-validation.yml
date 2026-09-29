@@ -1,0 +1,44 @@
+name: Orbit UI Quick Create argument form validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-quick-create-argument-form
+
+permissions:
+  contents: write
+
+jobs:
+  quick-create-argument-form:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-quick-create-argument-form
+      - name: Apply argument form patch
+        run: python3 tools/validation/quick_create_argument_form_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 2
+          grep -q 'QuickCreateArgumentState' engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          grep -q 'quickCreateFormCommand_' engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          grep -q 'studio-quick-create-argument-popup' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Use ' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'CommandValueKind::Boolean' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'CommandValueKind::Integer' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'CommandValueKind::Float' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'CommandValueKind::String' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'CommandValueKind::Vector3' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'CommandValueKind::ObjectId' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'CommandValueKind::PropertyId' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'scene::ObjectId::Parse' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'schema::PropertyId::Parse' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'registry.Invoke(command->id, arguments)' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Add generated Quick Create argument forms"
+          git push origin HEAD:orbit-ui-quick-create-argument-form
