@@ -332,6 +332,72 @@ void StudioViewportPanels::DrawWorkspaceBand(
     }
 }
 
+i32 StudioViewportPanels::QuickCreateCommandPriority(
+    const std::string_view category) const noexcept
+{
+    const auto matches =
+        [category](const std::string_view value) noexcept
+        {
+            return category.find(value) != std::string_view::npos;
+        };
+
+    switch (g_workspaceMode)
+    {
+    case WorkspaceMode::Scene:
+        return matches("Scene") ||
+               matches("World") ||
+               matches("Path")
+            ? 3
+            : 1;
+
+    case WorkspaceMode::Planet:
+        return matches("Planet") ||
+               matches("Terrain") ||
+               matches("Biome") ||
+               matches("World")
+            ? 4
+            : 1;
+
+    case WorkspaceMode::Celestial:
+        return matches("Celestial") ||
+               matches("World")
+            ? 4
+            : 1;
+
+    case WorkspaceMode::Simulation:
+        if (matches("Simulation") ||
+            matches("Volume") ||
+            matches("Physics"))
+        {
+            return 4;
+        }
+        return matches("World") ||
+               matches("Scene")
+            ? 2
+            : 1;
+
+    case WorkspaceMode::Shading:
+        return matches("Shading") ||
+               matches("Material")
+            ? 4
+            : 0;
+    }
+
+    return 1;
+}
+
+bool StudioViewportPanels::PreferCommandQuickCreate() const noexcept
+{
+    return g_workspaceMode == WorkspaceMode::Planet ||
+        g_workspaceMode == WorkspaceMode::Celestial ||
+        g_workspaceMode == WorkspaceMode::Shading;
+}
+
+bool StudioViewportPanels::ShowViewportQuickCreate() const noexcept
+{
+    return g_workspaceMode != WorkspaceMode::Shading;
+}
+
 void StudioViewportPanels::DrawContextBand(
     editor_ui::PanelContext& context)
 {
