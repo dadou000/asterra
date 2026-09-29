@@ -1,0 +1,49 @@
+name: Orbit UI command form metadata validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-command-form-metadata
+
+permissions:
+  contents: write
+
+jobs:
+  command-form-metadata:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-command-form-metadata
+      - name: Apply command form metadata patch
+        run: python3 tools/validation/command_form_metadata_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 3
+          grep -q 'std::string displayName;' engine/commands/include/orbit/commands/CommandRegistry.hpp
+          grep -q 'std::string description;' engine/commands/include/orbit/commands/CommandRegistry.hpp
+          grep -q 'std::string unit;' engine/commands/include/orbit/commands/CommandRegistry.hpp
+          grep -q 'std::optional<CommandValue> defaultValue;' engine/commands/include/orbit/commands/CommandRegistry.hpp
+          grep -q 'std::optional<f64> minimum;' engine/commands/include/orbit/commands/CommandRegistry.hpp
+          grep -q 'std::optional<f64> maximum;' engine/commands/include/orbit/commands/CommandRegistry.hpp
+          grep -q 'Optional inputs##quick-create-optional-inputs' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Required inputs' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'parameter.defaultValue.has_value()' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'parameter.description' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'parameter.unit' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'context.SliderDouble' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'value->x = std::max' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q '.displayName = "Radius"' engine/editor_model/src/AuthoringCommands.cpp
+          grep -q '.unit = "m"' engine/editor_model/src/AuthoringCommands.cpp
+          grep -q '.unit = "kg"' engine/editor_model/src/AuthoringCommands.cpp
+          grep -q '.minimum = 0.0' engine/editor_model/src/AuthoringCommands.cpp
+          grep -q "6'000'000.0" engine/editor_model/src/AuthoringCommands.cpp
+          grep -q '5.0e24' engine/editor_model/src/AuthoringCommands.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/commands/include/orbit/commands/CommandRegistry.hpp engine/editor_model/src/AuthoringCommands.cpp engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Improve generated command forms"
+          git push origin HEAD:orbit-ui-command-form-metadata
