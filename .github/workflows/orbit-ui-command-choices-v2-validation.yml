@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: orbit-ui-command-choices-v2
+      - run: python3 tools/validation/command_choices_patch_fix.py
       - run: python3 tools/validation/command_choices_patch.py
       - run: git diff --check
       - run: |
