@@ -2441,6 +2441,7 @@ void StudioExpansionShell::DrawNavigationBand(
             quickCreateArguments_.clear();
             quickCreateArgumentEnabled_.clear();
             quickCreateIdText_.clear();
+            quickCreatePickerQuery_.clear();
             quickCreateArgumentError_.clear();
         };
 
@@ -2588,11 +2589,327 @@ void StudioExpansionShell::DrawNavigationBand(
                             }
                             break;
                         case commands::CommandValueKind::ObjectId:
-                        case commands::CommandValueKind::PropertyId:
-                            static_cast<void>(context.InputText(
-                                label,
-                                quickCreateIdText_[parameter.name]));
+                        {
+                            auto& idText = quickCreateIdText_[parameter.name];
+                            std::string selected = "None";
+                            if (const auto parsed = scene::ObjectId::Parse(idText);
+                                parsed.has_value())
+                            {
+                                if (const auto record = world.Objects().Find(*parsed);
+                                    record.has_value())
+                                {
+                                    selected = record->name;
+                                    if (const auto* type =
+                                            world.Schemas().FindType(record->type);
+                                        type != nullptr)
+                                    {
+                                        selected += " · ";
+                                        selected += type->displayName;
+                                    }
+                                }
+                                else
+                                {
+                                    selected = parsed->ToString();
+                                }
+                            }
+                            context.KeyValue(parameter.name, selected);
+
+                            std::string chooseLabel =
+                                "Choose…##quick-create-object-picker-" +
+                                parameter.name;
+                            const bool openPicker = context.Button(chooseLabel);
+                            std::string popupId =
+                                "quick-create-object-picker-popup-" +
+                                parameter.name;
+                            if (context.BeginPopup(
+                                    popupId,
+                                    openPicker,
+                                    {.width = 440.0F * editor_ui::CurrentUiScale(),
+                                     .height = 0.0F}))
+                            {
+                                context.Text("Choose Object");
+                                auto& query =
+                                    quickCreatePickerQuery_[parameter.name];
+                                static_cast<void>(context.InputText(
+                                    "Search##quick-create-object-search",
+                                    query));
+                                context.Separator();
+
+                                std::vector<scene::ObjectRecord> candidates;
+                                const auto addCandidate =
+                                    [&candidates](const scene::ObjectRecord& candidate)
+                                    {
+                                        const bool duplicate =
+                                            std::ranges::any_of(
+                                                candidates,
+                                                [&candidate](const scene::ObjectRecord& item)
+                                                {
+                                                    return item.id == candidate.id;
+                                                });
+                                        if (!duplicate && candidates.size() < 20U)
+                                        {
+                                            candidates.push_back(candidate);
+                                        }
+                                    };
+
+                                if (query.empty())
+                                {
+                                    for (const auto selectedId :
+                                         world.Selection().Ordered())
+                                    {
+                                        if (const auto record =
+                                                world.Objects().Find(selectedId);
+                                            record.has_value())
+                                        {
+                                            addCandidate(*record);
+                                        }
+                                    }
+                                    for (const auto& root : world.Explorer().Roots())
+                                    {
+                                        addCandidate(root);
+                                        if (candidates.size() >= 20U)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    for (const auto& result :
+                                         world.Explorer().Search(query, 20U))
+                                    {
+                                        addCandidate(result);
+                                    }
+                                }
+
+                                if (candidates.empty())
+                                {
+                                    context.MutedText(
+                                        query.empty()
+                                            ? "No root or selected objects are available."
+                                            : "No matching objects.");
+                                }
+                                else
+                                {
+                                    for (const auto& candidate : candidates)
+                                    {
+                                        std::string option = candidate.name;
+                                        if (const auto* type =
+                                                world.Schemas().FindType(candidate.type);
+                                            type != nullptr)
+                                        {
+                                            option += "\n";
+                                            option += type->displayName;
+                                        }
+                                        option += " · ";
+                                        option += candidate.id.ToString();
+                                        option += "##object-picker-result-";
+                                        option += candidate.id.ToString();
+
+                                        if (context.Selectable(option, false))
+                                        {
+                                            found->second = candidate.id;
+                                            idText = candidate.id.ToString();
+                                            query.clear();
+                                            context.CloseCurrentPopup();
+                                        }
+                                    }
+                                }
+                                context.EndPopup();
+                            }
+
+                            std::string advancedLabel =
+                                "Advanced UUID##quick-create-object-uuid-" +
+                                parameter.name;
+                            if (context.Section(advancedLabel, false))
+                            {
+                                static_cast<void>(context.InputText(label, idText));
+                            }
                             break;
+                        }
+                        case commands::CommandValueKind::PropertyId:
+                        {
+                            auto& idText = quickCreateIdText_[parameter.name];
+                            std::string selected = "None";
+                            if (const auto parsed = schema::PropertyId::Parse(idText);
+                                parsed.has_value())
+                            {
+                                const auto catalog = world.Schemas().Catalog();
+                                for (const auto& type : catalog)
+                                {
+                                    const auto property = std::ranges::find_if(
+                                        type.properties,
+                                        [&parsed](const schema::PropertySchema& item)
+                                        {
+                                            return item.id == *parsed;
+                                        });
+                                    if (property != type.properties.end())
+                                    {
+                                        selected = property->name +
+                                            " · " + type.displayName;
+                                        break;
+                                    }
+                                }
+                                if (selected == "None")
+                                {
+                                    selected = parsed->ToString();
+                                }
+                            }
+                            context.KeyValue(parameter.name, selected);
+
+                            std::string chooseLabel =
+                                "Choose…##quick-create-property-picker-" +
+                                parameter.name;
+                            const bool openPicker = context.Button(chooseLabel);
+                            std::string popupId =
+                                "quick-create-property-picker-popup-" +
+                                parameter.name;
+                            if (context.BeginPopup(
+                                    popupId,
+                                    openPicker,
+                                    {.width = 460.0F * editor_ui::CurrentUiScale(),
+                                     .height = 0.0F}))
+                            {
+                                context.Text("Choose Property");
+                                auto& query =
+                                    quickCreatePickerQuery_[parameter.name];
+                                static_cast<void>(context.InputText(
+                                    "Search##quick-create-property-search",
+                                    query));
+                                context.Separator();
+
+                                std::optional<schema::TypeId> preferredType;
+                                for (const auto& commandParameter :
+                                     descriptor->parameters)
+                                {
+                                    if (commandParameter.kind !=
+                                        commands::CommandValueKind::ObjectId)
+                                    {
+                                        continue;
+                                    }
+                                    const auto textIt =
+                                        quickCreateIdText_.find(commandParameter.name);
+                                    if (textIt == quickCreateIdText_.end())
+                                    {
+                                        continue;
+                                    }
+                                    const auto objectId =
+                                        scene::ObjectId::Parse(textIt->second);
+                                    if (!objectId.has_value())
+                                    {
+                                        continue;
+                                    }
+                                    if (const auto object =
+                                            world.Objects().Find(*objectId);
+                                        object.has_value())
+                                    {
+                                        preferredType = object->type;
+                                        break;
+                                    }
+                                }
+                                if (!preferredType.has_value() &&
+                                    world.Selection().Ordered().size() == 1U)
+                                {
+                                    if (const auto selectedObject =
+                                            world.Objects().Find(
+                                                world.Selection().Ordered().front());
+                                        selectedObject.has_value())
+                                    {
+                                        preferredType = selectedObject->type;
+                                    }
+                                }
+
+                                struct PropertyCandidate
+                                {
+                                    std::string label;
+                                    schema::PropertyId id{};
+                                    bool preferred{false};
+                                };
+                                std::vector<PropertyCandidate> candidates;
+                                const std::string lowerQuery = PaletteLower(query);
+                                const auto catalog = world.Schemas().Catalog();
+                                for (const auto& type : catalog)
+                                {
+                                    for (const auto& property : type.properties)
+                                    {
+                                        std::string searchable =
+                                            property.name + " " +
+                                            type.displayName + " " +
+                                            type.category;
+                                        if (!lowerQuery.empty() &&
+                                            PaletteLower(searchable).find(lowerQuery) ==
+                                                std::string::npos)
+                                        {
+                                            continue;
+                                        }
+
+                                        std::string option = property.name;
+                                        option += "\n";
+                                        option += type.displayName;
+                                        if (!property.unit.empty())
+                                        {
+                                            option += " · ";
+                                            option += property.unit;
+                                        }
+                                        option += " · ";
+                                        option += property.id.ToString();
+                                        candidates.push_back({
+                                            .label = std::move(option),
+                                            .id = property.id,
+                                            .preferred =
+                                                preferredType.has_value() &&
+                                                type.id == *preferredType
+                                        });
+                                    }
+                                }
+                                std::ranges::stable_sort(
+                                    candidates,
+                                    [](const PropertyCandidate& left,
+                                       const PropertyCandidate& right)
+                                    {
+                                        if (left.preferred != right.preferred)
+                                        {
+                                            return left.preferred;
+                                        }
+                                        return left.label < right.label;
+                                    });
+                                if (candidates.size() > 24U)
+                                {
+                                    candidates.resize(24U);
+                                }
+
+                                if (candidates.empty())
+                                {
+                                    context.MutedText("No matching schema properties.");
+                                }
+                                else
+                                {
+                                    for (const auto& candidate : candidates)
+                                    {
+                                        std::string option = candidate.label;
+                                        option += "##property-picker-result-";
+                                        option += candidate.id.ToString();
+                                        if (context.Selectable(option, false))
+                                        {
+                                            found->second = candidate.id;
+                                            idText = candidate.id.ToString();
+                                            query.clear();
+                                            context.CloseCurrentPopup();
+                                        }
+                                    }
+                                }
+                                context.EndPopup();
+                            }
+
+                            std::string advancedLabel =
+                                "Advanced UUID##quick-create-property-uuid-" +
+                                parameter.name;
+                            if (context.Section(advancedLabel, false))
+                            {
+                                static_cast<void>(context.InputText(label, idText));
+                            }
+                            break;
+                        }
                         }
                     }
 
