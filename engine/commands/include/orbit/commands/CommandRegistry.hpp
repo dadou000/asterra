@@ -45,6 +45,15 @@ struct CommandParameter
     CommandValueKind kind{
         CommandValueKind::String};
     bool required{true};
+
+    // Optional editor presentation metadata. The command implementation remains
+    // authoritative: these values only improve generated argument forms.
+    std::string displayName;
+    std::string description;
+    std::string unit;
+    std::optional<CommandValue> defaultValue;
+    std::optional<f64> minimum;
+    std::optional<f64> maximum;
 };
 
 struct CommandEnablement
