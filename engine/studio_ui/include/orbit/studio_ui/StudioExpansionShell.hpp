@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace orbit::studio_session
 {
@@ -110,6 +111,11 @@ private:
     bool commandPaletteOpenRequested_{false};
     std::string quickCreateBrowseQuery_;
     i32 quickCreateBrowseSelection_{0};
+    commands::CommandId quickCreateArgumentCommand_{};
+    commands::CommandArguments quickCreateArguments_;
+    std::unordered_map<std::string, bool> quickCreateArgumentEnabled_;
+    std::unordered_map<std::string, std::string> quickCreateIdText_;
+    std::string quickCreateArgumentError_;
     bool attached_{false};
 
     // 0 = follow focused viewport, 1 = pin Primary, 2 = pin Body Map.
