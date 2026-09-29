@@ -75,6 +75,39 @@ constexpr std::array<std::string_view, 4> kSurfaceViews{
         label.starts_with("New ");
 }
 
+[[nodiscard]] std::string CommandPaletteSecondaryText(
+    const CommandPaletteEntry& entry)
+{
+    std::string secondary = entry.category;
+    if (!entry.description.empty())
+    {
+        if (!secondary.empty())
+        {
+            secondary += " · ";
+        }
+        secondary += entry.description;
+    }
+
+    for (char& value : secondary)
+    {
+        if (value == '\n' ||
+            value == '\r' ||
+            value == '\t')
+        {
+            value = ' ';
+        }
+    }
+
+    constexpr std::size_t kMaxSecondaryCharacters = 96U;
+    if (secondary.size() > kMaxSecondaryCharacters)
+    {
+        secondary.resize(kMaxSecondaryCharacters - 3U);
+        secondary += "...";
+    }
+
+    return secondary;
+}
+
 [[nodiscard]] bool IsTerrainSplineTool(
     const StudioTerrainAuthoringTool tool) noexcept
 {
@@ -2014,6 +2047,13 @@ void StudioExpansionShell::DrawNavigationBand(
                 const auto& entry =
                     visibleMatches[static_cast<std::size_t>(index)];
                 std::string label = entry.label;
+                const std::string secondary =
+                    CommandPaletteSecondaryText(entry);
+                if (!secondary.empty())
+                {
+                    label += "\n";
+                    label += secondary;
+                }
                 label += "##palette-";
                 label += entry.command.ToString();
                 if (context.Selectable(
