@@ -2030,6 +2030,40 @@ void PanelContext::Toolbar(
     }
 }
 
+bool PanelContext::BeginPopup(
+    const std::string_view id,
+    const bool openRequested,
+    const UiSize size)
+{
+    const std::string ownedId(id);
+
+    if (openRequested)
+    {
+        ImGui::OpenPopup(ownedId.c_str());
+    }
+
+    if (size.width > 0.0F || size.height > 0.0F)
+    {
+        ImGui::SetNextWindowSize(
+            ImVec2(
+                std::max(size.width, 0.0F),
+                std::max(size.height, 0.0F)),
+            ImGuiCond_Appearing);
+    }
+
+    return ImGui::BeginPopup(ownedId.c_str());
+}
+
+void PanelContext::EndPopup()
+{
+    ImGui::EndPopup();
+}
+
+void PanelContext::CloseCurrentPopup()
+{
+    ImGui::CloseCurrentPopup();
+}
+
 void PanelContext::ContextMenu(
     const std::string_view id,
     const std::span<const ActionPresentation> actions,

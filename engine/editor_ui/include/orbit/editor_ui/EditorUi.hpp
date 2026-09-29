@@ -155,6 +155,15 @@ public:
     void EndDragSource();
     [[nodiscard]] std::optional<std::vector<std::byte>> AcceptDragPayload(std::string_view type);
     void Toolbar(std::span<const ActionPresentation> actions);
+    // Generic popup surface for rich transient UI such as command palettes.
+    // Call EndPopup only when BeginPopup returns true. A zero size axis is
+    // auto-fit by ImGui; non-zero dimensions apply when the popup appears.
+    [[nodiscard]] bool BeginPopup(
+        std::string_view id,
+        bool openRequested,
+        UiSize size = {});
+    void EndPopup();
+    void CloseCurrentPopup();
     void ContextMenu(std::string_view id, std::span<const ActionPresentation> actions, bool openRequested);
     void RadialMenu(std::string_view id, std::span<const ActionPresentation> actions, bool openRequested);
     void SameLine();

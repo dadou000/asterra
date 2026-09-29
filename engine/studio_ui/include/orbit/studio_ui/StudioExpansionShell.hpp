@@ -99,7 +99,6 @@ private:
     StudioViewportPanels* owner_{nullptr};
     ViewportAuthoringState viewportState_{};
     std::string commandQuery_;
-    bool commandSearchOpen_{false};
     bool quickCreateOpen_{false};
     bool attached_{false};
 
