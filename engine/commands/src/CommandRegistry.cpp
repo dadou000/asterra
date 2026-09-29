@@ -1,5 +1,6 @@
 #include <orbit/commands/CommandRegistry.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 #include <type_traits>
 #include <unordered_set>
@@ -92,6 +93,53 @@ void CommandRegistry::Register(
         {
             throw std::invalid_argument(
                 "Command parameters require unique non-empty names.");
+        }
+
+        if (parameter.defaultValue.has_value() &&
+            KindOf(*parameter.defaultValue) != parameter.kind)
+        {
+            throw std::invalid_argument(
+                "Command parameter default value has wrong type: " +
+                parameter.name);
+        }
+
+        std::unordered_set<std::string> choiceLabels;
+        for (const CommandChoice& choice : parameter.choices)
+        {
+            if (choice.label.empty() ||
+                !choiceLabels.insert(choice.label).second)
+            {
+                throw std::invalid_argument(
+                    "Command parameter choices require unique non-empty labels: " +
+                    parameter.name);
+            }
+
+            if (KindOf(choice.value) != parameter.kind)
+            {
+                throw std::invalid_argument(
+                    "Command parameter choice has wrong type: " +
+                    parameter.name);
+            }
+        }
+
+        if (parameter.defaultValue.has_value() &&
+            !parameter.choices.empty())
+        {
+            const bool defaultIsChoice =
+                std::any_of(
+                    parameter.choices.begin(),
+                    parameter.choices.end(),
+                    [&parameter](const CommandChoice& choice)
+                    {
+                        return choice.value == *parameter.defaultValue;
+                    });
+
+            if (!defaultIsChoice)
+            {
+                throw std::invalid_argument(
+                    "Command parameter default value is not an enumerated choice: " +
+                    parameter.name);
+            }
         }
     }
 

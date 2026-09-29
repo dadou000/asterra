@@ -39,6 +39,12 @@ using CommandValue =
         scene::ObjectId,
         schema::PropertyId>;
 
+struct CommandChoice
+{
+    std::string label;
+    CommandValue value;
+};
+
 struct CommandParameter
 {
     std::string name;
@@ -54,6 +60,9 @@ struct CommandParameter
     std::optional<CommandValue> defaultValue;
     std::optional<f64> minimum;
     std::optional<f64> maximum;
+    // Enumerated values render as a generated drop-down. Values remain typed
+    // CommandValue instances so the same metadata works for string and numeric modes.
+    std::vector<CommandChoice> choices;
 };
 
 struct CommandEnablement
