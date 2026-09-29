@@ -1,0 +1,40 @@
+name: Orbit UI property tree picker v2 validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-property-tree-picker-v2
+
+permissions:
+  contents: write
+
+jobs:
+  property-tree-picker-v2:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-property-tree-picker-v2
+      - name: Apply property tree picker patch
+        run: python3 tools/validation/property_tree_picker_v2_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 1
+          grep -q 'struct PropertyCategoryGroup' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'context.MutedText("Schema")' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'property-picker-category-' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'property-picker-type-' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'property-picker-property-' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'property-picker-search-result-' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Current Type' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'selectedPropertyId' engine/studio_ui/src/StudioExpansionShell.cpp
+          ! grep -q 'std::prev(groups.end())' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'Advanced UUID##quick-create-property-uuid-' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Add hierarchical property picker"
+          git push origin HEAD:orbit-ui-property-tree-picker-v2
