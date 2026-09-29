@@ -204,6 +204,8 @@ void StudioViewportPanels::EnsureViewportModeCommands()
                 return;
             }
 
+#pragma push_macro("Register")
+#undef Register
             registry.Register({
                 .id = command,
                 .name = std::string{name},
@@ -279,6 +281,7 @@ void StudioViewportPanels::EnsureViewportModeCommands()
                             mode);
                     }
             });
+#pragma pop_macro("Register")
         };
 
     registerMode(
