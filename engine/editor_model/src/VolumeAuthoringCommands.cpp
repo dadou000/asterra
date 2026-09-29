@@ -542,7 +542,16 @@ void RegisterVolumeCommands(
                 .description =
                     "Production preset: Empty, Smoke, Fire, Fog, Dust, Snow, or Surface Flow.",
                 .defaultValue =
-                    commands::CommandValue{std::string{"Empty"}}
+                    commands::CommandValue{std::string{"Empty"}},
+                .choices = {
+                    {.label = "Empty", .value = commands::CommandValue{std::string{"Empty"}}},
+                    {.label = "Smoke", .value = commands::CommandValue{std::string{"Smoke"}}},
+                    {.label = "Fire", .value = commands::CommandValue{std::string{"Fire"}}},
+                    {.label = "Fog", .value = commands::CommandValue{std::string{"Fog"}}},
+                    {.label = "Dust", .value = commands::CommandValue{std::string{"Dust"}}},
+                    {.label = "Snow", .value = commands::CommandValue{std::string{"Snow"}}},
+                    {.label = "Surface Flow", .value = commands::CommandValue{std::string{"Surface Flow"}}}
+                }
             }
         },
         .presentationSurfaces = {
@@ -745,7 +754,18 @@ void RegisterVolumeCommands(
                 .required = true,
                 .displayName = "Source Type",
                 .description =
-                    "Source adapter: Brush, Texture / Mask, Terrain, Spline, Mesh / SDF, Collision Proxy, Particles, Object Motion, or World Motion."
+                    "Source adapter used by the selected universal Volume.",
+                .choices = {
+                    {.label = "Brush", .value = commands::CommandValue{std::string{"Brush"}}},
+                    {.label = "Texture / Mask", .value = commands::CommandValue{std::string{"Texture / Mask"}}},
+                    {.label = "Terrain", .value = commands::CommandValue{std::string{"Terrain"}}},
+                    {.label = "Spline", .value = commands::CommandValue{std::string{"Spline"}}},
+                    {.label = "Mesh / SDF", .value = commands::CommandValue{std::string{"Mesh / SDF"}}},
+                    {.label = "Collision Proxy", .value = commands::CommandValue{std::string{"Collision Proxy"}}},
+                    {.label = "Particles", .value = commands::CommandValue{std::string{"Particles"}}},
+                    {.label = "Object Motion", .value = commands::CommandValue{std::string{"Object Motion"}}},
+                    {.label = "World Motion", .value = commands::CommandValue{std::string{"World Motion"}}}
+                }
             }
         },
         .presentationSurfaces = {
@@ -822,7 +842,14 @@ void RegisterVolumeCommands(
                 .required = true,
                 .displayName = "Effector Type",
                 .description =
-                    "Effector type: Obstacle, Drag, Wind, Temperature, or Dissipation."
+                    "Obstacle or force behavior applied by the selected universal Volume.",
+                .choices = {
+                    {.label = "Obstacle", .value = commands::CommandValue{std::string{"Obstacle"}}},
+                    {.label = "Drag", .value = commands::CommandValue{std::string{"Drag"}}},
+                    {.label = "Wind", .value = commands::CommandValue{std::string{"Wind"}}},
+                    {.label = "Temperature", .value = commands::CommandValue{std::string{"Temperature"}}},
+                    {.label = "Dissipation", .value = commands::CommandValue{std::string{"Dissipation"}}}
+                }
             }
         },
         .presentationSurfaces = {
