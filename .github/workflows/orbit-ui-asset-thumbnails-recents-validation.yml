@@ -25,6 +25,14 @@ jobs:
           grep -q 'assetThumbnailCache' apps/editor/src/Main.cpp
           grep -q 'context.MutedText("Recent")' engine/studio_ui/src/StudioExpansionShell.cpp
           grep -q 'InteractiveImage' engine/studio_ui/src/StudioExpansionShell.cpp
+      - name: Install Vulkan SDK
+        shell: powershell
+        run: |
+          choco install vulkan-sdk -y --no-progress
+          $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if ($null -eq $sdk) { throw 'Vulkan SDK install did not create C:\VulkanSDK.' }
+          "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$($sdk.FullName)\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Configure Orbit
         shell: bash
         run: cmake -S . -B build -DBUILD_TESTING=OFF -DORBIT_WARNINGS_AS_ERRORS=OFF
