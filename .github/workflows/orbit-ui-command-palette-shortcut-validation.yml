@@ -1,0 +1,51 @@
+name: Orbit UI command palette shortcut validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-command-palette-shortcut
+
+permissions:
+  contents: write
+
+jobs:
+  command-palette-shortcut:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-command-palette-shortcut
+      - name: Apply patch
+        run: python3 tools/validation/command_palette_shortcut_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 8
+          grep -q 'P,' engine/platform/include/orbit/platform/Window.hpp
+          grep -q 'case Key::P:' engine/platform/src/windows/Win32Keyboard.cpp
+          grep -q 'RegisterCallback' engine/editor_model/include/orbit/editor_model/ShortcutRegistry.hpp
+          grep -q 'allowWhenKeyboardCaptured' engine/editor_model/include/orbit/editor_model/ShortcutRegistry.hpp
+          grep -q 'binding.callback()' engine/editor_model/src/ShortcutRegistry.cpp
+          grep -q 'binding.allowWhenKeyboardCaptured' engine/editor_model/src/ShortcutRegistry.cpp
+          grep -q 'RequestCommandPaletteOpen' engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          grep -q 'commandPaletteOpenRequested_' engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          grep -q 'std::exchange(commandPaletteOpenRequested_, false)' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'RequestCommandPaletteOpen' engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp
+          grep -q 'Key::P' apps/editor/src/Main.cpp
+          grep -q 'shortcuts.RegisterCallback' apps/editor/src/Main.cpp
+          grep -q 'Commands##command-palette-toggle' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'registry.Invoke(entry.command)' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add apps/editor/src/Main.cpp
+          git add engine/platform/include/orbit/platform/Window.hpp
+          git add engine/platform/src/windows/Win32Keyboard.cpp
+          git add engine/editor_model/include/orbit/editor_model/ShortcutRegistry.hpp
+          git add engine/editor_model/src/ShortcutRegistry.cpp
+          git add engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git add engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp
+          git commit -m "Add global command palette shortcut"
+          git push origin HEAD:orbit-ui-command-palette-shortcut
