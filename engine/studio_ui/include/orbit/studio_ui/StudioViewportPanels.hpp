@@ -2,6 +2,7 @@
 
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/StudioAssetShelf.hpp>
 #include <orbit/studio_ui/StudioExpansionShell.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
@@ -73,6 +74,7 @@ public:
     void SetContentService(content::ContentService* content) noexcept
     {
         content_ = content;
+        InstallStudioAssetShelf(content);
     }
 
     void RequestCommandPaletteOpen() noexcept
