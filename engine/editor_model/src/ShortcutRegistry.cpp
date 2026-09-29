@@ -1,6 +1,7 @@
 #include <orbit/editor_model/ShortcutRegistry.hpp>
 
 #include <stdexcept>
+#include <utility>
 
 namespace orbit::editor_model
 {
@@ -27,6 +28,34 @@ void ShortcutRegistry::Register(
     bindings_.push_back({
         .chord = chord,
         .command = command
+    });
+}
+
+void ShortcutRegistry::RegisterCallback(
+    const ShortcutChord chord,
+    std::function<void()> callback,
+    const bool allowWhenKeyboardCaptured)
+{
+    if (!callback)
+    {
+        throw std::invalid_argument(
+            "Shortcut requires a callback.");
+    }
+
+    for (const Binding& binding :
+         bindings_)
+    {
+        if (binding.chord == chord)
+        {
+            throw std::invalid_argument(
+                "Shortcut chord is already registered.");
+        }
+    }
+
+    bindings_.push_back({
+        .chord = chord,
+        .callback = std::move(callback),
+        .allowWhenKeyboardCaptured = allowWhenKeyboardCaptured
     });
 }
 
@@ -57,18 +86,26 @@ void ShortcutRegistry::Update(
             shift == binding.chord.shift &&
             alt == binding.chord.alt;
 
-        if (!suppressInvocation &&
+        if ((!suppressInvocation ||
+             binding.allowWhenKeyboardCaptured) &&
             down &&
             !binding.wasDown)
         {
-            const auto enablement =
-                commandRegistry.Enablement(
-                    binding.command);
-
-            if (enablement.enabled)
+            if (binding.callback)
             {
-                commandRegistry.Invoke(
-                    binding.command);
+                binding.callback();
+            }
+            else
+            {
+                const auto enablement =
+                    commandRegistry.Enablement(
+                        binding.command);
+
+                if (enablement.enabled)
+                {
+                    commandRegistry.Invoke(
+                        binding.command);
+                }
             }
         }
 

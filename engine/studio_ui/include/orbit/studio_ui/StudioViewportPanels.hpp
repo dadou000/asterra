@@ -65,6 +65,11 @@ public:
     void Register(editor_ui::EditorUi& ui);
     void RegisterSecondary(editor_ui::EditorUi& ui);
 
+    void RequestCommandPaletteOpen() noexcept
+    {
+        expansion_.RequestCommandPaletteOpen();
+    }
+
 private:
     friend class StudioExpansionShell;
 

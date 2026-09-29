@@ -58,6 +58,8 @@ namespace
         return L'L';
     case Key::M:
         return L'M';
+    case Key::P:
+        return L'P';
     case Key::V:
         return L'V';
     case Key::X:
