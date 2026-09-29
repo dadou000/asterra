@@ -2516,6 +2516,13 @@ void StudioExpansionShell::DrawNavigationBand(
                         }
                     }
 
+                    if (!parameter.choices.empty())
+                    {
+                        quickCreateArguments_[parameter.name] =
+                            parameter.choices.front().value;
+                        continue;
+                    }
+
                     switch (parameter.kind)
                     {
                     case commands::CommandValueKind::Boolean:
@@ -2665,6 +2672,42 @@ void StudioExpansionShell::DrawNavigationBand(
                             continue;
                         }
 
+                        if (!parameter.choices.empty())
+                        {
+                            std::vector<std::string_view> choiceLabels;
+                            choiceLabels.reserve(parameter.choices.size());
+
+                            i32 choiceIndex = 0;
+                            bool currentChoiceFound = false;
+                            for (std::size_t choice = 0U;
+                                 choice < parameter.choices.size();
+                                 ++choice)
+                            {
+                                const auto& commandChoice =
+                                    parameter.choices[choice];
+                                choiceLabels.push_back(commandChoice.label);
+                                if (commandChoice.value == found->second)
+                                {
+                                    choiceIndex = static_cast<i32>(choice);
+                                    currentChoiceFound = true;
+                                }
+                            }
+
+                            if (!currentChoiceFound)
+                            {
+                                choiceIndex = 0;
+                                found->second = parameter.choices.front().value;
+                            }
+
+                            if (context.Combo(label, choiceLabels, choiceIndex))
+                            {
+                                found->second =
+                                    parameter.choices[
+                                        static_cast<std::size_t>(choiceIndex)].value;
+                            }
+                        }
+                        else
+                        {
                         switch (parameter.kind)
                         {
                         case commands::CommandValueKind::Boolean:
@@ -3534,6 +3577,7 @@ void StudioExpansionShell::DrawNavigationBand(
                                 static_cast<void>(context.InputText(label, idText));
                             }
                             break;
+                        }
                         }
                         }
 
