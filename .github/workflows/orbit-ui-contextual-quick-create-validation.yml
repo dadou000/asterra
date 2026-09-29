@@ -1,0 +1,42 @@
+name: Orbit UI contextual quick create validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-contextual-quick-create
+
+permissions:
+  contents: write
+
+jobs:
+  contextual-quick-create:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-contextual-quick-create
+      - name: Apply contextual quick create patch
+        run: python3 tools/validation/contextual_quick_create_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 3
+          grep -q 'QuickCreateCommandPriority' engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp
+          grep -q 'PreferCommandQuickCreate' engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp
+          grep -q 'ShowViewportQuickCreate' engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp
+          grep -q 'WorkspaceMode::Shading' engine/studio_ui/src/StudioViewportPanels.cpp
+          grep -q 'matches("Terrain")' engine/studio_ui/src/StudioViewportPanels.cpp
+          grep -q 'std::stable_sort' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'For Selection' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'context.MutedText("Viewport")' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'No creation actions are relevant' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'StudioContributionSurface::QuickCreate' engine/studio_ui/src/StudioExpansionShell.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp
+          git add engine/studio_ui/src/StudioViewportPanels.cpp
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Prioritize contextual quick create actions"
+          git push origin HEAD:orbit-ui-contextual-quick-create
