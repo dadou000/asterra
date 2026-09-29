@@ -2435,6 +2435,268 @@ void StudioExpansionShell::DrawNavigationBand(
         }
         context.Separator();
 
+        const auto clearArgumentForm = [this]
+        {
+            quickCreateArgumentCommand_ = {};
+            quickCreateArguments_.clear();
+            quickCreateArgumentEnabled_.clear();
+            quickCreateIdText_.clear();
+            quickCreateArgumentError_.clear();
+        };
+
+        const auto beginArgumentForm =
+            [this, &registry, &clearArgumentForm](
+                const commands::CommandId command)
+            {
+                clearArgumentForm();
+                const auto* descriptor = registry.Find(command);
+                if (descriptor == nullptr)
+                {
+                    quickCreateArgumentError_ =
+                        "Command metadata is no longer available.";
+                    return;
+                }
+
+                quickCreateArgumentCommand_ = command;
+                for (const auto& parameter : descriptor->parameters)
+                {
+                    quickCreateArgumentEnabled_[parameter.name] =
+                        parameter.required;
+
+                    switch (parameter.kind)
+                    {
+                    case commands::CommandValueKind::Boolean:
+                        quickCreateArguments_[parameter.name] = false;
+                        break;
+                    case commands::CommandValueKind::Integer:
+                        quickCreateArguments_[parameter.name] = i64{0};
+                        break;
+                    case commands::CommandValueKind::Float:
+                        quickCreateArguments_[parameter.name] = f64{0.0};
+                        break;
+                    case commands::CommandValueKind::String:
+                        quickCreateArguments_[parameter.name] = std::string{};
+                        break;
+                    case commands::CommandValueKind::Vector3:
+                        quickCreateArguments_[parameter.name] = math::Double3{};
+                        break;
+                    case commands::CommandValueKind::ObjectId:
+                        quickCreateArguments_[parameter.name] = scene::ObjectId{};
+                        quickCreateIdText_[parameter.name] = {};
+                        break;
+                    case commands::CommandValueKind::PropertyId:
+                        quickCreateArguments_[parameter.name] = schema::PropertyId{};
+                        quickCreateIdText_[parameter.name] = {};
+                        break;
+                    }
+                }
+            };
+
+        if (quickCreateArgumentCommand_.IsValid())
+        {
+            const auto* descriptor =
+                registry.Find(quickCreateArgumentCommand_);
+            if (descriptor == nullptr)
+            {
+                context.ErrorText(
+                    "Command argument form failed: command metadata disappeared.");
+                if (context.Button("Back##quick-create-argument-back-missing"))
+                {
+                    clearArgumentForm();
+                }
+            }
+            else
+            {
+                if (context.Button("Back##quick-create-argument-back"))
+                {
+                    clearArgumentForm();
+                }
+                else
+                {
+                    context.SameLine();
+                    context.Heading(descriptor->name);
+                    if (!descriptor->description.empty())
+                    {
+                        context.MutedText(descriptor->description);
+                    }
+
+                    for (const auto& parameter : descriptor->parameters)
+                    {
+                        bool enabled = parameter.required ||
+                            quickCreateArgumentEnabled_[parameter.name];
+                        if (!parameter.required)
+                        {
+                            std::string optionalLabel =
+                                "Set " + parameter.name +
+                                "##quick-create-optional-" + parameter.name;
+                            if (context.Checkbox(optionalLabel, enabled))
+                            {
+                                quickCreateArgumentEnabled_[parameter.name] =
+                                    enabled;
+                            }
+                        }
+
+                        if (!enabled)
+                        {
+                            continue;
+                        }
+
+                        std::string label = parameter.name;
+                        if (parameter.required)
+                        {
+                            label += " *";
+                        }
+                        label += "##quick-create-argument-";
+                        label += parameter.name;
+
+                        auto found = quickCreateArguments_.find(parameter.name);
+                        if (found == quickCreateArguments_.end())
+                        {
+                            continue;
+                        }
+
+                        switch (parameter.kind)
+                        {
+                        case commands::CommandValueKind::Boolean:
+                            if (auto* value = std::get_if<bool>(&found->second))
+                            {
+                                static_cast<void>(context.Checkbox(label, *value));
+                            }
+                            break;
+                        case commands::CommandValueKind::Integer:
+                            if (auto* value = std::get_if<i64>(&found->second))
+                            {
+                                static_cast<void>(context.InputInteger(label, *value));
+                            }
+                            break;
+                        case commands::CommandValueKind::Float:
+                            if (auto* value = std::get_if<f64>(&found->second))
+                            {
+                                static_cast<void>(context.InputDouble(label, *value));
+                            }
+                            break;
+                        case commands::CommandValueKind::String:
+                            if (auto* value = std::get_if<std::string>(&found->second))
+                            {
+                                static_cast<void>(context.InputText(label, *value));
+                            }
+                            break;
+                        case commands::CommandValueKind::Vector3:
+                            if (auto* value = std::get_if<math::Double3>(&found->second))
+                            {
+                                static_cast<void>(context.InputDouble3(label, *value));
+                            }
+                            break;
+                        case commands::CommandValueKind::ObjectId:
+                        case commands::CommandValueKind::PropertyId:
+                            static_cast<void>(context.InputText(
+                                label,
+                                quickCreateIdText_[parameter.name]));
+                            break;
+                        }
+                    }
+
+                    if (!quickCreateArgumentError_.empty())
+                    {
+                        context.ErrorText(quickCreateArgumentError_);
+                    }
+
+                    if (context.PrimaryButton("Create##quick-create-argument-submit"))
+                    {
+                        commands::CommandArguments arguments;
+                        std::string validationError;
+
+                        for (const auto& parameter : descriptor->parameters)
+                        {
+                            const bool enabled = parameter.required ||
+                                quickCreateArgumentEnabled_[parameter.name];
+                            if (!enabled)
+                            {
+                                continue;
+                            }
+
+                            const auto found =
+                                quickCreateArguments_.find(parameter.name);
+                            if (found == quickCreateArguments_.end())
+                            {
+                                validationError =
+                                    "Missing generated value for " +
+                                    parameter.name + ".";
+                                break;
+                            }
+
+                            if (parameter.kind ==
+                                commands::CommandValueKind::ObjectId)
+                            {
+                                const auto parsed = scene::ObjectId::Parse(
+                                    quickCreateIdText_[parameter.name]);
+                                if (!parsed.has_value())
+                                {
+                                    validationError =
+                                        parameter.name +
+                                        " must be a valid object UUID.";
+                                    break;
+                                }
+                                arguments[parameter.name] = *parsed;
+                            }
+                            else if (parameter.kind ==
+                                     commands::CommandValueKind::PropertyId)
+                            {
+                                const auto parsed = schema::PropertyId::Parse(
+                                    quickCreateIdText_[parameter.name]);
+                                if (!parsed.has_value())
+                                {
+                                    validationError =
+                                        parameter.name +
+                                        " must be a valid property UUID.";
+                                    break;
+                                }
+                                arguments[parameter.name] = *parsed;
+                            }
+                            else
+                            {
+                                arguments[parameter.name] = found->second;
+                            }
+                        }
+
+                        if (!validationError.empty())
+                        {
+                            quickCreateArgumentError_ =
+                                std::move(validationError);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                registry.Invoke(
+                                    quickCreateArgumentCommand_,
+                                    arguments);
+                                owner_->status_.clear();
+                                clearArgumentForm();
+                                quickCreateBrowseQuery_.clear();
+                                quickCreateBrowseSelection_ = 0;
+                                context.CloseCurrentPopup();
+                            }
+                            catch (const std::exception& exception)
+                            {
+                                quickCreateArgumentError_ =
+                                    exception.what();
+                                owner_->status_ = exception.what();
+                            }
+                        }
+                    }
+
+                    if (context.KeyPressed(editor_ui::UiKey::Escape))
+                    {
+                        clearArgumentForm();
+                    }
+                }
+            }
+
+            context.EndPopup();
+            return;
+        }
+
         std::vector<CommandPaletteEntry> creationEntries;
         creationEntries.reserve(commandCatalog.size());
         for (const auto& command : commandCatalog)
@@ -2451,8 +2713,7 @@ void StudioExpansionShell::DrawNavigationBand(
                     {
                         return entry.command == command.id;
                     });
-            if (paletteEntry == palette.end() ||
-                paletteEntry->requiresArguments)
+            if (paletteEntry == palette.end())
             {
                 continue;
             }
@@ -2478,7 +2739,6 @@ void StudioExpansionShell::DrawNavigationBand(
                         return entry.command == contribution.command;
                     });
             if (paletteEntry == palette.end() ||
-                paletteEntry->requiresArguments ||
                 std::ranges::any_of(
                     creationEntries,
                     [&contribution](const CommandPaletteEntry& entry)
@@ -2526,6 +2786,12 @@ void StudioExpansionShell::DrawNavigationBand(
         const auto invokeCreation =
             [&](const CommandPaletteEntry& entry)
             {
+                if (entry.requiresArguments)
+                {
+                    beginArgumentForm(entry.command);
+                    return false;
+                }
+
                 try
                 {
                     registry.Invoke(entry.command);
