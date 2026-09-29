@@ -64,6 +64,16 @@ replace_once(
 shell = Path('engine/studio_ui/src/StudioExpansionShell.cpp')
 replace_once(
     shell,
+    '''[[nodiscard]] const char* ViewportModeName(\n''',
+    '''[[nodiscard]] const char* ViewportModeDisplayName(\n''',
+    'Disambiguate viewport mode display helper')
+replace_once(
+    shell,
+    '''            ViewportModeName(target->mode)));\n''',
+    '''            ViewportModeDisplayName(target->mode)));\n''',
+    'Use viewport mode display helper')
+replace_once(
+    shell,
     '''#include <orbit/content/ContentService.hpp>\n#include <orbit/editor_model/AuthoringCommands.hpp>\n''',
     '''#include <orbit/content/ContentService.hpp>\n#include <orbit/editor_model/AuthoringCommands.hpp>\n#include <orbit/studio_ui/AssetThumbnailCache.hpp>\n''',
     'AssetThumbnailCache shell include')
