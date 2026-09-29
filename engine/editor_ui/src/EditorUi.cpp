@@ -2030,6 +2030,28 @@ void PanelContext::Toolbar(
     }
 }
 
+void PanelContext::FocusNextItem()
+{
+    ImGui::SetKeyboardFocusHere();
+}
+
+bool PanelContext::KeyPressed(
+    const UiKey key,
+    const bool repeat) const noexcept
+{
+    ImGuiKey imguiKey = ImGuiKey_None;
+    switch (key)
+    {
+    case UiKey::Up: imguiKey = ImGuiKey_UpArrow; break;
+    case UiKey::Down: imguiKey = ImGuiKey_DownArrow; break;
+    case UiKey::Enter: imguiKey = ImGuiKey_Enter; break;
+    case UiKey::Escape: imguiKey = ImGuiKey_Escape; break;
+    }
+
+    return imguiKey != ImGuiKey_None &&
+        ImGui::IsKeyPressed(imguiKey, repeat);
+}
+
 bool PanelContext::ActionList(
     const std::span<const ActionPresentation> actions)
 {

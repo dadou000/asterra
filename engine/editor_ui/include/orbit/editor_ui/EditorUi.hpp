@@ -81,6 +81,14 @@ struct ActionPresentation
     std::function<void()> invoke;
 };
 
+enum class UiKey : u8
+{
+    Up,
+    Down,
+    Enter,
+    Escape
+};
+
 class ShellBandRegistry;
 
 class PanelContext
@@ -98,6 +106,11 @@ public:
     [[nodiscard]] bool Button(std::string_view label);
     [[nodiscard]] bool PrimaryButton(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
+    // Focuses the next widget submitted through this context.
+    void FocusNextItem();
+    [[nodiscard]] bool KeyPressed(
+        UiKey key,
+        bool repeat = false) const noexcept;
     // Multi-line editor for code. The string grows as the user types; Tab
     // inserts a tab. Returns true on the frame it changed.
     [[nodiscard]] bool InputTextMultiline(
