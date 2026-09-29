@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace orbit::studio_session
 {
@@ -117,6 +118,7 @@ private:
     std::unordered_map<std::string, std::string> quickCreateIdText_;
     std::unordered_map<std::string, std::string> quickCreatePickerQuery_;
     std::unordered_map<std::string, i32> quickCreatePickerSelection_;
+    std::vector<std::string> quickCreateRecentAssets_;
     std::string quickCreateArgumentError_;
     bool attached_{false};
 

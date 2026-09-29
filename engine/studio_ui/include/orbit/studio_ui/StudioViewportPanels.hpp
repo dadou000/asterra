@@ -19,6 +19,8 @@ class ContentService;
 
 namespace orbit::studio_ui
 {
+class AssetThumbnailCache;
+
 inline constexpr editor_ui::PanelId kPrimaryViewportPanel{
     .high = 0x4f52424954535455ULL,
     .low = 0x44494f5657455750ULL
@@ -73,6 +75,11 @@ public:
     void SetContentService(content::ContentService* content) noexcept
     {
         content_ = content;
+    }
+
+    void SetAssetThumbnailCache(AssetThumbnailCache* thumbnails) noexcept
+    {
+        assetThumbnails_ = thumbnails;
     }
 
     void RequestCommandPaletteOpen() noexcept
@@ -143,6 +150,7 @@ private:
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     content::ContentService* content_{nullptr};
+    AssetThumbnailCache* assetThumbnails_{nullptr};
     std::string status_;
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
 

@@ -53,6 +53,7 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
+#include <orbit/studio_ui/AssetThumbnailCache.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/DebugViewUi.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
@@ -2180,11 +2181,19 @@ int main(
                 device,
                 studioSession);
 
+        orbit::studio_ui::AssetThumbnailCache
+            assetThumbnailCache(
+                device,
+                graphicsQueue,
+                content);
+
         orbit::studio_ui::StudioViewportPanels
             studioViewportPanels(
                 studioViews,
                 studioSession);
         studioViewportPanels.SetContentService(&content);
+        studioViewportPanels.SetAssetThumbnailCache(
+            &assetThumbnailCache);
 
         shortcuts.RegisterCallback(
             {

@@ -21,13 +21,7 @@
 #include <variant>
 #include <vector>
 
-#define Register RegisterBase
-#define RegisterSecondary RegisterSecondaryBase
-#define DrawView DrawViewBase
 #include "StudioViewportPanelsBase.cpp"
-#undef DrawView
-#undef RegisterSecondary
-#undef Register
 
 namespace orbit::studio_ui
 {

@@ -1,4 +1,5 @@
 add_library(OrbitStudioUi STATIC
+    src/AssetThumbnailCache.cpp
     src/CelestialAuthoringUi.cpp
     src/DebugViewUi.cpp
     src/DisplayDiagnosticsUi.cpp

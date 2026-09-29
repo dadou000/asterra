@@ -380,7 +380,7 @@ void StudioViewportPanels::ClearBinding() noexcept
     terrainSplineTerrain_.reset();
 }
 
-void StudioViewportPanels::Register(
+void StudioViewportPanels::RegisterBase(
     editor_ui::EditorUi& ui)
 {
     if (views_ != nullptr)
@@ -416,7 +416,7 @@ void StudioViewportPanels::Register(
     });
 }
 
-void StudioViewportPanels::RegisterSecondary(
+void StudioViewportPanels::RegisterSecondaryBase(
     editor_ui::EditorUi& ui)
 {
     ui.RegisterPanel({
@@ -433,7 +433,7 @@ void StudioViewportPanels::RegisterSecondary(
     });
 }
 
-void StudioViewportPanels::DrawView(
+void StudioViewportPanels::DrawViewBase(
     editor_ui::PanelContext& context,
     const std::string_view id)
 {

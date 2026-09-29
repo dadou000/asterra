@@ -2,6 +2,7 @@
 
 #include <orbit/content/ContentService.hpp>
 #include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/studio_ui/AssetThumbnailCache.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/editor_ui/FocusState.hpp>
 #include <orbit/editor_ui/PanelExtensions.hpp>
@@ -135,7 +136,7 @@ constexpr std::array<std::string_view, 4> kSurfaceViews{
         tool == StudioTerrainAuthoringTool::Ridge;
 }
 
-[[nodiscard]] const char* ViewportModeName(
+[[nodiscard]] const char* ViewportModeDisplayName(
     const studio_session::ViewportMode mode) noexcept
 {
     switch (mode)
@@ -1110,7 +1111,7 @@ void StudioExpansionShell::DrawViewportTargetProperties(
     context.MutedText(
         std::format(
             "Mode: {}",
-            ViewportModeName(target->mode)));
+            ViewportModeDisplayName(target->mode)));
 
     if (context.Button("Follow Active Body##viewport-follow-active"))
     {
@@ -3024,9 +3025,46 @@ void StudioExpansionShell::DrawNavigationBand(
                                         context.Separator();
 
                                         std::vector<content::AssetRecord> candidates;
+                                        std::size_t recentCount = 0U;
+
+                                        // With no query, place recently chosen compatible
+                                        // assets first. They remain ordinary catalog records,
+                                        // so deletion/rename naturally removes stale entries.
+                                        if (query.empty())
+                                        {
+                                            for (const std::string& recentPath :
+                                                 quickCreateRecentAssets_)
+                                            {
+                                                const auto* recent =
+                                                    owner_->content_->FindByPath(recentPath);
+                                                if (recent == nullptr ||
+                                                    !assetMatchesParameter(*recent))
+                                                {
+                                                    continue;
+                                                }
+                                                candidates.push_back(*recent);
+                                                ++recentCount;
+                                                if (recentCount >= 6U)
+                                                {
+                                                    break;
+                                                }
+                                            }
+                                        }
+
                                         for (auto asset : owner_->content_->Search(query))
                                         {
-                                            if (assetMatchesParameter(asset))
+                                            if (!assetMatchesParameter(asset))
+                                            {
+                                                continue;
+                                            }
+
+                                            const bool duplicate = std::ranges::any_of(
+                                                candidates,
+                                                [&asset](const content::AssetRecord& existing)
+                                                {
+                                                    return existing.id == asset.id;
+                                                });
+                                            if (!duplicate)
                                             {
                                                 candidates.push_back(std::move(asset));
                                             }
@@ -3067,6 +3105,22 @@ void StudioExpansionShell::DrawNavigationBand(
                                                 {
                                                     *value =
                                                         asset.sourcePath.generic_string();
+
+                                                    const std::string recentPath = *value;
+                                                    std::erase(
+                                                        quickCreateRecentAssets_,
+                                                        recentPath);
+                                                    quickCreateRecentAssets_.insert(
+                                                        quickCreateRecentAssets_.begin(),
+                                                        recentPath);
+                                                    constexpr std::size_t kMaximumRecentAssets = 8U;
+                                                    if (quickCreateRecentAssets_.size() >
+                                                        kMaximumRecentAssets)
+                                                    {
+                                                        quickCreateRecentAssets_.resize(
+                                                            kMaximumRecentAssets);
+                                                    }
+
                                                     query.clear();
                                                     context.CloseCurrentPopup();
                                                 };
@@ -3078,6 +3132,47 @@ void StudioExpansionShell::DrawNavigationBand(
                                             {
                                                 const auto& asset =
                                                     candidates[static_cast<std::size_t>(index)];
+
+                                                if (query.empty())
+                                                {
+                                                    if (index == 0 && recentCount > 0U)
+                                                    {
+                                                        context.MutedText("Recent");
+                                                    }
+                                                    else if (
+                                                        recentCount > 0U &&
+                                                        static_cast<std::size_t>(index) ==
+                                                            recentCount)
+                                                    {
+                                                        context.Separator();
+                                                        context.MutedText("Project Assets");
+                                                    }
+                                                }
+
+                                                bool thumbnailClicked = false;
+                                                if (owner_->assetThumbnails_ != nullptr)
+                                                {
+                                                    if (rhi::Texture* thumbnail =
+                                                            owner_->assetThumbnails_->Get(
+                                                                asset.sourcePath);
+                                                        thumbnail != nullptr)
+                                                    {
+                                                        const auto image =
+                                                            context.InteractiveImage(
+                                                                "##quick-create-asset-thumb-" +
+                                                                    asset.id.ToString(),
+                                                                *thumbnail,
+                                                                {
+                                                                    .width = 44.0F *
+                                                                        editor_ui::CurrentUiScale(),
+                                                                    .height = 44.0F *
+                                                                        editor_ui::CurrentUiScale()
+                                                                });
+                                                        thumbnailClicked = image.clicked;
+                                                        context.SameLine();
+                                                    }
+                                                }
+
                                                 std::string option = asset.name;
                                                 option += "\n";
                                                 option += content::AssetKindName(asset.kind);
@@ -3085,7 +3180,8 @@ void StudioExpansionShell::DrawNavigationBand(
                                                 option += asset.sourcePath.generic_string();
                                                 option += "##quick-create-asset-result-";
                                                 option += asset.id.ToString();
-                                                if (context.Selectable(
+                                                if (thumbnailClicked ||
+                                                    context.Selectable(
                                                         option,
                                                         *value ==
                                                             asset.sourcePath.generic_string()))
