@@ -108,6 +108,8 @@ private:
     std::string commandQuery_;
     i32 commandPaletteSelection_{0};
     bool commandPaletteOpenRequested_{false};
+    std::string quickCreateBrowseQuery_;
+    i32 quickCreateBrowseSelection_{0};
     bool attached_{false};
 
     // 0 = follow focused viewport, 1 = pin Primary, 2 = pin Body Map.

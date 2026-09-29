@@ -95,7 +95,12 @@ BuildCommandPalette(
             .label = command.name,
             .category = command.category,
             .description = command.description,
-            .requiresArguments = !command.parameters.empty()
+            .requiresArguments = std::ranges::any_of(
+                command.parameters,
+                [](const commands::CommandParameter& parameter)
+                {
+                    return parameter.required;
+                })
         });
     }
 

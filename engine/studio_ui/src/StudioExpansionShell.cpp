@@ -75,6 +75,22 @@ constexpr std::array<std::string_view, 4> kSurfaceViews{
         label.starts_with("New ");
 }
 
+[[nodiscard]] bool IsQuickCreateCatalogEntry(
+    const commands::CommandCatalogEntry& entry) noexcept
+{
+    if (IsQuickCreateLabel(entry.name))
+    {
+        return true;
+    }
+
+    return std::ranges::any_of(
+        entry.presentationSurfaces,
+        [](const std::string& surface)
+        {
+            return surface == kStudioQuickCreateCommandSurface;
+        });
+}
+
 [[nodiscard]] std::string CommandPaletteSecondaryText(
     const CommandPaletteEntry& entry)
 {
@@ -1947,8 +1963,9 @@ void StudioExpansionShell::DrawNavigationBand(
     }
 
     auto& registry = world.CommandRegistry();
+    const auto commandCatalog = registry.Catalog();
     const auto palette =
-        BuildCommandPalette(registry.Catalog());
+        BuildCommandPalette(commandCatalog);
 
     const f32 commandPaletteWidth =
         520.0F * editor_ui::CurrentUiScale();
@@ -2089,6 +2106,7 @@ void StudioExpansionShell::DrawNavigationBand(
         context.EndPopup();
     }
 
+    bool openQuickCreateBrowser = false;
     const f32 quickCreateWidth =
         360.0F * editor_ui::CurrentUiScale();
     if (context.BeginPopup(
@@ -2377,9 +2395,223 @@ void StudioExpansionShell::DrawNavigationBand(
                 "No creation actions are relevant to the current workspace and selection.");
         }
 
+        if (drewQuickCreateSection)
+        {
+            context.Separator();
+        }
+        if (context.Button("Browse All…##quick-create-browse-all"))
+        {
+            quickCreateBrowseQuery_.clear();
+            quickCreateBrowseSelection_ = 0;
+            openQuickCreateBrowser = true;
+            closeQuickCreate = true;
+        }
+
         if (closeQuickCreate)
         {
             context.CloseCurrentPopup();
+        }
+
+        context.EndPopup();
+    }
+
+    const f32 quickCreateBrowserWidth =
+        520.0F * editor_ui::CurrentUiScale();
+    if (context.BeginPopup(
+            "studio-quick-create-browser-popup",
+            openQuickCreateBrowser,
+            {.width = quickCreateBrowserWidth, .height = 0.0F}))
+    {
+        context.Text("Add · Browse All");
+        if (openQuickCreateBrowser)
+        {
+            context.FocusNextItem();
+        }
+        if (context.InputText(
+                "##studio-quick-create-browser-query",
+                quickCreateBrowseQuery_))
+        {
+            quickCreateBrowseSelection_ = 0;
+        }
+        context.Separator();
+
+        std::vector<CommandPaletteEntry> creationEntries;
+        creationEntries.reserve(commandCatalog.size());
+        for (const auto& command : commandCatalog)
+        {
+            if (!IsQuickCreateCatalogEntry(command))
+            {
+                continue;
+            }
+
+            const auto paletteEntry =
+                std::ranges::find_if(
+                    palette,
+                    [&command](const CommandPaletteEntry& entry)
+                    {
+                        return entry.command == command.id;
+                    });
+            if (paletteEntry == palette.end() ||
+                paletteEntry->requiresArguments)
+            {
+                continue;
+            }
+            creationEntries.push_back(*paletteEntry);
+        }
+
+        const auto browsePluginCatalog =
+            GlobalStudioUiContributions().Catalog(
+                StudioContributionSurface::QuickCreate);
+        for (const auto& contribution : browsePluginCatalog)
+        {
+            if (contribution.kind != StudioContributionKind::Command ||
+                !contribution.command.IsValid())
+            {
+                continue;
+            }
+
+            const auto paletteEntry =
+                std::ranges::find_if(
+                    palette,
+                    [&contribution](const CommandPaletteEntry& entry)
+                    {
+                        return entry.command == contribution.command;
+                    });
+            if (paletteEntry == palette.end() ||
+                paletteEntry->requiresArguments ||
+                std::ranges::any_of(
+                    creationEntries,
+                    [&contribution](const CommandPaletteEntry& entry)
+                    {
+                        return entry.command == contribution.command;
+                    }))
+            {
+                continue;
+            }
+
+            auto entry = *paletteEntry;
+            if (!contribution.label.empty())
+            {
+                entry.label = contribution.label;
+            }
+            if (!contribution.category.empty())
+            {
+                entry.category = contribution.category;
+            }
+            creationEntries.push_back(std::move(entry));
+        }
+
+        const auto matches =
+            SearchCommandPalette(
+                creationEntries,
+                quickCreateBrowseQuery_,
+                creationEntries.size());
+
+        std::vector<CommandPaletteEntry> visibleMatches;
+        visibleMatches.reserve(12U);
+        for (const auto& entry : matches)
+        {
+            if (!registry.Enablement(entry.command).enabled)
+            {
+                continue;
+            }
+
+            visibleMatches.push_back(entry);
+            if (visibleMatches.size() >= 12U)
+            {
+                break;
+            }
+        }
+
+        const auto invokeCreation =
+            [&](const CommandPaletteEntry& entry)
+            {
+                try
+                {
+                    registry.Invoke(entry.command);
+                    owner_->status_.clear();
+                    quickCreateBrowseQuery_.clear();
+                    quickCreateBrowseSelection_ = 0;
+                    context.CloseCurrentPopup();
+                    return true;
+                }
+                catch (const std::exception& exception)
+                {
+                    owner_->status_ = exception.what();
+                    return false;
+                }
+            };
+
+        if (context.KeyPressed(editor_ui::UiKey::Escape))
+        {
+            quickCreateBrowseQuery_.clear();
+            quickCreateBrowseSelection_ = 0;
+            context.CloseCurrentPopup();
+        }
+        else if (visibleMatches.empty())
+        {
+            quickCreateBrowseSelection_ = 0;
+            context.MutedText(
+                "No matching creation commands are enabled in the current context.");
+        }
+        else
+        {
+            const i32 visibleCount =
+                static_cast<i32>(visibleMatches.size());
+            quickCreateBrowseSelection_ = std::clamp(
+                quickCreateBrowseSelection_,
+                0,
+                visibleCount - 1);
+
+            if (context.KeyPressed(editor_ui::UiKey::Down, true))
+            {
+                quickCreateBrowseSelection_ =
+                    (quickCreateBrowseSelection_ + 1) % visibleCount;
+            }
+            if (context.KeyPressed(editor_ui::UiKey::Up, true))
+            {
+                quickCreateBrowseSelection_ =
+                    (quickCreateBrowseSelection_ + visibleCount - 1) %
+                    visibleCount;
+            }
+
+            bool invoked = false;
+            for (i32 index = 0; index < visibleCount; ++index)
+            {
+                const auto& entry =
+                    visibleMatches[static_cast<std::size_t>(index)];
+                std::string label = entry.label;
+                const std::string secondary =
+                    CommandPaletteSecondaryText(entry);
+                if (!secondary.empty())
+                {
+                    label += "\n";
+                    label += secondary;
+                }
+                label += "##quick-create-browser-";
+                label += entry.command.ToString();
+
+                if (context.Selectable(
+                        label,
+                        index == quickCreateBrowseSelection_))
+                {
+                    quickCreateBrowseSelection_ = index;
+                    invoked = invokeCreation(entry);
+                    if (invoked)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (!invoked &&
+                context.KeyPressed(editor_ui::UiKey::Enter))
+            {
+                static_cast<void>(
+                    invokeCreation(
+                        visibleMatches[static_cast<std::size_t>(
+                            quickCreateBrowseSelection_)]));
+            }
         }
 
         context.EndPopup();
