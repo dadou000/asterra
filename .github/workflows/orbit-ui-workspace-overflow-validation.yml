@@ -1,0 +1,34 @@
+name: Orbit UI workspace overflow validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-workspace-overflow
+
+permissions:
+  contents: write
+
+jobs:
+  workspace-overflow:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-workspace-overflow
+      - name: Apply patch
+        run: python3 tools/validation/workspace_toolbar_overflow_patch.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only)" = "engine/studio_ui/src/StudioExpansionShell.cpp"
+          grep -q 'studio-workspace-toolbar-overflow' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'studio-context-toolbar-overflow' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q 'StudioContributionSurface::WorkspaceToolbar,' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -A2 'StudioContributionSurface::WorkspaceToolbar,' engine/studio_ui/src/StudioExpansionShell.cpp | grep -q 'true'
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Make workspace toolbar contributions responsive"
+          git push origin HEAD:orbit-ui-workspace-overflow
