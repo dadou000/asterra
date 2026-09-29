@@ -1931,8 +1931,14 @@ void StudioExpansionShell::DrawNavigationBand(
         context.Button("+ Add##quick-create-toggle");
 
     context.SameLine();
+    const f32 commandHintThreshold =
+        230.0F * editor_ui::CurrentUiScale();
+    const std::string_view commandButtonLabel =
+        context.ContentAvailable().width >= commandHintThreshold
+            ? "Commands  Ctrl+Shift+P##command-palette-toggle"
+            : "Commands##command-palette-toggle";
     const bool openCommandPalette =
-        context.Button("Commands##command-palette-toggle") ||
+        context.Button(commandButtonLabel) ||
         std::exchange(commandPaletteOpenRequested_, false);
     if (openCommandPalette)
     {
