@@ -1,0 +1,59 @@
+name: Orbit UI tool-aware snap validation
+
+on:
+  push:
+    branches:
+      - orbit-ui-tool-aware-snap
+
+permissions:
+  contents: write
+
+jobs:
+  tool-aware-snap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-tool-aware-snap
+
+      - name: Make snap controls tool-aware
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('engine/studio_ui/src/StudioExpansionShell.cpp')
+          text = path.read_text(encoding='utf-8')
+
+          properties_anchor = '''    if (context.Combo(\n            "Transform Space##viewport-transform-space-properties",\n            kTransformSpaces,\n            transformSpace))\n    {\n        transformSpace = std::clamp(transformSpace, 0, 1);\n        viewportState_.gizmo.space =\n            static_cast<GizmoSpace>(transformSpace);\n    }\n\n    const std::string_view id = SelectedViewportId();\n'''
+
+          properties_replacement = '''    if (context.Combo(\n            "Transform Space##viewport-transform-space-properties",\n            kTransformSpaces,\n            transformSpace))\n    {\n        transformSpace = std::clamp(transformSpace, 0, 1);\n        viewportState_.gizmo.space =\n            static_cast<GizmoSpace>(transformSpace);\n    }\n\n    switch (viewportState_.gizmo.tool)\n    {\n    case GizmoTool::Select:\n        break;\n\n    case GizmoTool::Translate:\n    {\n        static constexpr std::array<std::string_view, 4>\n            kTranslationSnapModes{"Off", "Grid", "Surface", "Both"};\n        i32 snapMode =\n            (viewportState_.gizmo.translationSnap ? 1 : 0) |\n            (viewportState_.gizmo.surfaceSnap ? 2 : 0);\n        if (context.Combo(\n                "Snap##viewport-translation-snap-properties",\n                kTranslationSnapModes,\n                snapMode))\n        {\n            viewportState_.gizmo.translationSnap =\n                (snapMode & 1) != 0;\n            viewportState_.gizmo.surfaceSnap =\n                (snapMode & 2) != 0;\n        }\n        if (viewportState_.gizmo.translationSnap)\n        {\n            static_cast<void>(context.InputDouble(\n                "Grid Step (m)##viewport-translation-snap-step",\n                viewportState_.gizmo.translationSnapMeters));\n            viewportState_.gizmo.translationSnapMeters =\n                std::max(0.001, viewportState_.gizmo.translationSnapMeters);\n        }\n        break;\n    }\n\n    case GizmoTool::Rotate:\n    {\n        static constexpr std::array<std::string_view, 2>\n            kRotationSnapModes{"Off", "Angle"};\n        i32 snapMode = viewportState_.gizmo.rotationSnap ? 1 : 0;\n        if (context.Combo(\n                "Snap##viewport-rotation-snap-properties",\n                kRotationSnapModes,\n                snapMode))\n        {\n            viewportState_.gizmo.rotationSnap = snapMode != 0;\n        }\n        if (viewportState_.gizmo.rotationSnap)\n        {\n            static_cast<void>(context.InputDouble(\n                "Angle Step (deg)##viewport-rotation-snap-step",\n                viewportState_.gizmo.rotationSnapDegrees));\n            viewportState_.gizmo.rotationSnapDegrees =\n                std::max(0.001, viewportState_.gizmo.rotationSnapDegrees);\n        }\n        break;\n    }\n\n    case GizmoTool::Scale:\n    {\n        static constexpr std::array<std::string_view, 2>\n            kScaleSnapModes{"Off", "Step"};\n        i32 snapMode = viewportState_.gizmo.scaleSnap ? 1 : 0;\n        if (context.Combo(\n                "Snap##viewport-scale-snap-properties",\n                kScaleSnapModes,\n                snapMode))\n        {\n            viewportState_.gizmo.scaleSnap = snapMode != 0;\n        }\n        if (viewportState_.gizmo.scaleSnap)\n        {\n            static_cast<void>(context.InputDouble(\n                "Scale Step##viewport-scale-snap-step",\n                viewportState_.gizmo.scaleSnapStep));\n            viewportState_.gizmo.scaleSnapStep =\n                std::max(0.001, viewportState_.gizmo.scaleSnapStep);\n        }\n        break;\n    }\n    }\n\n    const std::string_view id = SelectedViewportId();\n'''
+
+          row_anchor = '''    context.SameLine();\n    static constexpr std::array<std::string_view, 4>\n        kSnapModes{"Off", "Grid", "Surface", "Both"};\n    i32 snapMode =\n        (viewportState_.gizmo.translationSnap ? 1 : 0) |\n        (viewportState_.gizmo.surfaceSnap ? 2 : 0);\n    if (context.Combo(\n            "##gizmo-snap-mode",\n            kSnapModes,\n            snapMode))\n    {\n        viewportState_.gizmo.translationSnap =\n            (snapMode & 1) != 0;\n        viewportState_.gizmo.surfaceSnap =\n            (snapMode & 2) != 0;\n    }\n\n'''
+
+          row_replacement = '''    switch (viewportState_.gizmo.tool)\n    {\n    case GizmoTool::Select:\n        break;\n\n    case GizmoTool::Translate:\n    {\n        context.SameLine();\n        static constexpr std::array<std::string_view, 4>\n            kTranslationSnapModes{"Off", "Grid", "Surface", "Both"};\n        i32 snapMode =\n            (viewportState_.gizmo.translationSnap ? 1 : 0) |\n            (viewportState_.gizmo.surfaceSnap ? 2 : 0);\n        if (context.Combo(\n                "##gizmo-translation-snap-mode",\n                kTranslationSnapModes,\n                snapMode))\n        {\n            viewportState_.gizmo.translationSnap =\n                (snapMode & 1) != 0;\n            viewportState_.gizmo.surfaceSnap =\n                (snapMode & 2) != 0;\n        }\n        break;\n    }\n\n    case GizmoTool::Rotate:\n    {\n        context.SameLine();\n        static constexpr std::array<std::string_view, 2>\n            kRotationSnapModes{"Off", "Angle"};\n        i32 snapMode = viewportState_.gizmo.rotationSnap ? 1 : 0;\n        if (context.Combo(\n                "##gizmo-rotation-snap-mode",\n                kRotationSnapModes,\n                snapMode))\n        {\n            viewportState_.gizmo.rotationSnap = snapMode != 0;\n        }\n        break;\n    }\n\n    case GizmoTool::Scale:\n    {\n        context.SameLine();\n        static constexpr std::array<std::string_view, 2>\n            kScaleSnapModes{"Off", "Step"};\n        i32 snapMode = viewportState_.gizmo.scaleSnap ? 1 : 0;\n        if (context.Combo(\n                "##gizmo-scale-snap-mode",\n                kScaleSnapModes,\n                snapMode))\n        {\n            viewportState_.gizmo.scaleSnap = snapMode != 0;\n        }\n        break;\n    }\n    }\n\n'''
+
+          if properties_anchor not in text:\n              raise SystemExit('properties snap anchor not found')\n          if row_anchor not in text:\n              raise SystemExit('row snap anchor not found')\n
+          updated = text.replace(properties_anchor, properties_replacement, 1)\n          updated = updated.replace(row_anchor, row_replacement, 1)\n
+          if '"##gizmo-snap-mode"' in updated:\n              raise SystemExit('legacy generic snap combo remains')\n
+          path.write_text(updated, encoding='utf-8')\n          PY
+
+      - name: Verify focused diff
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only)" = "engine/studio_ui/src/StudioExpansionShell.cpp"
+          grep -q 'case GizmoTool::Select:' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q '##gizmo-rotation-snap-mode' engine/studio_ui/src/StudioExpansionShell.cpp
+          grep -q '##gizmo-scale-snap-mode' engine/studio_ui/src/StudioExpansionShell.cpp
+          ! grep -q '"##gizmo-snap-mode"' engine/studio_ui/src/StudioExpansionShell.cpp
+
+      - name: Commit validation change
+        shell: bash
+        run: |
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/src/StudioExpansionShell.cpp
+          git commit -m "Make viewport snapping tool-aware"
+          git push origin HEAD:orbit-ui-tool-aware-snap
