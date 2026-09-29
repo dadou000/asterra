@@ -115,6 +115,7 @@ private:
     commands::CommandArguments quickCreateArguments_;
     std::unordered_map<std::string, bool> quickCreateArgumentEnabled_;
     std::unordered_map<std::string, std::string> quickCreateIdText_;
+    std::unordered_map<std::string, std::string> quickCreatePickerQuery_;
     std::string quickCreateArgumentError_;
     bool attached_{false};
 
