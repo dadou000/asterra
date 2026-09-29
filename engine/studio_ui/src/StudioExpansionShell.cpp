@@ -2098,11 +2098,16 @@ void StudioExpansionShell::DrawNavigationBand(
     {
         context.Text("Add");
 
-        bool closeQuickCreate =
-            DrawBuiltInQuickCreate(context);
+        bool closeQuickCreate = false;
 
-        std::vector<editor_ui::ActionPresentation> commandActions;
-        commandActions.reserve(4U);
+        struct RankedQuickCreateAction
+        {
+            i32 priority{0};
+            editor_ui::ActionPresentation action;
+        };
+
+        std::vector<RankedQuickCreateAction> rankedCommandActions;
+        rankedCommandActions.reserve(8U);
         for (const auto& entry : palette)
         {
             if (entry.requiresArguments ||
@@ -2118,39 +2123,106 @@ void StudioExpansionShell::DrawNavigationBand(
                 continue;
             }
 
+            const i32 priority =
+                owner_->QuickCreateCommandPriority(entry.category);
+            if (priority <= 0)
+            {
+                continue;
+            }
+
             const auto command = entry.command;
             std::string label = entry.label;
             label += "##quick-create-";
             label += command.ToString();
-            commandActions.push_back({
-                .label = std::move(label),
-                .invoke =
-                    [&registry, &closeQuickCreate, command, this]
-                    {
-                        try
+            rankedCommandActions.push_back({
+                .priority = priority,
+                .action = {
+                    .label = std::move(label),
+                    .invoke =
+                        [&registry, &closeQuickCreate, command, this]
                         {
-                            registry.Invoke(command);
-                            owner_->status_.clear();
-                            closeQuickCreate = true;
+                            try
+                            {
+                                registry.Invoke(command);
+                                owner_->status_.clear();
+                                closeQuickCreate = true;
+                            }
+                            catch (const std::exception& exception)
+                            {
+                                owner_->status_ = exception.what();
+                            }
                         }
-                        catch (const std::exception& exception)
-                        {
-                            owner_->status_ = exception.what();
-                        }
-                    }
+                }
+            });
+        }
+
+        std::stable_sort(
+            rankedCommandActions.begin(),
+            rankedCommandActions.end(),
+            [](const RankedQuickCreateAction& left,
+               const RankedQuickCreateAction& right)
+            {
+                return left.priority > right.priority;
             });
 
+        std::vector<editor_ui::ActionPresentation> commandActions;
+        commandActions.reserve(4U);
+        for (auto& ranked : rankedCommandActions)
+        {
+            commandActions.push_back(std::move(ranked.action));
             if (commandActions.size() >= 4U)
             {
                 break;
             }
         }
 
-        if (!commandActions.empty())
+        bool drewQuickCreateSection = false;
+        const auto drawCommandActions = [&]
         {
-            context.Separator();
-            context.MutedText("Commands");
+            if (commandActions.empty())
+            {
+                return;
+            }
+
+            if (drewQuickCreateSection)
+            {
+                context.Separator();
+            }
+            context.MutedText(
+                world.Selection().Ordered().empty()
+                    ? "Available"
+                    : "For Selection");
             static_cast<void>(context.ActionList(commandActions));
+            drewQuickCreateSection = true;
+        };
+
+        const auto drawViewportActions = [&]
+        {
+            if (!owner_->ShowViewportQuickCreate())
+            {
+                return;
+            }
+
+            if (drewQuickCreateSection)
+            {
+                context.Separator();
+            }
+            context.MutedText("Viewport");
+            closeQuickCreate =
+                DrawBuiltInQuickCreate(context) ||
+                closeQuickCreate;
+            drewQuickCreateSection = true;
+        };
+
+        if (owner_->PreferCommandQuickCreate())
+        {
+            drawCommandActions();
+            drawViewportActions();
+        }
+        else
+        {
+            drawViewportActions();
+            drawCommandActions();
         }
 
         const auto pluginCatalog =
@@ -2158,7 +2230,10 @@ void StudioExpansionShell::DrawNavigationBand(
                 StudioContributionSurface::QuickCreate);
         if (!pluginCatalog.empty())
         {
-            context.Separator();
+            if (drewQuickCreateSection)
+            {
+                context.Separator();
+            }
             context.MutedText("Extensions");
             closeQuickCreate =
                 DrawContributions(
@@ -2167,6 +2242,13 @@ void StudioExpansionShell::DrawNavigationBand(
                     false,
                     true) ||
                 closeQuickCreate;
+            drewQuickCreateSection = true;
+        }
+
+        if (!drewQuickCreateSection)
+        {
+            context.MutedText(
+                "No creation actions are relevant to the current workspace and selection.");
         }
 
         if (closeQuickCreate)

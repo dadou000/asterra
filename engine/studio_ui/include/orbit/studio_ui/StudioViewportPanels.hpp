@@ -104,6 +104,11 @@ private:
     void DrawActivityBand(
         editor_ui::PanelContext& context);
 
+    [[nodiscard]] i32 QuickCreateCommandPriority(
+        std::string_view category) const noexcept;
+    [[nodiscard]] bool PreferCommandQuickCreate() const noexcept;
+    [[nodiscard]] bool ShowViewportQuickCreate() const noexcept;
+
     // View-mode commands remain world-registry commands for command search,
     // MCP and automation. Row 2 invokes the same commands through one compact
     // selector instead of registering three permanent toolbar contributions.
