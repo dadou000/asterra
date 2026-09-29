@@ -1,0 +1,22 @@
+name: Orbit UI command metadata propagation validation
+on:
+  push:
+    branches: [orbit-ui-command-metadata-propagation]
+permissions:
+  contents: write
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-command-metadata-propagation
+      - run: python3 tools/validation/command_metadata_propagation_patch.py
+      - run: git diff --check
+      - run: |
+          git config user.name orbit-ui-validation
+          git config user.email orbit-ui-validation@users.noreply.github.com
+          git add engine/editor_model/src/AuthoringCommands.cpp engine/editor_model/src/MaterialAuthoringCommands.cpp engine/editor_model/src/VolumeAuthoringCommands.cpp
+          git commit -m "Propagate command form metadata"
+          git push origin HEAD:orbit-ui-command-metadata-propagation
