@@ -74,7 +74,24 @@ public:
     void SetContentService(content::ContentService* content) noexcept
     {
         content_ = content;
-        InstallStudioAssetShelf(content);
+
+        std::filesystem::path shelfState;
+        if (content != nullptr && session_ != nullptr)
+        {
+            try
+            {
+                shelfState =
+                    session_->World().Project().RootDirectory() /
+                    ".orbit" /
+                    "AssetShelf.ini";
+            }
+            catch (...)
+            {
+                shelfState.clear();
+            }
+        }
+
+        InstallStudioAssetShelf(content, std::move(shelfState));
     }
 
     void RequestCommandPaletteOpen() noexcept
