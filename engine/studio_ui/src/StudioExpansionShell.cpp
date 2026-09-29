@@ -18,6 +18,7 @@
 #include <array>
 #include <exception>
 #include <format>
+#include <functional>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -2635,83 +2636,169 @@ void StudioExpansionShell::DrawNavigationBand(
                                     query));
                                 context.Separator();
 
-                                std::vector<scene::ObjectRecord> candidates;
-                                const auto addCandidate =
-                                    [&candidates](const scene::ObjectRecord& candidate)
+                                const auto selectedObjectId =
+                                    scene::ObjectId::Parse(idText);
+                                const auto chooseObject =
+                                    [&](const scene::ObjectRecord& candidate)
                                     {
-                                        const bool duplicate =
-                                            std::ranges::any_of(
-                                                candidates,
-                                                [&candidate](const scene::ObjectRecord& item)
-                                                {
-                                                    return item.id == candidate.id;
-                                                });
-                                        if (!duplicate && candidates.size() < 20U)
-                                        {
-                                            candidates.push_back(candidate);
-                                        }
+                                        found->second = candidate.id;
+                                        idText = candidate.id.ToString();
+                                        query.clear();
+                                        context.CloseCurrentPopup();
                                     };
 
-                                if (query.empty())
+                                if (!query.empty())
                                 {
-                                    for (const auto selectedId :
-                                         world.Selection().Ordered())
+                                    const auto candidates =
+                                        world.Explorer().Search(query, 20U);
+                                    if (candidates.empty())
                                     {
-                                        if (const auto record =
+                                        context.MutedText("No matching objects.");
+                                    }
+                                    else
+                                    {
+                                        for (const auto& candidate : candidates)
+                                        {
+                                            std::string option = candidate.name;
+                                            if (const auto* type =
+                                                    world.Schemas().FindType(candidate.type);
+                                                type != nullptr)
+                                            {
+                                                option += "\n";
+                                                option += type->displayName;
+                                            }
+                                            option += " · ";
+                                            option += candidate.id.ToString();
+                                            option += "##object-picker-search-result-";
+                                            option += candidate.id.ToString();
+
+                                            if (context.Selectable(
+                                                    option,
+                                                    selectedObjectId.has_value() &&
+                                                        candidate.id == *selectedObjectId))
+                                            {
+                                                chooseObject(candidate);
+                                            }
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    const auto selectedObjects =
+                                        world.Selection().Ordered();
+                                    if (!selectedObjects.empty())
+                                    {
+                                        context.MutedText("Selection");
+                                        for (const auto selectedId : selectedObjects)
+                                        {
+                                            const auto candidate =
                                                 world.Objects().Find(selectedId);
-                                            record.has_value())
-                                        {
-                                            addCandidate(*record);
-                                        }
-                                    }
-                                    for (const auto& root : world.Explorer().Roots())
-                                    {
-                                        addCandidate(root);
-                                        if (candidates.size() >= 20U)
-                                        {
-                                            break;
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    for (const auto& result :
-                                         world.Explorer().Search(query, 20U))
-                                    {
-                                        addCandidate(result);
-                                    }
-                                }
+                                            if (!candidate.has_value())
+                                            {
+                                                continue;
+                                            }
 
-                                if (candidates.empty())
-                                {
-                                    context.MutedText(
-                                        query.empty()
-                                            ? "No root or selected objects are available."
-                                            : "No matching objects.");
-                                }
-                                else
-                                {
-                                    for (const auto& candidate : candidates)
-                                    {
-                                        std::string option = candidate.name;
-                                        if (const auto* type =
-                                                world.Schemas().FindType(candidate.type);
-                                            type != nullptr)
-                                        {
-                                            option += "\n";
-                                            option += type->displayName;
+                                            std::string option = candidate->name;
+                                            if (const auto* type =
+                                                    world.Schemas().FindType(candidate->type);
+                                                type != nullptr)
+                                            {
+                                                option += "\n";
+                                                option += type->displayName;
+                                            }
+                                            option += "##object-picker-selected-";
+                                            option += candidate->id.ToString();
+                                            if (context.Selectable(
+                                                    option,
+                                                    selectedObjectId.has_value() &&
+                                                        candidate->id == *selectedObjectId))
+                                            {
+                                                chooseObject(*candidate);
+                                            }
                                         }
-                                        option += " · ";
-                                        option += candidate.id.ToString();
-                                        option += "##object-picker-result-";
-                                        option += candidate.id.ToString();
+                                        context.Separator();
+                                    }
 
-                                        if (context.Selectable(option, false))
+                                    const auto roots = world.Explorer().Roots();
+                                    if (roots.empty())
+                                    {
+                                        context.MutedText("No objects are available in this world.");
+                                    }
+                                    else
+                                    {
+                                        context.MutedText("Hierarchy");
+                                        std::function<void(
+                                            const scene::ObjectRecord&,
+                                            u32)> drawObjectNode;
+                                        drawObjectNode =
+                                            [&](const scene::ObjectRecord& candidate,
+                                                const u32 depth)
+                                            {
+                                                constexpr u32 kMaximumPickerDepth = 64U;
+                                                const auto children =
+                                                    depth < kMaximumPickerDepth
+                                                        ? world.Explorer().Children(candidate.id)
+                                                        : std::vector<scene::ObjectRecord>{};
+                                                const bool isChosen =
+                                                    selectedObjectId.has_value() &&
+                                                    candidate.id == *selectedObjectId;
+
+                                                std::string typeName;
+                                                if (const auto* type =
+                                                        world.Schemas().FindType(candidate.type);
+                                                    type != nullptr)
+                                                {
+                                                    typeName = type->displayName;
+                                                }
+
+                                                if (children.empty())
+                                                {
+                                                    std::string option = candidate.name;
+                                                    if (!typeName.empty())
+                                                    {
+                                                        option += " · ";
+                                                        option += typeName;
+                                                    }
+                                                    option += "##object-picker-leaf-";
+                                                    option += candidate.id.ToString();
+                                                    if (context.Selectable(option, isChosen))
+                                                    {
+                                                        chooseObject(candidate);
+                                                    }
+                                                    return;
+                                                }
+
+                                                std::string nodeLabel = candidate.name;
+                                                if (!typeName.empty())
+                                                {
+                                                    nodeLabel += " · ";
+                                                    nodeLabel += typeName;
+                                                }
+                                                nodeLabel += "##object-picker-node-";
+                                                nodeLabel += candidate.id.ToString();
+                                                const auto interaction =
+                                                    context.TreeItem(nodeLabel, isChosen);
+                                                context.SameLine();
+                                                std::string chooseLabel =
+                                                    "Choose##object-picker-choose-" +
+                                                    candidate.id.ToString();
+                                                if (context.Button(chooseLabel))
+                                                {
+                                                    chooseObject(candidate);
+                                                }
+                                                if (interaction.open)
+                                                {
+                                                    for (const auto& child : children)
+                                                    {
+                                                        drawObjectNode(child, depth + 1U);
+                                                    }
+                                                    context.TreePop();
+                                                }
+                                            };
+
+                                        for (const auto& root : roots)
                                         {
-                                            found->second = candidate.id;
-                                            idText = candidate.id.ToString();
-                                            query.clear();
-                                            context.CloseCurrentPopup();
+                                            drawObjectNode(root, 0U);
                                         }
                                     }
                                 }
