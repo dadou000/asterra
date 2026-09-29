@@ -696,12 +696,6 @@ void StudioViewportPanels::DrawView(
         }
     }
 
-    if (!status_.empty())
-    {
-        transientChrome = true;
-        context.MutedText(status_);
-    }
-
     if (transientChrome)
     {
         context.Separator();

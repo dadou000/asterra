@@ -833,15 +833,21 @@ void StudioViewportPanels::DrawActivityBand(
     appendPanel("Tasks", "Tasks");
     appendPanel("Display Diagnostics", "Diagnostics");
 
-    if (actions.empty())
+    if (!actions.empty())
     {
-        return;
+        context.SameLine();
+        context.MutedText("|");
+        context.SameLine();
+        context.Toolbar(actions);
     }
 
-    context.SameLine();
-    context.MutedText("|");
-    context.SameLine();
-    context.Toolbar(actions);
+    if (!status_.empty())
+    {
+        context.SameLine();
+        context.MutedText("|");
+        context.SameLine();
+        context.MutedText(status_);
+    }
 }
 
 void StudioViewportPanels::RegisterContextInspector(
@@ -1047,12 +1053,6 @@ void StudioViewportPanels::DrawContextInspector(
     {
         context.MutedText(
             "No specialized authoring section is needed for this selection. Common schema properties remain fully editable above.");
-    }
-
-    if (!status_.empty())
-    {
-        context.Separator();
-        context.Text(status_);
     }
 }
 
