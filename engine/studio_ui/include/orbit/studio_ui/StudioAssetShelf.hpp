@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -26,6 +27,8 @@ inline i32 mode = 0;
 inline i32 kindFilter = 0;
 inline std::vector<std::string> favorites;
 inline std::vector<std::string> recents;
+inline u64 thumbnailRevision = ~u64{0};
+inline std::unordered_set<std::string> warmedThumbnails;
 
 inline constexpr std::array<std::string_view, 3> kModes{
     "All",
@@ -254,6 +257,36 @@ inline void TouchRecent(const std::string& path)
     }
 }
 
+inline void WarmThumbnailOnce(const content::AssetRecord& asset) noexcept
+{
+    if (contentService == nullptr)
+    {
+        return;
+    }
+
+    const u64 revision = contentService->Revision();
+    if (thumbnailRevision != revision)
+    {
+        thumbnailRevision = revision;
+        warmedThumbnails.clear();
+    }
+
+    const std::string path = asset.sourcePath.generic_string();
+    if (!warmedThumbnails.insert(path).second)
+    {
+        return;
+    }
+
+    try
+    {
+        static_cast<void>(contentService->GetThumbnail(asset.id, 72U, 72U));
+    }
+    catch (...)
+    {
+        warmedThumbnails.erase(path);
+    }
+}
+
 inline void Draw(editor_ui::PanelContext& context)
 {
     if (contentService == nullptr)
@@ -376,11 +409,10 @@ inline void Draw(editor_ui::PanelContext& context)
         return;
     }
 
-    context.MutedText(
-        "Click to mark recent. Drag an asset onto compatible authoring surfaces.");
-
     for (const auto& asset : visible)
     {
+        WarmThumbnailOnce(asset);
+
         const std::string path = asset.sourcePath.generic_string();
         const bool favorite = ContainsPath(favorites, path);
 
@@ -423,14 +455,6 @@ inline void Draw(editor_ui::PanelContext& context)
         {
             ToggleFavorite(path);
         }
-
-        const auto thumbnail =
-            contentService->GetThumbnail(asset.id, 72U, 72U);
-        context.MutedText(
-            std::string("Thumbnail ") +
-            std::to_string(thumbnail.width) + "×" +
-            std::to_string(thumbnail.height) +
-            (thumbnail.cacheHit ? " · cached" : " · generated"));
     }
 }
 } // namespace asset_shelf_detail
@@ -458,6 +482,8 @@ inline void InstallStudioAssetShelf(
     if (bindingChanged)
     {
         asset_shelf_detail::query.clear();
+        asset_shelf_detail::thumbnailRevision = ~u64{0};
+        asset_shelf_detail::warmedThumbnails.clear();
         asset_shelf_detail::LoadState();
     }
 
