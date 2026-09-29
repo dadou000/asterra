@@ -694,8 +694,8 @@ bool StudioExpansionShell::DrawContributions(
 
     context.SameLine();
 
-    // Keep built-in authoring/view/gizmo controls stable. Only extensible
-    // context commands collapse when the row runs short on horizontal space.
+    // Keep built-in shell controls stable. Only extensible contributions
+    // collapse when the current row runs short on horizontal space.
     // ContentAvailable() is evaluated after all high-priority controls have
     // drawn, so this adapts to both window width and the active context.
     constexpr f32 kInlineContributionReserve = 300.0F;
@@ -710,10 +710,21 @@ bool StudioExpansionShell::DrawContributions(
         return invokedSuccessfully;
     }
 
+    const bool workspaceSurface =
+        surface == StudioContributionSurface::WorkspaceToolbar;
+    const char* overflowButton =
+        workspaceSurface
+            ? "…##studio-workspace-toolbar-overflow"
+            : "…##studio-context-toolbar-overflow";
+    const char* overflowMenu =
+        workspaceSurface
+            ? "studio-workspace-toolbar-overflow-menu"
+            : "studio-context-toolbar-overflow-menu";
+
     const bool openOverflow =
-        context.Button("…##studio-context-toolbar-overflow");
+        context.Button(overflowButton);
     context.ContextMenu(
-        "studio-context-toolbar-overflow-menu",
+        overflowMenu,
         actions,
         openOverflow);
     return invokedSuccessfully;
@@ -2055,7 +2066,8 @@ void StudioExpansionShell::DrawNavigationBand(
 
     static_cast<void>(DrawContributions(
         context,
-        StudioContributionSurface::WorkspaceToolbar));
+        StudioContributionSurface::WorkspaceToolbar,
+        true));
 }
 
 void StudioExpansionShell::DrawViewportBand(
