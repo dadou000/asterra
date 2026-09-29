@@ -2030,6 +2030,52 @@ void PanelContext::Toolbar(
     }
 }
 
+bool PanelContext::ActionList(
+    const std::span<const ActionPresentation> actions)
+{
+    bool invoked = false;
+
+    for (const ActionPresentation& action : actions)
+    {
+        if (!action.enabled)
+        {
+            ImGui::BeginDisabled();
+        }
+
+        const bool selected =
+            ImGui::Selectable(
+                action.label.c_str(),
+                false);
+
+        const bool hovered =
+            ImGui::IsItemHovered(
+                ImGuiHoveredFlags_AllowWhenDisabled);
+
+        if (!action.enabled)
+        {
+            ImGui::EndDisabled();
+
+            if (hovered &&
+                !action.disabledReason.empty())
+            {
+                ImGui::SetTooltip(
+                    "%s",
+                    action.disabledReason.c_str());
+            }
+        }
+
+        if (selected &&
+            action.enabled &&
+            action.invoke)
+        {
+            action.invoke();
+            invoked = true;
+        }
+    }
+
+    return invoked;
+}
+
 bool PanelContext::BeginPopup(
     const std::string_view id,
     const bool openRequested,

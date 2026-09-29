@@ -621,21 +621,23 @@ void StudioExpansionShell::SyncPersistentState() noexcept
     }
 }
 
-void StudioExpansionShell::DrawContributions(
+bool StudioExpansionShell::DrawContributions(
     editor_ui::PanelContext& context,
     const StudioContributionSurface surface,
-    const bool responsiveOverflow)
+    const bool responsiveOverflow,
+    const bool verticalList)
 {
     if (owner_ == nullptr ||
         owner_->session_ == nullptr ||
         !owner_->session_->World().HasWorld())
     {
-        return;
+        return false;
     }
 
     auto& commands =
         owner_->session_->World().CommandRegistry();
 
+    bool invokedSuccessfully = false;
     std::vector<editor_ui::ActionPresentation> actions;
     for (const auto& contribution :
          GlobalStudioUiContributions().Catalog(surface))
@@ -655,7 +657,7 @@ void StudioExpansionShell::DrawContributions(
             .enabled = enablement.enabled,
             .disabledReason = enablement.reason,
             .invoke =
-                [this, command]
+                [this, command, &invokedSuccessfully]
                 {
                     if (owner_ == nullptr ||
                         owner_->session_ == nullptr ||
@@ -669,6 +671,7 @@ void StudioExpansionShell::DrawContributions(
                         owner_->session_->World().CommandRegistry().Invoke(
                             command);
                         owner_->status_.clear();
+                        invokedSuccessfully = true;
                     }
                     catch (const std::exception& exception)
                     {
@@ -680,7 +683,13 @@ void StudioExpansionShell::DrawContributions(
 
     if (actions.empty())
     {
-        return;
+        return false;
+    }
+
+    if (verticalList)
+    {
+        static_cast<void>(context.ActionList(actions));
+        return invokedSuccessfully;
     }
 
     context.SameLine();
@@ -698,7 +707,7 @@ void StudioExpansionShell::DrawContributions(
     if (!overflow)
     {
         context.Toolbar(actions);
-        return;
+        return invokedSuccessfully;
     }
 
     const bool openOverflow =
@@ -707,6 +716,7 @@ void StudioExpansionShell::DrawContributions(
         "studio-context-toolbar-overflow-menu",
         actions,
         openOverflow);
+    return invokedSuccessfully;
 }
 
 void StudioExpansionShell::DrawInspectorExtension(
@@ -794,13 +804,15 @@ bool StudioExpansionShell::BezierContextRelevant() const noexcept
     return false;
 }
 
-void StudioExpansionShell::DrawBuiltInQuickCreate(
+bool StudioExpansionShell::DrawBuiltInQuickCreate(
     editor_ui::PanelContext& context)
 {
     if (owner_ == nullptr)
     {
-        return;
+        return false;
     }
+
+    bool created = false;
 
     const std::string viewportId{SelectedViewportId()};
     const bool enabled =
@@ -819,14 +831,14 @@ void StudioExpansionShell::DrawBuiltInQuickCreate(
         .enabled = enabled,
         .disabledReason = disabledReason,
         .invoke =
-            [this, viewportId]
+            [this, viewportId, &created]
             {
                 try
                 {
                     owner_->CreateLocalLightAtViewport(
                         viewportId,
                         false);
-                    quickCreateOpen_ = false;
+                    created = true;
                 }
                 catch (const std::exception& exception)
                 {
@@ -839,14 +851,14 @@ void StudioExpansionShell::DrawBuiltInQuickCreate(
         .enabled = enabled,
         .disabledReason = disabledReason,
         .invoke =
-            [this, viewportId]
+            [this, viewportId, &created]
             {
                 try
                 {
                     owner_->CreateLocalLightAtViewport(
                         viewportId,
                         true);
-                    quickCreateOpen_ = false;
+                    created = true;
                 }
                 catch (const std::exception& exception)
                 {
@@ -859,14 +871,14 @@ void StudioExpansionShell::DrawBuiltInQuickCreate(
         .enabled = enabled,
         .disabledReason = disabledReason,
         .invoke =
-            [this, viewportId]
+            [this, viewportId, &created]
             {
                 try
                 {
                     owner_->CreateVisibilityProxyAtViewport(
                         viewportId,
                         false);
-                    quickCreateOpen_ = false;
+                    created = true;
                 }
                 catch (const std::exception& exception)
                 {
@@ -879,14 +891,14 @@ void StudioExpansionShell::DrawBuiltInQuickCreate(
         .enabled = enabled,
         .disabledReason = disabledReason,
         .invoke =
-            [this, viewportId]
+            [this, viewportId, &created]
             {
                 try
                 {
                     owner_->CreateVisibilityProxyAtViewport(
                         viewportId,
                         true);
-                    quickCreateOpen_ = false;
+                    created = true;
                 }
                 catch (const std::exception& exception)
                 {
@@ -895,8 +907,8 @@ void StudioExpansionShell::DrawBuiltInQuickCreate(
             }
     });
 
-    context.SameLine();
-    context.Toolbar(actions);
+    static_cast<void>(context.ActionList(actions));
+    return created;
 }
 
 void StudioExpansionShell::DrawViewportTargetProperties(
@@ -1871,13 +1883,8 @@ void StudioExpansionShell::DrawNavigationBand(
     }
 
     context.SameLine();
-    if (context.Button(
-            quickCreateOpen_
-                ? "Close Add##quick-create-toggle"
-                : "+ Add##quick-create-toggle"))
-    {
-        quickCreateOpen_ = !quickCreateOpen_;
-    }
+    const bool openQuickCreate =
+        context.Button("+ Add##quick-create-toggle");
 
     context.SameLine();
     const bool openCommandPalette =
@@ -1958,11 +1965,20 @@ void StudioExpansionShell::DrawNavigationBand(
         context.EndPopup();
     }
 
-    if (quickCreateOpen_)
+    const f32 quickCreateWidth =
+        360.0F * editor_ui::CurrentUiScale();
+    if (context.BeginPopup(
+            "studio-quick-create-popup",
+            openQuickCreate,
+            {.width = quickCreateWidth, .height = 0.0F}))
     {
-        DrawBuiltInQuickCreate(context);
+        context.Text("Add");
 
-        std::size_t shown = 0U;
+        bool closeQuickCreate =
+            DrawBuiltInQuickCreate(context);
+
+        std::vector<editor_ui::ActionPresentation> commandActions;
+        commandActions.reserve(4U);
         for (const auto& entry : palette)
         {
             if (entry.requiresArguments ||
@@ -1978,38 +1994,68 @@ void StudioExpansionShell::DrawNavigationBand(
                 continue;
             }
 
-            context.SameLine();
+            const auto command = entry.command;
             std::string label = entry.label;
             label += "##quick-create-";
-            label += entry.command.ToString();
-            if (context.Button(label))
-            {
-                try
-                {
-                    registry.Invoke(entry.command);
-                    owner_->status_.clear();
-                    quickCreateOpen_ = false;
-                }
-                catch (const std::exception& exception)
-                {
-                    owner_->status_ = exception.what();
-                }
-            }
+            label += command.ToString();
+            commandActions.push_back({
+                .label = std::move(label),
+                .invoke =
+                    [&registry, &closeQuickCreate, command, this]
+                    {
+                        try
+                        {
+                            registry.Invoke(command);
+                            owner_->status_.clear();
+                            closeQuickCreate = true;
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            owner_->status_ = exception.what();
+                        }
+                    }
+            });
 
-            if (++shown >= 2U)
+            if (commandActions.size() >= 4U)
             {
                 break;
             }
         }
 
-        DrawContributions(
-            context,
-            StudioContributionSurface::QuickCreate);
+        if (!commandActions.empty())
+        {
+            context.Separator();
+            context.MutedText("Commands");
+            static_cast<void>(context.ActionList(commandActions));
+        }
+
+        const auto pluginCatalog =
+            GlobalStudioUiContributions().Catalog(
+                StudioContributionSurface::QuickCreate);
+        if (!pluginCatalog.empty())
+        {
+            context.Separator();
+            context.MutedText("Extensions");
+            closeQuickCreate =
+                DrawContributions(
+                    context,
+                    StudioContributionSurface::QuickCreate,
+                    false,
+                    true) ||
+                closeQuickCreate;
+        }
+
+        if (closeQuickCreate)
+        {
+            context.CloseCurrentPopup();
+        }
+
+        context.EndPopup();
     }
 
-    DrawContributions(
+    static_cast<void>(DrawContributions(
         context,
-        StudioContributionSurface::WorkspaceToolbar);
+        StudioContributionSurface::WorkspaceToolbar));
 }
 
 void StudioExpansionShell::DrawViewportBand(
@@ -2249,9 +2295,9 @@ void StudioExpansionShell::DrawViewportBand(
     }
     }
 
-    DrawContributions(
+    static_cast<void>(DrawContributions(
         context,
         StudioContributionSurface::ContextToolbar,
-        true);
+        true));
 }
 } // namespace orbit::studio_ui

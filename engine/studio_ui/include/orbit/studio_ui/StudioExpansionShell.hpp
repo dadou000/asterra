@@ -65,10 +65,11 @@ private:
     void DrawNavigationBand(editor_ui::PanelContext& context);
     void DrawViewportBand(editor_ui::PanelContext& context);
     void DrawInspectorExtension(editor_ui::PanelContext& context);
-    void DrawContributions(
+    [[nodiscard]] bool DrawContributions(
         editor_ui::PanelContext& context,
         StudioContributionSurface surface,
-        bool responsiveOverflow = false);
+        bool responsiveOverflow = false,
+        bool verticalList = false);
 
     // Terrain is the densest contextual tool family. Keep the permanent shell
     // to one selector while the canonical Properties panel exposes only the
@@ -84,7 +85,8 @@ private:
     [[nodiscard]] std::string_view SelectedViewportId() const noexcept;
     [[nodiscard]] bool ViewportControlsRelevant() const noexcept;
     [[nodiscard]] bool BezierContextRelevant() const noexcept;
-    void DrawBuiltInQuickCreate(editor_ui::PanelContext& context);
+    [[nodiscard]] bool DrawBuiltInQuickCreate(
+        editor_ui::PanelContext& context);
     void DrawViewportTargetProperties(editor_ui::PanelContext& context);
     void DrawViewportDiagnosticsProperties(editor_ui::PanelContext& context);
     void DrawBezierProperties(editor_ui::PanelContext& context);
@@ -99,7 +101,6 @@ private:
     StudioViewportPanels* owner_{nullptr};
     ViewportAuthoringState viewportState_{};
     std::string commandQuery_;
-    bool quickCreateOpen_{false};
     bool attached_{false};
 
     // 0 = follow focused viewport, 1 = pin Primary, 2 = pin Body Map.
