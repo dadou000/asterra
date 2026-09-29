@@ -1,0 +1,36 @@
+name: Orbit UI viewport base macro cleanup
+
+on:
+  push:
+    branches:
+      - orbit-ui-quick-create-argument-form
+
+permissions:
+  contents: write
+
+jobs:
+  viewport-base-macro-cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: orbit-ui-quick-create-argument-form
+      - name: Apply macro cleanup
+        run: python3 tools/validation/studio_viewport_base_macro_cleanup.py
+      - name: Verify and commit
+        shell: bash
+        run: |
+          git diff --check
+          test "$(git diff --name-only | wc -l)" -eq 3
+          ! grep -q '#define Register RegisterBase' engine/studio_ui/src/StudioViewportPanels.cpp
+          ! grep -q '#define RegisterSecondary RegisterSecondaryBase' engine/studio_ui/src/StudioViewportPanels.cpp
+          grep -q '#define DrawView DrawViewBase' engine/studio_ui/src/StudioViewportPanels.cpp
+          ! grep -q 'RegisterBase' engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp
+          ! grep -q 'StudioViewportPanels::Register(' engine/studio_ui/src/StudioViewportPanelsBase.cpp
+          grep -q 'registry.Register({' engine/studio_ui/src/StudioViewportPanelsBase.cpp
+          git config user.name "orbit-ui-validation"
+          git config user.email "orbit-ui-validation@users.noreply.github.com"
+          git add engine/studio_ui/include/orbit/studio_ui/StudioViewportPanels.hpp engine/studio_ui/src/StudioViewportPanels.cpp engine/studio_ui/src/StudioViewportPanelsBase.cpp
+          git commit -m "Remove Studio viewport registration macro collision"
+          git push origin HEAD:orbit-ui-quick-create-argument-form
