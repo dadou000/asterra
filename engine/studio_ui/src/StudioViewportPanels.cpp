@@ -388,6 +388,7 @@ void StudioViewportPanels::DrawElementBubble(
     const std::string suffix = object.ToString();
     bool open =
         context.Button("v##bubble-open-" + suffix);
+    context.AnchorNextPopupBelowItem();
 
     if (bubbleOpenRequest_.has_value() &&
         *bubbleOpenRequest_ == object)

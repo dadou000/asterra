@@ -2127,6 +2127,15 @@ bool PanelContext::BeginPopup(
     return ImGui::BeginPopup(ownedId.c_str());
 }
 
+void PanelContext::AnchorNextPopupBelowItem()
+{
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    ImGui::SetNextWindowPos(
+        ImVec2(min.x, max.y + 4.0F),
+        ImGuiCond_Appearing);
+}
+
 void PanelContext::EndPopup()
 {
     ImGui::EndPopup();

@@ -182,6 +182,10 @@ public:
         std::string_view id,
         bool openRequested,
         UiSize size = {});
+    // Places the next popup directly under the previously submitted item
+    // (call right after the item, before BeginPopup). Applies when the popup
+    // appears, so a user-moved popup is not snapped back.
+    void AnchorNextPopupBelowItem();
     void EndPopup();
     void CloseCurrentPopup();
     void ContextMenu(std::string_view id, std::span<const ActionPresentation> actions, bool openRequested);
