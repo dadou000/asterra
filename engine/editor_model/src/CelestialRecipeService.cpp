@@ -1,4 +1,6 @@
 #include <orbit/editor_model/CelestialRecipeService.hpp>
+#include <orbit/editor_model/PlanetSurface.hpp>
+#include <orbit/selection/SelectionService.hpp>
 
 #include <orbit/world_model/AtmospherePropertySolver.hpp>
 
@@ -442,6 +444,17 @@ CelestialRecipeService::CreateRockyPlanetInternal(
             "Surface",
             "Terrain Authority"));
 
+    {
+        // Generated planets and moons own solid ground from the start.
+        selection::SelectionService unusedSelection;
+        static_cast<void>(
+            EnsurePlanetSurface(
+                objects_,
+                commands_,
+                unusedSelection,
+                body));
+    }
+
     if (recipe.atmosphere)
     {
         const auto atmosphere =
@@ -598,6 +611,17 @@ CelestialRecipeService::CreateMoonInternal(
             world_model::kSurfaceCapabilityType,
             "Surface",
             "Terrain Authority"));
+
+    {
+        // Generated planets and moons own solid ground from the start.
+        selection::SelectionService unusedSelection;
+        static_cast<void>(
+            EnsurePlanetSurface(
+                objects_,
+                commands_,
+                unusedSelection,
+                body));
+    }
 
     return body;
 }

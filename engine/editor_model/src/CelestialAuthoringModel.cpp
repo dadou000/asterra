@@ -1,4 +1,5 @@
 #include <orbit/editor_model/CelestialAuthoringModel.hpp>
+#include <orbit/editor_model/PlanetSurface.hpp>
 
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/PropertyProvenanceSchema.hpp>
@@ -222,6 +223,14 @@ scene::ObjectId CelestialAuthoringModel::CreateBody(
             world_model::kCelestialBodyType,
             name,
             parent);
+
+    // A new planet owns solid ground from the start.
+    static_cast<void>(
+        EnsurePlanetSurface(
+            objects_,
+            commands_,
+            selection_,
+            created));
 
     SelectOnly(created);
     return created;

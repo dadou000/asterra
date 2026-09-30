@@ -128,6 +128,48 @@ inline constexpr schema::TypeId kVisibilityProxyType{
     .low = 0x50524f5859000001ULL
 };
 
+// Scene geometry primitive: a visible box/sphere/cylinder/capsule/plane whose
+// placement is relative to its parent object's frame. See docs/ORBIT_PRIMITIVES.md.
+inline constexpr schema::TypeId kPrimitiveType{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x5459504500000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveEnabled{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x454e41424c454401ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveShape{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x5348415045000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitivePositionMeters{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x504f534954494f4eULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveEulerDegrees{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x45554c4552000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveSizeMeters{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x53495a4500000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveMaterialAsset{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x4d4154455249414cULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveCastShadows{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x4341535453484144ULL
+};
+
 inline constexpr schema::TypeId kMaterialAssignmentType{
     .high = 0x4f524249544d4154ULL,
     .low = 0x41535349474e0001ULL

@@ -473,6 +473,8 @@ public:
     void Render(rhi::CommandList& commands, rhi::Texture& target, u32 targetWidth, u32 targetHeight);
     [[nodiscard]] bool WantsMouse() const noexcept;
     [[nodiscard]] bool WantsKeyboard() const noexcept;
+    // True once per typed "/" that was not meant for a text field.
+    [[nodiscard]] bool ConsumeSlashRequest() noexcept;
 
 private:
     class Impl;

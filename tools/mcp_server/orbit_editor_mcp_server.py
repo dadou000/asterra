@@ -423,6 +423,58 @@ def orbit_object_duplicate(object_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_celestial_create_from_recipe(
+    kind: str,
+    parent_id: str,
+    name: str | None = None,
+    radius_m: float | None = None,
+    mass_kg: float | None = None,
+    density_kg_m3: float | None = None,
+    temperature_k: float | None = None,
+    rotation_period_s: float | None = None,
+    semi_major_axis_m: float | None = None,
+    eccentricity: float | None = None,
+    inclination_deg: float | None = None,
+    central_mu_m3_s2: float | None = None,
+    atmosphere: bool | None = None,
+    ocean: bool | None = None,
+    synchronous_rotation: bool | None = None,
+    seed: int = 1,
+) -> dict[str, Any]:
+    """Create a star, rocky_planet or moon from Orbit's physical recipes.
+
+    parent_id is a celestial system/reference node for star and rocky_planet,
+    and a celestial body for moon. Omitted numbers keep the recipe defaults
+    (Sun / Earth / Moon). One undoable transaction."""
+    params: dict[str, Any] = {"kind": kind, "parent": parent_id, "seed": seed}
+    optional = {
+        "name": name,
+        "radius_m": radius_m,
+        "mass_kg": mass_kg,
+        "density_kg_m3": density_kg_m3,
+        "temperature_k": temperature_k,
+        "rotation_period_s": rotation_period_s,
+        "semi_major_axis_m": semi_major_axis_m,
+        "eccentricity": eccentricity,
+        "inclination_deg": inclination_deg,
+        "central_mu_m3_s2": central_mu_m3_s2,
+        "atmosphere": atmosphere,
+        "ocean": ocean,
+        "synchronous_rotation": synchronous_rotation,
+    }
+    params.update({k: v for k, v in optional.items() if v is not None})
+    return _rpc("celestial.create_from_recipe", params)
+
+
+@mcp.tool()
+def orbit_world_ensure_planet_surfaces() -> dict[str, Any]:
+    """Give every spherical planet/moon without one a Terrain Surface (one undo
+    step). Stars, giants, compact objects and ellipsoid bodies are skipped.
+    New planets already get a surface automatically."""
+    return _rpc("world.ensure_planet_surfaces", {})
+
+
+@mcp.tool()
 def orbit_celestial_capabilities(body_id: str) -> list[dict[str, Any]]:
     """List a celestial body's capability domains (atmosphere, clouds, rings, ...)
     with state 'absent', 'enabled' or 'disabled'."""
@@ -715,6 +767,33 @@ def orbit_panel_list() -> list[dict[str, Any]]:
 def orbit_panel_focus(title: str) -> dict[str, Any]:
     """Open a panel by title (case-insensitive) and bring its tab to the front."""
     return _rpc("studio.panel_focus", {"title": title})
+
+
+@mcp.tool()
+def orbit_viewport_navigate(
+    delta_seconds: float = 0.016,
+    mouse_dx: float = 0.0,
+    mouse_dy: float = 0.0,
+    move_right: float = 0.0,
+    move_forward: float = 0.0,
+    move_up: float = 0.0,
+    boost: bool = False,
+) -> dict[str, Any]:
+    """Apply one camera navigation step to the primary viewport, like the
+    right-mouse look + WASD/QE gesture. Uses terrain navigation when the active
+    body has terrain, otherwise the same navigation on a reference sphere. Call repeatedly to move continuously."""
+    return _rpc(
+        "viewport.navigate",
+        {
+            "delta_seconds": delta_seconds,
+            "mouse_dx": mouse_dx,
+            "mouse_dy": mouse_dy,
+            "move_right": move_right,
+            "move_forward": move_forward,
+            "move_up": move_up,
+            "boost": boost,
+        },
+    )
 
 
 @mcp.tool()

@@ -94,6 +94,7 @@ bookkeeping.
 | `orbit_panel_list` | `studio.panel_list` | Every tab with `open` and `visible`. |
 | `orbit_panel_focus(title)` | `studio.panel_focus` | Opens a tab by title (case-insensitive) and brings it to the front. |
 | `orbit_panel_close(title)` | `studio.panel_close` | Closes a tab; reopen with focus. |
+| `orbit_viewport_navigate(delta_seconds, mouse_dx, mouse_dy, move_right, move_forward, move_up, boost)` | `viewport.navigate` | One camera navigation step, same as right-mouse look + WASD/QE. Terrain navigation when the active body has terrain, reference-sphere navigation otherwise (same movement, no terrain). |
 | `orbit_workspace_get` / `orbit_workspace_set(mode)` | `studio.workspace_get` / `studio.workspace_set` | Scene, Planet, Celestial, Simulation, Shading; same as the Mode selector. |
 | `orbit_bubble_open(object_id)` | `studio.bubble_open` | Opens the element parameter bubble shown in the active mode toolbar. |
 
@@ -129,6 +130,8 @@ button row, and `view.surface_debug_*` below — all three drive the same
 | `orbit_body_create(parent_id, name)` | `body.create` |
 | `orbit_body_capabilities(body_id)` | `body.capabilities` |
 | `orbit_body_set_capability(body_id, capability, enabled)` | `body.set_capability` |
+| `orbit_celestial_create_from_recipe(kind, parent_id, ...)` | `celestial.create_from_recipe` | Star / rocky planet / moon from the physical recipes with explicit parameters (defaults are Sun / Earth / Moon). Same recipe service as the Celestial panel's Generate Seeded System. |
+| `orbit_world_ensure_planet_surfaces` | `world.ensure_planet_surfaces` | Gives every spherical planet/moon without one a Terrain Surface (one undo step). New planets get one automatically; stars, giants, compact objects and ellipsoid bodies are skipped. |
 | `orbit_celestial_capabilities(body_id)` / `orbit_celestial_set_capability(body_id, type_id, enabled)` | `celestial.capabilities` / `celestial.set_capability` (Celestial toolbar toggles; disabling keeps authored values, enabling a missing capability creates it) |
 | `orbit_schema_catalog` / `orbit_command_catalog` | `schema.catalog` / `command.catalog` |
 | `orbit_transaction_begin/commit/rollback`, `orbit_undo`, `orbit_redo` | `transaction.*`, `history.*` |

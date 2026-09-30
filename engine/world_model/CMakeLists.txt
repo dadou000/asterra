@@ -19,6 +19,7 @@ add_library(OrbitWorldModel STATIC
     src/VolumeSchemas.cpp
     src/LocalLightBinding.cpp
     src/VisibilityProxyBinding.cpp
+    src/PrimitiveBinding.cpp
     src/MaterialAssignmentBinding.cpp
     src/UniverseComposition.cpp
 )
@@ -88,6 +89,10 @@ if(BUILD_TESTING)
         tests/VisibilityProxyBindingTests.cpp
     )
 
+    add_executable(OrbitPrimitiveBindingTests
+        tests/PrimitiveBindingTests.cpp
+    )
+
     add_executable(OrbitMaterialAssignmentBindingTests
         tests/MaterialAssignmentBindingTests.cpp
     )
@@ -131,6 +136,21 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.VisibilityProxyBinding
         COMMAND OrbitVisibilityProxyBindingTests
+    )
+
+    target_link_libraries(OrbitPrimitiveBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+    target_compile_features(
+        OrbitPrimitiveBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPrimitiveBindingTests)
+
+    add_test(
+        NAME Orbit.PrimitiveBinding
+        COMMAND OrbitPrimitiveBindingTests
     )
     target_compile_features(
         OrbitLocalLightBindingTests PRIVATE cxx_std_23)

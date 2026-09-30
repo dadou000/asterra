@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 
 #include <orbit/editor_model/CelestialRecipeService.hpp>
+#include <orbit/editor_model/PlanetSurface.hpp>
 #include <orbit/world_model/AtmospherePropertySolver.hpp>
 #include <orbit/world_model/PropertyProvenanceStore.hpp>
 
@@ -468,6 +469,30 @@ void CelestialAuthoringUi::Draw(
 
     if (context.Section("Add to World##celestial-sec-create", false))
     {
+        if (context.Button(
+                "Give All Planets a Surface##celestial-ensure-surfaces"))
+        {
+            try
+            {
+                const u32 created =
+                    editor_model::EnsureAllPlanetSurfaces(
+                        world.Objects(),
+                        world.Commands(),
+                        world.Selection());
+                status_ =
+                    created == 0U
+                        ? "Every planet already has a surface."
+                        : std::format(
+                              "Created {} surface{}.",
+                              created,
+                              created == 1U ? "" : "s");
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
+
         static_cast<void>(
             context.InputText(
                 "New System Name##celestial-system-name",

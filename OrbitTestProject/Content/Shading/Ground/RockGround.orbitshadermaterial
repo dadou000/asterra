@@ -1,3 +1,0 @@
-[shader_material]
-name = "RockGround"
-shader = "RockGround.shade.hlsl"

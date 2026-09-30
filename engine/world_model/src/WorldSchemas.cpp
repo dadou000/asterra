@@ -944,6 +944,21 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kPrimitiveType,
+        .displayName = "Primitive",
+        .category = "Scene / Geometry",
+        .properties = {
+            {.id=kPrimitiveEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kPrimitiveShape,.name="Shape",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=4.0}},
+            {.id=kPrimitivePositionMeters,.name="Parent-frame Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
+            {.id=kPrimitiveEulerDegrees,.name="Parent-frame Euler Rotation",.kind=schema::PropertyKind::Vector3,.unit="deg",.defaultValue=math::Double3{}},
+            {.id=kPrimitiveSizeMeters,.name="Size",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{1.0,1.0,1.0}},
+            {.id=kPrimitiveMaterialAsset,.name="Material Asset",.kind=schema::PropertyKind::String,.defaultValue=std::string{}},
+            {.id=kPrimitiveCastShadows,.name="Cast Shadows",.kind=schema::PropertyKind::Boolean,.defaultValue=true,.advanced=true}
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",

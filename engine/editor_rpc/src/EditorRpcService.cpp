@@ -1,6 +1,8 @@
 #include <orbit/editor_rpc/EditorRpcService.hpp>
 
 #include <orbit/editor_model/CelestialAuthoringModel.hpp>
+#include <orbit/editor_model/CelestialRecipeService.hpp>
+#include <orbit/editor_model/PlanetSurface.hpp>
 
 #include <orbit/math/Vector.hpp>
 #include <orbit/paths/PathNetwork.hpp>
@@ -1533,6 +1535,191 @@ EditorRpcService::EditorRpcService(
             return rpc::Value(
                 rpc::Value::Object{
                     {"id", id.ToString()}
+                });
+        });
+
+    Register(
+        {
+            .name = "celestial.create_from_recipe",
+            .description =
+                "Creates a star, rocky planet or moon from Orbit's physical recipes with explicit parameters (one undoable transaction). kind: star | rocky_planet | moon. parent: a celestial system/reference node for star and rocky_planet, a celestial body for moon. Optional numeric fields keep the recipe defaults (Sun / Earth / Moon): seed, radius_m, mass_kg (star), density_kg_m3, temperature_k, rotation_period_s, semi_major_axis_m, eccentricity, inclination_deg, central_mu_m3_s2; booleans atmosphere, ocean, synchronous_rotation.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            const auto text =
+                [&values](const char* key)
+                    -> std::optional<std::string>
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end() ||
+                        found->second.IsNull())
+                    {
+                        return std::nullopt;
+                    }
+                    if (!found->second.IsString())
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            std::string(key) +
+                                " must be a string.");
+                    }
+                    return found->second.AsString();
+                };
+
+            const auto number =
+                [&values](const char* key)
+                    -> std::optional<f64>
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end() ||
+                        found->second.IsNull())
+                    {
+                        return std::nullopt;
+                    }
+                    if (!found->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            std::string(key) +
+                                " must be a number.");
+                    }
+                    return found->second.AsNumber();
+                };
+
+            const auto flag =
+                [&values](const char* key)
+                    -> std::optional<bool>
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end() ||
+                        found->second.IsNull())
+                    {
+                        return std::nullopt;
+                    }
+                    if (!found->second.IsBool())
+                    {
+                        throw rpc::Error(
+                            -32602,
+                            std::string(key) +
+                                " must be a boolean.");
+                    }
+                    return found->second.AsBool();
+                };
+
+            const auto kind = text("kind");
+            if (!kind.has_value())
+            {
+                throw rpc::Error(
+                    -32602,
+                    "kind is required: star, rocky_planet or moon.");
+            }
+
+            const scene::ObjectId parent =
+                RequireObjectId(values, "parent");
+
+            editor_model::CelestialRecipeService recipes(
+                objects,
+                commandService);
+
+            const auto seed =
+                static_cast<u64>(number("seed").value_or(1.0));
+
+            scene::ObjectId created{};
+
+            try
+            {
+                if (*kind == "star")
+                {
+                    editor_model::StarRecipe recipe;
+                    recipe.seed = seed;
+                    recipe.name = text("name").value_or(recipe.name);
+                    recipe.massKilograms = number("mass_kg").value_or(recipe.massKilograms);
+                    recipe.radiusMeters = number("radius_m").value_or(recipe.radiusMeters);
+                    recipe.effectiveTemperatureKelvin = number("temperature_k").value_or(recipe.effectiveTemperatureKelvin);
+                    recipe.rotationPeriodSeconds = number("rotation_period_s").value_or(recipe.rotationPeriodSeconds);
+                    created = recipes.CreateStar(parent, recipe);
+                }
+                else if (*kind == "rocky_planet")
+                {
+                    editor_model::RockyPlanetRecipe recipe;
+                    recipe.seed = seed;
+                    recipe.name = text("name").value_or(recipe.name);
+                    recipe.radiusMeters = number("radius_m").value_or(recipe.radiusMeters);
+                    recipe.densityKilogramsPerCubicMeter = number("density_kg_m3").value_or(recipe.densityKilogramsPerCubicMeter);
+                    recipe.semiMajorAxisMeters = number("semi_major_axis_m").value_or(recipe.semiMajorAxisMeters);
+                    recipe.eccentricity = number("eccentricity").value_or(recipe.eccentricity);
+                    recipe.inclinationDegrees = number("inclination_deg").value_or(recipe.inclinationDegrees);
+                    recipe.centralMuM3PerS2 = number("central_mu_m3_s2").value_or(recipe.centralMuM3PerS2);
+                    recipe.atmosphere = flag("atmosphere").value_or(recipe.atmosphere);
+                    recipe.ocean = flag("ocean").value_or(recipe.ocean);
+                    created = recipes.CreateRockyPlanet(parent, recipe);
+                }
+                else if (*kind == "moon")
+                {
+                    editor_model::MoonRecipe recipe;
+                    recipe.seed = seed;
+                    recipe.name = text("name").value_or(recipe.name);
+                    recipe.radiusMeters = number("radius_m").value_or(recipe.radiusMeters);
+                    recipe.densityKilogramsPerCubicMeter = number("density_kg_m3").value_or(recipe.densityKilogramsPerCubicMeter);
+                    recipe.semiMajorAxisMeters = number("semi_major_axis_m").value_or(recipe.semiMajorAxisMeters);
+                    recipe.eccentricity = number("eccentricity").value_or(recipe.eccentricity);
+                    recipe.inclinationDegrees = number("inclination_deg").value_or(recipe.inclinationDegrees);
+                    recipe.centralMuM3PerS2 = number("central_mu_m3_s2").value_or(recipe.centralMuM3PerS2);
+                    recipe.synchronousRotation = flag("synchronous_rotation").value_or(recipe.synchronousRotation);
+                    created = recipes.CreateMoon(parent, recipe);
+                }
+                else
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "kind must be star, rocky_planet or moon.");
+                }
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(
+                    1022,
+                    exception.what());
+            }
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"id", created.ToString()}
+                });
+        });
+
+    Register(
+        {
+            .name = "world.ensure_planet_surfaces",
+            .description =
+                "Gives every spherical planet or moon that lacks one a Terrain Surface, in one undoable transaction. Stars, giants, compact objects and ellipsoid bodies are skipped. Returns how many surfaces were created.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService,
+         &selection](
+            const rpc::Value&)
+        {
+            const u32 created =
+                editor_model::EnsureAllPlanetSurfaces(
+                    objects,
+                    commandService,
+                    selection);
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"created",
+                     static_cast<f64>(created)}
                 });
         });
 

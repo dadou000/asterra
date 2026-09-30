@@ -1,4 +1,5 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/editor_model/PlanetSurface.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 
 #include <orbit/world_model/WorldSchemas.hpp>
@@ -198,78 +199,22 @@ void RegisterTerrainCommands(
 
                 const scene::ObjectId body =
                     selection.Ordered().front();
-                const bool ownsTransaction =
-                    !commandService.HasActiveTransaction();
 
-                if (ownsTransaction)
-                {
-                    commandService.BeginTransaction(
-                        "Create Terrain Surface");
-                }
-
-                try
-                {
-                    const auto terrain =
-                        commandService.CreateObject(
-                            world_model::kTerrainSurfaceType,
-                            "Terrain Surface",
-                            body);
-
-                    commandService.SetProperty(
-                        terrain,
-                        world_model::kTerrainSeed,
-                        i64{0x41535445525241LL});
-                    commandService.SetProperty(
-                        terrain,
-                        world_model::kTerrainMacroAmplitudeMeters,
-                        1'200.0);
-                    commandService.SetProperty(
-                        terrain,
-                        world_model::kTerrainMacroWavelengthMeters,
-                        800'000.0);
-                    commandService.SetProperty(
-                        terrain,
-                        world_model::kTerrainDetailAmplitudeMeters,
-                        320.0);
-                    commandService.SetProperty(
-                        terrain,
-                        world_model::kTerrainDetailWavelengthMeters,
-                        40'000.0);
-                    commandService.SetProperty(
-                        terrain,
-                        world_model::kTerrainDetailOctaves,
-                        i64{10});
-                    commandService.SetProperty(
-                        terrain,
-                        world_model::kTerrainMaximumElevationMeters,
-                        8'000.0);
-
-                    SurfaceAuthoringModel surfaceModel(
+                const auto terrain =
+                    EnsureTerrainSurface(
                         objects,
                         commandService,
-                        selection);
+                        selection,
+                        body);
 
-                    static_cast<void>(
-                        surfaceModel.EnsureProcessSettings(
-                            terrain));
-
-                    if (ownsTransaction)
-                    {
-                        commandService.CommitTransaction();
-                    }
-
-                    const scene::ObjectId selected[] = {terrain};
-                    selection.Set(selected);
-                }
-                catch (...)
+                if (!terrain.has_value())
                 {
-                    if (ownsTransaction &&
-                        commandService.HasActiveTransaction())
-                    {
-                        commandService.RollbackTransaction();
-                    }
-                    throw;
+                    throw std::invalid_argument(
+                        "Analytic terrain currently requires a spherical body.");
                 }
+
+                const scene::ObjectId selected[] = {*terrain};
+                selection.Set(selected);
             }
     });
 

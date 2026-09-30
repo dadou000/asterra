@@ -221,6 +221,155 @@ f64 StudioRenderViewSet::NavigationSpeedScale(
             movementSpeedScale;
 }
 
+namespace
+{
+// A body with no authored terrain is treated as a smooth sphere so it can use
+// the same navigation as terrain bodies.
+class ReferenceSphereSource final : public terrain::TerrainSource
+{
+public:
+    [[nodiscard]] terrain::TerrainSample Sample(
+        const terrain::TerrainQuery&) const noexcept override
+    {
+        return {};
+    }
+};
+
+[[nodiscard]] world::PlanetDefinition ReferencePlanet(
+    studio_session::StudioSession& session,
+    const editor_session::ActiveBodyTarget& target)
+{
+    if (auto planet =
+            session.World().Surfaces().Registry().
+                SphericalPlanetDefinition(target.body);
+        planet.has_value())
+    {
+        return *planet;
+    }
+
+    return {
+        .radiusMeters = std::max(target.referenceRadiusMeters, 1.0),
+        .id = {
+            .high = target.body.high,
+            .low = target.body.low
+        }
+    };
+}
+
+[[nodiscard]] studio_session::StudioTerrainViewportRuntimeSnapshot
+ReferenceSnapshot(
+    studio_session::StudioSession& session,
+    const editor_session::ActiveBodyTarget& target,
+    const world::WorldPosition& observer)
+{
+    studio_session::StudioTerrainViewportRuntimeSnapshot snapshot{};
+    snapshot.worldGeneration = session.World().Generation();
+    snapshot.universeGeneration = target.universeGeneration;
+    snapshot.semanticBody = target.semanticObject;
+    snapshot.body = target.body;
+    snapshot.planet = ReferencePlanet(session, target);
+    snapshot.observer = observer;
+    return snapshot;
+}
+} // namespace
+
+bool StudioRenderViewSet::HasTerrainNavigation(
+    const std::string_view id) const
+{
+    if (session_ == nullptr)
+    {
+        return false;
+    }
+
+    const auto terrain =
+        session_->TerrainRuntime().
+            Capture(id);
+
+    return terrain.has_value() &&
+        session_->TerrainRuntime().
+            IsCurrent(*terrain);
+}
+
+bool StudioRenderViewSet::NavigateReference(
+    const std::string_view id,
+    const StudioTerrainNavigationInput& input)
+{
+    render_view::RenderView* const view = Find(id);
+    if (view == nullptr || session_ == nullptr)
+    {
+        return false;
+    }
+
+    const auto* viewport = session_->Viewports().Find(id);
+    if (viewport == nullptr ||
+        !viewport->target.has_value() ||
+        viewport->mode != studio_session::ViewportMode::Perspective)
+    {
+        return false;
+    }
+
+    const auto& target = *viewport->target;
+
+    auto found = referenceNavigation_.find(id);
+    if (found == referenceNavigation_.end() ||
+        found->second.target != target.semanticObject ||
+        found->second.universeGeneration != target.universeGeneration)
+    {
+        // Continue from what the viewport shows now so the camera does not
+        // jump when the user first touches the controls.
+        world::WorldPosition start{};
+        const auto& current = view->Camera();
+        if (current.frame == target.frame)
+        {
+            start.meters = current.localPositionMeters;
+        }
+        else if (const auto framed =
+                     ComposeViewportCamera(
+                         *viewport,
+                         target.universeGeneration);
+                 framed.has_value())
+        {
+            start.meters = framed->localPositionMeters;
+        }
+
+        found = referenceNavigation_.insert_or_assign(
+            std::string(id),
+            ReferenceNavigation{
+                .target = target.semanticObject,
+                .universeGeneration = target.universeGeneration,
+                .observer = start
+            }).first;
+    }
+
+    auto& entry = found->second;
+    const ReferenceSphereSource source;
+
+    auto snapshot = ReferenceSnapshot(*session_, target, entry.observer);
+    const StudioTerrainNavigationUpdate update =
+        AdvanceTerrainNavigation(
+            entry.navigation,
+            snapshot,
+            source,
+            input);
+
+    if (update.moved)
+    {
+        entry.observer = update.observer;
+        snapshot.observer = update.observer;
+    }
+
+    view->Camera() =
+        ComposeTerrainViewportCamera(
+            *viewport,
+            snapshot,
+            &update);
+
+    return
+        update.moved ||
+        input.mouseDeltaX != 0.0 ||
+        input.mouseDeltaY != 0.0;
+}
+
 bool StudioRenderViewSet::NavigateTerrain(
     const std::string_view id,
     const StudioTerrainNavigationInput& input)
@@ -238,7 +387,7 @@ bool StudioRenderViewSet::NavigateTerrain(
         !session_->TerrainRuntime().
             IsCurrent(*terrain))
     {
-        return false;
+        return NavigateReference(id, input);
     }
 
     auto& state =
@@ -277,6 +426,8 @@ bool StudioRenderViewSet::FocusTerrainBody(
     {
         return false;
     }
+
+    referenceNavigation_.erase(id);
 
     auto terrain =
         session_->TerrainRuntime().
@@ -558,6 +709,8 @@ bool StudioRenderViewSet::ResetTerrainView(
         return false;
     }
 
+    referenceNavigation_.erase(id);
+
     auto terrain =
         session_->TerrainRuntime().
             Capture(id);
@@ -817,12 +970,48 @@ u32 StudioRenderViewSet::Refresh(
                         *target,
                         *terrain,
                         &navigation);
+                referenceNavigation_.erase(id);
             }
             else
             {
                 RequireNavigationState(id).
                     initialized =
                     false;
+            }
+        }
+
+        if (!camera.has_value() &&
+            target->mode ==
+                studio_session::ViewportMode::Perspective)
+        {
+            const auto reference = referenceNavigation_.find(id);
+            if (reference != referenceNavigation_.end())
+            {
+                if (target->target.has_value() &&
+                    target->target->semanticObject ==
+                        reference->second.target &&
+                    target->target->universeGeneration ==
+                        reference->second.universeGeneration)
+                {
+                    const ReferenceSphereSource source;
+                    const auto referenceRuntime = ReferenceSnapshot(
+                        *session_,
+                        *target->target,
+                        reference->second.observer);
+                    const auto navigation =
+                        CurrentTerrainNavigation(
+                            reference->second.navigation,
+                            referenceRuntime,
+                            source);
+                    camera = ComposeTerrainViewportCamera(
+                        *target,
+                        referenceRuntime,
+                        &navigation);
+                }
+                else
+                {
+                    referenceNavigation_.erase(reference);
+                }
             }
         }
 

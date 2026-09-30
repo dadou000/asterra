@@ -1124,6 +1124,7 @@ public:
     std::vector<UiVertex> convertedVertices;
     std::vector<u32> convertedIndices;
     bool frameBegun{false};
+    bool slashRequested{false};
 };
 
 PanelContext::PanelContext(
@@ -2813,6 +2814,15 @@ void EditorUi::BeginFrame(
     for (const char16_t character :
          window.ConsumeTextInputUtf16())
     {
+        // A typed "/" opens the command palette unless a text field is being
+        // edited. It is matched by the character it types, so it works on any
+        // keyboard layout (on AZERTY it is a Shift chord).
+        if (character == u'/' && !io.WantTextInput)
+        {
+            impl_->slashRequested = true;
+            continue;
+        }
+
         io.AddInputCharacterUTF16(
             static_cast<ImWchar16>(
                 character));
@@ -3476,6 +3486,11 @@ bool EditorUi::WantsMouse() const noexcept
         impl_->context);
     return ImGui::GetIO().
         WantCaptureMouse;
+}
+
+bool EditorUi::ConsumeSlashRequest() noexcept
+{
+    return std::exchange(impl_->slashRequested, false);
 }
 
 bool EditorUi::WantsKeyboard() const noexcept

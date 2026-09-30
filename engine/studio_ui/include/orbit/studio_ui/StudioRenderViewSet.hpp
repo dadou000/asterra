@@ -135,6 +135,17 @@ public:
         std::string_view id,
         const StudioTerrainNavigationInput& input);
 
+    // True when the viewport currently has a usable terrain runtime, i.e.
+    // NavigateTerrain drives the terrain observer rather than the reference
+    // sphere.
+    [[nodiscard]] bool HasTerrainNavigation(std::string_view id) const;
+
+    // Same navigation for a body with no terrain runtime (no Surface
+    // capability, a star, ...), run against a zero-elevation reference sphere.
+    [[nodiscard]] bool NavigateReference(
+        std::string_view id,
+        const StudioTerrainNavigationInput& input);
+
     [[nodiscard]] bool FocusTerrainBody(
         std::string_view id);
 
@@ -254,6 +265,22 @@ private:
         StudioTerrainNavigationState,
         std::less<>>
         navigationStates_;
+
+    // Navigation for a body that has no terrain runtime. It runs the exact
+    // terrain navigation math (surface-relative motion, altitude-scaled speed,
+    // look) against a zero-elevation reference sphere, so both kinds of body
+    // move identically. It persists per view until the viewport target
+    // changes (selecting another body reframes it) or the view is reset.
+    struct ReferenceNavigation
+    {
+        scene::ObjectId target{};
+        u64 universeGeneration{0U};
+        StudioTerrainNavigationState navigation{};
+        world::WorldPosition observer{};
+    };
+
+    std::map<std::string, ReferenceNavigation, std::less<>>
+        referenceNavigation_;
 
     std::map<std::string, bool, std::less<>> compositionEnabled_;
 

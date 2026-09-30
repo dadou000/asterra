@@ -1,4 +1,5 @@
 #include <orbit/editor_model/AuthoringCommands.hpp>
+#include <orbit/editor_model/PlanetSurface.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 
@@ -517,6 +518,14 @@ void Register(
                         body,
                         builtin::kBodyRotationPhaseDegrees,
                         0.0);
+
+                    // Every new planet owns solid ground from the start.
+                    static_cast<void>(
+                        EnsurePlanetSurface(
+                            objects,
+                            commandService,
+                            selection,
+                            body));
 
                     if (ownsTransaction)
                     {

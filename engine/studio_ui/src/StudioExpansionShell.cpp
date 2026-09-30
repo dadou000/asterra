@@ -1955,7 +1955,7 @@ void StudioExpansionShell::DrawNavigationBand(
         230.0F * editor_ui::CurrentUiScale();
     const std::string_view commandButtonLabel =
         context.ContentAvailable().width >= commandHintThreshold
-            ? "Commands  Ctrl+Shift+P##command-palette-toggle"
+            ? "Commands  /##command-palette-toggle"
             : "Commands##command-palette-toggle";
     const bool openCommandPalette =
         context.Button(commandButtonLabel) ||

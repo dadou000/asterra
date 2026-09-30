@@ -11,6 +11,7 @@ add_library(OrbitEditorModel STATIC
     src/ExplorerModel.cpp
     src/InspectorModel.cpp
     src/OutputLog.cpp
+    src/PlanetSurface.cpp
     src/SurfaceAuthoringModel.cpp
     src/SystemViewModel.cpp
 )

@@ -2398,6 +2398,72 @@ int main(
 
             rpcHost.Dispatcher().Register(
                 {
+                    .name = "viewport.navigate",
+                    .description =
+                        "Applies one navigation step to the primary viewport camera, exactly like the right-mouse look/WASD gesture: mouse_dx/mouse_dy in pixels, move_right/move_forward/move_up in -1..1, delta_seconds, boost. Uses terrain navigation when the active body has terrain, and free-fly otherwise.",
+                    .mutating = true
+                },
+                [&studioViews](const Value& params)
+                {
+                    const auto number =
+                        [&params](const char* key)
+                        {
+                            if (!params.IsObject())
+                            {
+                                return 0.0;
+                            }
+                            const auto found =
+                                params.AsObject().find(key);
+                            if (found == params.AsObject().end() ||
+                                !found->second.IsNumber())
+                            {
+                                return 0.0;
+                            }
+                            return found->second.AsNumber();
+                        };
+
+                    orbit::studio_ui::StudioTerrainNavigationInput input{
+                        .deltaSeconds =
+                            std::clamp(
+                                number("delta_seconds"),
+                                0.0,
+                                1.0),
+                        .mouseDeltaX = number("mouse_dx"),
+                        .mouseDeltaY = number("mouse_dy"),
+                        .moveRight =
+                            std::clamp(number("move_right"), -1.0, 1.0),
+                        .moveForward =
+                            std::clamp(number("move_forward"), -1.0, 1.0),
+                        .moveUp =
+                            std::clamp(number("move_up"), -1.0, 1.0),
+                        .boost =
+                            params.IsObject() &&
+                            params.AsObject().find("boost") !=
+                                params.AsObject().end() &&
+                            params.AsObject().at("boost").IsBool() &&
+                            params.AsObject().at("boost").AsBool()
+                    };
+
+                    const bool terrainDriven =
+                        studioViews.HasTerrainNavigation(
+                            "studio.primary");
+                    const bool moved =
+                        studioViews.NavigateTerrain(
+                            "studio.primary",
+                            input);
+                    return Value(
+                        Value::Object{
+                            {"moved", moved},
+                            {"navigation",
+                             std::string(
+                                 terrainDriven
+                                     ? "terrain"
+                                     : "reference_sphere")}
+                        });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
                     .name = "studio.workspace_get",
                     .description =
                         "Returns the active workspace mode (Scene, Planet, Celestial, Simulation, Shading).",
@@ -8287,6 +8353,11 @@ int main(
             ui.BeginFrame(
                 window,
                 deltaSeconds);
+
+            if (ui.ConsumeSlashRequest())
+            {
+                studioViewportPanels.RequestCommandPaletteOpen();
+            }
 
             {
                 // Which project/world am I in? Refreshed a few times a
