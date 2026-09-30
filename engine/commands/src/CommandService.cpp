@@ -1,5 +1,6 @@
 #include <orbit/commands/CommandService.hpp>
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -38,9 +39,8 @@ void CommandService::ApplyAndRecord(
     if (activeTransaction_.has_value())
     {
         action.redo(key);
-        activeTransaction_->
-            actions.push_back(
-                std::move(action));
+        activeTransaction_->actions.push_back(
+            std::move(action));
         return;
     }
 
@@ -58,8 +58,7 @@ void CommandService::ApplyAndRecord(
     }
 
     Transaction transaction;
-    transaction.label =
-        std::string(label);
+    transaction.label = std::string(label);
     transaction.actions.push_back(
         std::move(action));
 
@@ -72,8 +71,7 @@ scene::ObjectId
 CommandService::CreateObject(
     const schema::TypeId type,
     const std::string_view name,
-    const std::optional<
-        scene::ObjectId> parent,
+    const std::optional<scene::ObjectId> parent,
     const i64 sortOrder)
 {
     if (schemas_.FindType(type) == nullptr)
@@ -94,24 +92,68 @@ CommandService::CreateObject(
         "Create Object",
         Action{
             .redo =
-                [this, record](
-                    scene::MutationKey key)
+                [this, record](scene::MutationKey key)
                 {
-                    objects_.Insert(
-                        key,
-                        record);
+                    objects_.Insert(key, record);
                 },
             .undo =
-                [this, id = record.id](
-                    scene::MutationKey key)
+                [this, id = record.id](scene::MutationKey key)
                 {
-                    objects_.Erase(
-                        key,
-                        id);
+                    objects_.Erase(key, id);
                 }
         });
 
     return record.id;
+}
+
+scene::ObjectId
+CommandService::DuplicateObject(
+    const scene::ObjectId object,
+    const std::string_view nameSuffix)
+{
+    const scene::ObjectRecord source =
+        RequireObject(object);
+
+    if (!objects_.Children(object).empty())
+    {
+        throw std::invalid_argument(
+            "Generic duplicate supports leaf objects only; duplicate the hierarchy explicitly.");
+    }
+
+    const schema::TypeSchema* typeSchema =
+        schemas_.FindType(source.type);
+    if (typeSchema == nullptr)
+    {
+        throw std::runtime_error(
+            "Cannot duplicate an object with an unknown schema type.");
+    }
+
+    const scene::ObjectId duplicate =
+        CreateObject(
+            source.type,
+            source.name + std::string(nameSuffix),
+            source.parent,
+            source.sortOrder + 1);
+
+    for (const auto& property : typeSchema->properties)
+    {
+        if (property.readOnly)
+        {
+            continue;
+        }
+
+        const auto value =
+            objects_.GetProperty(object, property.id);
+        if (value.has_value())
+        {
+            SetProperty(
+                duplicate,
+                property.id,
+                *value);
+        }
+    }
+
+    return duplicate;
 }
 
 void CommandService::DeleteObject(
@@ -137,8 +179,7 @@ void CommandService::DeleteObject(
 
     std::vector<std::pair<
         schema::PropertyId,
-        schema::PropertyValue>>
-        storedProperties;
+        schema::PropertyValue>> storedProperties;
 
     for (const auto& property : typeSchema->properties)
     {
@@ -157,21 +198,16 @@ void CommandService::DeleteObject(
         "Delete Object",
         Action{
             .redo =
-                [this, object](
-                    scene::MutationKey key)
+                [this, object](scene::MutationKey key)
                 {
                     objects_.Erase(key, object);
                 },
             .undo =
-                [this,
-                 record,
-                 storedProperties](
-                    scene::MutationKey key)
+                [this, record, storedProperties](scene::MutationKey key)
                 {
                     objects_.Insert(key, record);
 
-                    for (const auto& [property, value] :
-                         storedProperties)
+                    for (const auto& [property, value] : storedProperties)
                     {
                         objects_.SetProperty(
                             key,
@@ -199,10 +235,7 @@ void CommandService::RenameObject(
         "Rename Object",
         Action{
             .redo =
-                [this,
-                 object,
-                 name](
-                    scene::MutationKey key)
+                [this, object, name](scene::MutationKey key)
                 {
                     objects_.Rename(
                         key,
@@ -210,10 +243,7 @@ void CommandService::RenameObject(
                         name);
                 },
             .undo =
-                [this,
-                 object,
-                 oldName](
-                    scene::MutationKey key)
+                [this, object, oldName](scene::MutationKey key)
                 {
                     objects_.Rename(
                         key,
@@ -225,8 +255,7 @@ void CommandService::RenameObject(
 
 void CommandService::ReparentObject(
     const scene::ObjectId object,
-    const std::optional<
-        scene::ObjectId> parent)
+    const std::optional<scene::ObjectId> parent)
 {
     const auto oldParent =
         RequireObject(object).parent;
@@ -240,10 +269,7 @@ void CommandService::ReparentObject(
         "Reparent Object",
         Action{
             .redo =
-                [this,
-                 object,
-                 parent](
-                    scene::MutationKey key)
+                [this, object, parent](scene::MutationKey key)
                 {
                     objects_.Reparent(
                         key,
@@ -251,10 +277,7 @@ void CommandService::ReparentObject(
                         parent);
                 },
             .undo =
-                [this,
-                 object,
-                 oldParent](
-                    scene::MutationKey key)
+                [this, object, oldParent](scene::MutationKey key)
                 {
                     objects_.Reparent(
                         key,
@@ -272,11 +295,10 @@ void CommandService::SetProperty(
     const scene::ObjectRecord current =
         RequireObject(object);
 
-    const schema::PropertySchema*
-        propertySchema =
-            schemas_.FindProperty(
-                current.type,
-                property);
+    const schema::PropertySchema* propertySchema =
+        schemas_.FindProperty(
+            current.type,
+            property);
 
     if (propertySchema == nullptr)
     {
@@ -313,11 +335,7 @@ void CommandService::SetProperty(
         "Set Property",
         Action{
             .redo =
-                [this,
-                 object,
-                 property,
-                 value](
-                    scene::MutationKey key)
+                [this, object, property, value](scene::MutationKey key)
                 {
                     objects_.SetProperty(
                         key,
@@ -326,11 +344,7 @@ void CommandService::SetProperty(
                         value);
                 },
             .undo =
-                [this,
-                 object,
-                 property,
-                 previous](
-                    scene::MutationKey key)
+                [this, object, property, previous](scene::MutationKey key)
                 {
                     if (previous.has_value())
                     {
@@ -347,6 +361,56 @@ void CommandService::SetProperty(
                             object,
                             property);
                     }
+                }
+        });
+}
+
+void CommandService::ResetProperty(
+    const scene::ObjectId object,
+    const schema::PropertyId property)
+{
+    const scene::ObjectRecord current =
+        RequireObject(object);
+    const schema::PropertySchema* propertySchema =
+        schemas_.FindProperty(current.type, property);
+
+    if (propertySchema == nullptr)
+    {
+        throw std::invalid_argument(
+            "Property is not defined for object type.");
+    }
+    if (propertySchema->readOnly)
+    {
+        throw std::invalid_argument(
+            "Property is read-only.");
+    }
+
+    const auto previous =
+        objects_.GetProperty(object, property);
+    if (!previous.has_value())
+    {
+        return;
+    }
+
+    ApplyAndRecord(
+        "Reset Property",
+        Action{
+            .redo =
+                [this, object, property](scene::MutationKey key)
+                {
+                    objects_.RemoveProperty(
+                        key,
+                        object,
+                        property);
+                },
+            .undo =
+                [this, object, property, previous](scene::MutationKey key)
+                {
+                    objects_.SetProperty(
+                        key,
+                        object,
+                        property,
+                        *previous);
                 }
         });
 }
@@ -395,12 +459,10 @@ void CommandService::CommitTransaction()
         throw;
     }
 
-    if (!activeTransaction_->
-            actions.empty())
+    if (!activeTransaction_->actions.empty())
     {
         undoStack_.push_back(
-            std::move(
-                *activeTransaction_));
+            std::move(*activeTransaction_));
         redoStack_.clear();
     }
 
@@ -437,6 +499,42 @@ bool CommandService::CanRedo() const noexcept
         !activeTransaction_.has_value();
 }
 
+std::vector<std::string> CommandService::UndoLabels(
+    const std::size_t limit) const
+{
+    const std::size_t count =
+        std::min(limit, undoStack_.size());
+    std::vector<std::string> result;
+    result.reserve(count);
+
+    for (std::size_t offset = 0U;
+         offset < count;
+         ++offset)
+    {
+        result.push_back(
+            undoStack_[undoStack_.size() - 1U - offset].label);
+    }
+    return result;
+}
+
+std::vector<std::string> CommandService::RedoLabels(
+    const std::size_t limit) const
+{
+    const std::size_t count =
+        std::min(limit, redoStack_.size());
+    std::vector<std::string> result;
+    result.reserve(count);
+
+    for (std::size_t offset = 0U;
+         offset < count;
+         ++offset)
+    {
+        result.push_back(
+            redoStack_[redoStack_.size() - 1U - offset].label);
+    }
+    return result;
+}
+
 void CommandService::Undo()
 {
     if (!CanUndo())
@@ -446,8 +544,7 @@ void CommandService::Undo()
     }
 
     Transaction transaction =
-        std::move(
-            undoStack_.back());
+        std::move(undoStack_.back());
     undoStack_.pop_back();
 
     scene::MutationKey key;
@@ -455,10 +552,8 @@ void CommandService::Undo()
 
     try
     {
-        for (auto iterator =
-                 transaction.actions.rbegin();
-             iterator !=
-                 transaction.actions.rend();
+        for (auto iterator = transaction.actions.rbegin();
+             iterator != transaction.actions.rend();
              ++iterator)
         {
             iterator->undo(key);
@@ -487,8 +582,7 @@ void CommandService::Redo()
     }
 
     Transaction transaction =
-        std::move(
-            redoStack_.back());
+        std::move(redoStack_.back());
     redoStack_.pop_back();
 
     scene::MutationKey key;
@@ -496,8 +590,7 @@ void CommandService::Redo()
 
     try
     {
-        for (Action& action :
-             transaction.actions)
+        for (Action& action : transaction.actions)
         {
             action.redo(key);
         }
