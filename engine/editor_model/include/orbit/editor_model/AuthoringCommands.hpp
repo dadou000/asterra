@@ -22,6 +22,16 @@ inline constexpr commands::CommandId kClearSelection{
     .low = 0x53454c434c454152ULL
 };
 
+inline constexpr commands::CommandId kDuplicateSelection{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x4455504c53454c01ULL
+};
+
+inline constexpr commands::CommandId kDeleteSelection{
+    .high = 0x4f52424954434d44ULL,
+    .low = 0x44454c4553454c01ULL
+};
+
 inline constexpr commands::CommandId kMoveToRoot{
     .high = 0x4f52424954434d44ULL,
     .low = 0x4d4f5645524f4f54ULL

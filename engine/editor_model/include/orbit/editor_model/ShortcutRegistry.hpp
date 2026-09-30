@@ -22,6 +22,17 @@ struct ShortcutChord
 class ShortcutRegistry
 {
 public:
+    ShortcutRegistry() noexcept;
+    ~ShortcutRegistry();
+
+    ShortcutRegistry(const ShortcutRegistry&) = delete;
+    ShortcutRegistry& operator=(const ShortcutRegistry&) = delete;
+
+    // Orbit Studio owns one process-wide shortcut registry. Presentation
+    // modules use this discovery seam to contribute bindings without threading
+    // the registry through every UI constructor or creating parallel handlers.
+    [[nodiscard]] static ShortcutRegistry* Active() noexcept;
+
     void Register(
         ShortcutChord chord,
         commands::CommandId command);

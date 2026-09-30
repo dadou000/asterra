@@ -1,16 +1,20 @@
 #pragma once
 
+#include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_ui/StudioAssetShelf.hpp>
 #include <orbit/studio_ui/StudioExpansionShell.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace orbit::content
@@ -48,10 +52,6 @@ inline constexpr editor_ui::PanelId kSecondaryViewportPanel{
     .low = 0x44494f5657455732ULL
 };
 
-// Dockable presentation for the two default independent Studio RenderViews.
-// Panel registrations may outlive a project/session; Rebind() swaps only the
-// project-bound presentation services while the panel object itself remains
-// stable across StudioWorkspace project replacement.
 class StudioViewportPanels
 {
 public:
@@ -74,7 +74,25 @@ public:
     void SetContentService(content::ContentService* content) noexcept
     {
         content_ = content;
-        InstallStudioAssetShelf(content);
+
+        std::filesystem::path shelfState;
+        if (content != nullptr && session_ != nullptr)
+        {
+            try
+            {
+                shelfState =
+                    session_->World().Project().RootDirectory() /
+                    ".orbit" /
+                    "AssetShelf.ini";
+            }
+            catch (...)
+            {
+                shelfState.clear();
+            }
+        }
+
+        InstallStudioAssetShelf(content, std::move(shelfState));
+        InstallQol(nullptr);
     }
 
     void RequestCommandPaletteOpen() noexcept
@@ -98,41 +116,43 @@ private:
         editor_ui::PanelContext& context,
         std::string_view id);
 
-    void RegisterContextInspector(
-        editor_ui::EditorUi& ui);
-    void DrawContextInspector(
-        editor_ui::PanelContext& context);
+    void RegisterContextInspector(editor_ui::EditorUi& ui);
+    void DrawContextInspector(editor_ui::PanelContext& context);
 
-    // StudioExpansionShell owns the two permanent top rows and calls the
-    // workspace/context fragments below. This class registers only the bottom
-    // activity/status strip, which controls existing bottom-docked views
-    // without duplicating their build/log/diagnostic state.
-    void RegisterShellBands(
-        editor_ui::EditorUi& ui);
-    void DrawWorkspaceBand(
-        editor_ui::PanelContext& context);
-    void DrawContextBand(
-        editor_ui::PanelContext& context);
-    void DrawActivityBand(
-        editor_ui::PanelContext& context);
+    void InstallQol(editor_ui::EditorUi* ui = nullptr) noexcept;
+    void EnsureQolCommands();
+    void TrackSelectionHistory();
+    void NavigateSelectionHistory(i32 delta);
+    void SelectParent();
+    void SelectFirstChild();
+    void DuplicateSelection();
+    void DeleteSelection();
+    void BeginRenameSelection();
+    void CommitRenameSelection();
+    void RevealSelectionInWorld();
+    void DrawQolNavigation(editor_ui::PanelContext& context);
+    void DrawQolHistory(editor_ui::PanelContext& context);
+    void DrawQolProperties(editor_ui::PanelContext& context);
+    void ApplyViewportPreset(i32 preset);
+    void Notify(
+        std::string title,
+        std::string detail = {},
+        bool error = false) noexcept;
+
+    void RegisterShellBands(editor_ui::EditorUi& ui);
+    void DrawWorkspaceBand(editor_ui::PanelContext& context);
+    void DrawContextBand(editor_ui::PanelContext& context);
+    void DrawActivityBand(editor_ui::PanelContext& context);
 
     [[nodiscard]] i32 QuickCreateCommandPriority(
         std::string_view category) const noexcept;
     [[nodiscard]] bool PreferCommandQuickCreate() const noexcept;
     [[nodiscard]] bool ShowViewportQuickCreate() const noexcept;
 
-    // View-mode commands remain world-registry commands for command search,
-    // MCP and automation. Row 2 invokes the same commands through one compact
-    // selector instead of registering three permanent toolbar contributions.
-    // They are reinstalled after a world switch because EditorWorldSession
-    // intentionally replaces its complete command graph with the new world.
     void EnsureViewportModeCommands();
     void UnregisterViewportModeCommands() noexcept;
     void InvokeViewportMode(studio_session::ViewportMode mode);
 
-    // Built-in quick creation remains presentation-aware because placement is
-    // intentionally relative to a viewport camera. StudioExpansionShell calls
-    // these from + Add so creation no longer needs permanent viewport chrome.
     [[nodiscard]] bool CanCreateAtViewport(
         std::string_view id) const noexcept;
     void CreateLocalLightAtViewport(
@@ -145,8 +165,22 @@ private:
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     content::ContentService* content_{nullptr};
+    editor_ui::EditorUi* ui_{nullptr};
     std::string status_;
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
+
+    bool qolInstalled_{false};
+    u64 observedSelectionRevision_{0};
+    std::vector<std::vector<scene::ObjectId>> selectionHistory_;
+    std::size_t selectionHistoryCursor_{0};
+    bool applyingSelectionHistory_{false};
+    bool renameSelection_{false};
+    bool renameFocusRequested_{false};
+    std::string renameText_;
+    std::string propertyFilter_;
+    bool propertyModifiedOnly_{false};
+    std::vector<schema::PropertyId> pinnedProperties_;
+    std::optional<schema::PropertyValue> copiedPropertyValue_;
 
     StudioTerrainAuthoringTool terrainTool_{
         StudioTerrainAuthoringTool::Select};
@@ -173,13 +207,10 @@ private:
     std::optional<f64> hoveredBiomeAuthoredWeight_;
     std::optional<f64> hoveredBiomeAutomaticWeight_;
 
-    // The legacy expert Inspector still owns only its schema presentation
-    // preference. Specialized authoring sections are drawn from the same
-    // shared provider registry used by canonical Properties.
     bool contextualAdvancedProperties_{false};
 
-    // Owns navigation/command + contextual/viewport presentation rows,
-    // project-local shell persistence and plugin contribution registries.
     StudioExpansionShell expansion_{*this};
 };
 } // namespace orbit::studio_ui
+
+#include <orbit/studio_ui/StudioQol.inl>

@@ -63,12 +63,21 @@ void OpenPanels(
     }
 }
 
+void CloseLegacyBrowserSources(editor_ui::EditorUi& ui)
+{
+    ClosePanels(
+        ui,
+        {
+            "Explorer",
+            "Material Service"
+        });
+}
+
 void CloseSpecialistPanels(editor_ui::EditorUi& ui)
 {
     ClosePanels(
         ui,
         {
-            "World / Assets",
             "Inspector",
             "Body Map / Debug View",
             "System View",
@@ -84,6 +93,15 @@ void CloseSpecialistPanels(editor_ui::EditorUi& ui)
         });
 }
 
+void OpenCanonicalBrowser(
+    editor_ui::EditorUi& ui,
+    const BrowserMode mode)
+{
+    g_browserMode = mode;
+    CloseLegacyBrowserSources(ui);
+    OpenPanels(ui, {"World / Assets"});
+}
+
 void OpenCanonicalWorkspace(
     editor_ui::EditorUi& ui,
     const std::initializer_list<std::string_view> centerPanels)
@@ -92,12 +110,11 @@ void OpenCanonicalWorkspace(
     ClosePanels(
         ui,
         {
-            "Material Service",
             "Build",
             "Output"
         });
 
-    OpenPanels(ui, {"Explorer"});
+    OpenCanonicalBrowser(ui, g_browserMode);
     OpenPanels(ui, centerPanels);
     OpenPanels(ui, {"Properties"});
 }
@@ -126,13 +143,13 @@ void ActivateWorkspace(
             ui,
             {
                 "Viewport",
-                "Explorer",
                 "Build",
                 "Output"
             });
+        OpenCanonicalBrowser(ui, BrowserMode::Assets);
         OpenPanels(
             ui,
-            {"Material Service", "Shading", "Properties"});
+            {"Shading", "Properties"});
         break;
     }
 }
@@ -213,10 +230,7 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
         .draw =
             [&ui](editor_ui::PanelContext& context)
             {
-                static_cast<void>(
-                    ui.ClosePanelByTitle("Explorer"));
-                static_cast<void>(
-                    ui.ClosePanelByTitle("Material Service"));
+                CloseLegacyBrowserSources(ui);
 
                 static constexpr std::array<std::string_view, 2>
                     kBrowserModes{
@@ -736,9 +750,6 @@ void StudioViewportPanels::DrawContextBand(
         return;
     }
 
-    // Terrain context is owned exclusively by StudioExpansionShell. Keeping a
-    // second terrain branch here used to duplicate the same tool choices and
-    // made future toolbar changes easy to desynchronize.
     switch (g_workspaceMode)
     {
     case WorkspaceMode::Scene:
