@@ -718,6 +718,24 @@ def orbit_panel_focus(title: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_workspace_get() -> dict[str, Any]:
+    """Return the active Studio workspace mode."""
+    return _rpc("studio.workspace_get", {})
+
+
+@mcp.tool()
+def orbit_workspace_set(mode: str) -> dict[str, Any]:
+    """Switch workspace mode: Scene, Planet, Celestial, Simulation or Shading."""
+    return _rpc("studio.workspace_set", {"mode": mode})
+
+
+@mcp.tool()
+def orbit_bubble_open(object_id: str) -> dict[str, Any]:
+    """Open an object's parameter bubble in the active mode toolbar."""
+    return _rpc("studio.bubble_open", {"id": object_id})
+
+
+@mcp.tool()
 def orbit_panel_close(title: str) -> dict[str, Any]:
     """Close a panel by title; reopen it with orbit_panel_focus."""
     return _rpc("studio.panel_close", {"title": title})

@@ -2398,6 +2398,89 @@ int main(
 
             rpcHost.Dispatcher().Register(
                 {
+                    .name = "studio.workspace_get",
+                    .description =
+                        "Returns the active workspace mode (Scene, Planet, Celestial, Simulation, Shading).",
+                    .mutating = false
+                },
+                [&studioViewportPanels](const Value&)
+                {
+                    return Value(
+                        Value::Object{
+                            {"mode",
+                             std::string(
+                                 studioViewportPanels.
+                                     WorkspaceModeName())}
+                        });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "studio.workspace_set",
+                    .description =
+                        "Switches the workspace mode (Scene, Planet, Celestial, Simulation, Shading), exactly like the Mode selector.",
+                    .mutating = true
+                },
+                [&studioViewportPanels](const Value& params)
+                {
+                    const auto* mode =
+                        params.IsObject()
+                            ? params.AsObject().find("mode") !=
+                                      params.AsObject().end()
+                                  ? &params.AsObject().at("mode")
+                                  : nullptr
+                            : nullptr;
+                    if (mode == nullptr || !mode->IsString() ||
+                        !studioViewportPanels.SetWorkspaceMode(
+                            mode->AsString()))
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "mode must be one of Scene, Planet, Celestial, Simulation, Shading.");
+                    }
+                    return Value(
+                        Value::Object{
+                            {"mode", mode->AsString()}
+                        });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "studio.bubble_open",
+                    .description =
+                        "Opens the parameter bubble of an object in the active toolbar (Scene: the selected object; Celestial: a body or one of its enabled capabilities).",
+                    .mutating = true
+                },
+                [&studioViewportPanels](const Value& params)
+                {
+                    const auto* id =
+                        params.IsObject()
+                            ? params.AsObject().find("id") !=
+                                      params.AsObject().end()
+                                  ? &params.AsObject().at("id")
+                                  : nullptr
+                            : nullptr;
+                    const auto parsed =
+                        id != nullptr && id->IsString()
+                            ? orbit::scene::ObjectId::Parse(
+                                  id->AsString())
+                            : std::nullopt;
+                    if (!parsed.has_value())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "id must be an object id string.");
+                    }
+                    studioViewportPanels.RequestElementBubble(
+                        *parsed);
+                    return Value(
+                        Value::Object{
+                            {"requested", true}
+                        });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
                     .name = "studio.panel_close",
                     .description =
                         "Closes a panel by title (case-insensitive); it can be reopened with studio.panel_focus.",
@@ -5491,7 +5574,7 @@ int main(
                             {
                                 const std::string label =
                                     object.name +
-                                    "  \xC2\xB7  " +
+                                    "  -  " +
                                     typeLabel(
                                         object.type) +
                                     "##tree-" +
@@ -5630,7 +5713,7 @@ int main(
                                     context.Separator();
 
                                     if (context.Selectable(
-                                            "Move under\xE2\x80\xA6##mv-" +
+                                            "Move under...##mv-" +
                                                 object.id.
                                                     ToString(),
                                             false))
@@ -5761,7 +5844,7 @@ int main(
                     {
                         openMovePicker = false;
                         context.Text(
-                            "Move under\xE2\x80\xA6");
+                            "Move under...");
                         static_cast<void>(
                             context.InputText(
                                 "Filter##explorer-move-filter",
@@ -5782,7 +5865,7 @@ int main(
 
                             if (context.Selectable(
                                     candidate.name +
-                                        "  \xC2\xB7  " +
+                                        "  -  " +
                                         typeLabel(
                                             candidate.type) +
                                         "##move-target-" +

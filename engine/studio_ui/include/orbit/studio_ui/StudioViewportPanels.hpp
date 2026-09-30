@@ -104,6 +104,15 @@ public:
     // (Scene today) and removes it for modes that have none.
     void SyncModeToolbar();
 
+    // Workspace mode (Scene, Planet, Celestial, Simulation, Shading) and the
+    // element-bubble popover are reachable from RPC/MCP as well as the UI.
+    [[nodiscard]] std::string_view WorkspaceModeName() const noexcept;
+    [[nodiscard]] bool SetWorkspaceMode(std::string_view name);
+    void RequestElementBubble(scene::ObjectId object) noexcept
+    {
+        bubbleOpenRequest_ = object;
+    }
+
 private:
     friend class StudioExpansionShell;
 
@@ -181,6 +190,7 @@ private:
     editor_ui::EditorUi* ui_{nullptr};
     std::string status_;
     bool celestialMoreRequested_{false};
+    std::optional<scene::ObjectId> bubbleOpenRequest_;
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
 
     bool qolInstalled_{false};

@@ -94,6 +94,8 @@ bookkeeping.
 | `orbit_panel_list` | `studio.panel_list` | Every tab with `open` and `visible`. |
 | `orbit_panel_focus(title)` | `studio.panel_focus` | Opens a tab by title (case-insensitive) and brings it to the front. |
 | `orbit_panel_close(title)` | `studio.panel_close` | Closes a tab; reopen with focus. |
+| `orbit_workspace_get` / `orbit_workspace_set(mode)` | `studio.workspace_get` / `studio.workspace_set` | Scene, Planet, Celestial, Simulation, Shading; same as the Mode selector. |
+| `orbit_bubble_open(object_id)` | `studio.bubble_open` | Opens the element parameter bubble shown in the active mode toolbar. |
 
 The Shading tab (content tree with folders, live-compiled HLSL shaders and
 shader materials, a preview on selectable shapes and lighting) is fully

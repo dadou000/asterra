@@ -323,6 +323,23 @@ void StudioViewportPanels::RegisterShellBands(
     SyncModeToolbar();
 }
 
+std::string_view StudioViewportPanels::WorkspaceModeName() const noexcept
+{
+    return StudioWorkspaceName(g_workspaceMode);
+}
+
+bool StudioViewportPanels::SetWorkspaceMode(const std::string_view name)
+{
+    const auto parsed = ParseWorkspaceMode(name);
+    if (!parsed.has_value() || g_workspaceUi == nullptr)
+    {
+        return false;
+    }
+
+    ActivateWorkspace(*g_workspaceUi, *parsed);
+    return true;
+}
+
 void StudioViewportPanels::SyncModeToolbar()
 {
     if (g_workspaceMode != WorkspaceMode::Scene &&
@@ -369,8 +386,15 @@ void StudioViewportPanels::DrawElementBubble(
     }
 
     const std::string suffix = object.ToString();
-    const bool open =
-        context.Button("\xE2\x96\xBE##bubble-open-" + suffix);
+    bool open =
+        context.Button("v##bubble-open-" + suffix);
+
+    if (bubbleOpenRequest_.has_value() &&
+        *bubbleOpenRequest_ == object)
+    {
+        bubbleOpenRequest_.reset();
+        open = true;
+    }
 
     if (!context.BeginPopup(
             "element-bubble##" + suffix,
@@ -384,7 +408,7 @@ void StudioViewportPanels::DrawElementBubble(
     context.Heading(
         record->name +
         (type != nullptr
-             ? "  \xC2\xB7  " + type->displayName
+             ? "  -  " + type->displayName
              : std::string{}));
 
     std::size_t advancedCount = 0U;
@@ -606,7 +630,7 @@ void StudioViewportPanels::DrawCelestialToolbar(
     toggle(world_model::kMagnetosphereCapabilityType, "Aurora");
     toggle(world_model::kSurfaceCapabilityType, "Surface");
 
-    if (context.Button("Moreâ¦##celestial-tb-more"))
+    if (context.Button("More...##celestial-tb-more"))
     {
         celestialMoreRequested_ = true;
     }
@@ -714,8 +738,8 @@ void StudioViewportPanels::DrawSceneToolbar(
     static constexpr std::array<std::string_view, 2> kSpaces{
         "World", "Local"};
     i32 space = static_cast<i32>(gizmo.space);
-    if (context.Combo(
-            "##scene-toolbar-space",
+    if (context.SegmentedControl(
+            "scene-toolbar-space",
             kSpaces,
             space))
     {
@@ -1013,7 +1037,7 @@ void StudioViewportPanels::DrawContextBand(
 
         context.Text(
             std::format(
-                "{} · {:.0f} lm",
+                "{} - {:.0f} lm",
                 spot ? "Spot Light" : "Point Light",
                 intensity));
         context.SameLine();
@@ -1182,7 +1206,7 @@ void StudioViewportPanels::DrawContextBand(
 
     if (pathPairRelevant)
     {
-        context.Text("2 Path Nodes · Connect");
+        context.Text("2 Path Nodes - Connect");
         context.SameLine();
 
         if (context.Button("Direct##quick-path-direct"))
@@ -1474,7 +1498,7 @@ void StudioViewportPanels::DrawContextInspector(
 
     context.Heading("Inspector");
     context.MutedText(
-        "Expert compatibility view · canonical editing lives in Properties.");
+        "Expert compatibility view - canonical editing lives in Properties.");
 
     if (selected.empty())
     {
