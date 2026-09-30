@@ -19,19 +19,12 @@ namespace orbit::studio_ui
 {
 class StudioViewportPanels;
 
-// Shared extension registries used by Orbit and hot-reloadable plugins. They
-// intentionally contain presentation contributions only; commands, scene
-// objects and authoring state remain owned by their existing services.
 [[nodiscard]] InspectorProviderRegistry&
 GlobalInspectorProviders() noexcept;
 
 [[nodiscard]] StudioUiContributionRegistry&
 GlobalStudioUiContributions() noexcept;
 
-// Modular shell integration for features that should not enlarge the viewport
-// panel implementation: selection breadcrumbs, command search, quick-create,
-// viewport layout/gizmo presentation, plugin toolbar contributions and
-// project-local presentation persistence.
 class StudioExpansionShell
 {
 public:
@@ -54,8 +47,6 @@ public:
         return viewportState_;
     }
 
-    // Presentation extensions use the exact same focus-aware target as the
-    // built-in shell. This does not expose or duplicate viewport runtime state.
     [[nodiscard]] std::string_view
     ControlledViewportId() const noexcept
     {
@@ -64,6 +55,17 @@ public:
 
     void RequestCommandPaletteOpen() noexcept
     {
+        commandPaletteOpenRequested_ = true;
+    }
+
+    // Keyboard-first + Add entry point. Reuse the proven command palette
+    // rather than introducing a second modal: filtering for authoring verbs
+    // immediately surfaces Create/Add/New command descriptors, including
+    // generated argument forms and project-asset pickers.
+    void RequestQuickCreateOpen() noexcept
+    {
+        commandQuery_ = "Create";
+        commandPaletteSelection_ = 0;
         commandPaletteOpenRequested_ = true;
     }
 
@@ -77,17 +79,10 @@ private:
         bool responsiveOverflow = false,
         bool verticalList = false);
 
-    // Terrain is the densest contextual tool family. Keep the permanent shell
-    // to one selector while the canonical Properties panel exposes only the
-    // active tool's parameters. The underlying authoring state remains owned
-    // by StudioViewportPanels and its production viewport implementation.
     [[nodiscard]] bool TerrainContextRelevant() const noexcept;
     void DrawTerrainContext(editor_ui::PanelContext& context);
     void DrawTerrainToolProperties(editor_ui::PanelContext& context);
 
-    // View presentation follows the last production viewport window that held
-    // editor focus. Properties can pin an explicit viewport when needed, but
-    // the permanent shell does not require a manual Primary/Body Map selector.
     [[nodiscard]] std::string_view SelectedViewportId() const noexcept;
     [[nodiscard]] bool ViewportControlsRelevant() const noexcept;
     [[nodiscard]] bool BezierContextRelevant() const noexcept;
@@ -97,10 +92,6 @@ private:
     void DrawViewportDiagnosticsProperties(editor_ui::PanelContext& context);
     void DrawBezierProperties(editor_ui::PanelContext& context);
 
-    // Loads when the bound project changes and writes only when one of the
-    // expansion-owned fields changes. Workspace/browser/activity fields are
-    // preserved verbatim so the same StudioPersistentState file can become
-    // the single authority as those surfaces are migrated later.
     void SyncPersistentState() noexcept;
     void SavePersistentStateIfChanged() noexcept;
 
@@ -120,7 +111,6 @@ private:
     std::string quickCreateArgumentError_;
     bool attached_{false};
 
-    // 0 = follow focused viewport, 1 = pin Primary, 2 = pin Body Map.
     i32 viewportControlMode_{0};
     mutable i32 lastFocusedViewportIndex_{0};
 
