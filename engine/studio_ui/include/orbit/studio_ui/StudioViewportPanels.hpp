@@ -146,6 +146,13 @@ private:
     void RegisterShellBands(editor_ui::EditorUi& ui);
     void DrawSceneToolbar(editor_ui::PanelContext& context);
     void DrawCelestialToolbar(editor_ui::PanelContext& context);
+
+    // Small "v" chip that opens a popover with the ordinary (non-advanced)
+    // parameters of one object. Edits go through CommandService, so they are
+    // undoable and identical to editing the same property in Properties.
+    void DrawElementBubble(
+        editor_ui::PanelContext& context,
+        scene::ObjectId object);
     void DrawWorkspaceBand(editor_ui::PanelContext& context);
     void DrawContextBand(editor_ui::PanelContext& context);
     void DrawActivityBand(editor_ui::PanelContext& context);

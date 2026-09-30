@@ -357,6 +357,167 @@ void StudioViewportPanels::SyncModeToolbar()
     });
 }
 
+void StudioViewportPanels::DrawElementBubble(
+    editor_ui::PanelContext& context,
+    const scene::ObjectId object)
+{
+    auto& world = session_->World();
+    const auto record = world.Objects().Find(object);
+    if (!record.has_value())
+    {
+        return;
+    }
+
+    const std::string suffix = object.ToString();
+    const bool open =
+        context.Button("\xE2\x96\xBE##bubble-open-" + suffix);
+
+    if (!context.BeginPopup(
+            "element-bubble##" + suffix,
+            open,
+            {340.0F, 0.0F}))
+    {
+        return;
+    }
+
+    const auto* type = world.Schemas().FindType(record->type);
+    context.Heading(
+        record->name +
+        (type != nullptr
+             ? "  \xC2\xB7  " + type->displayName
+             : std::string{}));
+
+    std::size_t advancedCount = 0U;
+
+    if (type != nullptr)
+    {
+        for (const auto& property : type->properties)
+        {
+            if (property.readOnly)
+            {
+                continue;
+            }
+
+            if (property.advanced)
+            {
+                ++advancedCount;
+                continue;
+            }
+
+            const auto stored =
+                world.Objects().GetProperty(object, property.id);
+            const schema::PropertyValue current =
+                stored.value_or(property.defaultValue);
+
+            std::string label = property.name;
+            if (!property.unit.empty())
+            {
+                label += " (" + property.unit + ")";
+            }
+            label += "##bubble-" + suffix + "-" + property.id.ToString();
+
+            std::optional<schema::PropertyValue> next;
+
+            if (const auto* asBool = std::get_if<bool>(&current))
+            {
+                bool edited = *asBool;
+                if (context.Checkbox(label, edited))
+                {
+                    next = edited;
+                }
+            }
+            else if (const auto* asInt = std::get_if<i64>(&current))
+            {
+                i64 edited = *asInt;
+                if (context.InputInteger(label, edited))
+                {
+                    next = edited;
+                }
+            }
+            else if (const auto* asFloat = std::get_if<f64>(&current))
+            {
+                f64 edited = *asFloat;
+                const bool ranged =
+                    property.range.minimum.has_value() &&
+                    property.range.maximum.has_value();
+                const bool changed = ranged
+                    ? context.SliderDouble(
+                          label,
+                          edited,
+                          *property.range.minimum,
+                          *property.range.maximum)
+                    : context.InputDouble(label, edited);
+                if (changed)
+                {
+                    next = edited;
+                }
+            }
+            else if (const auto* asText =
+                         std::get_if<std::string>(&current))
+            {
+                std::string edited = *asText;
+                if (context.InputText(label, edited))
+                {
+                    next = std::move(edited);
+                }
+            }
+            else if (const auto* asVec =
+                         std::get_if<math::Double3>(&current))
+            {
+                math::Double3 edited = *asVec;
+                if (context.InputDouble3(label, edited))
+                {
+                    next = edited;
+                }
+            }
+            else
+            {
+                context.MutedText(property.name + ": object reference");
+            }
+
+            if (next.has_value())
+            {
+                try
+                {
+                    world.Commands().SetProperty(
+                        object,
+                        property.id,
+                        *next);
+                    status_.clear();
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ = exception.what();
+                }
+            }
+        }
+    }
+
+    context.Separator();
+    if (advancedCount > 0U)
+    {
+        context.MutedText(
+            std::format(
+                "{} advanced field{} in Properties.",
+                advancedCount,
+                advancedCount == 1U ? "" : "s"));
+    }
+
+    if (context.Button("Open in Properties##bubble-props-" + suffix))
+    {
+        const std::array selected{object};
+        world.Selection().Set(std::span(selected));
+        if (g_workspaceUi != nullptr)
+        {
+            static_cast<void>(
+                g_workspaceUi->FocusPanelByTitle("Properties"));
+        }
+        context.CloseCurrentPopup();
+    }
+
+    context.EndPopup();
+}
+
 void StudioViewportPanels::DrawCelestialToolbar(
     editor_ui::PanelContext& context)
 {
@@ -388,6 +549,8 @@ void StudioViewportPanels::DrawCelestialToolbar(
 
     context.Text(body->name);
     context.SameLine();
+    DrawElementBubble(context, body->id);
+    context.SameLine();
     context.MutedText("|");
     context.SameLine();
 
@@ -417,6 +580,20 @@ void StudioViewportPanels::DrawCelestialToolbar(
                 catch (const std::exception& exception)
                 {
                     status_ = exception.what();
+                }
+            }
+
+            if (state.has_value())
+            {
+                for (const auto& child :
+                     world.Objects().Children(body->id))
+                {
+                    if (child.type == type)
+                    {
+                        context.SameLine();
+                        DrawElementBubble(context, child.id);
+                        break;
+                    }
                 }
             }
             context.SameLine();
@@ -626,6 +803,16 @@ void StudioViewportPanels::DrawSceneToolbar(
             world.CommandRegistry().Invoke(
                 editor_model::authoring_commands::kRedo);
         });
+    }
+
+    if (world.Selection().Ordered().size() == 1U)
+    {
+        separator();
+        context.MutedText("Selected");
+        context.SameLine();
+        DrawElementBubble(
+            context,
+            world.Selection().Ordered().front());
     }
 
     if (!status_.empty())
