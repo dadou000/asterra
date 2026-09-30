@@ -5,6 +5,29 @@
 
 namespace orbit::editor_model
 {
+namespace
+{
+ShortcutRegistry* g_activeShortcutRegistry = nullptr;
+}
+
+ShortcutRegistry::ShortcutRegistry() noexcept
+{
+    g_activeShortcutRegistry = this;
+}
+
+ShortcutRegistry::~ShortcutRegistry()
+{
+    if (g_activeShortcutRegistry == this)
+    {
+        g_activeShortcutRegistry = nullptr;
+    }
+}
+
+ShortcutRegistry* ShortcutRegistry::Active() noexcept
+{
+    return g_activeShortcutRegistry;
+}
+
 void ShortcutRegistry::Register(
     const ShortcutChord chord,
     const commands::CommandId command)
