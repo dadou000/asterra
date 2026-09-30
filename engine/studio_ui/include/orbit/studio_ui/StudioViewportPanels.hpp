@@ -51,10 +51,6 @@ inline constexpr editor_ui::PanelId kSecondaryViewportPanel{
     .low = 0x44494f5657455732ULL
 };
 
-// Dockable presentation for the two default independent Studio RenderViews.
-// Panel registrations may outlive a project/session; Rebind() swaps only the
-// project-bound presentation services while the panel object itself remains
-// stable across StudioWorkspace project replacement.
 class StudioViewportPanels
 {
 public:
@@ -95,6 +91,7 @@ public:
         }
 
         InstallStudioAssetShelf(content, std::move(shelfState));
+        InstallQol(nullptr);
     }
 
     void RequestCommandPaletteOpen() noexcept
@@ -118,15 +115,10 @@ private:
         editor_ui::PanelContext& context,
         std::string_view id);
 
-    void RegisterContextInspector(
-        editor_ui::EditorUi& ui);
-    void DrawContextInspector(
-        editor_ui::PanelContext& context);
+    void RegisterContextInspector(editor_ui::EditorUi& ui);
+    void DrawContextInspector(editor_ui::PanelContext& context);
 
-    // High-frequency Studio workflow QoL. Implementation lives in
-    // StudioQol.cpp so the production viewport remains focused on rendering
-    // and authoring rather than becoming another monolithic UI controller.
-    void InstallQol(editor_ui::EditorUi& ui) noexcept;
+    void InstallQol(editor_ui::EditorUi* ui = nullptr) noexcept;
     void EnsureQolCommands();
     void TrackSelectionHistory();
     void NavigateSelectionHistory(i32 delta);
@@ -146,18 +138,10 @@ private:
         std::string detail = {},
         bool error = false) noexcept;
 
-    // StudioExpansionShell owns the two permanent top rows and calls the
-    // workspace/context fragments below. This class registers only the bottom
-    // activity/status strip, which controls existing bottom-docked views
-    // without duplicating their build/log/diagnostic state.
-    void RegisterShellBands(
-        editor_ui::EditorUi& ui);
-    void DrawWorkspaceBand(
-        editor_ui::PanelContext& context);
-    void DrawContextBand(
-        editor_ui::PanelContext& context);
-    void DrawActivityBand(
-        editor_ui::PanelContext& context);
+    void RegisterShellBands(editor_ui::EditorUi& ui);
+    void DrawWorkspaceBand(editor_ui::PanelContext& context);
+    void DrawContextBand(editor_ui::PanelContext& context);
+    void DrawActivityBand(editor_ui::PanelContext& context);
 
     [[nodiscard]] i32 QuickCreateCommandPriority(
         std::string_view category) const noexcept;
@@ -184,8 +168,6 @@ private:
     std::string status_;
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
 
-    // QoL/session presentation state. None of this is semantic world
-    // authority; every mutation still routes through CommandService.
     bool qolInstalled_{false};
     u64 observedSelectionRevision_{0};
     std::vector<std::vector<scene::ObjectId>> selectionHistory_;
@@ -229,3 +211,5 @@ private:
     StudioExpansionShell expansion_{*this};
 };
 } // namespace orbit::studio_ui
+
+#include <orbit/studio_ui/StudioQol.inl>
