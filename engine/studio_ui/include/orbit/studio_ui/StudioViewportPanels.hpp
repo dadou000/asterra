@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
