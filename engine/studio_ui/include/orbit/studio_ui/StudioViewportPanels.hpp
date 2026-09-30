@@ -145,6 +145,7 @@ private:
 
     void RegisterShellBands(editor_ui::EditorUi& ui);
     void DrawSceneToolbar(editor_ui::PanelContext& context);
+    void DrawCelestialToolbar(editor_ui::PanelContext& context);
     void DrawWorkspaceBand(editor_ui::PanelContext& context);
     void DrawContextBand(editor_ui::PanelContext& context);
     void DrawActivityBand(editor_ui::PanelContext& context);
@@ -172,6 +173,7 @@ private:
     content::ContentService* content_{nullptr};
     editor_ui::EditorUi* ui_{nullptr};
     std::string status_;
+    bool celestialMoreRequested_{false};
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;
 
     bool qolInstalled_{false};

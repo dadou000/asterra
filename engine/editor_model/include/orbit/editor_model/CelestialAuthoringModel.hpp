@@ -64,6 +64,18 @@ public:
     [[nodiscard]] scene::ObjectId AddRingBand(
         std::string_view name = "Ring Band");
 
+    // Enable state of a body's capability: nullopt when the body has none.
+    // Toggling keeps the capability object (and its authored values) and only
+    // flips kCapabilityEnabled; enabling a missing one creates it.
+    [[nodiscard]] std::optional<bool> CapabilityEnabled(
+        scene::ObjectId body,
+        schema::TypeId capabilityType) const;
+
+    void SetCapabilityEnabled(
+        scene::ObjectId body,
+        schema::TypeId capabilityType,
+        bool enabled);
+
     void RemoveSelectedCapability();
     void RemoveSelectedRingBand();
 

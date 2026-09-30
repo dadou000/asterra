@@ -303,6 +303,87 @@ scene::ObjectId CelestialAuthoringModel::AddCapability(
     return created;
 }
 
+std::optional<bool> CelestialAuthoringModel::CapabilityEnabled(
+    const scene::ObjectId body,
+    const schema::TypeId capabilityType) const
+{
+    std::optional<bool> result;
+
+    for (const auto& child : objects_.Children(body))
+    {
+        if (child.type != capabilityType)
+        {
+            continue;
+        }
+
+        bool enabled = true;
+        if (const auto value = objects_.GetProperty(
+                child.id,
+                world_model::kCapabilityEnabled);
+            value.has_value())
+        {
+            if (const auto* stored = std::get_if<bool>(&*value);
+                stored != nullptr)
+            {
+                enabled = *stored;
+            }
+        }
+
+        result = result.value_or(false) || enabled;
+    }
+
+    return result;
+}
+
+void CelestialAuthoringModel::SetCapabilityEnabled(
+    const scene::ObjectId body,
+    const schema::TypeId capabilityType,
+    const bool enabled)
+{
+    const auto descriptor = std::find_if(
+        kCapabilities.begin(),
+        kCapabilities.end(),
+        [capabilityType](const auto& item)
+        {
+            return item.type == capabilityType;
+        });
+
+    if (descriptor == kCapabilities.end())
+    {
+        throw std::invalid_argument(
+            "Requested type is not a celestial capability.");
+    }
+
+    const auto owner = objects_.Find(body);
+    if (!owner.has_value() ||
+        owner->type != world_model::kCelestialBodyType)
+    {
+        throw std::invalid_argument(
+            "Capabilities can only be toggled on a celestial body.");
+    }
+
+    bool found = false;
+    for (const auto& child : objects_.Children(body))
+    {
+        if (child.type == capabilityType)
+        {
+            found = true;
+            commands_.SetProperty(
+                child.id,
+                world_model::kCapabilityEnabled,
+                enabled);
+        }
+    }
+
+    if (!found && enabled)
+    {
+        static_cast<void>(commands_.CreateObject(
+            capabilityType,
+            descriptor->label,
+            body));
+    }
+}
+
 scene::ObjectId
 CelestialAuthoringModel::AddRingBand(
     const std::string_view name)

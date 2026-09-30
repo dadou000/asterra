@@ -1,5 +1,7 @@
 #include <orbit/editor_rpc/EditorRpcService.hpp>
 
+#include <orbit/editor_model/CelestialAuthoringModel.hpp>
+
 #include <orbit/math/Vector.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 
@@ -1531,6 +1533,108 @@ EditorRpcService::EditorRpcService(
             return rpc::Value(
                 rpc::Value::Object{
                     {"id", id.ToString()}
+                });
+        });
+
+    Register(
+        {
+            .name = "celestial.capabilities",
+            .description =
+                "Lists a celestial body's capability domains with their state: absent, enabled or disabled.",
+            .mutating = false
+        },
+        [&objects,
+         &schemas,
+         &commandService,
+         &selection](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+            const auto body =
+                RequireObjectId(
+                    values,
+                    "body");
+
+            editor_model::CelestialAuthoringModel model(
+                objects,
+                schemas,
+                commandService,
+                selection);
+
+            rpc::Value::Array result;
+
+            for (const auto& capability :
+                 model.AvailableCapabilities())
+            {
+                const auto state =
+                    model.CapabilityEnabled(
+                        body,
+                        capability.type);
+
+                result.emplace_back(
+                    rpc::Value(
+                        rpc::Value::Object{
+                            {"type",
+                             capability.type.ToString()},
+                            {"label",
+                             std::string(capability.label)},
+                            {"state",
+                             !state.has_value()
+                                 ? std::string("absent")
+                                 : (*state
+                                        ? std::string("enabled")
+                                        : std::string("disabled"))}
+                        }));
+            }
+
+            return rpc::Value(
+                std::move(result));
+        });
+
+    Register(
+        {
+            .name = "celestial.set_capability",
+            .description =
+                "Enables or disables a celestial body capability (atmosphere, clouds, rings, ...). Enabling a missing one creates it; disabling keeps its authored values.",
+            .mutating = true
+        },
+        [&objects,
+         &schemas,
+         &commandService,
+         &selection](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+            const auto& enabled =
+                Require(values, "enabled");
+
+            if (!enabled.IsBool())
+            {
+                throw rpc::Error(
+                    -32602,
+                    "enabled must be a boolean.");
+            }
+
+            editor_model::CelestialAuthoringModel model(
+                objects,
+                schemas,
+                commandService,
+                selection);
+
+            model.SetCapabilityEnabled(
+                RequireObjectId(
+                    values,
+                    "body"),
+                RequireTypeId(
+                    values,
+                    "type"),
+                enabled.AsBool());
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"ok", true}
                 });
         });
 

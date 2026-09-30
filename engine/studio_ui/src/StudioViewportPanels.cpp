@@ -1,4 +1,5 @@
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
+#include <orbit/editor_model/CelestialAuthoringModel.hpp>
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/InspectorModel.hpp>
@@ -324,7 +325,8 @@ void StudioViewportPanels::RegisterShellBands(
 
 void StudioViewportPanels::SyncModeToolbar()
 {
-    if (g_workspaceMode != WorkspaceMode::Scene)
+    if (g_workspaceMode != WorkspaceMode::Scene &&
+        g_workspaceMode != WorkspaceMode::Celestial)
     {
         static_cast<void>(
             editor_ui::RemoveShellBand("orbit.mode-toolbar"));
@@ -338,12 +340,146 @@ void StudioViewportPanels::SyncModeToolbar()
         .draw =
             [](editor_ui::PanelContext& context)
             {
-                if (g_shellPanels != nullptr)
+                if (g_shellPanels == nullptr)
+                {
+                    return;
+                }
+
+                if (g_workspaceMode == WorkspaceMode::Celestial)
+                {
+                    g_shellPanels->DrawCelestialToolbar(context);
+                }
+                else
                 {
                     g_shellPanels->DrawSceneToolbar(context);
                 }
             }
     });
+}
+
+void StudioViewportPanels::DrawCelestialToolbar(
+    editor_ui::PanelContext& context)
+{
+    if (session_ == nullptr ||
+        !session_->World().HasWorld())
+    {
+        context.MutedText(
+            "Open a world to use the Celestial tools.");
+        return;
+    }
+
+    auto& world = session_->World();
+    editor_model::CelestialAuthoringModel model(
+        world.Objects(),
+        world.Schemas(),
+        world.Commands(),
+        world.Selection());
+
+    context.Text("Celestial");
+    context.SameLine();
+
+    const auto body = model.SelectedBody();
+    if (!body.has_value())
+    {
+        context.MutedText(
+            "Select a body (or one of its parts) to enable or disable its elements.");
+        return;
+    }
+
+    context.Text(body->name);
+    context.SameLine();
+    context.MutedText("|");
+    context.SameLine();
+
+    const auto toggle =
+        [&](const schema::TypeId type,
+            const std::string_view label)
+        {
+            const auto state =
+                model.CapabilityEnabled(body->id, type);
+            bool enabled = state.value_or(false);
+
+            const std::string id =
+                std::string(label) +
+                "##celestial-tb-" +
+                type.ToString();
+
+            if (context.Checkbox(id, enabled))
+            {
+                try
+                {
+                    model.SetCapabilityEnabled(
+                        body->id,
+                        type,
+                        enabled);
+                    status_.clear();
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ = exception.what();
+                }
+            }
+            context.SameLine();
+        };
+
+    toggle(world_model::kAtmosphereCapabilityType, "Atmosphere");
+    toggle(world_model::kCloudLayerCapabilityType, "Clouds");
+    toggle(world_model::kOceanCapabilityType, "Ocean");
+    toggle(world_model::kRingSystemCapabilityType, "Rings");
+    toggle(world_model::kMagnetosphereCapabilityType, "Aurora");
+    toggle(world_model::kSurfaceCapabilityType, "Surface");
+
+    if (context.Button("Moreâ¦##celestial-tb-more"))
+    {
+        celestialMoreRequested_ = true;
+    }
+
+    if (context.BeginPopup(
+            "celestial-tb-more-popup",
+            celestialMoreRequested_))
+    {
+        celestialMoreRequested_ = false;
+        context.MutedText("All elements of this body");
+        context.Separator();
+
+        for (const auto& capability :
+             model.AvailableCapabilities())
+        {
+            bool enabled =
+                model.CapabilityEnabled(
+                        body->id,
+                        capability.type)
+                    .value_or(false);
+
+            if (context.Checkbox(
+                    std::string(capability.label) +
+                        "##celestial-more-" +
+                        capability.type.ToString(),
+                    enabled))
+            {
+                try
+                {
+                    model.SetCapabilityEnabled(
+                        body->id,
+                        capability.type,
+                        enabled);
+                    status_.clear();
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ = exception.what();
+                }
+            }
+        }
+
+        context.EndPopup();
+    }
+
+    if (!status_.empty())
+    {
+        context.SameLine();
+        context.MutedText(status_);
+    }
 }
 
 void StudioViewportPanels::DrawSceneToolbar(

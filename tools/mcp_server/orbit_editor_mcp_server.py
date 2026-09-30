@@ -423,6 +423,28 @@ def orbit_object_duplicate(object_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_celestial_capabilities(body_id: str) -> list[dict[str, Any]]:
+    """List a celestial body's capability domains (atmosphere, clouds, rings, ...)
+    with state 'absent', 'enabled' or 'disabled'."""
+    return _rpc("celestial.capabilities", {"body": body_id})
+
+
+@mcp.tool()
+def orbit_celestial_set_capability(
+    body_id: str,
+    type_id: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Enable/disable a capability on a celestial body. Enabling a missing one
+    creates it; disabling keeps its authored values. Use type_id from
+    orbit_celestial_capabilities."""
+    return _rpc(
+        "celestial.set_capability",
+        {"body": body_id, "type": type_id, "enabled": enabled},
+    )
+
+
+@mcp.tool()
 def orbit_property_set(
     object_id: str,
     property_id: str,

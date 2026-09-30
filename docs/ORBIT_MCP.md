@@ -127,6 +127,7 @@ button row, and `view.surface_debug_*` below — all three drive the same
 | `orbit_body_create(parent_id, name)` | `body.create` |
 | `orbit_body_capabilities(body_id)` | `body.capabilities` |
 | `orbit_body_set_capability(body_id, capability, enabled)` | `body.set_capability` |
+| `orbit_celestial_capabilities(body_id)` / `orbit_celestial_set_capability(body_id, type_id, enabled)` | `celestial.capabilities` / `celestial.set_capability` (Celestial toolbar toggles; disabling keeps authored values, enabling a missing capability creates it) |
 | `orbit_schema_catalog` / `orbit_command_catalog` | `schema.catalog` / `command.catalog` |
 | `orbit_transaction_begin/commit/rollback`, `orbit_undo`, `orbit_redo` | `transaction.*`, `history.*` |
 | `orbit_selection_get/set/clear` | `selection.*` |
