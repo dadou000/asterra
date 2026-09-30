@@ -219,11 +219,17 @@ inline void PruneMissingEntries() noexcept
         const auto thumbnail = contentService->GetThumbnail(asset.id, 80U, 80U);
         std::ifstream input(thumbnail.path, std::ios::binary);
         if (!input) return preview;
-        const std::vector<std::byte> bytes(
-            std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>());
-        if (bytes.size() < 54U ||
-            std::to_integer<u8>(bytes[0]) != 'B' ||
+
+        std::error_code fileError;
+        const auto fileBytes = std::filesystem::file_size(thumbnail.path, fileError);
+        if (fileError || fileBytes < 54U) return preview;
+        std::vector<std::byte> bytes(static_cast<std::size_t>(fileBytes));
+        input.read(
+            reinterpret_cast<char*>(bytes.data()),
+            static_cast<std::streamsize>(bytes.size()));
+        if (!input) return preview;
+
+        if (std::to_integer<u8>(bytes[0]) != 'B' ||
             std::to_integer<u8>(bytes[1]) != 'M' ||
             Read16(bytes, 28U) != 32U)
             return preview;
