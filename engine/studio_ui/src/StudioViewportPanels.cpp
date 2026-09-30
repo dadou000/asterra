@@ -125,6 +125,10 @@ void ActivateWorkspace(
 {
     g_workspaceMode = mode;
     g_browserMode = DefaultBrowserMode(mode);
+    if (g_shellPanels != nullptr)
+    {
+        g_shellPanels->SyncModeToolbar();
+    }
 
     switch (mode)
     {
@@ -287,6 +291,8 @@ StudioViewportPanels::~StudioViewportPanels()
     {
         static_cast<void>(
             editor_ui::RemoveShellBand("orbit.activity"));
+        static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.mode-toolbar"));
         g_shellPanels = nullptr;
         g_workspaceUi = nullptr;
     }
@@ -312,6 +318,185 @@ void StudioViewportPanels::RegisterShellBands(
                 }
             }
     });
+
+    SyncModeToolbar();
+}
+
+void StudioViewportPanels::SyncModeToolbar()
+{
+    if (g_workspaceMode != WorkspaceMode::Scene)
+    {
+        static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.mode-toolbar"));
+        return;
+    }
+
+    editor_ui::UpsertShellBand({
+        .id = "orbit.mode-toolbar",
+        .order = 5,
+        .height = 44.0F,
+        .draw =
+            [](editor_ui::PanelContext& context)
+            {
+                if (g_shellPanels != nullptr)
+                {
+                    g_shellPanels->DrawSceneToolbar(context);
+                }
+            }
+    });
+}
+
+void StudioViewportPanels::DrawSceneToolbar(
+    editor_ui::PanelContext& context)
+{
+    if (session_ == nullptr ||
+        !session_->World().HasWorld())
+    {
+        context.MutedText(
+            "Open a world to use the Scene tools.");
+        return;
+    }
+
+    auto& world = session_->World();
+    auto& gizmo = expansion_.ViewportState().gizmo;
+    constexpr std::string_view kViewport = "studio.primary";
+
+    const auto run =
+        [this](const auto& action)
+        {
+            try
+            {
+                action();
+                status_.clear();
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        };
+
+    const auto separator =
+        [&context]
+        {
+            context.SameLine();
+            context.MutedText("|");
+            context.SameLine();
+        };
+
+    context.Text("Scene");
+    context.SameLine();
+
+    static constexpr std::array<std::string_view, 4> kTools{
+        "Select", "Move", "Rotate", "Scale"};
+    i32 tool = static_cast<i32>(gizmo.tool);
+    if (context.SegmentedControl(
+            "scene-toolbar-gizmo-tool",
+            kTools,
+            tool))
+    {
+        gizmo.tool = static_cast<GizmoTool>(std::clamp(tool, 0, 3));
+    }
+
+    context.SameLine();
+    static constexpr std::array<std::string_view, 2> kSpaces{
+        "World", "Local"};
+    i32 space = static_cast<i32>(gizmo.space);
+    if (context.Combo(
+            "##scene-toolbar-space",
+            kSpaces,
+            space))
+    {
+        gizmo.space = static_cast<GizmoSpace>(std::clamp(space, 0, 1));
+    }
+
+    if (gizmo.tool != GizmoTool::Select)
+    {
+        context.SameLine();
+        bool* snap = &gizmo.translationSnap;
+        if (gizmo.tool == GizmoTool::Rotate)
+        {
+            snap = &gizmo.rotationSnap;
+        }
+        else if (gizmo.tool == GizmoTool::Scale)
+        {
+            snap = &gizmo.scaleSnap;
+        }
+        static_cast<void>(
+            context.Checkbox("Snap##scene-toolbar-snap", *snap));
+    }
+
+    separator();
+    context.MutedText("Create");
+    context.SameLine();
+
+    const bool canCreate = CanCreateAtViewport(kViewport);
+    if (!canCreate)
+    {
+        context.MutedText("(focus a viewport)");
+        context.SameLine();
+    }
+    else
+    {
+        if (context.Button("+ Point Light##scene-tb-point"))
+        {
+            run([&] { CreateLocalLightAtViewport(kViewport, false); });
+        }
+        context.SameLine();
+        if (context.Button("+ Spot Light##scene-tb-spot"))
+        {
+            run([&] { CreateLocalLightAtViewport(kViewport, true); });
+        }
+        context.SameLine();
+        if (context.Button("+ Box##scene-tb-box"))
+        {
+            run([&] { CreateVisibilityProxyAtViewport(kViewport, true); });
+        }
+        context.SameLine();
+        if (context.Button("+ Sphere##scene-tb-sphere"))
+        {
+            run([&] { CreateVisibilityProxyAtViewport(kViewport, false); });
+        }
+        context.SameLine();
+    }
+
+    separator();
+    context.MutedText("Edit");
+    context.SameLine();
+
+    const bool hasSelection = !world.Selection().Ordered().empty();
+    if (context.Button("Duplicate##scene-tb-dup") && hasSelection)
+    {
+        run([&] { DuplicateSelection(); });
+    }
+    context.SameLine();
+    if (context.Button("Delete##scene-tb-del") && hasSelection)
+    {
+        run([&] { DeleteSelection(); });
+    }
+    context.SameLine();
+    if (context.Button("Undo##scene-tb-undo"))
+    {
+        run([&]
+        {
+            world.CommandRegistry().Invoke(
+                editor_model::authoring_commands::kUndo);
+        });
+    }
+    context.SameLine();
+    if (context.Button("Redo##scene-tb-redo"))
+    {
+        run([&]
+        {
+            world.CommandRegistry().Invoke(
+                editor_model::authoring_commands::kRedo);
+        });
+    }
+
+    if (!status_.empty())
+    {
+        context.SameLine();
+        context.MutedText(status_);
+    }
 }
 
 void StudioViewportPanels::DrawWorkspaceBand(

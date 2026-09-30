@@ -100,6 +100,10 @@ public:
         expansion_.RequestCommandPaletteOpen();
     }
 
+    // Shows the horizontal toolbar that belongs to the active workspace mode
+    // (Scene today) and removes it for modes that have none.
+    void SyncModeToolbar();
+
 private:
     friend class StudioExpansionShell;
 
@@ -140,6 +144,7 @@ private:
         bool error = false) noexcept;
 
     void RegisterShellBands(editor_ui::EditorUi& ui);
+    void DrawSceneToolbar(editor_ui::PanelContext& context);
     void DrawWorkspaceBand(editor_ui::PanelContext& context);
     void DrawContextBand(editor_ui::PanelContext& context);
     void DrawActivityBand(editor_ui::PanelContext& context);
