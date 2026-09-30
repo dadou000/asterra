@@ -64,130 +64,108 @@ void CelestialAuthoringUi::Draw(
         world.Commands(),
         world.Selection());
 
-    context.Heading("Hierarchy");
-
     const auto selected =
         model.PrimarySelection();
+    const auto body =
+        model.SelectedBody();
+
+    context.Heading("Planet & Celestial Editor");
 
     if (selected.has_value())
     {
         context.Text(
             std::format(
-                "Selected: {}",
+                "Editing: {}",
                 selected->name));
+
+        if (body.has_value() &&
+            body->id != selected->id)
+        {
+            context.MutedText(
+                std::format(
+                    "Part of body: {}",
+                    body->name));
+        }
     }
     else
     {
         context.MutedText(
-            "Select a system/body/reference node in Explorer.");
+            "Select a system, body or part in Explorer to edit it.");
     }
 
-    static_cast<void>(
-        context.InputText(
-            "System Name##celestial-system-name",
-            newSystemName_));
-
-    if (context.Button(
-            "+ System##celestial-create-system"))
+    if (!status_.empty())
     {
-        try
-        {
-            static_cast<void>(
-                model.CreateSystem(
-                    newSystemName_));
-            status_ =
-                "Celestial system created.";
-        }
-        catch (const std::exception& exception)
-        {
-            status_ = exception.what();
-        }
-    }
-
-    static_cast<void>(
-        context.InputText(
-            "Body Name##celestial-body-name",
-            newBodyName_));
-
-    if (context.Button(
-            "+ Body##celestial-create-body"))
-    {
-        try
-        {
-            static_cast<void>(
-                model.CreateBody(
-                    newBodyName_));
-            status_ =
-                "Celestial body created.";
-        }
-        catch (const std::exception& exception)
-        {
-            status_ = exception.what();
-        }
-    }
-
-    static_cast<void>(
-        context.InputText(
-            "Reference Name##celestial-reference-name",
-            newReferenceName_));
-
-    if (context.Button(
-            "+ Reference / Barycenter##celestial-create-reference"))
-    {
-        try
-        {
-            static_cast<void>(
-                model.CreateReferenceNode(
-                    newReferenceName_));
-            status_ =
-                "Reference/barycenter node created.";
-        }
-        catch (const std::exception& exception)
-        {
-            status_ = exception.what();
-        }
+        context.MutedText(status_);
     }
 
     context.Separator();
-    context.Heading("Capabilities");
 
-    const auto body =
-        model.SelectedBody();
-
-    if (!body.has_value())
+    if (context.Section("Edit Selection##celestial-sec-edit"))
     {
-        context.MutedText(
-            "Select a body or one of its capability children.");
-    }
-    else
-    {
-        context.Text(
-            std::format(
-                "Target: {}",
-                body->name));
-
-        for (const auto& capability :
-             model.AvailableCapabilities())
+        if (!body.has_value())
         {
-            const std::string label =
-                "+ " +
-                std::string(
-                    capability.label) +
-                "##celestial-capability-" +
-                capability.type.ToString();
+            context.MutedText(
+                "Nothing to edit yet. Select a body, or one of its parts, in Explorer.");
+        }
+        else
+        {
+            context.Text(
+                std::format(
+                    "Target: {}",
+                    body->name));
+            context.MutedText(
+                "Add a part to this body:");
 
-            if (context.Button(label))
+            for (const auto& capability :
+                 model.AvailableCapabilities())
+            {
+                const std::string label =
+                    "+ " +
+                    std::string(
+                        capability.label) +
+                    "##celestial-capability-" +
+                    capability.type.ToString();
+
+                if (context.Button(label))
+                {
+                    try
+                    {
+                        static_cast<void>(
+                            model.AddCapability(
+                                capability.type,
+                                capability.label));
+                        status_ =
+                            std::string(
+                                capability.label) +
+                            " capability added.";
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        status_ = exception.what();
+                    }
+                }
+            }
+        }
+
+        if (selected.has_value() &&
+            selected->type ==
+                world_model::
+                    kRingSystemCapabilityType)
+        {
+            context.Separator();
+            context.Heading("Ring Bands");
+            context.MutedText(
+                "Bands are ordinary children of this Ring System. Add as many physical radial intervals as needed.");
+
+            if (context.Button(
+                    "+ Ring Band##celestial-add-ring-band"))
             {
                 try
                 {
                     static_cast<void>(
-                        model.AddCapability(
-                            capability.type,
-                            capability.label));
+                        model.AddRingBand());
                     status_ =
-                        std::string(
-                            capability.label) +
-                        " capability added.";
+                        "Ring Band added.";
                 }
                 catch (const std::exception& exception)
                 {
@@ -195,79 +173,52 @@ void CelestialAuthoringUi::Draw(
                 }
             }
         }
-    }
 
-    if (selected.has_value() &&
-        selected->type ==
-            world_model::
-                kRingSystemCapabilityType)
-    {
-        context.Separator();
-        context.Heading("Ring Bands");
-        context.MutedText(
-            "Bands are ordinary children of this Ring System. Add as many physical radial intervals as needed.");
-
-        if (context.Button(
-                "+ Ring Band##celestial-add-ring-band"))
+        if (selected.has_value() &&
+            selected->type ==
+                world_model::kRingBandType)
         {
-            try
+            context.Separator();
+
+            if (context.Button(
+                    "Remove Selected Ring Band##celestial-remove-ring-band"))
             {
-                static_cast<void>(
-                    model.AddRingBand());
-                status_ =
-                    "Ring Band added.";
-            }
-            catch (const std::exception& exception)
-            {
-                status_ = exception.what();
+                try
+                {
+                    model.RemoveSelectedRingBand();
+                    status_ =
+                        "Ring Band removed.";
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ = exception.what();
+                }
             }
         }
-    }
 
-    if (selected.has_value() &&
-        selected->type ==
-            world_model::kRingBandType)
-    {
-        context.Separator();
-
-        if (context.Button(
-                "Remove Selected Ring Band##celestial-remove-ring-band"))
+        if (selected.has_value() &&
+            model.IsCapabilityType(
+                selected->type))
         {
-            try
+            context.Separator();
+
+            if (context.Button(
+                    "Remove Selected Capability##celestial-remove-capability"))
             {
-                model.RemoveSelectedRingBand();
-                status_ =
-                    "Ring Band removed.";
-            }
-            catch (const std::exception& exception)
-            {
-                status_ = exception.what();
+                try
+                {
+                    model.RemoveSelectedCapability();
+                    status_ =
+                        "Capability removed.";
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ = exception.what();
+                }
             }
         }
+
     }
-
-    if (selected.has_value() &&
-        model.IsCapabilityType(
-            selected->type))
-    {
-        context.Separator();
-
-        if (context.Button(
-                "Remove Selected Capability##celestial-remove-capability"))
-        {
-            try
-            {
-                model.RemoveSelectedCapability();
-                status_ =
-                    "Capability removed.";
-            }
-            catch (const std::exception& exception)
-            {
-                status_ = exception.what();
-            }
-        }
-    }
-
     std::optional<scene::ObjectRecord>
         atmosphereCapability;
 
@@ -296,12 +247,11 @@ void CelestialAuthoringUi::Draw(
         }
     }
 
-    if (atmosphereCapability.has_value())
+    if (atmosphereCapability.has_value() &&
+        context.Section("Atmosphere##celestial-sec-atmosphere"))
     {
-        context.Separator();
-        context.Heading("Atmosphere Solver");
         context.MutedText(
-            "Presets and derived controls write the same Atmosphere capability inspected in Properties. Enable Advanced Properties for exact coefficients and provenance metadata.");
+            "Pick a preset, then Solve to fill the derived values. Exact coefficients live in Properties (enable Advanced).");
 
         world_model::AtmospherePropertySolver
             atmosphereSolver(
@@ -514,229 +464,296 @@ void CelestialAuthoringUi::Draw(
                     exception.what();
             }
         }
-    }
+        }
 
-    context.Separator();
-    context.Heading("Recipes");
-    context.MutedText(
-        "Recipes create ordinary editable objects and capabilities. The seed controls authored physical/orbital values; generation is one undoable transaction.");
-
-    static_cast<void>(
-        context.InputInteger(
-            "Seed##celestial-recipe-seed",
-            recipeSeed_));
-
-    static_cast<void>(
-        context.InputInteger(
-            "Rocky Planets##celestial-recipe-planets",
-            recipePlanetCount_));
-
-    static_cast<void>(
-        context.Checkbox(
-            "Generate Moons##celestial-recipe-moons",
-            recipeGenerateMoons_));
-
-    static_cast<void>(
-        context.InputText(
-            "Generated System Name##celestial-recipe-system-name",
-            recipeSystemName_));
-
-    static_cast<void>(
-        context.InputText(
-            "Primary Star Name##celestial-recipe-star-name",
-            recipeStarName_));
-
-    if (context.PrimaryButton(
-            "Generate Seeded System##celestial-recipe-generate"))
+    if (context.Section("Add to World##celestial-sec-create", false))
     {
-        try
+        static_cast<void>(
+            context.InputText(
+                "New System Name##celestial-system-name",
+                newSystemName_));
+
+        if (context.Button(
+                "+ Add System##celestial-create-system"))
         {
-            const auto roots =
-                world.Objects().Roots();
-
-            const auto worldRoot =
-                std::find_if(
-                    roots.begin(),
-                    roots.end(),
-                    [](const auto& object)
-                    {
-                        return object.type ==
-                            world_model::kWorldType;
-                    });
-
-            if (worldRoot == roots.end())
+            try
             {
-                throw std::runtime_error(
-                    "World root is required before running a celestial recipe.");
+                static_cast<void>(
+                    model.CreateSystem(
+                        newSystemName_));
+                status_ =
+                    "Celestial system created.";
             }
-
-            if (recipeSeed_ < 0)
+            catch (const std::exception& exception)
             {
-                throw std::invalid_argument(
-                    "Recipe seed must be non-negative.");
+                status_ = exception.what();
             }
-
-            if (recipePlanetCount_ <= 0 ||
-                recipePlanetCount_ >
-                    static_cast<i64>(
-                        std::numeric_limits<u32>::max()))
-            {
-                throw std::invalid_argument(
-                    "Rocky planet count must be between 1 and uint32 max.");
-            }
-
-            editor_model::CelestialRecipeService
-                recipes(
-                    world.Objects(),
-                    world.Commands());
-
-            const auto generated =
-                recipes.CreateSeededSystem(
-                    worldRoot->id,
-                    editor_model::
-                        SeededSystemRecipe{
-                            .seed =
-                                static_cast<u64>(
-                                    recipeSeed_),
-                            .systemName =
-                                recipeSystemName_,
-                            .starName =
-                                recipeStarName_,
-                            .rockyPlanetCount =
-                                static_cast<u32>(
-                                    recipePlanetCount_),
-                            .generateMoons =
-                                recipeGenerateMoons_
-                        });
-
-            const std::array selectedSystem{
-                generated.system
-            };
-
-            world.Selection().Set(
-                std::span(
-                    selectedSystem));
-
-            static_cast<void>(
-                world.RebuildUniverse());
-
-            status_ =
-                std::format(
-                    "Generated '{}' from seed {}: 1 star, {} rocky planet{}, {} moon{}.",
-                    recipeSystemName_,
-                    recipeSeed_,
-                    generated.planets.size(),
-                    generated.planets.size() == 1U
-                        ? ""
-                        : "s",
-                    generated.moons.size(),
-                    generated.moons.size() == 1U
-                        ? ""
-                        : "s");
         }
-        catch (const std::exception& exception)
+
+        static_cast<void>(
+            context.InputText(
+                "New Body Name##celestial-body-name",
+                newBodyName_));
+
+        if (context.Button(
+                "+ Add Body##celestial-create-body"))
         {
-            status_ =
-                exception.what();
+            try
+            {
+                static_cast<void>(
+                    model.CreateBody(
+                        newBodyName_));
+                status_ =
+                    "Celestial body created.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
+
+        static_cast<void>(
+            context.InputText(
+                "New Reference Name##celestial-reference-name",
+                newReferenceName_));
+
+        if (context.Button(
+                "+ Add Reference / Barycenter##celestial-create-reference"))
+        {
+            try
+            {
+                static_cast<void>(
+                    model.CreateReferenceNode(
+                        newReferenceName_));
+                status_ =
+                    "Reference/barycenter node created.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
         }
     }
 
-    context.Separator();
-    context.Heading("Validation");
-
-    if (context.Button(
-            "Validate Celestial Model##celestial-validate"))
-    {
-        diagnostics_ =
-            model.Validate();
-
-        try
-        {
-            static_cast<void>(
-                world.RebuildUniverse());
-
-            if (diagnostics_.size() == 1U &&
-                diagnostics_.front().severity ==
-                    editor_model::
-                        CelestialDiagnosticSeverity::
-                            Info)
-            {
-                status_ =
-                    "Semantic and runtime celestial validation passed.";
-            }
-            else
-            {
-                status_ =
-                    "Semantic validation completed with diagnostics.";
-            }
-        }
-        catch (const std::exception& exception)
-        {
-            diagnostics_.push_back({
-                .severity =
-                    editor_model::
-                        CelestialDiagnosticSeverity::
-                            Error,
-                .message =
-                    std::string(
-                        "Runtime composition: ") +
-                    exception.what(),
-                .object =
-                    std::nullopt
-            });
-
-            status_ =
-                "Runtime celestial validation failed.";
-        }
-    }
-
-    if (diagnostics_.empty())
+    if (context.Section("Generate Seeded System##celestial-sec-recipe", false))
     {
         context.MutedText(
-            "Run validation to inspect hierarchy and runtime composition.");
-    }
-    else
-    {
-        for (const auto& diagnostic :
-             diagnostics_)
+            "Creates a full star system of ordinary, editable objects from a seed. One undo step reverts it.");
+
+        static_cast<void>(
+            context.InputInteger(
+                "Seed##celestial-recipe-seed",
+                recipeSeed_));
+
+        static_cast<void>(
+            context.InputInteger(
+                "Rocky Planets##celestial-recipe-planets",
+                recipePlanetCount_));
+
+        static_cast<void>(
+            context.Checkbox(
+                "Generate Moons##celestial-recipe-moons",
+                recipeGenerateMoons_));
+
+        static_cast<void>(
+            context.InputText(
+                "Generated System Name##celestial-recipe-system-name",
+                recipeSystemName_));
+
+        static_cast<void>(
+            context.InputText(
+                "Primary Star Name##celestial-recipe-star-name",
+                recipeStarName_));
+
+        if (context.PrimaryButton(
+                "Generate Seeded System##celestial-recipe-generate"))
         {
-            const char* prefix = "[info]";
-
-            if (diagnostic.severity ==
-                editor_model::
-                    CelestialDiagnosticSeverity::
-                        Warning)
+            try
             {
-                prefix = "[warning]";
-            }
-            else if (
-                diagnostic.severity ==
-                editor_model::
-                    CelestialDiagnosticSeverity::
-                        Error)
-            {
-                prefix = "[error]";
-            }
+                const auto roots =
+                    world.Objects().Roots();
 
-            context.Text(
-                std::format(
-                    "{} {}{}",
-                    prefix,
-                    diagnostic.message,
-                    diagnostic.object.
-                            has_value()
-                        ? " (" +
-                              diagnostic.object->
-                                  ToString() +
-                              ")"
-                        : ""));
+                const auto worldRoot =
+                    std::find_if(
+                        roots.begin(),
+                        roots.end(),
+                        [](const auto& object)
+                        {
+                            return object.type ==
+                                world_model::kWorldType;
+                        });
+
+                if (worldRoot == roots.end())
+                {
+                    throw std::runtime_error(
+                        "World root is required before running a celestial recipe.");
+                }
+
+                if (recipeSeed_ < 0)
+                {
+                    throw std::invalid_argument(
+                        "Recipe seed must be non-negative.");
+                }
+
+                if (recipePlanetCount_ <= 0 ||
+                    recipePlanetCount_ >
+                        static_cast<i64>(
+                            std::numeric_limits<u32>::max()))
+                {
+                    throw std::invalid_argument(
+                        "Rocky planet count must be between 1 and uint32 max.");
+                }
+
+                editor_model::CelestialRecipeService
+                    recipes(
+                        world.Objects(),
+                        world.Commands());
+
+                const auto generated =
+                    recipes.CreateSeededSystem(
+                        worldRoot->id,
+                        editor_model::
+                            SeededSystemRecipe{
+                                .seed =
+                                    static_cast<u64>(
+                                        recipeSeed_),
+                                .systemName =
+                                    recipeSystemName_,
+                                .starName =
+                                    recipeStarName_,
+                                .rockyPlanetCount =
+                                    static_cast<u32>(
+                                        recipePlanetCount_),
+                                .generateMoons =
+                                    recipeGenerateMoons_
+                            });
+
+                const std::array selectedSystem{
+                    generated.system
+                };
+
+                world.Selection().Set(
+                    std::span(
+                        selectedSystem));
+
+                static_cast<void>(
+                    world.RebuildUniverse());
+
+                status_ =
+                    std::format(
+                        "Generated '{}' from seed {}: 1 star, {} rocky planet{}, {} moon{}.",
+                        recipeSystemName_,
+                        recipeSeed_,
+                        generated.planets.size(),
+                        generated.planets.size() == 1U
+                            ? ""
+                            : "s",
+                        generated.moons.size(),
+                        generated.moons.size() == 1U
+                            ? ""
+                            : "s");
+            }
+            catch (const std::exception& exception)
+            {
+                status_ =
+                    exception.what();
+            }
         }
+
     }
 
-    if (!status_.empty())
+    if (context.Section("Validation##celestial-sec-validate", false))
     {
-        context.Separator();
-        context.Text(status_);
+
+        if (context.Button(
+                "Check Model##celestial-validate"))
+        {
+            diagnostics_ =
+                model.Validate();
+
+            try
+            {
+                static_cast<void>(
+                    world.RebuildUniverse());
+
+                if (diagnostics_.size() == 1U &&
+                    diagnostics_.front().severity ==
+                        editor_model::
+                            CelestialDiagnosticSeverity::
+                                Info)
+                {
+                    status_ =
+                        "Semantic and runtime celestial validation passed.";
+                }
+                else
+                {
+                    status_ =
+                        "Semantic validation completed with diagnostics.";
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                diagnostics_.push_back({
+                    .severity =
+                        editor_model::
+                            CelestialDiagnosticSeverity::
+                                Error,
+                    .message =
+                        std::string(
+                            "Runtime composition: ") +
+                        exception.what(),
+                    .object =
+                        std::nullopt
+                });
+
+                status_ =
+                    "Runtime celestial validation failed.";
+            }
+        }
+
+        if (diagnostics_.empty())
+        {
+            context.MutedText(
+                "Not run yet. Check the hierarchy and runtime composition.");
+        }
+        else
+        {
+            for (const auto& diagnostic :
+                 diagnostics_)
+            {
+                const char* prefix = "[info]";
+
+                if (diagnostic.severity ==
+                    editor_model::
+                        CelestialDiagnosticSeverity::
+                            Warning)
+                {
+                    prefix = "[warning]";
+                }
+                else if (
+                    diagnostic.severity ==
+                    editor_model::
+                        CelestialDiagnosticSeverity::
+                            Error)
+                {
+                    prefix = "[error]";
+                }
+
+                context.Text(
+                    std::format(
+                        "{} {}{}",
+                        prefix,
+                        diagnostic.message,
+                        diagnostic.object.
+                                has_value()
+                            ? " (" +
+                                  diagnostic.object->
+                                      ToString() +
+                                  ")"
+                            : ""));
+            }
+        }
+
     }
 }
 } // namespace orbit::studio_ui

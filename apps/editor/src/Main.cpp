@@ -69,6 +69,7 @@
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
 #include <orbit/world_model/MaterialAssignmentBinding.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
@@ -5347,6 +5348,9 @@ int main(
                  &renameSelectionRevision,
                  &objects,
                  &presentActions,
+                 &commandService,
+                 &schemas,
+                 &content,
                  &worldSession](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -5356,6 +5360,54 @@ int main(
                         context.Text("No world is open.");
                         return;
                     }
+
+                    static std::string explorerStatus;
+                    static std::string moveFilter;
+                    static std::optional<
+                        orbit::scene::ObjectId>
+                        moveSource;
+                    static bool openMovePicker = false;
+
+                    const auto typeLabel =
+                        [&schemas](
+                            const orbit::schema::TypeId
+                                type)
+                            -> std::string
+                        {
+                            if (const auto* schema =
+                                    schemas().FindType(
+                                        type);
+                                schema != nullptr)
+                            {
+                                return std::string(
+                                    schema->displayName);
+                            }
+                            return "Object";
+                        };
+
+                    const auto attempt =
+                        [](const std::string_view what,
+                           const auto& action)
+                        {
+                            try
+                            {
+                                action();
+                                explorerStatus =
+                                    std::string(what) +
+                                    " done.";
+                            }
+                            catch (
+                                const std::exception&
+                                    exception)
+                            {
+                                explorerStatus =
+                                    std::string(what) +
+                                    " failed: " +
+                                    exception.what();
+                                orbit::log::Warning(
+                                    exception.what());
+                            }
+                        };
 
                     static constexpr
                         std::string_view
@@ -5439,6 +5491,9 @@ int main(
                             {
                                 const std::string label =
                                     object.name +
+                                    "  \xC2\xB7  " +
+                                    typeLabel(
+                                        object.type) +
                                     "##tree-" +
                                     object.id.ToString();
 
@@ -5473,12 +5528,152 @@ int main(
                                             CommandSurfaceKind::
                                                 ContextMenu);
 
-                                context.ContextMenu(
-                                    "ExplorerObjectMenu##" +
-                                        object.id.
-                                            ToString(),
-                                    objectMenu,
-                                    item.rightClicked);
+                                if (context.BeginPopup(
+                                        "ExplorerObjectMenu##" +
+                                            object.id.
+                                                ToString(),
+                                        item.rightClicked))
+                                {
+                                    context.MutedText(
+                                        "Add child");
+
+                                    static constexpr std::array<
+                                        orbit::schema::TypeId,
+                                        6>
+                                        kAddChildTypes{
+                                            orbit::world_model::
+                                                kCelestialSystemType,
+                                            orbit::world_model::
+                                                kCelestialBodyType,
+                                            orbit::world_model::
+                                                kCelestialReferenceNodeType,
+                                            orbit::world_model::
+                                                kPointLightType,
+                                            orbit::world_model::
+                                                kSpotLightType,
+                                            orbit::world_model::
+                                                kVisibilityProxyType
+                                        };
+
+                                    for (const auto type :
+                                         kAddChildTypes)
+                                    {
+                                        const std::string name =
+                                            typeLabel(type);
+
+                                        if (context.Selectable(
+                                                "+ " + name +
+                                                    "##add-" +
+                                                    object.id.
+                                                        ToString() +
+                                                    "-" +
+                                                    type.ToString(),
+                                                false))
+                                        {
+                                            attempt(
+                                                "Add " + name,
+                                                [&]
+                                                {
+                                                    static_cast<
+                                                        void>(
+                                                        commandService()
+                                                            .CreateObject(
+                                                                type,
+                                                                name,
+                                                                object.id));
+                                                });
+                                            context.
+                                                CloseCurrentPopup();
+                                        }
+                                    }
+
+                                    context.Separator();
+
+                                    if (context.Selectable(
+                                            "Duplicate##dup-" +
+                                                object.id.
+                                                    ToString(),
+                                            false))
+                                    {
+                                        attempt(
+                                            "Duplicate",
+                                            [&]
+                                            {
+                                                static_cast<
+                                                    void>(
+                                                    commandService()
+                                                        .DuplicateObject(
+                                                            object.id));
+                                            });
+                                        context.
+                                            CloseCurrentPopup();
+                                    }
+
+                                    if (context.Selectable(
+                                            "Delete##del-" +
+                                                object.id.
+                                                    ToString(),
+                                            false))
+                                    {
+                                        attempt(
+                                            "Delete",
+                                            [&]
+                                            {
+                                                commandService()
+                                                    .DeleteObject(
+                                                        object.id);
+                                            });
+                                        context.
+                                            CloseCurrentPopup();
+                                    }
+
+                                    context.Separator();
+
+                                    if (context.Selectable(
+                                            "Move under\xE2\x80\xA6##mv-" +
+                                                object.id.
+                                                    ToString(),
+                                            false))
+                                    {
+                                        moveSource = object.id;
+                                        moveFilter.clear();
+                                        openMovePicker = true;
+                                        context.
+                                            CloseCurrentPopup();
+                                    }
+
+                                    if (context.Selectable(
+                                            "Move to root##mvroot-" +
+                                                object.id.
+                                                    ToString(),
+                                            false))
+                                    {
+                                        attempt(
+                                            "Move to root",
+                                            [&]
+                                            {
+                                                explorer()
+                                                    .Reparent(
+                                                        object.id,
+                                                        std::nullopt);
+                                            });
+                                        context.
+                                            CloseCurrentPopup();
+                                    }
+
+                                    if (!objectMenu.empty())
+                                    {
+                                        context.Separator();
+                                        if (context.ActionList(
+                                                objectMenu))
+                                        {
+                                            context.
+                                                CloseCurrentPopup();
+                                        }
+                                    }
+
+                                    context.EndPopup();
+                                }
 
                                 if (const auto payload =
                                         context.
@@ -5550,6 +5745,147 @@ int main(
                              explorer().Roots())
                         {
                             drawObject(root);
+                        }
+                    }
+
+                    if (!explorerStatus.empty())
+                    {
+                        context.MutedText(
+                            explorerStatus);
+                    }
+
+                    if (context.BeginPopup(
+                            "Move under##explorer-move-picker",
+                            openMovePicker,
+                            {320.0F, 280.0F}))
+                    {
+                        openMovePicker = false;
+                        context.Text(
+                            "Move under\xE2\x80\xA6");
+                        static_cast<void>(
+                            context.InputText(
+                                "Filter##explorer-move-filter",
+                                moveFilter));
+                        context.Separator();
+
+                        for (const auto& candidate :
+                             explorer().Search(
+                                 moveFilter,
+                                 32U))
+                        {
+                            if (moveSource.has_value() &&
+                                candidate.id ==
+                                    *moveSource)
+                            {
+                                continue;
+                            }
+
+                            if (context.Selectable(
+                                    candidate.name +
+                                        "  \xC2\xB7  " +
+                                        typeLabel(
+                                            candidate.type) +
+                                        "##move-target-" +
+                                        candidate.id.
+                                            ToString(),
+                                    false) &&
+                                moveSource.has_value())
+                            {
+                                attempt(
+                                    "Move",
+                                    [&]
+                                    {
+                                        explorer().Reparent(
+                                            *moveSource,
+                                            candidate.id);
+                                    });
+                                context.CloseCurrentPopup();
+                            }
+                        }
+
+                        context.EndPopup();
+                    }
+
+                    if (context.Section(
+                            "Assets##explorer-assets",
+                            false))
+                    {
+                        using orbit::content::AssetKind;
+                        static constexpr std::array<
+                            std::pair<
+                                AssetKind,
+                                std::string_view>,
+                            10>
+                            kAssetGroups{{
+                                {AssetKind::Material,
+                                 "Materials"},
+                                {AssetKind::MaterialInstance,
+                                 "Material Instances"},
+                                {AssetKind::ShaderMaterial,
+                                 "Shader Materials"},
+                                {AssetKind::ShadingShader,
+                                 "Shading Shaders"},
+                                {AssetKind::Shader,
+                                 "Shaders"},
+                                {AssetKind::Texture,
+                                 "Textures"},
+                                {AssetKind::Decal,
+                                 "Decals"},
+                                {AssetKind::Mesh,
+                                 "Meshes"},
+                                {AssetKind::Component,
+                                 "Components"},
+                                {AssetKind::PathProfile,
+                                 "Path Profiles"}
+                            }};
+
+                        const auto assets = content.All();
+
+                        for (const auto& [kind, title] :
+                             kAssetGroups)
+                        {
+                            std::vector<
+                                const orbit::content::
+                                    AssetRecord*>
+                                group;
+
+                            for (const auto& asset : assets)
+                            {
+                                if (asset.kind == kind)
+                                {
+                                    group.push_back(&asset);
+                                }
+                            }
+
+                            if (group.empty())
+                            {
+                                continue;
+                            }
+
+                            const auto node =
+                                context.TreeItem(
+                                    std::string(title) +
+                                        "  (" +
+                                        std::to_string(
+                                            group.size()) +
+                                        ")##explorer-asset-group-" +
+                                        std::string(title),
+                                    false);
+
+                            if (node.open)
+                            {
+                                for (const auto* asset :
+                                     group)
+                                {
+                                    static_cast<void>(
+                                        context.Selectable(
+                                            asset->name +
+                                                "##explorer-asset-" +
+                                                asset->id.ToString(),
+                                            false));
+                                }
+                                context.TreePop();
+                            }
                         }
                     }
 

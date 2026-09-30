@@ -411,6 +411,18 @@ def orbit_object_reparent(
 
 
 @mcp.tool()
+def orbit_object_delete(object_id: str) -> dict[str, Any]:
+    """Delete one leaf object (no children) as an undoable command."""
+    return _rpc("object.delete", {"id": object_id})
+
+
+@mcp.tool()
+def orbit_object_duplicate(object_id: str) -> dict[str, Any]:
+    """Clone one leaf object with its stored properties; returns the new id."""
+    return _rpc("object.duplicate", {"id": object_id})
+
+
+@mcp.tool()
 def orbit_property_set(
     object_id: str,
     property_id: str,

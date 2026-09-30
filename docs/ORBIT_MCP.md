@@ -121,6 +121,7 @@ button row, and `view.surface_debug_*` below — all three drive the same
 | `orbit_object_roots` / `_children` / `_get` | `object.roots` / `.children` / `.get` |
 | `orbit_object_create(type_id, name, parent_id)` | `object.create` |
 | `orbit_object_rename` / `_reparent` | `object.rename` / `object.reparent` |
+| `orbit_object_delete` / `_duplicate` | `object.delete` / `object.duplicate` (leaf objects only; undoable) |
 | `orbit_property_set(object_id, property_id, value)` | `property.set` |
 | `orbit_body_list` | `body.list` |
 | `orbit_body_create(parent_id, name)` | `body.create` |

@@ -1487,6 +1487,55 @@ EditorRpcService::EditorRpcService(
 
     Register(
         {
+            .name = "object.delete",
+            .description =
+                "Deletes one leaf semantic object through CommandService.",
+            .mutating = true
+        },
+        [&commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            commandService.DeleteObject(
+                RequireObjectId(
+                    values,
+                    "id"));
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"ok", true}
+                });
+        });
+
+    Register(
+        {
+            .name = "object.duplicate",
+            .description =
+                "Clones one leaf semantic object through CommandService.",
+            .mutating = true
+        },
+        [&commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            const auto id =
+                commandService.DuplicateObject(
+                    RequireObjectId(
+                        values,
+                        "id"));
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"id", id.ToString()}
+                });
+        });
+
+    Register(
+        {
             .name = "property.set",
             .description =
                 "Sets a schema property through CommandService.",
