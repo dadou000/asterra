@@ -1,4 +1,5 @@
 add_library(OrbitRenderGraph STATIC
+    src/GpuPassTimer.cpp
     src/RenderGraph.cpp
 )
 

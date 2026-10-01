@@ -1,4 +1,5 @@
 #include <orbit/hot_reload/HotReloadHost.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <orbit/hot_reload/ChangeClassifier.hpp>
 #include <orbit/hot_reload/ModuleApi.hpp>
 
@@ -333,6 +334,7 @@ private:
 
     void WorkerMain(const std::stop_token stopToken)
     {
+        core::SetCurrentThreadName("Orbit.HotReloadHost");
         std::error_code directoryError;
         std::filesystem::create_directories(
             runtimeProcessRoot_,

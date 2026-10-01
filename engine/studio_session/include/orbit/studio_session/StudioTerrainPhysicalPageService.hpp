@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/editor_session/EditorWorldSession.hpp>
+#include <orbit/jobs/JobSystem.hpp>
 #include <orbit/studio_session/StudioTerrainRebuildScheduler.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
@@ -100,6 +101,9 @@ public:
     [[nodiscard]] std::optional<StudioTerrainBodyRebuildStatus>
     BodyStatus(
         world::PlanetId planet) const;
+
+    // Workers, running and queued jobs of the pool that builds physical pages.
+    [[nodiscard]] jobs::JobSystemTelemetry JobTelemetry() const noexcept;
 
     // M13 presentation diagnostics. Value-only scheduler snapshots; callers
     // gain no build/product authority through this seam.

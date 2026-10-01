@@ -1,3 +1,4 @@
+#include <orbit/profiler/Profiler.hpp>
 #include "VulkanObjects.hpp"
 
 #include <stdexcept>
@@ -31,6 +32,8 @@ void VulkanFence::Wait(const u64 value)
     {
         return;
     }
+
+    ORBIT_PROFILE_SCOPE("vk.fence_wait");
 
     VkSemaphoreWaitInfo waitInfo{};
     waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
@@ -97,6 +100,7 @@ void VulkanQueue::SetPendingSwapchainSync(
 
 void VulkanQueue::Submit(CommandList& commandList)
 {
+    ORBIT_PROFILE_SCOPE("vk.queue_submit");
     auto* vulkanCommandList =
         dynamic_cast<VulkanCommandList*>(&commandList);
 

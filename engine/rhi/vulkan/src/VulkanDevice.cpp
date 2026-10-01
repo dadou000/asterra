@@ -347,6 +347,11 @@ struct Candidate
             extensions,
             VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
 
+    capabilities.calibratedTimestamps =
+        SupportsExtension(
+            extensions,
+            VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+
     return capabilities;
 }
 
@@ -582,6 +587,13 @@ struct ValidationFeatureRequest
     std::vector<const char*> enabledExtensions(
         kRequiredDeviceExtensions.begin(),
         kRequiredDeviceExtensions.end());
+
+    // GPU profiling: lets GPU timestamps be placed on the CPU profiler timeline.
+    if (capabilities.calibratedTimestamps)
+    {
+        enabledExtensions.push_back(
+            VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+    }
 
     VkPhysicalDeviceAccelerationStructureFeaturesKHR
         accelerationFeatures{};
@@ -976,6 +988,14 @@ std::unique_ptr<Device> CreateDevice(const DeviceDesc& desc)
         reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
             vkGetDeviceProcAddr(
                 nativeDevice, "vkCmdPushDescriptorSetKHR"));
+
+    if (capabilities.calibratedTimestamps)
+    {
+        functions.vkGetCalibratedTimestampsKHR =
+            reinterpret_cast<PFN_vkGetCalibratedTimestampsKHR>(
+                vkGetDeviceProcAddr(
+                    nativeDevice, "vkGetCalibratedTimestampsKHR"));
+    }
 
     if (capabilities.accelerationStructures)
     {

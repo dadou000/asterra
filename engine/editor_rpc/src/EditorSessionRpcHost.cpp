@@ -139,6 +139,7 @@ std::optional<std::string>
 EditorSessionRpcHost::Dispatch(
     const std::string_view payload)
 {
+    requestCount_.fetch_add(1U, std::memory_order_relaxed);
     if (BatchContainsWorldSwitch(payload))
     {
         return BatchSwitchError();

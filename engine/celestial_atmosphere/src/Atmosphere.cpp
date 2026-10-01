@@ -1,3 +1,4 @@
+#include <orbit/profiler/Profiler.hpp>
 #include <orbit/celestial_atmosphere/Atmosphere.hpp>
 
 #include <algorithm>
@@ -5,9 +6,12 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <execution>
 #include <limits>
 #include <numbers>
+#include <numeric>
 #include <stdexcept>
+#include <vector>
 
 namespace orbit::celestial_atmosphere
 {
@@ -787,6 +791,7 @@ AtmosphereStaticLuts BuildStaticLuts(
     const AtmosphereParameters& p,
     const AtmosphereLutConfig& c)
 {
+    ORBIT_PROFILE_SCOPE("atmosphere.build_static_luts");
     const u64 fingerprint =
         AtmosphereFingerprint(
             p,
@@ -1122,6 +1127,7 @@ AtmosphereSkyView BuildSkyView(
     const SkyViewInput& input,
     const AtmosphereLutConfig& c)
 {
+    ORBIT_PROFILE_SCOPE("atmosphere.build_sky_view");
     Validate(p, c);
 
     if (staticLuts.fingerprint !=
@@ -1183,9 +1189,16 @@ AtmosphereSkyView BuildSkyView(
         0.0,
         input.observerRadiusMeters};
 
-    for (u32 y = 0U;
-         y < sky.height;
-         ++y)
+    // Every texel is independent (shared inputs are read-only and each writes its
+    // own element), so the rows are built in parallel: this table is rebuilt on
+    // the CPU whenever the camera altitude changes.
+    std::vector<u32> skyRows(sky.height);
+    std::iota(skyRows.begin(), skyRows.end(), 0U);
+    std::for_each(
+        std::execution::par,
+        skyRows.begin(),
+        skyRows.end(),
+        [&](const u32 y)
     {
         const f64 viewTheta =
             std::numbers::pi_v<f64> *
@@ -1451,7 +1464,7 @@ AtmosphereSkyView BuildSkyView(
                     1.0F
                 };
         }
-    }
+    });
 
     return result;
 }

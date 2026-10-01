@@ -95,6 +95,13 @@ struct MacroGlobeMesh
     const universe::BodyShape& shape,
     const MacroGlobeConfig& config = {});
 
+// Same as above, but also retains shared ownership of the source so that
+// background orbital-patch builds can never outlive it.
+[[nodiscard]] u64 MacroGlobeFingerprint(
+    const std::shared_ptr<const terrain::TerrainSource>& source,
+    const universe::BodyShape& shape,
+    const MacroGlobeConfig& config = {});
+
 [[nodiscard]] MacroGlobeMesh BuildMacroGlobe(
     const terrain::TerrainSource& source,
     const universe::BodyShape& shape,
@@ -149,6 +156,9 @@ struct MacroGlobeLighting
     f32 oceanRoughness{0.12F};
     f32 oceanGlintStrength{1.0F};
     bool oceanEnabled{false};
+    // Orbital patch detail bias in stops: +1 doubles the patch resolution the
+    // selector asks for (half the target cell size in pixels), -1 halves it.
+    f32 lodBiasStops{0.0F};
 };
 
 // The old renderer remains compiled privately so the adaptive wrapper can use
@@ -193,6 +203,12 @@ private:
 #ifndef ORBIT_BUILD_LEGACY_MACRO_GLOBE_RENDERER
 class HybridMacroGlobeRuntime;
 
+struct MacroGlobeWorkStats
+{
+    u32 patchesPending{0U};
+    u32 patchesResident{0U};
+};
+
 class MacroGlobeRenderer
 {
 public:
@@ -227,6 +243,13 @@ public:
         f32 opacity = 1.0F,
         const MacroGlobeLighting& lighting = {},
         rhi::Texture* depth = nullptr);
+
+    // True while orbital terrain patches are still being built.
+    [[nodiscard]] bool HasPendingWork() const noexcept;
+
+    // Orbital patch builds in flight on worker threads and patches resident on
+    // the GPU, summed over every globe this renderer holds.
+    [[nodiscard]] MacroGlobeWorkStats WorkStats() const noexcept;
 
 private:
     std::unique_ptr<LegacyMacroGlobeRenderer> legacy_;

@@ -1,4 +1,5 @@
 #include <orbit/map_render/PlanetMapRenderer.hpp>
+#include <orbit/core/ThreadName.hpp>
 
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
@@ -461,7 +462,11 @@ public:
         const terrain::AnalyticTerrainSource* terrainPointer = terrain_.get();
         generationFuture_ = std::async(
             std::launch::async,
-            [terrainPointer]() { return GenerateLayers(*terrainPointer); });
+            [terrainPointer]()
+            {
+                core::SetCurrentThreadName("Orbit.MapLayers");
+                return GenerateLayers(*terrainPointer);
+            });
     }
 
     void Poll()

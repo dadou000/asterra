@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <stdexcept>
 #include <utility>
 
@@ -136,6 +137,9 @@ bool StudioRenderViewSet::Destroy(
     views_.erase(found);
     navigationStates_.erase(ownedId);
     compositionEnabled_.erase(ownedId);
+    textDiagnosticsHud_.erase(ownedId);
+    orbitalPatchStats_.erase(ownedId);
+    terrainLayers_.erase(ownedId);
     debugFields_.erase(ownedId);
     debugPhysicalPageLevels_.erase(ownedId);
     debugPhysicalPages_.erase(ownedId);
@@ -578,6 +582,268 @@ StudioRenderViewSet::PickTerrainSurface(
     }
 
     return pick;
+}
+
+void StudioRenderViewSet::SetTerrainLayers(
+    const std::string_view id,
+    StudioTerrainLayerOptions options)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+    if (!std::isfinite(options.lodBiasStops))
+    {
+        options.lodBiasStops = 0.0F;
+    }
+    options.lodBiasStops = std::clamp(options.lodBiasStops, -4.0F, 4.0F);
+    terrainLayers_.insert_or_assign(std::string(id), options);
+}
+
+StudioTerrainLayerOptions StudioRenderViewSet::TerrainLayers(
+    const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+    const auto found = terrainLayers_.find(id);
+    return found == terrainLayers_.end()
+        ? StudioTerrainLayerOptions{}
+        : found->second;
+}
+
+void StudioRenderViewSet::SetOrbitalPatchStats(
+    const std::string_view id,
+    const u32 patchesPending,
+    const u32 patchesResident)
+{
+    orbitalPatchStats_.insert_or_assign(
+        std::string(id),
+        OrbitalPatchStats{patchesPending, patchesResident});
+}
+
+void StudioRenderViewSet::SetTextDiagnosticsHud(
+    const std::string_view id,
+    const bool enabled)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+    textDiagnosticsHud_.insert_or_assign(std::string(id), enabled);
+}
+
+bool StudioRenderViewSet::TextDiagnosticsHud(const std::string_view id) const
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+    const auto found = textDiagnosticsHud_.find(id);
+    return found != textDiagnosticsHud_.end() && found->second;
+}
+
+StudioViewportTextReport StudioRenderViewSet::TextDiagnostics(
+    const std::string_view id,
+    const std::optional<std::pair<f32, f32>> cursorUv)
+{
+    const auto* view = Find(id);
+    if (view == nullptr || session_ == nullptr)
+    {
+        throw std::out_of_range(
+            "Studio render-view ID is not registered.");
+    }
+
+    StudioViewportTextReport report;
+    report.viewId = std::string(id);
+    report.layers = TerrainLayers(id);
+    report.width = view->Width();
+    report.height = view->Height();
+
+    const auto* target = session_->Viewports().Find(id);
+    if (target != nullptr)
+    {
+        switch (target->mode)
+        {
+        case studio_session::ViewportMode::Perspective:
+            report.viewMode = "perspective";
+            break;
+        case studio_session::ViewportMode::BodyMap:
+            report.viewMode = "body_map";
+            break;
+        case studio_session::ViewportMode::Debug:
+            report.viewMode = "debug";
+            break;
+        case studio_session::ViewportMode::System:
+            report.viewMode = "system";
+            break;
+        }
+    }
+
+    const auto& camera = view->Camera();
+    constexpr f64 kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+    report.cameraPosition = camera.localPositionMeters;
+    report.forward = {camera.forward.x, camera.forward.y, camera.forward.z};
+    report.up = {camera.up.x, camera.up.y, camera.up.z};
+    report.verticalFovDegrees = camera.verticalFovRadians * kRadiansToDegrees;
+    report.nearPlaneMeters = camera.nearPlaneMeters;
+    report.farPlaneMeters = camera.farPlaneMeters;
+    report.distanceFromCoreMeters = math::Length(camera.localPositionMeters);
+
+    const auto runtime = session_->TerrainRuntime().Capture(id);
+    const bool terrainCurrent =
+        runtime.has_value() && session_->TerrainRuntime().IsCurrent(*runtime);
+
+    report.navigation = terrainCurrent
+        ? "terrain"
+        : (target != nullptr && target->target.has_value()
+            ? "reference_sphere"
+            : "none");
+
+    {
+        StudioCpuTerrainReport cpu;
+        const auto pool = session_->TerrainPhysicalPages().JobTelemetry();
+        cpu.poolWorkers = pool.workers;
+        cpu.poolRunningJobs = pool.running;
+        cpu.poolQueuedJobs = pool.queued;
+        cpu.poolOutstandingJobs = pool.outstanding;
+
+        if (const auto patches = orbitalPatchStats_.find(id);
+            patches != orbitalPatchStats_.end())
+        {
+            cpu.globePatchesPending = patches->second.pending;
+            cpu.globePatchesResident = patches->second.resident;
+        }
+
+        if (terrainCurrent)
+        {
+            if (const auto status =
+                    session_->TerrainPhysicalPages().BodyStatus(
+                        runtime->planet.id);
+                status.has_value())
+            {
+                cpu.hasPages = true;
+                cpu.pageState =
+                    studio_session::TerrainRebuildStateName(status->state);
+                cpu.pages = status->pages;
+                cpu.dirtyPages = status->dirtyPages;
+                cpu.queuedPages = status->queuedPages;
+                cpu.buildingPages = status->buildingPages;
+                cpu.uploadingPages = status->uploadingPages;
+                cpu.readyPages = status->readyPages;
+                cpu.failedPages = status->failedPages;
+                cpu.stalePages = status->stalePages;
+                cpu.completedProducts = status->completedProducts;
+                cpu.totalProducts = status->totalProducts;
+            }
+        }
+        report.cpuTerrain = cpu;
+    }
+
+    if (!terrainCurrent)
+    {
+        return report;
+    }
+
+    const auto& source = session_->TerrainRuntime().TerrainSource(*runtime);
+    const f64 radius = runtime->planet.radiusMeters;
+
+    report.hasTerrain = true;
+    report.planetRadiusMeters = radius;
+    report.heightAboveDatumMeters = report.distanceFromCoreMeters - radius;
+    report.physicalPageLevel = runtime->physicalPageLevel;
+    report.adaptiveCoverageTier = runtime->adaptiveCoverageTier;
+    report.terrainSourceRevision = runtime->terrainSourceRevision;
+    report.worldGeneration = runtime->worldGeneration;
+    report.runtimeGeneration = runtime->runtimeGeneration;
+
+    if (report.distanceFromCoreMeters > 0.0)
+    {
+        const math::Double3 radial =
+            camera.localPositionMeters / report.distanceFromCoreMeters;
+        const math::Double3 pole{0.0, 1.0, 0.0};
+        math::Double3 north = pole - radial * math::Dot(pole, radial);
+        if (math::LengthSquared(north) < 1.0e-18)
+        {
+            north = {1.0, 0.0, 0.0};
+        }
+        north = math::Normalize(north);
+        // Toward increasing longitude, matching the terrain point report.
+        const math::Double3 east = math::Normalize(math::Cross(radial, pole));
+        const math::Double3 forward = report.forward;
+        report.cameraPitchDegrees =
+            std::asin(std::clamp(math::Dot(forward, radial), -1.0, 1.0)) *
+            kRadiansToDegrees;
+        f64 heading =
+            std::atan2(math::Dot(forward, east), math::Dot(forward, north)) *
+            kRadiansToDegrees;
+        if (heading < 0.0)
+        {
+            heading += 360.0;
+        }
+        report.cameraHeadingDegrees = heading;
+
+        const f64 altitudeGuess =
+            std::max(std::abs(report.heightAboveDatumMeters), 1.0);
+        report.nadir = SampleStudioTerrainPoint(
+            source,
+            runtime->planet.id,
+            radius,
+            radial,
+            StudioPixelFootprintMeters(
+                camera.verticalFovRadians,
+                report.height,
+                altitudeGuess));
+        report.heightAboveTerrainMeters =
+            report.distanceFromCoreMeters -
+            report.nadir->groundRadiusFromCoreMeters;
+        if (report.nadir->underwater)
+        {
+            report.heightAboveWaterSurfaceMeters =
+                report.distanceFromCoreMeters -
+                report.nadir->renderedSurfaceRadiusFromCoreMeters;
+        }
+    }
+
+    if (cursorUv.has_value())
+    {
+        const auto pick = PickTerrainSurface(id, cursorUv->first, cursorUv->second);
+        if (pick.has_value())
+        {
+            StudioCursorPickReport cursor;
+            cursor.point = SampleStudioTerrainPoint(
+                source,
+                runtime->planet.id,
+                radius,
+                pick->surface.unitDirection,
+                StudioPixelFootprintMeters(
+                    camera.verticalFovRadians,
+                    report.height,
+                    std::max(pick->hitDistanceMeters, 1.0)));
+            cursor.hitDistanceMeters = pick->hitDistanceMeters;
+            cursor.pickPhysicalElevationMeters = pick->physicalElevationMeters;
+            cursor.pickRenderedElevationMeters = pick->renderedElevationMeters;
+            cursor.physicalLod = pick->physicalLod;
+            if (pick->physicalPage.has_value())
+            {
+                const auto& tile = pick->physicalPage->tile;
+                cursor.physicalPage = std::format(
+                    "{}/{}/{}/{}",
+                    static_cast<u32>(tile.face),
+                    static_cast<u32>(tile.level),
+                    tile.x,
+                    tile.y);
+            }
+            report.cursor = std::move(cursor);
+        }
+    }
+
+    return report;
 }
 
 std::optional<StudioSurfacePick>
@@ -1155,7 +1421,9 @@ StudioRenderViewSet::Catalog() const
             .hasLiveDebugPage =
                 LiveDebugPage(id) != nullptr,
             .diagnostics =
-                TerrainDiagnosticOverlays(id)
+                TerrainDiagnosticOverlays(id),
+            .layers =
+                TerrainLayers(id)
         });
     }
 

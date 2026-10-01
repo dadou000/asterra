@@ -1,3 +1,6 @@
+#include <unordered_map>
+#include <mutex>
+#include <orbit/profiler/Profiler.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 
 #define NOMINMAX
@@ -53,8 +56,40 @@ using Microsoft::WRL::ComPtr;
 }
 } // namespace
 
+namespace
+{
+// Compiling the same HLSL again (a renderer or pipeline being rebuilt, for
+// example when the terrain clipmap changes tier) used to cost seconds per
+// shader on the frame thread. The compile is a pure function of the request
+// (no include handler, no external state), so identical requests share one
+// result for the life of the process. Edited sources hash differently and miss.
+std::mutex gCompileCacheMutex;
+std::unordered_map<std::string, Binary> gCompileCache;
+constexpr std::size_t kCompileCacheLimit = 512U;
+
+[[nodiscard]] std::string CompileCacheKey(const CompileRequest& request)
+{
+    std::string key;
+    key.reserve(request.source.size() + request.entryPoint.size() + 32U);
+    key += std::to_string(static_cast<int>(request.stage));
+    key += '|';
+    key += std::to_string(request.shaderModelMajor);
+    key += '.';
+    key += std::to_string(request.shaderModelMinor);
+    key += request.enableSpirvRayQuery ? "|rq" : "|-";
+    key += request.debug ? "|dbg|" : "|rel|";
+    key += request.entryPoint;
+    key += '|';
+    key += request.source;
+    return key;
+}
+} // namespace
+
 Binary DxcShaderCompiler::Compile(const CompileRequest& request) const
 {
+    // Named by entry point so a capture shows which shader held the thread.
+    ORBIT_PROFILE_SCOPE(profiler::Intern(
+        std::string("dxc.compile ") + std::string(request.entryPoint)));
     if (request.source.empty())
     {
         throw std::invalid_argument(
@@ -65,6 +100,16 @@ Binary DxcShaderCompiler::Compile(const CompileRequest& request) const
     {
         throw std::invalid_argument(
             "Orbit shader entry point cannot be empty.");
+    }
+
+    const std::string cacheKey = CompileCacheKey(request);
+    {
+        std::scoped_lock lock(gCompileCacheMutex);
+        if (const auto found = gCompileCache.find(cacheKey);
+            found != gCompileCache.end())
+        {
+            return found->second;
+        }
     }
 
     ComPtr<IDxcUtils> utils;
@@ -191,6 +236,14 @@ Binary DxcShaderCompiler::Compile(const CompileRequest& request) const
     Binary binary{};
     binary.stage = request.stage;
     binary.bytecode.assign(begin, end);
+    {
+        std::scoped_lock lock(gCompileCacheMutex);
+        if (gCompileCache.size() >= kCompileCacheLimit)
+        {
+            gCompileCache.clear();
+        }
+        gCompileCache.emplace(cacheKey, binary);
+    }
     return binary;
 }
 } // namespace orbit::shader::dxc

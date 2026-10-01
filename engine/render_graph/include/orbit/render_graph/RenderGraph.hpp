@@ -13,6 +13,8 @@
 
 namespace orbit::render_graph
 {
+class GpuPassTimer;
+
 struct TextureHandle
 {
     u32 index{~0U};
@@ -146,7 +148,9 @@ public:
     // calls Compile() automatically when necessary.
     void Compile();
 
-    void Execute(rhi::CommandList& commands);
+    // With a GpuPassTimer, a GPU timestamp follows every pass so the profiler
+    // can show per-pass GPU time (docs/ORBIT_PROFILER.md).
+    void Execute(rhi::CommandList& commands, GpuPassTimer* gpuTimer = nullptr);
 
     [[nodiscard]] rhi::Texture& Texture(
         TextureHandle handle);

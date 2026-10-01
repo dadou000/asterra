@@ -2,6 +2,9 @@ add_library(OrbitStudioUi STATIC
     src/CelestialAuthoringUi.cpp
     src/DebugViewUi.cpp
     src/DisplayDiagnosticsUi.cpp
+    src/ProfilerModel.cpp
+    src/ProfilerPanelRpc.cpp
+    src/ProfilerUi.cpp
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
     src/ShadingUi.cpp
@@ -23,6 +26,8 @@ add_library(OrbitStudioUi STATIC
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
     src/StudioViewportRenderer.cpp
+    src/StudioTextDiagnosticsHud.cpp
+    src/StudioViewportTextDiagnostics.cpp
     src/WorldDocumentsUi.cpp
 )
 
@@ -51,6 +56,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialScheduler
         Orbit::CelestialRadiometry
         Orbit::Content
+        Orbit::Core
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::Lighting
@@ -275,6 +281,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingSelectionInspection
         COMMAND OrbitLightingSelectionInspectionTests
+    )
+
+    add_executable(OrbitProfilerModelTests
+        tests/ProfilerModelTests.cpp
+    )
+
+    target_link_libraries(OrbitProfilerModelTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitProfilerModelTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitProfilerModelTests)
+
+    add_test(
+        NAME Orbit.ProfilerModel
+        COMMAND OrbitProfilerModelTests
     )
 
     add_executable(OrbitRuntimeProfilerSnapshotTests

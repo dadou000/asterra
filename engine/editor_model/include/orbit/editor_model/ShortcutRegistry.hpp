@@ -42,10 +42,17 @@ public:
         std::function<void()> callback,
         bool allowWhenKeyboardCaptured = false);
 
+    // suppressInvocation blocks shortcuts while the UI owns the keyboard
+    // (bindings registered with allowWhenKeyboardCaptured still fire).
+    // blockAll blocks every shortcut, for gestures that own the keyboard, such
+    // as flying the viewport camera: WASD/Q/E movement must never double as a
+    // letter shortcut (on AZERTY the Q position types A). Key state is still
+    // tracked, so releasing the gesture while a key is held does not fire it.
     void Update(
         platform::Window& window,
         const commands::CommandRegistry& commandRegistry,
-        bool suppressInvocation);
+        bool suppressInvocation,
+        bool blockAll = false);
 
 private:
     struct Binding

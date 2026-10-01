@@ -41,7 +41,8 @@ public:
 
 private:
     editor_session::EditorWorldSession* world_{nullptr};
-    jobs::JobSystem jobs_;
+    // Route solves are short and rare; two workers are plenty.
+    jobs::JobSystem jobs_{2U, "Routes"};
     std::unique_ptr<path_routing::RoutePlanner> planner_;
     u64 observedUniverseGeneration_{~u64{0}};
     u64 bindingGeneration_{0};

@@ -7,9 +7,13 @@
 #include <orbit/studio_ui/StudioAssetShelf.hpp>
 #include <orbit/studio_ui/StudioExpansionShell.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/StudioTextDiagnosticsHud.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
+#include <array>
+#include <chrono>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -228,6 +232,7 @@ private:
     f64 biomeBrushValue_{1.0};
     f64 biomeBrushOpacity_{1.0};
     bool biomeAutomaticOverlay_{false};
+    StudioTextDiagnosticsHud textHud_;
     std::optional<f64> hoveredBiomeAuthoredWeight_;
     std::optional<f64> hoveredBiomeAutomaticWeight_;
 

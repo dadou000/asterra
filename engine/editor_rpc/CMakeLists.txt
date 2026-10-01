@@ -1,5 +1,6 @@
 add_library(OrbitEditorRpc STATIC
     src/EditorRpcService.cpp
+    src/ProfilerRpc.cpp
     src/ProjectWorldRpc.cpp
     src/EditorSessionRpcHost.cpp
 )
@@ -14,6 +15,7 @@ target_include_directories(OrbitEditorRpc
 target_link_libraries(OrbitEditorRpc
     PUBLIC
         Orbit::Commands
+        Orbit::Core
         Orbit::Documents
         Orbit::Paths
         Orbit::Rpc

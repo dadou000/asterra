@@ -79,7 +79,10 @@ VSOutput main(VSInput input)
     output.position =
         float4(
             x / (aspect * tanHalfFov),
-            -y / tanHalfFov,
+            // The Vulkan backend already flips the viewport (negative height),
+            // so NDC Y is up here exactly as in every other renderer; negating
+            // it mirrored path and diagnostic overlays vertically.
+            y / tanHalfFov,
             z * 0.5,
             z);
     output.color = input.color;

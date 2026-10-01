@@ -5,6 +5,8 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_ui/StudioSurfacePicking.hpp>
+#include <orbit/studio_ui/StudioTerrainLayerOptions.hpp>
+#include <orbit/studio_ui/StudioViewportTextDiagnostics.hpp>
 #include <orbit/studio_ui/StudioViewportCamera.hpp>
 #include <orbit/studio_ui/StudioViewportNavigation.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
@@ -81,6 +83,7 @@ struct StudioRenderViewInfo
     std::optional<StudioPhysicalPageSelection> debugPhysicalPage;
     bool hasLiveDebugPage{false};
     StudioTerrainDiagnosticOverlayOptions diagnostics{};
+    StudioTerrainLayerOptions layers{};
 };
 
 // Owns the actual resizable GPU RenderViews corresponding to logical Studio
@@ -165,6 +168,34 @@ public:
         f32 u,
         f32 v,
         std::optional<u8> physicalTileLevel = std::nullopt);
+
+    // Complete numeric/text diagnostic for one view: camera, heights (above
+    // terrain, water surface, datum and from the planet core), and the terrain
+    // source's climate/biome/water/slope at the point below the camera and, when
+    // a cursor position in view UV is given, under the cursor. Backs the viewport
+    // HUD and the view.text_diagnostics RPC.
+    void SetTerrainLayers(
+        std::string_view id,
+        StudioTerrainLayerOptions options);
+
+    [[nodiscard]] StudioTerrainLayerOptions TerrainLayers(
+        std::string_view id) const;
+
+    // The renderer owns the orbital patch builds, so the host publishes their
+    // counters here each frame for the diagnostics report.
+    void SetOrbitalPatchStats(
+        std::string_view id,
+        u32 patchesPending,
+        u32 patchesResident);
+
+    // Whether the viewport draws its text diagnostics readout. Transient
+    // presentation state, like the debug field.
+    void SetTextDiagnosticsHud(std::string_view id, bool enabled);
+    [[nodiscard]] bool TextDiagnosticsHud(std::string_view id) const;
+
+    [[nodiscard]] StudioViewportTextReport TextDiagnostics(
+        std::string_view id,
+        std::optional<std::pair<f32, f32>> cursorUv = std::nullopt);
 
     [[nodiscard]] std::optional<StudioSurfacePick>
     LastTerrainSurfacePick(
@@ -283,6 +314,17 @@ private:
         referenceNavigation_;
 
     std::map<std::string, bool, std::less<>> compositionEnabled_;
+    std::map<std::string, bool, std::less<>> textDiagnosticsHud_;
+
+    std::map<std::string, StudioTerrainLayerOptions, std::less<>>
+        terrainLayers_;
+
+    struct OrbitalPatchStats
+    {
+        u32 pending{0U};
+        u32 resident{0U};
+    };
+    std::map<std::string, OrbitalPatchStats, std::less<>> orbitalPatchStats_;
 
     std::map<
         std::string,

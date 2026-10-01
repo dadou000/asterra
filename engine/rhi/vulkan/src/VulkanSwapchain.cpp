@@ -1,3 +1,4 @@
+#include <orbit/profiler/Profiler.hpp>
 #include "VulkanObjects.hpp"
 
 #include <algorithm>
@@ -316,6 +317,7 @@ void VulkanSwapchain::AcquireIfNeeded() const
     // wait has retired -- Vulkan validation calls this out as
     // undefined behavior, and unlike most UB it's cheap to just not
     // risk it.
+    ORBIT_PROFILE_SCOPE("vk.swapchain_acquire");
     vkWaitForFences(
         device_, 1, &imageAvailableFence, VK_TRUE, UINT64_MAX);
     vkResetFences(device_, 1, &imageAvailableFence);
@@ -371,6 +373,7 @@ void VulkanSwapchain::Present(const bool /*verticalSync*/)
     presentInfo.pSwapchains = &nativeSwapchain_;
     presentInfo.pImageIndices = &currentImageIndex_;
 
+    ORBIT_PROFILE_SCOPE("vk.present");
     const VkResult result =
         vkQueuePresentKHR(presentQueue_->Native(), &presentInfo);
 

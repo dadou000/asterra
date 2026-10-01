@@ -95,6 +95,15 @@ public:
 
     virtual bool PumpEvents() = 0;
 
+    // True if a keyboard, mouse, size or focus message arrived (or a mouse
+    // button is held) since the previous call. Lets an application render at
+    // full rate while the user interacts and throttle while it is idle.
+    [[nodiscard]] virtual bool ConsumeInputActivity() = 0;
+
+    // Sleeps for up to the given time but wakes immediately when any window
+    // message arrives, so a throttled loop still reacts to input at once.
+    virtual void WaitForActivity(u32 milliseconds) = 0;
+
     virtual void SetTitle(std::string_view title) = 0;
 
     [[nodiscard]] virtual bool KeyDown(

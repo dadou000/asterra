@@ -1,6 +1,7 @@
 #include <orbit/studio_session/ProjectBrowserModel.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -141,6 +142,129 @@ ProjectBrowserModel::RecentProjects() const
     }
 
     return result;
+}
+
+std::vector<DiscoveredProject> ProjectBrowserModel::DiscoverProjects(
+    const std::vector<std::filesystem::path>& roots,
+    const ProjectDiscoveryOptions& options)
+{
+    namespace fs = std::filesystem;
+
+    static constexpr std::string_view kSkipped[] = {
+        ".git", ".vs", ".svn", "node_modules", "build", "Build", "bin", "obj",
+        "vcpkg", "vcpkg_installed", "dist", "AppData", "$Recycle.Bin",
+        "System Volume Information", "__pycache__", ".cache"};
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + options.timeBudget;
+
+    std::vector<DiscoveredProject> found;
+
+    const auto known = [&found](const fs::path& manifest)
+    {
+        return std::ranges::any_of(
+            found,
+            [&manifest](const DiscoveredProject& item)
+            {
+                return item.manifestPath == manifest;
+            });
+    };
+
+    for (const auto& root : roots)
+    {
+        std::error_code error;
+        if (!fs::is_directory(root, error) || error)
+        {
+            continue;
+        }
+
+        fs::recursive_directory_iterator iterator(
+            root,
+            fs::directory_options::skip_permission_denied,
+            error);
+
+        if (error)
+        {
+            continue;
+        }
+
+        for (; iterator != fs::recursive_directory_iterator{};
+             iterator.increment(error))
+        {
+            if (error)
+            {
+                error.clear();
+                continue;
+            }
+
+            if (std::chrono::steady_clock::now() > deadline ||
+                found.size() >= options.maximumResults)
+            {
+                return found;
+            }
+
+            const fs::directory_entry& entry = *iterator;
+            std::error_code statusError;
+
+            if (entry.is_directory(statusError))
+            {
+                const auto u8name = entry.path().filename().generic_u8string();
+                const std::string name(u8name.begin(), u8name.end());
+                const bool skipped = std::ranges::any_of(
+                    kSkipped,
+                    [&name](const std::string_view candidate)
+                    {
+                        return name == candidate;
+                    });
+
+                if (skipped ||
+                    static_cast<u32>(iterator.depth()) + 1U >=
+                        options.maximumDepth)
+                {
+                    iterator.disable_recursion_pending();
+                }
+                continue;
+            }
+
+            if (entry.path().filename() != "Project.orbit.toml")
+            {
+                continue;
+            }
+
+            const fs::path manifest =
+                fs::weakly_canonical(entry.path(), statusError);
+            const fs::path resolved =
+                statusError ? entry.path() : manifest;
+
+            if (known(resolved))
+            {
+                continue;
+            }
+
+            try
+            {
+                const auto loaded = documents::LoadProjectManifest(resolved);
+                found.push_back({
+                    .manifestPath = resolved,
+                    .displayName = loaded.displayName,
+                    .modified = fs::last_write_time(resolved, statusError)
+                });
+            }
+            catch (const std::exception&)
+            {
+                // Not a usable Orbit project manifest; ignore it.
+            }
+        }
+    }
+
+    std::ranges::sort(
+        found,
+        [](const DiscoveredProject& a, const DiscoveredProject& b)
+        {
+            return a.modified > b.modified;
+        });
+
+    return found;
 }
 
 void ProjectBrowserModel::ForgetRecentProject(

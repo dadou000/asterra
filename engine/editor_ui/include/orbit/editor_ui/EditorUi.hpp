@@ -71,6 +71,17 @@ struct CanvasInteraction
     bool leftReleased{false};
     f32 u{0.0F};
     f32 v{0.0F};
+    // Pointer position in pixels from the canvas' top-left; valid while hovered.
+    f32 pixelX{0.0F};
+    f32 pixelY{0.0F};
+    // Mouse wheel ticks this frame while hovered (the canvas owns the wheel, so
+    // the panel behind it does not also scroll).
+    f32 wheel{0.0F};
+    // Left-button drag movement this frame, in pixels, for a drag that began on
+    // the canvas.
+    f32 dragDeltaX{0.0F};
+    f32 dragDeltaY{0.0F};
+    bool shiftDown{false};
 };
 
 struct ActionPresentation
@@ -157,10 +168,23 @@ public:
         std::string_view id,
         rhi::Texture& texture,
         UiSize size);
+    // Draws multi-line text in the top-left corner of the item submitted just
+    // before (typically the viewport Image) on a translucent plate, clipped to
+    // that item. For HUD-style readouts; it takes no input.
+    void OverlayTextOnLastItem(std::string_view text);
     [[nodiscard]] CanvasInteraction Canvas(std::string_view id, UiSize size);
     void CanvasLine(math::Float2 a, math::Float2 b, math::Float4 color, f32 thickness = 1.0F);
     void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
     void CanvasText(math::Float2 position, math::Float4 color, std::string_view text);
+    // Rectangle between two canvas positions (0..1 on both axes).
+    void CanvasRect(math::Float2 a, math::Float2 b, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
+    // Text that is cut off at `clipRight` (canvas x, 0..1), for labels inside
+    // bars. Positions are canvas fractions like CanvasText.
+    void CanvasTextClipped(math::Float2 position, f32 clipRight, math::Float4 color, std::string_view text);
+    // Tooltip next to the pointer; call only while the canvas is hovered.
+    void CanvasTooltip(std::string_view text);
+    [[nodiscard]] f32 TextWidthPixels(std::string_view text) const;
+    [[nodiscard]] f32 TextHeightPixels() const;
     [[nodiscard]] bool Checkbox(std::string_view label, bool& value);
     [[nodiscard]] bool InputDouble(std::string_view label, f64& value);
     [[nodiscard]] bool InputInteger(std::string_view label, i64& value);

@@ -1,3 +1,4 @@
+#include <orbit/profiler/Profiler.hpp>
 #include "VulkanObjects.hpp"
 
 #include <array>
@@ -1115,6 +1116,7 @@ VulkanDevice::CreateAabbAccelerationStructure(
 
 std::unique_ptr<Buffer> VulkanDevice::CreateBuffer(const BufferDesc& desc)
 {
+    ORBIT_PROFILE_SCOPE("vk.create_buffer");
     if (desc.sizeBytes == 0)
     {
         throw std::invalid_argument(
@@ -1165,6 +1167,7 @@ std::unique_ptr<Buffer> VulkanDevice::CreateBuffer(const BufferDesc& desc)
 std::unique_ptr<Texture> VulkanDevice::CreateTexture(
     const TextureDesc& desc)
 {
+    ORBIT_PROFILE_SCOPE("vk.create_texture");
     if (desc.width == 0 || desc.height == 0)
     {
         throw std::invalid_argument(
@@ -1336,6 +1339,40 @@ VulkanDevice::CreateTimestampQueryPool(const u32 count)
 
     return std::make_unique<VulkanTimestampQueryPool>(
         nativeDevice_, pool, count);
+}
+
+bool VulkanDevice::CalibrateGpuClock(
+    u64* const gpuTicks,
+    u64* const cpuTicks) const noexcept
+{
+    if (functions_.vkGetCalibratedTimestampsKHR == nullptr ||
+        gpuTicks == nullptr ||
+        cpuTicks == nullptr)
+    {
+        return false;
+    }
+
+    std::array<VkCalibratedTimestampInfoKHR, 2> info{};
+    info[0].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR;
+    info[0].timeDomain = VK_TIME_DOMAIN_DEVICE_KHR;
+    info[1].sType = VK_STRUCTURE_TYPE_CALIBRATED_TIMESTAMP_INFO_KHR;
+    info[1].timeDomain = VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_KHR;
+
+    std::array<u64, 2> values{};
+    u64 maxDeviation = 0U;
+    if (functions_.vkGetCalibratedTimestampsKHR(
+            nativeDevice_,
+            static_cast<u32>(info.size()),
+            info.data(),
+            values.data(),
+            &maxDeviation) != VK_SUCCESS)
+    {
+        return false;
+    }
+
+    *gpuTicks = values[0];
+    *cpuTicks = values[1];
+    return true;
 }
 
 f64 VulkanDevice::TimestampPeriodNanoseconds() const noexcept

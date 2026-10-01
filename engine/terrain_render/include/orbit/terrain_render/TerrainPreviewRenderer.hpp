@@ -84,6 +84,33 @@ struct TerrainPreviewConfig
     u32 framesInFlight{3};
 };
 
+// Optics of the standing water drawn over the clipmap bed. The defaults match
+// celestial_ocean::OceanOpticalParameters so an unconfigured view looks like
+// the orbital ocean. Transient presentation state, uploaded once per frame.
+struct TerrainWaterOptics
+{
+    // Absorption per metre for red, green, blue (1/m).
+    math::Float3 absorptionPerMeter{0.18F, 0.055F, 0.025F};
+    f32 refractiveIndex{1.333F};
+    // Albedo the water column tends to when it is deep.
+    math::Float3 deepColor{0.008F, 0.035F, 0.075F};
+    f32 deepColorDepthMeters{40.0F};
+    // Near-field surface roughness (a calm sea; the orbital value is a
+    // far-glint parameter and is not reused here).
+    f32 roughness{0.06F};
+    // Direction to the sun in the body-fixed frame and its irradiance, in the
+    // units the deferred lighting pass uses, so the water is lit like the scene.
+    math::Float3 sunDirectionBody{0.55F, 0.72F, -0.48F};
+    f32 sunIrradiance{1.0F};
+    // Sky irradiance (linear) for the body colour and the sky reflection.
+    math::Float3 skyIrradiance{0.05F, 0.07F, 0.10F};
+    // Near-field representation weight, so the water fades with the terrain.
+    f32 opacity{1.0F};
+    // Elevation of the sea surface. Dry land is signed against it so the
+    // waterline is resolved per pixel.
+    f32 seaLevelMeters{0.0F};
+};
+
 class TerrainPreviewRenderer
 {
 public:
@@ -135,6 +162,27 @@ public:
     void SetPhysicalPages(
         std::span<const terrain_gpu::GpuPhysicalSurfacePage> pages,
         u64 generation);
+
+    // Hides the standing-water rendering (an "ocean off" view). Takes effect on
+    // the next draw; no resources are rebuilt.
+    void SetDrySurface(bool dry) noexcept;
+
+    // Optics and sea level for the water pass. Takes effect on the next draw.
+    void SetWaterOptics(const TerrainWaterOptics& optics) noexcept;
+
+    // Draws standing water as its own object: a flat surface at sea level over
+    // the clipmap, alpha-blended over the already-lit scene in `colorTarget`'s
+    // pass. `terrainDepth` is the depth the terrain pass wrote; the pass tests
+    // against it (that is the shoreline) and measures the water column with it.
+    // Call after the terrain pass's Draw in the same frame. The render target
+    // must be bound with SetRenderTargetsReadOnlyDepth(color, terrainDepth).
+    void DrawWater(
+        rhi::CommandList& commandList,
+        u32 frameIndex,
+        u32 targetWidth,
+        u32 targetHeight,
+        const TerrainPreviewCamera& camera,
+        rhi::Texture& terrainDepth);
 
     // M38 transient physical-surface influence. The renderer keeps one
     // frame-in-flight-safe upload buffer per graphics frame and never mutates

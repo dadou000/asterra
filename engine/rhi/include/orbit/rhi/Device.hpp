@@ -32,6 +32,9 @@ struct DeviceCapabilities
     bool meshShaders{false};
     bool variableRateShading{false};
     bool presentTearing{false};
+    // The GPU timestamp clock can be read together with the CPU's performance
+    // counter (see Device::CalibrateGpuClock).
+    bool calibratedTimestamps{false};
     u32 shaderModelMajor{0};
     u32 shaderModelMinor{0};
 };
@@ -82,6 +85,19 @@ public:
     // TimestampQueryPool::TryGetResults' raw ticks into real time.
     [[nodiscard]] virtual f64 TimestampPeriodNanoseconds()
         const noexcept = 0;
+
+    // Reads the GPU timestamp clock and the CPU's QueryPerformanceCounter at the
+    // same instant, so GPU timestamps can be placed on the CPU profiler's
+    // timeline. Returns false when the backend cannot calibrate; GPU timings are
+    // then only durations.
+    [[nodiscard]] virtual bool CalibrateGpuClock(
+        u64* gpuTicks,
+        u64* cpuTicks) const noexcept
+    {
+        static_cast<void>(gpuTicks);
+        static_cast<void>(cpuTicks);
+        return false;
+    }
 
 protected:
     Device() = default;

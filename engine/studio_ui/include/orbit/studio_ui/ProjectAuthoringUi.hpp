@@ -11,7 +11,9 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <future>
 #include <string>
+#include <vector>
 #include <string_view>
 #include <vector>
 
@@ -101,6 +103,12 @@ private:
     std::filesystem::path openProjectManifest_;
     std::string openProjectWorld_;
     std::string recentFilter_;
+
+    // Projects found by scanning the usual folders (scanned in the background).
+    std::future<std::vector<studio_session::DiscoveredProject>>
+        discoveryFuture_;
+    std::vector<studio_session::DiscoveredProject> discovered_;
+    bool discoveryRan_{false};
     std::string newProjectRoot_;
     std::string newProjectName_{"New Orbit Project"};
     std::string openProjectPath_;

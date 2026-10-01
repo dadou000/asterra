@@ -1,4 +1,5 @@
 #include <orbit/hot_reload/HotIterationService.hpp>
+#include <orbit/core/ThreadName.hpp>
 
 #include <orbit/core/Log.hpp>
 
@@ -567,6 +568,7 @@ private:
     void WorkerMain(
         const std::stop_token stopToken)
     {
+        core::SetCurrentThreadName("Orbit.HotIteration");
         std::vector<std::unique_ptr<DirectoryChangeWatcher>>
             watchers;
         std::unordered_map<std::wstring,

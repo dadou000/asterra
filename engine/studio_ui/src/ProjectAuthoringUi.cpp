@@ -1,9 +1,12 @@
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
+#include <orbit/core/ThreadName.hpp>
 
 #include <orbit/platform/Paths.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <future>
 #include <system_error>
 #include <format>
 #include <stdexcept>
@@ -13,6 +16,14 @@ namespace orbit::studio_ui
 {
 namespace
 {
+// Paths may contain characters outside the ANSI code page, so UI text built
+// from them goes through UTF-8 rather than generic_string().
+[[nodiscard]] std::string Utf8(const std::filesystem::path& path)
+{
+    const auto text = path.generic_u8string();
+    return std::string(text.begin(), text.end());
+}
+
 [[nodiscard]] std::string WorldLabel(
     const editor_session::WorldDocumentItem& item)
 {
@@ -359,6 +370,90 @@ void ProjectAuthoringUi::DrawProjectBrowser(
             }
 
             context.MutedText(path);
+        }
+    }
+
+    if (context.Section("Find Projects", true))
+    {
+        context.MutedText(
+            "Scans Documents, Desktop, Downloads and Orbit's Projects folder.");
+
+        if (discoveryFuture_.valid() &&
+            discoveryFuture_.wait_for(std::chrono::seconds(0)) ==
+                std::future_status::ready)
+        {
+            try
+            {
+                discovered_ = discoveryFuture_.get();
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = std::format(
+                    "Project scan failed: {}",
+                    exception.what());
+            }
+        }
+
+        const bool scanning = discoveryFuture_.valid();
+
+        if (scanning)
+        {
+            context.MutedText("Scanning...");
+        }
+        else if (context.Button("Scan Usual Folders##project-scan") ||
+                 !discoveryRan_)
+        {
+            discoveryRan_ = true;
+            discoveryFuture_ = std::async(
+                std::launch::async,
+                []
+                {
+                    core::SetCurrentThreadName("Orbit.ProjectScan");
+                    return studio_session::ProjectBrowserModel::
+                        DiscoverProjects(
+                            platform::UsualProjectFolders());
+                });
+        }
+
+        if (!scanning && discovered_.empty() && discoveryRan_)
+        {
+            context.MutedText("No projects found in the usual folders.");
+        }
+
+        for (const auto& project : discovered_)
+        {
+            const bool alreadyRecent = std::ranges::any_of(
+                recentProjects,
+                [&project](const studio_session::RecentProjectItem& item)
+                {
+                    std::error_code error;
+                    return std::filesystem::equivalent(
+                        item.manifestPath,
+                        project.manifestPath,
+                        error);
+                });
+
+            if (alreadyRecent)
+            {
+                continue;
+            }
+
+            std::string label =
+                project.displayName.empty()
+                    ? Utf8(project.manifestPath.parent_path().filename())
+                    : project.displayName;
+            label += "##found:";
+            label += Utf8(project.manifestPath);
+
+            if (context.Selectable(label, false))
+            {
+                openManifest(
+                    project.manifestPath,
+                    "Project opened.");
+            }
+
+            context.MutedText(
+                Utf8(project.manifestPath.parent_path()));
         }
     }
 

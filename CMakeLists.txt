@@ -29,6 +29,24 @@ if(MSVC AND ORBIT_FAST_HOT_ITERATION)
     message(STATUS "Orbit fast hot iteration is enabled")
 endif()
 
+# The micro-profiler symbolises stall stack samples (docs/ORBIT_PROFILER.md), so
+# optimised builds carry debug info. /Z7 embeds it in each object (no shared PDB
+# server contention under /MP) and the linker emits one PDB per executable; it
+# does not change generated code.
+option(
+    ORBIT_PROFILER_SYMBOLS
+    "Emit debug symbols in optimised builds so profiler stall stacks have function names"
+    ON
+)
+if(MSVC AND ORBIT_PROFILER_SYMBOLS)
+    add_compile_options("$<$<CONFIG:Release,MinSizeRel>:/Z7>")
+    add_link_options("$<$<CONFIG:Release,MinSizeRel>:/DEBUG>")
+    if(NOT ORBIT_FAST_HOT_ITERATION)
+        # /DEBUG turns COMDAT folding off by default; keep the release size.
+        add_link_options("$<$<CONFIG:Release,MinSizeRel>:/OPT:REF;/OPT:ICF>")
+    endif()
+endif()
+
 # M44 performance captures must identify the exact engine revision that
 # produced them. The fallback keeps source archives/builds without .git usable,
 # but normal repository builds always stamp the current commit.

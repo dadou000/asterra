@@ -6,6 +6,7 @@ add_library(OrbitTerrainRender STATIC
     src/SurfaceMaterial.cpp
     src/TerrainPreviewRenderer.cpp
     src/UniformPlanetRenderer.cpp
+    src/WaterVolumeShader.cpp
 )
 
 add_library(Orbit::TerrainRender ALIAS OrbitTerrainRender)

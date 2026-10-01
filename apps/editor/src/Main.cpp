@@ -5,6 +5,7 @@
 #include <orbit/content/RuntimeTexture.hpp>
 #include <orbit/content_wic/WicTextureImporter.hpp>
 #include <orbit/core/Log.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>
 #include <orbit/dev_server/DevServer.hpp>
@@ -14,6 +15,7 @@
 #include <orbit/shading/ShadingWorkspace.hpp>
 #include <orbit/shading/MaterialThumbnailCache.hpp>
 #include <orbit/studio_ui/ShadingUi.hpp>
+#include <orbit/studio_ui/StudioTextDiagnosticsHud.hpp>
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/BuiltinSchemas.hpp>
 #include <orbit/editor_model/CommandSurfaces.hpp>
@@ -27,6 +29,9 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/editor_rpc/ProfilerRpc.hpp>
+#include <orbit/profiler/Profiler.hpp>
+#include <orbit/render_graph/GpuPassTimer.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/MaterialEmission.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
@@ -55,6 +60,7 @@
 #include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/DebugViewUi.hpp>
+#include <orbit/studio_ui/ProfilerUi.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
@@ -152,6 +158,37 @@ struct CpuFrameTelemetry
             milliseconds - previous,
             std::memory_order_relaxed);
         lastMs[phase].store(milliseconds, std::memory_order_relaxed);
+
+        // Mirror the phase into the micro-profiler as a synthetic lane so a hitch
+        // capture shows which phase of the main loop ate the time. Phases that
+        // nest inside others (compose_*, gi_*) go on their own lane.
+        if (orbit::profiler::Enabled() && phase != WholeLoop)
+        {
+            static constexpr std::array<const char*, kPhaseCount> labels{
+                "fence_wait", "pre_ui", "ui", "scene_update",
+                "render_graph_setup", "render_graph_execute",
+                "viewport_compose", "compose_early",
+                "compose_celestial", "compose_terrain", "compose_render",
+                "compose_gi", "compose_atmosphere", "compose_post",
+                "gi_prepare", "gi_update_list", "gi_estimate",
+                "gi_snapshot", "gi_snapshot_build", "gi_snapshot_upload",
+                "gi_passes",
+                "submit_present", "whole_loop"};
+            const bool topLevel =
+                phase == FenceWait || phase == PreUi || phase == Ui ||
+                phase == SceneUpdate || phase == RenderGraphSetup ||
+                phase == RenderGraphExecute || phase == ViewportCompose ||
+                phase == SubmitPresent;
+            const orbit::u64 end = orbit::profiler::NowTicks();
+            const auto duration = static_cast<orbit::u64>(
+                std::max(milliseconds, 0.0) *
+                orbit::profiler::TicksPerMillisecond());
+            orbit::profiler::RecordLaneSpan(
+                topLevel ? "Main loop phases" : "Main loop sub-phases",
+                labels[phase],
+                end > duration ? end - duration : 0U,
+                end);
+        }
     }
 
     void FinishFrame() noexcept
@@ -1338,6 +1375,19 @@ int main(
     const int argc,
     char** argv)
 {
+    orbit::core::SetCurrentThreadName("Orbit.Main");
+
+    // Always-on micro-profiler: per-thread scope rings plus a hitch/stall
+    // watchdog on this (the frame-driving) thread. See docs/ORBIT_PROFILER.md.
+    orbit::profiler::StartWatchdog();
+    struct ProfilerShutdown
+    {
+        ~ProfilerShutdown()
+        {
+            orbit::profiler::StopWatchdog();
+        }
+    } profilerShutdown;
+
     try
     {
         orbit::editor_model::OutputLog
@@ -1620,6 +1670,9 @@ int main(
             {
                 return cpuFrameTelemetry.Snapshot();
             });
+
+        orbit::editor_rpc::RegisterProfilerRpc(
+            rpcHost.Dispatcher());
 
         orbit::dev_server::DevServer
             rpcServer({
@@ -2107,6 +2160,60 @@ int main(
 
             rpcHost.Dispatcher().Register(
                 {
+                    .name = "project.discover",
+                    .description =
+                        "Scans the usual folders (Documents, Desktop, Downloads, Orbit's Projects folder) for Orbit projects and lists them, newest first. Optional roots overrides the folders.",
+                    .mutating = false
+                },
+                [](const Value& params)
+                {
+                    std::vector<std::filesystem::path> roots;
+                    if (params.IsObject())
+                    {
+                        const auto found = params.AsObject().find("roots");
+                        if (found != params.AsObject().end() &&
+                            found->second.IsArray())
+                        {
+                            for (const auto& item : found->second.AsArray())
+                            {
+                                if (item.IsString())
+                                {
+                                    roots.emplace_back(item.AsString());
+                                }
+                            }
+                        }
+                    }
+                    if (roots.empty())
+                    {
+                        roots = orbit::platform::UsualProjectFolders();
+                    }
+
+                    Value::Array items;
+                    for (const auto& project :
+                         orbit::studio_session::ProjectBrowserModel::
+                             DiscoverProjects(roots))
+                    {
+                        items.push_back(
+                            Value(
+                                Value::Object{
+                                    {"manifest",
+                                     [&project]
+                                     {
+                                         const auto text =
+                                             project.manifestPath.
+                                                 generic_u8string();
+                                         return std::string(
+                                             text.begin(),
+                                             text.end());
+                                     }()},
+                                    {"name", project.displayName}
+                                }));
+                    }
+                    return Value(std::move(items));
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
                     .name = "project.recent",
                     .description =
                         "Lists recently opened Orbit projects, most recent first.",
@@ -2181,6 +2288,10 @@ int main(
                 device,
                 studioSession);
 
+        // Text diagnostics readout over the primary viewport image.
+        orbit::studio_ui::StudioTextDiagnosticsHud
+            primaryTextHud;
+
         orbit::studio_ui::StudioViewportPanels
             studioViewportPanels(
                 studioViews,
@@ -2238,6 +2349,14 @@ int main(
                 studioViews);
         debugViewUi.Register(ui);
 
+        // CPU profiler panel + profiler.panel_* / profiler.snapshot RPC, both
+        // driving one model (docs/ORBIT_PROFILER.md).
+        orbit::studio_ui::ProfilerUi profilerUi;
+        profilerUi.Register(ui);
+        orbit::studio_ui::RegisterProfilerPanelRpc(
+            rpcHost.Dispatcher(),
+            profilerUi.Model());
+
         orbit::studio_ui::RegisterStudioRenderViewRpc(
             rpcHost.Dispatcher(),
             studioViews);
@@ -2247,6 +2366,13 @@ int main(
 
         orbit::lighting::LightingTimestampRecorder
             lightingTimestamps(
+                device,
+                swapchain.BufferCount());
+
+        // GPU time per render-graph pass, shown on the profiler's "GPU passes"
+        // lane (docs/ORBIT_PROFILER.md).
+        orbit::render_graph::GpuPassTimer
+            gpuPassTimer(
                 device,
                 swapchain.BufferCount());
 
@@ -2460,6 +2586,159 @@ int main(
                                      ? "terrain"
                                      : "reference_sphere")}
                         });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "viewport.focus_surface",
+                    .description =
+                        "Moves the viewport camera to a low vantage point over the terrain surface under the viewport position (u, v), each in 0..1 with (0, 0) at the top-left. The same operation as double-clicking the terrain in the viewport. Returns focused=false when that position does not hit terrain. id defaults to studio.primary.",
+                    .mutating = true
+                },
+                [&studioViews](const Value& params)
+                {
+                    if (!params.IsObject())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602, "Params must be an object.");
+                    }
+                    const auto& object = params.AsObject();
+                    const auto numberOf =
+                        [&object](const char* key)
+                        {
+                            const auto found = object.find(key);
+                            if (found == object.end() ||
+                                !found->second.IsNumber())
+                            {
+                                throw orbit::rpc::Error(
+                                    -32602,
+                                    std::string(key) +
+                                        " must be a number in 0..1.");
+                            }
+                            return found->second.AsNumber();
+                        };
+                    const auto idFound = object.find("id");
+                    const std::string id =
+                        idFound != object.end() && idFound->second.IsString()
+                            ? idFound->second.AsString()
+                            : std::string("studio.primary");
+
+                    const bool focused =
+                        studioViews.FocusTerrainSurfacePoint(
+                            id,
+                            static_cast<orbit::f32>(numberOf("u")),
+                            static_cast<orbit::f32>(numberOf("v")));
+                    return Value(
+                        Value::Object{
+                            {"focused", focused}
+                        });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "view.mode_set",
+                    .description =
+                        "Sets a viewport's mode (perspective | body_map | debug | system), like the viewport mode selector. id defaults to studio.primary.",
+                    .mutating = true
+                },
+                [&studioSession](const Value& params)
+                {
+                    const auto& object = params.AsObject();
+                    const auto idFound = object.find("id");
+                    const std::string id =
+                        idFound != object.end() && idFound->second.IsString()
+                            ? idFound->second.AsString()
+                            : std::string("studio.primary");
+                    const auto modeFound = object.find("mode");
+                    if (modeFound == object.end() ||
+                        !modeFound->second.IsString())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "mode must be perspective, body_map, debug or system.");
+                    }
+
+                    const std::string& mode = modeFound->second.AsString();
+                    orbit::studio_session::ViewportMode parsed{};
+                    if (mode == "perspective")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::Perspective;
+                    }
+                    else if (mode == "body_map")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::BodyMap;
+                    }
+                    else if (mode == "debug")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::Debug;
+                    }
+                    else if (mode == "system")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::System;
+                    }
+                    else
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "mode must be perspective, body_map, debug or system.");
+                    }
+
+                    studioSession.Viewports().SetMode(id, parsed);
+                    return Value(
+                        Value::Object{
+                            {"id", id},
+                            {"mode", mode}
+                        });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "view.debug_field_set",
+                    .description =
+                        "Chooses which terrain data field a viewport shows in debug mode, by the name listed in the Debug tab (for example 'Drainage', 'Final Biome'). id defaults to studio.primary; call with no field to list names.",
+                    .mutating = true
+                },
+                [&studioViews](const Value& params)
+                {
+                    const auto& object = params.AsObject();
+                    const auto idFound = object.find("id");
+                    const std::string id =
+                        idFound != object.end() && idFound->second.IsString()
+                            ? idFound->second.AsString()
+                            : std::string("studio.primary");
+
+                    Value::Array names;
+                    for (const auto& entry :
+                         orbit::terrain_debug::FieldCatalog())
+                    {
+                        names.emplace_back(std::string(entry.name));
+                    }
+
+                    const auto fieldFound = object.find("field");
+                    if (fieldFound == object.end() ||
+                        !fieldFound->second.IsString())
+                    {
+                        return Value(
+                            Value::Object{{"fields", Value(std::move(names))}});
+                    }
+
+                    for (const auto& entry :
+                         orbit::terrain_debug::FieldCatalog())
+                    {
+                        if (entry.name == fieldFound->second.AsString())
+                        {
+                            studioViews.SetDebugField(id, entry.field);
+                            return Value(
+                                Value::Object{
+                                    {"id", id},
+                                    {"field", std::string(entry.name)}
+                                });
+                        }
+                    }
+
+                    throw orbit::rpc::Error(
+                        -32602,
+                        "Unknown debug field. Call view.debug_field_set without field to list them.");
                 });
 
             rpcHost.Dispatcher().Register(
@@ -4711,6 +4990,7 @@ int main(
                  &viewportRightGestureDistance,
                  &viewportHomeWasDown,
                  &viewportEndWasDown,
+                 &primaryTextHud,
                  &pendingPrimaryViewResize](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -4847,6 +5127,12 @@ int main(
                                             primaryView->
                                                 Height())
                             });
+
+                    primaryTextHud.Draw(
+                        context,
+                        studioViews,
+                        "studio.primary",
+                        interaction);
 
                     bool viewportRadialOpen = false;
 
@@ -7926,6 +8212,33 @@ int main(
         auto previous =
             Clock::now();
 
+        // Frame pacing. The loop is vsync-bound, so an idle editor still
+        // re-renders the whole scene at the display refresh rate. Render at
+        // full rate while the user interacts, automation is talking to Studio
+        // or terrain is still refining; otherwise hold to a low rate that
+        // still wakes immediately on input. ORBIT_IDLE_FPS overrides the
+        // default of 30 (0 disables the throttle).
+        orbit::i32 idleFramesPerSecond = 30;
+        if (const std::string configured =
+                orbit::platform::EnvironmentVariable("ORBIT_IDLE_FPS");
+            !configured.empty())
+        {
+            try
+            {
+                idleFramesPerSecond = std::clamp(
+                    std::stoi(configured),
+                    0,
+                    1000);
+            }
+            catch (const std::exception&)
+            {
+            }
+        }
+        constexpr auto kIdleAfter = std::chrono::milliseconds(1500);
+        auto lastActivity = Clock::now();
+        auto lastIterationStart = Clock::now();
+        orbit::u64 lastRpcRequestCount = 0U;
+
         bool terrainUiSmokeValidated = false;
         orbit::u32 terrainUiSmokeAttempts = 0U;
         orbit::u32 terrainUiSmokeRenderedFrames = 0U;
@@ -7959,6 +8272,52 @@ int main(
 
         while (window.PumpEvents())
         {
+            {
+                const auto paceNow = Clock::now();
+                const orbit::u64 rpcRequests = rpcHost.RequestCount();
+                const bool busy =
+                    window.ConsumeInputActivity() ||
+                    rpcRequests != lastRpcRequestCount ||
+                    studioViewportRenderer.HasPendingTerrainWork();
+                lastRpcRequestCount = rpcRequests;
+
+                {
+                    const auto patchStats =
+                        studioViewportRenderer.TerrainWorkStats();
+                    studioViews.SetOrbitalPatchStats(
+                        "studio.primary",
+                        patchStats.patchesPending,
+                        patchStats.patchesResident);
+                }
+
+                if (busy)
+                {
+                    lastActivity = paceNow;
+                }
+                else if (
+                    idleFramesPerSecond > 0 &&
+                    paceNow - lastActivity > kIdleAfter)
+                {
+                    const auto target =
+                        std::chrono::microseconds(
+                            1'000'000 / idleFramesPerSecond);
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            paceNow - lastIterationStart);
+                    if (elapsed < target)
+                    {
+                        window.WaitForActivity(
+                            static_cast<orbit::u32>(
+                                (target - elapsed).count() / 1000));
+                    }
+                }
+
+                lastIterationStart = Clock::now();
+            }
+
+            // Frame timing starts after the idle-pacing wait so an intentional
+            // sleep is never reported as a hitch.
+            orbit::profiler::BeginFrame();
             const auto loopStarted = Clock::now();
             const orbit::u32 lightingFrameSlot = nextFrameSlot;
             auto& frame = inFlightFrames[lightingFrameSlot];
@@ -7981,6 +8340,7 @@ int main(
                 }
                 surfaceVolumeSolver.ResolveGpuTimingFrame(
                     lightingFrameSlot);
+                gpuPassTimer.Resolve(lightingFrameSlot);
             }
             frame.graph.reset();
 
@@ -8012,6 +8372,7 @@ int main(
             if (width == 0 ||
                 height == 0)
             {
+                orbit::profiler::CancelFrame();
                 continue;
             }
 
@@ -8462,10 +8823,16 @@ int main(
 
             if (worldSession.HasWorld())
             {
+                // Flying the camera (right mouse held) owns the keyboard:
+                // movement keys must not double as letter shortcuts.
                 shortcuts.Update(
                     window,
                     authoringCommands(),
-                    ui.WantsKeyboard());
+                    ui.WantsKeyboard(),
+                    viewportRightGestureActive ||
+                        window.MouseButtonDown(
+                            orbit::platform::
+                                MouseButton::Right));
             }
 
             publishAutomationChanges();
@@ -8508,6 +8875,9 @@ int main(
                     CurrentBackBuffer();
 
             lightingTimestamps.BeginFrame(
+                *commands,
+                lightingFrameSlot);
+            gpuPassTimer.BeginFrame(
                 *commands,
                 lightingFrameSlot);
 
@@ -8973,7 +9343,7 @@ int main(
                 {});
 
             const auto renderGraphExecuteStarted = Clock::now();
-            graph.Execute(*commands);
+            graph.Execute(*commands, &gpuPassTimer);
 
             commands->Close();
             cpuFrameTelemetry.Record(
@@ -9018,6 +9388,7 @@ int main(
                 std::chrono::duration<double, std::milli>(
                     Clock::now() - loopStarted).count());
             cpuFrameTelemetry.FinishFrame();
+            orbit::profiler::EndFrame();
 
             nextFrameSlot =
                 (nextFrameSlot + 1U) %

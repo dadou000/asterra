@@ -349,6 +349,18 @@ public:
         const shader::Compiler& compiler,
         u32 framesInFlight = 1U);
 
+    // True while far terrain patches are still being built, so the host can
+    // keep rendering at full rate until the view has finished refining.
+    [[nodiscard]] bool HasPendingTerrainWork() const noexcept
+    {
+        return macroGlobeRenderer_.HasPendingWork();
+    }
+
+    [[nodiscard]] celestial_globe::MacroGlobeWorkStats TerrainWorkStats() const noexcept
+    {
+        return macroGlobeRenderer_.WorkStats();
+    }
+
     [[nodiscard]] std::optional<StudioMacroGlobeDiagnostics>
     MacroGlobeDiagnostics(std::string_view viewportId) const noexcept;
     [[nodiscard]] std::optional<StudioSurfaceGlobeTransitionDiagnostics>

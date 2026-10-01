@@ -1,3 +1,4 @@
+#include <orbit/profiler/Profiler.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
 #include <orbit/celestial_radiometry/Radiometry.hpp>
@@ -2907,12 +2908,25 @@ StudioViewportRenderer::EnsureMacroGlobePresentation(
             .footprintScale = 1.5
         };
 
+    const auto* terrainCapability =
+        session.World().
+            Surfaces().
+            Registry().
+            FindTerrainSurface(body);
+
     const u64 geometryFingerprint =
-        celestial_globe::
-            MacroGlobeFingerprint(
-                terrainSource,
-                shape,
-                globeConfig);
+        terrainCapability != nullptr &&
+            terrainCapability->terrain.get() == &terrainSource
+        ? celestial_globe::
+              MacroGlobeFingerprint(
+                  terrainCapability->terrain,
+                  shape,
+                  globeConfig)
+        : celestial_globe::
+              MacroGlobeFingerprint(
+                  terrainSource,
+                  shape,
+                  globeConfig);
 
     const u64 sourceRevision =
         terrainSource.Revision();
@@ -3526,6 +3540,23 @@ StudioViewportRenderer::CelestialSchedulerBudget() const noexcept
     return celestialScheduler_.Budget();
 }
 
+// The sky-view table depends smoothly on the observer's altitude, but it is keyed
+// by an exact hash of the radius and rebuilt on the CPU (about 22 ms), so a climb
+// or descent rebuilt it on every frame. Snapping the altitude to ~2% steps keeps
+// the sky within a fraction of a pixel of exact while rebuilding it only a few
+// times per altitude decade.
+[[nodiscard]] f64 QuantizedSkyObserverRadius(
+    const f64 observerRadiusMeters,
+    const f64 bottomRadiusMeters) noexcept
+{
+    const f64 altitude =
+        std::max(observerRadiusMeters - bottomRadiusMeters, 1.0);
+    constexpr f64 kLogStep = 0.02;
+    const f64 snapped = std::exp(
+        std::round(std::log(altitude) / kLogStep) * kLogStep);
+    return bottomRadiusMeters + snapped;
+}
+
 void StudioViewportRenderer::SetCelestialQualityPolicy(
     celestial_representation::QualityPolicy policy) noexcept
 {
@@ -3765,10 +3796,21 @@ StudioViewportRenderer::Compose(
                     return;
                 }
                 const auto now = std::chrono::steady_clock::now();
-                cpuTimingRecorder(
-                    stage,
+                const double stageMs =
                     std::chrono::duration<double, std::milli>(
-                        now - composeStageStarted).count());
+                        now - composeStageStarted).count();
+                cpuTimingRecorder(stage, stageMs);
+                if (orbit::profiler::Enabled())
+                {
+                    const auto end = orbit::profiler::NowTicks();
+                    const auto width = static_cast<u64>(
+                        stageMs * orbit::profiler::TicksPerMillisecond());
+                    orbit::profiler::RecordLaneSpan(
+                        "Compose stages",
+                        orbit::profiler::Intern(stage),
+                        end > width ? end - width : 0U,
+                        end);
+                }
                 composeStageStarted = now;
             };
         auto* view = views.Find(info.id);
@@ -4380,6 +4422,7 @@ StudioViewportRenderer::Compose(
         }
 
 
+
         std::optional<
             world_model::ResolvedOceanBody>
             resolvedOceanForView;
@@ -4392,6 +4435,11 @@ StudioViewportRenderer::Compose(
                         session.World().
                             Objects(),
                         *atmosphereBody);
+        }
+
+        if (!info.layers.ocean)
+        {
+            resolvedOceanForView.reset();
         }
 
         std::optional<
@@ -4946,12 +4994,16 @@ StudioViewportRenderer::Compose(
                         localPositionMeters);
 
             const f64 observerRadius =
-                std::max(
-                    rawObserverRadius,
+                QuantizedSkyObserverRadius(
+                    std::max(
+                        rawObserverRadius,
+                        resolvedAtmosphere->
+                            parameters.
+                            bottomRadiusMeters +
+                            1.0e-3),
                     resolvedAtmosphere->
                         parameters.
-                        bottomRadiusMeters +
-                        1.0e-3);
+                        bottomRadiusMeters);
 
             const f64 irradiance =
                 studioDirectLight.
@@ -5223,6 +5275,12 @@ StudioViewportRenderer::Compose(
                 });
         }
 
+
+        // Near-field representation weight and sea level, recorded by the
+        // production-terrain case for the water pass added after lighting.
+        f64 nearFieldWaterWeight = 0.0;
+        f32 nearFieldSeaLevelMeters = 0.0F;
+
         switch (presentation)
         {
         case StudioViewportPresentation::ProductionTerrain:
@@ -5234,6 +5292,7 @@ StudioViewportRenderer::Compose(
                 throw std::logic_error(
                     "Studio production-terrain presentation lost its device, compiler or runtime binding.");
             }
+
 
             const auto& source =
                 session.TerrainRuntime().
@@ -5304,6 +5363,16 @@ StudioViewportRenderer::Compose(
                     .policy =
                         celestialQualityPolicy_
                 };
+            // The view's LOD bias keeps richer representations longer (+) or
+            // hands over to coarser ones sooner (-).
+            representationInput.policy.qualityScale =
+                std::clamp(
+                    representationInput.policy.qualityScale *
+                        std::exp2(
+                            static_cast<f64>(
+                                info.layers.lodBiasStops)),
+                    0.05,
+                    64.0);
 
             const celestial_representation::
                 RepresentationSubjectId
@@ -5356,15 +5425,21 @@ StudioViewportRenderer::Compose(
                 };
 
             const f64 productionWeight =
-                weightFor(
-                    celestial_representation::
-                        Representation::
-                            ProductionSurface);
+                info.layers.productionSurface
+                    ? weightFor(
+                          celestial_representation::
+                              Representation::
+                                  ProductionSurface)
+                    : 0.0;
             const f64 macroWeight =
                 weightFor(
                     celestial_representation::
                         Representation::
                             MacroDisplacedGlobe);
+
+            nearFieldWaterWeight = productionWeight;
+            nearFieldSeaLevelMeters = static_cast<f32>(
+                terrainDescription.global.seaLevelMeters);
 
             transitionDiagnostics_.insert_or_assign(
                 info.id,
@@ -5415,8 +5490,13 @@ StudioViewportRenderer::Compose(
                 composeStageStarted = now;
             }
 
-            const bool recreate =
-                terrain.renderer == nullptr ||
+            // The field generator depends only on the planet and its terrain
+            // source, not on the clipmap. The adaptive coverage tier changes the
+            // clipmap at a few altitudes; rebuilding the generator there
+            // recompiled its compute shader on the frame thread (a ~3 s freeze
+            // each time), so a clipmap-only change keeps it and rebuilds just
+            // the renderer.
+            const bool recreateGenerator =
                 terrain.fieldGenerator == nullptr ||
                 terrain.universeGeneration !=
                     terrainRuntime->
@@ -5427,7 +5507,11 @@ StudioViewportRenderer::Compose(
                     terrainRuntime->planet.id ||
                 terrain.terrainSourceRevision !=
                     terrainRuntime->
-                        terrainSourceRevision ||
+                        terrainSourceRevision;
+
+            const bool recreate =
+                recreateGenerator ||
+                terrain.renderer == nullptr ||
                 !SameClipmapConfig(
                     terrain.clipmap,
                     terrainRuntime->clipmap);
@@ -5458,15 +5542,20 @@ StudioViewportRenderer::Compose(
                 config.drySurface =
                     !resolvedOceanForView.has_value();
 
-                terrain.fieldGenerator =
-                    std::make_unique<
-                        terrain_gpu::
-                            GpuFieldGenerator>(
-                                *device_,
-                                *compiler_,
-                                terrainRuntime->
-                                    planet,
-                                *analytic);
+                if (recreateGenerator)
+                {
+                    // The renderer references the generator; drop it first.
+                    terrain.renderer.reset();
+                    terrain.fieldGenerator =
+                        std::make_unique<
+                            terrain_gpu::
+                                GpuFieldGenerator>(
+                                    *device_,
+                                    *compiler_,
+                                    terrainRuntime->
+                                        planet,
+                                    *analytic);
+                }
 
                 terrain.renderer =
                     std::make_unique<
@@ -5563,7 +5652,12 @@ StudioViewportRenderer::Compose(
 
             terrain.renderer->
                 SetSurfaceEffects(
-                    surfaceEffects.stamps);
+                    info.layers.surfaceEffects
+                        ? surfaceEffects.stamps
+                        : decltype(surfaceEffects.stamps){});
+            terrain.renderer->
+                SetDrySurface(
+                    !resolvedOceanForView.has_value());
 
             const auto camera =
                 TerrainCameraFromBodyCamera(
@@ -5809,6 +5903,8 @@ StudioViewportRenderer::Compose(
                      globeCamera,
                      studioDirectLight,
                      resolvedOceanForView,
+                     globeLodBias = info.layers.lodBiasStops,
+                     macroGlobeLayer = info.layers.macroGlobe,
                      projectedRadius =
                         representationDecision.
                             projectedRadiusPixels](
@@ -5827,7 +5923,8 @@ StudioViewportRenderer::Compose(
                                 Representation::
                                     MacroDisplacedGlobe)
                         {
-                            if (transitionGlobe == nullptr)
+                            if (transitionGlobe == nullptr ||
+                                !macroGlobeLayer)
                             {
                                 return;
                             }
@@ -5854,7 +5951,8 @@ StudioViewportRenderer::Compose(
                                                 ? resolvedOceanForView->optical.glintStrength
                                                 : 1.0),
                                     .oceanEnabled =
-                                        resolvedOceanForView.has_value()
+                                        resolvedOceanForView.has_value(),
+                                    .lodBiasStops = globeLodBias
                                 };
 
                             if (opacity >= 0.5F)
@@ -6356,7 +6454,9 @@ StudioViewportRenderer::Compose(
                  globe,
                  camera,
                  studioDirectLight,
-                 resolvedOceanForView](
+                 resolvedOceanForView,
+                 globeLodBias = info.layers.lodBiasStops,
+                 macroGlobeLayer = info.layers.macroGlobe](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -6378,7 +6478,7 @@ StudioViewportRenderer::Compose(
                         *macroSurfaceEmissionClass,
                         {0.0F, 0.0F, 0.0F, 0.0F});
 
-                    if (globe == nullptr)
+                    if (globe == nullptr || !macroGlobeLayer)
                     {
                         return;
                     }
@@ -6418,7 +6518,8 @@ StudioViewportRenderer::Compose(
                                             ? resolvedOceanForView->optical.glintStrength
                                             : 1.0),
                                 .oceanEnabled =
-                                    resolvedOceanForView.has_value()
+                                    resolvedOceanForView.has_value(),
+                                .lodBiasStops = globeLodBias
                             });
                 });
 
@@ -10259,6 +10360,91 @@ StudioViewportRenderer::Compose(
                 // near field instead of reprojecting stale indirect light.
                 finalGather.hasHistory = false;
                 finalGather.previousView = {};
+            }
+
+            // Near-field standing water is its own object: a flat surface at
+            // sea level, alpha-blended over the lit scene, after lighting, GI
+            // and reflections and before the atmosphere. The terrain pass drew
+            // the true bed; this pass tests against its depth (the shoreline)
+            // and measures the water column with it.
+            if (presentation ==
+                    StudioViewportPresentation::ProductionTerrain &&
+                nearFieldWaterWeight > 0.0 &&
+                resolvedOceanForView.has_value() &&
+                terrainRuntime.has_value())
+            {
+                if (const auto waterTerrain =
+                        terrainPresentations_.find(info.id);
+                    waterTerrain != terrainPresentations_.end() &&
+                    waterTerrain->second.renderer != nullptr)
+                {
+                    terrain_render::TerrainWaterOptics water{};
+                    const auto& optical = resolvedOceanForView->optical;
+                    water.absorptionPerMeter = {
+                        static_cast<f32>(optical.absorptionPerMeter.x),
+                        static_cast<f32>(optical.absorptionPerMeter.y),
+                        static_cast<f32>(optical.absorptionPerMeter.z)};
+                    water.refractiveIndex =
+                        static_cast<f32>(optical.refractiveIndex);
+                    water.deepColor = {
+                        static_cast<f32>(optical.deepWaterColor.x),
+                        static_cast<f32>(optical.deepWaterColor.y),
+                        static_cast<f32>(optical.deepWaterColor.z)};
+                    water.deepColorDepthMeters =
+                        static_cast<f32>(optical.deepColorDepthMeters);
+                    water.seaLevelMeters = nearFieldSeaLevelMeters;
+                    water.sunDirectionBody = studioDirectLight.directionBody;
+                    water.sunIrradiance = studioDirectLight.irradianceScale;
+                    water.skyIrradiance =
+                        radianceEstimateSettings.skyIrradianceLinear;
+                    water.opacity = static_cast<f32>(nearFieldWaterWeight);
+
+                    auto* waterRenderer = waterTerrain->second.renderer.get();
+                    waterRenderer->SetWaterOptics(water);
+
+                    const auto waterCamera =
+                        TerrainCameraFromBodyCamera(
+                            view->Camera(),
+                            terrainRuntime->observer);
+
+                    graph.AddPass(
+                        prefix + ".NearFieldWater",
+                        {
+                            {
+                                .texture = targets.color,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthRead,
+                                .access = render_graph::Access::Read
+                            }
+                        },
+                        [color,
+                         lightingDepth,
+                         waterRenderer,
+                         waterCamera,
+                         width,
+                         height,
+                         frameIndex](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            const std::array<rhi::Texture*, 1> waterTargets{
+                                color};
+                            commands.SetRenderTargetsReadOnlyDepth(
+                                waterTargets,
+                                *lightingDepth);
+                            waterRenderer->DrawWater(
+                                commands,
+                                frameIndex,
+                                width,
+                                height,
+                                waterCamera,
+                                *lightingDepth);
+                        });
+                }
             }
 
             recordComposeStage("gi");

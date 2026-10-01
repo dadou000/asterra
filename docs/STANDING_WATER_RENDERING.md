@@ -2,6 +2,12 @@
 
 Implemented 2026-09-13. Automated validation passed; user visual confirmation is pending.
 
+> **Update 2026-09-30:** the Studio clipmap no longer draws water as an opaque
+> raised surface. Near-field standing water is now a separate object with its own
+> pass; see "Near-field water pass" at the end. "Current representation" below
+> still describes the CPU sample contract, the sandbox and the orbital globe (the
+> far field is unchanged), but not how the Studio clipmap draws standing water.
+
 ## Failure mechanism
 
 The screenshot's HUD showed 14,337 ocean vertices and zero lake cells. Ocean
@@ -88,3 +94,65 @@ blend in overlaps; globally persistent lake IDs and shared spill levels would be
 needed to guarantee a single exact level across arbitrary region boundaries.
 Unresolved lakes fade with footprint, so this is not a promise of identical
 shoreline detail at every zoom level.
+
+## Near-field water pass (Studio clipmap, 2026-09-30)
+
+Water used to be painted onto a raised terrain surface, and two shading-only
+attempts (a flat-depth trick, baked bed relief) could not make it read as a flat
+plane with terrain beneath it. The clipmap now draws the terrain and the water as
+two objects. The far field (orbital patches) is unchanged.
+
+**Terrain pass.** The mesh sits on the true bed (`ClipmapVertexShader.hpp`). The
+pixel shader is the bed variant (`BuildClipmapBedPixelShader`): it draws no water,
+and the ocean biome colour, which describes the surface seen from above, is
+replaced by silt, because that is what shows through the water.
+
+**Water pass** (`TerrainPreviewRenderer::DrawWater`, render-graph pass
+`NearFieldWater`). It runs after lighting, GI and reflections and before the
+atmosphere, alpha-blended over the lit scene.
+
+- *Geometry.* The water vertex shader is derived from the terrain vertex shader
+  (`BuildClipmapWaterVertexShader`), so morphing, residency and clipmap holes are
+  identical. Vertices sit on the water surface: the sea plane (draw constant 43),
+  or bed + depth where a lake stands. A triangle is drawn only if at least one
+  corner is wet; the plane over its dry corners lies under the terrain.
+- *Shoreline.* The pass is bound with `SetRenderTargetsReadOnlyDepth` against the
+  terrain depth, so the hardware depth test removes water behind land. The shore
+  is the real intersection of the flat plane with the terrain, not a per-vertex
+  outline, and no puddle can appear where a pit falls between wet vertices.
+- *Water column.* The pixel shader samples the same terrain depth, converts it to
+  view depth and measures the ray from the surface to the bed, then turns that
+  into a vertical depth and a refracted path. The path is deliberately short
+  (0.6x) and uses the green/blue absorption, so the terrain stays readable through
+  water tens of metres deep.
+- *Shading.* `alpha = 1 - (1 - fresnel) * transmittance`; the colour adds Fresnel
+  sky reflection, sun glint (GGX) and the in-scattered body colour lit by the sun
+  and sky, in the same units as the deferred lighting (`irradianceScale`). Two
+  octaves of world-fixed ripples tilt the normal, fading out with the pixel
+  footprint. Output is clamped so a mirror-aligned glint cannot overflow RGBA16F.
+- *Optics* come from the resolved ocean (`absorptionPerMeter`, deep colour and
+  depth, refractive index) plus the sun, sky irradiance, sea level and the
+  near-field representation weight (the water fades with the terrain). They are
+  uploaded each frame in a small structured buffer at buffer slot 1
+  (`TerrainWaterOptics`). Near-field roughness is separate (0.06).
+- Ocean layer off (or no ocean): no water pass, and the terrain draws dry.
+
+### Limits
+- The water does not write depth or G-buffer, so the atmosphere and later passes
+  see the bed depth under water (the difference is a short slant path). GI and
+  reflections already ran and treat water pixels as the bed.
+- Alpha blending transmits the terrain by one factor, so the colour cast of the
+  water comes from the body colour, not from per-channel absorption of the bed.
+- No refraction of the bed, wave displacement, foam or caustics.
+- The sky reflection uses the GI sky summary, not the real atmosphere.
+
+### Seams this exposes
+Physical pages are composited into the clipmap with a hard switch at page
+borders. Where page terrain differs from generator terrain the bed shows a step
+under water, which the old painted surface hid; flat-bottomed lake basins from
+the page pipeline have abrupt walls. Blending at page edges is a separate change.
+
+### Hot iteration
+The shaders are embedded engine C++, so a change is picked up through the
+automatic native/generation handoff. The optics follow the ocean capability's
+properties live; nothing is cached across frames.

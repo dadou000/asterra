@@ -1,6 +1,8 @@
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 
+#include <optional>
 #include <stdexcept>
+#include <utility>
 #include <string>
 
 namespace orbit::studio_ui
@@ -95,6 +97,205 @@ constexpr i64 kFailed = 1071;
             {"surface_debug_mode", SurfaceDebugModeName(mode)}
         });
 }
+
+struct OverlayFlag
+{
+    const char* name;
+    bool StudioTerrainDiagnosticOverlayOptions::* member;
+};
+
+constexpr OverlayFlag kOverlayFlags[] = {
+    {"dirty_page_bounds", &StudioTerrainDiagnosticOverlayOptions::dirtyPageBounds},
+    {"build_states", &StudioTerrainDiagnosticOverlayOptions::buildStates},
+    {"physical_lod", &StudioTerrainDiagnosticOverlayOptions::physicalLod},
+    {"clipmap_rings", &StudioTerrainDiagnosticOverlayOptions::clipmapRings},
+    {"cache_status", &StudioTerrainDiagnosticOverlayOptions::cacheStatus},
+    {"authored_constraints", &StudioTerrainDiagnosticOverlayOptions::authoredConstraints},
+    {"biome_weights", &StudioTerrainDiagnosticOverlayOptions::biomeWeights},
+    {"process_masks", &StudioTerrainDiagnosticOverlayOptions::processMasks},
+    {"drainage_vectors", &StudioTerrainDiagnosticOverlayOptions::drainageVectors}};
+
+[[nodiscard]] Value OverlaysToRpc(
+    const std::string& id,
+    const StudioTerrainDiagnosticOverlayOptions& options)
+{
+    Value::Object result{{"id", id}};
+    for (const auto& flag : kOverlayFlags)
+    {
+        result.emplace(flag.name, options.*flag.member);
+    }
+    return Value(std::move(result));
+}
+
+[[nodiscard]] Value LayersToRpc(
+    const std::string& id,
+    const StudioTerrainLayerOptions& layers)
+{
+    return Value(Value::Object{
+        {"id", id},
+        {"production_surface", layers.productionSurface},
+        {"macro_globe", layers.macroGlobe},
+        {"ocean", layers.ocean},
+        {"surface_effects", layers.surfaceEffects},
+        {"lod_bias_stops", static_cast<f64>(layers.lodBiasStops)}});
+}
+
+[[nodiscard]] Value Vec3ToRpc(const math::Double3& value)
+{
+    return Value(Value::Array{value.x, value.y, value.z});
+}
+
+[[nodiscard]] Value PointToRpc(const StudioTerrainPointReport& point)
+{
+    Value::Object biomes;
+    biomes.emplace("ocean", static_cast<f64>(point.biomes.ocean));
+    biomes.emplace("desert", static_cast<f64>(point.biomes.desert));
+    biomes.emplace("grassland", static_cast<f64>(point.biomes.grassland));
+    biomes.emplace(
+        "temperate_forest",
+        static_cast<f64>(point.biomes.temperateForest));
+    biomes.emplace(
+        "boreal_forest",
+        static_cast<f64>(point.biomes.borealForest));
+    biomes.emplace("tundra", static_cast<f64>(point.biomes.tundra));
+    biomes.emplace("alpine", static_cast<f64>(point.biomes.alpine));
+    biomes.emplace("wetland", static_cast<f64>(point.biomes.wetland));
+
+    return Value(Value::Object{
+        {"unit_direction", Vec3ToRpc(point.unitDirection)},
+        {"latitude_degrees", point.latitudeDegrees},
+        {"longitude_degrees", point.longitudeDegrees},
+        {"footprint_meters", point.footprintMeters},
+        {"terrain_elevation_meters", point.terrainElevationMeters},
+        {"coarse_elevation_meters", point.coarseElevationMeters},
+        {"detail_delta_meters", point.detailDeltaMeters},
+        {"standing_water_depth_meters", point.standingWaterDepthMeters},
+        {"water_surface_elevation_meters", point.waterSurfaceElevationMeters},
+        {"underwater", point.underwater},
+        {"ground_radius_from_core_meters", point.groundRadiusFromCoreMeters},
+        {"rendered_surface_radius_from_core_meters",
+         point.renderedSurfaceRadiusFromCoreMeters},
+        {"slope_degrees", point.slopeDegrees},
+        {"downhill_bearing_degrees", point.downhillBearingDegrees},
+        {"climate", Value::Object{
+            {"temperature_c", static_cast<f64>(point.climate.temperatureC)},
+            {"humidity", static_cast<f64>(point.climate.humidity)},
+            {"precipitation", static_cast<f64>(point.climate.precipitation)},
+            {"continentality",
+             static_cast<f64>(point.climate.continentality)}}},
+        {"biome_weights", Value(std::move(biomes))},
+        {"dominant_biome", point.dominantBiome}});
+}
+
+[[nodiscard]] Value TextReportToRpc(
+    const StudioViewportTextReport& report,
+    const bool hud)
+{
+    Value::Object result{
+        {"id", report.viewId},
+        {"hud", hud},
+        {"view_mode", report.viewMode},
+        {"navigation", report.navigation},
+        {"width", static_cast<i64>(report.width)},
+        {"height", static_cast<i64>(report.height)},
+        {"has_terrain", report.hasTerrain},
+        {"camera", Value::Object{
+            {"position_meters", Vec3ToRpc(report.cameraPosition)},
+            {"forward", Vec3ToRpc(report.forward)},
+            {"up", Vec3ToRpc(report.up)},
+            {"heading_degrees", report.cameraHeadingDegrees},
+            {"pitch_degrees", report.cameraPitchDegrees},
+            {"vertical_fov_degrees", report.verticalFovDegrees},
+            {"near_plane_meters", report.nearPlaneMeters},
+            {"far_plane_meters", report.farPlaneMeters}}},
+        {"distance_from_core_meters", report.distanceFromCoreMeters},
+        {"layers", LayersToRpc(report.viewId, report.layers)},
+        {"text", FormatStudioViewportTextReport(report)}};
+
+    if (report.hasTerrain)
+    {
+        result.emplace("planet_radius_meters", report.planetRadiusMeters);
+        result.emplace(
+            "height_above_datum_meters",
+            report.heightAboveDatumMeters);
+        result.emplace(
+            "height_above_terrain_meters",
+            report.heightAboveTerrainMeters.has_value()
+                ? Value(*report.heightAboveTerrainMeters)
+                : Value(nullptr));
+        result.emplace(
+            "height_above_water_surface_meters",
+            report.heightAboveWaterSurfaceMeters.has_value()
+                ? Value(*report.heightAboveWaterSurfaceMeters)
+                : Value(nullptr));
+        result.emplace("terrain_runtime", Value::Object{
+            {"physical_page_level", static_cast<i64>(report.physicalPageLevel)},
+            {"adaptive_coverage_tier",
+             static_cast<i64>(report.adaptiveCoverageTier)},
+            {"terrain_source_revision",
+             static_cast<i64>(report.terrainSourceRevision)},
+            {"world_generation", static_cast<i64>(report.worldGeneration)},
+            {"runtime_generation",
+             static_cast<i64>(report.runtimeGeneration)}});
+    }
+
+    if (report.cpuTerrain.has_value())
+    {
+        const auto& cpu = *report.cpuTerrain;
+        Value::Object pages;
+        if (cpu.hasPages)
+        {
+            pages = Value::Object{
+                {"state", cpu.pageState},
+                {"pages", static_cast<i64>(cpu.pages)},
+                {"dirty", static_cast<i64>(cpu.dirtyPages)},
+                {"queued", static_cast<i64>(cpu.queuedPages)},
+                {"building", static_cast<i64>(cpu.buildingPages)},
+                {"uploading", static_cast<i64>(cpu.uploadingPages)},
+                {"ready", static_cast<i64>(cpu.readyPages)},
+                {"failed", static_cast<i64>(cpu.failedPages)},
+                {"stale", static_cast<i64>(cpu.stalePages)},
+                {"completed_products", static_cast<i64>(cpu.completedProducts)},
+                {"total_products", static_cast<i64>(cpu.totalProducts)}};
+        }
+        result.emplace("cpu_terrain", Value::Object{
+            {"page_pool", Value::Object{
+                {"workers", static_cast<i64>(cpu.poolWorkers)},
+                {"running", static_cast<i64>(cpu.poolRunningJobs)},
+                {"queued", static_cast<i64>(cpu.poolQueuedJobs)},
+                {"outstanding", static_cast<i64>(cpu.poolOutstandingJobs)}}},
+            {"page_rebuild", cpu.hasPages ? Value(std::move(pages)) : Value(nullptr)},
+            {"orbital_patches", Value::Object{
+                {"building", static_cast<i64>(cpu.globePatchesPending)},
+                {"resident", static_cast<i64>(cpu.globePatchesResident)}}}});
+    }
+
+    if (report.nadir.has_value())
+    {
+        result.emplace("below_camera", PointToRpc(*report.nadir));
+    }
+
+    if (report.cursor.has_value())
+    {
+        Value::Object cursor{
+            {"hit_distance_meters", report.cursor->hitDistanceMeters},
+            {"pick_physical_elevation_meters",
+             report.cursor->pickPhysicalElevationMeters},
+            {"pick_rendered_elevation_meters",
+             report.cursor->pickRenderedElevationMeters},
+            {"physical_page", report.cursor->physicalPage},
+            {"point", PointToRpc(report.cursor->point)}};
+        if (report.cursor->physicalLod.has_value())
+        {
+            cursor.emplace(
+                "physical_lod",
+                static_cast<i64>(*report.cursor->physicalLod));
+        }
+        result.emplace("under_cursor", Value(std::move(cursor)));
+    }
+
+    return Value(std::move(result));
+}
 } // namespace
 
 void RegisterStudioRenderViewRpc(
@@ -156,6 +357,259 @@ void RegisterStudioRenderViewRpc(
             catch (const rpc::Error&)
             {
                 throw;
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.terrain_overlays_get",
+            .description =
+                "Returns which terrain diagnostic overlays a Studio "
+                "RenderView draws (dirty_page_bounds, build_states, "
+                "physical_lod, clipmap_rings, cache_status, "
+                "authored_constraints, biome_weights, process_masks, "
+                "drainage_vectors).",
+            .mutating = false
+        },
+        [&views](const Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const std::string id = RequireString(values, "id");
+
+            try
+            {
+                return OverlaysToRpc(id, views.TerrainDiagnosticOverlays(id));
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kInvalid, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.terrain_overlays_set",
+            .description =
+                "Turns terrain diagnostic overlays on or off for a Studio "
+                "RenderView. Pass any of dirty_page_bounds, build_states, "
+                "physical_lod, clipmap_rings, cache_status, "
+                "authored_constraints, biome_weights, process_masks, "
+                "drainage_vectors as booleans; omitted flags keep their "
+                "value. The same toggles as the viewport's Diagnostics "
+                "properties.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const std::string id = RequireString(values, "id");
+
+            try
+            {
+                auto options = views.TerrainDiagnosticOverlays(id);
+                for (const auto& flag : kOverlayFlags)
+                {
+                    const auto found = values.find(flag.name);
+                    if (found == values.end())
+                    {
+                        continue;
+                    }
+                    if (!found->second.IsBool())
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            std::string(flag.name) + " must be a boolean.");
+                    }
+                    options.*flag.member = found->second.AsBool();
+                }
+                views.SetTerrainDiagnosticOverlays(id, options);
+                return OverlaysToRpc(id, views.TerrainDiagnosticOverlays(id));
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.terrain_layers_get",
+            .description =
+                "Returns which terrain layers a Studio RenderView draws "
+                "(production_surface = near-field clipmap terrain, "
+                "macro_globe = orbital displaced-globe patches, ocean, "
+                "surface_effects) and its lod_bias_stops.",
+            .mutating = false
+        },
+        [&views](const Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const std::string id = RequireString(values, "id");
+
+            try
+            {
+                return LayersToRpc(id, views.TerrainLayers(id));
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kInvalid, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.terrain_layers_set",
+            .description =
+                "Chooses which terrain layers a Studio RenderView draws and "
+                "its LOD bias. Pass any of production_surface, macro_globe, "
+                "ocean, surface_effects (booleans) and lod_bias_stops "
+                "(number, clamped to [-4, 4]; +1 keeps richer representations "
+                "longer and doubles orbital patch resolution, -1 the "
+                "opposite); omitted fields keep their value. The same "
+                "controls as the viewport Diagnostics 'Terrain layers' "
+                "section. Transient view state.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const std::string id = RequireString(values, "id");
+
+            try
+            {
+                auto layers = views.TerrainLayers(id);
+
+                const auto applyFlag =
+                    [&values](const char* name, bool& target)
+                {
+                    const auto found = values.find(name);
+                    if (found == values.end())
+                    {
+                        return;
+                    }
+                    if (!found->second.IsBool())
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            std::string(name) + " must be a boolean.");
+                    }
+                    target = found->second.AsBool();
+                };
+                applyFlag("production_surface", layers.productionSurface);
+                applyFlag("macro_globe", layers.macroGlobe);
+                applyFlag("ocean", layers.ocean);
+                applyFlag("surface_effects", layers.surfaceEffects);
+
+                if (const auto bias = values.find("lod_bias_stops");
+                    bias != values.end())
+                {
+                    if (!bias->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            "lod_bias_stops must be a number.");
+                    }
+                    layers.lodBiasStops =
+                        static_cast<f32>(bias->second.AsNumber());
+                }
+
+                views.SetTerrainLayers(id, layers);
+                return LayersToRpc(id, views.TerrainLayers(id));
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.text_diagnostics",
+            .description =
+                "Returns the full text diagnostic of a Studio RenderView: "
+                "camera position/heading/pitch, distance from the planet "
+                "core, height above datum (sea level), above the terrain and "
+                "above the water surface, and for the point below the camera "
+                "(and under the cursor when cursor_u/cursor_v in [0,1] are "
+                "given) latitude/longitude, terrain and coarse elevation, "
+                "water depth, radius from core, slope, downhill bearing, "
+                "climate and biome weights. 'text' is the same multi-line "
+                "readout the viewport HUD draws; 'hud' says whether the HUD "
+                "is on.",
+            .mutating = false
+        },
+        [&views](const Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const std::string id = RequireString(values, "id");
+
+            std::optional<std::pair<f32, f32>> cursor;
+            const auto cursorU = values.find("cursor_u");
+            const auto cursorV = values.find("cursor_v");
+            if (cursorU != values.end() || cursorV != values.end())
+            {
+                if (cursorU == values.end() || cursorV == values.end() ||
+                    !cursorU->second.IsNumber() ||
+                    !cursorV->second.IsNumber())
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "cursor_u and cursor_v must both be numbers.");
+                }
+                cursor = std::pair<f32, f32>{
+                    static_cast<f32>(cursorU->second.AsNumber()),
+                    static_cast<f32>(cursorV->second.AsNumber())};
+            }
+
+            try
+            {
+                return TextReportToRpc(
+                    views.TextDiagnostics(id, cursor),
+                    views.TextDiagnosticsHud(id));
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kInvalid, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.text_diagnostics_set",
+            .description =
+                "Turns the viewport's text diagnostics HUD on or off for a "
+                "Studio RenderView (the 'Text readout' checkbox in the "
+                "viewport Diagnostics properties). Returns the new state.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const std::string id = RequireString(values, "id");
+            const auto enabled = values.find("enabled");
+            if (enabled == values.end() || !enabled->second.IsBool())
+            {
+                throw rpc::Error(-32602, "enabled must be a boolean.");
+            }
+
+            try
+            {
+                views.SetTextDiagnosticsHud(id, enabled->second.AsBool());
+                return Value(Value::Object{
+                    {"id", id},
+                    {"hud", views.TextDiagnosticsHud(id)}});
             }
             catch (const std::exception& exception)
             {

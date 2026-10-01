@@ -179,6 +179,128 @@ def orbit_project_open(
 
 
 @mcp.tool()
+def orbit_view_terrain_overlays_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Which terrain diagnostic overlays a viewport draws."""
+    return _rpc("view.terrain_overlays_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_view_terrain_overlays_set(
+    view_id: str = "studio.primary",
+    dirty_page_bounds: bool | None = None,
+    build_states: bool | None = None,
+    physical_lod: bool | None = None,
+    clipmap_rings: bool | None = None,
+    cache_status: bool | None = None,
+    authored_constraints: bool | None = None,
+    biome_weights: bool | None = None,
+    process_masks: bool | None = None,
+    drainage_vectors: bool | None = None,
+) -> dict[str, Any]:
+    """Turn terrain diagnostic overlays on/off for a viewport. Omitted flags keep
+    their current value."""
+    params: dict[str, Any] = {"id": view_id}
+    for key, value in {
+        "dirty_page_bounds": dirty_page_bounds,
+        "build_states": build_states,
+        "physical_lod": physical_lod,
+        "clipmap_rings": clipmap_rings,
+        "cache_status": cache_status,
+        "authored_constraints": authored_constraints,
+        "biome_weights": biome_weights,
+        "process_masks": process_masks,
+        "drainage_vectors": drainage_vectors,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("view.terrain_overlays_set", params)
+
+
+@mcp.tool()
+def orbit_viewport_focus_surface(
+    u: float,
+    v: float,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Move the viewport camera to a low vantage point over the terrain under the
+    viewport position (u, v), each in 0..1 with (0, 0) at the top-left. Same as
+    double-clicking the terrain. Returns focused=false if that position does not
+    hit terrain."""
+    return _rpc("viewport.focus_surface", {"id": view_id, "u": u, "v": v})
+
+
+@mcp.tool()
+def orbit_view_terrain_layers_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Which terrain layers a viewport draws (production_surface = near-field
+    clipmap terrain, macro_globe = orbital patches, ocean, surface_effects) and its
+    lod_bias_stops."""
+    return _rpc("view.terrain_layers_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_view_terrain_layers_set(
+    view_id: str = "studio.primary",
+    production_surface: bool | None = None,
+    macro_globe: bool | None = None,
+    ocean: bool | None = None,
+    surface_effects: bool | None = None,
+    lod_bias_stops: float | None = None,
+) -> dict[str, Any]:
+    """Choose which terrain layers a viewport draws and its LOD bias. Omitted
+    fields keep their value. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
+    representations longer and doubles orbital patch resolution, -1 is coarser and
+    cheaper. Transient view state."""
+    params: dict[str, Any] = {"id": view_id}
+    for key, value in {
+        "production_surface": production_surface,
+        "macro_globe": macro_globe,
+        "ocean": ocean,
+        "surface_effects": surface_effects,
+        "lod_bias_stops": lod_bias_stops,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("view.terrain_layers_set", params)
+
+
+@mcp.tool()
+def orbit_view_text_diagnostics(
+    view_id: str = "studio.primary",
+    cursor_u: float | None = None,
+    cursor_v: float | None = None,
+) -> dict[str, Any]:
+    """Full numeric + text diagnostic for a viewport: camera position, heading,
+    pitch, distance from the planet core, height above datum (sea level), above the
+    terrain and above the water surface, and for the point below the camera (and
+    under the cursor when cursor_u/cursor_v in [0,1] are given) latitude/longitude,
+    terrain/coarse elevation, water depth, radius from core, slope, downhill
+    bearing, climate and biome weights. `text` is what the viewport HUD draws."""
+    params: dict[str, Any] = {"id": view_id}
+    if cursor_u is not None and cursor_v is not None:
+        params["cursor_u"] = cursor_u
+        params["cursor_v"] = cursor_v
+    return _rpc("view.text_diagnostics", params)
+
+
+@mcp.tool()
+def orbit_view_text_diagnostics_set(
+    enabled: bool,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Show or hide the text diagnostics HUD drawn over a viewport (the 'Text
+    readout' checkbox in the viewport Diagnostics properties)."""
+    return _rpc("view.text_diagnostics_set", {"id": view_id, "enabled": enabled})
+
+
+@mcp.tool()
+def orbit_project_discover(roots: list[str] | None = None) -> list[dict[str, Any]]:
+    """Scan the usual folders (Documents, Desktop, Downloads, Orbit's Projects
+    folder) for Orbit projects, newest first. Pass roots to scan other folders.
+    Open one with orbit_project_open."""
+    return _rpc("project.discover", {"roots": roots} if roots else {})
+
+
+@mcp.tool()
 def orbit_project_recent() -> list[dict[str, Any]]:
     """List recently opened projects (most recent first) with availability."""
     return _rpc("project.recent")
@@ -283,6 +405,118 @@ def orbit_viewport_focus_body() -> dict[str, Any]:
 def orbit_cpu_timings() -> dict[str, Any]:
     """Return last and rolling 120-frame CPU timings for the live Studio frame loop."""
     return _rpc("studio.cpu_timings")
+
+
+@mcp.tool()
+def orbit_profiler_status() -> dict[str, Any]:
+    """CPU micro-profiler state: configuration, frame-time summary, the last 120
+    frame times, and recent hitch captures (Perfetto traces with one lane per
+    thread and per CPU core, plus the stack frames that dominated each stall)."""
+    return _rpc("profiler.status")
+
+
+@mcp.tool()
+def orbit_profiler_configure(
+    enabled: bool | None = None,
+    hitch_threshold_ms: float | None = None,
+    stall_threshold_ms: float | None = None,
+    capture_window_ms: float | None = None,
+    max_hitch_files: int | None = None,
+) -> dict[str, Any]:
+    """Change the micro-profiler: turn it on/off, the frame length that counts as
+    a hitch (written to disk), the length at which stack sampling starts, how much
+    history a capture keeps, and how many hitch files are retained."""
+    params = {
+        key: value
+        for key, value in {
+            "enabled": enabled,
+            "hitch_threshold_ms": hitch_threshold_ms,
+            "stall_threshold_ms": stall_threshold_ms,
+            "capture_window_ms": capture_window_ms,
+            "max_hitch_files": max_hitch_files,
+        }.items()
+        if value is not None
+    }
+    return _rpc("profiler.configure", params)
+
+
+@mcp.tool()
+def orbit_profiler_capture(
+    window_ms: float | None = None, path: str | None = None
+) -> dict[str, Any]:
+    """Write the last window_ms of every thread and CPU core as a Chrome/Perfetto
+    trace (open at https://ui.perfetto.dev) and return its path."""
+    params: dict[str, Any] = {}
+    if window_ms is not None:
+        params["window_ms"] = window_ms
+    if path is not None:
+        params["path"] = path
+    return _rpc("profiler.capture", params)
+
+
+@mcp.tool()
+def orbit_profiler_panel_get() -> dict[str, Any]:
+    """State of the Studio Profiler panel: paused or live, snapshot source (live
+    or a loaded hitch file), options, visible time range and selected slice."""
+    return _rpc("profiler.panel_get")
+
+
+@mcp.tool()
+def orbit_profiler_panel_set(
+    paused: bool | None = None,
+    window_ms: float | None = None,
+    grouping: str | None = None,
+    freeze_on_hitch: bool | None = None,
+    min_slice_ms: float | None = None,
+    filter: str | None = None,
+    reset_view: bool | None = None,
+    view_begin_ms: float | None = None,
+    view_span_ms: float | None = None,
+    zoom_frame: int | None = None,
+    select_thread: str | None = None,
+    select_time_ms: float | None = None,
+    clear_selection: bool | None = None,
+    zoom_to_selection: bool | None = None,
+    load_trace: str | None = None,
+) -> dict[str, Any]:
+    """Drive the Profiler panel like its controls. paused pauses/resumes the live
+    capture; grouping is 'threads' or 'cores'; view_begin_ms/view_span_ms are
+    relative to the snapshot start; zoom_frame picks a frame (-1 = longest);
+    select_thread + select_time_ms selects the slice there; load_trace opens a
+    hitch or capture file (paused). Returns the new panel state."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "paused": paused,
+            "window_ms": window_ms,
+            "grouping": grouping,
+            "freeze_on_hitch": freeze_on_hitch,
+            "min_slice_ms": min_slice_ms,
+            "filter": filter,
+            "reset_view": reset_view,
+            "view_begin_ms": view_begin_ms,
+            "view_span_ms": view_span_ms,
+            "zoom_frame": zoom_frame,
+            "zoom_to_selection": zoom_to_selection,
+            "load_trace": load_trace,
+        }.items()
+        if value is not None
+    }
+    if select_thread is not None and select_time_ms is not None:
+        params["select"] = {"thread": select_thread, "time_ms": select_time_ms}
+    elif clear_selection:
+        params["select"] = None
+    return _rpc("profiler.panel_set", params)
+
+
+@mcp.tool()
+def orbit_profiler_snapshot(top_scopes: int = 15, slowest: int = 15) -> dict[str, Any]:
+    """Analysis of what the Profiler panel shows (live window, frozen snapshot or
+    loaded hitch file) within its visible range: frame stats, per-lane busy time,
+    heaviest scopes, heaviest GPU passes (GPU time per render pass), longest
+    slices (thread, core, self time) and stall stack samples. Pause first with orbit_profiler_panel_set(paused=True) to analyse a
+    fixed moment."""
+    return _rpc("profiler.snapshot", {"top_scopes": top_scopes, "slowest": slowest})
 
 
 @mcp.tool()
@@ -794,6 +1028,25 @@ def orbit_viewport_navigate(
             "boost": boost,
         },
     )
+
+
+@mcp.tool()
+def orbit_view_mode_set(mode: str, view_id: str = "studio.primary") -> dict[str, Any]:
+    """Set a viewport's mode: perspective, body_map, debug or system."""
+    return _rpc("view.mode_set", {"id": view_id, "mode": mode})
+
+
+@mcp.tool()
+def orbit_view_debug_field_set(
+    field: str | None = None,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Pick the terrain data field shown in debug mode (e.g. 'Drainage',
+    'Final Biome', 'Scatter Density'). Call without a field to list them."""
+    params: dict[str, Any] = {"id": view_id}
+    if field is not None:
+        params["field"] = field
+    return _rpc("view.debug_field_set", params)
 
 
 @mcp.tool()

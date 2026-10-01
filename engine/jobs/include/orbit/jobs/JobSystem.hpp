@@ -5,6 +5,7 @@
 #include <concepts>
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace orbit::jobs
@@ -57,11 +58,24 @@ private:
     friend class JobSystem;
 };
 
+// Worker count for a background pool sized as a share of the machine. Several
+// pools share one process, so each takes hardware_threads / divisor (at least
+// `minimum`) instead of all of them. The environment variable, when set to a
+// positive integer, overrides the computed value (for tuning and profiling).
+[[nodiscard]] u32 PoolWorkerCount(
+    const char* environmentVariable,
+    u32 divisor,
+    u32 minimum = 2U);
+
 class JobSystem
 {
 public:
+    // workerCount 0 means one worker per hardware thread minus one. `name`
+    // labels the pool's threads ("Orbit.<name>.<index>") so they can be told
+    // apart in a debugger or profiler.
     explicit JobSystem(
-        u32 workerCount = 0);
+        u32 workerCount = 0,
+        std::string name = "Jobs");
 
     ~JobSystem();
 

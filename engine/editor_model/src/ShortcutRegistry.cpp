@@ -85,7 +85,8 @@ void ShortcutRegistry::RegisterCallback(
 void ShortcutRegistry::Update(
     platform::Window& window,
     const commands::CommandRegistry& commandRegistry,
-    const bool suppressInvocation)
+    const bool suppressInvocation,
+    const bool blockAll)
 {
     const bool control =
         window.KeyDown(
@@ -109,7 +110,8 @@ void ShortcutRegistry::Update(
             shift == binding.chord.shift &&
             alt == binding.chord.alt;
 
-        if ((!suppressInvocation ||
+        if (!blockAll &&
+            (!suppressInvocation ||
              binding.allowWhenKeyboardCaptured) &&
             down &&
             !binding.wasDown)

@@ -1637,6 +1637,8 @@ CanvasInteraction PanelContext::Canvas(
         ImVec2(
             std::max(size.width, 1.0F),
             std::max(size.height, 1.0F)));
+    // Zooming a plot must not also scroll the panel behind it.
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
 
     const ImVec2 maximum{
         origin.x + std::max(size.width, 1.0F),
@@ -1714,7 +1716,21 @@ CanvasInteraction PanelContext::Canvas(
             ImGui::IsMouseReleased(
                 ImGuiMouseButton_Left),
         .u = u,
-        .v = v
+        .v = v,
+        .pixelX = hovered ? ImGui::GetMousePos().x - origin.x : 0.0F,
+        .pixelY = hovered ? ImGui::GetMousePos().y - origin.y : 0.0F,
+        .wheel = hovered ? ImGui::GetIO().MouseWheel : 0.0F,
+        .dragDeltaX =
+            ImGui::IsItemActive() &&
+                    ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0F)
+                ? ImGui::GetIO().MouseDelta.x
+                : 0.0F,
+        .dragDeltaY =
+            ImGui::IsItemActive() &&
+                    ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0F)
+                ? ImGui::GetIO().MouseDelta.y
+                : 0.0F,
+        .shiftDown = ImGui::GetIO().KeyShift
     };
 }
 
@@ -1797,6 +1813,41 @@ void PanelContext::CanvasCircle(
     }
 }
 
+void PanelContext::OverlayTextOnLastItem(const std::string_view text)
+{
+    if (text.empty())
+    {
+        return;
+    }
+
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    const char* const begin = text.data();
+    const char* const end = text.data() + text.size();
+    const ImVec2 size = ImGui::CalcTextSize(begin, end);
+    constexpr f32 kInset = 8.0F;
+    constexpr f32 kPadX = 8.0F;
+    constexpr f32 kPadY = 6.0F;
+
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(minimum, maximum, true);
+    const ImVec2 plateMinimum{minimum.x + kInset, minimum.y + kInset};
+    const ImVec2 plateMaximum{
+        plateMinimum.x + size.x + kPadX * 2.0F,
+        plateMinimum.y + size.y + kPadY * 2.0F};
+    drawList->AddRectFilled(
+        plateMinimum,
+        plateMaximum,
+        IM_COL32(8, 10, 14, 170),
+        4.0F);
+    drawList->AddText(
+        ImVec2{plateMinimum.x + kPadX, plateMinimum.y + kPadY},
+        IM_COL32(236, 240, 246, 255),
+        begin,
+        end);
+    drawList->PopClipRect();
+}
+
 void PanelContext::CanvasText(
     const math::Float2 position,
     const math::Float4 color,
@@ -1824,6 +1875,91 @@ void PanelContext::CanvasText(
                 color.w)),
         text.data(),
         text.data() + text.size());
+}
+
+void PanelContext::CanvasRect(
+    const math::Float2 a,
+    const math::Float2 b,
+    const math::Float4 color,
+    const bool filled,
+    const f32 thickness)
+{
+    if (!canvasActive_)
+    {
+        return;
+    }
+
+    const ImVec2 low{
+        canvasOrigin_.x + a.x * canvasSize_.width,
+        canvasOrigin_.y + a.y * canvasSize_.height};
+    const ImVec2 high{
+        canvasOrigin_.x + b.x * canvasSize_.width,
+        canvasOrigin_.y + b.y * canvasSize_.height};
+    const ImU32 packed = ImGui::ColorConvertFloat4ToU32(
+        ImVec4(color.x, color.y, color.z, color.w));
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    if (filled)
+    {
+        drawList->AddRectFilled(low, high, packed);
+    }
+    else
+    {
+        drawList->AddRect(low, high, packed, 0.0F, 0, thickness);
+    }
+}
+
+void PanelContext::CanvasTextClipped(
+    const math::Float2 position,
+    const f32 clipRight,
+    const math::Float4 color,
+    const std::string_view text)
+{
+    if (!canvasActive_ || text.empty())
+    {
+        return;
+    }
+
+    const ImVec2 mapped{
+        canvasOrigin_.x + position.x * canvasSize_.width,
+        canvasOrigin_.y + position.y * canvasSize_.height};
+    const f32 right = canvasOrigin_.x + clipRight * canvasSize_.width;
+    if (right <= mapped.x)
+    {
+        return;
+    }
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(
+        ImVec2(mapped.x, canvasOrigin_.y),
+        ImVec2(right, canvasOrigin_.y + canvasSize_.height),
+        true);
+    drawList->AddText(
+        mapped,
+        ImGui::ColorConvertFloat4ToU32(
+            ImVec4(color.x, color.y, color.z, color.w)),
+        text.data(),
+        text.data() + text.size());
+    drawList->PopClipRect();
+}
+
+void PanelContext::CanvasTooltip(const std::string_view text)
+{
+    if (text.empty())
+    {
+        return;
+    }
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(text.data(), text.data() + text.size());
+    ImGui::EndTooltip();
+}
+
+f32 PanelContext::TextWidthPixels(const std::string_view text) const
+{
+    return ImGui::CalcTextSize(text.data(), text.data() + text.size()).x;
+}
+
+f32 PanelContext::TextHeightPixels() const
+{
+    return ImGui::GetTextLineHeight();
 }
 
 bool PanelContext::Checkbox(

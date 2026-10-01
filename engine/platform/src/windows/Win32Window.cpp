@@ -635,6 +635,19 @@ public:
                 return false;
             }
 
+            if ((message.message >= WM_KEYFIRST &&
+                 message.message <= WM_KEYLAST) ||
+                (message.message >= WM_MOUSEFIRST &&
+                 message.message <= WM_MOUSELAST) ||
+                message.message == WM_INPUT ||
+                message.message == WM_SIZE ||
+                message.message == WM_SETFOCUS ||
+                message.message == WM_KILLFOCUS ||
+                message.message == WM_DPICHANGED)
+            {
+                inputActivity_ = true;
+            }
+
             TranslateMessage(
                 &message);
 
@@ -644,6 +657,35 @@ public:
 
         UpdateRelativeMouseCapture();
         return true;
+    }
+
+    [[nodiscard]] bool ConsumeInputActivity() override
+    {
+        // Held buttons keep the editor interactive even when no new message
+        // arrives (for example a right-drag in relative mouse mode).
+        const bool buttonHeld =
+            (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0 ||
+            (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0;
+
+        const bool activity = inputActivity_ || buttonHeld;
+        inputActivity_ = false;
+        return activity;
+    }
+
+    void WaitForActivity(const u32 milliseconds) override
+    {
+        if (milliseconds == 0U)
+        {
+            return;
+        }
+
+        MsgWaitForMultipleObjectsEx(
+            0,
+            nullptr,
+            milliseconds,
+            QS_ALLINPUT,
+            MWMO_INPUTAVAILABLE);
     }
 
     [[nodiscard]] bool KeyDown(
@@ -1063,6 +1105,7 @@ private:
     mutable u32 width_{};
     mutable u32 height_{};
     bool relativeMouseMode_{false};
+    bool inputActivity_{true};
     bool relativeMouseCaptured_{false};
 };
 } // namespace

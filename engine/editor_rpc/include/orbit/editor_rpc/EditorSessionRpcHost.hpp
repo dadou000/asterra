@@ -4,6 +4,7 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -30,6 +31,13 @@ public:
 
     [[nodiscard]] std::optional<std::string>
     Dispatch(std::string_view payload);
+
+    // Number of payloads dispatched so far. Lets the host treat automation
+    // traffic as activity (for example to keep rendering at full rate).
+    [[nodiscard]] u64 RequestCount() const noexcept
+    {
+        return requestCount_.load(std::memory_order_relaxed);
+    }
 
     [[nodiscard]] rpc::Dispatcher& Dispatcher() noexcept;
     [[nodiscard]] const rpc::Dispatcher& Dispatcher() const noexcept;
@@ -73,6 +81,7 @@ private:
     std::vector<std::string> hostMethods_;
     std::vector<std::string> closedProjectMethods_;
     bool pendingRebind_{false};
+    std::atomic<u64> requestCount_{0U};
     std::function<void(EditorRpcService&)>
         editorConfigurator_;
     std::optional<ViewportAutomation>

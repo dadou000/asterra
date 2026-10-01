@@ -1,3 +1,4 @@
+#include <orbit/profiler/Profiler.hpp>
 #include "VulkanObjects.hpp"
 
 #include <array>
@@ -180,6 +181,7 @@ VkPipelineLayout VulkanGraphicsPipeline::Layout() const noexcept
 std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
     const GraphicsPipelineDesc& desc)
 {
+    ORBIT_PROFILE_SCOPE("vk.create_graphics_pipeline");
     if (desc.vertexShader.data == nullptr ||
         desc.vertexShader.size == 0 ||
         desc.pixelShader.data == nullptr ||
@@ -609,6 +611,7 @@ VkPipelineLayout VulkanComputePipeline::Layout() const noexcept
 std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
     const ComputePipelineDesc& desc)
 {
+    ORBIT_PROFILE_SCOPE("vk.create_compute_pipeline");
     if (desc.computeShader.data == nullptr ||
         desc.computeShader.size == 0)
     {

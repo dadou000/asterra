@@ -758,6 +758,16 @@ float CraterFeatureWeight(float diameterMeters, float footprintMeters)
     return Smooth((diameterMeters - lower) / max(upper - lower, 1.0));
 }
 
+// Angle between two unit vectors. acos(dot) collapses near zero: a float32 dot
+// product near 1 has a step of ~6e-8, and acos turns that into ~3.5e-4 rad
+// (about 2 km on an Earth-size body), which shows up as faceted spikes in any
+// crater profile. atan2(|cross|, dot) stays accurate down to the vector
+// precision itself.
+float StableAngle(float3 a, float3 b)
+{
+    return atan2(length(cross(a, b)), dot(a, b));
+}
+
 float ProceduralCraterHeight(float3 direction, float footprintMeters)
 {
     float planetRadius = ParamFloat(kParamPlanetRadiusMeters);
@@ -781,7 +791,7 @@ float ProceduralCraterHeight(float3 direction, float footprintMeters)
         float cosine = clamp(dot(center, direction), -1.0, 1.0);
         if (cosine < boundingCosine) continue;
 
-        float x = acos(cosine) * planetRadius / craterRadius;
+        float x = StableAngle(center, direction) * planetRadius / craterRadius;
         bool complex = craterRadius >= complexRadius;
         float delta = 0.0;
         if (x < 1.0)
@@ -892,7 +902,7 @@ float LocalCraterHeight(float3 direction, float footprintMeters)
                 3.14159265358979));
             if (cosine < boundingCosine) continue;
 
-            float craterDistance = acos(cosine) *
+            float craterDistance = StableAngle(candidate, direction) *
                 planetRadius / craterRadius;
             float age = LocalCraterUnit(
                 cellHash, MakeU64(0x44454752u, 0x41444550u));

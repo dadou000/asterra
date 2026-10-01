@@ -1,3 +1,4 @@
+#include <orbit/profiler/Profiler.hpp>
 #include <orbit/studio_session/StudioTerrainPhysicalPageService.hpp>
 
 #include <orbit/jobs/JobSystem.hpp>
@@ -1797,6 +1798,7 @@ void MergeSediment(
     const terrain::TerrainGenerationRevisions& revisions,
     const procedural_graph::BuildContext& context)
 {
+    ORBIT_PROFILE_SCOPE("terrain_pages.build_product");
     const auto inputs =
         shared->Capture();
 
@@ -2431,7 +2433,12 @@ public:
     StudioTerrainPhysicalPageConfig
         config{};
 
-    jobs::JobSystem jobs{};
+    // Half the hardware threads, so terrain page builds leave room for the
+    // render thread, orbital patch builds and the OS. ORBIT_TERRAIN_WORKERS
+    // overrides it.
+    jobs::JobSystem jobs{
+        jobs::PoolWorkerCount("ORBIT_TERRAIN_WORKERS", 2U),
+        "TerrainPages"};
 
     std::unordered_map<
         universe::BodyId,
@@ -2947,6 +2954,12 @@ StudioTerrainPhysicalPageService::BodyStatus(
                       BodyStatus(
                           planet))
         : std::nullopt;
+}
+
+jobs::JobSystemTelemetry
+StudioTerrainPhysicalPageService::JobTelemetry() const noexcept
+{
+    return impl_->jobs.Telemetry();
 }
 
 std::vector<StudioTerrainPageRebuildStatus>

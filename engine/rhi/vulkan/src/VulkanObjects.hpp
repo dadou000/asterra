@@ -35,6 +35,7 @@ struct DeviceFunctions
     PFN_vkGetAccelerationStructureBuildSizesKHR vkGetAccelerationStructureBuildSizesKHR{nullptr};
     PFN_vkCmdBuildAccelerationStructuresKHR vkCmdBuildAccelerationStructuresKHR{nullptr};
     PFN_vkGetAccelerationStructureDeviceAddressKHR vkGetAccelerationStructureDeviceAddressKHR{nullptr};
+    PFN_vkGetCalibratedTimestampsKHR vkGetCalibratedTimestampsKHR{nullptr};
 };
 
 // Maps an abstract ResourceState to how a *texture* attachment/image
@@ -720,6 +721,10 @@ public:
 
     [[nodiscard]] f64 TimestampPeriodNanoseconds()
         const noexcept override;
+
+    [[nodiscard]] bool CalibrateGpuClock(
+        u64* gpuTicks,
+        u64* cpuTicks) const noexcept override;
 
     // Not part of the abstract Device interface -- RenderDoc integration
     // is inherently backend-specific. Null if the device wasn't created

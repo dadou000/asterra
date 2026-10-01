@@ -1,5 +1,8 @@
 #include <orbit/render_graph/RenderGraph.hpp>
 
+#include <orbit/profiler/Profiler.hpp>
+#include <orbit/render_graph/GpuPassTimer.hpp>
+
 #include <algorithm>
 #include <deque>
 #include <optional>
@@ -36,6 +39,9 @@ struct RenderGraph::PassEntry
     std::vector<BufferUse> bufferUses;
     PassCallback callback;
     std::vector<u32> dependencies;
+    // Interned name for the CPU profiler, so a capture shows which pass's
+    // recording callback took the time (docs/ORBIT_PROFILER.md).
+    const char* profileName{""};
 };
 
 rhi::Texture& Resources::Texture(
@@ -276,7 +282,8 @@ void RenderGraph::AddPass(
         .name = std::string(name),
         .textureUses = std::move(textureUses),
         .bufferUses = std::move(bufferUses),
-        .callback = std::move(callback)
+        .callback = std::move(callback),
+        .profileName = profiler::Intern(name)
     });
 
     compiled_ = false;
@@ -519,7 +526,8 @@ void RenderGraph::Compile()
 }
 
 void RenderGraph::Execute(
-    rhi::CommandList& commands)
+    rhi::CommandList& commands,
+    GpuPassTimer* const gpuTimer)
 {
     if (!compiled_)
     {
@@ -632,9 +640,14 @@ void RenderGraph::Execute(
 
         if (pass.callback)
         {
+            ORBIT_PROFILE_SCOPE(pass.profileName);
             pass.callback(
                 commands,
                 resources);
+            if (gpuTimer != nullptr)
+            {
+                gpuTimer->Mark(commands, pass.profileName);
+            }
         }
     }
 }

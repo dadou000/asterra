@@ -1,4 +1,5 @@
 #include <orbit/terrain_render/UniformPlanetRenderer.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <orbit/math/Matrix.hpp>
 #include <orbit/terrain_render/SurfaceEffectGpuBinding.hpp>
 #include <orbit/terrain_render/SurfaceEffectShader.hpp>
@@ -174,6 +175,7 @@ public:
             const auto lod = static_cast<u32>(requested);
             future = std::async(std::launch::async, [p = planet, s = source, lod]
             {
+                core::SetCurrentThreadName("Orbit.UniformPlanet");
                 return terrain_stream::BuildUniformPlanetMesh(p, *s, lod);
             });
         }

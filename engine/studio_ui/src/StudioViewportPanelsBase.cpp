@@ -746,6 +746,8 @@ void StudioViewportPanels::DrawView(
                     renderView->Height())
             });
 
+    textHud_.Draw(context, *views_, id, imageInteraction);
+
     if (target->mode ==
             studio_session::ViewportMode::Debug ||
         terrainTool_ ==

@@ -1,9 +1,13 @@
+#include <orbit/profiler/Profiler.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
+#include <orbit/core/ThreadName.hpp>
 #include <orbit/celestial_globe/PlanetPatchHierarchy.hpp>
 
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <future>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -21,6 +25,10 @@ namespace
 struct RegisteredTerrainAuthority
 {
     const terrain::TerrainSource* source{nullptr};
+    // Set when the caller handed over shared ownership. Background patch
+    // builds hold a copy, so a world rebuild can never free the source under
+    // a running job. Without it, patches are built synchronously.
+    std::shared_ptr<const terrain::TerrainSource> owner;
     universe::BodyShape shape{};
     u64 sourceRevision{0U};
 };
@@ -108,12 +116,49 @@ LookupTerrainAuthority(const u64 fingerprint)
         1.0F);
 }
 
+// Relief cue that does not depend on the sun angle. Under a high sun a crater
+// has no shading, so craters vanish from orbit. A vertex that sits lower than
+// its neighbours (a floor) is darkened and one that sits higher (a rim or
+// ejecta blanket) is brightened, in proportion to how strongly it stands out
+// at this patch's resolution. 0 is flat; positive is concave.
+template <typename ElevationAt>
+[[nodiscard]] f32 PatchCavity(
+    const ElevationAt& elevationAt,
+    const i32 x,
+    const i32 y,
+    const f64 footprintMeters)
+{
+    if (footprintMeters <= 0.0)
+    {
+        return 0.0F;
+    }
+
+    const f64 mean =
+        0.25 * (elevationAt(x - 1, y) +
+                elevationAt(x + 1, y) +
+                elevationAt(x, y - 1) +
+                elevationAt(x, y + 1));
+
+    return static_cast<f32>((mean - elevationAt(x, y)) / footprintMeters);
+}
+
+// Sine of the angle between the surface normal and the local radial
+// direction: 0 on flat ground, larger on crater walls and scarps.
+[[nodiscard]] f32 PatchSlopeSine(const PlanetPatchVertex& vertex) noexcept
+{
+    const auto radial = math::Normalize(vertex.positionMeters);
+    const f64 cosine = std::clamp(math::Dot(vertex.normal, radial), -1.0, 1.0);
+    return static_cast<f32>(std::sqrt(std::max(0.0, 1.0 - cosine * cosine)));
+}
+
 [[nodiscard]] celestial_appearance::AppearanceTexel
 BuildPatchAppearance(
     const terrain::TerrainSource& source,
     const PlanetPatchVertex& vertex,
     const f64 footprintMeters,
-    const bool oceanEnabled)
+    const bool oceanEnabled,
+    const f32 cavity,
+    const f32 slopeSine)
 {
     const auto direction = math::Normalize(vertex.positionMeters);
     const auto sample = source.Sample({
@@ -159,6 +204,24 @@ BuildPatchAppearance(
         albedo = {0.012F, 0.042F, 0.075F};
     }
     albedo = Mix(albedo, {0.76F, 0.82F, 0.86F}, ice);
+
+    if (ocean < 0.5F)
+    {
+        // Darker floors and steep walls, lighter rims. Clamped so noisy relief
+        // never turns the surface black or white. The gains are deliberately
+        // strong: from orbit under a high sun this is the only thing that
+        // makes craters readable.
+        const f32 relief = std::clamp(
+            1.0F - 0.75F * std::tanh(cavity * 9.0F) -
+                0.9F * slopeSine,
+            0.30F,
+            1.45F);
+        albedo = {
+            albedo.x * relief,
+            albedo.y * relief,
+            albedo.z * relief
+        };
+    }
 
     f32 roughness = BiomeRoughness(sample.biomes);
     if (ocean > 0.5F)
@@ -255,6 +318,24 @@ u64 MacroGlobeFingerprint(
     return fingerprint;
 }
 
+u64 MacroGlobeFingerprint(
+    const std::shared_ptr<const terrain::TerrainSource>& source,
+    const universe::BodyShape& shape,
+    const MacroGlobeConfig& config)
+{
+    const u64 fingerprint =
+        MacroGlobeFingerprint(*source, shape, config);
+
+    std::scoped_lock lock(gTerrainAuthorityMutex);
+    if (const auto found = gTerrainAuthorities.find(fingerprint);
+        found != gTerrainAuthorities.end())
+    {
+        found->second.owner = source;
+    }
+
+    return fingerprint;
+}
+
 GpuMacroGlobeProduct::GpuMacroGlobeProduct(
     rhi::Device& device,
     const MacroGlobeMesh& mesh,
@@ -340,13 +421,42 @@ public:
     {
     }
 
+    [[nodiscard]] MacroGlobeWorkStats WorkStats() const noexcept
+    {
+        MacroGlobeWorkStats stats;
+        for (const auto& [fingerprint, state] : states_)
+        {
+            static_cast<void>(fingerprint);
+            stats.patchesPending += static_cast<u32>(state.pending.size());
+            stats.patchesResident += static_cast<u32>(state.residents.size());
+        }
+        return stats;
+    }
+
+    // True while terrain patches are still being built or uploaded, so the
+    // caller can keep rendering at full rate until refinement settles.
+    [[nodiscard]] bool HasPendingWork() const noexcept
+    {
+        for (const auto& [fingerprint, state] : states_)
+        {
+            static_cast<void>(fingerprint);
+            if (!state.pending.empty())
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] bool Prepare(
         GpuMacroGlobeProduct& fallback,
         const render_view::CameraState& camera,
         const u32 width,
         const u32 height,
-        const bool oceanEnabled)
+        const bool oceanEnabled,
+        const f32 lodBiasStops)
     {
+        ORBIT_PROFILE_SCOPE("globe.prepare");
         const auto registered = LookupTerrainAuthority(fallback.Fingerprint());
         if (!registered.has_value() ||
             registered->source == nullptr ||
@@ -368,6 +478,8 @@ public:
         }
 
         ++state.serial;
+        state.syncBuildsThisPrepare = 0U;
+        CollectCompleted(state);
         const f64 radius = std::max(fallback.ReferenceRadiusMeters(), 1.0);
         const PlanetPatchView view{
             .cameraPositionMeters = camera.localPositionMeters,
@@ -377,12 +489,30 @@ public:
             .viewportHeightPixels = height,
             .maximumDisplacementMeters = std::max(radius * 0.02, 1000.0)
         };
+        // LOD bias. The pixel target alone does nothing once the selector is
+        // bound by its patch budget or level cap (the usual case from orbit),
+        // so the bias also scales the selection budget (x1/8 .. x2, with the
+        // resident cap kept at 2.5x the selection so a refined view does not
+        // thrash) and lets positive bias refine up to two levels deeper.
+        const f64 bias = static_cast<f64>(
+            std::clamp(lodBiasStops, -4.0F, 4.0F));
+        const f64 budgetScale = std::clamp(std::exp2(bias), 0.125, 2.0);
+        state.selectedBudget = std::max(
+            128U,
+            static_cast<u32>(
+                static_cast<f64>(kMaximumSelectedPatches) * budgetScale));
+        state.residentBudget =
+            static_cast<std::size_t>(state.selectedBudget) * 5U / 2U;
+        const u32 maximumLevel =
+            kMaximumLevel +
+            static_cast<u32>(std::clamp(std::lround(bias), 0L, 2L));
+
         const PlanetPatchSelectorConfig selectorConfig{
             .patchResolution = kPatchResolution,
-            .maximumLevel = kMaximumLevel,
-            .targetCellPixels = 2.0,
+            .maximumLevel = maximumLevel,
+            .targetCellPixels = 2.0 * std::exp2(-bias),
             .hysteresisFraction = 0.20,
-            .maximumSelectedPatches = kMaximumSelectedPatches,
+            .maximumSelectedPatches = state.selectedBudget,
             .horizonCulling = true,
             .frustumCulling = true
         };
@@ -453,15 +583,13 @@ public:
             std::unique(missing.begin(), missing.end()),
             missing.end());
 
-        u32 built = 0U;
         for (const auto id : missing)
         {
-            if (built >= kPatchBuildsPerPrepare)
+            if (state.pending.size() >= kPatchBuildsInFlight)
             {
                 break;
             }
-            BuildResident(state, id);
-            ++built;
+            LaunchBuild(state, id);
         }
 
         state.active.clear();
@@ -576,14 +704,23 @@ public:
 private:
     static constexpr u32 kPatchResolution = 33U;
     static constexpr u32 kMaximumLevel = 10U;
-    static constexpr u32 kMaximumSelectedPatches = 256U;
-    static constexpr u32 kPatchBuildsPerPrepare = 1U;
-    static constexpr std::size_t kMaximumResidentPatches = 1024U;
+    static constexpr u32 kMaximumSelectedPatches = 1024U;
+    // Patch builds run on worker threads. This many may be in flight at once, and
+    // at most kPatchUploadsPerPrepare finished patches are uploaded to the GPU
+    // per call, so the render thread never waits on terrain sampling.
+    static constexpr std::size_t kPatchBuildsInFlight = 6U;
+    static constexpr u32 kPatchUploadsPerPrepare = 8U;
 
     struct Resident
     {
         std::unique_ptr<GpuMacroGlobeProduct> gpu;
         u64 lastUsedSerial{0U};
+    };
+
+    struct BuiltPatch
+    {
+        PlanetPatchMesh patch;
+        std::vector<celestial_appearance::AppearanceTexel> appearance;
     };
 
     struct State
@@ -597,20 +734,29 @@ private:
         std::set<PlanetPatchId> desiredRefined;
         std::vector<PlanetPatchId> active;
         u64 serial{0U};
+        u32 syncBuildsThisPrepare{0U};
+        // Selection and residency budgets for the current LOD bias.
+        u32 selectedBudget{1024U};
+        std::size_t residentBudget{2560U};
+        // Destroyed first (a std::future from std::async blocks until its job
+        // is done), so jobs never outlive the source/shape they read.
+        std::map<PlanetPatchId, std::future<BuiltPatch>> pending;
     };
 
-    void BuildResident(State& state, const PlanetPatchId id)
+    // Samples the terrain and builds the vertex/appearance data for one patch.
+    // Pure CPU work with no GPU access, so it is safe on a worker thread
+    // (TerrainSource::Sample is required to be thread-safe).
+    [[nodiscard]] static BuiltPatch BuildPatchData(
+        const terrain::TerrainSource* source,
+        const universe::BodyShape shape,
+        const PlanetPatchId id,
+        const bool oceanEnabled)
     {
-        if (state.residents.contains(id) ||
-            state.authority.source == nullptr ||
-            device_ == nullptr)
-        {
-            return;
-        }
-
-        const auto patch = BuildPlanetPatch(
-            *state.authority.source,
-            state.authority.shape,
+        core::SetCurrentThreadName("Orbit.GlobePatch");
+        BuiltPatch built;
+        built.patch = BuildPlanetPatch(
+            *source,
+            shape,
             id,
             PlanetPatchMeshConfig{
                 .patchResolution = kPatchResolution,
@@ -618,22 +764,104 @@ private:
                 .skirtDepthMeters = 0.0
             });
 
-        std::vector<celestial_appearance::AppearanceTexel> appearance;
-        appearance.reserve(patch.vertices.size());
-        for (const auto& vertex : patch.vertices)
+        built.appearance.reserve(built.patch.vertices.size());
+        const i32 n = static_cast<i32>(kPatchResolution);
+
+        // Neighbours outside the patch are sampled from the terrain source so
+        // edge vertices see the same relief as interior ones; one-sided
+        // neighbours would print a visible line along every patch edge.
+        const auto elevationAt =
+            [&](const i32 x, const i32 y) -> f64
         {
-            appearance.push_back(BuildPatchAppearance(
-                *state.authority.source,
-                vertex,
-                patch.sampleFootprintMeters,
-                state.oceanEnabled));
+            if (x >= 0 && x < n && y >= 0 && y < n)
+            {
+                return built.patch.vertices[
+                    static_cast<std::size_t>(y) * static_cast<std::size_t>(n) +
+                    static_cast<std::size_t>(x)].elevationMeters;
+            }
+
+            const auto direction = PlanetPatchDirection(
+                id,
+                static_cast<f64>(x) / static_cast<f64>(n - 1),
+                static_cast<f64>(y) / static_cast<f64>(n - 1));
+            return source->Sample({
+                .unitDirection = direction,
+                .footprintMeters = built.patch.sampleFootprintMeters
+            }).elevationMeters;
+        };
+
+        for (std::size_t index = 0U; index < built.patch.vertices.size(); ++index)
+        {
+            const i32 x = static_cast<i32>(index % static_cast<std::size_t>(n));
+            const i32 y = static_cast<i32>(index / static_cast<std::size_t>(n));
+            built.appearance.push_back(BuildPatchAppearance(
+                *source,
+                built.patch.vertices[index],
+                built.patch.sampleFootprintMeters,
+                oceanEnabled,
+                PatchCavity(
+                    elevationAt,
+                    x,
+                    y,
+                    built.patch.sampleFootprintMeters),
+                PatchSlopeSine(built.patch.vertices[index])));
         }
 
-        auto macroMesh = ToMacroMesh(patch);
+        return built;
+    }
+
+    void LaunchBuild(State& state, const PlanetPatchId id)
+    {
+        if (state.residents.contains(id) ||
+            state.pending.contains(id) ||
+            state.authority.source == nullptr ||
+            device_ == nullptr)
+        {
+            return;
+        }
+
+        if (state.authority.owner == nullptr)
+        {
+            // No shared ownership: the source is only guaranteed alive for
+            // this call, so build on the calling thread.
+            if (state.syncBuildsThisPrepare >= 2U)
+            {
+                return;
+            }
+            ++state.syncBuildsThisPrepare;
+
+            BuiltPatch built = BuildPatchData(
+                state.authority.source,
+                state.authority.shape,
+                id,
+                state.oceanEnabled);
+            Upload(state, id, built);
+            return;
+        }
+
+        state.pending.emplace(
+            id,
+            std::async(
+                std::launch::async,
+                [owner = state.authority.owner,
+                 shape = state.authority.shape,
+                 id,
+                 ocean = state.oceanEnabled]
+                {
+                    ORBIT_PROFILE_SCOPE("globe.build_patch");
+                    return BuildPatchData(owner.get(), shape, id, ocean);
+                }));
+    }
+
+    void Upload(State& state, const PlanetPatchId id, BuiltPatch& built)
+    {
+        ORBIT_PROFILE_SCOPE("globe.upload_patch");
+        auto macroMesh = ToMacroMesh(built.patch);
         auto gpu = std::make_unique<GpuMacroGlobeProduct>(
             *device_,
             macroMesh,
-            std::span<const celestial_appearance::AppearanceTexel>(appearance));
+            std::span<const celestial_appearance::AppearanceTexel>(
+                built.appearance));
 
         state.residents.emplace(
             id,
@@ -641,6 +869,33 @@ private:
                 .gpu = std::move(gpu),
                 .lastUsedSerial = state.serial
             });
+    }
+
+    // Uploads finished patches on the calling (render) thread.
+    void CollectCompleted(State& state)
+    {
+        u32 uploaded = 0U;
+        for (auto it = state.pending.begin(); it != state.pending.end();)
+        {
+            if (uploaded >= kPatchUploadsPerPrepare)
+            {
+                break;
+            }
+
+            if (it->second.wait_for(std::chrono::seconds(0)) !=
+                std::future_status::ready)
+            {
+                ++it;
+                continue;
+            }
+
+            const PlanetPatchId id = it->first;
+            BuiltPatch built = it->second.get();
+            it = state.pending.erase(it);
+
+            Upload(state, id, built);
+            ++uploaded;
+        }
     }
 
     void AppendActive(State& state, const PlanetPatchId node)
@@ -679,7 +934,7 @@ private:
 
     void EvictColdResidents(State& state)
     {
-        if (state.residents.size() <= kMaximumResidentPatches)
+        if (state.residents.size() <= state.residentBudget)
         {
             return;
         }
@@ -687,7 +942,7 @@ private:
         const std::set<PlanetPatchId> active(
             state.active.begin(), state.active.end());
 
-        while (state.residents.size() > kMaximumResidentPatches)
+        while (state.residents.size() > state.residentBudget)
         {
             auto victim = state.residents.end();
             for (auto it = state.residents.begin();
@@ -730,6 +985,16 @@ MacroGlobeRenderer::MacroGlobeRenderer(
 
 MacroGlobeRenderer::~MacroGlobeRenderer() = default;
 
+bool MacroGlobeRenderer::HasPendingWork() const noexcept
+{
+    return hybrid_ != nullptr && hybrid_->HasPendingWork();
+}
+
+MacroGlobeWorkStats MacroGlobeRenderer::WorkStats() const noexcept
+{
+    return hybrid_ != nullptr ? hybrid_->WorkStats() : MacroGlobeWorkStats{};
+}
+
 void MacroGlobeRenderer::Draw(
     rhi::CommandList& commands,
     rhi::Texture& target,
@@ -741,7 +1006,13 @@ void MacroGlobeRenderer::Draw(
     const MacroGlobeLighting& lighting)
 {
     if (hybrid_ != nullptr &&
-        hybrid_->Prepare(globe, camera, width, height, lighting.oceanEnabled))
+        hybrid_->Prepare(
+            globe,
+            camera,
+            width,
+            height,
+            lighting.oceanEnabled,
+            lighting.lodBiasStops))
     {
         hybrid_->Draw(
             *legacy_,
@@ -781,7 +1052,13 @@ void MacroGlobeRenderer::DrawSurface(
     rhi::Texture* depth)
 {
     if (hybrid_ != nullptr &&
-        hybrid_->Prepare(globe, camera, width, height, lighting.oceanEnabled))
+        hybrid_->Prepare(
+            globe,
+            camera,
+            width,
+            height,
+            lighting.oceanEnabled,
+            lighting.lodBiasStops))
     {
         hybrid_->DrawSurface(
             *legacy_,

@@ -1275,8 +1275,65 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
             ? "Diagnostics: Body Map / Debug View"
             : "Diagnostics: Primary");
 
+    {
+        bool textHud = owner_->views_->TextDiagnosticsHud(id);
+        if (context.Checkbox(
+                "Text readout (position, heights, biome)##diag-text",
+                textHud))
+        {
+            owner_->views_->SetTextDiagnosticsHud(id, textHud);
+        }
+    }
+
     if (target->mode == studio_session::ViewportMode::Perspective)
     {
+        if (context.Section("Terrain layers##diag-layers", true))
+        {
+            auto layers = owner_->views_->TerrainLayers(id);
+            bool layersChanged = false;
+
+            layersChanged =
+                context.Checkbox(
+                    "Near-field terrain##layer-production",
+                    layers.productionSurface) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Orbital globe patches##layer-macro",
+                    layers.macroGlobe) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Ocean##layer-ocean",
+                    layers.ocean) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Surface effects##layer-effects",
+                    layers.surfaceEffects) || layersChanged;
+
+            f64 bias = static_cast<f64>(layers.lodBiasStops);
+            if (context.SliderDouble(
+                    "LOD bias (stops)##layer-lod-bias",
+                    bias,
+                    -4.0,
+                    4.0))
+            {
+                layers.lodBiasStops = static_cast<f32>(bias);
+                layersChanged = true;
+            }
+            context.MutedText(
+                "+ keeps richer terrain longer and doubles orbital patch detail; - is coarser and cheaper.");
+
+            if (context.Button("Reset layers##layer-reset"))
+            {
+                layers = {};
+                layersChanged = true;
+            }
+
+            if (layersChanged)
+            {
+                owner_->views_->SetTerrainLayers(id, layers);
+            }
+        }
+
         auto diagnostics =
             owner_->views_->TerrainDiagnosticOverlays(id);
         bool changed = false;

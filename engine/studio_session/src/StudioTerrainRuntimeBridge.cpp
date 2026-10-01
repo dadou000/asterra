@@ -994,13 +994,13 @@ void StudioTerrainRuntimeBridge::UpdateObserverPlan(
                     ? coarserLevel->
                         terrainFootprintMeters
                     : 0.0,
+            // Shading slope at this ring's own footprint and spacing; see
+            // TerrainPreviewRenderer for why it is not level 0's spacing.
             .fineNormalFootprintMeters =
-                runtime.layout.levels[
-                    0U].
-                    sampleSpacingMeters,
+                level.
+                    terrainFootprintMeters,
             .fineNormalEpsilonMeters =
-                runtime.layout.levels[
-                    0U].
+                level.
                     sampleSpacingMeters,
             .centerOffsetMeters =
                 runtime.motion.levels[

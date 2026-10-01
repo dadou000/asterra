@@ -1,16 +1,23 @@
 #include <orbit/jobs/JobSystem.hpp>
 
 #include <orbit/core/Log.hpp>
+#include <orbit/core/ThreadName.hpp>
+#include <orbit/profiler/Profiler.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <exception>
+#include <format>
 #include <limits>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -71,10 +78,53 @@ bool JobGroup::IsComplete() const noexcept
         state_->remaining.load(std::memory_order_acquire) == 0;
 }
 
+u32 PoolWorkerCount(
+    const char* const environmentVariable,
+    const u32 divisor,
+    const u32 minimum)
+{
+    if (environmentVariable != nullptr)
+    {
+        std::string value;
+#if defined(_WIN32)
+        char* buffer = nullptr;
+        std::size_t length = 0;
+        if (_dupenv_s(&buffer, &length, environmentVariable) == 0 &&
+            buffer != nullptr)
+        {
+            value = buffer;
+            std::free(buffer);
+        }
+#else
+        if (const char* found = std::getenv(environmentVariable))
+        {
+            value = found;
+        }
+#endif
+        if (!value.empty())
+        {
+            u32 parsed = 0;
+            const auto [end, error] = std::from_chars(
+                value.data(),
+                value.data() + value.size(),
+                parsed);
+            if (error == std::errc{} && end != value.data() && parsed > 0U)
+            {
+                return parsed;
+            }
+        }
+    }
+
+    const u32 hardware = std::max(std::thread::hardware_concurrency(), 1U);
+    return std::max(hardware / std::max(divisor, 1U), minimum);
+}
+
 class JobSystem::Impl
 {
 public:
-    explicit Impl(u32 workerCount)
+    Impl(u32 workerCount, std::string name)
+        : name_(std::move(name))
+        , jobScopeName_(profiler::Intern(name_ + ".job"))
     {
         if (workerCount == 0)
         {
@@ -392,6 +442,9 @@ private:
 
         try
         {
+            // One scope per job, named after the pool, so a capture shows every
+            // job on every worker. Jobs that want a finer label nest their own.
+            ORBIT_PROFILE_SCOPE(jobScopeName_);
             item.function();
         }
         catch (...)
@@ -438,6 +491,9 @@ private:
 
     void WorkerLoop(const u32 workerIndex)
     {
+        core::SetCurrentThreadName(
+            std::format("Orbit.{}.{}", name_, workerIndex));
+
         while (true)
         {
             u64 observedGeneration;
@@ -468,6 +524,8 @@ private:
         }
     }
 
+    std::string name_;
+    const char* jobScopeName_{nullptr};
     std::vector<std::unique_ptr<Worker>> workers_;
     std::atomic<u64> outstandingJobs_{0};
     std::atomic<u64> runningJobs_{0};
@@ -478,8 +536,8 @@ private:
     std::condition_variable wakeCondition_;
 };
 
-JobSystem::JobSystem(const u32 workerCount)
-    : impl_(std::make_unique<Impl>(workerCount))
+JobSystem::JobSystem(const u32 workerCount, std::string name)
+    : impl_(std::make_unique<Impl>(workerCount, std::move(name)))
 {
 }
 
