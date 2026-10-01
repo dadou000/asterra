@@ -15,6 +15,130 @@ namespace
 }
 } // namespace
 
+u32 ClipmapLevelCount(const ClipmapConfig& config) noexcept
+{
+    return config.Banded() ? config.bandCount : config.levelCount;
+}
+
+ClipmapBand ClipmapLevelBand(
+    const ClipmapConfig& config,
+    const u32 levelIndex) noexcept
+{
+    ClipmapBand band;
+    if (!config.Banded() || levelIndex >= config.bandCount)
+        return band;
+    band.innerMeters =
+        levelIndex == 0U ? 0.0 : config.bandEdgesMeters[levelIndex - 1U];
+    band.outerMeters = config.bandEdgesMeters[levelIndex];
+    return band;
+}
+
+f64 ClipmapLevelSpacingMeters(
+    const ClipmapConfig& config,
+    const u32 levelIndex) noexcept
+{
+    if (config.Banded())
+    {
+        const u32 index = std::min(levelIndex, config.bandCount - 1U);
+        const f64 reach = config.bandEdgesMeters[index];
+        const u32 half = (config.gridResolution - 1U) / 2U;
+        return reach * config.bandExtentMargin / static_cast<f64>(half);
+    }
+    return config.baseSpacingMeters *
+        std::pow(config.levelScale, static_cast<f64>(levelIndex));
+}
+
+u32 ClipmapLevelGridResolution(
+    const ClipmapConfig& config,
+    const u32 levelIndex) noexcept
+{
+    if (config.Banded())
+        return config.gridResolution;
+    if (config.coarseGridResolution != 0U &&
+        config.baseSpacingMeters *
+                std::pow(config.levelScale, static_cast<f64>(levelIndex)) >=
+            config.coarseMinSpacingMeters)
+    {
+        return config.coarseGridResolution;
+    }
+    return config.gridResolution;
+}
+
+f64 ClipmapLevelHalfExtentMeters(
+    const ClipmapConfig& config,
+    const u32 levelIndex) noexcept
+{
+    const u32 resolution = ClipmapLevelGridResolution(config, levelIndex);
+    return static_cast<f64>((resolution - 1U) / 2U) *
+        ClipmapLevelSpacingMeters(config, levelIndex);
+}
+
+namespace
+{
+// The experimental distance-banded layout: independent windows, no holes and no
+// geomorph (the renderer cross-fades neighbouring levels per pixel by camera
+// distance).
+[[nodiscard]] ClipmapLayout BuildBandedClipmapLayout(
+    const ClipmapConfig& config,
+    const world::WorldPosition& observer)
+{
+    if (config.bandCount > kMaxClipmapBands)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap has too many distance bands.");
+    }
+    if (config.gridResolution < 9 || (config.gridResolution % 2U) == 0U)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap grid resolution must be odd and at least 9.");
+    }
+    if (!std::isfinite(config.bandExtentMargin) ||
+        config.bandExtentMargin < 1.0 ||
+        !std::isfinite(config.bandZoneFraction) ||
+        config.bandZoneFraction < 0.0 || config.bandZoneFraction >= 0.5 ||
+        config.bandExtentMargin < 1.0 + config.bandZoneFraction)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap band margin must cover the cross-fade zone.");
+    }
+    f64 previous = 0.0;
+    for (u32 index = 0; index < config.bandCount; ++index)
+    {
+        const f64 edge = config.bandEdgesMeters[index];
+        if (!std::isfinite(edge) || edge <= previous)
+        {
+            throw std::invalid_argument(
+                "Orbit terrain clipmap band edges must be positive and increasing.");
+        }
+        previous = edge;
+    }
+    if (config.bandCount < 2U)
+    {
+        throw std::invalid_argument(
+            "Orbit terrain clipmap needs at least two distance bands.");
+    }
+
+    ClipmapLayout layout{};
+    layout.surfaceFrame = world::MakeSurfaceFrame(observer.meters);
+    layout.levels.reserve(config.bandCount);
+    for (u32 index = 0; index < config.bandCount; ++index)
+    {
+        const f64 spacing = ClipmapLevelSpacingMeters(config, index);
+        const f64 halfExtent = ClipmapLevelHalfExtentMeters(config, index);
+        layout.levels.push_back({
+            .index = index,
+            .gridResolution = config.gridResolution,
+            .sampleSpacingMeters = spacing,
+            .terrainFootprintMeters = spacing,
+            .innerHoleHalfExtentMeters = 0.0,
+            .outerHalfExtentMeters = halfExtent,
+            .morphStartHalfExtentMeters = halfExtent,
+            .morphEndHalfExtentMeters = halfExtent});
+    }
+    return layout;
+}
+} // namespace
+
 ClipmapLayout BuildClipmapLayout(
     const ClipmapConfig& config,
     const world::WorldPosition& observer)
@@ -28,6 +152,9 @@ ClipmapLayout BuildClipmapLayout(
         throw std::invalid_argument(
             "Orbit terrain clipmap layout requires a finite observer direction.");
     }
+
+    if (config.Banded())
+        return BuildBandedClipmapLayout(config, observer);
 
     if (config.levelCount == 0)
     {
@@ -62,20 +189,30 @@ ClipmapLayout BuildClipmapLayout(
             "Orbit terrain clipmap level scale must be exactly 2.0.");
     }
 
-    const u32 cellsPerAxis = config.gridResolution - 1U;
-
     // With a 2:1 parent ratio, half the grid must contain an even number of
     // fine cells so both +/- outer borders fall on parent-grid coordinates.
     // Common clipmap sizes (9, 17, 33, 65, 129, ...) satisfy this 4k+1 rule.
-    if ((cellsPerAxis % 4U) != 0U)
+    for (const u32 resolution :
+         {config.gridResolution, config.coarseGridResolution})
+    {
+        if (resolution != 0U && ((resolution - 1U) % 4U) != 0U)
+        {
+            throw std::invalid_argument(
+                "Orbit terrain clipmap grid resolution must be 4k+1 for 2:1 LOD alignment.");
+        }
+    }
+    if (config.coarseGridResolution != 0U &&
+        (config.coarseGridResolution < config.gridResolution ||
+         !std::isfinite(config.coarseMinSpacingMeters) ||
+         config.coarseMinSpacingMeters < 0.0))
     {
         throw std::invalid_argument(
-            "Orbit terrain clipmap grid resolution must be 4k+1 for 2:1 LOD alignment.");
+            "Orbit terrain clipmap coarse grid must be at least the fine grid and have a finite spacing threshold.");
     }
-    const u32 halfCells = cellsPerAxis / 2U;
+    const u32 baseHalfCells = (config.gridResolution - 1U) / 2U;
 
     if (config.overlapCells == 0 ||
-        config.overlapCells >= halfCells)
+        config.overlapCells >= baseHalfCells)
     {
         throw std::invalid_argument(
             "Orbit terrain clipmap overlap must fit inside half the grid.");
@@ -96,11 +233,19 @@ ClipmapLayout BuildClipmapLayout(
                 config.levelScale,
                 static_cast<f64>(levelIndex));
 
+        const u32 levelResolution =
+            ClipmapLevelGridResolution(config, levelIndex);
+        const u32 halfCells = (levelResolution - 1U) / 2U;
+
         const f64 outerHalfExtent =
             static_cast<f64>(halfCells) * spacing;
 
-        const f64 overlapWidth =
-            static_cast<f64>(config.overlapCells) * spacing;
+        // The morph band keeps the same share of the half extent on every level.
+        const f64 overlapCells = std::max(
+            static_cast<f64>(config.overlapCells),
+            static_cast<f64>(config.overlapCells) *
+                static_cast<f64>(halfCells) / static_cast<f64>(baseHalfCells));
+        const f64 overlapWidth = overlapCells * spacing;
 
         if (!std::isfinite(spacing) ||
             !std::isfinite(outerHalfExtent) ||
@@ -130,7 +275,7 @@ ClipmapLayout BuildClipmapLayout(
 
         layout.levels.push_back({
             .index = levelIndex,
-            .gridResolution = config.gridResolution,
+            .gridResolution = levelResolution,
             .sampleSpacingMeters = spacing,
             .terrainFootprintMeters = spacing,
             .innerHoleHalfExtentMeters = innerHoleHalfExtent,
@@ -143,9 +288,29 @@ ClipmapLayout BuildClipmapLayout(
     return layout;
 }
 
+void ApplyClipmapActiveRange(
+    ClipmapLayout& layout,
+    const u32 firstLevel,
+    const u32 lastLevel)
+{
+    for (ClipmapLevel& level : layout.levels)
+    {
+        level.active = level.index >= firstLevel && level.index <= lastLevel;
+        if (level.index == firstLevel)
+        {
+            // Nothing finer sits in the middle: draw the whole patch. The
+            // morph band already starts outside the hole, so it is unchanged.
+            level.innerHoleHalfExtentMeters = 0.0;
+        }
+    }
+}
+
 f64 ClipmapOuterHalfExtentMeters(
     const ClipmapConfig& config)
 {
+    if (config.Banded())
+        return ClipmapLevelHalfExtentMeters(config, config.bandCount - 1U);
+
     if (config.levelCount == 0)
     {
         throw std::invalid_argument(
@@ -183,19 +348,10 @@ f64 ClipmapOuterHalfExtentMeters(
             "Orbit terrain clipmap coverage requires a 4k+1 grid resolution.");
     }
 
-    const u32 halfCells =
-        cellsPerAxis / 2U;
-
-    const f64 coarsestSpacing =
-        config.baseSpacingMeters *
-        std::pow(
-            config.levelScale,
-            static_cast<f64>(
-                config.levelCount - 1U));
-
     const f64 extent =
-        static_cast<f64>(halfCells) *
-        coarsestSpacing;
+        ClipmapLevelHalfExtentMeters(
+            config,
+            config.levelCount - 1U);
 
     if (!std::isfinite(extent))
     {

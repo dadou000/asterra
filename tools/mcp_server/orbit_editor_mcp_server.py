@@ -191,6 +191,9 @@ def orbit_view_terrain_overlays_set(
     build_states: bool | None = None,
     physical_lod: bool | None = None,
     clipmap_rings: bool | None = None,
+    clipmap_levels: bool | None = None,
+    clipmap_wireframe: bool | None = None,
+    clipmap_freeze: bool | None = None,
     cache_status: bool | None = None,
     authored_constraints: bool | None = None,
     biome_weights: bool | None = None,
@@ -198,13 +201,23 @@ def orbit_view_terrain_overlays_set(
     drainage_vectors: bool | None = None,
 ) -> dict[str, Any]:
     """Turn terrain diagnostic overlays on/off for a viewport. Omitted flags keep
-    their current value."""
+    their current value. clipmap_rings outlines only the ACTIVE clipmap levels (the
+    dynamic planner's range, finest and coarsest brighter); clipmap_levels tints
+    the terrain surface by clipmap level so each active level and its hand-off are
+    visible. clipmap_wireframe draws the terrain mesh as a wireframe (water hidden);
+    clipmap_freeze freezes the clipmap (plan, window, residency, content) where it
+    is so the camera can fly away and look at the rings from outside; turning it
+    off snaps the clipmap back to the camera. Frozen/wireframe state is reported in
+    view.text_diagnostics' clipmap_plan. The active levels are listed there too."""
     params: dict[str, Any] = {"id": view_id}
     for key, value in {
         "dirty_page_bounds": dirty_page_bounds,
         "build_states": build_states,
         "physical_lod": physical_lod,
         "clipmap_rings": clipmap_rings,
+        "clipmap_levels": clipmap_levels,
+        "clipmap_wireframe": clipmap_wireframe,
+        "clipmap_freeze": clipmap_freeze,
         "cache_status": cache_status,
         "authored_constraints": authored_constraints,
         "biome_weights": biome_weights,
@@ -233,7 +246,8 @@ def orbit_viewport_focus_surface(
 def orbit_view_terrain_layers_get(view_id: str = "studio.primary") -> dict[str, Any]:
     """Which terrain layers a viewport draws (production_surface = near-field
     clipmap terrain, macro_globe = orbital patches, ocean, surface_effects) and its
-    lod_bias_stops."""
+    lod_bias_stops, and the dynamic clipmap planner (dynamic_clipmaps,
+    clipmap_pixels_per_vertex)."""
     return _rpc("view.terrain_layers_get", {"id": view_id})
 
 
@@ -241,22 +255,55 @@ def orbit_view_terrain_layers_get(view_id: str = "studio.primary") -> dict[str, 
 def orbit_view_terrain_layers_set(
     view_id: str = "studio.primary",
     production_surface: bool | None = None,
+    full_clipmap: bool | None = None,
     macro_globe: bool | None = None,
     ocean: bool | None = None,
     surface_effects: bool | None = None,
     lod_bias_stops: float | None = None,
+    dynamic_clipmaps: bool | None = None,
+    clipmap_pixels_per_vertex: float | None = None,
+    clipmap_fade_seconds: float | None = None,
+    experimental_distance_bands: bool | None = None,
+    clipmap_band_edges_meters: list[float] | None = None,
+    clipmap_band_scale: float | None = None,
 ) -> dict[str, Any]:
     """Choose which terrain layers a viewport draws and its LOD bias. Omitted
     fields keep their value. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
     representations longer and doubles orbital patch resolution, -1 is coarser and
-    cheaper. Transient view state."""
+    cheaper (with full_clipmap it scales the clipmap planner's target spacing too).
+    full_clipmap (default true) draws the production clipmap from the ground to
+    orbit and never uses the orbital globe; false brings back the hand-off to the
+    orbital globe. dynamic_clipmaps draws and generates only the clipmap levels the
+    camera can use (off = the whole 20-level ladder at every altitude);
+    clipmap_pixels_per_vertex ([0.25, 32], default 3) is the target sample spacing
+    in pixels at the nearest ground, lower keeps finer levels longer.
+    clipmap_fade_seconds ([0, 5], default 0.4) is how long a clipmap level takes to
+    dissolve in or out when the plan adds or drops it (0 = instant, they pop).
+    experimental_distance_bands (default false) is an EXPERIMENT: with full_clipmap,
+    clipmap level k is drawn only where the camera's distance to the terrain lies
+    between clipmap_band_edges_meters[k-1] and [k] (up to 16 increasing metres,
+    default [100, 500, 2000, 10000, 40000, 160000, 640000, 2560000, 10000000,
+    40000000]; the last is the farthest distance drawn), and neighbouring bands
+    cross-fade per pixel so the rings resize continuously with the camera instead
+    of following the fixed 2:1 ladder. clipmap_band_scale ([0.1, 10], default 1)
+    multiplies every edge, a one-number way to make all the clipmap distances
+    larger or smaller. Changing the edges or scale rebuilds the terrain renderer. The chosen
+    level range is reported as clipmap_plan by orbit_view_text_diagnostics.
+    Transient view state."""
     params: dict[str, Any] = {"id": view_id}
     for key, value in {
         "production_surface": production_surface,
+        "full_clipmap": full_clipmap,
         "macro_globe": macro_globe,
         "ocean": ocean,
         "surface_effects": surface_effects,
         "lod_bias_stops": lod_bias_stops,
+        "dynamic_clipmaps": dynamic_clipmaps,
+        "clipmap_pixels_per_vertex": clipmap_pixels_per_vertex,
+        "clipmap_fade_seconds": clipmap_fade_seconds,
+        "experimental_distance_bands": experimental_distance_bands,
+        "clipmap_band_edges_meters": clipmap_band_edges_meters,
+        "clipmap_band_scale": clipmap_band_scale,
     }.items():
         if value is not None:
             params[key] = value

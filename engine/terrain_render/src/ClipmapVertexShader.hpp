@@ -40,6 +40,10 @@ struct VSOutput
     float3 bodyFixedNormal : TEXCOORD9;
     float3 bodyFixedSurfaceDirection : TEXCOORD10;
     float drySurface : TEXCOORD11;
+    // Level coverage. The pixel shader keeps a pixel when y <= noise < x, where
+    // noise is a per-pixel value in [0, 1). Neighbouring levels use the same
+    // noise with complementary x/y, so every pixel belongs to exactly one level.
+    float2 lodFade : TEXCOORD13;
     float horizonClip : SV_ClipDistance0;
 };
 
@@ -265,8 +269,65 @@ VSOutput main(uint vertexId : SV_VertexID)
             innerHoleHalfExtentMeters &&
         abs(cellCenterY - innerHoleCenterOffsetMeters.y) + halfCell <=
             innerHoleHalfExtentMeters;
-    if (insideHole)
-        output.horizonClip = -1.0;
+    // A level that is still fading in or out is dithered against the level
+    // around it, so the hole only becomes a hard cut once the finer level is
+    // fully drawn.
+    const float zoneFraction = g_pc.g_observerNorthBody.w;
+    if (zoneFraction < 0.0)
+    {
+        // Ladder: the level's time fade, and the finer level's fade over the hole.
+        const float selfFade = g_pc.g_observerEastBody.w;
+        const float finerFade = g_pc.g_observerUpBody.w;
+        output.lodFade = float2(selfFade, 0.0);
+        if (insideHole)
+        {
+            if (finerFade >= 0.999)
+                output.horizonClip = -1.0;
+            else
+                output.lodFade.y = finerFade;
+        }
+    }
+    else
+    {
+        // Distance bands (experimental): coverage is a function of this vertex's
+        // distance from the camera. x rises across the level's inner edge, y
+        // across its outer edge (a level with no inner edge has x = 1).
+        const float innerEdge = g_pc.g_observerEastBody.w;
+        const float outerEdge = g_pc.g_observerUpBody.w;
+        const float distanceMeters = length(localPosition);
+        // Triangles span about two cells: cull a vertex only when no pixel
+        // near it can have any coverage.
+        const float slack = 2.0 * spacing;
+        const float lowestCoverage =
+            outerEdge > 0.0
+                ? smoothstep(
+                    outerEdge * (1.0 - zoneFraction),
+                    outerEdge * (1.0 + zoneFraction),
+                    distanceMeters - slack)
+                : 0.0;
+        const float highestCoverage =
+            innerEdge > 0.0
+                ? smoothstep(
+                    innerEdge * (1.0 - zoneFraction),
+                    innerEdge * (1.0 + zoneFraction),
+                    distanceMeters + slack)
+                : 1.0;
+        output.lodFade = float2(
+            innerEdge > 0.0
+                ? smoothstep(
+                    innerEdge * (1.0 - zoneFraction),
+                    innerEdge * (1.0 + zoneFraction),
+                    distanceMeters)
+                : 1.0,
+            outerEdge > 0.0
+                ? smoothstep(
+                    outerEdge * (1.0 - zoneFraction),
+                    outerEdge * (1.0 + zoneFraction),
+                    distanceMeters)
+                : 0.0);
+        if (highestCoverage <= 0.0 || lowestCoverage >= 1.0)
+            output.horizonClip = -1.0;
+    }
 
     return output;
 }

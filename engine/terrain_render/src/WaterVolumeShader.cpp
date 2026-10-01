@@ -134,6 +134,14 @@ float GeometrySchlickGgx(float nDotV, float roughness)
 
 float4 main(VSOutput input) : SV_Target0
 {
+    {
+        // Same per-pixel level ownership as the terrain pass (see the vertex
+        // shader's lodFade), so overlapping levels draw their water once.
+        const float ditherNoise = frac(52.9829189 *
+            frac(dot(input.position.xy, float2(0.06711056, 0.00583715))));
+        if (ditherNoise >= input.lodFade.x || ditherNoise < input.lodFade.y)
+            discard;
+    }
     const WaterOptics water = g_waterOptics[0];
     const float nearPlane = max(water.projection.x, 1.0e-3);
     const float farPlane = max(water.projection.y, nearPlane * 2.0);
@@ -263,6 +271,28 @@ float4 main(VSOutput input) : SV_Target0
 std::string BuildClipmapBedPixelShader(const std::string_view baseShader)
 {
     std::string result(baseShader);
+
+    // Level cross-fade: a screen-door dither between a level fading in or out
+    // and the level around it, so a plan change dissolves instead of popping.
+    ReplaceOnce(
+        result,
+        "    float drySurface : TEXCOORD11;\n    float horizonClip : SV_ClipDistance0;",
+        "    float drySurface : TEXCOORD11;\n"
+        "    float2 lodFade : TEXCOORD13;\n"
+        "    float horizonClip : SV_ClipDistance0;",
+        "the terrain pixel input struct");
+    ReplaceOnce(
+        result,
+        "SurfaceOutputs main(VSOutput input)\n{\n",
+        "SurfaceOutputs main(VSOutput input)\n{\n"
+        "    {\n"
+        "        // Interleaved gradient noise: stable per pixel, evenly spread.\n"
+        "        const float ditherNoise = frac(52.9829189 *\n"
+        "            frac(dot(input.position.xy, float2(0.06711056, 0.00583715))));\n"
+        "        if (ditherNoise >= input.lodFade.x || ditherNoise < input.lodFade.y)\n"
+        "            discard;\n"
+        "    }\n",
+        "the terrain pixel entry point");
 
     ReplaceOnce(
         result,

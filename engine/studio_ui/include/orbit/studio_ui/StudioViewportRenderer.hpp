@@ -365,6 +365,10 @@ public:
     MacroGlobeDiagnostics(std::string_view viewportId) const noexcept;
     [[nodiscard]] std::optional<StudioSurfaceGlobeTransitionDiagnostics>
     SurfaceGlobeTransitionDiagnostics(std::string_view viewportId) const noexcept;
+    // The clipmap levels the dynamic planner kept active for a view last frame
+    // (valid == false when the production terrain was not drawn).
+    [[nodiscard]] StudioClipmapPlanStats ClipmapPlanStats(
+        std::string_view viewportId) const noexcept;
     [[nodiscard]] std::optional<StudioVisibilityProxyDiagnostics>
     VisibilityProxyDiagnostics(std::string_view viewportId) const noexcept;
     [[nodiscard]] std::optional<StudioLuminanceHistogramDiagnostics>
@@ -654,6 +658,7 @@ private:
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> atmosphereScratch_;
     std::map<std::string, StudioCelestialLightingDiagnostics, std::less<>> lightingDiagnostics_;
     std::map<std::string, StudioSurfaceGlobeTransitionDiagnostics, std::less<>> transitionDiagnostics_;
+    std::map<std::string, StudioClipmapPlanStats, std::less<>> clipmapPlanStats_;
     std::map<std::string, StudioVisibilityProxyDiagnostics, std::less<>> visibilityProxyDiagnostics_;
     std::map<std::string, StudioEmissiveGiDiagnostics, std::less<>> emissiveGiDiagnostics_;
     std::map<std::string, VisibilityProxyPresentation, std::less<>> visibilityProxyPresentations_;

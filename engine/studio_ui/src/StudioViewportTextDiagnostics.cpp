@@ -280,9 +280,10 @@ std::string FormatStudioViewportTextReport(
         Meters(report.farPlaneMeters));
 
     text += std::format(
-        "Layers: production {}  orbital globe {}  ocean {}  surface effects {}   LOD bias {:+.2f} stops\n",
+        "Layers: production {}{}  orbital globe {}  ocean {}  surface effects {}   LOD bias {:+.2f} stops\n",
         report.layers.productionSurface ? "on" : "OFF",
-        report.layers.macroGlobe ? "on" : "OFF",
+        report.layers.fullClipmap ? " (full clipmap, ground to orbit)" : "",
+        report.layers.macroGlobe && !report.layers.fullClipmap ? "on" : "OFF",
         report.layers.ocean ? "on" : "OFF",
         report.layers.surfaceEffects ? "on" : "OFF",
         static_cast<f64>(report.layers.lodBiasStops));
@@ -339,6 +340,59 @@ std::string FormatStudioViewportTextReport(
                 cursor.physicalLod.has_value()
                     ? std::format(" (LOD {})", *cursor.physicalLod)
                     : std::string());
+        }
+    }
+
+    if (report.clipmapPlan.has_value())
+    {
+        const auto& plan = *report.clipmapPlan;
+        if (plan.frozen || plan.wireframe)
+        {
+            text += std::format(
+                "Clipmap debug:{}{}\n",
+                plan.frozen ? " FROZEN (the camera no longer drives the clipmap)" : "",
+                plan.wireframe ? " wireframe" : "");
+        }
+        if (plan.dynamic)
+        {
+            text += std::format(
+                "Clipmap{}: levels {}..{} of {} active (finest {}, reaches {})   nearest ground {}, screen wants {} spacing   {} plan changes\n",
+                plan.banded ? " (EXPERIMENT, distance bands)" : "",
+                plan.firstLevel,
+                plan.lastLevel,
+                plan.ladderLevels,
+                Meters(plan.finestSpacingMeters),
+                Meters(plan.coarsestHalfExtentMeters),
+                Meters(plan.nearestGroundMeters),
+                Meters(plan.requiredSpacingMeters),
+                plan.planChanges);
+            // One compact entry per drawn level: index and sample spacing (and the
+            // camera-distance band of the experimental banded clipmap).
+            std::string levels = plan.banded ? "  bands:" : "  levels:";
+            for (const auto& level : plan.levels)
+            {
+                if (plan.banded)
+                {
+                    levels += std::format(
+                        " L{}={}..{} @{}",
+                        level.level,
+                        Meters(level.bandInnerMeters),
+                        Meters(level.bandOuterMeters),
+                        Meters(level.spacingMeters));
+                }
+                else
+                {
+                    levels += std::format(
+                        " L{}={}", level.level, Meters(level.spacingMeters));
+                }
+            }
+            text += levels + '\n';
+        }
+        else
+        {
+            text += std::format(
+                "Clipmap: all {} levels active (dynamic planning off)\n",
+                plan.ladderLevels);
         }
     }
 

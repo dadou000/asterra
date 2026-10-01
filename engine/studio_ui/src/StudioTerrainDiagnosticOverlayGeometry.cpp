@@ -457,8 +457,13 @@ void AppendClipmapRings(
     std::vector<editor_ui::PreviewLine>& result,
     const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime,
     const terrain::TerrainSource& source,
-    const render_view::CameraState& camera)
+    const render_view::CameraState& camera,
+    const StudioClipmapActiveRange& activeRange)
 {
+    if (activeRange.suppressRings)
+    {
+        return;
+    }
     const std::size_t count =
         std::min(
             runtime.layout.levels.size(),
@@ -468,6 +473,15 @@ void AppendClipmapRings(
          index < count;
          ++index)
     {
+        // Levels outside the dynamic plan are neither drawn nor generated, so
+        // they get no ring either.
+        if (activeRange.valid &&
+            (index < activeRange.firstLevel ||
+             index > activeRange.lastLevel))
+        {
+            continue;
+        }
+
         const auto& level =
             runtime.layout.levels[index];
 
@@ -480,11 +494,18 @@ void AppendClipmapRings(
                     static_cast<f32>(count - 1U)
                 : 0.0F;
 
+        // The finest and coarsest active levels are the plan's two ends; they
+        // are drawn at full strength, the levels between at 60%.
+        const bool planEnd =
+            activeRange.valid &&
+            (index == activeRange.firstLevel ||
+             index == activeRange.lastLevel);
+
         const math::Float4 color{
             0.10F + 0.65F * t,
             0.82F - 0.45F * t,
             1.00F,
-            0.80F
+            planEnd || !activeRange.valid ? 0.95F : 0.60F
         };
 
         AppendOffsetSquare(
@@ -1348,7 +1369,8 @@ BuildTerrainDiagnosticOverlayLines(
     const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime,
     const terrain::TerrainSource& source,
     const std::span<const StudioTerrainDiagnosticPage> pages,
-    const render_view::CameraState& camera)
+    const render_view::CameraState& camera,
+    const StudioClipmapActiveRange& activeRange)
 {
     std::vector<editor_ui::PreviewLine>
         result;
@@ -1367,7 +1389,8 @@ BuildTerrainDiagnosticOverlayLines(
             result,
             runtime,
             source,
-            camera);
+            camera,
+            activeRange);
     }
 
     for (const auto& page :

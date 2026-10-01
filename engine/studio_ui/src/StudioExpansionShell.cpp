@@ -1298,6 +1298,10 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                     layers.productionSurface) || layersChanged;
             layersChanged =
                 context.Checkbox(
+                    "Full clipmap renderer (ground to orbit, no globe)##layer-full-clipmap",
+                    layers.fullClipmap) || layersChanged;
+            layersChanged =
+                context.Checkbox(
                     "Orbital globe patches##layer-macro",
                     layers.macroGlobe) || layersChanged;
             layersChanged =
@@ -1321,6 +1325,53 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
             }
             context.MutedText(
                 "+ keeps richer terrain longer and doubles orbital patch detail; - is coarser and cheaper.");
+
+            layersChanged =
+                context.Checkbox(
+                    "Dynamic clipmap levels##layer-dynamic-clipmaps",
+                    layers.dynamicClipmaps) || layersChanged;
+            f64 pixelsPerVertex = static_cast<f64>(layers.clipmapPixelsPerVertex);
+            if (context.SliderDouble(
+                    "Pixels per vertex##layer-clipmap-ppv",
+                    pixelsPerVertex,
+                    0.25,
+                    16.0))
+            {
+                layers.clipmapPixelsPerVertex = static_cast<f32>(pixelsPerVertex);
+                layersChanged = true;
+            }
+            f64 fadeSeconds = static_cast<f64>(layers.clipmapFadeSeconds);
+            if (context.SliderDouble(
+                    "Level fade (s)##layer-clipmap-fade",
+                    fadeSeconds,
+                    0.0,
+                    3.0))
+            {
+                layers.clipmapFadeSeconds = static_cast<f32>(fadeSeconds);
+                layersChanged = true;
+            }
+            layersChanged =
+                context.Checkbox(
+                    "EXPERIMENT: distance-banded levels##layer-distance-bands",
+                    layers.experimentalDistanceBands) || layersChanged;
+            f64 bandScale = static_cast<f64>(layers.clipmapBandScale);
+            if (context.SliderDouble(
+                    "Band distance scale##layer-band-scale",
+                    bandScale,
+                    0.25,
+                    4.0))
+            {
+                layers.clipmapBandScale = static_cast<f32>(bandScale);
+                layersChanged = true;
+            }
+            context.MutedText(
+                "Draws clipmap level k only where the camera's distance to the terrain is in its band "
+                "(default 0-100 m, 100-500 m, 500-2 km, 2-10 km, ...), cross-fading neighbours so the rings "
+                "resize with the camera. Needs the full clipmap renderer. Edit the bands over RPC "
+                "(clipmap_band_edges_meters).");
+            context.MutedText(
+                "Dynamic levels draw only the clipmap levels the camera can use: fine levels vanish "
+                "as you rise, coarse ones when ground is not in view. Lower pixels-per-vertex keeps finer levels.");
 
             if (context.Button("Reset layers##layer-reset"))
             {
@@ -1357,8 +1408,17 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
             "Physical LOD##diag-physical-lod",
             diagnostics.physicalLod);
         toggle(
-            "Clipmap rings##diag-clipmap-rings",
+            "Active clipmap rings##diag-clipmap-rings",
             diagnostics.clipmapRings);
+        toggle(
+            "Tint terrain by clipmap level##diag-clipmap-levels",
+            diagnostics.clipmapLevels);
+        toggle(
+            "Clipmap wireframe##diag-clipmap-wireframe",
+            diagnostics.clipmapWireframe);
+        toggle(
+            "Freeze clipmaps##diag-clipmap-freeze",
+            diagnostics.clipmapFreeze);
         toggle(
             "Cache status##diag-cache",
             diagnostics.cacheStatus);

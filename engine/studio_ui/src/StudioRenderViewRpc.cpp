@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 
+#include <cmath>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -109,6 +110,9 @@ constexpr OverlayFlag kOverlayFlags[] = {
     {"build_states", &StudioTerrainDiagnosticOverlayOptions::buildStates},
     {"physical_lod", &StudioTerrainDiagnosticOverlayOptions::physicalLod},
     {"clipmap_rings", &StudioTerrainDiagnosticOverlayOptions::clipmapRings},
+    {"clipmap_levels", &StudioTerrainDiagnosticOverlayOptions::clipmapLevels},
+    {"clipmap_wireframe", &StudioTerrainDiagnosticOverlayOptions::clipmapWireframe},
+    {"clipmap_freeze", &StudioTerrainDiagnosticOverlayOptions::clipmapFreeze},
     {"cache_status", &StudioTerrainDiagnosticOverlayOptions::cacheStatus},
     {"authored_constraints", &StudioTerrainDiagnosticOverlayOptions::authoredConstraints},
     {"biome_weights", &StudioTerrainDiagnosticOverlayOptions::biomeWeights},
@@ -127,6 +131,21 @@ constexpr OverlayFlag kOverlayFlags[] = {
     return Value(std::move(result));
 }
 
+// The band edges up to the first 0 (the list's end).
+[[nodiscard]] Value BandEdgesToRpc(const StudioTerrainLayerOptions& layers)
+{
+    Value::Array edges;
+    for (const f32 edge : layers.clipmapBandEdgesMeters)
+    {
+        if (edge <= 0.0F)
+        {
+            break;
+        }
+        edges.emplace_back(static_cast<f64>(edge));
+    }
+    return Value(std::move(edges));
+}
+
 [[nodiscard]] Value LayersToRpc(
     const std::string& id,
     const StudioTerrainLayerOptions& layers)
@@ -134,10 +153,19 @@ constexpr OverlayFlag kOverlayFlags[] = {
     return Value(Value::Object{
         {"id", id},
         {"production_surface", layers.productionSurface},
+        {"full_clipmap", layers.fullClipmap},
         {"macro_globe", layers.macroGlobe},
         {"ocean", layers.ocean},
         {"surface_effects", layers.surfaceEffects},
-        {"lod_bias_stops", static_cast<f64>(layers.lodBiasStops)}});
+        {"lod_bias_stops", static_cast<f64>(layers.lodBiasStops)},
+        {"dynamic_clipmaps", layers.dynamicClipmaps},
+        {"clipmap_pixels_per_vertex",
+         static_cast<f64>(layers.clipmapPixelsPerVertex)},
+        {"clipmap_fade_seconds",
+         static_cast<f64>(layers.clipmapFadeSeconds)},
+        {"experimental_distance_bands", layers.experimentalDistanceBands},
+        {"clipmap_band_scale", static_cast<f64>(layers.clipmapBandScale)},
+        {"clipmap_band_edges_meters", BandEdgesToRpc(layers)}});
 }
 
 [[nodiscard]] Value Vec3ToRpc(const math::Double3& value)
@@ -270,6 +298,47 @@ constexpr OverlayFlag kOverlayFlags[] = {
                 {"resident", static_cast<i64>(cpu.globePatchesResident)}}}});
     }
 
+    if (report.clipmapPlan.has_value())
+    {
+        const auto& plan = *report.clipmapPlan;
+        // One entry per drawn level: its index, sample spacing and half extent
+        // (and, for the experimental banded clipmap, its distance band).
+        Value::Array activeLevels;
+        for (const StudioClipmapLevelStats& level : plan.levels)
+        {
+            Value::Object entry{
+                {"level", static_cast<i64>(level.level)},
+                {"spacing_meters", level.spacingMeters},
+                {"half_extent_meters", level.halfExtentMeters}};
+            if (plan.banded)
+            {
+                entry.emplace("band_inner_meters", level.bandInnerMeters);
+                entry.emplace("band_outer_meters", level.bandOuterMeters);
+            }
+            activeLevels.emplace_back(std::move(entry));
+        }
+        result.emplace("clipmap_plan", Value::Object{
+            {"levels", Value(std::move(activeLevels))},
+            {"dynamic", plan.dynamic},
+            {"frozen", plan.frozen},
+            {"wireframe", plan.wireframe},
+            {"banded", plan.banded},
+            {"ladder_levels", static_cast<i64>(plan.ladderLevels)},
+            {"first_level", static_cast<i64>(plan.firstLevel)},
+            {"last_level", static_cast<i64>(plan.lastLevel)},
+            {"active_levels",
+             static_cast<i64>(plan.lastLevel >= plan.firstLevel
+                                  ? plan.lastLevel - plan.firstLevel + 1U
+                                  : 0U)},
+            {"finest_spacing_meters", plan.finestSpacingMeters},
+            {"coarsest_half_extent_meters", plan.coarsestHalfExtentMeters},
+            {"nearest_ground_meters", plan.nearestGroundMeters},
+            {"visible_arc_meters", plan.visibleArcMeters},
+            {"required_spacing_meters", plan.requiredSpacingMeters},
+            {"ground_elevation_meters", plan.groundElevationMeters},
+            {"plan_changes", static_cast<i64>(plan.planChanges)}});
+    }
+
     if (report.nadir.has_value())
     {
         result.emplace("below_camera", PointToRpc(*report.nadir));
@@ -370,7 +439,8 @@ void RegisterStudioRenderViewRpc(
             .description =
                 "Returns which terrain diagnostic overlays a Studio "
                 "RenderView draws (dirty_page_bounds, build_states, "
-                "physical_lod, clipmap_rings, cache_status, "
+                "physical_lod, clipmap_rings (active levels only), clipmap_levels (tints the terrain by level), "
+                "clipmap_wireframe, clipmap_freeze, cache_status, "
                 "authored_constraints, biome_weights, process_masks, "
                 "drainage_vectors).",
             .mutating = false
@@ -396,7 +466,9 @@ void RegisterStudioRenderViewRpc(
             .description =
                 "Turns terrain diagnostic overlays on or off for a Studio "
                 "RenderView. Pass any of dirty_page_bounds, build_states, "
-                "physical_lod, clipmap_rings, cache_status, "
+                "physical_lod, clipmap_rings (active levels only), clipmap_levels (tints the terrain by level), "
+                "clipmap_wireframe (terrain as a wireframe), clipmap_freeze (the clipmap stops following the "
+                "camera, which can fly away and look at the rings from outside), cache_status, "
                 "authored_constraints, biome_weights, process_masks, "
                 "drainage_vectors as booleans; omitted flags keep their "
                 "value. The same toggles as the viewport's Diagnostics "
@@ -445,8 +517,14 @@ void RegisterStudioRenderViewRpc(
             .description =
                 "Returns which terrain layers a Studio RenderView draws "
                 "(production_surface = near-field clipmap terrain, "
+                "full_clipmap = the clipmap draws from ground to orbit and "
+                "replaces the orbital globe, "
                 "macro_globe = orbital displaced-globe patches, ocean, "
-                "surface_effects) and its lod_bias_stops.",
+                "surface_effects), its lod_bias_stops, and the dynamic "
+                "clipmap planner (dynamic_clipmaps, "
+                "clipmap_pixels_per_vertex, clipmap_fade_seconds, "
+                "experimental_distance_bands, clipmap_band_edges_meters, "
+                "clipmap_band_scale).",
             .mutating = false
         },
         [&views](const Value& params)
@@ -473,7 +551,24 @@ void RegisterStudioRenderViewRpc(
                 "ocean, surface_effects (booleans) and lod_bias_stops "
                 "(number, clamped to [-4, 4]; +1 keeps richer representations "
                 "longer and doubles orbital patch resolution, -1 the "
-                "opposite); omitted fields keep their value. The same "
+                "opposite). dynamic_clipmaps (boolean) draws and generates "
+                "only the clipmap levels the camera can use; "
+                "clipmap_pixels_per_vertex (number, [0.25, 32], default 3) "
+                "is the target sample spacing in pixels at the nearest "
+                "ground, lower keeps finer levels longer; "
+                "clipmap_fade_seconds (number, [0, 5], default 0.4) is how "
+                "long a level takes to dissolve in or out when the plan adds "
+                "or drops it (0 = instant, they pop). "
+                "experimental_distance_bands (boolean, default false) draws "
+                "clipmap level k only where the camera's distance to the "
+                "terrain lies between clipmap_band_edges_meters[k-1] and "
+                "[k] (array of up to 16 increasing metres, default "
+                "[100, 500, 2000, 10000, 40000, ...]; the last is the farthest "
+                "distance drawn), cross-fading neighbours so the rings resize "
+                "continuously; clipmap_band_scale (number, [0.1, 10], default "
+                "1) multiplies every edge (rebuilds the renderer, applied in "
+                "1/8-octave steps). Omitted fields "
+                "keep their value. The same "
                 "controls as the viewport Diagnostics 'Terrain layers' "
                 "section. Transient view state.",
             .mutating = true
@@ -504,9 +599,80 @@ void RegisterStudioRenderViewRpc(
                     target = found->second.AsBool();
                 };
                 applyFlag("production_surface", layers.productionSurface);
+                applyFlag("full_clipmap", layers.fullClipmap);
                 applyFlag("macro_globe", layers.macroGlobe);
                 applyFlag("ocean", layers.ocean);
                 applyFlag("surface_effects", layers.surfaceEffects);
+                applyFlag("dynamic_clipmaps", layers.dynamicClipmaps);
+
+                if (const auto pixels = values.find("clipmap_pixels_per_vertex");
+                    pixels != values.end())
+                {
+                    if (!pixels->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            "clipmap_pixels_per_vertex must be a number.");
+                    }
+                    layers.clipmapPixelsPerVertex =
+                        static_cast<f32>(pixels->second.AsNumber());
+                }
+
+                applyFlag(
+                    "experimental_distance_bands",
+                    layers.experimentalDistanceBands);
+
+                if (const auto edges = values.find("clipmap_band_edges_meters");
+                    edges != values.end())
+                {
+                    if (!edges->second.IsArray() ||
+                        edges->second.AsArray().size() >
+                            layers.clipmapBandEdgesMeters.size())
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            "clipmap_band_edges_meters must be an array of at most 16 numbers.");
+                    }
+                    layers.clipmapBandEdgesMeters.fill(0.0F);
+                    std::size_t slot = 0U;
+                    for (const auto& entry : edges->second.AsArray())
+                    {
+                        if (!entry.IsNumber())
+                        {
+                            throw rpc::Error(
+                                kInvalid,
+                                "clipmap_band_edges_meters must contain numbers.");
+                        }
+                        layers.clipmapBandEdgesMeters[slot++] =
+                            static_cast<f32>(entry.AsNumber());
+                    }
+                }
+
+                if (const auto scale = values.find("clipmap_band_scale");
+                    scale != values.end())
+                {
+                    if (!scale->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            "clipmap_band_scale must be a number.");
+                    }
+                    layers.clipmapBandScale =
+                        static_cast<f32>(scale->second.AsNumber());
+                }
+
+                if (const auto fade = values.find("clipmap_fade_seconds");
+                    fade != values.end())
+                {
+                    if (!fade->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            "clipmap_fade_seconds must be a number.");
+                    }
+                    layers.clipmapFadeSeconds =
+                        static_cast<f32>(fade->second.AsNumber());
+                }
 
                 if (const auto bias = values.find("lod_bias_stops");
                     bias != values.end())

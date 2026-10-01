@@ -42,7 +42,17 @@ struct StudioTerrainDiagnosticOverlayOptions
     bool dirtyPageBounds{false};
     bool buildStates{false};
     bool physicalLod{false};
+    // Outlines of the ACTIVE clipmap levels only (the dynamic planner's range),
+    // finest and coarsest drawn brighter.
     bool clipmapRings{false};
+    // Tints the terrain surface by clipmap level (a shading change, not lines)
+    // so the active levels and where each one hands off are visible.
+    bool clipmapLevels{false};
+    // Draws the terrain clipmap as a wireframe (the water surface is hidden).
+    bool clipmapWireframe{false};
+    // Freezes the clipmap where it is: plan, window and content stop following
+    // the camera, which can then fly away and look at the rings from outside.
+    bool clipmapFreeze{false};
     bool cacheStatus{false};
     bool authoredConstraints{false};
     bool biomeWeights{false};
@@ -183,6 +193,11 @@ public:
 
     // The renderer owns the orbital patch builds, so the host publishes their
     // counters here each frame for the diagnostics report.
+    // What the clipmap planner chose for a view; set by the frame loop.
+    void SetClipmapPlanStats(
+        std::string_view id,
+        const StudioClipmapPlanStats& stats);
+
     void SetOrbitalPatchStats(
         std::string_view id,
         u32 patchesPending,
@@ -325,6 +340,7 @@ private:
         u32 resident{0U};
     };
     std::map<std::string, OrbitalPatchStats, std::less<>> orbitalPatchStats_;
+    std::map<std::string, StudioClipmapPlanStats, std::less<>> clipmapPlanStats_;
 
     std::map<
         std::string,

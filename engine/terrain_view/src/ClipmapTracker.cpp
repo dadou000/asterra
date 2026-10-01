@@ -19,7 +19,7 @@ ClipmapTracker::ClipmapTracker(
     const ClipmapConfig config)
     : planet_(planet),
       config_(config),
-      levels_(config.levelCount)
+      levels_(ClipmapLevelCount(config))
 {
     if (!std::isfinite(planet_.radiusMeters) ||
         planet_.radiusMeters <= 0.0)
@@ -127,11 +127,22 @@ ClipmapMotionUpdate ClipmapTracker::Update(
         // invariant the working Godot quadtree gets naturally: child borders
         // always land on parent-grid coordinates instead of alternating between
         // aligned and half-cell phases as the observer moves.
-        const f64 alignmentSpacingMeters =
+        f64 alignmentSpacingMeters =
             index + 1U < layout.levels.size()
                 ? layout.levels[index + 1U].
                     sampleSpacingMeters
                 : level.sampleSpacingMeters;
+        if (config_.Banded())
+        {
+            // Banded levels do not share a 2:1 lattice. Phase-lock to the parent
+            // only when its spacing is a whole multiple of this level's.
+            const f64 ratio =
+                alignmentSpacingMeters / level.sampleSpacingMeters;
+            if (std::abs(ratio - std::round(ratio)) > 1.0e-6)
+            {
+                alignmentSpacingMeters = level.sampleSpacingMeters;
+            }
+        }
 
         const math::Double2 desiredCenterOffsetMeters{
             std::round(

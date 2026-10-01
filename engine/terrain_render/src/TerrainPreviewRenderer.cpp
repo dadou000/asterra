@@ -57,7 +57,10 @@ namespace
     const bool debugLodColorEnabled,
     const bool debugSideCutEnabled,
     const bool drySurface,
-    const f32 seaLevelMeters) noexcept
+    const f32 seaLevelMeters,
+    const f32 selfFade,
+    const f32 finerFade,
+    const f32 bandZoneFraction) noexcept
 {
     std::array<u32, 56> result{};
 
@@ -120,10 +123,16 @@ namespace
     store(44, static_cast<f32>(observerFrame.east.x));
     store(45, static_cast<f32>(observerFrame.east.y));
     store(46, static_cast<f32>(observerFrame.east.z));
+    store(47, selfFade);
 
     store(48, static_cast<f32>(observerFrame.up.x));
     store(49, static_cast<f32>(observerFrame.up.y));
     store(50, static_cast<f32>(observerFrame.up.z));
+    store(51, finerFade);
+
+    // < 0: ladder (selfFade/finerFade are time fades). >= 0: distance bands
+    // (selfFade/finerFade are the band's inner/outer edge in metres).
+    store(55, bandZoneFraction);
 
     store(52, static_cast<f32>(observerFrame.north.x));
     store(53, static_cast<f32>(observerFrame.north.y));
@@ -162,7 +171,7 @@ public:
           layout_(terrain_view::BuildClipmapLayout(config_.clipmap, observer)),
           tracker_(planet_, config_.clipmap),
           residency_(config_.clipmap),
-          levels_(config_.clipmap.levelCount)
+          levels_(terrain_view::ClipmapLevelCount(config_.clipmap))
     {
         if (math::Length(observer.meters) <= planet_.radiusMeters)
             throw std::invalid_argument(
@@ -170,6 +179,14 @@ public:
         if (config_.framesInFlight == 0)
             throw std::invalid_argument(
                 "Orbit terrain preview requires at least one frame in flight.");
+
+        planner_.SetConfig(config_.planner);
+        desiredPlan_.dynamic = false;
+        desiredPlan_.firstLevel = 0U;
+        desiredPlan_.lastLevel =
+            terrain_view::ClipmapLevelCount(config_.clipmap) - 1U;
+        plan_ = desiredPlan_;
+        levelValid_.assign(terrain_view::ClipmapLevelCount(config_.clipmap), 0U);
 
         CreateSharedTopology();
         CreateLevelBuffers();
@@ -193,6 +210,10 @@ public:
 
     void UpdateObserver(const world::WorldPosition& observer)
     {
+        liveObserver_ = observer;
+        // Frozen: the clipmap stays where it was and the camera is free to leave it.
+        if (clipmapFrozen_)
+            return;
         SetObserverView(observer);
         desiredObserver_ = observer;
         desiredCoverageTier_ = SelectCoverageTier(observer, desiredCoverageTier_);
@@ -211,6 +232,213 @@ public:
     void SetGenerationFrozen(const bool frozen) noexcept
     {
         generationFrozen_ = frozen;
+    }
+
+    void SetWireframe(const bool wireframe) noexcept
+    {
+        wireframe_ = wireframe;
+    }
+
+    // Freezes the whole clipmap (plan, window position, residency, content) at
+    // the current observer. The camera keeps moving; the terrain is drawn from
+    // wherever it is relative to the frozen window. Unfreezing snaps the window
+    // back to the camera and re-plans.
+    void SetClipmapFrozen(const bool frozen)
+    {
+        if (frozen == clipmapFrozen_)
+            return;
+        clipmapFrozen_ = frozen;
+        if (frozen)
+        {
+            // The camera vectors the Studio passes are expressed in this frame.
+            frozenCameraFrame_ = world::MakeSurfaceFrame(observer_.meters);
+            return;
+        }
+        UpdateObserver(liveObserver_);
+        planDirty_ = true;
+    }
+
+    [[nodiscard]] bool ClipmapFrozen() const noexcept
+    {
+        return clipmapFrozen_;
+    }
+    void SetClipmapPlanner(const terrain_view::ClipmapPlannerConfig& config)
+    {
+        // Callers may push the setting every frame; only a real change resets
+        // the planner (and its hysteresis).
+        if (config == config_.planner)
+            return;
+        config_.planner = config;
+        planner_.SetConfig(config);
+        // Re-plan on the next Draw even if the camera has not moved.
+        planDirty_ = true;
+    }
+
+    void SetGroundElevationHint(const f64 elevationMeters) noexcept
+    {
+        if (std::isfinite(elevationMeters))
+            groundElevationHintMeters_ = elevationMeters;
+    }
+
+    [[nodiscard]] const terrain_view::ClipmapPlan& ClipmapPlan() const noexcept
+    {
+        return plan_;
+    }
+
+    [[nodiscard]] std::vector<TerrainClipmapLevelSummary> ClipmapLevels() const
+    {
+        std::vector<TerrainClipmapLevelSummary> result;
+        result.reserve(layout_.levels.size());
+        for (const terrain_view::ClipmapLevel& level : layout_.levels)
+        {
+            const terrain_view::ClipmapBand band =
+                terrain_view::ClipmapLevelBand(baseClipmapConfig_, level.index);
+            result.push_back({
+                .level = level.index,
+                .active = level.active,
+                .spacingMeters = level.sampleSpacingMeters,
+                .halfExtentMeters = level.outerHalfExtentMeters,
+                .bandInnerMeters = band.innerMeters,
+                .bandOuterMeters = band.outerMeters});
+        }
+        return result;
+    }
+
+    [[nodiscard]] bool ClipmapBanded() const noexcept
+    {
+        return baseClipmapConfig_.Banded();
+    }
+
+    // Plans the active clipmap range for this camera. A change queues a rebuild
+    // of the candidate layout (ServiceStreaming applies it right after).
+    void UpdatePlan(
+        const TerrainPreviewCamera& camera,
+        const u32 targetWidth,
+        const u32 targetHeight)
+    {
+        if (clipmapFrozen_)
+        {
+            // The plan holds, but a dissolve already under way finishes.
+            if (!levelFades_.empty() && !baseClipmapConfig_.Banded())
+                AdvanceLevelFades();
+            return;
+        }
+        terrain_view::ClipmapPlanView view;
+        // The camera vectors are in the observer's local frame (x east, y up,
+        // z north), so the observer sits on the local up axis at its radius.
+        view.position = {0.0, math::Length(observer_.meters), 0.0};
+        view.forward = {
+            static_cast<f64>(camera.forward.x),
+            static_cast<f64>(camera.forward.y),
+            static_cast<f64>(camera.forward.z)};
+        view.up = {
+            static_cast<f64>(camera.up.x),
+            static_cast<f64>(camera.up.y),
+            static_cast<f64>(camera.up.z)};
+        view.verticalFovRadians = camera.verticalFovRadians > 0.0F
+            ? static_cast<f64>(camera.verticalFovRadians)
+            : static_cast<f64>(config_.verticalFovRadians);
+        view.viewportWidthPixels = targetWidth;
+        view.viewportHeightPixels = targetHeight;
+        view.planetRadiusMeters = planet_.radiusMeters;
+        view.groundElevationMeters = groundElevationHintMeters_;
+
+        const terrain_view::ClipmapPlan planned =
+            planner_.Plan(baseClipmapConfig_, view);
+        stats_.nearestGroundMeters = planned.nearestGroundMeters;
+        stats_.visibleArcMeters = planned.visibleArcMeters;
+        stats_.requiredSpacingMeters = planned.requiredSpacingMeters;
+
+        // The planner's range is the target. Levels fade toward it, so the range
+        // the layout (generation, drawing) uses also holds the levels still
+        // fading out.
+        plannedPlan_ = planned;
+        terrain_view::ClipmapPlan next = planned;
+        // Banded levels need no time fade: their coverage already follows the
+        // camera's distance continuously.
+        if (!baseClipmapConfig_.Banded())
+        {
+            AdvanceLevelFades();
+            for (u32 level = 0U; level < static_cast<u32>(levelFades_.size()); ++level)
+            {
+                if (planned.Active(level) || levelFades_[level] <= 0.0F)
+                    continue;
+                next.firstLevel = std::min(next.firstLevel, level);
+                next.lastLevel = std::max(next.lastLevel, level);
+            }
+        }
+
+        if (!(next == desiredPlan_) || planDirty_)
+        {
+            desiredPlan_ = next;
+            planDirty_ = false;
+            // A new candidate must be built even though the observer is the same.
+            ++desiredGeneration_;
+            ++stats_.planChanges;
+        }
+    }
+
+    // How drawn a level is, 0..1. A level the plan adds fades in, one it drops
+    // fades out (the fragment shader dithers it against its neighbour), so
+    // levels dissolve instead of popping.
+    // Distance-band constants for the draw (experimental banded clipmap); in the
+    // ladder the fallback is the time fade.
+    [[nodiscard]] f32 BandInner(const u32 level, const f32 fallback) const noexcept
+    {
+        return baseClipmapConfig_.Banded()
+            ? static_cast<f32>(
+                  terrain_view::ClipmapLevelBand(baseClipmapConfig_, level).innerMeters)
+            : fallback;
+    }
+    [[nodiscard]] f32 BandOuter(const u32 level, const f32 fallback) const noexcept
+    {
+        return baseClipmapConfig_.Banded()
+            ? static_cast<f32>(
+                  terrain_view::ClipmapLevelBand(baseClipmapConfig_, level).outerMeters)
+            : fallback;
+    }
+    [[nodiscard]] f32 BandZone() const noexcept
+    {
+        return baseClipmapConfig_.Banded()
+            ? static_cast<f32>(baseClipmapConfig_.bandZoneFraction)
+            : -1.0F;
+    }
+
+    void SetLevelFadeSeconds(const f64 seconds) noexcept
+    {
+        if (std::isfinite(seconds))
+            levelFadeSeconds_ = std::clamp(seconds, 0.0, 5.0);
+    }
+
+    [[nodiscard]] f32 LevelFade(const u32 level) const noexcept
+    {
+        return level < levelFades_.size() ? levelFades_[level] : 1.0F;
+    }
+
+    void AdvanceLevelFades()
+    {
+        const u32 ladder = terrain_view::ClipmapLevelCount(baseClipmapConfig_);
+        const auto now = std::chrono::steady_clock::now();
+        const f64 elapsed = std::chrono::duration<f64>(now - lastFadeTime_).count();
+        lastFadeTime_ = now;
+
+        const bool first = levelFades_.size() != ladder;
+        if (first)
+            levelFades_.assign(ladder, 0.0F);
+        // A long frame (a stall) must not skip the dissolve entirely.
+        const f32 step = levelFadeSeconds_ > 0.0
+            ? static_cast<f32>(std::clamp(elapsed, 0.0, 0.05) / levelFadeSeconds_)
+            : 1.0F;
+
+        for (u32 level = 0U; level < ladder; ++level)
+        {
+            const bool wanted = plannedPlan_.Active(level);
+            if (first)
+                levelFades_[level] = wanted ? 1.0F : 0.0F;
+            else
+                levelFades_[level] = std::clamp(
+                    levelFades_[level] + (wanted ? step : -step), 0.0F, 1.0F);
+        }
     }
 
     void SetPhysicalPages(
@@ -262,8 +490,29 @@ public:
             math::LengthSquared(math::Cross(cameraUp, cameraForward)) <= 1.0e-8F)
             cameraUp = {0.0F, 1.0F, 0.0F};
 
+        math::Float3 eye{0.0F, 0.0F, 0.0F};
+        if (clipmapFrozen_)
+        {
+            // The geometry is in the frozen observer's local frame. Put the live
+            // camera where it really is relative to that frame.
+            const world::SurfaceFrame liveFrame =
+                world::MakeSurfaceFrame(liveObserver_.meters);
+            const auto fromLive = [&liveFrame](const math::Float3& v)
+            {
+                return liveFrame.east * static_cast<f64>(v.x) +
+                    liveFrame.up * static_cast<f64>(v.y) +
+                    liveFrame.north * static_cast<f64>(v.z);
+            };
+            cameraForward = ToObserverLocal(
+                fromLive(cameraForward), frozenCameraFrame_);
+            cameraUp = ToObserverLocal(
+                fromLive(cameraUp), frozenCameraFrame_);
+            eye = ToObserverLocal(
+                liveObserver_.meters - observer_.meters, frozenCameraFrame_);
+        }
+
         const math::Mat4 view = math::LookAtLH(
-            {0.0F, 0.0F, 0.0F}, cameraForward, cameraUp);
+            eye, eye + cameraForward, cameraUp);
         const math::Mat4 projection = math::PerspectiveReverseZLH(
             camera.verticalFovRadians > 0.0F
                 ? camera.verticalFovRadians : config_.verticalFovRadians,
@@ -286,7 +535,9 @@ public:
         if (frameIndex >= config_.framesInFlight)
             throw std::out_of_range(
                 "Orbit terrain frame index exceeds configured frames in flight.");
-        if (targetWidth == 0 || targetHeight == 0 || waterOptics_.opacity <= 0.0F)
+        // A wireframe view shows the mesh, not a water surface over it.
+        if (targetWidth == 0 || targetHeight == 0 || waterOptics_.opacity <= 0.0F ||
+            wireframe_)
             return;
 
         const math::Mat4 mvp =
@@ -320,14 +571,20 @@ public:
              levelIndex < static_cast<u32>(levels_.size());
              ++levelIndex)
         {
+            if (!layout_.levels[levelIndex].active)
+                continue;
             const terrain_view::ClipmapLevel& level =
                 layout_.levels[levelIndex];
             const terrain_view::ClipmapLevel* coarserLevel =
+                !baseClipmapConfig_.Banded() &&
                 levelIndex + 1U < static_cast<u32>(levels_.size())
                     ? &layout_.levels[levelIndex + 1U]
                     : nullptr;
+            // The finest active level has no finer level to leave a hole for.
             const terrain_view::ClipmapLevelMotion* finerMotion =
-                levelIndex > 0U ? &motion_.levels[levelIndex - 1U] : nullptr;
+                levelIndex > 0U && layout_.levels[levelIndex - 1U].active
+                    ? &motion_.levels[levelIndex - 1U]
+                    : nullptr;
 
             const auto constants = BuildDrawConstants(
                 mvp,
@@ -343,12 +600,15 @@ public:
                 false,
                 false,
                 config_.drySurface,
-                waterOptics_.seaLevelMeters);
+                waterOptics_.seaLevelMeters,
+                BandInner(levelIndex, 1.0F),
+                BandOuter(levelIndex, 1.0F),
+                BandZone());
 
             commandList.SetGraphicsConstants(constants);
             commandList.SetGraphicsBuffer(
                 0, *levels_[levelIndex].gpuSampleBuffer);
-            commandList.Draw(patchVertexCount_);
+            commandList.Draw(patchVertexCounts_[levelIndex]);
         }
     }
 
@@ -359,6 +619,7 @@ public:
         const u32 targetHeight,
         const TerrainPreviewCamera& camera)
     {
+        UpdatePlan(camera, targetWidth, targetHeight);
         ServiceStreaming();
         stats_.uploadedBytesLastFrame = 0;
         if (stats_.rebaseCount > 0)
@@ -391,24 +652,39 @@ public:
             .right = static_cast<i32>(targetWidth),
             .bottom = static_cast<i32>(targetHeight)
         });
-        commandList.SetGraphicsPipeline(*pipeline_);
+        if (wireframe_ != config_.wireframe)
+        {
+            if (!alternatePipeline_)
+                alternatePipeline_ = CreateTerrainPipeline(wireframe_);
+            commandList.SetGraphicsPipeline(*alternatePipeline_);
+        }
+        else
+        {
+            commandList.SetGraphicsPipeline(*pipeline_);
+        }
         surfaceEffects_.Bind(commandList, frameIndex);
 
         for (u32 levelIndex = 0;
              levelIndex < static_cast<u32>(levels_.size());
              ++levelIndex)
         {
+            if (!layout_.levels[levelIndex].active)
+                continue;
             stats_.uploadedBytesLastFrame +=
                 PrepareLevelFrame(commandList, levelIndex);
 
             const terrain_view::ClipmapLevel& level =
                 layout_.levels[levelIndex];
             const terrain_view::ClipmapLevel* coarserLevel =
+                !baseClipmapConfig_.Banded() &&
                 levelIndex + 1U < static_cast<u32>(levels_.size())
                     ? &layout_.levels[levelIndex + 1U]
                     : nullptr;
+            // The finest active level has no finer level to leave a hole for.
             const terrain_view::ClipmapLevelMotion* finerMotion =
-                levelIndex > 0U ? &motion_.levels[levelIndex - 1U] : nullptr;
+                levelIndex > 0U && layout_.levels[levelIndex - 1U].active
+                    ? &motion_.levels[levelIndex - 1U]
+                    : nullptr;
 
             const auto constants = BuildDrawConstants(
                 mvp,
@@ -424,12 +700,17 @@ public:
                 debugLodColorEnabled_,
                 debugSideCutEnabled_,
                 config_.drySurface,
-                waterOptics_.seaLevelMeters);
+                waterOptics_.seaLevelMeters,
+                BandInner(levelIndex, LevelFade(levelIndex)),
+                BandOuter(
+                    levelIndex,
+                    finerMotion != nullptr ? LevelFade(levelIndex - 1U) : 1.0F),
+                BandZone());
 
             commandList.SetGraphicsConstants(constants);
             commandList.SetGraphicsBuffer(
                 0, *levels_[levelIndex].gpuSampleBuffer);
-            commandList.Draw(patchVertexCount_);
+            commandList.Draw(patchVertexCounts_[levelIndex]);
             ++stats_.drawCallsLastFrame;
         }
 
@@ -438,8 +719,9 @@ public:
 
     [[nodiscard]] u32 VertexCount() const noexcept
     {
-        const u64 total = static_cast<u64>(patchVertexCount_) *
-            static_cast<u64>(config_.clipmap.levelCount);
+        u64 total = 0;
+        for (const u32 count : patchVertexCounts_)
+            total += count;
         return static_cast<u32>(std::min<u64>(
             total, std::numeric_limits<u32>::max()));
     }
@@ -454,6 +736,7 @@ public:
 private:
     struct CandidateState
     {
+        terrain_view::ClipmapPlan plan;
         u32 coverageTier{0};
         terrain_view::ClipmapConfig clipmapConfig{};
         terrain_view::ClipmapLayout layout;
@@ -486,23 +769,27 @@ private:
 
     void CreateSharedTopology()
     {
-        const u64 cellsPerAxis =
-            static_cast<u64>(config_.clipmap.gridResolution) - 1ULL;
-        const u64 vertexCount = cellsPerAxis * cellsPerAxis * 6ULL;
-        patchVertexCount_ = static_cast<u32>(std::min<u64>(
-            vertexCount, std::numeric_limits<u32>::max()));
+        // One vertex count per level: coarse levels can carry a denser grid.
+        patchVertexCounts_.clear();
+        for (u32 level = 0; level < terrain_view::ClipmapLevelCount(config_.clipmap); ++level)
+        {
+            const u64 cellsPerAxis = static_cast<u64>(
+                terrain_view::ClipmapLevelGridResolution(config_.clipmap, level)) - 1ULL;
+            const u64 vertexCount = cellsPerAxis * cellsPerAxis * 6ULL;
+            patchVertexCounts_.push_back(static_cast<u32>(std::min<u64>(
+                vertexCount, std::numeric_limits<u32>::max())));
+        }
     }
 
     void CreateLevelBuffers()
     {
-        const u64 sampleCount =
-            static_cast<u64>(config_.clipmap.gridResolution) *
-            static_cast<u64>(config_.clipmap.gridResolution);
-        const u64 bytes = sampleCount *
-            sizeof(terrain_stream::TerrainSampleValue);
-
-        for (LevelGpuState& level : levels_)
+        for (u32 levelIndex = 0; levelIndex < levels_.size(); ++levelIndex)
         {
+            LevelGpuState& level = levels_[levelIndex];
+            const u64 resolution = terrain_view::ClipmapLevelGridResolution(
+                config_.clipmap, levelIndex);
+            const u64 bytes = resolution * resolution *
+                sizeof(terrain_stream::TerrainSampleValue);
             level.gpuSampleBuffer = device_.CreateBuffer({
                 .sizeBytes = bytes,
                 .usage = rhi::BufferUsage::Structured,
@@ -557,7 +844,7 @@ private:
 
     void CreatePipeline(const shader::Compiler& shaderCompiler)
     {
-        const shader::Binary vertexShader = shaderCompiler.Compile({
+        terrainVertexShader_ = shaderCompiler.Compile({
             .source = kVertexShader,
             .entryPoint = "main",
             .stage = shader::Stage::Vertex,
@@ -566,14 +853,25 @@ private:
         const std::string pixelShaderSource =
             BuildSurfaceEffectPixelShader(
                 BuildClipmapBedPixelShader(kPixelShader));
-        const shader::Binary pixelShader = shaderCompiler.Compile({
+        terrainPixelShader_ = shaderCompiler.Compile({
             .source = pixelShaderSource,
             .entryPoint = "main",
             .stage = shader::Stage::Pixel,
             .debug = false
         });
 
-        pipeline_ = device_.CreateGraphicsPipeline({
+        pipeline_ = CreateTerrainPipeline(config_.wireframe);
+    }
+
+    // The terrain pipeline in a fill mode. The wireframe variant is built the
+    // first time it is drawn, from the already compiled shaders.
+    [[nodiscard]] std::unique_ptr<rhi::GraphicsPipeline>
+    CreateTerrainPipeline(const bool wireframe)
+    {
+        const shader::Binary& vertexShader = terrainVertexShader_;
+        const shader::Binary& pixelShader = terrainPixelShader_;
+
+        return device_.CreateGraphicsPipeline({
             .vertexShader = {
                 .data = vertexShader.bytecode.data(),
                 .size = vertexShader.bytecode.size()
@@ -587,7 +885,7 @@ private:
             .pushConstantDwords = 56,
             .shaderResourceBuffers = 2,
             .topology = rhi::PrimitiveTopology::TriangleList,
-            .fillMode = config_.wireframe
+            .fillMode = wireframe
                 ? rhi::FillMode::Wireframe : rhi::FillMode::Solid,
             .cullMode = rhi::CullMode::None,
             .depthCompare = rhi::DepthCompare::GreaterEqual,
@@ -696,6 +994,7 @@ private:
             desiredCoverageTier_ == activeCoverageTier_;
 
         CandidateState candidate{
+            .plan = desiredPlan_,
             .coverageTier = desiredCoverageTier_,
             .clipmapConfig = candidateConfig,
             .layout = terrain_view::BuildClipmapLayout(candidateConfig, observer),
@@ -704,11 +1003,22 @@ private:
             .residency = reuseCommittedState
                 ? residency_ : terrain_stream::ToroidalResidency(candidateConfig)
         };
+        // A tier change rebuilds every level, so nothing is valid afterwards.
+        if (!reuseCommittedState)
+            std::fill(levelValid_.begin(), levelValid_.end(), u8{0});
+        terrain_view::ApplyClipmapActiveRange(
+            candidate.layout,
+            candidate.plan.firstLevel,
+            candidate.plan.lastLevel);
 
         candidate.motion = candidate.tracker.Update(observer);
         candidate.residencyUpdate = candidate.residency.Apply(candidate.motion);
-        terrain_stream::RefreshTerrainMorphRegions(
-            candidate.layout, candidate.motion, candidate.residencyUpdate);
+        // Banded levels do not geomorph into a parent.
+        if (!candidateConfig.Banded())
+        {
+            terrain_stream::RefreshTerrainMorphRegions(
+                candidate.layout, candidate.motion, candidate.residencyUpdate);
+        }
         candidate.requests.reserve(levels_.size());
 
         for (u32 levelIndex = 0;
@@ -717,11 +1027,18 @@ private:
         {
             const auto& levelUpdate =
                 candidate.residencyUpdate.levels[levelIndex];
-            if (levelUpdate.refreshRegions.empty())
+            const auto& level = candidate.layout.levels[levelIndex];
+            // Levels outside the plan are neither drawn nor generated.
+            if (!level.active)
+                continue;
+            // A level that has just become active (or was never generated) holds
+            // stale samples: regenerate it in full once.
+            const bool needsFull =
+                levelValid_[levelIndex] == 0U && !levelUpdate.fullRefresh;
+            if (levelUpdate.refreshRegions.empty() && !needsFull)
                 continue;
 
-            const auto& level = candidate.layout.levels[levelIndex];
-            const bool hasCoarser =
+            const bool hasCoarser = !candidateConfig.Banded() &&
                 levelIndex + 1U < static_cast<u32>(levels_.size());
             const terrain_view::ClipmapLevel* coarserLevel = hasCoarser
                 ? &candidate.layout.levels[levelIndex + 1U] : nullptr;
@@ -755,7 +1072,13 @@ private:
                     : candidate.motion.levels[levelIndex].surfaceFrame,
                 .originX = levelUpdate.originX,
                 .originY = levelUpdate.originY,
-                .regions = levelUpdate.refreshRegions
+                .regions = needsFull
+                    ? std::vector<terrain_stream::PhysicalRegion>{{
+                          .x = 0U,
+                          .y = 0U,
+                          .width = level.gridResolution,
+                          .height = level.gridResolution}}
+                    : levelUpdate.refreshRegions
             });
         }
         return candidate;
@@ -789,12 +1112,32 @@ private:
         const std::vector<terrain_stream::TerrainSampleRequest> requests =
             std::move(candidate.requests);
         config_.clipmap = candidate.clipmapConfig;
+        plan_ = candidate.plan;
+        stats_.plannerDynamic = plan_.dynamic;
+        stats_.ladderLevels = static_cast<u32>(levels_.size());
+        stats_.activeFirstLevel = plan_.firstLevel;
+        stats_.activeLastLevel = plan_.lastLevel;
         layout_ = std::move(candidate.layout);
         activeCoverageTier_ = candidate.coverageTier;
         tracker_ = std::move(candidate.tracker);
         residency_ = std::move(candidate.residency);
         motion_ = std::move(candidate.motion);
         residencyUpdate_ = std::move(candidate.residencyUpdate);
+
+        // Inactive levels keep no pending work; active ones are valid from here.
+        for (u32 levelIndex = 0U; levelIndex < static_cast<u32>(levels_.size());
+             ++levelIndex)
+        {
+            if (layout_.levels[levelIndex].active)
+            {
+                levelValid_[levelIndex] = 1U;
+                continue;
+            }
+            levelValid_[levelIndex] = 0U;
+            LevelGpuState& idle = levels_[levelIndex];
+            idle.dirtyUpdates.clear();
+            idle.appliedSerial = idle.currentSerial;
+        }
 
         for (const auto& request : requests)
         {
@@ -823,6 +1166,8 @@ private:
     void InitializeBlocking(const world::WorldPosition& observer)
     {
         ORBIT_PROFILE_SCOPE("terrain.initialize_blocking");
+        liveObserver_ = observer;
+        wireframe_ = config_.wireframe;
         SetObserverView(observer);
         desiredObserver_ = observer;
         desiredCoverageTier_ = SelectCoverageTier(observer, activeCoverageTier_);
@@ -857,8 +1202,13 @@ private:
              ++levelIndex)
         {
             const auto& level = layout_.levels[levelIndex];
+            if (!level.active)
+            {
+                levelValid_[levelIndex] = 0U;
+                continue;
+            }
             const auto& levelUpdate = residencyUpdate_.levels[levelIndex];
-            const bool hasCoarser =
+            const bool hasCoarser = !baseClipmapConfig_.Banded() &&
                 levelIndex + 1U < static_cast<u32>(levels_.size());
             const auto* coarser = hasCoarser
                 ? &layout_.levels[levelIndex + 1U] : nullptr;
@@ -1125,7 +1475,17 @@ private:
     terrain_stream::ToroidalResidency residency_;
     std::vector<LevelGpuState> levels_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    // The other fill mode, built the first time it is drawn.
+    std::unique_ptr<rhi::GraphicsPipeline> alternatePipeline_;
+    shader::Binary terrainVertexShader_;
+    shader::Binary terrainPixelShader_;
 
+    // The observer the clipmap is built around (frozen while clipmapFrozen_)
+    // and where the camera really is.
+    world::WorldPosition liveObserver_{};
+    world::SurfaceFrame frozenCameraFrame_{};
+    bool wireframe_{false};
+    bool clipmapFrozen_{false};
     world::WorldPosition observer_{};
     world::WorldPosition desiredObserver_{};
     world::SurfaceFrame observerFrame_{};
@@ -1141,9 +1501,21 @@ private:
     u64 committedGeneration_{0};
     u32 activeCoverageTier_{0};
     u32 desiredCoverageTier_{0};
+    terrain_view::ClipmapPlanner planner_;
+    terrain_view::ClipmapPlan plan_;
+    terrain_view::ClipmapPlan desiredPlan_;
+    // What the planner asked for (the layout's range also holds fading levels).
+    terrain_view::ClipmapPlan plannedPlan_;
+    std::vector<f32> levelFades_;
+    f64 levelFadeSeconds_{0.4};
+    std::chrono::steady_clock::time_point lastFadeTime_{};
+    bool planDirty_{false};
+    f64 groundElevationHintMeters_{0.0};
+    // Per level: 1 when its sample buffer holds current data for the layout.
+    std::vector<u8> levelValid_;
     TerrainStreamingStats stats_{};
     std::chrono::steady_clock::time_point lastRebaseTime_{};
-    u32 patchVertexCount_{0};
+    std::vector<u32> patchVertexCounts_;
 };
 
 TerrainPreviewRenderer::TerrainPreviewRenderer(
@@ -1212,6 +1584,55 @@ void TerrainPreviewRenderer::SetDebugVisuals(
 void TerrainPreviewRenderer::SetGenerationFrozen(const bool frozen)
 {
     impl_->SetGenerationFrozen(frozen);
+}
+
+void TerrainPreviewRenderer::SetWireframe(const bool wireframe)
+{
+    impl_->SetWireframe(wireframe);
+}
+
+void TerrainPreviewRenderer::SetClipmapFrozen(const bool frozen)
+{
+    impl_->SetClipmapFrozen(frozen);
+}
+
+bool TerrainPreviewRenderer::ClipmapFrozen() const noexcept
+{
+    return impl_->ClipmapFrozen();
+}
+
+void TerrainPreviewRenderer::SetClipmapPlanner(
+    const terrain_view::ClipmapPlannerConfig& config)
+{
+    impl_->SetClipmapPlanner(config);
+}
+
+void TerrainPreviewRenderer::SetLevelFadeSeconds(const f64 seconds) noexcept
+{
+    impl_->SetLevelFadeSeconds(seconds);
+}
+
+void TerrainPreviewRenderer::SetGroundElevationHint(
+    const f64 elevationMeters) noexcept
+{
+    impl_->SetGroundElevationHint(elevationMeters);
+}
+
+std::vector<TerrainClipmapLevelSummary> TerrainPreviewRenderer::ClipmapLevels()
+    const
+{
+    return impl_->ClipmapLevels();
+}
+
+bool TerrainPreviewRenderer::ClipmapBanded() const noexcept
+{
+    return impl_->ClipmapBanded();
+}
+
+const terrain_view::ClipmapPlan& TerrainPreviewRenderer::ClipmapPlan()
+    const noexcept
+{
+    return impl_->ClipmapPlan();
 }
 
 void TerrainPreviewRenderer::SetPhysicalPages(

@@ -24,18 +24,25 @@ namespace orbit::studio_session
 struct StudioTerrainRuntimeConfig
 {
     terrain_view::ClipmapConfig clipmap{
-        // A 65x65 grid plus one extra coarse level preserves the prior
-        // 131 km outer coverage of the 129x129/12-level stack while cutting
-        // per-level clipmap generation and draw work by nearly four times.
-        .levelCount = 13U,
-        .gridResolution = 65U,
+        // A 65x65 grid per level. The ladder is a fixed 2:1 octave lattice from
+        // 1 m up to ~16,800 km of half extent (20 levels); the dynamic clipmap
+        // planner (terrain_view::ClipmapPlanner) chooses which of its levels the
+        // camera draws each frame, so unused fine and coarse levels cost nothing.
+        .levelCount = 20U,
+        .gridResolution = 257U,
         .baseSpacingMeters = 1.0,
         .levelScale = 2.0,
-        .overlapCells = 6U
+        .overlapCells = 24U,
+        // Rings 256 m and coarser (reaching to the horizon, and all of what orbit
+        // sees) carry twice the samples across.
+        .coarseGridResolution = 513U,
+        .coarseMinSpacingMeters = 256.0
     };
 
+    // The ladder already reaches the horizon from any altitude, so the old
+    // "shift the whole ladder coarser" tiers are not used.
     terrain_view::AdaptiveClipmapCoverageConfig
-        adaptiveCoverage{};
+        adaptiveCoverage{.enabled = false};
 
     // Physical page selection is diagnostic/process identity, not render LOD.
     u8 physicalPageLevel{8U};

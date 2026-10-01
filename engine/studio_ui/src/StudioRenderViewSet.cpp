@@ -139,6 +139,7 @@ bool StudioRenderViewSet::Destroy(
     compositionEnabled_.erase(ownedId);
     textDiagnosticsHud_.erase(ownedId);
     orbitalPatchStats_.erase(ownedId);
+    clipmapPlanStats_.erase(ownedId);
     terrainLayers_.erase(ownedId);
     debugFields_.erase(ownedId);
     debugPhysicalPageLevels_.erase(ownedId);
@@ -598,6 +599,30 @@ void StudioRenderViewSet::SetTerrainLayers(
         options.lodBiasStops = 0.0F;
     }
     options.lodBiasStops = std::clamp(options.lodBiasStops, -4.0F, 4.0F);
+    if (!std::isfinite(options.clipmapPixelsPerVertex))
+    {
+        options.clipmapPixelsPerVertex = 3.0F;
+    }
+    options.clipmapPixelsPerVertex =
+        std::clamp(options.clipmapPixelsPerVertex, 0.25F, 32.0F);
+    if (!std::isfinite(options.clipmapFadeSeconds))
+    {
+        options.clipmapFadeSeconds = 0.4F;
+    }
+    options.clipmapFadeSeconds =
+        std::clamp(options.clipmapFadeSeconds, 0.0F, 5.0F);
+    if (!std::isfinite(options.clipmapBandScale))
+    {
+        options.clipmapBandScale = 1.0F;
+    }
+    options.clipmapBandScale = std::clamp(options.clipmapBandScale, 0.1F, 10.0F);
+    for (f32& edge : options.clipmapBandEdgesMeters)
+    {
+        if (!std::isfinite(edge) || edge < 0.0F)
+        {
+            edge = 0.0F;
+        }
+    }
     terrainLayers_.insert_or_assign(std::string(id), options);
 }
 
@@ -613,6 +638,13 @@ StudioTerrainLayerOptions StudioRenderViewSet::TerrainLayers(
     return found == terrainLayers_.end()
         ? StudioTerrainLayerOptions{}
         : found->second;
+}
+
+void StudioRenderViewSet::SetClipmapPlanStats(
+    const std::string_view id,
+    const StudioClipmapPlanStats& stats)
+{
+    clipmapPlanStats_.insert_or_assign(std::string(id), stats);
 }
 
 void StudioRenderViewSet::SetOrbitalPatchStats(
@@ -743,6 +775,12 @@ StudioViewportTextReport StudioRenderViewSet::TextDiagnostics(
             }
         }
         report.cpuTerrain = cpu;
+    }
+
+    if (const auto plan = clipmapPlanStats_.find(id);
+        plan != clipmapPlanStats_.end() && plan->second.valid)
+    {
+        report.clipmapPlan = plan->second;
     }
 
     if (!terrainCurrent)

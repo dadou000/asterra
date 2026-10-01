@@ -8288,6 +8288,10 @@ int main(
                         "studio.primary",
                         patchStats.patchesPending,
                         patchStats.patchesResident);
+                    studioViews.SetClipmapPlanStats(
+                        "studio.primary",
+                        studioViewportRenderer.ClipmapPlanStats(
+                            "studio.primary"));
                 }
 
                 if (busy)

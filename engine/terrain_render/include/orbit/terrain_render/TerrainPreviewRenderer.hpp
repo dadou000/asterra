@@ -11,6 +11,7 @@
 #include <orbit/terrain_region/DerivedTerrainRegionCache.hpp>
 #include <orbit/terrain_render/SurfaceEffects.hpp>
 #include <orbit/terrain_view/ClipmapLayout.hpp>
+#include <orbit/terrain_view/ClipmapPlanner.hpp>
 #include <orbit/world/Planet.hpp>
 #include <orbit/world/WorldPosition.hpp>
 
@@ -47,6 +48,17 @@ struct TerrainStreamingStats
     f64 activeBaseSpacingMeters{0.0};
     f64 activeOuterHalfExtentMeters{0.0};
 
+    // Dynamic clipmap plan (terrain_view::ClipmapPlanner): the active range of
+    // the ladder, what drove it, and how often it has changed.
+    bool plannerDynamic{false};
+    u32 ladderLevels{0};
+    u32 activeFirstLevel{0};
+    u32 activeLastLevel{0};
+    f64 nearestGroundMeters{0.0};
+    f64 visibleArcMeters{0.0};
+    f64 requiredSpacingMeters{0.0};
+    u64 planChanges{0};
+
     bool updatePending{false};
 };
 
@@ -72,6 +84,9 @@ struct TerrainPreviewConfig
 
     terrain_view::AdaptiveClipmapCoverageConfig
         adaptiveCoverage{};
+
+    // Which levels of the ladder the camera needs each frame.
+    terrain_view::ClipmapPlannerConfig planner{};
 
     f32 verticalFovRadians{1.22173048F};
     f32 nearPlaneMeters{10.0F};
@@ -109,6 +124,18 @@ struct TerrainWaterOptics
     // Elevation of the sea surface. Dry land is signed against it so the
     // waterline is resolved per pixel.
     f32 seaLevelMeters{0.0F};
+};
+
+// One level of the clipmap as it is laid out now (read-only diagnostics).
+struct TerrainClipmapLevelSummary
+{
+    u32 level{0U};
+    bool active{false};
+    f64 spacingMeters{0.0};
+    f64 halfExtentMeters{0.0};
+    // Camera-distance band of a banded level (0 for the ladder).
+    f64 bandInnerMeters{0.0};
+    f64 bandOuterMeters{0.0};
 };
 
 class TerrainPreviewRenderer
@@ -156,6 +183,30 @@ public:
         bool lodColorEnabled,
         bool sideCutEnabled);
     void SetGenerationFrozen(bool frozen);
+
+    // Draws the clipmap as a wireframe (and hides the water surface over it).
+    // Takes effect on the next Draw.
+    void SetWireframe(bool wireframe);
+    // Freezes the clipmap: the active-level plan, the window position, residency
+    // and generated content all stop following the camera, which keeps moving
+    // and can leave the clipmap to look at it from outside. Unfreezing snaps the
+    // window back to the camera.
+    void SetClipmapFrozen(bool frozen);
+    [[nodiscard]] bool ClipmapFrozen() const noexcept;
+
+    // Dynamic clipmap planning. Takes effect on the next Draw; turning it off
+    // activates the whole ladder again.
+    void SetClipmapPlanner(const terrain_view::ClipmapPlannerConfig& config);
+    // Seconds a clipmap level takes to dissolve in or out when the plan adds or
+    // drops it (clamped to [0, 5]; 0 swaps instantly).
+    void SetLevelFadeSeconds(f64 seconds) noexcept;
+    // Terrain elevation under the camera (metres above the planet radius), so the
+    // planner measures distance to the actual ground.
+    void SetGroundElevationHint(f64 elevationMeters) noexcept;
+    [[nodiscard]] const terrain_view::ClipmapPlan& ClipmapPlan() const noexcept;
+    // Every level of the current layout, finest first.
+    [[nodiscard]] std::vector<TerrainClipmapLevelSummary> ClipmapLevels() const;
+    [[nodiscard]] bool ClipmapBanded() const noexcept;
 
     // M12 live physical pages. A changed generation records one full derived
     // refresh of the current clipmap lattice; stable generations are free.

@@ -121,6 +121,8 @@ struct StudioViewportTextReport
     std::optional<StudioTerrainPointReport> nadir;
     std::optional<StudioCursorPickReport> cursor;
     std::optional<StudioCpuTerrainReport> cpuTerrain;
+    // Which clipmap levels the planner keeps active for this view.
+    std::optional<StudioClipmapPlanStats> clipmapPlan;
     StudioTerrainLayerOptions layers{};
 };
 

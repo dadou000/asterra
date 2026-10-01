@@ -20,6 +20,18 @@ struct StudioTerrainDiagnosticPage
         snapshot;
 };
 
+// The clipmap levels the dynamic planner keeps active. A default value (invalid)
+// means every level of the layout is drawn.
+struct StudioClipmapActiveRange
+{
+    bool valid{false};
+    u32 firstLevel{0U};
+    u32 lastLevel{0U};
+    // The experimental distance-banded clipmap draws other windows than the
+    // layout these rings are built from, so they are not drawn.
+    bool suppressRings{false};
+};
+
 // M13 disposable diagnostic geometry. All inputs are copied/read-only runtime
 // snapshots. Producing or toggling these lines cannot invalidate or regenerate
 // terrain by construction.
@@ -29,5 +41,6 @@ BuildTerrainDiagnosticOverlayLines(
     const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime,
     const terrain::TerrainSource& source,
     std::span<const StudioTerrainDiagnosticPage> pages,
-    const render_view::CameraState& camera);
+    const render_view::CameraState& camera,
+    const StudioClipmapActiveRange& activeRange = {});
 } // namespace orbit::studio_ui

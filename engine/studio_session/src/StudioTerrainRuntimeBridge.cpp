@@ -26,7 +26,12 @@ namespace
             1.0e-12 &&
         config.overlapCells > 0U &&
         config.overlapCells <
-            (config.gridResolution - 1U) / 2U;
+            (config.gridResolution - 1U) / 2U &&
+        (config.coarseGridResolution == 0U ||
+         (config.coarseGridResolution >= config.gridResolution &&
+          ((config.coarseGridResolution - 1U) % 4U) == 0U &&
+          std::isfinite(config.coarseMinSpacingMeters) &&
+          config.coarseMinSpacingMeters >= 0.0));
 }
 
 [[nodiscard]] world::WorldPosition DefaultObserver(

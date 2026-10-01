@@ -177,7 +177,50 @@ CelestialWorkKeyFor(
         a.gridResolution == b.gridResolution &&
         a.baseSpacingMeters == b.baseSpacingMeters &&
         a.levelScale == b.levelScale &&
-        a.overlapCells == b.overlapCells;
+        a.overlapCells == b.overlapCells &&
+        a.coarseGridResolution == b.coarseGridResolution &&
+        a.coarseMinSpacingMeters == b.coarseMinSpacingMeters &&
+        a.bandCount == b.bandCount &&
+        a.bandEdgesMeters == b.bandEdgesMeters &&
+        a.bandExtentMargin == b.bandExtentMargin &&
+        a.bandZoneFraction == b.bandZoneFraction;
+}
+
+// The experimental distance-banded clipmap for the layer options, or `base` (the
+// ladder) when the experiment is off or its band edges are unusable.
+[[nodiscard]] terrain_view::ClipmapConfig EffectiveClipmapConfig(
+    const terrain_view::ClipmapConfig& base,
+    const StudioTerrainLayerOptions& layers)
+{
+    if (!layers.fullClipmap || !layers.experimentalDistanceBands)
+    {
+        return base;
+    }
+    terrain_view::ClipmapConfig banded = base;
+    banded.bandCount = 0U;
+    banded.bandEdgesMeters = {};
+    // Quantised so dragging the scale does not rebuild the renderer every frame.
+    const f64 scale = std::exp2(
+        std::round(std::log2(static_cast<f64>(layers.clipmapBandScale)) * 8.0) / 8.0);
+    f64 previous = 0.0;
+    for (const f32 rawEdge : layers.clipmapBandEdgesMeters)
+    {
+        const f64 edge = static_cast<f64>(rawEdge) * scale;
+        if (rawEdge <= 0.0F || edge <= previous)
+        {
+            break;
+        }
+        banded.bandEdgesMeters[banded.bandCount++] = edge;
+        previous = edge;
+    }
+    if (banded.bandCount < 2U)
+    {
+        return base;
+    }
+    banded.gridResolution = 513U;
+    banded.coarseGridResolution = 0U;
+    banded.levelCount = banded.bandCount;
+    return banded;
 }
 
 [[nodiscard]] math::Double3x3 EulerDegreesToRotation(
@@ -3208,6 +3251,15 @@ SurfaceGlobeTransitionDiagnostics(
         : std::optional(found->second);
 }
 
+StudioClipmapPlanStats
+StudioViewportRenderer::ClipmapPlanStats(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found = clipmapPlanStats_.find(viewportId);
+    return found == clipmapPlanStats_.end() ? StudioClipmapPlanStats{}
+                                            : found->second;
+}
+
 std::optional<
     StudioLuminanceHistogramDiagnostics>
 StudioViewportRenderer::
@@ -5352,10 +5404,15 @@ StudioViewportRenderer::Compose(
                                 1U)),
                     .features = {
                         .productionSurfaceAvailable = true,
+                        // The full clipmap renderer never hands over to the
+                        // orbital globe: with no macro representation the
+                        // resolver keeps the production clipmap at every range.
                         .macroDisplacementAvailable =
-                            hasMacroGlobe,
+                            hasMacroGlobe &&
+                            !info.layers.fullClipmap,
                         .complexFarAppearance =
                             hasMacroGlobe &&
+                            !info.layers.fullClipmap &&
                             !studioDirectLight.
                                 direct.has_value(),
                         .radiativeEmitter = false
@@ -5383,16 +5440,36 @@ StudioViewportRenderer::Compose(
                         terrainRuntime->body.low
                 };
 
-            const auto representationDecision =
+            auto representationDecision =
                 representationTracker_.ResolveFor(
                     representationSubject,
                     representationInput);
 
-            const auto representationBlend =
+            auto representationBlend =
                 celestial_representation::
                     ResolveRepresentationBlend(
                         representationInput,
                         representationDecision);
+
+            // Full clipmap renderer: the production clipmap is the only terrain
+            // representation, from the ground to orbit. The resolver would hand
+            // over to a smooth globe or impostor as the body shrinks on screen;
+            // that choice is overridden here so no other representation draws.
+            if (info.layers.fullClipmap)
+            {
+                representationDecision.representation =
+                    celestial_representation::Representation::ProductionSurface;
+                representationDecision.lowerFidelityNeighbor =
+                    celestial_representation::Representation::ProductionSurface;
+                representationDecision.hysteresisHeld = false;
+                representationBlend.richer =
+                    celestial_representation::Representation::ProductionSurface;
+                representationBlend.lower =
+                    celestial_representation::Representation::ProductionSurface;
+                representationBlend.richerWeight = 1.0;
+                representationBlend.lowerWeight = 0.0;
+                representationBlend.overlapping = false;
+            }
 
             const auto weightFor =
                 [&](const celestial_representation::
@@ -5509,12 +5586,14 @@ StudioViewportRenderer::Compose(
                     terrainRuntime->
                         terrainSourceRevision;
 
+            const terrain_view::ClipmapConfig effectiveClipmap =
+                EffectiveClipmapConfig(terrainRuntime->clipmap, info.layers);
             const bool recreate =
                 recreateGenerator ||
                 terrain.renderer == nullptr ||
                 !SameClipmapConfig(
                     terrain.clipmap,
-                    terrainRuntime->clipmap);
+                    effectiveClipmap);
 
             if (recreate)
             {
@@ -5523,7 +5602,7 @@ StudioViewportRenderer::Compose(
                     config{};
 
                 config.clipmap =
-                    terrainRuntime->clipmap;
+                    effectiveClipmap;
                 config.adaptiveCoverage.enabled =
                     false;
                 config.nearPlaneMeters =
@@ -5582,7 +5661,7 @@ StudioViewportRenderer::Compose(
                     terrainRuntime->
                         terrainSourceRevision;
                 terrain.clipmap =
-                    terrainRuntime->clipmap;
+                    effectiveClipmap;
                 terrain.observer =
                     terrainRuntime->observer;
             }
@@ -5658,6 +5737,73 @@ StudioViewportRenderer::Compose(
             terrain.renderer->
                 SetDrySurface(
                     !resolvedOceanForView.has_value());
+
+            // Dynamic clipmap levels: which of the ladder's levels this camera
+            // needs, planned from distance to the ground rather than a fixed ring.
+            {
+                terrain_view::ClipmapPlannerConfig planner{};
+                planner.enabled = info.layers.dynamicClipmaps;
+                // The LOD bias moves the planner's target spacing too: +1 stop
+                // asks for twice the samples per pixel.
+                planner.pixelsPerVertex =
+                    static_cast<f64>(info.layers.clipmapPixelsPerVertex) *
+                    std::exp2(-static_cast<f64>(info.layers.lodBiasStops));
+                terrain.renderer->SetClipmapPlanner(planner);
+                terrain.renderer->SetLevelFadeSeconds(
+                    static_cast<f64>(info.layers.clipmapFadeSeconds));
+                // "Tint terrain by clipmap level": the clipmap shader colours
+                // each level differently, so the active set is visible.
+                const auto overlays = views.TerrainDiagnosticOverlays(info.id);
+                terrain.renderer->SetDebugVisuals(overlays.clipmapLevels, false);
+                terrain.renderer->SetWireframe(overlays.clipmapWireframe);
+                terrain.renderer->SetClipmapFrozen(overlays.clipmapFreeze);
+
+                const f64 groundElevation = analytic->Sample({
+                    .unitDirection = math::Normalize(
+                        terrainRuntime->observer.meters),
+                    .footprintMeters = 500.0,
+                    .planet = terrainRuntime->planet.id,
+                    .radialOffsetMeters = 0.0
+                }).elevationMeters;
+                terrain.renderer->SetGroundElevationHint(groundElevation);
+
+                const auto& clipmapPlan = terrain.renderer->ClipmapPlan();
+                const auto& streaming = terrain.renderer->StreamingStats();
+                std::vector<StudioClipmapLevelStats> drawnLevels;
+                for (const auto& level : terrain.renderer->ClipmapLevels())
+                {
+                    if (!level.active)
+                    {
+                        continue;
+                    }
+                    drawnLevels.push_back({
+                        .level = level.level,
+                        .spacingMeters = level.spacingMeters,
+                        .halfExtentMeters = level.halfExtentMeters,
+                        .bandInnerMeters = level.bandInnerMeters,
+                        .bandOuterMeters = level.bandOuterMeters});
+                }
+                clipmapPlanStats_.insert_or_assign(
+                    info.id,
+                    StudioClipmapPlanStats{
+                        .valid = true,
+                        .dynamic = clipmapPlan.dynamic,
+                        .banded = terrain.renderer->ClipmapBanded(),
+                        .levels = std::move(drawnLevels),
+                        .frozen = overlays.clipmapFreeze,
+                        .wireframe = overlays.clipmapWireframe,
+                        .ladderLevels = streaming.ladderLevels,
+                        .firstLevel = clipmapPlan.firstLevel,
+                        .lastLevel = clipmapPlan.lastLevel,
+                        .nearestGroundMeters = streaming.nearestGroundMeters,
+                        .visibleArcMeters = streaming.visibleArcMeters,
+                        .requiredSpacingMeters = streaming.requiredSpacingMeters,
+                        .finestSpacingMeters = clipmapPlan.finestSpacingMeters,
+                        .coarsestHalfExtentMeters =
+                            clipmapPlan.coarsestHalfExtentMeters,
+                        .planChanges = streaming.planChanges,
+                        .groundElevationMeters = groundElevation});
+            }
 
             const auto camera =
                 TerrainCameraFromBodyCamera(
@@ -5904,7 +6050,7 @@ StudioViewportRenderer::Compose(
                      studioDirectLight,
                      resolvedOceanForView,
                      globeLodBias = info.layers.lodBiasStops,
-                     macroGlobeLayer = info.layers.macroGlobe,
+                     macroGlobeLayer = (info.layers.macroGlobe && !info.layers.fullClipmap),
                      projectedRadius =
                         representationDecision.
                             projectedRadiusPixels](
@@ -6192,8 +6338,8 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::TerrainDebug:
         {
-            transitionDiagnostics_.erase(
-                info.id);
+            transitionDiagnostics_.erase(info.id);
+            clipmapPlanStats_.erase(info.id);
 
             macroGlobePresentations_.erase(
                 info.id);
@@ -6295,8 +6441,8 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::TerrainDebugUnavailable:
         {
-            transitionDiagnostics_.erase(
-                info.id);
+            transitionDiagnostics_.erase(info.id);
+            clipmapPlanStats_.erase(info.id);
 
             macroGlobePresentations_.erase(
                 info.id);
@@ -6330,8 +6476,8 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::MacroGlobe:
         {
-            transitionDiagnostics_.erase(
-                info.id);
+            transitionDiagnostics_.erase(info.id);
+            clipmapPlanStats_.erase(info.id);
             terrainPresentations_.erase(
                 info.id);
 
@@ -6456,7 +6602,7 @@ StudioViewportRenderer::Compose(
                  studioDirectLight,
                  resolvedOceanForView,
                  globeLodBias = info.layers.lodBiasStops,
-                 macroGlobeLayer = info.layers.macroGlobe](
+                 macroGlobeLayer = (info.layers.macroGlobe && !info.layers.fullClipmap)](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -6881,8 +7027,8 @@ StudioViewportRenderer::Compose(
                             compactDraw);
                     });
 
-                transitionDiagnostics_.erase(
-                    info.id);
+                transitionDiagnostics_.erase(info.id);
+            clipmapPlanStats_.erase(info.id);
 
                 break;
             }
@@ -7801,8 +7947,8 @@ StudioViewportRenderer::Compose(
             }
             else
             {
-                transitionDiagnostics_.erase(
-                    info.id);
+                transitionDiagnostics_.erase(info.id);
+            clipmapPlanStats_.erase(info.id);
 
                 graph.AddPass(
                     prefix + ".Body",
@@ -7885,8 +8031,8 @@ StudioViewportRenderer::Compose(
 
         case StudioViewportPresentation::Blank:
         {
-            transitionDiagnostics_.erase(
-                info.id);
+            transitionDiagnostics_.erase(info.id);
+            clipmapPlanStats_.erase(info.id);
 
             macroGlobePresentations_.erase(
                 info.id);
@@ -10911,13 +11057,26 @@ StudioViewportRenderer::Compose(
                     });
                 }
 
+                StudioClipmapActiveRange activeRange{};
+                if (const auto plan = clipmapPlanStats_.find(info.id);
+                    plan != clipmapPlanStats_.end() && plan->second.valid &&
+                    plan->second.dynamic)
+                {
+                    activeRange = {
+                        .valid = true,
+                        .firstLevel = plan->second.firstLevel,
+                        .lastLevel = plan->second.lastLevel,
+                        .suppressRings = plan->second.banded};
+                }
+
                 auto lines =
                     BuildTerrainDiagnosticOverlayLines(
                         diagnostics,
                         *terrainRuntime,
                         source,
                         pages,
-                        view->Camera());
+                        view->Camera(),
+                        activeRange);
 
                 overlayLines.insert(
                     overlayLines.end(),

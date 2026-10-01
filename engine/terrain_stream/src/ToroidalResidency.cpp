@@ -60,9 +60,9 @@ void EmitWrappedSpan(
 ToroidalResidency::ToroidalResidency(
     const terrain_view::ClipmapConfig config)
     : config_(config),
-      levels_(config.levelCount)
+      levels_(terrain_view::ClipmapLevelCount(config))
 {
-    if (config_.levelCount == 0)
+    if (terrain_view::ClipmapLevelCount(config_) == 0)
     {
         throw std::invalid_argument(
             "Orbit toroidal residency requires at least one clipmap level.");
@@ -85,9 +85,6 @@ ResidencyUpdate ToroidalResidency::Apply(
             "Orbit toroidal residency motion level count does not match its configuration.");
     }
 
-    const u32 resolution =
-        config_.gridResolution;
-
     ResidencyUpdate update{};
     update.levels.reserve(
         levels_.size());
@@ -100,6 +97,12 @@ ResidencyUpdate ToroidalResidency::Apply(
     {
         const auto& movement =
             motion.levels[levelIndex];
+
+        // Coarse levels can carry a denser grid than fine ones.
+        const u32 resolution =
+            terrain_view::ClipmapLevelGridResolution(
+                config_,
+                levelIndex);
 
         if (movement.levelIndex !=
             levelIndex)
