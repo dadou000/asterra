@@ -229,10 +229,17 @@ ClipmapMotionUpdate ClipmapTracker::Update(
             motion.cellShiftX != 0 ||
             motion.cellShiftY != 0;
 
+        // Ladder samples bake the edge morph, which depends on where the window
+        // is, so a scroll rebuilds the whole level. Banded levels have no morph:
+        // a sample depends only on its own position, so a scroll refreshes just
+        // the strip that came into view.
+        const bool scrollNeedsFullRefresh =
+            centerMoved && !(config_.Banded() && config_.bandPartialUpdates);
+
         motion.fullRefresh =
             rebase ||
             state.samplesInvalidated ||
-            centerMoved;
+            scrollNeedsFullRefresh;
 
         state.samplesInvalidated = false;
 

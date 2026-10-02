@@ -193,15 +193,38 @@ ClipmapPlan ClipmapPlanner::Plan(
             arc = std::max(arc, groundRadius * std::acos(ratio));
         }
     }
+    // How far the ground can be seen is a different question from how near it is.
+    // The ground sphere above is the terrain around the camera (its height hint
+    // plus the relief margin), which is right for the NEAREST ground but wrong
+    // for the farthest: on a mountain it sits at the camera's own height and
+    // collapses the coverage to a few hundred metres, although the land and sea
+    // far below stay in view. Far coverage is sized from the mean planet radius.
+    f64 farRadius = groundRadius;
+    if (groundRadius > view.planetRadiusMeters &&
+        view.planetRadiusMeters < cameraRadius - 0.5)
+    {
+        farRadius = view.planetRadiusMeters;
+        const GroundSurvey farSurvey =
+            SurveyGround(config_, view, cameraRadius, farRadius);
+        if (farSurvey.anyHit)
+        {
+            arc = std::max(arc, farSurvey.farthestArcMeters);
+            if (farSurvey.anyMiss)
+            {
+                const f64 farRatio = std::clamp(farRadius / cameraRadius, 0.0, 1.0);
+                arc = std::max(arc, farRadius * std::acos(farRatio));
+            }
+        }
+    }
     plan.nearestGroundMeters = nearest;
     plan.visibleArcMeters = arc;
     {
         // Straight-line distance to the farthest visible ground: the chord of the
         // ground sphere between the camera and a point `arc` away from the nadir.
-        const f64 angle = std::min(arc / groundRadius, 3.14159265358979);
+        const f64 angle = std::min(arc / farRadius, 3.14159265358979);
         plan.farthestDistanceMeters = std::sqrt(std::max(
-            cameraRadius * cameraRadius + groundRadius * groundRadius -
-                2.0 * cameraRadius * groundRadius * std::cos(angle),
+            cameraRadius * cameraRadius + farRadius * farRadius -
+                2.0 * cameraRadius * farRadius * std::cos(angle),
             0.0));
         plan.farthestDistanceMeters =
             std::max(plan.farthestDistanceMeters, nearest);

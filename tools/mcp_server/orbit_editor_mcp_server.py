@@ -266,6 +266,9 @@ def orbit_view_terrain_layers_set(
     experimental_distance_bands: bool | None = None,
     clipmap_band_edges_meters: list[float] | None = None,
     clipmap_band_scale: float | None = None,
+    clipmap_partial_updates: bool | None = None,
+    physical_pages: bool | None = None,
+    clouds: bool | None = None,
 ) -> dict[str, Any]:
     """Choose which terrain layers a viewport draws and its LOD bias. Omitted
     fields keep their value. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
@@ -287,7 +290,15 @@ def orbit_view_terrain_layers_set(
     cross-fade per pixel so the rings resize continuously with the camera instead
     of following the fixed 2:1 ladder. clipmap_band_scale ([0.1, 10], default 1)
     multiplies every edge, a one-number way to make all the clipmap distances
-    larger or smaller. Changing the edges or scale rebuilds the terrain renderer. The chosen
+    larger or smaller. Changing the edges or scale rebuilds the terrain renderer.
+    clipmap_partial_updates (default true) makes banded levels refresh only the strip
+    that scrolled into view; false regenerates a whole level on every scroll (for
+    comparison; clipmap_plan.generated_samples counts what was generated).
+    physical_pages (default true) composites the derived physical pages (the
+    cache_status bounds) into the clipmap's elevation and water depth; false draws
+    the plain generated terrain, to tell page-related height steps from the generator.
+    clouds (default true) ray-marches the body's cloud layer in the viewport (a
+    layer with no built cloud field draws nothing). The chosen
     level range is reported as clipmap_plan by orbit_view_text_diagnostics.
     Transient view state."""
     params: dict[str, Any] = {"id": view_id}
@@ -304,6 +315,9 @@ def orbit_view_terrain_layers_set(
         "experimental_distance_bands": experimental_distance_bands,
         "clipmap_band_edges_meters": clipmap_band_edges_meters,
         "clipmap_band_scale": clipmap_band_scale,
+        "clipmap_partial_updates": clipmap_partial_updates,
+        "physical_pages": physical_pages,
+        "clouds": clouds,
     }.items():
         if value is not None:
             params[key] = value

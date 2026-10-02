@@ -346,6 +346,13 @@ std::string FormatStudioViewportTextReport(
     if (report.clipmapPlan.has_value())
     {
         const auto& plan = *report.clipmapPlan;
+        if (plan.renderedGroundValid)
+        {
+            text += std::format(
+                "Drawn ground under camera: {} (camera floor)   groundElevationHint {}\n",
+                Meters(plan.renderedGroundElevationMeters),
+                Meters(plan.groundElevationMeters));
+        }
         if (plan.frozen || plan.wireframe)
         {
             text += std::format(

@@ -67,8 +67,10 @@ ResolveGlobalDesc(
     const f64 diameterMeters,
     const f64 footprintMeters) noexcept
 {
-    const f64 lower = footprintMeters * 2.0;
-    const f64 upper = footprintMeters * 4.0;
+    // Several samples across, or a crater aliases into a grid of vertex-sized
+    // bumps (matches the GPU generator's CraterFeatureWeight).
+    const f64 lower = footprintMeters * 4.0;
+    const f64 upper = footprintMeters * 8.0;
     if (diameterMeters <= lower) return 0.0;
     if (diameterMeters >= upper) return 1.0;
     return detail::Smooth((diameterMeters - lower) /
@@ -364,9 +366,12 @@ f64 AnalyticTerrainSource::LocalCraterHeightDelta(
             if (craterDistance >= 1.0 && craterDistance <= 1.55)
             {
                 const f64 ejectaT = (craterDistance - 1.0) / 0.55;
+                // Ramp in from zero at the rim (matches the GPU generator).
+                const f64 rimRamp = detail::Smooth(
+                    std::clamp((craterDistance - 1.0) / 0.15, 0.0, 1.0));
                 delta += craterRadius * 0.007 *
                     std::pow(craterDistance, -3.0) *
-                    (1.0 - detail::Smooth(ejectaT));
+                    (1.0 - detail::Smooth(ejectaT)) * rimRamp;
             }
             result += delta * preservation;
         }
@@ -429,9 +434,11 @@ f64 AnalyticTerrainSource::CraterHeightDelta(
         {
             const f64 extent = (x - 1.0) /
                 std::max(desc_.craters.maximumEjectaExtentRadii - 1.0, 1.0e-9);
+            const f64 rimRamp = detail::Smooth(
+                std::clamp((x - 1.0) / 0.15, 0.0, 1.0));
             delta += crater.radiusMeters * 0.010 *
                 std::pow(std::max(x, 1.0), -3.0) *
-                (1.0 - detail::Smooth(extent));
+                (1.0 - detail::Smooth(extent)) * rimRamp;
         }
         result += delta * preservation;
     }

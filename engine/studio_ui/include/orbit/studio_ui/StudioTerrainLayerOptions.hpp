@@ -52,12 +52,33 @@ struct StudioTerrainLayerOptions
     // cost of larger, coarser windows per level). Applied in 1/8-octave steps
     // because a change rebuilds the terrain renderer.
     f32 clipmapBandScale{1.0F};
+    // Banded levels refresh only the strip that scrolled into view (default).
+    // False regenerates a whole level on every scroll, for comparison.
+    bool clipmapPartialUpdates{true};
+    // Composite the derived physical pages (the "cache status" bounds) into the
+    // clipmap's elevation and water depth. Off draws the plain generated
+    // terrain, to tell page-related height steps from the generator.
+    bool physicalPages{true};
+    // Ray-march the body's cloud layer in this view (ground to orbit). The
+    // cloud field itself is still built and used for shadows/orbital globes.
+    bool clouds{true};
     std::array<f32, 16> clipmapBandEdgesMeters{
         100.0F, 500.0F, 2000.0F, 10000.0F, 40000.0F, 160000.0F, 640000.0F,
         2560000.0F, 10000000.0F, 40000000.0F};
 
     [[nodiscard]] constexpr bool operator==(
         const StudioTerrainLayerOptions&) const noexcept = default;
+};
+
+// The built cloud field of the view's target body (read-only diagnostics).
+struct StudioCloudReport
+{
+    u32 layerCount{0U};
+    f64 meanCoverage{0.0};
+    f64 meanOpticalDepth{0.0};
+    i64 timeBucket{0};
+    u64 fingerprint{0U};
+    bool gpuResident{false};
 };
 
 // One clipmap level that is drawn this frame (read-only diagnostics).
@@ -92,6 +113,15 @@ struct StudioClipmapPlanStats
     f64 finestSpacingMeters{0.0};
     f64 coarsestHalfExtentMeters{0.0};
     u64 planChanges{0U};
+    // Terrain samples the clipmap generated since the renderer was created.
+    u64 generatedSamples{0U};
     f64 groundElevationMeters{0.0};
+    // Elevation of the terrain the clipmap draws under the camera (GPU readback,
+    // a few frames late); navigation floors the camera on it.
+    bool renderedGroundValid{false};
+    f64 renderedGroundElevationMeters{0.0};
+    // The CPU terrain source evaluated at the same vertices and footprint.
+    f64 renderedGroundCpuElevationMeters{0.0};
+    f64 renderedGroundFootprintMeters{0.0};
 };
 } // namespace orbit::studio_ui

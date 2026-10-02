@@ -4,6 +4,7 @@
 #include <orbit/celestial_atmosphere/Atmosphere.hpp>
 #include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
+#include <orbit/celestial_clouds/CloudRenderer.hpp>
 #include <orbit/celestial_compact_render/CompactObjectRenderer.hpp>
 #include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
@@ -598,6 +599,7 @@ private:
     celestial_magnetosphere_render::AuroraRenderer auroraRenderer_;
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     celestial_atmosphere::AtmosphereRenderer atmosphereRenderer_;
+    celestial_clouds::CloudRenderer cloudRenderer_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
     volume_render::UniversalVolumeRenderer universalVolumeRenderer_;
@@ -656,6 +658,10 @@ private:
     // Per-view composite target for the atmosphere pass (scene is read while
     // the result is written, then copied back into the view's scene color).
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> atmosphereScratch_;
+    // Half-resolution cloud march result (radiance + transmittance) per view.
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudTargets_;
+    // Half-resolution sun transmittance through the clouds, read by direct lighting.
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudShadowTargets_;
     std::map<std::string, StudioCelestialLightingDiagnostics, std::less<>> lightingDiagnostics_;
     std::map<std::string, StudioSurfaceGlobeTransitionDiagnostics, std::less<>> transitionDiagnostics_;
     std::map<std::string, StudioClipmapPlanStats, std::less<>> clipmapPlanStats_;

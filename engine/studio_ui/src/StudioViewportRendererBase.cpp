@@ -183,7 +183,8 @@ CelestialWorkKeyFor(
         a.bandCount == b.bandCount &&
         a.bandEdgesMeters == b.bandEdgesMeters &&
         a.bandExtentMargin == b.bandExtentMargin &&
-        a.bandZoneFraction == b.bandZoneFraction;
+        a.bandZoneFraction == b.bandZoneFraction &&
+        a.bandPartialUpdates == b.bandPartialUpdates;
 }
 
 // The experimental distance-banded clipmap for the layer options, or `base` (the
@@ -217,6 +218,7 @@ CelestialWorkKeyFor(
     {
         return base;
     }
+    banded.bandPartialUpdates = layers.clipmapPartialUpdates;
     banded.gridResolution = 513U;
     banded.coarseGridResolution = 0U;
     banded.levelCount = banded.bandCount;
@@ -2528,6 +2530,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       auroraRenderer_(device, compiler),
       compactObjectRenderer_(device, compiler),
       atmosphereRenderer_(device, compiler),
+      cloudRenderer_(device, compiler),
       pathRenderer_(device, compiler),
       surfaceVolumeDebugRenderer_(device, compiler),
       universalVolumeRenderer_(device, compiler),
@@ -5690,10 +5693,18 @@ StudioViewportRenderer::Compose(
                     *analytic,
                     *device_);
 
-            terrain.renderer->
-                SetPhysicalPages(
-                    physicalPages.pages,
-                    physicalPages.generation);
+            if (info.layers.physicalPages)
+            {
+                terrain.renderer->
+                    SetPhysicalPages(
+                        physicalPages.pages,
+                        physicalPages.generation);
+            }
+            else
+            {
+                // A distinct generation so toggling back re-applies the pages.
+                terrain.renderer->SetPhysicalPages({}, 0U);
+            }
 
             const auto particleBodyIdentity =
                 VolumeParticleBodyIdentityWords(
@@ -5767,6 +5778,37 @@ StudioViewportRenderer::Compose(
                 }).elevationMeters;
                 terrain.renderer->SetGroundElevationHint(groundElevation);
 
+                // The ground the clipmap actually draws under the camera (read
+                // back from the GPU a few frames late) is the floor navigation
+                // uses next to the CPU terrain.
+                const auto drawnGround = terrain.renderer->RenderedGround();
+                // The CPU terrain at exactly the vertices the GPU value came from
+                // (same positions, same footprint), to tell a real generator
+                // mismatch from a difference in what is being compared.
+                f64 cpuAtDrawnGround = 0.0;
+                if (drawnGround.valid)
+                {
+                    cpuAtDrawnGround = -1.0e30;
+                    for (const auto& cornerDirection : drawnGround.cornerDirections)
+                    {
+                        cpuAtDrawnGround = std::max(
+                            cpuAtDrawnGround,
+                            analytic->Sample({
+                                .unitDirection = cornerDirection,
+                                .footprintMeters = drawnGround.footprintMeters,
+                                .planet = terrainRuntime->planet.id,
+                                .radialOffsetMeters = 0.0
+                            }).elevationMeters);
+                    }
+                }
+                if (drawnGround.valid)
+                {
+                    views.SetRenderedGround(
+                        info.id,
+                        drawnGround.direction,
+                        drawnGround.elevationMeters);
+                }
+
                 const auto& clipmapPlan = terrain.renderer->ClipmapPlan();
                 const auto& streaming = terrain.renderer->StreamingStats();
                 std::vector<StudioClipmapLevelStats> drawnLevels;
@@ -5802,7 +5844,14 @@ StudioViewportRenderer::Compose(
                         .coarsestHalfExtentMeters =
                             clipmapPlan.coarsestHalfExtentMeters,
                         .planChanges = streaming.planChanges,
-                        .groundElevationMeters = groundElevation});
+                        .generatedSamples = streaming.cumulativeGeneratedSamples,
+                        .groundElevationMeters = groundElevation,
+                        .renderedGroundValid = drawnGround.valid,
+                        .renderedGroundElevationMeters =
+                            drawnGround.elevationMeters,
+                        .renderedGroundCpuElevationMeters = cpuAtDrawnGround,
+                        .renderedGroundFootprintMeters =
+                            drawnGround.footprintMeters});
             }
 
             const auto camera =
@@ -9136,9 +9185,120 @@ StudioViewportRenderer::Compose(
                     ? &volumeParticleRenderer_.ParticleLightGrid()
                     : nullptr;
 
+            // Cloud shadows: sun transmittance through the cloud layer at each
+            // visible surface, at half resolution, read by the direct lighting.
+            rhi::Texture* cloudShadowTexture = nullptr;
+            std::optional<render_graph::TextureUse> cloudShadowUse;
+            if (const auto cloudFound = cloudPresentations_.find(info.id);
+                info.layers.clouds &&
+                cloudFound != cloudPresentations_.end() &&
+                cloudFound->second.gpu != nullptr &&
+                cloudFound->second.field != nullptr &&
+                !cloudFound->second.field->layers.empty() &&
+                logicalTarget->target.has_value() &&
+                cloudFound->second.body == logicalTarget->target->body &&
+                (info.layers.fullClipmap || !info.layers.macroGlobe) &&
+                studioDirectLight.direct.has_value() &&
+                logicalTarget->mode != studio_session::ViewportMode::Debug)
+            {
+                if (const auto shadowAtmosphere =
+                        atmospherePresentations_.find(info.id);
+                    shadowAtmosphere != atmospherePresentations_.end() &&
+                    shadowAtmosphere->second.body == logicalTarget->target->body)
+                {
+                    const u32 shadowWidth = std::max(1U, (width + 1U) / 2U);
+                    const u32 shadowHeight = std::max(1U, (height + 1U) / 2U);
+                    auto& shadowTarget = cloudShadowTargets_[info.id];
+                    if (shadowTarget == nullptr ||
+                        shadowTarget->Width() != shadowWidth ||
+                        shadowTarget->Height() != shadowHeight)
+                    {
+                        shadowTarget = device_->CreateTexture({
+                            .width = shadowWidth,
+                            .height = shadowHeight,
+                            .format = rhi::TextureFormat::RGBA16_Float,
+                            .initialState = rhi::ResourceState::ShaderResource});
+                    }
+                    cloudShadowTexture = shadowTarget.get();
+                    const auto shadowHandle = graph.ImportTexture(
+                        prefix + ".CloudShadowTarget",
+                        *cloudShadowTexture,
+                        rhi::ResourceState::ShaderResource);
+
+                    auto* shadowGpu = cloudFound->second.gpu.get();
+                    const auto shadowLayer =
+                        cloudFound->second.field->layers.front().parameters;
+                    const f64 shadowReferenceRadius =
+                        shadowAtmosphere->second.parameters.bottomRadiusMeters;
+                    const auto shadowCamera = view->Camera();
+                    const celestial_atmosphere::AtmosphereRenderView shadowView{
+                        .cameraPositionMeters = shadowCamera.localPositionMeters,
+                        .forward = shadowCamera.forward,
+                        .up = shadowCamera.up,
+                        .verticalFovRadians = shadowCamera.verticalFovRadians,
+                        .nearPlaneMeters = shadowCamera.nearPlaneMeters,
+                        .farPlaneMeters = shadowCamera.farPlaneMeters,
+                        .sunDirection = studioDirectLight.directionBody,
+                        .irradianceScale = studioDirectLight.irradianceScale};
+
+                    graph.AddPass(
+                        prefix + ".CloudShadow",
+                        {
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthRead,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = shadowHandle,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         lightingDepth,
+                         shadowGpu,
+                         shadowLayer,
+                         shadowReferenceRadius,
+                         shadowView,
+                         shadowTexture = cloudShadowTexture,
+                         shadowWidth,
+                         shadowHeight](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            cloudRenderer_.DrawShadow(
+                                commands,
+                                *lightingDepth,
+                                *shadowGpu,
+                                *shadowTexture,
+                                shadowWidth,
+                                shadowHeight,
+                                shadowReferenceRadius,
+                                shadowLayer,
+                                shadowView);
+                        });
+
+                    cloudShadowUse = render_graph::TextureUse{
+                        .texture = shadowHandle,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read};
+                }
+            }
+            const auto withCloudShadow =
+                [&cloudShadowUse](
+                    std::vector<render_graph::TextureUse> uses)
+            {
+                if (cloudShadowUse.has_value())
+                {
+                    uses.push_back(*cloudShadowUse);
+                }
+                return uses;
+            };
+
             graph.AddPass(
                 prefix + ".SharedDirectLighting",
-                {
+                withCloudShadow({
                     {
                         .texture =
                             targets.surfaceBaseRoughness,
@@ -9187,7 +9347,7 @@ StudioViewportRenderer::Compose(
                             render_graph::Access::
                                 Write
                     }
-                },
+                }),
                 {
                     {
                         .buffer =
@@ -9235,6 +9395,7 @@ StudioViewportRenderer::Compose(
                  localOffsetsHandle,
                  localIndicesHandle,
                  particleLightGridForDirect,
+                 cloudShadowTexture,
                  lightingTimestamps,
                  frameIndex,
                  nearFieldIndirect](
@@ -9269,6 +9430,7 @@ StudioViewportRenderer::Compose(
                         directLight,
                         localLightGrid,
                         particleLightGridForDirect,
+                        cloudShadowTexture,
                         // The sky/ground fill floor tracks the stellar
                         // irradiance actually reaching this body, so distant
                         // planets are not washed flat by a fixed 3.5% floor.
@@ -10672,6 +10834,116 @@ StudioViewportRenderer::Compose(
                             studioDirectLight.
                                 irradianceScale
                     };
+
+                // Cloud shell in the near-field/clipmap views: composited
+                // before the atmosphere so aerial perspective covers it.
+                if (const auto cloudFound = cloudPresentations_.find(info.id);
+                    info.layers.clouds &&
+                    (info.layers.fullClipmap || !info.layers.macroGlobe) &&
+                    cloudFound != cloudPresentations_.end() &&
+                    cloudFound->second.gpu != nullptr &&
+                    cloudFound->second.field != nullptr &&
+                    !cloudFound->second.field->layers.empty() &&
+                    cloudFound->second.body == logicalTarget->target->body)
+                {
+                    auto* cloudGpu = cloudFound->second.gpu.get();
+                    const auto cloudLayer =
+                        cloudFound->second.field->layers.front().parameters;
+                    const f64 cloudReferenceRadius =
+                        atmosphereFound->second.parameters.bottomRadiusMeters;
+
+                    // Half-resolution march, then a depth-bounded bilinear composite.
+                    const u32 cloudWidth = std::max(1U, (width + 1U) / 2U);
+                    const u32 cloudHeight = std::max(1U, (height + 1U) / 2U);
+                    auto& cloudTarget = cloudTargets_[info.id];
+                    if (cloudTarget == nullptr ||
+                        cloudTarget->Width() != cloudWidth ||
+                        cloudTarget->Height() != cloudHeight)
+                    {
+                        cloudTarget = device_->CreateTexture({
+                            .width = cloudWidth,
+                            .height = cloudHeight,
+                            .format = rhi::TextureFormat::RGBA16_Float,
+                            .initialState = rhi::ResourceState::ShaderResource});
+                    }
+                    auto* cloudTexture = cloudTarget.get();
+                    const auto cloudHandle = graph.ImportTexture(
+                        prefix + ".CloudTarget",
+                        *cloudTexture,
+                        rhi::ResourceState::ShaderResource);
+
+                    graph.AddPass(
+                        prefix + ".Clouds",
+                        {
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthRead,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = cloudHandle,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         lightingDepth,
+                         atmosphereLuts,
+                         cloudTexture,
+                         cloudGpu,
+                         cloudLayer,
+                         cloudReferenceRadius,
+                         cloudWidth,
+                         cloudHeight,
+                         atmosphereParameters,
+                         atmosphereView](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            cloudRenderer_.Draw(
+                                commands,
+                                *lightingDepth,
+                                *atmosphereLuts,
+                                *cloudGpu,
+                                *cloudTexture,
+                                cloudWidth,
+                                cloudHeight,
+                                cloudReferenceRadius,
+                                cloudLayer,
+                                atmosphereParameters,
+                                atmosphereView);
+                        });
+
+                    graph.AddPass(
+                        prefix + ".CloudsComposite",
+                        {
+                            {
+                                .texture = cloudHandle,
+                                .state = rhi::ResourceState::ShaderResource,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = targets.color,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         cloudTexture,
+                         color,
+                         width,
+                         height](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            cloudRenderer_.Composite(
+                                commands,
+                                *cloudTexture,
+                                *color,
+                                width,
+                                height);
+                        });
+                }
 
                 graph.AddPass(
                     prefix + ".Atmosphere",

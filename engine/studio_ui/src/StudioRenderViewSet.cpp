@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 
 #include <orbit/studio_ui/StudioViewportCamera.hpp>
+#include <orbit/terrain/TerrainSource.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -375,6 +376,71 @@ bool StudioRenderViewSet::NavigateReference(
         input.mouseDeltaY != 0.0;
 }
 
+namespace
+{
+// The runtime's terrain source with the drawn ground as a floor: a query close
+// to where the renderer read the ground back returns at least that elevation.
+// Navigation (ground clearance, altitude above terrain) then agrees with what is
+// on screen even when the CPU terrain is lower there.
+class RenderedGroundFloorSource final : public terrain::TerrainSource
+{
+public:
+    RenderedGroundFloorSource(
+        const terrain::TerrainSource& base,
+        const math::Double3& unitDirection,
+        const f64 elevationMeters,
+        const f64 planetRadiusMeters)
+        : base_(base),
+          direction_(unitDirection),
+          elevation_(elevationMeters),
+          // About 150 m on the surface.
+          minimumCosine_(std::cos(150.0 / std::max(planetRadiusMeters, 1.0)))
+    {
+    }
+
+    [[nodiscard]] terrain::TerrainSample Sample(
+        const terrain::TerrainQuery& query) const noexcept override
+    {
+        terrain::TerrainSample sample = base_.Sample(query);
+        if (math::Dot(math::Normalize(query.unitDirection), direction_) >=
+                minimumCosine_ &&
+            std::isfinite(elevation_) &&
+            elevation_ > sample.elevationMeters)
+        {
+            sample.elevationMeters = elevation_;
+        }
+        return sample;
+    }
+
+    [[nodiscard]] u64 Revision() const noexcept override
+    {
+        return base_.Revision();
+    }
+
+    [[nodiscard]] terrain::TerrainGenerationRevisions GenerationRevisions()
+        const noexcept override
+    {
+        return base_.GenerationRevisions();
+    }
+
+private:
+    const terrain::TerrainSource& base_;
+    math::Double3 direction_;
+    f64 elevation_;
+    f64 minimumCosine_;
+};
+} // namespace
+
+void StudioRenderViewSet::SetRenderedGround(
+    const std::string_view id,
+    const math::Double3& unitDirection,
+    const f64 elevationMeters)
+{
+    renderedGround_.insert_or_assign(
+        std::string(id),
+        RenderedGround{math::Normalize(unitDirection), elevationMeters});
+}
+
 bool StudioRenderViewSet::NavigateTerrain(
     const std::string_view id,
     const StudioTerrainNavigationInput& input)
@@ -398,9 +464,24 @@ bool StudioRenderViewSet::NavigateTerrain(
     auto& state =
         RequireNavigationState(id);
 
-    const auto& source =
+    const auto& baseSource =
         session_->TerrainRuntime().
             TerrainSource(*terrain);
+
+    const auto drawnGround = renderedGround_.find(id);
+    std::optional<RenderedGroundFloorSource> flooredSource;
+    if (drawnGround != renderedGround_.end())
+    {
+        flooredSource.emplace(
+            baseSource,
+            drawnGround->second.unitDirection,
+            drawnGround->second.elevationMeters,
+            terrain->planet.radiusMeters);
+    }
+    const terrain::TerrainSource& source =
+        flooredSource.has_value()
+            ? static_cast<const terrain::TerrainSource&>(*flooredSource)
+            : baseSource;
 
     const StudioTerrainNavigationUpdate update =
         AdvanceTerrainNavigation(
@@ -640,6 +721,16 @@ StudioTerrainLayerOptions StudioRenderViewSet::TerrainLayers(
         : found->second;
 }
 
+void StudioRenderViewSet::SetCloudReport(
+    const std::string_view id,
+    const std::optional<StudioCloudReport>& report)
+{
+    if (report.has_value())
+        cloudReports_.insert_or_assign(std::string(id), *report);
+    else
+        cloudReports_.erase(std::string(id));
+}
+
 void StudioRenderViewSet::SetClipmapPlanStats(
     const std::string_view id,
     const StudioClipmapPlanStats& stats)
@@ -781,6 +872,10 @@ StudioViewportTextReport StudioRenderViewSet::TextDiagnostics(
         plan != clipmapPlanStats_.end() && plan->second.valid)
     {
         report.clipmapPlan = plan->second;
+    }
+    if (const auto clouds = cloudReports_.find(id); clouds != cloudReports_.end())
+    {
+        report.clouds = clouds->second;
     }
 
     if (!terrainCurrent)

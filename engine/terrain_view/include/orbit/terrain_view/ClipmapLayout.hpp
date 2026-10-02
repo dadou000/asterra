@@ -42,6 +42,9 @@ struct ClipmapConfig
     std::array<f64, kMaxClipmapBands> bandEdgesMeters{};
     f64 bandExtentMargin{1.3};
     f64 bandZoneFraction{0.15};
+    // Banded levels refresh only the strip that scrolled into view. False
+    // regenerates the whole level on every scroll (for comparison).
+    bool bandPartialUpdates{true};
 
     [[nodiscard]] constexpr bool Banded() const noexcept { return bandCount > 0U; }
 };

@@ -94,6 +94,14 @@ Texture2D g_depth;
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
+// Sun transmittance through the cloud layer (red), reduced resolution.
+[[vk::binding(8, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_cloudShadow;
+[[vk::binding(8, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_cloudShadowSampler;
+
 struct Constants
 {
     float4 lightDirectionAndScale;
@@ -103,6 +111,7 @@ struct Constants
     float4 depthRangeAndPhotometry;
     uint4 localGrid;
     float4 cameraFrameAndParticleGrid;
+    float4 extra; // x: cloud shadow texture bound
 };
 [[vk::push_constant]] Constants g;
 
@@ -434,6 +443,12 @@ float4 main(VSOutput input) : SV_Target0
         stellarColor *
         stellarIrradiance;
 
+    if (g.extra.x > 0.0)
+    {
+        stellarLinear *=
+            g_cloudShadow.SampleLevel(g_cloudShadowSampler, input.uv, 0).r;
+    }
+
     const float ambient =
         max(g.lightColorAndAmbient.w, 0.0);
     const float3 ambientLinear =
@@ -598,9 +613,9 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 28U,
+            .pushConstantDwords = 32U,
             .shaderResourceBuffers = 4U,
-            .sampledTextures = 4U,
+            .sampledTextures = 5U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -640,6 +655,7 @@ void DirectLightingRenderer::Draw(
     const DirectionalLight& light,
     const TiledLightGrid& localLightGrid,
     rhi::Buffer* particleLightGrid,
+    rhi::Texture* cloudShadow,
     const DirectLightingSettings& settings)
 {
     if (width == 0U || height == 0U)
@@ -658,7 +674,7 @@ void DirectLightingRenderer::Draw(
     constexpr f32 kPhotopicLuminousEfficacy =
         683.0F;
 
-    const std::array<u32, 28> constants{
+    const std::array<u32, 32> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -703,7 +719,12 @@ void DirectLightingRenderer::Draw(
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.x)),
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.y)),
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.z)),
-        bits(particleLightGrid != nullptr ? 1.0F : 0.0F)
+        bits(particleLightGrid != nullptr ? 1.0F : 0.0F),
+
+        bits(cloudShadow != nullptr ? 1.0F : 0.0F),
+        0U,
+        0U,
+        0U
     };
 
     commands.SetRenderTarget(targetSceneColor);
@@ -752,6 +773,11 @@ void DirectLightingRenderer::Draw(
     commands.SetGraphicsTexture(
         3U,
         depth);
+    commands.SetGraphicsTexture(
+        4U,
+        cloudShadow != nullptr
+            ? *cloudShadow
+            : depth);
 
     commands.Draw(6U);
 }

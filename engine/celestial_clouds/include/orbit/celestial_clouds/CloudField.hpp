@@ -68,6 +68,9 @@ struct CloudTexel
     f32 opticalDepth{0.0F};
     f32 singleScatteringAlbedo{0.999F};
     f32 anisotropy{0.72F};
+    // 0 = stratus (flat, low), 0.5 = cumulus, 1 = cumulonimbus (tall, anvil).
+    // Selects the vertical profile in near-field ray-marched views.
+    f32 cloudType{0.5F};
 };
 
 struct CloudLayerField
@@ -127,7 +130,8 @@ struct GpuCloudTexel
     f32 coverage{0.0F};
     f32 opticalDepth{0.0F};
     f32 singleScatteringAlbedo{0.999F};
-    f32 anisotropy{0.72F};
+    // Per-layer anisotropy is constant, so the slot carries the cloud type.
+    f32 cloudType{0.5F};
 };
 
 class GpuCloudFieldProduct

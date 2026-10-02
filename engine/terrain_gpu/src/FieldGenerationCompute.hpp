@@ -290,10 +290,15 @@ float ValueNoise3D(float3 position, uint64_t seed)
 }
 
 // Ports VectorNoise3D's packing of three disjoint 21-bit channels out of
-// one 64-bit corner hash (not three independent Mix64 calls).
+// one 64-bit corner hash (not three independent Mix64 calls). The corner hash is
+// Mix64(seed ^ x ^ y ^ z), as on the CPU; callers must mix before calling.
 float3 CornerVector(uint64_t hash)
 {
-    uint64_t mask = MakeU64(0x1Fu, 0xFFFFFu); // (1<<21)-1
+    // (1 << 21) - 1 = 0x1FFFFF. This used to read MakeU64(0x1F, 0xFFFFF), i.e.
+    // 0x1F000FFFFF: after the uint() truncation every channel kept only 20 bits,
+    // so the vector noise (the mountain domain warp) was biased into [-1, 0]
+    // instead of [-1, 1] and the mountain shape disagreed with the CPU source.
+    uint64_t mask = MakeU64(0u, 0x1FFFFFu);
     float scale = 2.0 / 2097151.0; // 2 / mask, mask as a float
 
     float cx = float(uint(hash & mask)) * scale - 1.0;
@@ -311,14 +316,14 @@ float3 VectorNoise3D(float3 position, uint64_t seed)
     uint64_t x0, x1, y0, y1, z0, z1;
     NoiseAxisHashes(p0, x0, x1, y0, y1, z0, z1);
 
-    float3 v0 = CornerVector(seed ^ x0 ^ y0 ^ z0);
-    float3 v1 = CornerVector(seed ^ x1 ^ y0 ^ z0);
-    float3 v2 = CornerVector(seed ^ x0 ^ y1 ^ z0);
-    float3 v3 = CornerVector(seed ^ x1 ^ y1 ^ z0);
-    float3 v4 = CornerVector(seed ^ x0 ^ y0 ^ z1);
-    float3 v5 = CornerVector(seed ^ x1 ^ y0 ^ z1);
-    float3 v6 = CornerVector(seed ^ x0 ^ y1 ^ z1);
-    float3 v7 = CornerVector(seed ^ x1 ^ y1 ^ z1);
+    float3 v0 = CornerVector(Mix64(seed ^ x0 ^ y0 ^ z0));
+    float3 v1 = CornerVector(Mix64(seed ^ x1 ^ y0 ^ z0));
+    float3 v2 = CornerVector(Mix64(seed ^ x0 ^ y1 ^ z0));
+    float3 v3 = CornerVector(Mix64(seed ^ x1 ^ y1 ^ z0));
+    float3 v4 = CornerVector(Mix64(seed ^ x0 ^ y0 ^ z1));
+    float3 v5 = CornerVector(Mix64(seed ^ x1 ^ y0 ^ z1));
+    float3 v6 = CornerVector(Mix64(seed ^ x0 ^ y1 ^ z1));
+    float3 v7 = CornerVector(Mix64(seed ^ x1 ^ y1 ^ z1));
 
     return InterpolateCellVector(v0, v1, v2, v3, v4, v5, v6, v7, blend);
 }
@@ -674,6 +679,24 @@ void MakeSurfaceFrame(float3 up, out float3 outEast, out float3 outNorth)
     outNorth = normalize(cross(up, outEast));
 }
 
+// Hardware sin/cos are only good to ~3e-7 absolute, which times the planet
+// radius is metres: sample positions snapped onto concentric rings. Small angles
+// use the series (error below 1e-11 relative up to 0.2 rad).
+void SinCosAccurate(float angle, out float s, out float c)
+{
+    if (angle < 0.2)
+    {
+        const float a2 = angle * angle;
+        s = angle * (1.0 - a2 / 6.0 * (1.0 - a2 / 20.0 * (1.0 - a2 / 42.0)));
+        c = 1.0 - a2 / 2.0 * (1.0 - a2 / 12.0 * (1.0 - a2 / 30.0));
+    }
+    else
+    {
+        s = sin(angle);
+        c = cos(angle);
+    }
+}
+
 // Ports orbit::world::DirectionAtSurfaceOffset -- see the comment on
 // SurfaceDirectionForOffsetFromBasis in TerrainPreviewRenderer.cpp, whose
 // identical closed-form rotation this matches (Rodrigues' formula for a
@@ -685,7 +708,10 @@ float3 DirectionAtSurfaceOffset(float3 up, float3 east, float3 north, float2 off
     if (distanceMeters <= 0.0001) return up;
     float3 tangentDirection = normalize(east * offsetMeters.x + north * offsetMeters.y);
     float angle = distanceMeters / planetRadiusMeters;
-    return normalize(up * cos(angle) + tangentDirection * sin(angle));
+    float sineAngle;
+    float cosineAngle;
+    SinCosAccurate(angle, sineAngle, cosineAngle);
+    return normalize(up * cosineAngle + tangentDirection * sineAngle);
 }
 
 // === Biome classification (TerrainFields.cpp::ClassifyBiomeWeights) ===
@@ -749,10 +775,24 @@ float LimitElevation(float elevationMeters, float seaLevelMeters, float maxEleva
     return seaLevelMeters + shoulder + headroom * (1.0 - 1.0 / (1.0 + x + x * x));
 }
 
+// Slack for the cheap "is this point near the crater" test. dot() of two nearby
+// unit vectors is 1 - angle^2/2, and float32 cannot tell that from 1 once the
+// angle is under ~3.5e-4 rad (about 2 km): the bounding cosine of any crater
+// smaller than that rounds to exactly 1.0, so `cosine < boundingCosine` was true
+// almost everywhere and the crater vanished except in tiny quantised patches
+// (plateaus and L-shaped ledges where the CPU, in double, has a bowl). The test is
+// only a cull, so it accepts anything within ~1e-6 of the bound and the exact
+// StableAngle distance does the rest.
+static const float kCraterBoundingSlack = 1.0e-6;
+
 float CraterFeatureWeight(float diameterMeters, float footprintMeters)
 {
-    float lower = footprintMeters * 2.0;
-    float upper = footprintMeters * 4.0;
+    // A crater needs several samples across to be resolved. At 2-4 samples
+    // (the old range) the small ones aliased: each became a one-to-three vertex
+    // bump, and the lattice they sit on showed as a regular grid of spikes and
+    // staircases with slope spikes in the normals.
+    float lower = footprintMeters * 4.0;
+    float upper = footprintMeters * 8.0;
     if (diameterMeters <= lower) return 0.0;
     if (diameterMeters >= upper) return 1.0;
     return Smooth((diameterMeters - lower) / max(upper - lower, 1.0));
@@ -789,7 +829,7 @@ float ProceduralCraterHeight(float3 direction, float footprintMeters)
             craterRadius * 2.0, footprintMeters);
         if (spectralWeight <= 0.0) break;
         float cosine = clamp(dot(center, direction), -1.0, 1.0);
-        if (cosine < boundingCosine) continue;
+        if (cosine < boundingCosine - kCraterBoundingSlack) continue;
 
         float x = StableAngle(center, direction) * planetRadius / craterRadius;
         bool complex = craterRadius >= complexRadius;
@@ -823,8 +863,12 @@ float ProceduralCraterHeight(float3 direction, float footprintMeters)
         if (x >= 1.0 && x <= ejectaExtent)
         {
             float extent = (x - 1.0) / max(ejectaExtent - 1.0, 1.0e-6);
+            // The blanket ramps in from zero at the rim. Switching it on at full
+            // strength there left a step of 1% of the crater radius (a cliff
+            // that sampled as a dotted staircase) exactly along the rim.
+            float rimRamp = Smooth(saturate((x - 1.0) / 0.15));
             delta += craterRadius * 0.010 * pow(max(x, 1.0), -3.0) *
-                (1.0 - Smooth(extent));
+                (1.0 - Smooth(extent)) * rimRamp;
         }
         result += delta * (1.0 - degradation) * spectralWeight;
     }
@@ -900,7 +944,7 @@ float LocalCraterHeight(float3 direction, float footprintMeters)
             float boundingCosine = cos(min(
                 craterRadius * 1.55 / planetRadius,
                 3.14159265358979));
-            if (cosine < boundingCosine) continue;
+            if (cosine < boundingCosine - kCraterBoundingSlack) continue;
 
             float craterDistance = StableAngle(candidate, direction) *
                 planetRadius / craterRadius;
@@ -920,9 +964,11 @@ float LocalCraterHeight(float3 direction, float footprintMeters)
             if (craterDistance >= 1.0 && craterDistance <= 1.55)
             {
                 float ejectaT = (craterDistance - 1.0) / 0.55;
+                // Ramp in from zero at the rim (see ProceduralCraterHeight).
+                float rimRamp = Smooth(saturate((craterDistance - 1.0) / 0.15));
                 delta += craterRadius * 0.007 *
                     pow(craterDistance, -3.0) *
-                    (1.0 - Smooth(ejectaT));
+                    (1.0 - Smooth(ejectaT)) * rimRamp;
             }
             result += delta * preservation;
         }

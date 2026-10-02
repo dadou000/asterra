@@ -677,6 +677,30 @@ CloudFieldProduct BuildCloudField(
                                 detailScale,
                             parameters.seed);
 
+                    // Cloud type: broad noise biased by how convective the
+                    // climate is, so thick wet cores grow tall (cumulonimbus)
+                    // and dry/thin weather stays flat (stratus).
+                    const f64 typeNoise =
+                        FractalPattern(
+                            advected,
+                            parameters.weatherScale * 0.8,
+                            parameters.detailScale * 0.3,
+                            parameters.seed ^ 0x51ED270BULL);
+                    const f64 convective =
+                        parameters.sourceModel ==
+                                CloudSourceModel::ClimateProcedural
+                            ? std::clamp(
+                                  0.4 + 1.2 * (climateCoverage - 0.35),
+                                  0.0,
+                                  1.0)
+                            : 0.5;
+                    const f64 cloudType =
+                        std::clamp(
+                            (0.6 * typeNoise + 0.4 * convective - 0.25) /
+                                0.6,
+                            0.0,
+                            1.0);
+
                     const f64 weather =
                         parameters.sourceModel ==
                                 CloudSourceModel::
@@ -732,7 +756,9 @@ CloudFieldProduct BuildCloudField(
                         .anisotropy =
                             static_cast<f32>(
                                 parameters.
-                                    anisotropy)
+                                    anisotropy),
+                        .cloudType =
+                            static_cast<f32>(cloudType)
                     };
                 }
             }
@@ -1138,8 +1164,8 @@ GpuCloudFieldProduct::GpuCloudFieldProduct(
                 .singleScatteringAlbedo =
                     texel.
                         singleScatteringAlbedo,
-                .anisotropy =
-                    texel.anisotropy
+                .cloudType =
+                    texel.cloudType
             });
         }
     }

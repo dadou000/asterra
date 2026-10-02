@@ -191,9 +191,22 @@ public:
     [[nodiscard]] StudioTerrainLayerOptions TerrainLayers(
         std::string_view id) const;
 
+    // The elevation of the terrain the clipmap actually draws under a view's
+    // camera (read back from the GPU a few frames late). Terrain navigation uses
+    // it as a floor next to the CPU terrain source, so the camera cannot end up
+    // under what is on screen. Published by the renderer each frame.
+    void SetRenderedGround(
+        std::string_view id,
+        const math::Double3& unitDirection,
+        f64 elevationMeters);
+
     // The renderer owns the orbital patch builds, so the host publishes their
     // counters here each frame for the diagnostics report.
     // What the clipmap planner chose for a view; set by the frame loop.
+    // The target body's cloud field, published by the host each frame.
+    void SetCloudReport(
+        std::string_view id,
+        const std::optional<StudioCloudReport>& report);
     void SetClipmapPlanStats(
         std::string_view id,
         const StudioClipmapPlanStats& stats);
@@ -333,6 +346,14 @@ private:
 
     std::map<std::string, StudioTerrainLayerOptions, std::less<>>
         terrainLayers_;
+    std::map<std::string, StudioCloudReport, std::less<>> cloudReports_;
+
+    struct RenderedGround
+    {
+        math::Double3 unitDirection{};
+        f64 elevationMeters{0.0};
+    };
+    std::map<std::string, RenderedGround, std::less<>> renderedGround_;
 
     struct OrbitalPatchStats
     {

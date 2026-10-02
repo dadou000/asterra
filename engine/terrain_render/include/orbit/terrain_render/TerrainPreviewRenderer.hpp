@@ -15,6 +15,7 @@
 #include <orbit/world/Planet.hpp>
 #include <orbit/world/WorldPosition.hpp>
 
+#include <array>
 #include <memory>
 #include <span>
 
@@ -126,6 +127,27 @@ struct TerrainWaterOptics
     f32 seaLevelMeters{0.0F};
 };
 
+// The elevation of the terrain the clipmap actually draws under the camera,
+// read back from the GPU a few frames late (the highest of the four vertices
+// around the point below the camera). Camera ground clearance uses it so the
+// camera cannot end up under what is on screen when that differs from the CPU
+// terrain source (physical pages, generator filtering).
+struct TerrainRenderedGround
+{
+    bool valid{false};
+    // Metres above the planet radius.
+    f64 elevationMeters{0.0};
+    // Unit direction (planet centred) the sample was taken under.
+    math::Double3 direction{};
+    f64 spacingMeters{0.0};
+    // The four vertices behind elevationMeters: where they are (unit directions),
+    // what the GPU generated there, and the footprint it generated them with. Lets
+    // the CPU terrain source be evaluated at exactly the same points to compare.
+    std::array<math::Double3, 4> cornerDirections{};
+    std::array<f32, 4> cornerElevations{};
+    f64 footprintMeters{0.0};
+};
+
 // One level of the clipmap as it is laid out now (read-only diagnostics).
 struct TerrainClipmapLevelSummary
 {
@@ -204,6 +226,7 @@ public:
     // planner measures distance to the actual ground.
     void SetGroundElevationHint(f64 elevationMeters) noexcept;
     [[nodiscard]] const terrain_view::ClipmapPlan& ClipmapPlan() const noexcept;
+    [[nodiscard]] TerrainRenderedGround RenderedGround() const noexcept;
     // Every level of the current layout, finest first.
     [[nodiscard]] std::vector<TerrainClipmapLevelSummary> ClipmapLevels() const;
     [[nodiscard]] bool ClipmapBanded() const noexcept;

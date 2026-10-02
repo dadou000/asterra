@@ -95,8 +95,25 @@ float3 SurfaceDirectionForOffsetFromBasis(
         const float3 tangentDirection = normalize(
             east * offsetMeters.x + north * offsetMeters.y);
         const float angle = distanceMeters / planetRadius;
+        // The hardware sin/cos are only good to about 3e-7 absolute, which times
+        // the planet radius is metres: vertices of a fine level snapped onto
+        // concentric rings. Small angles use the series instead (error below
+        // 1e-11 relative up to 0.2 rad).
+        float sineAngle;
+        float cosineAngle;
+        if (angle < 0.2)
+        {
+            const float a2 = angle * angle;
+            sineAngle = angle * (1.0 - a2 / 6.0 * (1.0 - a2 / 20.0 * (1.0 - a2 / 42.0)));
+            cosineAngle = 1.0 - a2 / 2.0 * (1.0 - a2 / 12.0 * (1.0 - a2 / 30.0));
+        }
+        else
+        {
+            sineAngle = sin(angle);
+            cosineAngle = cos(angle);
+        }
         direction = normalize(
-            up * cos(angle) + tangentDirection * sin(angle));
+            up * cosineAngle + tangentDirection * sineAngle);
     }
     return direction;
 }

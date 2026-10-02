@@ -67,6 +67,24 @@ struct PushConstants
 
 static const uint kSampleStrideBytes = 32u;
 
+// Hardware sin/cos are only good to ~3e-7 absolute, which times the planet
+// radius is metres: sample positions snapped onto concentric rings. Small angles
+// use the series (error below 1e-11 relative up to 0.2 rad).
+void SinCosAccurate(float angle, out float s, out float c)
+{
+    if (angle < 0.2)
+    {
+        const float a2 = angle * angle;
+        s = angle * (1.0 - a2 / 6.0 * (1.0 - a2 / 20.0 * (1.0 - a2 / 42.0)));
+        c = 1.0 - a2 / 2.0 * (1.0 - a2 / 12.0 * (1.0 - a2 / 30.0));
+    }
+    else
+    {
+        s = sin(angle);
+        c = cos(angle);
+    }
+}
+
 float3 DirectionAtSurfaceOffset(
     float3 up, float3 east, float3 north,
     float2 offsetMeters, float radius)
@@ -82,7 +100,10 @@ float3 DirectionAtSurfaceOffset(
     float3 tangent = east * tangentDirection2d.x + north * tangentDirection2d.y;
     float angle = distance / radius;
 
-    return up * cos(angle) + tangent * sin(angle);
+    float sineAngle;
+    float cosineAngle;
+    SinCosAccurate(angle, sineAngle, cosineAngle);
+    return up * cosineAngle + tangent * sineAngle;
 }
 
 float BilinearSampleDelta(float2 offsetMeters)

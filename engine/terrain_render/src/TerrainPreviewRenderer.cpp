@@ -188,6 +188,16 @@ public:
         plan_ = desiredPlan_;
         levelValid_.assign(terrain_view::ClipmapLevelCount(config_.clipmap), 0U);
 
+        groundReadbackPending_.assign(config_.framesInFlight, {});
+        for (u32 slot = 0U; slot < config_.framesInFlight; ++slot)
+        {
+            groundReadback_.push_back(device_.CreateBuffer({
+                .sizeBytes = 4U * sizeof(f32),
+                .usage = rhi::BufferUsage::Generic,
+                .memory = rhi::MemoryUsage::HostVisible,
+                .initialState = rhi::ResourceState::CopyDestination}));
+        }
+
         CreateSharedTopology();
         CreateLevelBuffers();
         CreateWaterOpticsBuffers();
@@ -307,6 +317,114 @@ public:
     [[nodiscard]] bool ClipmapBanded() const noexcept
     {
         return baseClipmapConfig_.Banded();
+    }
+
+    [[nodiscard]] TerrainRenderedGround RenderedGround() const noexcept
+    {
+        return renderedGround_;
+    }
+
+    // Reads back the ground heights recorded for this frame slot the last time it
+    // was used (the slot's earlier submission has retired by now).
+    void CollectGroundReadback(const u32 frameIndex)
+    {
+        if (frameIndex >= groundReadback_.size() ||
+            !groundReadbackPending_[frameIndex].valid)
+            return;
+        GroundReadbackRequest& request = groundReadbackPending_[frameIndex];
+        request.valid = false;
+        const std::byte* mapped = groundReadback_[frameIndex]->Map();
+        f32 corners[4]{};
+        std::memcpy(corners, mapped, sizeof(corners));
+        groundReadback_[frameIndex]->Unmap();
+        f32 highest = corners[0];
+        for (const f32 corner : corners)
+            highest = std::max(highest, corner);
+        if (!std::isfinite(highest))
+            return;
+        renderedGround_ = {
+            .valid = true,
+            .elevationMeters = static_cast<f64>(highest),
+            .direction = request.direction,
+            .spacingMeters = request.spacingMeters,
+            .cornerDirections = request.cornerDirections,
+            .cornerElevations = {corners[0], corners[1], corners[2], corners[3]},
+            .footprintMeters = request.footprintMeters};
+    }
+
+    // Copies the four vertex elevations around the point below the camera out of
+    // the finest drawn level. Called right after that level is prepared.
+    // True once a readback is recorded (or already waiting) for this frame slot.
+    bool RecordGroundReadback(
+        rhi::CommandList& commandList,
+        const u32 frameIndex,
+        const u32 levelIndex)
+    {
+        if (frameIndex >= groundReadback_.size())
+            return true;
+        if (groundReadbackPending_[frameIndex].valid)
+            return true;
+        if (levelIndex >= motion_.levels.size() ||
+            levelIndex >= residencyUpdate_.levels.size() ||
+            levelValid_[levelIndex] == 0U)
+            return false;
+        const terrain_view::ClipmapLevel& level = layout_.levels[levelIndex];
+        const terrain_view::ClipmapLevelMotion& motion = motion_.levels[levelIndex];
+        const math::Double3 direction = math::Normalize(liveObserver_.meters);
+        const math::Double2 offset = world::SurfaceOffsetBetweenDirections(
+            planet_, motion.surfaceFrame, direction);
+        const f64 spacing = level.sampleSpacingMeters;
+        const f64 half = (static_cast<f64>(level.gridResolution) - 1.0) * 0.5;
+        const f64 logicalX = (offset.x - motion.centerOffsetMeters.x) / spacing + half;
+        const f64 logicalY = (offset.y - motion.centerOffsetMeters.y) / spacing + half;
+        const i64 maxIndex = static_cast<i64>(level.gridResolution) - 1;
+        if (!(logicalX >= 0.0 && logicalY >= 0.0 &&
+              logicalX <= static_cast<f64>(maxIndex) &&
+              logicalY <= static_cast<f64>(maxIndex)))
+            return false; // the camera is outside this level's window
+        const i64 baseX = static_cast<i64>(std::floor(logicalX));
+        const i64 baseY = static_cast<i64>(std::floor(logicalY));
+        const terrain_stream::LevelResidencyUpdate& residency =
+            residencyUpdate_.levels[levelIndex];
+        rhi::Buffer& source = *levels_[levelIndex].gpuSampleBuffer;
+        commandList.Transition(
+            source,
+            rhi::ResourceState::ShaderResource,
+            rhi::ResourceState::CopySource);
+        std::array<math::Double3, 4> cornerDirections{};
+        for (u32 corner = 0U; corner < 4U; ++corner)
+        {
+            const i64 x = std::clamp<i64>(baseX + (corner & 1U), 0, maxIndex);
+            const i64 y = std::clamp<i64>(baseY + (corner >> 1U), 0, maxIndex);
+            cornerDirections[corner] = world::DirectionAtSurfaceOffset(
+                planet_,
+                motion.surfaceFrame,
+                math::Double2{
+                    motion.centerOffsetMeters.x +
+                        (static_cast<f64>(x) - half) * spacing,
+                    motion.centerOffsetMeters.y +
+                        (static_cast<f64>(y) - half) * spacing});
+            const u64 resolution = level.gridResolution;
+            const u64 physicalX = (static_cast<u64>(x) + residency.originX) % resolution;
+            const u64 physicalY = (static_cast<u64>(y) + residency.originY) % resolution;
+            commandList.CopyBuffer(
+                source,
+                (physicalY * resolution + physicalX) * sizeof(terrain_stream::TerrainSampleValue),
+                *groundReadback_[frameIndex],
+                static_cast<u64>(corner) * sizeof(f32),
+                sizeof(f32));
+        }
+        commandList.Transition(
+            source,
+            rhi::ResourceState::CopySource,
+            rhi::ResourceState::ShaderResource);
+        groundReadbackPending_[frameIndex] = {
+            .valid = true,
+            .direction = direction,
+            .spacingMeters = spacing,
+            .footprintMeters = level.terrainFootprintMeters,
+            .cornerDirections = cornerDirections};
+        return true;
     }
 
     // Plans the active clipmap range for this camera. A change queues a rebuild
@@ -621,6 +739,9 @@ public:
     {
         UpdatePlan(camera, targetWidth, targetHeight);
         ServiceStreaming();
+        RefreshForNewRegions();
+        if (frameIndex < config_.framesInFlight)
+            CollectGroundReadback(frameIndex);
         stats_.uploadedBytesLastFrame = 0;
         if (stats_.rebaseCount > 0)
         {
@@ -664,6 +785,7 @@ public:
         }
         surfaceEffects_.Bind(commandList, frameIndex);
 
+        bool groundRecordedThisFrame = false;
         for (u32 levelIndex = 0;
              levelIndex < static_cast<u32>(levels_.size());
              ++levelIndex)
@@ -672,6 +794,10 @@ public:
                 continue;
             stats_.uploadedBytesLastFrame +=
                 PrepareLevelFrame(commandList, levelIndex);
+            // The finest drawn level that holds the camera feeds the ground height.
+            if (!groundRecordedThisFrame)
+                groundRecordedThisFrame =
+                    RecordGroundReadback(commandList, frameIndex, levelIndex);
 
             const terrain_view::ClipmapLevel& level =
                 layout_.levels[levelIndex];
@@ -1191,6 +1317,31 @@ private:
         stats_.updatePending = false;
     }
 
+    // Hydrology region deltas arrive asynchronously and are composited into a
+    // sample only when it is generated. A level that scrolls by strips keeps the
+    // samples it already has, so one generated before a region was ready would
+    // stay without it (two levels then disagree about the terrain). When the
+    // cache's content changes, regenerate the active levels once. Throttled: the
+    // revision can move several times in a burst.
+    void RefreshForNewRegions()
+    {
+        if (hydrologyRegionCache_ == nullptr || regionDeltaComposite_ == nullptr)
+            return;
+        const u64 revision = hydrologyRegionCache_->ContentRevision();
+        const auto now = std::chrono::steady_clock::now();
+        if (revision != regionRevision_)
+        {
+            regionRevision_ = revision;
+            regionRefreshPending_ = true;
+        }
+        if (!regionRefreshPending_ ||
+            std::chrono::duration<f64>(now - lastRegionRefresh_).count() < 0.5)
+            return;
+        regionRefreshPending_ = false;
+        lastRegionRefresh_ = now;
+        RecordPhysicalPageRefresh();
+    }
+
     void RecordPhysicalPageRefresh()
     {
         if (motion_.levels.size() != levels_.size() ||
@@ -1508,6 +1659,20 @@ private:
     terrain_view::ClipmapPlan plannedPlan_;
     std::vector<f32> levelFades_;
     f64 levelFadeSeconds_{0.4};
+    struct GroundReadbackRequest
+    {
+        bool valid{false};
+        math::Double3 direction{};
+        f64 spacingMeters{0.0};
+        f64 footprintMeters{0.0};
+        std::array<math::Double3, 4> cornerDirections{};
+    };
+    std::vector<std::unique_ptr<rhi::Buffer>> groundReadback_;
+    std::vector<GroundReadbackRequest> groundReadbackPending_;
+    TerrainRenderedGround renderedGround_{};
+    u64 regionRevision_{0};
+    bool regionRefreshPending_{false};
+    std::chrono::steady_clock::time_point lastRegionRefresh_{};
     std::chrono::steady_clock::time_point lastFadeTime_{};
     bool planDirty_{false};
     f64 groundElevationHintMeters_{0.0};
@@ -1627,6 +1792,11 @@ std::vector<TerrainClipmapLevelSummary> TerrainPreviewRenderer::ClipmapLevels()
 bool TerrainPreviewRenderer::ClipmapBanded() const noexcept
 {
     return impl_->ClipmapBanded();
+}
+
+TerrainRenderedGround TerrainPreviewRenderer::RenderedGround() const noexcept
+{
+    return impl_->RenderedGround();
 }
 
 const terrain_view::ClipmapPlan& TerrainPreviewRenderer::ClipmapPlan()

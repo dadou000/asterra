@@ -1,5 +1,6 @@
 add_library(OrbitCelestialClouds STATIC
     src/CloudField.cpp
+    src/CloudRenderer.cpp
 )
 
 add_library(
@@ -17,9 +18,11 @@ target_link_libraries(
     OrbitCelestialClouds
     PUBLIC
         Orbit::CelestialAppearance
+        Orbit::CelestialAtmosphere
         Orbit::Core
         Orbit::Math
         Orbit::RHI
+        Orbit::Shader
         Orbit::Terrain
         Orbit::Time
 )

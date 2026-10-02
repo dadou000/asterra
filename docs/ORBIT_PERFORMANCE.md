@@ -200,9 +200,41 @@ frames of 4.6 ms near the ground rising to about 9 ms from orbit (the ladder is 
 ladder's. Levels re-centre
 on their own lattice, so each regenerates in full whenever the camera crosses one of its cells. The "Active clipmap rings"
 overlay is not drawn in this mode (use Tint terrain by clipmap level and Wireframe). LOD bias and pixels-per-vertex do
-not apply. Distances are adjustable: the Diagnostics "Band distance scale" slider (`clipmap_band_scale`, 0.1-10, default 1)
+not apply. Distances are adjustable per level: with the experiment on, Diagnostics lists one "Level N reaches (m)" input per clipmap level (the distance where that level ends and the next begins; typing a value pushes later levels out to stay increasing). Also the "Band distance scale" slider (`clipmap_band_scale`, 0.1-10, default 1)
 multiplies every edge (2 = every band twice as far from the camera), and `clipmap_band_edges_meters` sets each edge. Both
 rebuild the terrain renderer (the scale is applied in 1/8-octave steps so a drag does not rebuild every frame).
+
+**Physical pages and precision.** Two fixes for terrain that looked shifted or noisy: (1) every shader that turns a metre
+offset into a surface direction (the clipmap vertex shader and the field-generation, page-composite and region-delta
+compute shaders) used hardware `sin`/`cos` of `offset / planetRadius`, good to about 3e-7, i.e. about 2 m at planet radius,
+so sample and vertex positions snapped onto concentric rings (spiky ring patterns in the terrain, a polar-looking
+wireframe); angles under 0.2 rad now use a series. (2) The page composite replaced the generated elevation and water
+depth outright inside a physical page, leaving a height step along the page bounds (the "cache status" outline); it now
+fades from the generated terrain to the page over the page's outer 6 texels. `physical_pages` (Diagnostics RPC
+`view.terrain_layers_set`) turns the composite off to compare.
+
+**Camera floor on the drawn ground.** Navigation clamped the camera to the CPU terrain source, but the clipmap draws the
+GPU-generated terrain (plus physical pages), which can differ by tens of metres, so the camera could end up under what is
+on screen. The terrain renderer now copies the four vertex elevations around the point below the camera out of the finest
+drawn level into a small host-readable buffer each frame and reads them back a few frames later (the highest of the four,
+so the floor is conservative). `StudioRenderViewSet` keeps it per view and `NavigateTerrain` floors every elevation query
+within about 150 m of that point at it, so ground clearance and altitude-above-terrain follow the drawn surface. It is
+reported as `clipmap_plan.rendered_ground_elevation_meters` (and the "Drawn ground under camera" HUD line) next to the
+CPU terrain's `below_camera.terrain_elevation_meters`. Measured over land: drawn ground up to 58 m above the CPU terrain
+(about 6 m of one 34 m gap came from physical pages, the rest from the generator versus the CPU source); over ocean it was
+about 10 m below. The floor only raises the camera; where the drawn ground is below the CPU terrain the CPU value stays.
+
+**GPU generator parity.** The clipmap's GPU terrain generator (`FieldGenerationCompute.hpp`) is a float32 port of
+`AnalyticTerrainSource`. `clipmap_plan.rendered_ground_elevation_meters` (the highest of the four vertices under the camera,
+read back from the GPU) next to `rendered_ground_cpu_elevation_meters` (the CPU source evaluated at exactly those vertices
+with the same footprint) is a direct parity check; fly a line and the two must agree. They disagreed by -11 to +58 m until
+three port bugs were fixed: (1) the vector-noise corner hash was not `Mix64`-ed (the CPU hashes each corner with
+`Mix64(seed ^ x ^ y ^ z)` and splits it into three channels), (2) its 21-bit channel mask was `0x1F000FFFFF` instead of
+`0x1FFFFF` (each channel kept 20 bits, biased into [-1, 0]); together they made the mountain domain warp differ, so the mountain
+relief did; and (3) the crater bounding test `dot() < boundingCosine` rounded to exactly 1.0 for small craters and culled
+them almost everywhere. After the fixes 42 samples from sea level to 2 km mountains, at three altitudes, agree to 0.07 m or
+better. When changing the generator, bisect with stage outputs (global coarse, macro, mountains, craters, detail) against
+the CPU, not by eye.
 
 **Wireframe and freeze.** Diagnostics also has **Clipmap wireframe** (the terrain mesh as lines; the water surface is
 hidden so the rings show) and **Freeze clipmaps** (`clipmap_wireframe`, `clipmap_freeze` in `view.terrain_overlays_set`,
@@ -257,3 +289,44 @@ Known differences from the globe: from orbit the clipmap shows the same continen
 (the larger craters at 1,000 km), but small crater speckle and the sharpest coast detail at 4,000 km are softer than the
 globe's uniform-pixel patches, because rings are coarse away from the nadir; at 60-300 km it is also slightly softer
 than the old hybrid. A denser coarse grid (1025) or per-ring resolution tuning would narrow that further.
+
+## Clouds in the clipmap view
+
+The cloud field (`celestial_clouds`) used to be composited only into the macro-globe appearance, so clipmap and
+near-field views showed no clouds. `CloudRenderer` now ray-marches the first cloud layer. It runs only when the view
+uses the clipmap (`full_clipmap`) or has no macro globe, so clouds are never drawn twice. Toggle: Diagnostics
+"Clouds", `view.terrain_layers_set {clouds}` / `orbit_view_terrain_layers_set(clouds=...)`.
+
+**Shape.** Each cloud-field texel carries a `cloudType` (0 stratus, 0.5 cumulus, 1 cumulonimbus; noise biased by
+climate convection). The shader blends three unit-integral vertical profiles (thin low stratus, flat-based rounded
+cumulus, full-height tower with a denser anvil top), so the column optical depth is preserved. A baked 32^3 tileable
+cellular-noise volume (`R` base shape, `G/B/A` erosion octaves, one 16-byte voxel = one fetch) gives the billows; it is
+sampled at two non-aligned scales (one rotated) so the repeating lattice never reads as a grid.
+
+**Lighting.** Three scattering octaves (energy, extinction and anisotropy halved each time) plus an isotropic
+multiple-scatter floor and a height-dependent ambient; sun colour from the atmosphere transmittance LUT, sampled once
+per pixel.
+
+**Optimisations** (mirroring the reference EVE raymarched clouds): geometric step growth from 60 m with the rate solved per
+pixel so 112 steps cover the whole shell segment (a long grazing ray keeps fine steps near the camera; a uniform
+budget step made side-on clouds blurry, striped and see-through), stratified per-pixel jitter, empty-space skipping
+(x4, capped at 4 km extra, when the cloud field has no cloud in that column), early-out at 2 % transmittance, erosion noise only within 25-60 km and never in the
+sun march, a 4-step sun march (100-500 m steps on the base shape + a coarse tail) instead of per-sample LUT reads, and
+**half-resolution** marching into an RGBA16F target (radiance + transmittance) bounded by the nearest full-resolution
+depth, composited over the scene with an alpha blend (`L/(1-T), 1-T` -> `L + T*scene`) and bilinear upsampling, with no
+scene copy. Passes: `<view>.Clouds`, `<view>.CloudsComposite`, before `<view>.Atmosphere`. Not done: the reference
+also time-slices a cached light volume and reprojects across frames.
+
+**Measured** (Release, Earth, frame-time average with clouds on vs off): at 8 km looking at the horizon 6.58 vs 5.88 ms
+(+0.7 ms), looking down 7.51 vs 5.86 ms (+1.65 ms), inside the layer at 3 km 7.33 vs 5.95 ms; the first full-resolution
+version cost +2.2 ms and +5.4 ms in the first two. Visual checks: clouds-on vs clouds-off at 0.8, 3, 8, 60 and
+2,000 km. Hot path: the shader is an embedded string in `CloudRenderer.cpp`, so saving it rebuilds the target and
+hands off automatically.
+
+**Cloud shadows.** `<view>.CloudShadow` (half resolution, before `<view>.SharedDirectLighting`) reconstructs the surface
+position of each pixel from the depth buffer, marches 16 steps along the sun ray through the cloud shell (up to 60 km, same
+density as the camera march: base shape plus half-strength erosion) and writes the sun transmittance. The direct-lighting
+shader multiplies its stellar term by that texture (binding 8, the `cloudShadow` argument of
+`DirectLightingRenderer::Draw`, flag in `extra.x`), so shadows follow the visible clouds, move with the wind and leave the
+sky ambient untouched. They share the `clouds` toggle. Measured straight down at 0.8 km: clouds on vs off differ in 3.5 %
+of pixels by more than 24/255, on-vs-on differs by 0.0 %, and ground under the overcast switches from sun-lit to sky-lit.

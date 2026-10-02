@@ -26,6 +26,8 @@ struct PushConstants
 [[vk::push_constant]] PushConstants g_pc;
 
 static const uint kSampleStrideBytes = 32u;
+// Texels of the page edge over which it fades into the generated terrain.
+static const float kPageFeatherTexels = 6.0;
 static const uint kPhysicalTexelStrideBytes = 8u;
 
 uint WrapIndex(int value, uint size)
@@ -33,6 +35,24 @@ uint WrapIndex(int value, uint size)
     int m = value % int(size);
     if (m < 0) m += int(size);
     return uint(m);
+}
+
+// Hardware sin/cos are only good to ~3e-7 absolute, which times the planet
+// radius is metres: sample positions snapped onto concentric rings. Small angles
+// use the series (error below 1e-11 relative up to 0.2 rad).
+void SinCosAccurate(float angle, out float s, out float c)
+{
+    if (angle < 0.2)
+    {
+        const float a2 = angle * angle;
+        s = angle * (1.0 - a2 / 6.0 * (1.0 - a2 / 20.0 * (1.0 - a2 / 42.0)));
+        c = 1.0 - a2 / 2.0 * (1.0 - a2 / 12.0 * (1.0 - a2 / 30.0));
+    }
+    else
+    {
+        s = sin(angle);
+        c = cos(angle);
+    }
 }
 
 float3 DirectionAtSurfaceOffset(
@@ -61,9 +81,12 @@ float3 DirectionAtSurfaceOffset(
     float angle =
         distanceMeters / radiusMeters;
 
+    float sineAngle;
+    float cosineAngle;
+    SinCosAccurate(angle, sineAngle, cosineAngle);
     return normalize(
-        up * cos(angle) +
-        tangentDirection * sin(angle));
+        up * cosineAngle +
+        tangentDirection * sineAngle);
 }
 
 void DirectionToCube(
@@ -380,6 +403,53 @@ void main(
     uint byteOffset =
         physicalIndex *
         kSampleStrideBytes;
+
+    // Feather toward the generated terrain over the page's outer texels. A page
+    // is a coarser, differently filtered evaluation of the terrain than the
+    // clipmap level's own, so replacing the generated elevation outright left a
+    // vertical step exactly along the page bounds (the cache-status outline).
+    {
+        float2 pageExtent =
+            max(
+                g_pc.pageBounds.zw -
+                    g_pc.pageBounds.xy,
+                float2(
+                    0.0000001,
+                    0.0000001));
+        float2 pageUv =
+            saturate(
+                (uv -
+                 g_pc.pageBounds.xy) /
+                pageExtent);
+        float edgeDistance =
+            min(
+                min(pageUv.x, 1.0 - pageUv.x),
+                min(pageUv.y, 1.0 - pageUv.y));
+        float featherWidth =
+            kPageFeatherTexels /
+            float(
+                max(
+                    g_pc.grid.w - 1u,
+                    1u));
+        float pageWeight =
+            smoothstep(
+                0.0,
+                featherWidth,
+                edgeDistance);
+        float2 generated =
+            float2(
+                asfloat(
+                    g_samples.Load(
+                        byteOffset + 0u)),
+                asfloat(
+                    g_samples.Load(
+                        byteOffset + 20u)));
+        physical =
+            lerp(
+                generated,
+                physical,
+                pageWeight);
+    }
 
     g_samples.Store(
         byteOffset + 0u,

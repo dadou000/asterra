@@ -165,6 +165,9 @@ constexpr OverlayFlag kOverlayFlags[] = {
          static_cast<f64>(layers.clipmapFadeSeconds)},
         {"experimental_distance_bands", layers.experimentalDistanceBands},
         {"clipmap_band_scale", static_cast<f64>(layers.clipmapBandScale)},
+        {"clipmap_partial_updates", layers.clipmapPartialUpdates},
+        {"physical_pages", layers.physicalPages},
+        {"clouds", layers.clouds},
         {"clipmap_band_edges_meters", BandEdgesToRpc(layers)}});
 }
 
@@ -336,7 +339,35 @@ constexpr OverlayFlag kOverlayFlags[] = {
             {"visible_arc_meters", plan.visibleArcMeters},
             {"required_spacing_meters", plan.requiredSpacingMeters},
             {"ground_elevation_meters", plan.groundElevationMeters},
-            {"plan_changes", static_cast<i64>(plan.planChanges)}});
+            {"plan_changes", static_cast<i64>(plan.planChanges)},
+            {"generated_samples", static_cast<i64>(plan.generatedSamples)},
+            {"rendered_ground_elevation_meters",
+             plan.renderedGroundValid
+                 ? Value(plan.renderedGroundElevationMeters)
+                 : Value(nullptr)},
+            {"rendered_ground_cpu_elevation_meters",
+             plan.renderedGroundValid
+                 ? Value(plan.renderedGroundCpuElevationMeters)
+                 : Value(nullptr)},
+            {"rendered_ground_footprint_meters",
+             plan.renderedGroundValid
+                 ? Value(plan.renderedGroundFootprintMeters)
+                 : Value(nullptr)}});
+    }
+
+    if (report.clouds.has_value())
+    {
+        const auto& clouds = *report.clouds;
+        result.emplace("clouds", Value::Object{
+            {"layer_count", static_cast<i64>(clouds.layerCount)},
+            {"mean_coverage", clouds.meanCoverage},
+            {"mean_optical_depth", clouds.meanOpticalDepth},
+            {"time_bucket", clouds.timeBucket},
+            {"fingerprint", static_cast<i64>(clouds.fingerprint)},
+            {"gpu_resident", clouds.gpuResident},
+            // The cloud field is composited into the orbital globe's appearance;
+            // the full clipmap renderer does not draw the globe.
+            {"composited_into_globe", !report.layers.fullClipmap}});
     }
 
     if (report.nadir.has_value())
@@ -524,7 +555,7 @@ void RegisterStudioRenderViewRpc(
                 "clipmap planner (dynamic_clipmaps, "
                 "clipmap_pixels_per_vertex, clipmap_fade_seconds, "
                 "experimental_distance_bands, clipmap_band_edges_meters, "
-                "clipmap_band_scale).",
+                "clipmap_band_scale, clipmap_partial_updates, physical_pages, clouds).",
             .mutating = false
         },
         [&views](const Value& params)
@@ -567,7 +598,14 @@ void RegisterStudioRenderViewRpc(
                 "distance drawn), cross-fading neighbours so the rings resize "
                 "continuously; clipmap_band_scale (number, [0.1, 10], default "
                 "1) multiplies every edge (rebuilds the renderer, applied in "
-                "1/8-octave steps). Omitted fields "
+                "1/8-octave steps); clipmap_partial_updates (boolean, default "
+                "true) makes banded levels refresh only the strip that "
+                "scrolled into view (false regenerates a whole level on every "
+                "scroll, for comparison); physical_pages (boolean, default "
+                "true) composites the derived physical pages (the cache "
+                "status bounds) into the clipmap, false draws the plain "
+                "generated terrain; clouds (boolean, default true) ray-marches "
+                "the body's cloud layer in the viewport. Omitted fields "
                 "keep their value. The same "
                 "controls as the viewport Diagnostics 'Terrain layers' "
                 "section. Transient view state.",
@@ -621,6 +659,11 @@ void RegisterStudioRenderViewRpc(
                 applyFlag(
                     "experimental_distance_bands",
                     layers.experimentalDistanceBands);
+                applyFlag(
+                    "clipmap_partial_updates",
+                    layers.clipmapPartialUpdates);
+                applyFlag("physical_pages", layers.physicalPages);
+                applyFlag("clouds", layers.clouds);
 
                 if (const auto edges = values.find("clipmap_band_edges_meters");
                     edges != values.end())

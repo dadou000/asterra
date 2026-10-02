@@ -123,6 +123,9 @@ struct StudioViewportTextReport
     std::optional<StudioCpuTerrainReport> cpuTerrain;
     // Which clipmap levels the planner keeps active for this view.
     std::optional<StudioClipmapPlanStats> clipmapPlan;
+    // The target body's cloud field (absent when it has no cloud layer or the
+    // field is not built yet).
+    std::optional<StudioCloudReport> clouds;
     StudioTerrainLayerOptions layers{};
 };
 

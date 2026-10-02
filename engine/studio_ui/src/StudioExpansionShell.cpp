@@ -1312,6 +1312,10 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                 context.Checkbox(
                     "Surface effects##layer-effects",
                     layers.surfaceEffects) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Clouds##layer-clouds",
+                    layers.clouds) || layersChanged;
 
             f64 bias = static_cast<f64>(layers.lodBiasStops);
             if (context.SliderDouble(
@@ -1363,6 +1367,39 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
             {
                 layers.clipmapBandScale = static_cast<f32>(bandScale);
                 layersChanged = true;
+            }
+            if (layers.experimentalDistanceBands)
+            {
+                // One rendering distance per clipmap level: level k is drawn
+                // between the previous level's distance and this one.
+                for (std::size_t edgeIndex = 0U;
+                     edgeIndex < layers.clipmapBandEdgesMeters.size() &&
+                     layers.clipmapBandEdgesMeters[edgeIndex] > 0.0F;
+                     ++edgeIndex)
+                {
+                    f64 edge = static_cast<f64>(layers.clipmapBandEdgesMeters[edgeIndex]);
+                    const f64 lower = edgeIndex == 0U
+                        ? 1.0
+                        : static_cast<f64>(layers.clipmapBandEdgesMeters[edgeIndex - 1U]) * 1.05;
+                    const std::string label = std::format(
+                        "Level {} reaches (m)##layer-band-edge-{}", edgeIndex, edgeIndex);
+                    if (context.InputDouble(label, edge))
+                    {
+                        // Keep the edges increasing; the next one is pushed out if needed.
+                        edge = std::max(edge, lower);
+                        layers.clipmapBandEdgesMeters[edgeIndex] = static_cast<f32>(edge);
+                        for (std::size_t next = edgeIndex + 1U;
+                             next < layers.clipmapBandEdgesMeters.size() &&
+                             layers.clipmapBandEdgesMeters[next] > 0.0F;
+                             ++next)
+                        {
+                            layers.clipmapBandEdgesMeters[next] = std::max(
+                                layers.clipmapBandEdgesMeters[next],
+                                layers.clipmapBandEdgesMeters[next - 1U] * 1.05F);
+                        }
+                        layersChanged = true;
+                    }
+                }
             }
             context.MutedText(
                 "Draws clipmap level k only where the camera's distance to the terrain is in its band "

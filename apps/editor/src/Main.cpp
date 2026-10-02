@@ -8292,6 +8292,23 @@ int main(
                         "studio.primary",
                         studioViewportRenderer.ClipmapPlanStats(
                             "studio.primary"));
+                    {
+                        const auto clouds =
+                            studioViewportRenderer.CloudDiagnostics(
+                                "studio.primary");
+                        std::optional<orbit::studio_ui::StudioCloudReport> cloudReport;
+                        if (clouds.has_value())
+                        {
+                            cloudReport = orbit::studio_ui::StudioCloudReport{
+                                .layerCount = clouds->layerCount,
+                                .meanCoverage = clouds->meanCoverage,
+                                .meanOpticalDepth = clouds->meanOpticalDepth,
+                                .timeBucket = clouds->timeBucket,
+                                .fingerprint = clouds->fingerprint,
+                                .gpuResident = clouds->gpuResident};
+                        }
+                        studioViews.SetCloudReport("studio.primary", cloudReport);
+                    }
                 }
 
                 if (busy)

@@ -55,6 +55,9 @@ public:
         // present it is the shared authority for smoke transmittance and
         // low-frequency particle emission; no particle-state readback occurs.
         rhi::Buffer* particleLightGrid = nullptr,
+        // Optional reduced-resolution sun transmittance from the cloud layer
+        // (red channel, 1 = lit); multiplies the direct stellar term.
+        rhi::Texture* cloudShadow = nullptr,
         const DirectLightingSettings& settings = {});
 
 private:

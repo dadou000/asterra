@@ -1,4 +1,5 @@
 #include <orbit/terrain_view/ClipmapPlanner.hpp>
+#include <orbit/terrain_view/ClipmapTracker.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -353,6 +354,57 @@ void TestBandedPlannerFollowsDistance()
     }
 }
 
+void TestBandedTrackerScrollsWholeCells()
+{
+    // A level's centre must move by a whole number of its own cells per update,
+    // or partial (strip) refreshes would leave stale samples.
+    const ClipmapConfig config = Banded();
+    const orbit::world::PlanetDefinition planet{.radiusMeters = kRadius};
+    terrain_view::ClipmapTracker tracker(planet, config);
+    std::vector<orbit::math::Double2> previous;
+    for (int step = 0; step < 400; ++step)
+    {
+        // Move the observer around in an irregular path (metres, on the +X pole).
+        const double east = 37.3 * step + 0.01 * step * step;
+        const double north = -12.9 * step + 3.0 * std::sin(step * 0.3) * 100.0;
+        const orbit::world::WorldPosition observer{
+            .meters = orbit::math::Normalize(orbit::math::Double3{
+                kRadius + 500.0, east, north}) * (kRadius + 500.0)};
+        const auto update = tracker.Update(observer);
+        const auto layout = terrain_view::BuildClipmapLayout(config, observer);
+        for (std::size_t level = 0; level < update.levels.size(); ++level)
+        {
+            const auto& motion = update.levels[level];
+            if (previous.size() == update.levels.size() && !motion.fullRefresh)
+            {
+                const double spacing = layout.levels[level].sampleSpacingMeters;
+                const double dx = (motion.centerOffsetMeters.x - previous[level].x) / spacing;
+                const double dy = (motion.centerOffsetMeters.y - previous[level].y) / spacing;
+                Check(std::abs(dx - std::round(dx)) < 1.0e-6 &&
+                          std::abs(dy - std::round(dy)) < 1.0e-6,
+                      "a level scrolls by whole cells");
+                Check(static_cast<long long>(std::llround(dx)) == motion.cellShiftX &&
+                          static_cast<long long>(std::llround(dy)) == motion.cellShiftY,
+                      "the reported cell shift matches the centre movement");
+            }
+        }
+        previous.clear();
+        for (const auto& motion : update.levels) previous.push_back(motion.centerOffsetMeters);
+    }
+}
+
+void TestMountainSeesTheLandBelow()
+{
+    // On a 3.4 km mountain the ground hint equals the camera's height. Coverage
+    // must still reach the land and sea far below, not stop at the hint sphere.
+    ClipmapPlanner planner{ClipmapPlannerConfig{}};
+    ClipmapPlanView view = View(5.0, 5.0, 3372.0);
+    view.groundElevationMeters = 3815.0; // a coarse hint above the camera
+    const ClipmapPlan plan = planner.Plan(Ladder(), view);
+    Check(plan.visibleArcMeters > 50000.0, "far coverage is sized from the planet, not the hint");
+    Check(plan.coarsestHalfExtentMeters > 50000.0, "coarse levels reach the far ground");
+}
+
 int main()
 {
     try
@@ -370,6 +422,8 @@ int main()
         TestDenseCoarseLevelsNeedFewerLevels();
         TestBandedLayout();
         TestBandedPlannerFollowsDistance();
+        TestBandedTrackerScrollsWholeCells();
+        TestMountainSeesTheLandBelow();
     }
     catch (const std::exception& exception)
     {
