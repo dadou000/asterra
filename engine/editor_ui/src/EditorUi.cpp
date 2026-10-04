@@ -1618,7 +1618,8 @@ ImageInteraction PanelContext::Image(
         .doubleClicked = doubleClicked,
         .rightClicked = rightClicked,
         .u = u,
-        .v = v
+        .v = v,
+        .wheel = hovered ? ImGui::GetIO().MouseWheel : 0.0F
     };
 }
 

@@ -1,6 +1,7 @@
 add_library(OrbitCelestialClouds STATIC
     src/CloudField.cpp
     src/CloudRenderer.cpp
+    src/WeatherModel.cpp
 )
 
 add_library(
@@ -48,6 +49,18 @@ if(BUILD_TESTING)
         OrbitCelestialCloudTests PRIVATE cxx_std_23)
     orbit_enable_warnings(
         OrbitCelestialCloudTests)
+
+    add_executable(
+        OrbitWeatherMapDump
+        tests/WeatherMapDump.cpp
+    )
+    target_link_libraries(
+        OrbitWeatherMapDump
+        PRIVATE
+            Orbit::CelestialClouds
+    )
+    target_compile_features(
+        OrbitWeatherMapDump PRIVATE cxx_std_23)
 
     add_test(
         NAME Orbit.CelestialClouds

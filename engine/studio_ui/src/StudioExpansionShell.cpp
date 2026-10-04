@@ -1316,6 +1316,30 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                 context.Checkbox(
                     "Clouds##layer-clouds",
                     layers.clouds) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Cloud light volume##layer-cloud-light-volume",
+                    layers.cloudLightVolume) || layersChanged;
+            f64 volumeDebugAltitude = static_cast<f64>(layers.cloudVolumeDebugAltitude);
+            if (context.SliderDouble(
+                    "Light volume debug slice (m, 0 = off)##layer-cloud-volume-debug",
+                    volumeDebugAltitude,
+                    0.0,
+                    20000.0))
+            {
+                layers.cloudVolumeDebugAltitude = static_cast<f32>(volumeDebugAltitude);
+                layersChanged = true;
+            }
+            f64 godrayStrength = static_cast<f64>(layers.cloudGodrayStrength);
+            if (context.SliderDouble(
+                    "God-ray strength##layer-cloud-godrays",
+                    godrayStrength,
+                    0.0,
+                    2.0))
+            {
+                layers.cloudGodrayStrength = static_cast<f32>(godrayStrength);
+                layersChanged = true;
+            }
 
             f64 bias = static_cast<f64>(layers.lodBiasStops);
             if (context.SliderDouble(
@@ -1450,6 +1474,15 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
         toggle(
             "Tint terrain by clipmap level##diag-clipmap-levels",
             diagnostics.clipmapLevels);
+        toggle(
+            "Clipmap sample health (bad elevation/morph/slope)##diag-clipmap-sample-health",
+            diagnostics.clipmapSampleHealth);
+        toggle(
+            "Clipmap hole / fade view (why vertices are culled)##diag-clipmap-hole-view",
+            diagnostics.clipmapHoleView);
+        toggle(
+            "Clipmap projected position view (clipped vertices)##diag-clipmap-projection-view",
+            diagnostics.clipmapProjectionView);
         toggle(
             "Clipmap wireframe##diag-clipmap-wireframe",
             diagnostics.clipmapWireframe);

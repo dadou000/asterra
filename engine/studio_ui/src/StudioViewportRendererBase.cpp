@@ -50,6 +50,84 @@ namespace orbit::studio_ui
 {
 namespace
 {
+// Resolves a view's cloud lab options into the renderer's lab: places the cloud
+// ahead of the camera along the ground when the place serial changes, and builds
+// the lab sun (elevation/azimuth at the cloud) when the sun is overridden.
+template <typename Camera, typename Anchor>
+[[nodiscard]] celestial_clouds::CloudLab ResolveCloudLab(
+    Anchor& anchor,
+    const StudioCloudLab& options,
+    const Camera& camera,
+    const f64 planetRadiusMeters,
+    math::Float3& sunDirection,
+    bool& sunOverridden)
+{
+    sunOverridden = false;
+    if (!options.enabled)
+    {
+        anchor.valid = false;
+        return {};
+    }
+
+    const math::Double3 position = camera.localPositionMeters;
+    if (!anchor.valid || anchor.serial != options.placeSerial)
+    {
+        const math::Double3 up = math::Normalize(position);
+        const math::Double3 forward{
+            static_cast<f64>(camera.forward.x),
+            static_cast<f64>(camera.forward.y),
+            static_cast<f64>(camera.forward.z)};
+        math::Double3 horizontal = forward - up * math::Dot(forward, up);
+        if (math::Length(horizontal) < 1.0e-6)
+        {
+            horizontal = math::Cross(math::Double3{0.0, 1.0, 0.0}, up);
+        }
+        horizontal = math::Normalize(horizontal);
+        anchor.center = math::Normalize(
+            up * planetRadiusMeters +
+            horizontal * static_cast<f64>(options.distanceMeters));
+        anchor.serial = options.placeSerial;
+        anchor.valid = true;
+    }
+
+    if (options.overrideSun)
+    {
+        const math::Double3 up = anchor.center;
+        math::Double3 east = math::Cross(math::Double3{0.0, 1.0, 0.0}, up);
+        if (math::Length(east) < 1.0e-6)
+        {
+            east = math::Double3{1.0, 0.0, 0.0};
+        }
+        east = math::Normalize(east);
+        const math::Double3 north = math::Cross(up, east);
+        const f64 elevation =
+            static_cast<f64>(options.sunElevationDegrees) * std::numbers::pi / 180.0;
+        const f64 azimuth =
+            static_cast<f64>(options.sunAzimuthDegrees) * std::numbers::pi / 180.0;
+        const math::Double3 sun =
+            up * std::sin(elevation) +
+            (north * std::cos(azimuth) + east * std::sin(azimuth)) * std::cos(elevation);
+        sunDirection = {
+            static_cast<f32>(sun.x), static_cast<f32>(sun.y), static_cast<f32>(sun.z)};
+        sunOverridden = true;
+    }
+
+    return celestial_clouds::CloudLab{
+        .enabled = true,
+        .centerDirection = anchor.center,
+        .radiusMeters = options.radiusMeters,
+        .type = options.type,
+        .coverage = options.coverage,
+        .cirrus = options.cirrus,
+        .precipitation = options.precipitation,
+        .heightScale = options.heightScale,
+        .maturity = options.maturity,
+        .organisation = options.organisation,
+        .density = options.density,
+        .cirrusSheet = options.cirrusSheet,
+        .seed = options.seed};
+}
+
 [[nodiscard]] u64 CombineFingerprint(
     const u64 seed,
     const u64 value) noexcept
@@ -3359,6 +3437,14 @@ void StudioViewportRenderer::ResetHumanEyeAdaptation(
     found->second.hasEyeUpdateTime = false;
 }
 
+void StudioViewportRenderer::SetHumanEyeAdaptationLocked(
+    const std::string_view viewportId,
+    const bool locked)
+{
+    luminanceHistogramPresentations_[std::string(viewportId)]
+        .diagnostics.eyeAdaptationLocked = locked;
+}
+
 void StudioViewportRenderer::SetHighlightEffectsConfig(
     const std::string_view viewportId,
     post_process::HighlightEffectsConfig config)
@@ -4194,7 +4280,7 @@ StudioViewportRenderer::Compose(
             macroGlobeSurface != nullptr &&
             macroGlobeSurface->terrain != nullptr;
 
-        const auto studioDirectLight =
+        auto studioDirectLight =
             logicalTarget->target.has_value() &&
                     snapshot.hasWorld
                 ? ResolveStudioDirectLight(
@@ -4202,6 +4288,35 @@ StudioViewportRenderer::Compose(
                       logicalTarget->target->body,
                       atTime)
                 : ResolvedStudioDirectLight{};
+
+        // Cloud lab sun override: light the whole view (terrain, shadows, sky and
+        // clouds) from the chosen sun at the lab cloud, so a terminator-lit cloud sits
+        // on a terminator-lit landscape.
+        if (const auto& lab = info.layers.cloudLab;
+            lab.enabled && lab.overrideSun && studioDirectLight.direct.has_value())
+        {
+            if (const auto anchor = cloudLabAnchors_.find(info.id);
+                anchor != cloudLabAnchors_.end() && anchor->second.valid)
+            {
+                const math::Double3 up = anchor->second.center;
+                math::Double3 east = math::Cross(math::Double3{0.0, 1.0, 0.0}, up);
+                if (math::Length(east) < 1.0e-6)
+                {
+                    east = math::Double3{1.0, 0.0, 0.0};
+                }
+                east = math::Normalize(east);
+                const math::Double3 north = math::Cross(up, east);
+                const f64 elevation =
+                    static_cast<f64>(lab.sunElevationDegrees) * std::numbers::pi / 180.0;
+                const f64 azimuth =
+                    static_cast<f64>(lab.sunAzimuthDegrees) * std::numbers::pi / 180.0;
+                const math::Double3 sun =
+                    up * std::sin(elevation) +
+                    (north * std::cos(azimuth) + east * std::sin(azimuth)) * std::cos(elevation);
+                studioDirectLight.directionBody = {
+                    static_cast<f32>(sun.x), static_cast<f32>(sun.y), static_cast<f32>(sun.z)};
+            }
+        }
 
         if (studioDirectLight.direct.has_value())
         {
@@ -4305,9 +4420,18 @@ StudioViewportRenderer::Compose(
                                   *shape)
                         : 1.0;
 
-                const celestial_clouds::
-                    CloudFieldConfig
-                    cloudConfig{};
+                // Seasons: the weather model's circulation cells follow the
+                // latitude of the sub-stellar point.
+                celestial_clouds::CloudFieldConfig cloudConfig{};
+                if (studioDirectLight.direct.has_value())
+                {
+                    cloudConfig.subsolarLatitudeRadians = std::asin(
+                        std::clamp(
+                            static_cast<f64>(
+                                studioDirectLight.directionBody.y),
+                            -1.0,
+                            1.0));
+                }
 
                 const u64 cloudFingerprint =
                     celestial_clouds::
@@ -5765,7 +5889,9 @@ StudioViewportRenderer::Compose(
                 // "Tint terrain by clipmap level": the clipmap shader colours
                 // each level differently, so the active set is visible.
                 const auto overlays = views.TerrainDiagnosticOverlays(info.id);
-                terrain.renderer->SetDebugVisuals(overlays.clipmapLevels, false);
+                terrain.renderer->SetDebugVisuals(
+                    overlays.clipmapLevels, false, overlays.clipmapSampleHealth, overlays.clipmapHoleView,
+                    overlays.clipmapProjectionView);
                 terrain.renderer->SetWireframe(overlays.clipmapWireframe);
                 terrain.renderer->SetClipmapFrozen(overlays.clipmapFreeze);
 
@@ -5823,7 +5949,9 @@ StudioViewportRenderer::Compose(
                         .spacingMeters = level.spacingMeters,
                         .halfExtentMeters = level.halfExtentMeters,
                         .bandInnerMeters = level.bandInnerMeters,
-                        .bandOuterMeters = level.bandOuterMeters});
+                        .bandOuterMeters = level.bandOuterMeters,
+                        .gridResolution = level.gridResolution,
+                        .drawnVertices = level.drawnVertices});
                 }
                 clipmapPlanStats_.insert_or_assign(
                     info.id,
@@ -9231,6 +9359,15 @@ StudioViewportRenderer::Compose(
                     const f64 shadowReferenceRadius =
                         shadowAtmosphere->second.parameters.bottomRadiusMeters;
                     const auto shadowCamera = view->Camera();
+                    math::Float3 labShadowSun{};
+                    bool labShadowSunOverridden = false;
+                    const auto shadowLab = ResolveCloudLab(
+                        cloudLabAnchors_[info.id],
+                        info.layers.cloudLab,
+                        shadowCamera,
+                        shadowReferenceRadius,
+                        labShadowSun,
+                        labShadowSunOverridden);
                     const celestial_atmosphere::AtmosphereRenderView shadowView{
                         .cameraPositionMeters = shadowCamera.localPositionMeters,
                         .forward = shadowCamera.forward,
@@ -9261,6 +9398,7 @@ StudioViewportRenderer::Compose(
                          shadowLayer,
                          shadowReferenceRadius,
                          shadowView,
+                         shadowLab,
                          shadowTexture = cloudShadowTexture,
                          shadowWidth,
                          shadowHeight](
@@ -9276,7 +9414,8 @@ StudioViewportRenderer::Compose(
                                 shadowHeight,
                                 shadowReferenceRadius,
                                 shadowLayer,
-                                shadowView);
+                                shadowView,
+                                shadowLab);
                         });
 
                     cloudShadowUse = render_graph::TextureUse{
@@ -10835,116 +10974,6 @@ StudioViewportRenderer::Compose(
                                 irradianceScale
                     };
 
-                // Cloud shell in the near-field/clipmap views: composited
-                // before the atmosphere so aerial perspective covers it.
-                if (const auto cloudFound = cloudPresentations_.find(info.id);
-                    info.layers.clouds &&
-                    (info.layers.fullClipmap || !info.layers.macroGlobe) &&
-                    cloudFound != cloudPresentations_.end() &&
-                    cloudFound->second.gpu != nullptr &&
-                    cloudFound->second.field != nullptr &&
-                    !cloudFound->second.field->layers.empty() &&
-                    cloudFound->second.body == logicalTarget->target->body)
-                {
-                    auto* cloudGpu = cloudFound->second.gpu.get();
-                    const auto cloudLayer =
-                        cloudFound->second.field->layers.front().parameters;
-                    const f64 cloudReferenceRadius =
-                        atmosphereFound->second.parameters.bottomRadiusMeters;
-
-                    // Half-resolution march, then a depth-bounded bilinear composite.
-                    const u32 cloudWidth = std::max(1U, (width + 1U) / 2U);
-                    const u32 cloudHeight = std::max(1U, (height + 1U) / 2U);
-                    auto& cloudTarget = cloudTargets_[info.id];
-                    if (cloudTarget == nullptr ||
-                        cloudTarget->Width() != cloudWidth ||
-                        cloudTarget->Height() != cloudHeight)
-                    {
-                        cloudTarget = device_->CreateTexture({
-                            .width = cloudWidth,
-                            .height = cloudHeight,
-                            .format = rhi::TextureFormat::RGBA16_Float,
-                            .initialState = rhi::ResourceState::ShaderResource});
-                    }
-                    auto* cloudTexture = cloudTarget.get();
-                    const auto cloudHandle = graph.ImportTexture(
-                        prefix + ".CloudTarget",
-                        *cloudTexture,
-                        rhi::ResourceState::ShaderResource);
-
-                    graph.AddPass(
-                        prefix + ".Clouds",
-                        {
-                            {
-                                .texture = targets.depth,
-                                .state = rhi::ResourceState::DepthRead,
-                                .access = render_graph::Access::Read
-                            },
-                            {
-                                .texture = cloudHandle,
-                                .state = rhi::ResourceState::RenderTarget,
-                                .access = render_graph::Access::Write
-                            }
-                        },
-                        [this,
-                         lightingDepth,
-                         atmosphereLuts,
-                         cloudTexture,
-                         cloudGpu,
-                         cloudLayer,
-                         cloudReferenceRadius,
-                         cloudWidth,
-                         cloudHeight,
-                         atmosphereParameters,
-                         atmosphereView](
-                            rhi::CommandList& commands,
-                            const render_graph::Resources&)
-                        {
-                            cloudRenderer_.Draw(
-                                commands,
-                                *lightingDepth,
-                                *atmosphereLuts,
-                                *cloudGpu,
-                                *cloudTexture,
-                                cloudWidth,
-                                cloudHeight,
-                                cloudReferenceRadius,
-                                cloudLayer,
-                                atmosphereParameters,
-                                atmosphereView);
-                        });
-
-                    graph.AddPass(
-                        prefix + ".CloudsComposite",
-                        {
-                            {
-                                .texture = cloudHandle,
-                                .state = rhi::ResourceState::ShaderResource,
-                                .access = render_graph::Access::Read
-                            },
-                            {
-                                .texture = targets.color,
-                                .state = rhi::ResourceState::RenderTarget,
-                                .access = render_graph::Access::Write
-                            }
-                        },
-                        [this,
-                         cloudTexture,
-                         color,
-                         width,
-                         height](
-                            rhi::CommandList& commands,
-                            const render_graph::Resources&)
-                        {
-                            cloudRenderer_.Composite(
-                                commands,
-                                *cloudTexture,
-                                *color,
-                                width,
-                                height);
-                        });
-                }
-
                 graph.AddPass(
                     prefix + ".Atmosphere",
                     {
@@ -11037,6 +11066,294 @@ StudioViewportRenderer::Compose(
                             width,
                             height);
                     });
+
+                // Not drawing clouds this frame leaves the history stale.
+                if (!info.layers.clouds)
+                {
+                    if (const auto stale = cloudTemporal_.find(info.id);
+                        stale != cloudTemporal_.end())
+                    {
+                        stale->second.valid = false;
+                    }
+                }
+
+                // Cloud shell in the near-field/clipmap views, composited AFTER the atmosphere pass:
+                // the clouds sit inside the atmosphere, so the atmosphere pass must not treat them as
+                // surfaces at the terrain depth. The cloud shader applies its own aerial perspective
+                // over the camera-to-cloud distance.
+                if (const auto cloudFound = cloudPresentations_.find(info.id);
+                    info.layers.clouds &&
+                    (info.layers.fullClipmap || !info.layers.macroGlobe) &&
+                    cloudFound != cloudPresentations_.end() &&
+                    cloudFound->second.gpu != nullptr &&
+                    cloudFound->second.field != nullptr &&
+                    !cloudFound->second.field->layers.empty() &&
+                    cloudFound->second.body == logicalTarget->target->body)
+                {
+                    auto* cloudGpu = cloudFound->second.gpu.get();
+                    const auto cloudLayer =
+                        cloudFound->second.field->layers.front().parameters;
+                    const f64 cloudReferenceRadius =
+                        atmosphereFound->second.parameters.bottomRadiusMeters;
+                    // Cloud lab: one isolated cloud, optionally lit by a chosen sun.
+                    auto cloudView = atmosphereView;
+                    math::Float3 labSun = cloudView.sunDirection;
+                    bool labSunOverridden = false;
+                    const auto cloudLab = ResolveCloudLab(
+                        cloudLabAnchors_[info.id],
+                        info.layers.cloudLab,
+                        atmosphereCamera,
+                        cloudReferenceRadius,
+                        labSun,
+                        labSunOverridden);
+                    if (labSunOverridden)
+                    {
+                        cloudView.sunDirection = labSun;
+                    }
+
+                    // Half-resolution march, then a depth-bounded bilinear composite.
+                    const f32 cloudScale =
+                        std::clamp(info.layers.cloudResolutionScale, 0.25F, 1.0F);
+                    const f32 cloudGodrays =
+                        std::clamp(info.layers.cloudGodrayStrength, 0.0F, 2.0F);
+                    const bool cloudLightVolume = info.layers.cloudLightVolume;
+                    auto& cloudVolumeSlot = cloudLightVolumes_[info.id];
+                    if (cloudVolumeSlot == nullptr)
+                    {
+                        cloudVolumeSlot = cloudRenderer_.CreateLightVolume();
+                    }
+                    auto* cloudVolume = cloudVolumeSlot.get();
+                    const f32 cloudVolumeDebug = info.layers.cloudVolumeDebugAltitude;
+                    const u32 cloudWidth = std::max(
+                        1U, static_cast<u32>(std::ceil(static_cast<f32>(width) * cloudScale)));
+                    const u32 cloudHeight = std::max(
+                        1U, static_cast<u32>(std::ceil(static_cast<f32>(height) * cloudScale)));
+                    auto& cloudTarget = cloudTargets_[info.id];
+                    if (cloudTarget == nullptr ||
+                        cloudTarget->Width() != cloudWidth ||
+                        cloudTarget->Height() != cloudHeight)
+                    {
+                        cloudTarget = device_->CreateTexture({
+                            .width = cloudWidth,
+                            .height = cloudHeight,
+                            .format = rhi::TextureFormat::RGBA16_Float,
+                            .initialState = rhi::ResourceState::ShaderResource});
+                    }
+                    auto* cloudTexture = cloudTarget.get();
+                    const auto cloudHandle = graph.ImportTexture(
+                        prefix + ".CloudTarget",
+                        *cloudTexture,
+                        rhi::ResourceState::ShaderResource);
+
+                    // Temporal accumulation: the march is resolved against last frame's
+                    // result into one of two persistent targets (see CloudRenderer::Resolve).
+                    auto& temporal = cloudTemporal_[info.id];
+                    const bool temporalOn = info.layers.cloudTemporal;
+                    if (temporal.resolved[0] == nullptr ||
+                        temporal.resolved[0]->Width() != cloudWidth ||
+                        temporal.resolved[0]->Height() != cloudHeight)
+                    {
+                        for (auto& resolved : temporal.resolved)
+                        {
+                            resolved = device_->CreateTexture({
+                                .width = cloudWidth,
+                                .height = cloudHeight,
+                                .format = rhi::TextureFormat::RGBA16_Float,
+                                .initialState = rhi::ResourceState::ShaderResource});
+                        }
+                        temporal.valid = false;
+                    }
+                    const celestial_clouds::CloudRenderer::CloudResolveView nowView{
+                        .cameraPositionMeters = cloudView.cameraPositionMeters,
+                        .forward = cloudView.forward,
+                        .up = cloudView.up,
+                        .verticalFovRadians = cloudView.verticalFovRadians,
+                        .aspect = static_cast<f32>(cloudWidth) / static_cast<f32>(cloudHeight)};
+                    const auto sameLab =
+                        [](const celestial_clouds::CloudLab& a, const celestial_clouds::CloudLab& b)
+                    {
+                        return a.enabled == b.enabled &&
+                            a.centerDirection.x == b.centerDirection.x &&
+                            a.centerDirection.y == b.centerDirection.y &&
+                            a.centerDirection.z == b.centerDirection.z &&
+                            a.radiusMeters == b.radiusMeters && a.type == b.type &&
+                            a.coverage == b.coverage && a.cirrus == b.cirrus &&
+                            a.precipitation == b.precipitation &&
+                            a.heightScale == b.heightScale && a.maturity == b.maturity &&
+                            a.organisation == b.organisation && a.density == b.density &&
+                            a.cirrusSheet == b.cirrusSheet &&
+                            a.seed == b.seed;
+                    };
+                    if (!sameLab(temporal.previousLab, cloudLab))
+                    {
+                        // The cloud changed under the history (lab placed or edited).
+                        temporal.valid = false;
+                    }
+                    const u32 writeIndex = temporal.writeIndex;
+                    auto* resolvedTexture = temporal.resolved[writeIndex].get();
+                    auto* historyTexture = temporal.resolved[1U - writeIndex].get();
+                    const bool historyValid = temporalOn && temporal.valid;
+                    const auto previousView = temporal.previous;
+                    const u32 cloudFrame = temporal.frame++;
+                    const auto resolvedHandle = graph.ImportTexture(
+                        prefix + ".CloudResolved",
+                        *resolvedTexture,
+                        rhi::ResourceState::ShaderResource);
+                    const auto historyHandle = graph.ImportTexture(
+                        prefix + ".CloudHistory",
+                        *historyTexture,
+                        rhi::ResourceState::ShaderResource);
+
+                    graph.AddPass(
+                        prefix + ".Clouds",
+                        {
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthRead,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = cloudHandle,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         lightingDepth,
+                         atmosphereLuts,
+                         cloudTexture,
+                         cloudGpu,
+                         cloudLayer,
+                         cloudReferenceRadius,
+                         cloudWidth,
+                         cloudHeight,
+                         atmosphereParameters,
+                         cloudView,
+                         cloudLab,
+                         cloudFrame,
+                         cloudGodrays,
+                         cloudLightVolume,
+                         cloudVolumeDebug,
+                         cloudVolume](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            cloudRenderer_.UpdateLightVolume(
+                                commands,
+                                *cloudVolume,
+                                *cloudGpu,
+                                cloudReferenceRadius,
+                                cloudLayer,
+                                atmosphereParameters,
+                                cloudView,
+                                cloudLab,
+                                cloudFrame,
+                                cloudLightVolume);
+                            cloudRenderer_.Draw(
+                                commands,
+                                *cloudVolume,
+                                *lightingDepth,
+                                *atmosphereLuts,
+                                *cloudGpu,
+                                *cloudTexture,
+                                cloudWidth,
+                                cloudHeight,
+                                cloudReferenceRadius,
+                                cloudLayer,
+                                atmosphereParameters,
+                                cloudView,
+                                cloudLab,
+                                cloudFrame,
+                                cloudGodrays,
+                                cloudVolumeDebug);
+                        });
+
+                    graph.AddPass(
+                        prefix + ".CloudsResolve",
+                        {
+                            {
+                                .texture = cloudHandle,
+                                .state = rhi::ResourceState::ShaderResource,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = historyHandle,
+                                .state = rhi::ResourceState::ShaderResource,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = resolvedHandle,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         cloudTexture,
+                         historyTexture,
+                         resolvedTexture,
+                         cloudWidth,
+                         cloudHeight,
+                         cloudReferenceRadius,
+                         cloudLayer,
+                         nowView,
+                         previousView,
+                         historyValid](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            // A fifth of the result comes from the new march: about five frames
+                            // of averaging, quick enough to follow weather and motion.
+                            cloudRenderer_.Resolve(
+                                commands,
+                                *cloudTexture,
+                                *historyTexture,
+                                *resolvedTexture,
+                                cloudWidth,
+                                cloudHeight,
+                                cloudReferenceRadius +
+                                    0.5 * (cloudLayer.baseAltitudeMeters +
+                                           cloudLayer.topAltitudeMeters),
+                                nowView,
+                                previousView,
+                                historyValid,
+                                0.2F);
+                        });
+
+                    temporal.previous = nowView;
+                    temporal.previousLab = cloudLab;
+                    temporal.valid = true;
+                    temporal.writeIndex = 1U - writeIndex;
+
+                    graph.AddPass(
+                        prefix + ".CloudsComposite",
+                        {
+                            {
+                                .texture = resolvedHandle,
+                                .state = rhi::ResourceState::ShaderResource,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = targets.color,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         resolvedTexture,
+                         color,
+                         width,
+                         height](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            cloudRenderer_.Composite(
+                                commands,
+                                *resolvedTexture,
+                                *color,
+                                width,
+                                height);
+                        });
+                }
             }
 
             // RenderView imports depth as DepthWrite on the next frame.
@@ -12331,13 +12648,16 @@ StudioViewportRenderer::Compose(
                             0.25F);
                 }
 
-                histogram.diagnostics.eyeState =
-                    post_process::
-                        UpdateHumanEyeAdaptation(
-                            histogram.diagnostics.eyeState,
-                            histogram.diagnostics.statistics,
-                            eyeDeltaSeconds,
-                            histogram.diagnostics.eyeConfig);
+                if (!histogram.diagnostics.eyeAdaptationLocked)
+                {
+                    histogram.diagnostics.eyeState =
+                        post_process::
+                            UpdateHumanEyeAdaptation(
+                                histogram.diagnostics.eyeState,
+                                histogram.diagnostics.statistics,
+                                eyeDeltaSeconds,
+                                histogram.diagnostics.eyeConfig);
+                }
 
                 histogram.lastEyeUpdate =
                     eyeNow;

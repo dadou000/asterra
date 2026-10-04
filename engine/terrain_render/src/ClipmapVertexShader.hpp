@@ -128,6 +128,7 @@ float3 SurfaceDirectionForOffset(float2 offsetMeters, float planetRadius)
         g_pc.g_centerNorthAndMorphStart.xyz);
 }
 
+)" R"(
 VSOutput main(uint vertexId : SV_VertexID)
 {
     const float planetRadius = g_pc.g_planet.x;
@@ -242,7 +243,21 @@ VSOutput main(uint vertexId : SV_VertexID)
 
     if (g_pc.g_debug.y > 0.5)
     {
-        const uint colorIndex = ((uint)round(g_pc.g_debug.x)) % 8u;
+        uint colorIndex = ((uint)round(g_pc.g_debug.x)) % 8u;
+        if (g_pc.g_debug.y > 1.5 && g_pc.g_debug.y < 2.5)
+        {
+            // Sample health: which vertex data is bad. Material 0 = elevation not finite or beyond
+            // +-20 km, 1 = morph target not finite or more than 4 cells from the vertex, 2 = fine slope
+            // not finite or steeper than 20, 7 = healthy. Rows of one colour are a corrupted strip.
+            const float2 unmorphedOffset = g_pc.g_centerOffsetMeters.xy + localOffsetMeters;
+            const float2 morphDelta = morphTargetOffset - unmorphedOffset;
+            const bool badElevation = !isfinite(bedElevation) || abs(bedElevation) > 20000.0;
+            const bool badMorph = !isfinite(morphDelta.x) || !isfinite(morphDelta.y) ||
+                max(abs(morphDelta.x), abs(morphDelta.y)) > 4.0 * spacing;
+            const bool badSlope = !isfinite(fineSlope.x) || !isfinite(fineSlope.y) ||
+                abs(fineSlope.x) > 20.0 || abs(fineSlope.y) > 20.0;
+            colorIndex = badElevation ? 0u : (badMorph ? 1u : (badSlope ? 2u : 7u));
+        }
         output.biome0 = float4(
             colorIndex == 0u ? 1.0 : 0.0,
             colorIndex == 1u ? 1.0 : 0.0,
@@ -344,6 +359,66 @@ VSOutput main(uint vertexId : SV_VertexID)
                 : 0.0);
         if (highestCoverage <= 0.0 || lowestCoverage >= 1.0)
             output.horizonClip = -1.0;
+    }
+
+    if (g_pc.g_debug.y > 2.5 && g_pc.g_debug.y < 3.5)
+    {
+        // Hole / fade view: nothing is culled, every vertex is coloured by why it would be.
+        // Material 0 = beyond the horizon, 1 = inside a finer level's hole (culled once that level is
+        // fully faded in), 2 = inside the hole while the finer level is still fading, 3 = culled by the
+        // distance bands, 7 = drawn normally. A level drawn through its own hole shows overlap; long
+        // runs of 1 with no finer level drawn there are the black gaps.
+        const float horizonValue = surfaceDirection.y - horizonCosine + 0.000002 + positiveReliefPadding;
+        const bool beyondHorizon = horizonValue < 0.0;
+        const bool culledNow = output.horizonClip < 0.0;
+        uint holeIndex = 7u;
+        if (beyondHorizon)
+            holeIndex = 0u;
+        else if (culledNow && zoneFraction < 0.0)
+            holeIndex = 1u;
+        else if (culledNow)
+            holeIndex = 3u;
+        else if (insideHole && zoneFraction < 0.0 && output.lodFade.y > 0.0)
+            holeIndex = 2u;
+        output.biome0 = float4(
+            holeIndex == 0u ? 1.0 : 0.0,
+            holeIndex == 1u ? 1.0 : 0.0,
+            holeIndex == 2u ? 1.0 : 0.0,
+            holeIndex == 3u ? 1.0 : 0.0);
+        output.biome1 = float4(
+            holeIndex == 4u ? 1.0 : 0.0,
+            holeIndex == 5u ? 1.0 : 0.0,
+            holeIndex == 6u ? 1.0 : 0.0,
+            holeIndex == 7u ? 1.0 : 0.0);
+        output.horizonClip = 1.0;
+        output.lodFade = float2(1.0, 0.0);
+    }
+
+    if (g_pc.g_debug.y > 3.5)
+    {
+        // Projected position view: nothing is culled; each vertex is coloured by where it lands.
+        // Material 0 = non-finite clip position, 1 = behind the camera (w <= 0), 2 = in front of the near
+        // plane or beyond the far plane, 3 = inside the depth range but outside the screen sideways,
+        // 7 = on screen. Triangles that straddle a 1 or 2 vertex are the ones the GPU clips away.
+        const float4 clip = output.position;
+        const bool finite = isfinite(clip.x) && isfinite(clip.y) && isfinite(clip.z) && isfinite(clip.w);
+        uint projectedIndex = 7u;
+        if (!finite)
+            projectedIndex = 0u;
+        else if (clip.w <= 0.0)
+            projectedIndex = 1u;
+        else if (clip.z < 0.0 || clip.z > clip.w)
+            projectedIndex = 2u;
+        else if (abs(clip.x) > clip.w || abs(clip.y) > clip.w)
+            projectedIndex = 3u;
+        output.biome0 = float4(
+            projectedIndex == 0u ? 1.0 : 0.0,
+            projectedIndex == 1u ? 1.0 : 0.0,
+            projectedIndex == 2u ? 1.0 : 0.0,
+            projectedIndex == 3u ? 1.0 : 0.0);
+        output.biome1 = float4(0.0, 0.0, 0.0, projectedIndex == 7u ? 1.0 : 0.0);
+        output.horizonClip = 1.0;
+        output.lodFade = float2(1.0, 0.0);
     }
 
     return output;

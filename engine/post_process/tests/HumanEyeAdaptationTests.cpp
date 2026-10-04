@@ -42,6 +42,21 @@ orbit::post_process::LuminanceHistogramStatistics Stats(
     result.peakLuminance = std::exp2(peak);
     return result;
 }
+
+// Same as above but with an explicit p90, for scenes where the bright share of
+// the frame matters (p90 bright == at least ~10% of the frame is bright).
+orbit::post_process::LuminanceHistogramStatistics Stats(
+    const float p50,
+    const float p90,
+    const float p95,
+    const float p99,
+    const float peak)
+{
+    auto result = Stats(p50, p95, p99, peak);
+    result.p90Log2 = p90;
+    result.p90Luminance = std::exp2(p90);
+    return result;
+}
 } // namespace
 
 int main()
@@ -217,6 +232,79 @@ int main()
           0.0001F);
     Check(absurdClouds.peakExcessStops >
           brighterClouds.peakExcessStops);
+
+    // A large bright region must hold the eye at photopic exposure. 80% of the
+    // frame sits ~10 stops below the 20% that is fully bright: the median alone
+    // says "dark", but p90/p95 are bright, so neither exposure nor dark
+    // adaptation may chase the dark majority.
+    {
+        HumanEyeAdaptationState brightMinority{};
+
+        // Start fully adapted to the bright region.
+        for (int frame = 0; frame < 60 * 3; ++frame)
+        {
+            brightMinority =
+                UpdateHumanEyeAdaptation(
+                    brightMinority,
+                    Stats(2.0F, 2.0F, 2.0F, 2.0F, 2.0F),
+                    1.0F / 60.0F);
+        }
+
+        const float adaptedPhotopic =
+            brightMinority.photopicLog2;
+        const float adaptedExposure =
+            brightMinority.exposureScale;
+
+        // The view turns so only 20% of the frame is still bright.
+        for (int frame = 0; frame < 60 * 30; ++frame)
+        {
+            brightMinority =
+                UpdateHumanEyeAdaptation(
+                    brightMinority,
+                    Stats(-8.0F, 2.0F, 2.0F, 2.0F, 3.0F),
+                    1.0F / 60.0F);
+        }
+
+        // Exposure stays within a few stops of the bright region instead of
+        // opening up ~10 stops on the dark 80% and blowing the bright 20% out.
+        Check(brightMinority.photopicLog2 > adaptedPhotopic - 4.0F);
+        Check(brightMinority.exposureScale < adaptedExposure * 16.0F);
+        Check(brightMinority.darkTarget == 0.0F);
+        Check(brightMinority.darkAdaptation < 0.01F);
+    }
+
+    // The bright share must be large enough to matter: a tiny bright region
+    // (p90 still dark) leaves the median in charge, so a genuinely dark scene
+    // with a few bright pixels still dark-adapts.
+    {
+        HumanEyeAdaptationState tinyBright{};
+
+        for (int frame = 0; frame < 60 * 30; ++frame)
+        {
+            tinyBright =
+                UpdateHumanEyeAdaptation(
+                    tinyBright,
+                    Stats(-10.0F, -9.0F, 2.0F, 2.0F, 3.0F),
+                    1.0F / 60.0F);
+        }
+
+        Check(tinyBright.darkTarget > 0.5F);
+        Check(tinyBright.darkAdaptation > 0.2F);
+    }
+
+    // Hand-built statistics that never set p90 (it stays 0) are not
+    // monotonic. They must be treated as p50 <= p90 <= p95 and behave exactly
+    // like the percentile-only form.
+    {
+        const auto legacy = Stats(-10.0F, -9.0F, -8.0F, -7.0F);
+        const auto explicitP90 = Stats(-10.0F, -9.5F, -9.0F, -8.0F, -7.0F);
+
+        const auto a = UpdateHumanEyeAdaptation({}, legacy, 1.0F / 60.0F);
+        const auto b = UpdateHumanEyeAdaptation({}, explicitP90, 1.0F / 60.0F);
+
+        Check(std::abs(a.photopicTargetLog2 - b.photopicTargetLog2) < 0.3F);
+        Check(std::abs(a.darkTarget - b.darkTarget) < 0.1F);
+    }
 
     ResetHumanEyeAdaptation(state);
     Check(!state.initialized);

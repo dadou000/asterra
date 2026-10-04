@@ -192,6 +192,9 @@ def orbit_view_terrain_overlays_set(
     physical_lod: bool | None = None,
     clipmap_rings: bool | None = None,
     clipmap_levels: bool | None = None,
+    clipmap_sample_health: bool | None = None,
+    clipmap_hole_view: bool | None = None,
+    clipmap_projection_view: bool | None = None,
     clipmap_wireframe: bool | None = None,
     clipmap_freeze: bool | None = None,
     cache_status: bool | None = None,
@@ -204,7 +207,15 @@ def orbit_view_terrain_overlays_set(
     their current value. clipmap_rings outlines only the ACTIVE clipmap levels (the
     dynamic planner's range, finest and coarsest brighter); clipmap_levels tints
     the terrain surface by clipmap level so each active level and its hand-off are
-    visible. clipmap_wireframe draws the terrain mesh as a wireframe (water hidden);
+    visible. clipmap_sample_health colours each vertex by what is wrong with its GPU
+    sample (red bad elevation, green bad morph target, blue bad slope, grey healthy) to
+    find corrupted strips. clipmap_hole_view culls nothing and colours each vertex by why it
+    would be culled (red beyond the horizon, green inside a finer level's hole, blue inside it
+    while that level fades in, cyan culled by distance bands, grey drawn normally), to find
+    gaps where a finer level is missing. clipmap_projection_view culls nothing and colours
+    each vertex by where its clip position lands (red non-finite, green behind the camera,
+    blue outside the near/far range, cyan off screen sideways, grey on screen) to find
+    triangles the GPU clips away. clipmap_wireframe draws the terrain mesh as a wireframe (water hidden);
     clipmap_freeze freezes the clipmap (plan, window, residency, content) where it
     is so the camera can fly away and look at the rings from outside; turning it
     off snaps the clipmap back to the camera. Frozen/wireframe state is reported in
@@ -216,6 +227,9 @@ def orbit_view_terrain_overlays_set(
         "physical_lod": physical_lod,
         "clipmap_rings": clipmap_rings,
         "clipmap_levels": clipmap_levels,
+        "clipmap_sample_health": clipmap_sample_health,
+        "clipmap_hole_view": clipmap_hole_view,
+        "clipmap_projection_view": clipmap_projection_view,
         "clipmap_wireframe": clipmap_wireframe,
         "clipmap_freeze": clipmap_freeze,
         "cache_status": cache_status,
@@ -269,6 +283,12 @@ def orbit_view_terrain_layers_set(
     clipmap_partial_updates: bool | None = None,
     physical_pages: bool | None = None,
     clouds: bool | None = None,
+    cloud_lab: dict[str, Any] | None = None,
+    cloud_resolution_scale: float | None = None,
+    cloud_godray_strength: float | None = None,
+    cloud_light_volume: bool | None = None,
+    cloud_volume_debug_altitude: float | None = None,
+    cloud_temporal: bool | None = None,
 ) -> dict[str, Any]:
     """Choose which terrain layers a viewport draws and its LOD bias. Omitted
     fields keep their value. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
@@ -298,7 +318,28 @@ def orbit_view_terrain_layers_set(
     cache_status bounds) into the clipmap's elevation and water depth; false draws
     the plain generated terrain, to tell page-related height steps from the generator.
     clouds (default true) ray-marches the body's cloud layer in the viewport (a
-    layer with no built cloud field draws nothing). The chosen
+    layer with no built cloud field draws nothing). cloud_resolution_scale
+    (0.25-1, default 0.5) is the ray-march resolution relative to the viewport; 1
+    gives crisp edges at about four times the cost. cloud_godray_strength (0-2,
+    default 1) scales the crepuscular rays in cloud-shadowed air; 0 turns them
+    off. cloud_light_volume (default true) caches the optical depth towards the sun around
+    the camera (out to ~370 km) so cloud-on-cloud shadows and god rays reach far at a low sun;
+    false marches everything per sample (for comparison). cloud_volume_debug_altitude
+    (metres, default 0 = off) draws a horizontal slice of that volume at the given altitude
+    over the view as a heatmap of the optical depth towards the sun (blue clear to white
+    opaque, magenta = voxel not ready, nothing outside the cascades). -1 shows the scene
+    depth buffer instead (view-space distance, log scale, magenta = no depth written). cloud_lab replaces the weather
+    with ONE isolated cloud for judging vertical development, shape and
+    self-shadowing: {enabled, type (0.05 stratus, 0.2 stratocumulus, 0.32
+    nimbostratus, 0.5 cumulus, 0.72 congestus, 1.0 cumulonimbus), coverage, cirrus
+    (anvil / high cloud), precipitation, radius_meters, height_scale (exaggerates
+    vertical growth, 0.25-4), distance_meters (ahead of the camera along the
+    ground), sun_override + sun_elevation_degrees + sun_azimuth_degrees (light it
+    from a chosen sun), maturity (life cycle: 0 towering cumulus, 0.3 growing
+    cumulonimbus, 0.6 mature with anvil, 0.9 dissipating), organisation (0 single
+    cell, 0.5 multicell of mixed ages, 1 organised), density (0.2-6), cirrus_sheet (0-1:
+    patchy thin cirrus on the anti-sun side of the cell, where its shadow falls), seed, place
+    (true places the cloud ahead of the camera now)}. The chosen
     level range is reported as clipmap_plan by orbit_view_text_diagnostics.
     Transient view state."""
     params: dict[str, Any] = {"id": view_id}
@@ -318,6 +359,12 @@ def orbit_view_terrain_layers_set(
         "clipmap_partial_updates": clipmap_partial_updates,
         "physical_pages": physical_pages,
         "clouds": clouds,
+        "cloud_lab": cloud_lab,
+        "cloud_resolution_scale": cloud_resolution_scale,
+        "cloud_godray_strength": cloud_godray_strength,
+        "cloud_light_volume": cloud_light_volume,
+        "cloud_volume_debug_altitude": cloud_volume_debug_altitude,
+        "cloud_temporal": cloud_temporal,
     }.items():
         if value is not None:
             params[key] = value
@@ -1033,7 +1080,8 @@ def orbit_viewport_set_camera(
 
 @mcp.tool()
 def orbit_viewport_screenshot(path: str) -> dict[str, Any]:
-    """Capture the completed offscreen Studio RenderView to a 32-bit BMP."""
+    """Capture the completed offscreen Studio RenderView to an image file: PNG, or
+    a 32-bit BMP when the path ends in .bmp."""
     return _rpc("viewport.screenshot", {"path": path})
 
 
@@ -1370,6 +1418,281 @@ def orbit_shading_screenshot(path: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_time_get() -> dict[str, Any]:
+    """The simulation clock that drives planetary rotation, orbits, the sun and
+    the atmosphere/weather: playing or paused, rate (simulation seconds per real
+    second), time since the epoch (microseconds, seconds, text) and the step
+    size of the Step buttons. Studio starts paused."""
+    return _rpc("time.get")
+
+
+@mcp.tool()
+def orbit_time_set(
+    playing: bool | None = None,
+    rate: float | None = None,
+    time_microseconds: int | None = None,
+    step_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Drive the simulation transport (the Simulate / Pause band at the bottom
+    of Studio). playing=True simulates, False pauses; rate is simulation seconds
+    per real second (negative runs backwards); time_microseconds jumps to an
+    absolute time; step_seconds sets the size of the Step buttons."""
+    params: dict[str, Any] = {}
+    for key, value in {
+        "playing": playing,
+        "rate": rate,
+        "time_microseconds": time_microseconds,
+        "step_seconds": step_seconds,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("time.set", params)
+
+
+@mcp.tool()
+def orbit_time_step(seconds: float | None = None) -> dict[str, Any]:
+    """Advance the simulation clock by `seconds` (negative rewinds), whether it
+    is playing or paused: the Step buttons. Defaults to the configured step
+    size."""
+    return _rpc("time.step", {} if seconds is None else {"seconds": seconds})
+
+
+@mcp.tool()
+def orbit_viewport_pose_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Exact camera pose of a Studio perspective view: target body object id,
+    planet-fixed observer position, surface frame and look angles. Pass it to
+    orbit_viewport_pose_set to put the camera back."""
+    return _rpc("viewport.pose_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_viewport_pose_set(
+    pose_json: str,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Restore a pose returned by orbit_viewport_pose_get (as JSON text). The
+    view's target body must already be the pose's target_object (select it
+    first); otherwise restored is false."""
+    params = json.loads(pose_json)
+    if not isinstance(params, dict):
+        raise ValueError("pose_json must decode to a JSON object.")
+    params["id"] = view_id
+    return _rpc("viewport.pose_set", params)
+
+
+@mcp.tool()
+def orbit_reports_list(
+    status: str | None = None,
+    scope: str | list[str] | None = None,
+    transient: bool | None = None,
+    text: str | None = None,
+) -> list[dict[str, Any]]:
+    """List issue reports, newest first. status: unresolved | pending |
+    resolved. scope: performance | visual_quality | bug | crash | other (one or
+    several). transient filters problems that come and go. text matches the
+    title, description or a tag."""
+    params: dict[str, Any] = {}
+    for key, value in {
+        "status": status,
+        "scope": scope,
+        "transient": transient,
+        "text": text,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("reports.list", params)
+
+
+@mcp.tool()
+def orbit_reports_get(id: str) -> dict[str, Any]:
+    """One report (id 7 or "R-0007") with its starting condition and, for a
+    transient report, its ending condition: simulation time/rate, project,
+    world, camera pose, view diagnostics text and frame-time statistics."""
+    return _rpc("reports.get", {"id": id})
+
+
+@mcp.tool()
+def orbit_reports_create(
+    title: str = "",
+    description: str | None = None,
+    scopes: list[str] | None = None,
+    tags: list[str] | None = None,
+    transient: bool = False,
+    status: str | None = None,
+    capture_start: bool = True,
+    screenshot: bool = True,
+) -> dict[str, Any]:
+    """Raise an issue report. scopes: any of performance, visual_quality, bug,
+    crash, other. transient=True is a problem that comes and goes: it gets a
+    starting condition now and an ending condition later
+    (orbit_reports_capture which="end"). capture_start captures the situation
+    (time, camera, location, diagnostics) right now, with a PNG screenshot of the
+    viewport (screenshot=False skips it); the file is the condition's
+    screenshot_path in the result."""
+    params: dict[str, Any] = {
+        "title": title,
+        "transient": transient,
+        "capture_start": capture_start,
+        "screenshot": screenshot,
+    }
+    for key, value in {
+        "description": description,
+        "scopes": scopes,
+        "tags": tags,
+        "status": status,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("reports.create", params)
+
+
+@mcp.tool()
+def orbit_reports_update(
+    id: str,
+    title: str | None = None,
+    description: str | None = None,
+    resolution_note: str | None = None,
+    status: str | None = None,
+    scopes: list[str] | None = None,
+    tags: list[str] | None = None,
+    transient: bool | None = None,
+) -> dict[str, Any]:
+    """Edit a report: status (unresolved | pending | resolved), scopes, tags,
+    text fields. Making a report non-transient drops its ending condition."""
+    params: dict[str, Any] = {"id": id}
+    for key, value in {
+        "title": title,
+        "description": description,
+        "resolution_note": resolution_note,
+        "status": status,
+        "scopes": scopes,
+        "tags": tags,
+        "transient": transient,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("reports.update", params)
+
+
+@mcp.tool()
+def orbit_reports_capture(
+    id: str,
+    which: str = "start",
+    screenshot: bool = True,
+) -> dict[str, Any]:
+    """Capture the situation Studio is in now into a report. which="start"
+    replaces the starting condition; which="end" sets the ending condition of a
+    transient report (a non-transient report has none). A PNG screenshot of the
+    viewport is attached too (screenshot=False skips it)."""
+    return _rpc(
+        "reports.capture", {"id": id, "which": which, "screenshot": screenshot}
+    )
+
+
+@mcp.tool()
+def orbit_reports_show(id: str) -> dict[str, Any]:
+    """Open Studio's Reports panel on a report (its screenshot, conditions and
+    notes), the same as clicking its row."""
+    return _rpc("reports.show", {"id": id})
+
+
+@mcp.tool()
+def orbit_reports_open_screenshot(id: str, which: str = "start") -> dict[str, Any]:
+    """Show a report condition's screenshot file in the file browser, like the
+    "Show file" button in the Reports panel. Returns the file path."""
+    return _rpc("reports.open_screenshot", {"id": id, "which": which})
+
+
+@mcp.tool()
+def orbit_reports_restore(id: str, which: str = "start") -> dict[str, Any]:
+    """Recreate the situation a report was captured in: the simulation clock
+    goes to the captured time and rate (paused), the captured body is selected
+    and the camera returns to the captured pose. pose is "pending" while the
+    body loads and finishes on its own."""
+    return _rpc("reports.restore", {"id": id, "which": which})
+
+
+@mcp.tool()
+def orbit_reports_delete(id: str) -> dict[str, Any]:
+    """Delete a report. Ids are never reused."""
+    return _rpc("reports.delete", {"id": id})
+
+
+@mcp.tool()
+def orbit_reports_export(
+    id: str | None = None,
+    status: str | None = None,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Markdown write-up of one report (id) or of every report matching status.
+    With path, also writes it to that file."""
+    params: dict[str, Any] = {}
+    for key, value in {"id": id, "status": status, "path": path}.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("reports.export", params)
+
+
+@mcp.tool()
+def orbit_view_zoom_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Camera zoom of a viewport: a telephoto factor on the field of view
+    (1 = default, 2 = half the angle). Range 0.5 to 100."""
+    return _rpc("view.zoom_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_view_zoom_set(
+    zoom: float,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Set the camera zoom (the viewport Zoom control / mouse wheel). Clamped
+    to 0.5..100. Returns the zoom applied."""
+    return _rpc("view.zoom_set", {"id": view_id, "zoom": zoom})
+
+
+@mcp.tool()
+def orbit_viewport_capture_start(
+    kind: str = "fullscreen",
+    width: int | None = None,
+    height: int | None = None,
+    path: str | None = None,
+    settle_frames: int | None = None,
+) -> dict[str, Any]:
+    """Start a high-resolution capture of the primary viewport (the Screenshot
+    and Ultra 16K buttons). kind: fullscreen (window resolution), ultra (16K:
+    15360 px on the long side, keeping the viewport aspect) or custom (width and
+    height up to 16384). Saves a PNG (default <project>/Screenshots; a .bmp path
+    gives a BMP). The view is
+    resized, given frames to converge, captured and restored, so this returns at
+    once: poll orbit_viewport_capture_status until state is idle."""
+    params: dict[str, Any] = {"kind": kind}
+    for key, value in {
+        "width": width,
+        "height": height,
+        "path": path,
+        "settle_frames": settle_frames,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("viewport.capture_start", params)
+
+
+@mcp.tool()
+def orbit_viewport_screenshots_open() -> dict[str, Any]:
+    """Open the folder screenshots are saved to (<project>/Screenshots) in the
+    file browser, like the viewport "Screenshot Files" button. Returns its path."""
+    return _rpc("viewport.screenshots_open")
+
+
+@mcp.tool()
+def orbit_viewport_capture_status() -> dict[str, Any]:
+    """State of the high-resolution capture (idle, resizing, settling,
+    restoring) and the outcome of the last one: path, size, file_bytes or
+    error."""
+    return _rpc("viewport.capture_status")
+
+
+@mcp.tool()
 def orbit_rpc_call(method: str, params_json: str = "{}") -> Any:
     """Call any JSON-RPC method exposed by Orbit Studio.
 
@@ -1385,14 +1708,14 @@ def orbit_rpc_call(method: str, params_json: str = "{}") -> Any:
 if hasattr(mcp, "resource"):
     @mcp.resource(
         "orbit://viewport/screenshot",
-        mime_type="image/bmp",
+        mime_type="image/png",
     )
     def orbit_viewport_screenshot_resource() -> bytes:
-        """Return a fresh BMP capture of Orbit Studio's primary viewport."""
+        """Return a fresh PNG capture of Orbit Studio's primary viewport."""
         import tempfile
 
         with tempfile.NamedTemporaryFile(
-            suffix=".bmp", delete=False
+            suffix=".png", delete=False
         ) as temporary:
             path = Path(temporary.name)
 

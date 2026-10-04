@@ -2826,7 +2826,7 @@ void EditorRpcService::AttachViewport(
                 {
                     .name = "viewport.screenshot",
                     .description =
-                        "Captures the completed primary RenderView to a BMP file.",
+                        "Captures the completed primary RenderView to an image file: PNG, or BMP when path ends in .bmp.",
                     .mutating = false
                 },
                 [this,

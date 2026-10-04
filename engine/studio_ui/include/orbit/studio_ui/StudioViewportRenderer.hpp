@@ -262,6 +262,9 @@ struct StudioLuminanceHistogramDiagnostics
     post_process::HighlightEffectsConfig highlightConfig{};
     post_process::ToneMappingConfig toneMapping{};
     bool meteringMaskAvailable{false};
+    // Holds the exposure where it is (stitched captures need every tile to be
+    // exposed alike). Presentation state only.
+    bool eyeAdaptationLocked{false};
 };
 
 struct StudioVisibilityProxyDiagnostics
@@ -378,6 +381,7 @@ public:
     void SetLuminanceHistogramConfig(std::string_view viewportId, post_process::LuminanceHistogramConfig config);
     void SetHumanEyeAdaptationConfig(std::string_view viewportId, post_process::HumanEyeAdaptationConfig config);
     void ResetHumanEyeAdaptation(std::string_view viewportId) noexcept;
+    void SetHumanEyeAdaptationLocked(std::string_view viewportId, bool locked);
     void SetHighlightEffectsConfig(std::string_view viewportId, post_process::HighlightEffectsConfig config);
     void SetToneMappingConfig(std::string_view viewportId, post_process::ToneMappingConfig config);
     void SetLuminanceMeteringOverlay(std::string_view viewportId, bool enabled);
@@ -660,8 +664,31 @@ private:
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> atmosphereScratch_;
     // Half-resolution cloud march result (radiance + transmittance) per view.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudTargets_;
+    // Temporal accumulation of the cloud march: two resolved targets used as history and
+    // output on alternate frames, and the camera the history was resolved for.
+    struct CloudTemporal
+    {
+        std::array<std::unique_ptr<rhi::Texture>, 2> resolved;
+        u32 writeIndex{0U};
+        bool valid{false};
+        u32 frame{0U};
+        celestial_clouds::CloudRenderer::CloudResolveView previous{};
+        celestial_clouds::CloudLab previousLab{};
+    };
+    std::map<std::string, CloudTemporal, std::less<>> cloudTemporal_;
+    // One sun light volume per view: it is tied to that view's camera.
+    std::map<std::string, std::unique_ptr<celestial_clouds::CloudRenderer::LightVolume>, std::less<>>
+        cloudLightVolumes_;
     // Half-resolution sun transmittance through the clouds, read by direct lighting.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudShadowTargets_;
+    // Where each view's cloud lab cloud was placed (body-fixed unit direction).
+    struct CloudLabAnchor
+    {
+        u32 serial{0U};
+        bool valid{false};
+        math::Double3 center{1.0, 0.0, 0.0};
+    };
+    std::map<std::string, CloudLabAnchor, std::less<>> cloudLabAnchors_;
     std::map<std::string, StudioCelestialLightingDiagnostics, std::less<>> lightingDiagnostics_;
     std::map<std::string, StudioSurfaceGlobeTransitionDiagnostics, std::less<>> transitionDiagnostics_;
     std::map<std::string, StudioClipmapPlanStats, std::less<>> clipmapPlanStats_;

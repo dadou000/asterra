@@ -607,6 +607,153 @@ bool StudioRenderViewSet::FocusTerrainSurfacePoint(
     return true;
 }
 
+f64 StudioRenderViewSet::ViewFovRadians(const std::string_view id) const
+{
+    const render_view::RenderView* view = Find(id);
+    if (view == nullptr)
+    {
+        throw std::out_of_range("Studio render-view ID is not registered.");
+    }
+    return view->Camera().verticalFovRadians;
+}
+
+void StudioRenderViewSet::SetCaptureTile(
+    const std::string_view id,
+    const std::optional<StudioCaptureTile>& tile)
+{
+    if (!tile.has_value())
+    {
+        captureTiles_.erase(std::string(id));
+        return;
+    }
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range("Studio render-view ID is not registered.");
+    }
+    captureTiles_.insert_or_assign(std::string(id), *tile);
+}
+
+void StudioRenderViewSet::SetZoom(const std::string_view id, const f64 zoom)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range("Studio render-view ID is not registered.");
+    }
+    if (!std::isfinite(zoom))
+    {
+        throw std::invalid_argument("Zoom must be a finite number.");
+    }
+    zoom_.insert_or_assign(
+        std::string(id), std::clamp(zoom, kMinZoom, kMaxZoom));
+}
+
+f64 StudioRenderViewSet::Zoom(const std::string_view id) const
+{
+    const auto found = zoom_.find(id);
+    return found == zoom_.end() ? 1.0 : found->second;
+}
+
+std::optional<StudioViewPose> StudioRenderViewSet::ViewPose(
+    const std::string_view id) const
+{
+    if (session_ == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const auto* viewport = session_->Viewports().Find(id);
+    if (viewport == nullptr || !viewport->target.has_value())
+    {
+        return std::nullopt;
+    }
+
+    StudioViewPose pose{};
+    pose.targetObject = viewport->target->semanticObject.ToString();
+    pose.zoom = Zoom(id);
+
+    const auto terrain = session_->TerrainRuntime().Capture(id);
+    if (terrain.has_value() &&
+        session_->TerrainRuntime().IsCurrent(*terrain))
+    {
+        const auto& state = RequireNavigationState(id);
+        pose.terrain = true;
+        pose.observerMeters = terrain->observer.meters;
+        pose.surfaceFrame = state.surfaceFrame;
+        pose.yawRadians = state.freeCamera.YawRadians();
+        pose.pitchRadians = state.freeCamera.PitchRadians();
+        return pose;
+    }
+
+    const auto reference = referenceNavigation_.find(id);
+    if (reference == referenceNavigation_.end())
+    {
+        pose.hasCamera = false;
+        return pose;
+    }
+
+    pose.observerMeters = reference->second.observer.meters;
+    pose.surfaceFrame = reference->second.navigation.surfaceFrame;
+    pose.yawRadians = reference->second.navigation.freeCamera.YawRadians();
+    pose.pitchRadians = reference->second.navigation.freeCamera.PitchRadians();
+    return pose;
+}
+
+bool StudioRenderViewSet::RestoreViewPose(
+    const std::string_view id,
+    const StudioViewPose& pose)
+{
+    if (session_ == nullptr)
+    {
+        return false;
+    }
+
+    const auto* viewport = session_->Viewports().Find(id);
+    if (viewport == nullptr || !viewport->target.has_value() ||
+        viewport->target->semanticObject.ToString() != pose.targetObject)
+    {
+        return false;
+    }
+
+    SetZoom(id, pose.zoom);
+
+    if (!pose.hasCamera)
+    {
+        return true;
+    }
+
+    camera::FreeCameraConfig cameraConfig{};
+    cameraConfig.initialYawRadians = pose.yawRadians;
+    cameraConfig.initialPitchRadians = pose.pitchRadians;
+
+    const auto terrain = session_->TerrainRuntime().Capture(id);
+    if (terrain.has_value() &&
+        session_->TerrainRuntime().IsCurrent(*terrain))
+    {
+        auto& state = RequireNavigationState(id);
+        SynchronizeTerrainNavigation(state, *terrain);
+        state.surfaceFrame = pose.surfaceFrame;
+        state.freeCamera = camera::FreeCamera(cameraConfig);
+        return session_->TerrainRuntime().SetObserver(
+            id,
+            world::WorldPosition{.meters = pose.observerMeters});
+    }
+
+    // Reference-sphere body: make sure its navigation entry exists, then
+    // overwrite it.
+    static_cast<void>(NavigateReference(id, {}));
+    const auto reference = referenceNavigation_.find(id);
+    if (reference == referenceNavigation_.end())
+    {
+        return false;
+    }
+
+    reference->second.observer.meters = pose.observerMeters;
+    reference->second.navigation.surfaceFrame = pose.surfaceFrame;
+    reference->second.navigation.freeCamera =
+        camera::FreeCamera(cameraConfig);
+    return true;
+}
+
 std::optional<StudioSurfacePick>
 StudioRenderViewSet::PickTerrainSurface(
     const std::string_view id,
@@ -1431,6 +1578,53 @@ u32 StudioRenderViewSet::Refresh(
             terrainAuthoringOverlays_.erase(id);
             liveDebugPages_.erase(id);
             continue;
+        }
+
+        if (const auto zoom = zoom_.find(id);
+            zoom != zoom_.end() && zoom->second != 1.0)
+        {
+            camera->verticalFovRadians = static_cast<f32>(
+                2.0 *
+                std::atan(
+                    std::tan(0.5 * camera->verticalFovRadians) /
+                    zoom->second));
+        }
+
+        if (const auto tile = captureTiles_.find(id);
+            tile != captureTiles_.end())
+        {
+            const math::Float3 forward = math::Normalize(camera->forward);
+            const math::Float3 up = math::Normalize(camera->up);
+            // The view frame the renderers use is mirrored relative to the world
+            // vectors in the camera state, so screen-right is forward x up.
+            const math::Float3 right = math::Normalize(math::Cross(forward, up));
+
+            const f64 sinYaw = std::sin(tile->second.yawRadians);
+            const f64 cosYaw = std::cos(tile->second.yawRadians);
+            const f64 sinPitch = std::sin(tile->second.pitchRadians);
+            const f64 cosPitch = std::cos(tile->second.pitchRadians);
+
+            // Camera-space basis (x right, y up, z forward) of the turned view.
+            const math::Double3 newForward{
+                cosPitch * sinYaw, sinPitch, cosPitch * cosYaw};
+            const math::Double3 newRight{cosYaw, 0.0, -sinYaw};
+            const math::Double3 newUp = math::Cross(newForward, newRight);
+
+            const auto toWorld = [&](const math::Double3& v)
+            {
+                return math::Normalize(math::Float3{
+                    static_cast<f32>(
+                        v.x * right.x + v.y * up.x + v.z * forward.x),
+                    static_cast<f32>(
+                        v.x * right.y + v.y * up.y + v.z * forward.y),
+                    static_cast<f32>(
+                        v.x * right.z + v.y * up.z + v.z * forward.z)});
+            };
+
+            camera->forward = toWorld(newForward);
+            camera->up = toWorld(newUp);
+            camera->verticalFovRadians =
+                static_cast<f32>(tile->second.verticalFovRadians);
         }
 
         ApplyViewportCamera(

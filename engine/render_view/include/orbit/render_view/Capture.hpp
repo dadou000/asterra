@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace orbit::render_view
 {
@@ -27,6 +28,58 @@ struct CaptureResult
     rhi::Queue& graphicsQueue,
     RenderView& view,
     const std::filesystem::path& path);
+
+// The display target in memory: top-down, row-major RGBA8.
+struct CapturedImage
+{
+    u32 width{0};
+    u32 height{0};
+    std::vector<u8> rgba;
+};
+
+// Same image CaptureBmp writes, without the file. Same synchronisation
+// requirement.
+[[nodiscard]] CapturedImage CaptureRgba8(
+    rhi::Device& device,
+    rhi::Queue& graphicsQueue,
+    RenderView& view);
+
+// Writes a top-down RGBA8 image (width * height * 4 bytes) as a 32-bit BMP.
+// Rows are streamed, so images far larger than the screen are fine as long as
+// the file stays under the BMP limit of 4 GiB.
+[[nodiscard]] CaptureResult WriteBmpRgba8(
+    const std::filesystem::path& path,
+    u32 width,
+    u32 height,
+    const u8* rgba);
+
+// Writes a top-down RGBA8 image (width * height * 4 bytes) as a 24-bit PNG
+// (the display alpha is dropped: it carries nothing and would make the file
+// transparent). Streamed in row chunks, so images far larger than the screen
+// are fine. Needs the Windows imaging codec; throws elsewhere.
+[[nodiscard]] CaptureResult WritePngRgba8(
+    const std::filesystem::path& path,
+    u32 width,
+    u32 height,
+    const u8* rgba);
+
+// Format chosen by the extension: ".bmp" writes a BMP, anything else a PNG.
+// Studio's screenshots are PNG unless a caller asks for .bmp.
+[[nodiscard]] CaptureResult WriteImageRgba8(
+    const std::filesystem::path& path,
+    u32 width,
+    u32 height,
+    const u8* rgba);
+
+// CaptureBmp / CaptureRgba8 + WritePngRgba8, by extension as above.
+[[nodiscard]] CaptureResult CaptureImageFile(
+    rhi::Device& device,
+    rhi::Queue& graphicsQueue,
+    RenderView& view,
+    const std::filesystem::path& path);
+
+// Reads a PNG, BMP or other codec-supported image as top-down RGBA8.
+[[nodiscard]] CapturedImage ReadImageRgba8(const std::filesystem::path& path);
 
 // Physical render targets that can be captured losslessly for diagnostics.
 enum class CaptureBuffer

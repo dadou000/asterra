@@ -51,6 +51,20 @@ std::atomic<HumanEyeAdaptationUpdateOverride>
 {
     return std::clamp(value, 0.0F, 1.0F);
 }
+
+// A bright region that fills a meaningful share of the frame keeps the eye
+// photopic. The frame median alone cannot see it: with 80% of the frame dark
+// and 20% fully bright the median is dark, so exposure opened ~10 stops on the
+// dark majority (blowing the bright 20% out) and dark adaptation started
+// accumulating. p90 is the share proxy -- once p90 is bright, at least ~10% of
+// the weighted frame is bright, so the 20% case clears it with margin while a
+// handful of bright pixels (p90 still dark) leaves the median in charge.
+//
+// The eye cannot sit more than this many stops below such a region (veiling
+// glare from the bright area washes out the dark detail around it), so the
+// metered "median" is floored at p90 minus this span. Scenes whose p90 is
+// within the span of the median are untouched.
+constexpr f32 kBrightRegionSpanStops = 3.0F;
 } // namespace
 
 HumanEyeAdaptationState
@@ -108,6 +122,24 @@ UpdateHumanEyeAdaptationBuiltin(
             statistics.peakLog2,
             p99);
 
+    // Real percentiles are monotonic; hand-built statistics may leave p90
+    // unset (0), so pin it between the median and p95 before using it.
+    const f32 p90 =
+        std::min(
+            std::max(
+                FiniteOr(
+                    statistics.p90Log2,
+                    p50),
+                p50),
+            std::max(p95, p50));
+
+    // Median the adaptation actually meters: raised toward a large bright
+    // region so a dark majority cannot drag exposure or dark adaptation down.
+    const f32 meteredMedian =
+        std::max(
+            p50,
+            p90 - kBrightRegionSpanStops);
+
     const f32 p50Weight =
         Saturate(
             FiniteOr(
@@ -125,7 +157,7 @@ UpdateHumanEyeAdaptationBuiltin(
             1.0e-4F);
 
     state.rawPhotopicTargetLog2 =
-        (p50 * p50Weight +
+        (meteredMedian * p50Weight +
          p95 * p95Weight) /
         normalization;
 
@@ -176,7 +208,7 @@ UpdateHumanEyeAdaptationBuiltin(
 
     state.darkTarget =
         Saturate(
-            (darkThreshold - p50) /
+            (darkThreshold - meteredMedian) /
             (darkThreshold - darkFull));
 
     const f32 adaptedReference =

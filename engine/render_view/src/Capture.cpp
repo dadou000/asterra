@@ -549,4 +549,104 @@ CaptureResult CaptureBmp(
         .fileBytes = fileBytes
     };
 }
+
+CapturedImage CaptureRgba8(
+    rhi::Device& device,
+    rhi::Queue& graphicsQueue,
+    RenderView& view)
+{
+    rhi::Texture& display = view.DisplayColor();
+    if (display.Format() != rhi::TextureFormat::RGBA8_UNorm)
+    {
+        throw std::invalid_argument(
+            "RenderView capture requires an RGBA8 display target.");
+    }
+
+    const auto bytes = ReadbackTexture(device, graphicsQueue, display, 4U);
+
+    CapturedImage image;
+    image.width = view.Width();
+    image.height = view.Height();
+    image.rgba.resize(bytes.size());
+    std::memcpy(image.rgba.data(), bytes.data(), bytes.size());
+    return image;
+}
+
+CaptureResult WriteBmpRgba8(
+    const std::filesystem::path& path,
+    const u32 width,
+    const u32 height,
+    const u8* const rgba)
+{
+    const std::filesystem::path absolutePath = PrepareCapturePath(path);
+
+    constexpr u64 fileHeaderBytes = 14;
+    constexpr u64 infoHeaderBytes = 40;
+    const u64 pixelBytes =
+        static_cast<u64>(width) * static_cast<u64>(height) * 4U;
+    if (width == 0U || height == 0U ||
+        pixelBytes + fileHeaderBytes + infoHeaderBytes >
+            static_cast<u64>(std::numeric_limits<u32>::max()))
+    {
+        throw std::overflow_error("Image is empty or too large for BMP.");
+    }
+
+    std::ofstream output(absolutePath, std::ios::binary | std::ios::trunc);
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Orbit could not open the screenshot destination.");
+    }
+
+    const u32 fileBytes =
+        static_cast<u32>(fileHeaderBytes + infoHeaderBytes + pixelBytes);
+    WriteU16(output, 0x4D42U);
+    WriteU32(output, fileBytes);
+    WriteU16(output, 0U);
+    WriteU16(output, 0U);
+    WriteU32(output, static_cast<u32>(fileHeaderBytes + infoHeaderBytes));
+    WriteU32(output, static_cast<u32>(infoHeaderBytes));
+    WriteI32(output, static_cast<i32>(width));
+    WriteI32(output, static_cast<i32>(height));
+    WriteU16(output, 1U);
+    WriteU16(output, 32U);
+    WriteU32(output, 0U);
+    WriteU32(output, static_cast<u32>(pixelBytes));
+    WriteI32(output, 0);
+    WriteI32(output, 0);
+    WriteU32(output, 0U);
+    WriteU32(output, 0U);
+
+    // RGBA -> BGRA, bottom-up, one row at a time.
+    std::vector<char> row(static_cast<std::size_t>(width) * 4U);
+    for (u32 outputRow = 0; outputRow < height; ++outputRow)
+    {
+        const u8* source = rgba +
+            static_cast<std::size_t>(height - 1U - outputRow) *
+                static_cast<std::size_t>(width) * 4U;
+        for (u32 column = 0; column < width; ++column)
+        {
+            const u8* pixel = source + static_cast<std::size_t>(column) * 4U;
+            char* out = row.data() + static_cast<std::size_t>(column) * 4U;
+            out[0] = static_cast<char>(pixel[2]);
+            out[1] = static_cast<char>(pixel[1]);
+            out[2] = static_cast<char>(pixel[0]);
+            out[3] = static_cast<char>(pixel[3]);
+        }
+        output.write(row.data(), static_cast<std::streamsize>(row.size()));
+    }
+
+    output.close();
+    if (!output)
+    {
+        throw std::runtime_error(
+            "Orbit failed while writing the screenshot.");
+    }
+
+    return {
+        .path = absolutePath,
+        .width = width,
+        .height = height,
+        .fileBytes = fileBytes};
+}
 } // namespace orbit::render_view

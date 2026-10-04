@@ -7,7 +7,10 @@ add_library(OrbitStudioUi STATIC
     src/ProfilerUi.cpp
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
+    src/ReportsUi.cpp
+    src/ReportThumbnailCache.cpp
     src/ShadingUi.cpp
+    src/SimulationControlsUi.cpp
     src/StudioExpansionShell.cpp
     src/StudioRenderViewRpc.cpp
     src/StudioRenderViewSet.cpp
@@ -22,10 +25,12 @@ add_library(OrbitStudioUi STATIC
     src/V007ValidationCommands.cpp
     src/V007ValidationScenarios.cpp
     src/VolumeAuthoringM36.cpp
+    src/StudioViewContinuity.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
     src/StudioViewportRenderer.cpp
+    src/ViewportCaptureService.cpp
     src/StudioTextDiagnosticsHud.cpp
     src/StudioViewportTextDiagnostics.cpp
     src/WorldDocumentsUi.cpp
@@ -66,6 +71,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::RenderView
         Orbit::Rpc
         Orbit::Shading
+        Orbit::StudioReports
         Orbit::StudioSession
         Orbit::TerrainDebug
         Orbit::TerrainGpu
@@ -281,6 +287,40 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingSelectionInspection
         COMMAND OrbitLightingSelectionInspectionTests
+    )
+
+    add_executable(OrbitViewportCaptureTilingTests
+        tests/ViewportCaptureTilingTests.cpp
+    )
+
+    target_link_libraries(OrbitViewportCaptureTilingTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitViewportCaptureTilingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitViewportCaptureTilingTests)
+
+    add_test(
+        NAME Orbit.ViewportCaptureTiling
+        COMMAND OrbitViewportCaptureTilingTests
+    )
+
+    add_executable(OrbitStudioViewContinuityTests
+        tests/StudioViewContinuityTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioViewContinuityTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStudioViewContinuityTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioViewContinuityTests)
+
+    add_test(
+        NAME Orbit.StudioViewContinuity
+        COMMAND OrbitStudioViewContinuityTests
     )
 
     add_executable(OrbitProfilerModelTests

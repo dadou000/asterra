@@ -7,6 +7,47 @@
 
 namespace orbit::studio_ui
 {
+// Cloud lab: replaces the weather with ONE isolated cloud of a chosen type, with
+// exaggerated development, placed ahead of the camera, so vertical development,
+// shape and self-shadowing can be judged without hunting for them in the weather.
+// Transient presentation state like the other layer options.
+struct StudioCloudLab
+{
+    bool enabled{false};
+    // Cloud type axis: 0.05 stratus, 0.2 stratocumulus, 0.32 nimbostratus,
+    // 0.5 cumulus, 0.72 congestus, 1.0 cumulonimbus.
+    f32 type{1.0F};
+    f32 coverage{0.85F};
+    // High cloud (anvil / cirrus) coverage over and around the cloud, [0, 1].
+    f32 cirrus{0.0F};
+    f32 precipitation{0.3F};
+    // Horizontal radius of the cloud in metres.
+    f32 radiusMeters{6000.0F};
+    // Multiplies the vertical extent of the cloud shell (the cloud grows taller).
+    f32 heightScale{1.0F};
+    // Distance ahead of the camera, along the ground, where it is placed.
+    f32 distanceMeters{20000.0F};
+    // Light the cloud from a chosen sun (elevation above the horizon at the cloud,
+    // azimuth clockwise from north) instead of the scene sun, to read self-shadowing.
+    bool overrideSun{false};
+    f32 sunElevationDegrees{35.0F};
+    f32 sunAzimuthDegrees{90.0F};
+    // Life cycle (0 towering cumulus .. 0.3 growing .. 0.6 mature with anvil ..
+    // 0.9 dissipating), organisation (0 single cell, 0.5 multicell, 1 organised),
+    // density multiplier and the seed that arranges multicell clusters.
+    f32 maturity{0.6F};
+    f32 organisation{0.2F};
+    f32 density{1.0F};
+    // Coverage of a thin cirrus sheet on the anti-sun side of the cell (0 = none), to see the
+    // storm shadow it.
+    f32 cirrusSheet{0.0F};
+    u32 seed{1U};
+    // Incremented to (re)place the cloud ahead of the camera.
+    u32 placeSerial{0U};
+
+    [[nodiscard]] constexpr bool operator==(const StudioCloudLab&) const noexcept = default;
+};
+
 // Which terrain layers a view draws and how much LOD detail it asks for.
 // Transient presentation state (like the diagnostic overlays): none of it
 // enters terrain identity, persistence or generation.
@@ -62,6 +103,25 @@ struct StudioTerrainLayerOptions
     // Ray-march the body's cloud layer in this view (ground to orbit). The
     // cloud field itself is still built and used for shadows/orbital globes.
     bool clouds{true};
+    // Resolution of the cloud ray-march relative to the viewport, [0.25, 1]. The
+    // default 0.5 marches at half resolution (cheap, soft); 1 marches every pixel
+    // (crisp edges and fine detail, about four times the cost).
+    f32 cloudResolutionScale{0.5F};
+    // Accumulate the cloud march over frames (reprojected, history-clamped). Averages
+    // the per-frame sampling jitter away, so the half-resolution march reads as a much
+    // finer image. Off shows the raw single-frame march.
+    bool cloudTemporal{true};
+    // Strength of the crepuscular rays in cloud-shadowed air, [0, 2]. 0 turns them off
+    // (and skips their march), 1 is physically consistent with the atmosphere pass.
+    f32 cloudGodrayStrength{1.0F};
+    // Cache the optical depth towards the sun around the camera (a light volume, like EVE's) so
+    // cloud lighting reaches past the short in-march sun steps (cloud-on-cloud shadows at a low
+    // sun) and god rays are one lookup per step. Off falls back to marching everything.
+    bool cloudLightVolume{true};
+    // > 0 draws a horizontal slice of the light volume at this altitude (metres) over the view as a
+    // heatmap of the optical depth towards the sun (magenta = voxel not ready). 0 = off.
+    f32 cloudVolumeDebugAltitude{0.0F};
+    StudioCloudLab cloudLab{};
     std::array<f32, 16> clipmapBandEdgesMeters{
         100.0F, 500.0F, 2000.0F, 10000.0F, 40000.0F, 160000.0F, 640000.0F,
         2560000.0F, 10000000.0F, 40000000.0F};
@@ -90,6 +150,10 @@ struct StudioClipmapLevelStats
     // Distance-band edges (experimental banded clipmap); 0 for the ladder.
     f64 bandInnerMeters{0.0};
     f64 bandOuterMeters{0.0};
+    // Layout grid resolution and the vertices the renderer submits for the level (see
+    // TerrainClipmapLevelSummary); a level is fully drawn when drawnVertices == 6 * (resolution - 1)^2.
+    u32 gridResolution{0U};
+    u64 drawnVertices{0U};
 };
 
 // What the clipmap planner chose for a view this frame (read-only diagnostics).

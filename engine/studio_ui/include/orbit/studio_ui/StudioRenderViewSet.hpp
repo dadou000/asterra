@@ -48,6 +48,18 @@ struct StudioTerrainDiagnosticOverlayOptions
     // Tints the terrain surface by clipmap level (a shading change, not lines)
     // so the active levels and where each one hands off are visible.
     bool clipmapLevels{false};
+    // Colours each clipmap vertex by the health of its GPU sample: red = elevation not finite or
+    // beyond +-20 km, green = morph target not finite or far from the vertex, blue = slope not
+    // finite or steeper than 20, grey = healthy. Rows of one colour are a corrupted strip.
+    bool clipmapSampleHealth{false};
+    // Hole / fade view: nothing is culled; each vertex is coloured by why it would be (red beyond the
+    // horizon, green inside a finer level's hole, blue inside it while that level fades in, cyan culled by
+    // distance bands, grey drawn normally), to see gaps where a finer level is missing.
+    bool clipmapHoleView{false};
+    // Projected position view: nothing is culled; each vertex is coloured by where its clip position
+    // lands (red non-finite, green behind the camera, blue outside the near/far range, cyan off screen
+    // sideways, grey on screen), to find triangles the GPU clips away.
+    bool clipmapProjectionView{false};
     // Draws the terrain clipmap as a wireframe (the water surface is hidden).
     bool clipmapWireframe{false};
     // Freezes the clipmap where it is: plan, window and content stop following
@@ -75,6 +87,36 @@ struct StudioTerrainDiagnosticOverlayOptions
 
     [[nodiscard]] constexpr bool operator==(
         const StudioTerrainDiagnosticOverlayOptions&) const noexcept = default;
+};
+
+struct StudioViewPose
+{
+    // scene::ObjectId::ToString of the viewport's target body.
+    std::string targetObject;
+    // False for a view that has a target but has not been navigated yet
+    // (reference-sphere bodies): the pose below is then meaningless and only
+    // the target is worth restoring.
+    bool hasCamera{true};
+    // True when the target has a terrain runtime (terrain navigation); false
+    // for the zero-elevation reference sphere.
+    bool terrain{false};
+    math::Double3 observerMeters{};
+    world::SurfaceFrame surfaceFrame{};
+    f64 yawRadians{0.0};
+    f64 pitchRadians{0.0};
+    // Camera zoom of the view (1 = the default field of view).
+    f64 zoom{1.0};
+};
+
+// One tile of a stitched high-resolution capture: the camera is turned by yaw
+// (about its up axis) then pitch (about its resulting right axis) and given a
+// narrower field of view, so a series of tiles can be reprojected into one
+// large image of the original camera.
+struct StudioCaptureTile
+{
+    f64 yawRadians{0.0};
+    f64 pitchRadians{0.0};
+    f64 verticalFovRadians{1.0};
 };
 
 struct StudioRenderViewInfo
@@ -169,6 +211,39 @@ public:
 
     [[nodiscard]] bool ResetTerrainView(
         std::string_view id);
+
+    // Camera zoom: a telephoto factor on the view's field of view (2 shows
+    // half the angle, 0.5 twice as wide). Presentation state like the debug
+    // field: it never enters terrain authority, and it is applied to the
+    // camera each Refresh so picking and every renderer agree on it.
+    // Vertical field of view of the camera the view renders with now (zoom
+    // included).
+    [[nodiscard]] f64 ViewFovRadians(std::string_view id) const;
+
+    // Capture tiling (see StudioCaptureTile). Applied each Refresh on top of
+    // the zoomed camera; nullopt returns to the normal camera.
+    void SetCaptureTile(
+        std::string_view id,
+        const std::optional<StudioCaptureTile>& tile);
+
+    static constexpr f64 kMinZoom = 0.5;
+    static constexpr f64 kMaxZoom = 100.0;
+    void SetZoom(std::string_view id, f64 zoom);
+    [[nodiscard]] f64 Zoom(std::string_view id) const;
+
+    // The complete camera pose of a perspective view: the observer in the
+    // planet-fixed frame, the surface frame it travels with and the free-camera
+    // look angles. Issue reports capture it so a situation can be recreated
+    // exactly (RestoreViewPose). Absent when the view has no target body.
+    [[nodiscard]] std::optional<StudioViewPose> ViewPose(
+        std::string_view id) const;
+
+    // Puts the camera back on a captured pose. The target body must already be
+    // the one the pose was captured against (pose.targetObject); returns false
+    // when it is not, or when there is no usable view.
+    [[nodiscard]] bool RestoreViewPose(
+        std::string_view id,
+        const StudioViewPose& pose);
 
     // M08 shared production-terrain surface pick. All viewport authoring tools
     // consume this seam instead of deriving their own cube/ray identity.
@@ -343,6 +418,8 @@ private:
 
     std::map<std::string, bool, std::less<>> compositionEnabled_;
     std::map<std::string, bool, std::less<>> textDiagnosticsHud_;
+    std::map<std::string, f64, std::less<>> zoom_;
+    std::map<std::string, StudioCaptureTile, std::less<>> captureTiles_;
 
     std::map<std::string, StudioTerrainLayerOptions, std::less<>>
         terrainLayers_;

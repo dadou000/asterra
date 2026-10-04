@@ -1,6 +1,7 @@
 add_library(OrbitRenderView STATIC
     src/RenderView.cpp
     src/Capture.cpp
+    src/CapturePng.cpp
 )
 
 add_library(Orbit::RenderView ALIAS OrbitRenderView)
@@ -20,6 +21,15 @@ target_link_libraries(OrbitRenderView
         Orbit::RenderGraph
         Orbit::Shader
 )
+
+if(WIN32)
+    # PNG screenshots and report thumbnails go through the Windows imaging codec.
+    target_link_libraries(OrbitRenderView
+        PRIVATE
+            ole32
+            windowscodecs
+    )
+endif()
 
 target_compile_features(OrbitRenderView PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitRenderView)
@@ -41,4 +51,23 @@ if(BUILD_TESTING)
         NAME Orbit.ViewRay
         COMMAND OrbitViewRayTests
     )
+
+    if(WIN32)
+        add_executable(OrbitCapturePngTests
+            tests/CapturePngTests.cpp
+        )
+
+        target_link_libraries(OrbitCapturePngTests
+            PRIVATE
+                Orbit::RenderView
+        )
+
+        target_compile_features(OrbitCapturePngTests PRIVATE cxx_std_23)
+        orbit_enable_warnings(OrbitCapturePngTests)
+
+        add_test(
+            NAME Orbit.CapturePng
+            COMMAND OrbitCapturePngTests
+        )
+    endif()
 endif()

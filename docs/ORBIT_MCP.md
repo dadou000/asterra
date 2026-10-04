@@ -73,6 +73,16 @@ These methods run the same `ProjectAuthoringUi` operations as the Project
 Browser's *Create Project* / *Open Project* buttons, including recent-project
 bookkeeping.
 
+**Studio resumes where you left off.** The primary view's camera pose (observer,
+surface frame, look angles, zoom) and the simulation time are saved once a
+second and on exit to `<project>/.orbit/StudioView.ini`, and restored when the
+project opens (`StudioViewContinuity`). This is automatic, so there is no tool
+for it; to bookmark or replay a pose explicitly use the existing view-pose
+RPC/MCP pair. Saving stays off until the restore was attempted (or 30 s passed
+without the target body becoming current), so a fresh default camera never
+overwrites the remembered one. `--terrain-ui-smoke` runs skip it to keep their
+default view deterministic. Delete the file to reset.
+
 ## Worlds
 
 | MCP tool | RPC method |
@@ -97,9 +107,9 @@ bookkeeping.
 | `orbit_panel_close(title)` | `studio.panel_close` | Closes a tab; reopen with focus. |
 | `orbit_viewport_navigate(delta_seconds, mouse_dx, mouse_dy, move_right, move_forward, move_up, boost)` | `viewport.navigate` | One camera navigation step, same as right-mouse look + WASD/QE. Terrain navigation when the active body has terrain, reference-sphere navigation otherwise (same movement, no terrain). |
 | `orbit_viewport_focus_surface(u, v, view_id)` | `viewport.focus_surface` | Moves the camera to a low vantage point over the terrain under viewport position (u, v) in 0..1 (top-left origin), exactly like double-clicking the terrain. `focused: false` when the position misses terrain. |
-| `orbit_view_terrain_overlays_get/_set(view_id, flags...)` | `view.terrain_overlays_get` / `view.terrain_overlays_set` | Terrain diagnostic overlays: dirty_page_bounds, build_states, physical_lod, clipmap_rings (outlines the active clipmap levels only), clipmap_levels (tints the terrain by clipmap level), clipmap_wireframe (terrain as wireframe), clipmap_freeze (freezes the clipmap so the camera can fly away and inspect it), cache_status, authored_constraints, biome_weights, process_masks, drainage_vectors. Same toggles as the viewport Diagnostics properties. |
-| `orbit_view_terrain_layers_get/_set(view_id, production_surface?, full_clipmap?, macro_globe?, ocean?, surface_effects?, lod_bias_stops?, dynamic_clipmaps?, clipmap_pixels_per_vertex?, clipmap_fade_seconds?, experimental_distance_bands?, clipmap_band_edges_meters?, clipmap_band_scale?, clipmap_partial_updates?, physical_pages?, clouds?)` | `view.terrain_layers_get` / `view.terrain_layers_set` | Which terrain layers a viewport draws (near-field clipmap terrain, orbital globe patches, ocean, surface effects) and its LOD bias in stops (clamped to [-4, 4]; +1 keeps richer representations longer and doubles orbital patch resolution). `full_clipmap` (default on) draws the production clipmap from the ground to orbit and never uses the orbital globe. `dynamic_clipmaps`, `clipmap_pixels_per_vertex` and `clipmap_fade_seconds` (how long a level dissolves in or out, default 0.4 s, 0 = pop) (and the EXPERIMENTAL `experimental_distance_bands` with its `clipmap_band_edges_meters` list and `clipmap_band_scale` multiplier: clipmap level k is drawn only where the camera's distance to the terrain is in its band, neighbours cross-fading) control the dynamic clipmap planner (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). `clouds` (default on) ray-marches the body's cloud layer in the viewport (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). Same controls as the viewport Diagnostics "Terrain layers" section. |
-| `orbit_view_text_diagnostics(view_id, cursor_u?, cursor_v?)` | `view.text_diagnostics` | Complete numeric and text diagnostic for a viewport: camera position/heading/pitch, distance from the planet core, height above datum (sea level), above terrain and above the water surface, plus for the point below the camera and (with cursor_u/cursor_v) under the cursor: latitude/longitude, terrain and coarse elevation, detail delta, water depth and surface, radius from core, slope, downhill bearing, climate and biome weights, physical page/LOD, terrain runtime revisions, and `cpu_terrain` (physical-page pool workers/running/queued, page rebuild counts and products, orbital patches building/resident), and `clipmap_plan` (which clipmap levels the planner keeps active: first/last level, finest spacing, coarsest reach, nearest ground, the spacing the screen asks for, plan changes) and `clouds` (the target body's built cloud field: layer count, mean coverage and optical depth, time bucket, whether it is GPU-resident; absent without a cloud layer). `text` is exactly what the HUD shows. |
+| `orbit_view_terrain_overlays_get/_set(view_id, flags...)` | `view.terrain_overlays_get` / `view.terrain_overlays_set` | Terrain diagnostic overlays: dirty_page_bounds, build_states, physical_lod, clipmap_rings (outlines the active clipmap levels only), clipmap_levels (tints the terrain by clipmap level), clipmap_sample_health (colours each vertex by what is wrong with its GPU sample: red bad elevation, green bad morph target, blue bad slope, grey healthy; rows of one colour are a corrupted strip), clipmap_hole_view (culls nothing and colours each vertex by why it would be culled: red beyond the horizon, green inside a finer level's hole, blue inside it while that level fades in, cyan culled by distance bands, grey drawn normally), clipmap_projection_view (culls nothing and colours each vertex by where its clip position lands: red non-finite, green behind the camera, blue outside the near/far range, cyan off screen sideways, grey on screen; to find triangles the GPU clips away), clipmap_wireframe (terrain as wireframe), clipmap_freeze (freezes the clipmap so the camera can fly away and inspect it), cache_status, authored_constraints, biome_weights, process_masks, drainage_vectors. Same toggles as the viewport Diagnostics properties. |
+| `orbit_view_terrain_layers_get/_set(view_id, production_surface?, full_clipmap?, macro_globe?, ocean?, surface_effects?, lod_bias_stops?, dynamic_clipmaps?, clipmap_pixels_per_vertex?, clipmap_fade_seconds?, experimental_distance_bands?, clipmap_band_edges_meters?, clipmap_band_scale?, clipmap_partial_updates?, physical_pages?, clouds?, cloud_resolution_scale?, cloud_godray_strength?, cloud_light_volume?, cloud_volume_debug_altitude?, cloud_temporal?, cloud_lab?)` | `view.terrain_layers_get` / `view.terrain_layers_set` | Which terrain layers a viewport draws (near-field clipmap terrain, orbital globe patches, ocean, surface effects) and its LOD bias in stops (clamped to [-4, 4]; +1 keeps richer representations longer and doubles orbital patch resolution). `full_clipmap` (default on) draws the production clipmap from the ground to orbit and never uses the orbital globe. `dynamic_clipmaps`, `clipmap_pixels_per_vertex` and `clipmap_fade_seconds` (how long a level dissolves in or out, default 0.4 s, 0 = pop) (and the EXPERIMENTAL `experimental_distance_bands` with its `clipmap_band_edges_meters` list and `clipmap_band_scale` multiplier: clipmap level k is drawn only where the camera's distance to the terrain is in its band, neighbours cross-fading) control the dynamic clipmap planner (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). `cloud_resolution_scale` (0.25-1, default 0.5) is the cloud ray-march resolution relative to the viewport (1 = crisp, about four times the cost). `cloud_godray_strength` (0-2, default 1) scales the crepuscular rays: the cloud pass removes the direct in-scatter of air that sits in cloud shadow from what the atmosphere pass added (0 = off and skips the extra march; same slider as the Terrain layers "God-ray strength"). `cloud_light_volume` (default on) keeps a camera-centred cache of the optical depth towards the sun (three toroidal cascades, 250 m, 2 km and 8 km cells, usable out to about 11, 92 and 368 km from the camera, refreshed a few voxels per frame): cloud lighting then sees shadows from other clouds beyond the 6.7 km of in-march sun steps (a storm shadowing cirrus at a low sun) and god rays cost one lookup per step; off marches everything per sample, for comparison. `cloud_volume_debug_altitude` (metres, 0-40000, default 0 = off; -1 shows the scene depth buffer as log view-space distance instead, magenta where no depth was written) draws a horizontal slice of the light volume at that altitude over the view as a heatmap of the optical depth towards the sun (blue clear, yellow, red, white opaque; magenta = the voxel is not ready; nothing outside the three cascades; darker for the coarser cascades), to see where cloud shadows are in the volume. `cloud_temporal` (default on) accumulates the march over frames (reprojected through the cloud shell and clamped to the current neighbourhood) so the half-resolution march averages its sampling jitter away; off shows the raw single-frame march. `cloud_lab` (object) is the cloud lab: it replaces the weather with ONE isolated cloud of a chosen type (`type`: 0.05 stratus, 0.2 stratocumulus, 0.32 nimbostratus, 0.5 cumulus, 0.72 congestus, 1.0 cumulonimbus) with `coverage`, `cirrus` (anvil / high cloud), `precipitation`, `radius_meters`, exaggerated vertical development (`height_scale`, 0.25-4), `distance_meters` ahead of the camera, `maturity` (life cycle: 0 towering cumulus, 0.3 growing cumulonimbus, 0.6 mature with anvil, 0.9 dissipating), `organisation` (0 single cell, 0.5 multicell of mixed ages, 1 organised), `density` (0.2-6), `cirrus_sheet` (0-1, default 0: a patchy thin-cirrus layer on the anti-sun side of the cell, where the storm's shadow falls, to see clouds shadowing cirrus), `seed`, an optional sun (`sun_override`, `sun_elevation_degrees`, `sun_azimuth_degrees`) and `place: true` to (re)place it ahead of the camera; `get` returns the stored values plus `place_serial`. `clouds` (default on) ray-marches the body's cloud layer in the viewport (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). Same controls as the viewport Diagnostics "Terrain layers" section. |
+| `orbit_view_text_diagnostics(view_id, cursor_u?, cursor_v?)` | `view.text_diagnostics` | Complete numeric and text diagnostic for a viewport: camera position/heading/pitch, distance from the planet core, height above datum (sea level), above terrain and above the water surface, plus for the point below the camera and (with cursor_u/cursor_v) under the cursor: latitude/longitude, terrain and coarse elevation, detail delta, water depth and surface, radius from core, slope, downhill bearing, climate and biome weights, physical page/LOD, terrain runtime revisions, and `cpu_terrain` (physical-page pool workers/running/queued, page rebuild counts and products, orbital patches building/resident), and `clipmap_plan` (which clipmap levels the planner keeps active, with each level's `grid_resolution`, `drawn_vertices` vs `expected_vertices` and `fully_drawn` (false = rows of that level are not submitted): first/last level, finest spacing, coarsest reach, nearest ground, the spacing the screen asks for, plan changes) and `clouds` (the target body's built cloud field: layer count, mean coverage and optical depth, time bucket, whether it is GPU-resident; absent without a cloud layer). `text` is exactly what the HUD shows. |
 | `orbit_view_text_diagnostics_set(enabled, view_id)` | `view.text_diagnostics_set` | Shows or hides that HUD over the viewport (the "Text readout" checkbox in the viewport Diagnostics properties). |
 | `orbit_profiler_status` | `profiler.status` | CPU micro-profiler: configuration, frame-time summary, last 120 frame times and recent hitch captures (file path, frame ms, sampled stack frames). See [ORBIT_PROFILER.md](ORBIT_PROFILER.md). |
 | `orbit_profiler_configure(enabled?, hitch_threshold_ms?, stall_threshold_ms?, capture_window_ms?, max_hitch_files?)` | `profiler.configure` | Turns the profiler on/off and sets the hitch and stall thresholds and capture window. |
@@ -116,6 +126,98 @@ shader materials, a preview on selectable shapes and lighting) is fully
 scriptable through `shading.*`; see [ORBIT_SHADING.md](ORBIT_SHADING.md) for the
 contract, the hot path (shader edits never restart Studio) and the complete
 tool list.
+
+## Simulation time (Simulate / Pause / Step)
+
+The transport band along the bottom of Studio drives the one simulation clock
+that moves planetary rotation, orbits, the sun and the atmosphere/weather
+(clouds read the same time). Studio starts **paused**. `Simulate` / `Pause`
+toggles it, `<< Step` / `Step >>` move by the chosen step (1 s ... 10 days,
+playing or paused), `Speed` sets simulation seconds per real second, and the
+readout shows time since the clock epoch. A playing clock keeps Studio out of
+idle frame pacing. Backed by `SimulationControls` (`engine/studio_ui`), the same
+object the RPC methods call.
+
+| MCP tool | RPC method | Notes |
+| --- | --- | --- |
+| `orbit_time_get` | `time.get` | `playing`, `rate`, `time_microseconds`, `time_text`, `step_seconds`. |
+| `orbit_time_set(playing?, rate?, time_microseconds?, step_seconds?)` | `time.set` | Simulate / Pause, speed (negative runs backwards), jump to an absolute time, step size. |
+| `orbit_time_step(seconds?)` | `time.step` | The Step buttons; negative rewinds. |
+
+## Issue reports
+
+The **Reports** panel (View menu > Reports, or *Report issue* in the transport
+band) keeps many problems from one session. Each report has a status
+(`unresolved`, `pending`, `resolved`), any combination of scopes
+(`performance`, `visual_quality`, `bug`, `crash`, `other`), free tags, a title,
+description and resolution note.
+
+Every report captures a **condition**: a JSON snapshot of the simulation
+time/rate, project, world, workspace, selection, camera, exact camera pose,
+target body, latitude/longitude and heights, view diagnostics text, surface
+debug mode and frame-time statistics. A **persistent** problem has one
+condition. A **transient** problem (one that comes and goes) has a *starting
+condition* and, once it stops, an *ending condition*, each with its own capture
+button; a non-transient report has no end condition and rejects one. *Go to this
+situation* (`reports.restore`) pauses the clock at the captured time and rate,
+selects the captured body and puts the camera back on the captured pose (the
+camera finishes on its own once the body has loaded).
+
+Every condition also carries a **screenshot** of the viewport taken at the same
+moment (PNG, `<project>/Reports/Screenshots/R-0004-start.png` / `-end.png`). The
+Reports panel shows it under the condition and `reports.get` returns its path, so
+a problem can be looked at straight away, without launching a test. Retaking a
+condition replaces its picture; deleting a report deletes its pictures.
+
+Reports are saved to `<project>/Reports/reports.json` on every change (a crash
+never loses one; a damaged file is left alone and reported in the log). They
+live in the project, so they travel with it. Logic: `engine/studio_reports`
+(model, persistence, tests) and `ReportsController` (`engine/studio_ui`).
+
+| MCP tool | RPC method | Notes |
+| --- | --- | --- |
+| `orbit_reports_list(status?, scope?, transient?, text?)` | `reports.list` | Newest first, without snapshots. |
+| `orbit_reports_get(id)` | `reports.get` | Full report with start/end conditions, each with its `screenshot` (relative to the reports folder) and `screenshot_path` (absolute). `id` is `7` or `"R-0007"`. |
+| `orbit_reports_create(title?, description?, scopes?, tags?, transient?, status?, capture_start?, screenshot?)` | `reports.create` | Captures the starting condition and a screenshot unless `capture_start=false` / `screenshot=false`. |
+| `orbit_reports_update(id, ...)` | `reports.update` | Status, scopes, tags, text; `transient=false` drops the end condition. |
+| `orbit_reports_capture(id, which, screenshot?)` | `reports.capture` | `which` is `start` or `end` (transient reports only); retakes the screenshot unless `screenshot=false`. |
+| `orbit_reports_open_screenshot(id, which)` | `reports.open_screenshot` | Shows a condition's screenshot file in the file browser (the panel's **Show file** button). |
+| `orbit_reports_show(id)` | `reports.show` | Opens the Reports panel on a report (screenshot, conditions, notes). |
+| `orbit_reports_restore(id, which)` | `reports.restore` | Recreate the situation: time, body and camera. |
+| `orbit_reports_delete(id)` | `reports.delete` | Ids are never reused. |
+| `orbit_reports_export(id?, status?, path?)` | `reports.export` | Markdown write-up, optionally to a file. |
+| `orbit_viewport_pose_get(view_id?)` / `orbit_viewport_pose_set(pose_json, view_id?)` | `viewport.pose_get` / `viewport.pose_set` | Exact camera pose (observer, surface frame, look angles) of a view; what reports capture and restore. |
+
+Hot iteration: the model and UI are ordinary `engine/` native code (generation
+handoff on save); reports are on disk, so they survive the handoff.
+
+## Camera zoom and high-resolution captures
+
+The viewport toolbar has **Zoom x** (type a value, **1x** resets, and the mouse
+wheel over the view zooms), **Screenshot** and **Ultra 16K**. Zoom is a
+telephoto factor on the field of view (0.5 to 100) applied to the camera every
+frame, so picking, atmosphere and clouds all agree on it. A report captures and
+restores it with the camera pose.
+
+**Screenshot** renders the viewport at the full window resolution (no panel
+chrome) and saves a PNG in `<project>/Screenshots/` (a path ending in `.bmp` gives a BMP, which `viewport.screenshot` also honours). **Ultra 16K** makes a
+15360 px (long side) image with the viewport's aspect (15360x8640 for 16:9).
+A 16K frame does not fit in GPU memory as one render (about 5 GB per 33 Mpx), so
+Ultra is tiled: the camera is turned onto a 5x5 grid of 4K tiles with a
+narrower field of view, exposure and the simulation clock are held still, and
+the tiles are reprojected into one image. Turning a pinhole camera about its
+centre changes no perspective, so there are no seams or parallax; very wide
+fields of view are a little softer toward the corners (zoom in for the sharpest
+result). It takes about 15 seconds and about 1 GB of GPU memory more than the
+viewport itself; Studio stays responsive and returns to its size and
+simulation state afterwards. Any custom size above 8K is tiled the same way.
+
+| MCP tool | RPC method | Notes |
+| --- | --- | --- |
+| `orbit_view_zoom_get(view_id?)` / `orbit_view_zoom_set(zoom, view_id?)` | `view.zoom_get` / `view.zoom_set` | Same as the Zoom control. |
+| `orbit_viewport_capture_start(kind, width?, height?, path?, settle_frames?)` | `viewport.capture_start` | `kind`: `fullscreen`, `ultra`, `custom`. Returns at once. |
+| `orbit_viewport_screenshots_open` | `viewport.screenshots_open` | Opens `<project>/Screenshots` in the file browser (the viewport **Screenshot Files** button). |
+| `orbit_viewport_capture_status` | `viewport.capture_status` | Poll until `state` is `idle`; `last` has the file path, size or error. |
 
 ## Debug tab
 

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 
 #include <cmath>
@@ -42,6 +43,112 @@ constexpr i64 kFailed = 1071;
     }
 
     return found->second.AsString();
+}
+
+[[nodiscard]] std::string ViewIdOrPrimary(const Value& params)
+{
+    if (params.IsObject())
+    {
+        const auto found = params.AsObject().find("id");
+        if (found != params.AsObject().end() && found->second.IsString() &&
+            !found->second.AsString().empty())
+        {
+            return found->second.AsString();
+        }
+    }
+    return "studio.primary";
+}
+
+[[nodiscard]] Value Double3ToRpc(const math::Double3& value)
+{
+    return Value(Value::Array{value.x, value.y, value.z});
+}
+
+[[nodiscard]] math::Double3 Double3FromRpc(
+    const Value::Object& object,
+    const char* key)
+{
+    const auto found = object.find(key);
+    if (found == object.end() || !found->second.IsArray() ||
+        found->second.AsArray().size() != 3U)
+    {
+        throw rpc::Error(
+            -32602,
+            std::string(key) + " must be an array of three numbers.");
+    }
+    const auto& array = found->second.AsArray();
+    for (const Value& element : array)
+    {
+        if (!element.IsNumber() || !std::isfinite(element.AsNumber()))
+        {
+            throw rpc::Error(
+                -32602,
+                std::string(key) + " must contain finite numbers.");
+        }
+    }
+    return {
+        array[0].AsNumber(),
+        array[1].AsNumber(),
+        array[2].AsNumber()};
+}
+
+[[nodiscard]] f64 NumberFromRpc(
+    const Value::Object& object,
+    const char* key)
+{
+    const auto found = object.find(key);
+    if (found == object.end() || !found->second.IsNumber() ||
+        !std::isfinite(found->second.AsNumber()))
+    {
+        throw rpc::Error(
+            -32602, std::string(key) + " must be a finite number.");
+    }
+    return found->second.AsNumber();
+}
+
+[[nodiscard]] Value PoseToRpc(const std::string& id, const StudioViewPose& pose)
+{
+    return Value(Value::Object{
+        {"id", id},
+        {"target_object", pose.targetObject},
+        {"terrain", pose.terrain},
+        {"has_camera", pose.hasCamera},
+        {"zoom", pose.zoom},
+        {"observer", Double3ToRpc(pose.observerMeters)},
+        {"east", Double3ToRpc(pose.surfaceFrame.east)},
+        {"north", Double3ToRpc(pose.surfaceFrame.north)},
+        {"up", Double3ToRpc(pose.surfaceFrame.up)},
+        {"yaw", pose.yawRadians},
+        {"pitch", pose.pitchRadians}});
+}
+
+[[nodiscard]] StudioViewPose PoseFromRpc(const Value::Object& object)
+{
+    StudioViewPose pose{};
+    pose.targetObject = RequireString(object, "target_object");
+    if (const auto zoom = object.find("zoom");
+        zoom != object.end() && zoom->second.IsNumber() &&
+        std::isfinite(zoom->second.AsNumber()))
+    {
+        pose.zoom = zoom->second.AsNumber();
+    }
+    const auto hasCamera = object.find("has_camera");
+    pose.hasCamera = hasCamera == object.end() || !hasCamera->second.IsBool() ||
+        hasCamera->second.AsBool();
+    if (!pose.hasCamera)
+    {
+        return pose;
+    }
+    pose.observerMeters = Double3FromRpc(object, "observer");
+    pose.surfaceFrame.east = Double3FromRpc(object, "east");
+    pose.surfaceFrame.north = Double3FromRpc(object, "north");
+    pose.surfaceFrame.up = Double3FromRpc(object, "up");
+    pose.yawRadians = NumberFromRpc(object, "yaw");
+    pose.pitchRadians = NumberFromRpc(object, "pitch");
+    const auto terrain = object.find("terrain");
+    pose.terrain = terrain != object.end() && terrain->second.IsBool() &&
+        terrain->second.AsBool();
+    return pose;
 }
 
 [[nodiscard]] lighting::SurfaceDebugMode ParseSurfaceDebugMode(
@@ -111,6 +218,9 @@ constexpr OverlayFlag kOverlayFlags[] = {
     {"physical_lod", &StudioTerrainDiagnosticOverlayOptions::physicalLod},
     {"clipmap_rings", &StudioTerrainDiagnosticOverlayOptions::clipmapRings},
     {"clipmap_levels", &StudioTerrainDiagnosticOverlayOptions::clipmapLevels},
+    {"clipmap_sample_health", &StudioTerrainDiagnosticOverlayOptions::clipmapSampleHealth},
+    {"clipmap_hole_view", &StudioTerrainDiagnosticOverlayOptions::clipmapHoleView},
+    {"clipmap_projection_view", &StudioTerrainDiagnosticOverlayOptions::clipmapProjectionView},
     {"clipmap_wireframe", &StudioTerrainDiagnosticOverlayOptions::clipmapWireframe},
     {"clipmap_freeze", &StudioTerrainDiagnosticOverlayOptions::clipmapFreeze},
     {"cache_status", &StudioTerrainDiagnosticOverlayOptions::cacheStatus},
@@ -146,6 +256,28 @@ constexpr OverlayFlag kOverlayFlags[] = {
     return Value(std::move(edges));
 }
 
+[[nodiscard]] Value CloudLabToRpc(const StudioCloudLab& lab)
+{
+    return Value(Value::Object{
+        {"enabled", lab.enabled},
+        {"type", static_cast<f64>(lab.type)},
+        {"coverage", static_cast<f64>(lab.coverage)},
+        {"cirrus", static_cast<f64>(lab.cirrus)},
+        {"precipitation", static_cast<f64>(lab.precipitation)},
+        {"radius_meters", static_cast<f64>(lab.radiusMeters)},
+        {"height_scale", static_cast<f64>(lab.heightScale)},
+        {"distance_meters", static_cast<f64>(lab.distanceMeters)},
+        {"sun_override", lab.overrideSun},
+        {"sun_elevation_degrees", static_cast<f64>(lab.sunElevationDegrees)},
+        {"sun_azimuth_degrees", static_cast<f64>(lab.sunAzimuthDegrees)},
+        {"maturity", static_cast<f64>(lab.maturity)},
+        {"organisation", static_cast<f64>(lab.organisation)},
+        {"density", static_cast<f64>(lab.density)},
+        {"cirrus_sheet", static_cast<f64>(lab.cirrusSheet)},
+        {"seed", static_cast<i64>(lab.seed)},
+        {"place_serial", static_cast<i64>(lab.placeSerial)}});
+}
+
 [[nodiscard]] Value LayersToRpc(
     const std::string& id,
     const StudioTerrainLayerOptions& layers)
@@ -168,6 +300,12 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"clipmap_partial_updates", layers.clipmapPartialUpdates},
         {"physical_pages", layers.physicalPages},
         {"clouds", layers.clouds},
+        {"cloud_resolution_scale", static_cast<f64>(layers.cloudResolutionScale)},
+        {"cloud_temporal", layers.cloudTemporal},
+        {"cloud_godray_strength", static_cast<f64>(layers.cloudGodrayStrength)},
+        {"cloud_light_volume", layers.cloudLightVolume},
+        {"cloud_volume_debug_altitude", static_cast<f64>(layers.cloudVolumeDebugAltitude)},
+        {"cloud_lab", CloudLabToRpc(layers.cloudLab)},
         {"clipmap_band_edges_meters", BandEdgesToRpc(layers)}});
 }
 
@@ -312,7 +450,17 @@ constexpr OverlayFlag kOverlayFlags[] = {
             Value::Object entry{
                 {"level", static_cast<i64>(level.level)},
                 {"spacing_meters", level.spacingMeters},
-                {"half_extent_meters", level.halfExtentMeters}};
+                {"half_extent_meters", level.halfExtentMeters},
+                {"grid_resolution", static_cast<i64>(level.gridResolution)},
+                {"drawn_vertices", static_cast<i64>(level.drawnVertices)},
+                {"expected_vertices",
+                 static_cast<i64>(
+                     6ULL * (static_cast<u64>(level.gridResolution) - 1ULL) *
+                     (static_cast<u64>(level.gridResolution) - 1ULL))},
+                {"fully_drawn",
+                 level.drawnVertices ==
+                     6ULL * (static_cast<u64>(level.gridResolution) - 1ULL) *
+                         (static_cast<u64>(level.gridResolution) - 1ULL)}};
             if (plan.banded)
             {
                 entry.emplace("band_inner_meters", level.bandInnerMeters);
@@ -605,7 +753,17 @@ void RegisterStudioRenderViewRpc(
                 "true) composites the derived physical pages (the cache "
                 "status bounds) into the clipmap, false draws the plain "
                 "generated terrain; clouds (boolean, default true) ray-marches "
-                "the body's cloud layer in the viewport. Omitted fields "
+                "the body's cloud layer in the viewport; cloud_lab (object) "
+                "replaces the weather with one isolated cloud of a chosen type "
+                "for judging shape and self-shadowing: enabled, type (0.05 "
+                "stratus .. 1.0 cumulonimbus), coverage, cirrus, "
+                "precipitation, radius_meters, height_scale (exaggerates "
+                "vertical development), distance_meters, sun_override with "
+                "sun_elevation_degrees / sun_azimuth_degrees, maturity (life cycle "
+                "0 towering .. 0.3 growing .. 0.6 mature anvil .. 0.9 "
+                "dissipating), organisation (0 single cell, 0.5 multicell, 1 "
+                "organised), density (0.2-6) and seed, and place "
+                "(true places the cloud ahead of the camera). Omitted fields "
                 "keep their value. The same "
                 "controls as the viewport Diagnostics 'Terrain layers' "
                 "section. Transient view state.",
@@ -664,6 +822,109 @@ void RegisterStudioRenderViewRpc(
                     layers.clipmapPartialUpdates);
                 applyFlag("physical_pages", layers.physicalPages);
                 applyFlag("clouds", layers.clouds);
+                applyFlag("cloud_temporal", layers.cloudTemporal);
+                applyFlag("cloud_light_volume", layers.cloudLightVolume);
+                if (const auto debugAltitude = values.find("cloud_volume_debug_altitude");
+                    debugAltitude != values.end())
+                {
+                    if (!debugAltitude->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "cloud_volume_debug_altitude must be a number.");
+                    }
+                    layers.cloudVolumeDebugAltitude = std::clamp(
+                        static_cast<f32>(debugAltitude->second.AsNumber()), -1.0F, 40000.0F);
+                }
+                if (const auto scale = values.find("cloud_resolution_scale");
+                    scale != values.end())
+                {
+                    if (!scale->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "cloud_resolution_scale must be a number.");
+                    }
+                    layers.cloudResolutionScale = std::clamp(
+                        static_cast<f32>(scale->second.AsNumber()), 0.25F, 1.0F);
+                }
+                if (const auto strength = values.find("cloud_godray_strength");
+                    strength != values.end())
+                {
+                    if (!strength->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "cloud_godray_strength must be a number.");
+                    }
+                    layers.cloudGodrayStrength = std::clamp(
+                        static_cast<f32>(strength->second.AsNumber()), 0.0F, 2.0F);
+                }
+
+                if (const auto labFound = values.find("cloud_lab");
+                    labFound != values.end())
+                {
+                    if (!labFound->second.IsObject())
+                    {
+                        throw rpc::Error(kInvalid, "cloud_lab must be an object.");
+                    }
+                    const auto& labValues = labFound->second.AsObject();
+                    auto& lab = layers.cloudLab;
+                    const auto labFlag =
+                        [&labValues](const char* name, bool& target)
+                    {
+                        const auto found = labValues.find(name);
+                        if (found == labValues.end())
+                        {
+                            return;
+                        }
+                        if (!found->second.IsBool())
+                        {
+                            throw rpc::Error(
+                                kInvalid,
+                                std::string("cloud_lab.") + name + " must be a boolean.");
+                        }
+                        target = found->second.AsBool();
+                    };
+                    const auto labNumber =
+                        [&labValues](const char* name, f32& target, const f32 low, const f32 high)
+                    {
+                        const auto found = labValues.find(name);
+                        if (found == labValues.end())
+                        {
+                            return;
+                        }
+                        if (!found->second.IsNumber())
+                        {
+                            throw rpc::Error(
+                                kInvalid,
+                                std::string("cloud_lab.") + name + " must be a number.");
+                        }
+                        target = std::clamp(
+                            static_cast<f32>(found->second.AsNumber()), low, high);
+                    };
+                    labFlag("enabled", lab.enabled);
+                    labNumber("type", lab.type, 0.0F, 1.0F);
+                    labNumber("coverage", lab.coverage, 0.0F, 1.0F);
+                    labNumber("cirrus", lab.cirrus, 0.0F, 1.0F);
+                    labNumber("precipitation", lab.precipitation, 0.0F, 1.0F);
+                    labNumber("radius_meters", lab.radiusMeters, 200.0F, 200000.0F);
+                    labNumber("height_scale", lab.heightScale, 0.25F, 4.0F);
+                    labNumber("distance_meters", lab.distanceMeters, 500.0F, 500000.0F);
+                    labFlag("sun_override", lab.overrideSun);
+                    labNumber("sun_elevation_degrees", lab.sunElevationDegrees, -10.0F, 90.0F);
+                    labNumber("sun_azimuth_degrees", lab.sunAzimuthDegrees, 0.0F, 360.0F);
+                    labNumber("maturity", lab.maturity, 0.0F, 1.0F);
+                    labNumber("organisation", lab.organisation, 0.0F, 1.0F);
+                    labNumber("density", lab.density, 0.2F, 6.0F);
+                    labNumber("cirrus_sheet", lab.cirrusSheet, 0.0F, 1.0F);
+                    f32 seedValue = static_cast<f32>(lab.seed);
+                    labNumber("seed", seedValue, 0.0F, 100000.0F);
+                    lab.seed = static_cast<u32>(seedValue);
+                    bool place = false;
+                    labFlag("place", place);
+                    if (place)
+                    {
+                        ++lab.placeSerial;
+                    }
+                }
 
                 if (const auto edges = values.find("clipmap_band_edges_meters");
                     edges != values.end())
@@ -819,6 +1080,110 @@ void RegisterStudioRenderViewRpc(
                 return Value(Value::Object{
                     {"id", id},
                     {"hud", views.TextDiagnosticsHud(id)}});
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "viewport.pose_get",
+            .description =
+                "The complete camera pose of a Studio perspective view: "
+                "target body object id, whether it uses terrain navigation, "
+                "the planet-fixed observer position (metres), the surface "
+                "frame (east/north/up) and the free-camera yaw/pitch "
+                "(radians). Feed it to viewport.pose_set to put the camera "
+                "back exactly. id defaults to studio.primary.",
+            .mutating = false
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            const auto pose = views.ViewPose(id);
+            if (!pose.has_value())
+            {
+                throw rpc::Error(
+                    kInvalid,
+                    "View '" + id + "' has no target body or camera pose.");
+            }
+            return PoseToRpc(id, *pose);
+        });
+
+    dispatcher.Register(
+        {
+            .name = "viewport.pose_set",
+            .description =
+                "Restores a camera pose captured by viewport.pose_get "
+                "(target_object, terrain, observer, east, north, up, yaw, "
+                "pitch). The view's target body must already be "
+                "target_object (select it and viewport.focus_body first); "
+                "otherwise restored is false. id defaults to "
+                "studio.primary.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            const StudioViewPose pose = PoseFromRpc(RequireObject(params));
+            try
+            {
+                return Value(Value::Object{
+                    {"id", id},
+                    {"restored", views.RestoreViewPose(id, pose)}});
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.zoom_get",
+            .description =
+                "Camera zoom of a Studio RenderView: a telephoto factor on "
+                "the field of view (1 = default, 2 = half the angle). "
+                "Range 0.5 to 100. id defaults to studio.primary.",
+            .mutating = false
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            try
+            {
+                return Value(Value::Object{
+                    {"id", id},
+                    {"zoom", views.Zoom(id)},
+                    {"min", StudioRenderViewSet::kMinZoom},
+                    {"max", StudioRenderViewSet::kMaxZoom}});
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kInvalid, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.zoom_set",
+            .description =
+                "Sets the camera zoom of a Studio RenderView (the viewport "
+                "Zoom control and mouse wheel). zoom is clamped to 0.5..100. "
+                "id defaults to studio.primary. Returns the zoom applied.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            const f64 zoom = NumberFromRpc(RequireObject(params), "zoom");
+            try
+            {
+                views.SetZoom(id, zoom);
+                return Value(Value::Object{
+                    {"id", id}, {"zoom", views.Zoom(id)}});
             }
             catch (const std::exception& exception)
             {

@@ -158,6 +158,11 @@ struct TerrainClipmapLevelSummary
     // Camera-distance band of a banded level (0 for the ladder).
     f64 bandInnerMeters{0.0};
     f64 bandOuterMeters{0.0};
+    // Grid resolution the level is laid out with now (what the vertex shader indexes), and the vertex
+    // count the renderer actually submits for it. They agree when drawnVertices == 6 * (resolution - 1)^2;
+    // fewer drawn vertices than that leaves rows of the level undrawn.
+    u32 gridResolution{0U};
+    u64 drawnVertices{0U};
 };
 
 class TerrainPreviewRenderer
@@ -201,9 +206,17 @@ public:
     // coloring and a side cutaway through the observer, and pausing
     // clipmap regeneration so LOD boundaries hold still for
     // inspection while the camera keeps moving freely.
+    // sampleHealthEnabled colours each vertex by what is wrong with its sample (see the clipmap
+    // vertex shader): bad elevation, bad morph target, bad slope, or healthy.
     void SetDebugVisuals(
         bool lodColorEnabled,
-        bool sideCutEnabled);
+        bool sideCutEnabled,
+        bool sampleHealthEnabled = false,
+        // holeViewEnabled draws nothing culled and colours each vertex by why it would be.
+        bool holeViewEnabled = false,
+        // projectionViewEnabled draws nothing culled and colours each vertex by where its clip
+        // position lands (non-finite, behind the camera, outside the depth range, off screen, ok).
+        bool projectionViewEnabled = false);
     void SetGenerationFrozen(bool frozen);
 
     // Draws the clipmap as a wireframe (and hides the water surface over it).

@@ -55,6 +55,9 @@ namespace
     const world::SurfaceFrame& observerFrame,
     const u32 levelIndex,
     const bool debugLodColorEnabled,
+    const bool debugSampleHealthEnabled,
+    const bool debugHoleViewEnabled,
+    const bool debugProjectionViewEnabled,
     const bool debugSideCutEnabled,
     const bool drySurface,
     const f32 seaLevelMeters,
@@ -111,7 +114,7 @@ namespace
     store(35, static_cast<f32>(level.innerHoleHalfExtentMeters));
 
     store(36, static_cast<f32>(levelIndex));
-    store(37, debugLodColorEnabled ? 1.0F : 0.0F);
+    store(37, debugProjectionViewEnabled ? 4.0F : debugHoleViewEnabled ? 3.0F : (debugSampleHealthEnabled ? 2.0F : (debugLodColorEnabled ? 1.0F : 0.0F)));
     store(38, debugSideCutEnabled ? 1.0F : 0.0F);
     store(39, static_cast<f32>(innerHoleCenterOffset.y));
 
@@ -233,10 +236,16 @@ public:
 
     void SetDebugVisuals(
         const bool lodColorEnabled,
-        const bool sideCutEnabled) noexcept
+        const bool sideCutEnabled,
+        const bool sampleHealthEnabled,
+        const bool holeViewEnabled,
+        const bool projectionViewEnabled) noexcept
     {
         debugLodColorEnabled_ = lodColorEnabled;
         debugSideCutEnabled_ = sideCutEnabled;
+        debugSampleHealthEnabled_ = sampleHealthEnabled;
+        debugHoleViewEnabled_ = holeViewEnabled;
+        debugProjectionViewEnabled_ = projectionViewEnabled;
     }
 
     void SetGenerationFrozen(const bool frozen) noexcept
@@ -309,7 +318,11 @@ public:
                 .spacingMeters = level.sampleSpacingMeters,
                 .halfExtentMeters = level.outerHalfExtentMeters,
                 .bandInnerMeters = band.innerMeters,
-                .bandOuterMeters = band.outerMeters});
+                .bandOuterMeters = band.outerMeters,
+                .gridResolution = level.gridResolution,
+                .drawnVertices = level.index < patchVertexCounts_.size()
+                    ? patchVertexCounts_[level.index]
+                    : 0U});
         }
         return result;
     }
@@ -717,6 +730,9 @@ public:
                 levelIndex,
                 false,
                 false,
+                false,
+                false,
+                false,
                 config_.drySurface,
                 waterOptics_.seaLevelMeters,
                 BandInner(levelIndex, 1.0F),
@@ -824,6 +840,9 @@ public:
                 observerFrame_,
                 levelIndex,
                 debugLodColorEnabled_,
+                debugSampleHealthEnabled_,
+                debugHoleViewEnabled_,
+                debugProjectionViewEnabled_,
                 debugSideCutEnabled_,
                 config_.drySurface,
                 waterOptics_.seaLevelMeters,
@@ -1646,6 +1665,9 @@ private:
     f32 observerRadiusMeters_{0.0F};
 
     bool debugLodColorEnabled_{false};
+    bool debugSampleHealthEnabled_{false};
+    bool debugHoleViewEnabled_{false};
+    bool debugProjectionViewEnabled_{false};
     bool debugSideCutEnabled_{false};
     bool generationFrozen_{false};
     u64 desiredGeneration_{0};
@@ -1741,9 +1763,12 @@ void TerrainPreviewRenderer::DrawWater(
 
 void TerrainPreviewRenderer::SetDebugVisuals(
     const bool lodColorEnabled,
-    const bool sideCutEnabled)
+    const bool sideCutEnabled,
+    const bool sampleHealthEnabled,
+    const bool holeViewEnabled,
+    const bool projectionViewEnabled)
 {
-    impl_->SetDebugVisuals(lodColorEnabled, sideCutEnabled);
+    impl_->SetDebugVisuals(lodColorEnabled, sideCutEnabled, sampleHealthEnabled, holeViewEnabled, projectionViewEnabled);
 }
 
 void TerrainPreviewRenderer::SetGenerationFrozen(const bool frozen)

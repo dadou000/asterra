@@ -38,6 +38,7 @@
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
+#include <orbit/platform/FileBrowser.hpp>
 #include <orbit/platform/FileDialog.hpp>
 #include <orbit/platform/Paths.hpp>
 #include <orbit/platform_services/PlatformConfig.hpp>
@@ -61,11 +62,16 @@
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/DebugViewUi.hpp>
 #include <orbit/studio_ui/ProfilerUi.hpp>
+#include <orbit/studio_ui/ReportThumbnailCache.hpp>
+#include <orbit/studio_ui/ReportsUi.hpp>
+#include <orbit/studio_ui/SimulationControlsUi.hpp>
+#include <orbit/studio_ui/ViewportCaptureService.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/StudioViewContinuity.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
@@ -2288,6 +2294,12 @@ int main(
                 device,
                 studioSession);
 
+        // Remembers the primary camera and simulation time per project and
+        // restores them on open. Declared after studioViews/studioSession so
+        // its final save runs while both are still alive.
+        orbit::studio_ui::StudioViewContinuity
+            viewContinuity;
+
         // Text diagnostics readout over the primary viewport image.
         orbit::studio_ui::StudioTextDiagnosticsHud
             primaryTextHud;
@@ -2357,6 +2369,52 @@ int main(
             rpcHost.Dispatcher(),
             profilerUi.Model());
 
+        // Simulation transport (Simulate / Pause / Step) and time.* RPC, both
+        // driving the one Studio clock that moves the planets, the sun and the
+        // atmosphere (docs/ORBIT_MCP.md).
+        orbit::studio_ui::SimulationControls simulationControls(
+            studioSession.Clock());
+        orbit::studio_ui::SimulationControlsUi simulationUi(
+            simulationControls);
+        simulationUi.Register(ui);
+        orbit::studio_ui::RegisterSimulationRpc(
+            rpcHost.Dispatcher(),
+            simulationControls);
+
+        // Issue reports: a Reports panel and reports.* RPC over one store,
+        // saved with the project so a report survives a crash.
+        orbit::studio_reports::ReportStore reportStore;
+        try
+        {
+            reportStore.Open(
+                project.RootDirectory() / "Reports" / "reports.json");
+        }
+        catch (const std::exception& exception)
+        {
+            // Left unopened so a damaged file is never overwritten.
+            orbit::log::Warning(
+                std::format(
+                    "Reports: cannot open the report file, reports will not "
+                    "be saved: {}",
+                    exception.what()));
+        }
+        orbit::studio_ui::ReportsController reportsController(
+            reportStore,
+            rpcHost.Dispatcher());
+        orbit::studio_ui::ReportsUi reportsUi(reportsController);
+        reportsUi.Register(ui);
+        orbit::studio_ui::RegisterReportsRpc(
+            rpcHost.Dispatcher(),
+            reportsController);
+        orbit::studio_ui::RegisterReportsUiRpc(
+            rpcHost.Dispatcher(),
+            reportsUi);
+        simulationUi.SetReportIssueHandler(
+            [&reportsUi]
+            {
+                reportsUi.NewReportAndShow();
+            });
+
         orbit::studio_ui::RegisterStudioRenderViewRpc(
             rpcHost.Dispatcher(),
             studioViews);
@@ -2390,6 +2448,141 @@ int main(
         std::optional<std::pair<orbit::u32, orbit::u32>>
             pendingMaterialViewResize;
 
+        // Fullscreen and 16K captures of the primary viewport: resize, settle,
+        // capture, restore. Driven once per frame by the loop below.
+        orbit::studio_ui::ViewportCaptureService viewportCapture(
+            {
+                .viewSize =
+                    [primaryStudioView]()
+                    {
+                        return std::pair{
+                            primaryStudioView->Width(),
+                            primaryStudioView->Height()};
+                    },
+                .windowSize =
+                    [&window]()
+                    {
+                        return std::pair{
+                            window.Width(),
+                            window.Height()};
+                    },
+                .capture =
+                    [&device,
+                     &graphicsQueue,
+                     primaryStudioView](
+                        const std::filesystem::path& path)
+                    {
+                        return orbit::render_view::CaptureImageFile(
+                            device,
+                            graphicsQueue,
+                            *primaryStudioView,
+                            path);
+                    },
+                .viewFovRadians =
+                    [&studioViews]()
+                    {
+                        return studioViews.ViewFovRadians(
+                            "studio.primary");
+                    },
+                .captureImage =
+                    [&device,
+                     &graphicsQueue,
+                     primaryStudioView]()
+                    {
+                        return orbit::render_view::CaptureRgba8(
+                            device,
+                            graphicsQueue,
+                            *primaryStudioView);
+                    },
+                .setTile =
+                    [&studioViews](
+                        const std::optional<
+                            orbit::studio_ui::ViewportCaptureService::Tile>&
+                                tile)
+                    {
+                        if (!tile.has_value())
+                        {
+                            studioViews.SetCaptureTile(
+                                "studio.primary",
+                                std::nullopt);
+                            return;
+                        }
+                        studioViews.SetCaptureTile(
+                            "studio.primary",
+                            orbit::studio_ui::StudioCaptureTile{
+                                .yawRadians = tile->yawRadians,
+                                .pitchRadians = tile->pitchRadians,
+                                .verticalFovRadians =
+                                    tile->verticalFovRadians});
+                    },
+                .lockExposure =
+                    [&studioViewportRenderer](const bool locked)
+                    {
+                        studioViewportRenderer.
+                            SetHumanEyeAdaptationLocked(
+                                "studio.primary",
+                                locked);
+                    },
+                .simulationPlaying =
+                    [&simulationControls]()
+                    {
+                        return simulationControls.Playing();
+                    },
+                .setSimulationPlaying =
+                    [&simulationControls](const bool playing)
+                    {
+                        simulationControls.SetPlaying(playing);
+                    },
+                .busy =
+                    [&studioViewportRenderer]()
+                    {
+                        return studioViewportRenderer.
+                            HasPendingTerrainWork();
+                    },
+                .openPath =
+                    [](const std::filesystem::path& path)
+                    {
+                        orbit::platform::OpenInFileBrowser(path);
+                    }
+            },
+            project.RootDirectory() / "Screenshots");
+        orbit::studio_ui::RegisterViewportCaptureRpc(
+            rpcHost.Dispatcher(),
+            viewportCapture);
+
+        // Reports carry a screenshot of the viewport (PNG next to the reports
+        // file) and the panel shows it, so a problem can be looked at without
+        // launching anything. Not while a high-resolution capture has the view
+        // resized.
+        reportsController.SetScreenshotHook(
+            [&device,
+             &graphicsQueue,
+             primaryStudioView,
+             &viewportCapture](
+                const std::filesystem::path& path)
+            {
+                if (viewportCapture.Active())
+                {
+                    return false;
+                }
+                static_cast<void>(
+                    orbit::render_view::CaptureImageFile(
+                        device,
+                        graphicsQueue,
+                        *primaryStudioView,
+                        path));
+                return true;
+            });
+        orbit::studio_ui::ReportThumbnailCache reportThumbnails(
+            device,
+            graphicsQueue);
+        reportsUi.SetThumbnails(&reportThumbnails);
+        reportsController.SetOpenHook(
+            [](const std::filesystem::path& path)
+            {
+                orbit::platform::OpenInFileBrowser(path);
+            });
+
         rpcHost.AttachViewport({
             .view = primaryStudioView,
             .capture =
@@ -2400,7 +2593,7 @@ int main(
                         path)
                 {
                     return orbit::render_view::
-                        CaptureBmp(
+                        CaptureImageFile(
                             device,
                             graphicsQueue,
                             *primaryStudioView,
@@ -4991,6 +5184,7 @@ int main(
                  &viewportHomeWasDown,
                  &viewportEndWasDown,
                  &primaryTextHud,
+                 &viewportCapture,
                  &pendingPrimaryViewResize](
                     orbit::editor_ui::
                         PanelContext& context)
@@ -5087,6 +5281,94 @@ int main(
                                 viewportNavigationSpeedScale);
                     }
 
+                    // Camera zoom (also the mouse wheel over the view) and the
+                    // high-resolution captures. The same operations are
+                    // view.zoom_* and viewport.capture_* over RPC / MCP.
+                    {
+                        // Own row: the row above ends in a full-width input.
+                        if (viewportCapture.Active())
+                        {
+                            context.MutedText("Capturing...");
+                        }
+                        else
+                        {
+                            const auto startCapture =
+                                [&viewportCapture](
+                                    const orbit::studio_ui::
+                                        ViewportCaptureService::Kind kind)
+                            {
+                                try
+                                {
+                                    viewportCapture.Start({.kind = kind});
+                                }
+                                catch (const std::exception& exception)
+                                {
+                                    orbit::log::Warning(
+                                        std::format(
+                                            "Viewport capture: {}",
+                                            exception.what()));
+                                }
+                            };
+
+                            if (context.Button(
+                                    "Screenshot##viewport-shot"))
+                            {
+                                startCapture(
+                                    orbit::studio_ui::
+                                        ViewportCaptureService::Kind::
+                                            Fullscreen);
+                            }
+                            context.SameLine();
+                            if (context.Button(
+                                    "Ultra 16K##viewport-ultra"))
+                            {
+                                startCapture(
+                                    orbit::studio_ui::
+                                        ViewportCaptureService::Kind::
+                                            Ultra);
+                            }
+                        }
+
+                        // The folder the screenshots are saved to, in the file browser.
+                        context.SameLine();
+                        if (context.Button(
+                                "Screenshot Files##viewport-shot-files"))
+                        {
+                            try
+                            {
+                                static_cast<void>(
+                                    viewportCapture.OpenFolder());
+                            }
+                            catch (const std::exception& exception)
+                            {
+                                orbit::log::Warning(
+                                    std::format(
+                                        "Screenshot folder: {}",
+                                        exception.what()));
+                            }
+                        }
+
+                        context.SameLine();
+                        if (context.Button("1x##viewport-zoom-reset"))
+                        {
+                            studioViews.SetZoom(
+                                "studio.primary",
+                                1.0);
+                        }
+
+                        context.SameLine();
+                        double zoom =
+                            studioViews.Zoom("studio.primary");
+                        if (context.InputDouble(
+                                "Zoom x",
+                                zoom))
+                        {
+                            studioViews.SetZoom(
+                                "studio.primary",
+                                zoom);
+                        }
+                    }
+
                     const auto available =
                         context.ContentAvailable();
 
@@ -5103,10 +5385,11 @@ int main(
                                     22.0F,
                                 1.0F));
 
-                    if (width !=
+                    if (!viewportCapture.Active() &&
+                        (width !=
                             primaryView->Width() ||
                         height !=
-                            primaryView->Height())
+                            primaryView->Height()))
                     {
                         pendingPrimaryViewResize =
                             std::pair{width, height};
@@ -5127,6 +5410,19 @@ int main(
                                             primaryView->
                                                 Height())
                             });
+
+                    if (interaction.hovered &&
+                        interaction.wheel != 0.0F &&
+                        !viewportCapture.Active())
+                    {
+                        studioViews.SetZoom(
+                            "studio.primary",
+                            studioViews.Zoom("studio.primary") *
+                                std::pow(
+                                    1.15,
+                                    static_cast<double>(
+                                        interaction.wheel)));
+                    }
 
                     primaryTextHud.Draw(
                         context,
@@ -8278,6 +8574,7 @@ int main(
                 const bool busy =
                     window.ConsumeInputActivity() ||
                     rpcRequests != lastRpcRequestCount ||
+                    studioSession.Clock().Playing() ||
                     studioViewportRenderer.HasPendingTerrainWork();
                 lastRpcRequestCount = rpcRequests;
 
@@ -8399,6 +8696,15 @@ int main(
 
             static_cast<void>(runtime.ResizeSwapchainToWindow());
 
+            if (const auto wanted =
+                    viewportCapture.WantedViewSize();
+                wanted.has_value() &&
+                (wanted->first != primaryStudioView->Width() ||
+                 wanted->second != primaryStudioView->Height()))
+            {
+                pendingPrimaryViewResize = *wanted;
+            }
+
             if (pendingPrimaryViewResize.has_value() ||
                 pendingMaterialViewResize.has_value())
             {
@@ -8448,11 +8754,23 @@ int main(
 
             studioSession.Clock().Advance(
                 deltaSeconds);
+            reportsController.Tick();
+            viewportCapture.Tick();
+            reportThumbnails.Tick();
 
             const auto studioTick =
                 studioSession.Tick(false);
 
             synchronizeActiveBodyPreview();
+
+            // The smoke run asserts a deterministic default view.
+            if (!terrainUiSmoke)
+            {
+                viewContinuity.Tick(
+                    studioViews,
+                    studioSession,
+                    Clock::now());
+            }
 
             if (terrainUiSmoke &&
                 !terrainUiSmokeValidated)

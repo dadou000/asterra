@@ -1,5 +1,6 @@
 #include <orbit/celestial_clouds/CloudField.hpp>
 
+#include <orbit/celestial_clouds/WeatherModel.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
 
 #include <algorithm>
@@ -456,6 +457,11 @@ u64 CloudFieldFingerprint(
             value,
             static_cast<u64>(
                 timeBucket));
+    value =
+        terrain::StableCombine64(
+            value,
+            static_cast<u64>(std::llround(
+                config.subsolarLatitudeRadians * 573.0)));
 
     if (climateSource != nullptr)
     {
@@ -600,6 +606,7 @@ CloudFieldProduct BuildCloudField(
 
                     f64 climateCoverage =
                         0.5;
+                    WeatherClimate weatherClimate{};
 
                     if (parameters.sourceModel ==
                             CloudSourceModel::
@@ -636,6 +643,13 @@ CloudFieldProduct BuildCloudField(
                                         precipitation),
                                 0.0,
                                 1.0);
+
+                        weatherClimate = {
+                            .temperatureC = static_cast<f64>(
+                                sample.climate.temperatureC),
+                            .humidity = humidity,
+                            .precipitation = precipitation,
+                            .valid = true};
 
                         climateCoverage =
                             std::clamp(
@@ -677,38 +691,43 @@ CloudFieldProduct BuildCloudField(
                                 detailScale,
                             parameters.seed);
 
-                    // Cloud type: broad noise biased by how convective the
-                    // climate is, so thick wet cores grow tall (cumulonimbus)
-                    // and dry/thin weather stays flat (stratus).
-                    const f64 typeNoise =
-                        FractalPattern(
+                    // Placement and shape come from the simplified planetary
+                    // weather model (circulation cells, storm tracks, fronts)
+                    // modulated by the climate authority; an external
+                    // coverage adapter keeps its own authority.
+                    f64 weather = 0.0;
+                    f64 cloudType = 0.5;
+                    f64 precipitation = 0.0;
+                    f64 cirrus = 0.0;
+                    if (parameters.sourceModel ==
+                            CloudSourceModel::Authored ||
+                        parameters.sourceModel ==
+                            CloudSourceModel::Imported)
+                    {
+                        weather =
+                            climateCoverage * 0.72 + noise * 0.28;
+                        cloudType = std::clamp(
+                            (noise - 0.25) / 0.6, 0.0, 1.0);
+                    }
+                    else
+                    {
+                        const auto state = EvaluateWeather(
                             advected,
-                            parameters.weatherScale * 0.8,
-                            parameters.detailScale * 0.3,
-                            parameters.seed ^ 0x51ED270BULL);
-                    const f64 convective =
-                        parameters.sourceModel ==
-                                CloudSourceModel::ClimateProcedural
-                            ? std::clamp(
-                                  0.4 + 1.2 * (climateCoverage - 0.35),
-                                  0.0,
-                                  1.0)
-                            : 0.5;
-                    const f64 cloudType =
-                        std::clamp(
-                            (0.6 * typeNoise + 0.4 * convective - 0.25) /
-                                0.6,
-                            0.0,
-                            1.0);
-
-                    const f64 weather =
-                        parameters.sourceModel ==
-                                CloudSourceModel::
-                                    Procedural
-                            ? noise
-                            : climateCoverage *
-                                  0.72 +
-                              noise * 0.28;
+                            seconds,
+                            WeatherParameters{
+                                .subsolarLatitudeRadians =
+                                    config.subsolarLatitudeRadians,
+                                .noiseScale = parameters.weatherScale,
+                                .detailScale = parameters.detailScale,
+                                .seed = parameters.seed},
+                            weatherClimate);
+                        // Map coverage onto the range the threshold
+                        // ramp below expects.
+                        weather = 0.2 + 0.65 * state.coverage;
+                        cloudType = state.cloudType;
+                        precipitation = state.precipitation;
+                        cirrus = state.cirrus;
+                    }
 
                     const f64 threshold =
                         std::clamp(
@@ -720,8 +739,8 @@ CloudFieldProduct BuildCloudField(
 
                     const f64 rawCoverage =
                         SmoothStep(
-                            threshold - 0.18,
-                            threshold + 0.18,
+                            threshold - 0.26,
+                            threshold + 0.26,
                             weather);
 
                     const f64 coverage =
@@ -758,7 +777,13 @@ CloudFieldProduct BuildCloudField(
                                 parameters.
                                     anisotropy),
                         .cloudType =
-                            static_cast<f32>(cloudType)
+                            static_cast<f32>(cloudType),
+                        .precipitation =
+                            static_cast<f32>(precipitation),
+                        .weather =
+                            static_cast<f32>(weather),
+                        .cirrus =
+                            static_cast<f32>(cirrus)
                     };
                 }
             }
@@ -1158,12 +1183,11 @@ GpuCloudFieldProduct::GpuCloudFieldProduct(
         {
             packed.push_back({
                 .coverage =
-                    texel.coverage,
+                    texel.weather,
                 .opticalDepth =
-                    texel.opticalDepth,
-                .singleScatteringAlbedo =
-                    texel.
-                        singleScatteringAlbedo,
+                    texel.cirrus,
+                .precipitation =
+                    texel.precipitation,
                 .cloudType =
                     texel.cloudType
             });

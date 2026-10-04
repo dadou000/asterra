@@ -56,10 +56,12 @@ public:
 
 struct CloudFieldConfig
 {
-    u32 faceResolution{65};
+    u32 faceResolution{193};
     f64 footprintScale{2.0};
     i64 timeQuantumMicroseconds{
         1'000'000};
+    // Latitude of the sub-stellar point; seasons move the circulation cells.
+    f64 subsolarLatitudeRadians{0.0};
 };
 
 struct CloudTexel
@@ -71,6 +73,14 @@ struct CloudTexel
     // 0 = stratus (flat, low), 0.5 = cumulus, 1 = cumulonimbus (tall, anvil).
     // Selects the vertical profile in near-field ray-marched views.
     f32 cloudType{0.5F};
+    // Precipitation intensity [0, 1] from the weather model.
+    f32 precipitation{0.0F};
+    // The smooth weather value before the coverage threshold. The GPU stores it
+    // instead of the thresholded coverage so the ray-march can threshold after
+    // interpolation and get sub-texel edges instead of blocky texel steps.
+    f32 weather{0.0F};
+    // High cloud coverage (cirrus and cumulonimbus anvil outflow) [0, 1].
+    f32 cirrus{0.0F};
 };
 
 struct CloudLayerField
@@ -129,8 +139,9 @@ struct GpuCloudTexel
 {
     f32 coverage{0.0F};
     f32 opticalDepth{0.0F};
-    f32 singleScatteringAlbedo{0.999F};
-    // Per-layer anisotropy is constant, so the slot carries the cloud type.
+    // Albedo and anisotropy are per-layer constants, so the slots carry the
+    // weather model's per-texel precipitation and cloud type.
+    f32 precipitation{0.0F};
     f32 cloudType{0.5F};
 };
 

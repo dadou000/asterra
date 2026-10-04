@@ -1,7 +1,10 @@
 #include <orbit/celestial_clouds/CloudField.hpp>
+#include <orbit/celestial_clouds/WeatherModel.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace
 {
@@ -161,6 +164,49 @@ int main()
             {0.0, 1.0, 0.0}) != 1.0)
     {
         return 5;
+    }
+
+    {
+        // Simplified weather: deterministic, in range, and organised by latitude.
+        WeatherParameters weather;
+        weather.seed = 7U;
+        double tropics = 0.0;
+        double subtropics = 0.0;
+        double deepType = 0.0;
+        int samples = 0;
+        for (int i = 0; i < 360; ++i)
+        {
+            const double lon = (static_cast<double>(i) + 0.5) / 360.0 * 2.0 * std::numbers::pi;
+            const auto at = [&](const double latDegrees)
+            {
+                const double lat = latDegrees * std::numbers::pi / 180.0;
+                return EvaluateWeather(
+                    {std::cos(lat) * std::cos(lon), std::sin(lat), std::cos(lat) * std::sin(lon)},
+                    0.0,
+                    weather,
+                    {});
+            };
+            const auto equator = at(0.0);
+            const auto dry = at(27.0);
+            const auto again = at(0.0);
+            if (equator.coverage != again.coverage ||
+                equator.coverage < 0.0 || equator.coverage > 1.0 ||
+                equator.cloudType < 0.0 || equator.cloudType > 1.0 ||
+                equator.precipitation < 0.0 || equator.precipitation > 1.0)
+            {
+                return 6;
+            }
+            tropics += equator.coverage;
+            subtropics += dry.coverage;
+            deepType = std::max(deepType, equator.cloudType);
+            ++samples;
+        }
+        // The convergence zone is cloudier than the subtropical high and reaches
+        // towards cumulonimbus; the subtropics stay comparatively clear.
+        if (!(tropics / samples > subtropics / samples) || !(deepType > 0.7))
+        {
+            return 7;
+        }
     }
 
     return 0;

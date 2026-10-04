@@ -273,8 +273,14 @@ SurfaceFrame MakeSurfaceFrame(
         up = {0.0, 0.0, 1.0};
     }
 
+    // East is the geographic east (Y x up): continuous everywhere except at the poles themselves,
+    // where it is undefined. The reference axis used to switch to X at |up.y| >= 0.95 (latitude
+    // 71.8 degrees), which flipped east/north by up to 180 degrees there, so anything kept in this
+    // frame (camera, terrain lattice, caches) jumped as you crossed that latitude. The cross
+    // product stays well conditioned in double precision until a few millimetres from the pole.
+    constexpr f64 kPoleCosineThreshold = 1.0 - 1.0e-12;
     const math::Double3 reference =
-        std::abs(up.y) < 0.95
+        std::abs(up.y) < kPoleCosineThreshold
             ? math::Double3{0.0, 1.0, 0.0}
             : math::Double3{1.0, 0.0, 0.0};
 
