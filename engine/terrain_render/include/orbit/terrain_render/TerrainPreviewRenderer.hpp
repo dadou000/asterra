@@ -202,6 +202,12 @@ public:
     void UpdateObserver(
         const world::WorldPosition& observer);
 
+    // The tangent frame TerrainPreviewCamera vectors must be expressed in. It is
+    // parallel-transported with the observer, exactly like the clipmap geometry,
+    // so it must be used instead of world::MakeSurfaceFrame (which differs by a
+    // rotation about up and makes the terrain appear to slide with the camera).
+    [[nodiscard]] const world::SurfaceFrame& CameraFrame() const noexcept;
+
     // F2 debug menu (see apps/sandbox/src/Main.cpp): LOD lattice
     // coloring and a side cutaway through the observer, and pausing
     // clipmap regeneration so LOD boundaries hold still for

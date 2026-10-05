@@ -225,6 +225,7 @@ public:
     {
         liveObserver_ = observer;
         // Frozen: the clipmap stays where it was and the camera is free to leave it.
+        AdvanceLiveFrame(observer);
         if (clipmapFrozen_)
             return;
         SetObserverView(observer);
@@ -256,6 +257,11 @@ public:
     void SetWireframe(const bool wireframe) noexcept
     {
         wireframe_ = wireframe;
+    [[nodiscard]] const world::SurfaceFrame& CameraFrame() const noexcept
+    {
+        return liveFrame_;
+    }
+
     }
 
     // Freezes the whole clipmap (plan, window position, residency, content) at
@@ -269,8 +275,8 @@ public:
         clipmapFrozen_ = frozen;
         if (frozen)
         {
-            // The camera vectors the Studio passes are expressed in this frame.
-            frozenCameraFrame_ = world::MakeSurfaceFrame(observer_.meters);
+            // The frame the frozen geometry was authored in (transported, not rebuilt).
+            frozenCameraFrame_ = observerFrame_;
             return;
         }
         UpdateObserver(liveObserver_);
@@ -626,8 +632,7 @@ public:
         {
             // The geometry is in the frozen observer's local frame. Put the live
             // camera where it really is relative to that frame.
-            const world::SurfaceFrame liveFrame =
-                world::MakeSurfaceFrame(liveObserver_.meters);
+            const world::SurfaceFrame& liveFrame = liveFrame_;
             const auto fromLive = [&liveFrame](const math::Float3& v)
             {
                 return liveFrame.east * static_cast<f64>(v.x) +
@@ -1101,6 +1106,23 @@ private:
         const f64 observerRadius = math::Length(observer.meters);
         if (observerRadius <= planet_.radiusMeters)
             throw std::invalid_argument(
+    // Frame the Studio camera vectors are expressed in: the live observer's
+    // transported frame. It advances with the live observer even while the
+    // clipmap is frozen, and equals observerFrame_ otherwise.
+    void AdvanceLiveFrame(const world::WorldPosition& observer)
+    {
+        if (!liveFrameInitialized_)
+        {
+            liveFrame_ = world::MakeSurfaceFrame(observer.meters);
+            liveFrameInitialized_ = true;
+        }
+        else
+        {
+            liveFrame_ = world::TransportSurfaceFrameToDirection(
+                liveFrame_, observer.meters);
+        }
+    }
+
                 "Orbit terrain preview observer must be above the planet surface.");
 
         observer_ = observer;
@@ -1317,6 +1339,7 @@ private:
         desiredObserver_ = observer;
         desiredCoverageTier_ = SelectCoverageTier(observer, activeCoverageTier_);
         desiredGeneration_ = 1;
+        AdvanceLiveFrame(observer);
         CandidateState candidate = BuildCandidate(observer);
         CommitCandidate(std::move(candidate));
         committedGeneration_ = desiredGeneration_;
@@ -1658,6 +1681,8 @@ private:
     bool clipmapFrozen_{false};
     world::WorldPosition observer_{};
     world::WorldPosition desiredObserver_{};
+    world::SurfaceFrame liveFrame_{};
+    bool liveFrameInitialized_{false};
     world::SurfaceFrame observerFrame_{};
     bool observerFrameInitialized_{false};
     terrain_view::ClipmapMotionUpdate motion_;
@@ -1744,6 +1769,11 @@ void TerrainPreviewRenderer::SetDrySurface(const bool dry) noexcept
 }
 
 void TerrainPreviewRenderer::SetWaterOptics(
+const world::SurfaceFrame& TerrainPreviewRenderer::CameraFrame() const noexcept
+{
+    return impl_->CameraFrame();
+}
+
     const TerrainWaterOptics& optics) noexcept
 {
     impl_->SetWaterOptics(optics);

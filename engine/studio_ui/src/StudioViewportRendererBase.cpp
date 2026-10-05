@@ -1596,15 +1596,8 @@ TerrainConstraintDiagnosticOverlays(
 [[nodiscard]] terrain_render::TerrainPreviewCamera
 TerrainCameraFromBodyCamera(
     const render_view::CameraState& camera,
-    const world::WorldPosition& observer)
+    const world::SurfaceFrame& frame)
 {
-    const auto observerDirection =
-        math::Normalize(observer.meters);
-
-    const auto frame =
-        world::MakeSurfaceFrame(
-            observerDirection);
-
     const math::Double3 forward{
         static_cast<f64>(camera.forward.x),
         static_cast<f64>(camera.forward.y),
@@ -5985,7 +5978,7 @@ StudioViewportRenderer::Compose(
             const auto camera =
                 TerrainCameraFromBodyCamera(
                     view->Camera(),
-                    terrainRuntime->observer);
+                    terrain.renderer->CameraFrame());
 
             auto* terrainRenderer =
                 terrain.renderer.get();
@@ -10852,7 +10845,7 @@ StudioViewportRenderer::Compose(
                     const auto waterCamera =
                         TerrainCameraFromBodyCamera(
                             view->Camera(),
-                            terrainRuntime->observer);
+                            waterRenderer->CameraFrame());
 
                     graph.AddPass(
                         prefix + ".NearFieldWater",
