@@ -634,7 +634,7 @@ struct Constants
     uint width;
     uint height;
     float intensity;
-    uint reserved;
+    uint debugMode;      // 1 = show the gather's coverage instead of adding it
 };
 
 [[vk::push_constant]]
@@ -667,6 +667,29 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             g_indirectSampler,
             uv,
             0);
+
+    if (g.debugMode == 1u)
+    {
+        // Coverage view: R = gather confidence (alpha), G = brightness of the gathered light on a log
+        // scale, B = 0; magenta = the gather returned nothing at all for this pixel (no light, no
+        // confidence), which is where the surface gets no indirect light.
+        const float luminance =
+            dot(indirect.rgb, float3(0.2126, 0.7152, 0.0722));
+        if (indirect.a <= 0.0 && luminance <= 0.0)
+        {
+            g_target[pixel] = float4(1.0, 0.0, 1.0, scene.a);
+        }
+        else
+        {
+            g_target[pixel] =
+                float4(
+                    saturate(indirect.a),
+                    saturate(log2(1.0 + luminance * 64.0) / 6.0),
+                    0.0,
+                    scene.a);
+        }
+        return;
+    }
 
     g_target[pixel] =
         float4(
@@ -921,7 +944,8 @@ void ScreenSpaceFinalGatherRenderer::Combine(
     rhi::Texture& target,
     const u32 width,
     const u32 height,
-    const f32 intensity)
+    const f32 intensity,
+    const bool coverageView)
 {
     if (width == 0U || height == 0U)
     {
@@ -933,7 +957,7 @@ void ScreenSpaceFinalGatherRenderer::Combine(
         height,
         std::bit_cast<u32>(
             std::max(intensity, 0.0F)),
-        0U
+        coverageView ? 1U : 0U
     };
 
     commands.SetComputePipeline(

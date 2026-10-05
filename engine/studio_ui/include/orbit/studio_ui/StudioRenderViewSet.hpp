@@ -60,6 +60,10 @@ struct StudioTerrainDiagnosticOverlayOptions
     // lands (red non-finite, green behind the camera, blue outside the near/far range, cyan off screen
     // sideways, grey on screen), to find triangles the GPU clips away.
     bool clipmapProjectionView{false};
+    // Shading view: each terrain pixel is coloured by which interpolated input is bad (yellow biome
+    // weights sum to zero, magenta non-finite position, red/green/blue terrain normal, body-fixed
+    // normal, surface direction), written as emission so lighting cannot hide it. Dark grey = fine.
+    bool clipmapShadingView{false};
     // Draws the terrain clipmap as a wireframe (the water surface is hidden).
     bool clipmapWireframe{false};
     // Freezes the clipmap where it is: plan, window and content stop following

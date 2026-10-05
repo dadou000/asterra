@@ -195,6 +195,7 @@ def orbit_view_terrain_overlays_set(
     clipmap_sample_health: bool | None = None,
     clipmap_hole_view: bool | None = None,
     clipmap_projection_view: bool | None = None,
+    clipmap_shading_view: bool | None = None,
     clipmap_wireframe: bool | None = None,
     clipmap_freeze: bool | None = None,
     cache_status: bool | None = None,
@@ -215,7 +216,10 @@ def orbit_view_terrain_overlays_set(
     gaps where a finer level is missing. clipmap_projection_view culls nothing and colours
     each vertex by where its clip position lands (red non-finite, green behind the camera,
     blue outside the near/far range, cyan off screen sideways, grey on screen) to find
-    triangles the GPU clips away. clipmap_wireframe draws the terrain mesh as a wireframe (water hidden);
+    triangles the GPU clips away. clipmap_shading_view colours each terrain pixel by which
+    interpolated shading input is bad (yellow biome weights sum to zero, magenta non-finite
+    position, red/green/blue terrain normal / body-fixed normal / surface direction, dark
+    grey fine), as emission. clipmap_wireframe draws the terrain mesh as a wireframe (water hidden);
     clipmap_freeze freezes the clipmap (plan, window, residency, content) where it
     is so the camera can fly away and look at the rings from outside; turning it
     off snaps the clipmap back to the camera. Frozen/wireframe state is reported in
@@ -230,6 +234,7 @@ def orbit_view_terrain_overlays_set(
         "clipmap_sample_health": clipmap_sample_health,
         "clipmap_hole_view": clipmap_hole_view,
         "clipmap_projection_view": clipmap_projection_view,
+        "clipmap_shading_view": clipmap_shading_view,
         "clipmap_wireframe": clipmap_wireframe,
         "clipmap_freeze": clipmap_freeze,
         "cache_status": cache_status,
@@ -287,6 +292,13 @@ def orbit_view_terrain_layers_set(
     cloud_resolution_scale: float | None = None,
     cloud_godray_strength: float | None = None,
     cloud_light_volume: bool | None = None,
+    bypass_cloud_shadow: bool | None = None,
+    bypass_indirect_lighting: bool | None = None,
+    bypass_near_field_water: bool | None = None,
+    bypass_atmosphere: bool | None = None,
+    bypass_hybrid_reflections: bool | None = None,
+    bypass_radiance_cache: bool | None = None,
+    indirect_coverage_view: bool | None = None,
     cloud_volume_debug_altitude: float | None = None,
     cloud_temporal: bool | None = None,
 ) -> dict[str, Any]:
@@ -324,7 +336,13 @@ def orbit_view_terrain_layers_set(
     default 1) scales the crepuscular rays in cloud-shadowed air; 0 turns them
     off. cloud_light_volume (default true) caches the optical depth towards the sun around
     the camera (out to ~370 km) so cloud-on-cloud shadows and god rays reach far at a low sun;
-    false marches everything per sample (for comparison). cloud_volume_debug_altitude
+    false marches everything per sample (for comparison). bypass_cloud_shadow,
+    bypass_indirect_lighting (final gather + hybrid reflections), bypass_hybrid_reflections (only the reflections stage, to tell the two apart), bypass_radiance_cache (only the radiance-cache fallback of the final gather), bypass_near_field_water and
+    bypass_atmosphere (also skips the clouds drawn after it) each skip one stage of the frame
+    for this view, to bisect a rendering artefact (default false). indirect_coverage_view
+    replaces the final gather's contribution with its coverage (red confidence, green
+    gathered brightness on a log scale, magenta = the gather returned nothing for the
+    pixel, i.e. no indirect light there). cloud_volume_debug_altitude
     (metres, default 0 = off) draws a horizontal slice of that volume at the given altitude
     over the view as a heatmap of the optical depth towards the sun (blue clear to white
     opaque, magenta = voxel not ready, nothing outside the cascades). -1 shows the scene
@@ -363,6 +381,13 @@ def orbit_view_terrain_layers_set(
         "cloud_resolution_scale": cloud_resolution_scale,
         "cloud_godray_strength": cloud_godray_strength,
         "cloud_light_volume": cloud_light_volume,
+        "bypass_cloud_shadow": bypass_cloud_shadow,
+        "bypass_indirect_lighting": bypass_indirect_lighting,
+        "bypass_near_field_water": bypass_near_field_water,
+        "bypass_hybrid_reflections": bypass_hybrid_reflections,
+        "bypass_radiance_cache": bypass_radiance_cache,
+        "bypass_atmosphere": bypass_atmosphere,
+        "indirect_coverage_view": indirect_coverage_view,
         "cloud_volume_debug_altitude": cloud_volume_debug_altitude,
         "cloud_temporal": cloud_temporal,
     }.items():
@@ -513,6 +538,21 @@ def orbit_viewport_focus_body() -> dict[str, Any]:
 def orbit_cpu_timings() -> dict[str, Any]:
     """Return last and rolling 120-frame CPU timings for the live Studio frame loop."""
     return _rpc("studio.cpu_timings")
+
+
+@mcp.tool()
+def orbit_renderdoc_status() -> dict[str, Any]:
+    """RenderDoc state: available (Studio was launched with ORBIT_RENDERDOC=1 and
+    RenderDoc is installed), capturing, and last_capture_path (the newest .rdc)."""
+    return _rpc("renderdoc.status")
+
+
+@mcp.tool()
+def orbit_renderdoc_capture() -> dict[str, Any]:
+    """Capture the next presented frame with RenderDoc. Poll orbit_renderdoc_status
+    until capturing is false and last_capture_path changes, then open the .rdc in
+    the RenderDoc UI to step through passes. Errors if RenderDoc is unavailable."""
+    return _rpc("renderdoc.capture")
 
 
 @mcp.tool()

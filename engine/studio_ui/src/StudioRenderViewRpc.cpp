@@ -221,6 +221,7 @@ constexpr OverlayFlag kOverlayFlags[] = {
     {"clipmap_sample_health", &StudioTerrainDiagnosticOverlayOptions::clipmapSampleHealth},
     {"clipmap_hole_view", &StudioTerrainDiagnosticOverlayOptions::clipmapHoleView},
     {"clipmap_projection_view", &StudioTerrainDiagnosticOverlayOptions::clipmapProjectionView},
+    {"clipmap_shading_view", &StudioTerrainDiagnosticOverlayOptions::clipmapShadingView},
     {"clipmap_wireframe", &StudioTerrainDiagnosticOverlayOptions::clipmapWireframe},
     {"clipmap_freeze", &StudioTerrainDiagnosticOverlayOptions::clipmapFreeze},
     {"cache_status", &StudioTerrainDiagnosticOverlayOptions::cacheStatus},
@@ -304,6 +305,13 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"cloud_temporal", layers.cloudTemporal},
         {"cloud_godray_strength", static_cast<f64>(layers.cloudGodrayStrength)},
         {"cloud_light_volume", layers.cloudLightVolume},
+        {"bypass_cloud_shadow", layers.bypassCloudShadow},
+        {"bypass_indirect_lighting", layers.bypassIndirectLighting},
+        {"bypass_near_field_water", layers.bypassNearFieldWater},
+        {"bypass_atmosphere", layers.bypassAtmosphere},
+        {"bypass_hybrid_reflections", layers.bypassHybridReflections},
+        {"bypass_radiance_cache", layers.bypassRadianceCache},
+        {"indirect_coverage_view", layers.indirectCoverageView},
         {"cloud_volume_debug_altitude", static_cast<f64>(layers.cloudVolumeDebugAltitude)},
         {"cloud_lab", CloudLabToRpc(layers.cloudLab)},
         {"clipmap_band_edges_meters", BandEdgesToRpc(layers)}});
@@ -824,6 +832,13 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("clouds", layers.clouds);
                 applyFlag("cloud_temporal", layers.cloudTemporal);
                 applyFlag("cloud_light_volume", layers.cloudLightVolume);
+                applyFlag("bypass_cloud_shadow", layers.bypassCloudShadow);
+                applyFlag("bypass_indirect_lighting", layers.bypassIndirectLighting);
+                applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
+                applyFlag("bypass_atmosphere", layers.bypassAtmosphere);
+                applyFlag("bypass_hybrid_reflections", layers.bypassHybridReflections);
+                applyFlag("bypass_radiance_cache", layers.bypassRadianceCache);
+                applyFlag("indirect_coverage_view", layers.indirectCoverageView);
                 if (const auto debugAltitude = values.find("cloud_volume_debug_altitude");
                     debugAltitude != values.end())
                 {

@@ -1320,6 +1320,35 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                 context.Checkbox(
                     "Cloud light volume##layer-cloud-light-volume",
                     layers.cloudLightVolume) || layersChanged;
+            context.MutedText("Bypass a frame stage (for bisecting artefacts):");
+            layersChanged =
+                context.Checkbox(
+                    "Bypass cloud shadow##bypass-cloud-shadow",
+                    layers.bypassCloudShadow) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass indirect lighting (final gather + reflections)##bypass-indirect",
+                    layers.bypassIndirectLighting) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass hybrid reflections only##bypass-hybrid-reflections",
+                    layers.bypassHybridReflections) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass radiance cache fallback only##bypass-radiance-cache",
+                    layers.bypassRadianceCache) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass near-field water##bypass-near-water",
+                    layers.bypassNearFieldWater) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass atmosphere (and clouds)##bypass-atmosphere",
+                    layers.bypassAtmosphere) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Indirect lighting coverage view##indirect-coverage",
+                    layers.indirectCoverageView) || layersChanged;
             f64 volumeDebugAltitude = static_cast<f64>(layers.cloudVolumeDebugAltitude);
             if (context.SliderDouble(
                     "Light volume debug slice (m, 0 = off)##layer-cloud-volume-debug",
@@ -1483,6 +1512,9 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
         toggle(
             "Clipmap projected position view (clipped vertices)##diag-clipmap-projection-view",
             diagnostics.clipmapProjectionView);
+        toggle(
+            "Clipmap shading view (bad interpolated inputs)##diag-clipmap-shading-view",
+            diagnostics.clipmapShadingView);
         toggle(
             "Clipmap wireframe##diag-clipmap-wireframe",
             diagnostics.clipmapWireframe);

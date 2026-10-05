@@ -58,6 +58,7 @@ namespace
     const bool debugSampleHealthEnabled,
     const bool debugHoleViewEnabled,
     const bool debugProjectionViewEnabled,
+    const bool debugShadingViewEnabled,
     const bool debugSideCutEnabled,
     const bool drySurface,
     const f32 seaLevelMeters,
@@ -114,7 +115,7 @@ namespace
     store(35, static_cast<f32>(level.innerHoleHalfExtentMeters));
 
     store(36, static_cast<f32>(levelIndex));
-    store(37, debugProjectionViewEnabled ? 4.0F : debugHoleViewEnabled ? 3.0F : (debugSampleHealthEnabled ? 2.0F : (debugLodColorEnabled ? 1.0F : 0.0F)));
+    store(37, debugShadingViewEnabled ? 5.0F : debugProjectionViewEnabled ? 4.0F : debugHoleViewEnabled ? 3.0F : (debugSampleHealthEnabled ? 2.0F : (debugLodColorEnabled ? 1.0F : 0.0F)));
     store(38, debugSideCutEnabled ? 1.0F : 0.0F);
     store(39, static_cast<f32>(innerHoleCenterOffset.y));
 
@@ -224,8 +225,8 @@ public:
     void UpdateObserver(const world::WorldPosition& observer)
     {
         liveObserver_ = observer;
-        // Frozen: the clipmap stays where it was and the camera is free to leave it.
         AdvanceLiveFrame(observer);
+        // Frozen: the clipmap stays where it was and the camera is free to leave it.
         if (clipmapFrozen_)
             return;
         SetObserverView(observer);
@@ -240,13 +241,15 @@ public:
         const bool sideCutEnabled,
         const bool sampleHealthEnabled,
         const bool holeViewEnabled,
-        const bool projectionViewEnabled) noexcept
+        const bool projectionViewEnabled,
+        const bool shadingViewEnabled) noexcept
     {
         debugLodColorEnabled_ = lodColorEnabled;
         debugSideCutEnabled_ = sideCutEnabled;
         debugSampleHealthEnabled_ = sampleHealthEnabled;
         debugHoleViewEnabled_ = holeViewEnabled;
         debugProjectionViewEnabled_ = projectionViewEnabled;
+        debugShadingViewEnabled_ = shadingViewEnabled;
     }
 
     void SetGenerationFrozen(const bool frozen) noexcept
@@ -254,14 +257,14 @@ public:
         generationFrozen_ = frozen;
     }
 
-    void SetWireframe(const bool wireframe) noexcept
-    {
-        wireframe_ = wireframe;
     [[nodiscard]] const world::SurfaceFrame& CameraFrame() const noexcept
     {
         return liveFrame_;
     }
 
+    void SetWireframe(const bool wireframe) noexcept
+    {
+        wireframe_ = wireframe;
     }
 
     // Freezes the whole clipmap (plan, window position, residency, content) at
@@ -738,6 +741,7 @@ public:
                 false,
                 false,
                 false,
+                false,
                 config_.drySurface,
                 waterOptics_.seaLevelMeters,
                 BandInner(levelIndex, 1.0F),
@@ -848,6 +852,7 @@ public:
                 debugSampleHealthEnabled_,
                 debugHoleViewEnabled_,
                 debugProjectionViewEnabled_,
+                debugShadingViewEnabled_,
                 debugSideCutEnabled_,
                 config_.drySurface,
                 waterOptics_.seaLevelMeters,
@@ -1101,11 +1106,6 @@ private:
         });
     }
 
-    void SetObserverView(const world::WorldPosition& observer)
-    {
-        const f64 observerRadius = math::Length(observer.meters);
-        if (observerRadius <= planet_.radiusMeters)
-            throw std::invalid_argument(
     // Frame the Studio camera vectors are expressed in: the live observer's
     // transported frame. It advances with the live observer even while the
     // clipmap is frozen, and equals observerFrame_ otherwise.
@@ -1123,6 +1123,11 @@ private:
         }
     }
 
+    void SetObserverView(const world::WorldPosition& observer)
+    {
+        const f64 observerRadius = math::Length(observer.meters);
+        if (observerRadius <= planet_.radiusMeters)
+            throw std::invalid_argument(
                 "Orbit terrain preview observer must be above the planet surface.");
 
         observer_ = observer;
@@ -1334,12 +1339,12 @@ private:
     {
         ORBIT_PROFILE_SCOPE("terrain.initialize_blocking");
         liveObserver_ = observer;
+        AdvanceLiveFrame(observer);
         wireframe_ = config_.wireframe;
         SetObserverView(observer);
         desiredObserver_ = observer;
         desiredCoverageTier_ = SelectCoverageTier(observer, activeCoverageTier_);
         desiredGeneration_ = 1;
-        AdvanceLiveFrame(observer);
         CandidateState candidate = BuildCandidate(observer);
         CommitCandidate(std::move(candidate));
         committedGeneration_ = desiredGeneration_;
@@ -1676,13 +1681,13 @@ private:
     // The observer the clipmap is built around (frozen while clipmapFrozen_)
     // and where the camera really is.
     world::WorldPosition liveObserver_{};
+    world::SurfaceFrame liveFrame_{};
+    bool liveFrameInitialized_{false};
     world::SurfaceFrame frozenCameraFrame_{};
     bool wireframe_{false};
     bool clipmapFrozen_{false};
     world::WorldPosition observer_{};
     world::WorldPosition desiredObserver_{};
-    world::SurfaceFrame liveFrame_{};
-    bool liveFrameInitialized_{false};
     world::SurfaceFrame observerFrame_{};
     bool observerFrameInitialized_{false};
     terrain_view::ClipmapMotionUpdate motion_;
@@ -1693,6 +1698,7 @@ private:
     bool debugSampleHealthEnabled_{false};
     bool debugHoleViewEnabled_{false};
     bool debugProjectionViewEnabled_{false};
+    bool debugShadingViewEnabled_{false};
     bool debugSideCutEnabled_{false};
     bool generationFrozen_{false};
     u64 desiredGeneration_{0};
@@ -1763,17 +1769,17 @@ void TerrainPreviewRenderer::UpdateObserver(
     impl_->UpdateObserver(observer);
 }
 
+const world::SurfaceFrame& TerrainPreviewRenderer::CameraFrame() const noexcept
+{
+    return impl_->CameraFrame();
+}
+
 void TerrainPreviewRenderer::SetDrySurface(const bool dry) noexcept
 {
     impl_->SetDrySurface(dry);
 }
 
 void TerrainPreviewRenderer::SetWaterOptics(
-const world::SurfaceFrame& TerrainPreviewRenderer::CameraFrame() const noexcept
-{
-    return impl_->CameraFrame();
-}
-
     const TerrainWaterOptics& optics) noexcept
 {
     impl_->SetWaterOptics(optics);
@@ -1796,9 +1802,10 @@ void TerrainPreviewRenderer::SetDebugVisuals(
     const bool sideCutEnabled,
     const bool sampleHealthEnabled,
     const bool holeViewEnabled,
-    const bool projectionViewEnabled)
+    const bool projectionViewEnabled,
+    const bool shadingViewEnabled)
 {
-    impl_->SetDebugVisuals(lodColorEnabled, sideCutEnabled, sampleHealthEnabled, holeViewEnabled, projectionViewEnabled);
+    impl_->SetDebugVisuals(lodColorEnabled, sideCutEnabled, sampleHealthEnabled, holeViewEnabled, projectionViewEnabled, shadingViewEnabled);
 }
 
 void TerrainPreviewRenderer::SetGenerationFrozen(const bool frozen)

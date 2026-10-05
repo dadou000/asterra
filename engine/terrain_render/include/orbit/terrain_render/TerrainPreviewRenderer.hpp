@@ -222,7 +222,9 @@ public:
         bool holeViewEnabled = false,
         // projectionViewEnabled draws nothing culled and colours each vertex by where its clip
         // position lands (non-finite, behind the camera, outside the depth range, off screen, ok).
-        bool projectionViewEnabled = false);
+        bool projectionViewEnabled = false,
+        // shadingViewEnabled colours each pixel by which interpolated shading input is bad (emission).
+        bool shadingViewEnabled = false);
     void SetGenerationFrozen(bool frozen);
 
     // Draws the clipmap as a wireframe (and hides the water surface over it).

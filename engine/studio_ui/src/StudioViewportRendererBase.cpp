@@ -5884,7 +5884,7 @@ StudioViewportRenderer::Compose(
                 const auto overlays = views.TerrainDiagnosticOverlays(info.id);
                 terrain.renderer->SetDebugVisuals(
                     overlays.clipmapLevels, false, overlays.clipmapSampleHealth, overlays.clipmapHoleView,
-                    overlays.clipmapProjectionView);
+                    overlays.clipmapProjectionView, overlays.clipmapShadingView);
                 terrain.renderer->SetWireframe(overlays.clipmapWireframe);
                 terrain.renderer->SetClipmapFrozen(overlays.clipmapFreeze);
 
@@ -8621,6 +8621,11 @@ StudioViewportRenderer::Compose(
                     cameraAltitudeMeters <=
                     clipmapHalfExtentMeters;
             }
+            // Bisecting switch: skip the indirect lighting (final gather and hybrid reflections).
+            if (info.layers.bypassIndirectLighting)
+            {
+                nearFieldIndirect = false;
+            }
 
 
             u64 radianceSourceRevision =
@@ -9341,6 +9346,7 @@ StudioViewportRenderer::Compose(
             std::optional<render_graph::TextureUse> cloudShadowUse;
             if (const auto cloudFound = cloudPresentations_.find(info.id);
                 info.layers.clouds &&
+                !info.layers.bypassCloudShadow &&
                 cloudFound != cloudPresentations_.end() &&
                 cloudFound->second.gpu != nullptr &&
                 cloudFound->second.field != nullptr &&
@@ -9892,7 +9898,8 @@ StudioViewportRenderer::Compose(
                             gatherSettings);
                     });
 
-                if (radianceLevelCount > 0U)
+                if (radianceLevelCount > 0U &&
+                    !info.layers.bypassRadianceCache)
                 {
                     graph.AddPass(
                         prefix + ".RadianceCacheFallback",
@@ -10033,7 +10040,8 @@ StudioViewportRenderer::Compose(
                      currentIndirect,
                      gatherScratch,
                      width,
-                     height](
+                     height,
+                     coverageView = info.layers.indirectCoverageView](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -10043,7 +10051,9 @@ StudioViewportRenderer::Compose(
                             *currentIndirect,
                             *gatherScratch,
                             width,
-                            height);
+                            height,
+                            1.0F,
+                            coverageView);
                     });
 
                 graph.AddPass(
@@ -10098,7 +10108,8 @@ StudioViewportRenderer::Compose(
                         }
                     });
 
-                if (radianceLevelCount > 0U)
+                if (radianceLevelCount > 0U &&
+                    !info.layers.bypassHybridReflections)
                 {
                     lighting::HardwareRayQueryVisibilityBatch*
                         exactReflectionHardware = nullptr;
@@ -10839,6 +10850,7 @@ StudioViewportRenderer::Compose(
             if (presentation ==
                     StudioViewportPresentation::ProductionTerrain &&
                 nearFieldWaterWeight > 0.0 &&
+                !info.layers.bypassNearFieldWater &&
                 resolvedOceanForView.has_value() &&
                 terrainRuntime.has_value())
             {
@@ -10930,6 +10942,7 @@ StudioViewportRenderer::Compose(
                     atmosphereFound->second.body ==
                         logicalTarget->target->body &&
                     studioDirectLight.direct.has_value() &&
+                    !info.layers.bypassAtmosphere &&
                     logicalTarget->mode !=
                         studio_session::ViewportMode::Debug)
             {

@@ -118,6 +118,21 @@ struct StudioTerrainLayerOptions
     // cloud lighting reaches past the short in-march sun steps (cloud-on-cloud shadows at a low
     // sun) and god rays are one lookup per step. Off falls back to marching everything.
     bool cloudLightVolume{true};
+    // Per-pass bypass switches for bisecting a rendering artefact (all default off = normal rendering).
+    // Each skips one stage of the frame for this view: the cloud shadow texture read by direct lighting,
+    // the indirect lighting (final gather + hybrid reflections), the near-field water pass, and the
+    // atmosphere (which also skips the clouds drawn after it).
+    bool bypassCloudShadow{false};
+    bool bypassIndirectLighting{false};
+    bool bypassNearFieldWater{false};
+    bool bypassAtmosphere{false};
+    // Skips only the hybrid reflections stage (the final gather still runs); bypassIndirectLighting skips both.
+    bool bypassHybridReflections{false};
+    // Skips only the radiance-cache fallback that fills pixels the screen-space gather did not resolve.
+    bool bypassRadianceCache{false};
+    // Replaces the final gather's contribution with its coverage: red = confidence, green = gathered
+    // brightness (log), magenta = the gather returned nothing for that pixel (it gets no indirect light).
+    bool indirectCoverageView{false};
     // > 0 draws a horizontal slice of the light volume at this altitude (metres) over the view as a
     // heatmap of the optical depth towards the sun (magenta = voxel not ready). 0 = off.
     f32 cloudVolumeDebugAltitude{0.0F};

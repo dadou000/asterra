@@ -56,7 +56,10 @@ public:
         rhi::Texture& target,
         u32 width,
         u32 height,
-        f32 intensity = 1.0F);
+        f32 intensity = 1.0F,
+        // Writes the gather's coverage (confidence / brightness, magenta = nothing) instead of
+        // adding it to the scene colour.
+        bool coverageView = false);
 
 private:
     std::unique_ptr<rhi::ComputePipeline> gatherPipeline_;

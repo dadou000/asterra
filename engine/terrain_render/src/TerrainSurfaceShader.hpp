@@ -390,6 +390,39 @@ SurfaceOutputs main(VSOutput input)
         }
     }
 
+    if (input.waterDepth > 4.0)
+    {
+        // Shading debug view (flag set by the clipmap vertex shader): colour the pixel by which
+        // interpolated input is bad and write it as emission so lighting cannot hide it.
+        // yellow = biome weights sum to ~0 (the albedo is black), magenta = non-finite position,
+        // otherwise R = terrain normal, G = body-fixed normal, B = surface direction bad (not finite or
+        // not roughly unit length); dark grey = all inputs fine.
+        const float terrainNormalLength = length(input.terrainNormal);
+        const float bodyNormalLength = length(input.bodyFixedNormal);
+        const float surfaceDirectionLength = length(input.surfaceDirection);
+        const float bodySurfaceDirectionLength = length(input.bodyFixedSurfaceDirection);
+        const bool badTerrainNormal = !isfinite(terrainNormalLength) || terrainNormalLength < 0.5 || terrainNormalLength > 1.5;
+        const bool badBodyNormal = !isfinite(bodyNormalLength) || bodyNormalLength < 0.5 || bodyNormalLength > 1.5;
+        const bool badDirection =
+            !isfinite(surfaceDirectionLength) || surfaceDirectionLength < 0.5 || surfaceDirectionLength > 1.5 ||
+            !isfinite(bodySurfaceDirectionLength) || bodySurfaceDirectionLength < 0.5 || bodySurfaceDirectionLength > 1.5;
+        const bool badPosition = !isfinite(length(input.localPosition)) || !isfinite(length(input.worldPosition));
+        const bool noBiome = !isfinite(weightSum) || weightSum < 0.0001;
+        float3 debugColor = float3(0.12, 0.12, 0.12);
+        if (noBiome) { debugColor = float3(1.0, 1.0, 0.0); }
+        else if (badPosition) { debugColor = float3(1.0, 0.0, 1.0); }
+        else if (badTerrainNormal || badBodyNormal || badDirection)
+        {
+            debugColor = float3(badTerrainNormal ? 1.0 : 0.0, badBodyNormal ? 1.0 : 0.0, badDirection ? 1.0 : 0.0);
+        }
+        SurfaceOutputs debugOutput;
+        debugOutput.previewColor = float4(debugColor, 1.0);
+        debugOutput.baseRoughness = float4(0.0, 0.0, 0.0, 1.0);
+        debugOutput.normalMetallic = float4(0.0, 1.0, 0.0, 0.0);
+        debugOutput.emissionClass = float4(debugColor, EncodeSurfaceMeta(1.0, 1.0));
+        return debugOutput;
+    }
+
     SurfaceOutputs output;
     output.previewColor = float4(color, 1.0);
     output.baseRoughness =

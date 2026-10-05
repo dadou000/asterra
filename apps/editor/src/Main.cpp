@@ -1878,6 +1878,45 @@ int main(
             runtime.Window();
         orbit::rhi::Device& device =
             runtime.Device();
+        rpcHost.Dispatcher().Register(
+            {
+                .name = "renderdoc.status",
+                .description =
+                    "RenderDoc availability (needs Studio launched with ORBIT_RENDERDOC=1 "
+                    "and RenderDoc installed), whether a capture is in progress, and the "
+                    "path of the last completed .rdc capture.",
+                .mutating = false
+            },
+            [&device](const orbit::rpc::Value&)
+            {
+                return orbit::rpc::Value(orbit::rpc::Value::Object{
+                    {"available", orbit::rhi::vulkan::IsRenderDocAvailable(device)},
+                    {"capturing", orbit::rhi::vulkan::IsRenderDocCapturing(device)},
+                    {"last_capture_path", orbit::rhi::vulkan::LastRenderDocCapturePath(device)}});
+            });
+        rpcHost.Dispatcher().Register(
+            {
+                .name = "renderdoc.capture",
+                .description =
+                    "Captures the next presented frame with RenderDoc. Poll renderdoc.status "
+                    "until capturing is false and last_capture_path changes, then open the "
+                    ".rdc in the RenderDoc UI. Fails when RenderDoc is not available.",
+                .mutating = true
+            },
+            [&device](const orbit::rpc::Value&)
+            {
+                if (!orbit::rhi::vulkan::IsRenderDocAvailable(device))
+                {
+                    throw orbit::rpc::Error(
+                        1081,
+                        "RenderDoc is not available: launch Studio with ORBIT_RENDERDOC=1 and RenderDoc installed.");
+                }
+                orbit::rhi::vulkan::TriggerRenderDocCapture(device);
+                return orbit::rpc::Value(orbit::rpc::Value::Object{
+                    {"requested", true},
+                    {"previous_capture_path", orbit::rhi::vulkan::LastRenderDocCapturePath(device)}});
+            });
+
         orbit::rhi::Queue& graphicsQueue =
             runtime.GraphicsQueue();
         orbit::rhi::Swapchain& swapchain =

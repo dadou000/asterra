@@ -394,7 +394,8 @@ VSOutput main(uint vertexId : SV_VertexID)
         output.lodFade = float2(1.0, 0.0);
     }
 
-    if (g_pc.g_debug.y > 3.5)
+)" R"(
+    if (g_pc.g_debug.y > 3.5 && g_pc.g_debug.y < 4.5)
     {
         // Projected position view: nothing is culled; each vertex is coloured by where it lands.
         // Material 0 = non-finite clip position, 1 = behind the camera (w <= 0), 2 = in front of the near
@@ -417,6 +418,15 @@ VSOutput main(uint vertexId : SV_VertexID)
             projectedIndex == 2u ? 1.0 : 0.0,
             projectedIndex == 3u ? 1.0 : 0.0);
         output.biome1 = float4(0.0, 0.0, 0.0, projectedIndex == 7u ? 1.0 : 0.0);
+        output.horizonClip = 1.0;
+        output.lodFade = float2(1.0, 0.0);
+    }
+
+    if (g_pc.g_debug.y > 4.5)
+    {
+        // Shading view: nothing culled; the pixel shader reports bad interpolated inputs (it reads this
+        // flag from waterDepth, which the clipmap never sets otherwise).
+        output.waterDepth = 5.0;
         output.horizonClip = 1.0;
         output.lodFade = float2(1.0, 0.0);
     }
