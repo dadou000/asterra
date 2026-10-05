@@ -268,6 +268,12 @@ LoadLightingDisplaySettings(
     display.eye.overloadSoftRangeStops = detail::ReadFloat(values, "display.eye.overload_range", display.eye.overloadSoftRangeStops);
     display.eye.overloadAttackSeconds = detail::ReadFloat(values, "display.eye.overload_attack_seconds", display.eye.overloadAttackSeconds);
     display.eye.overloadRecoverySeconds = detail::ReadFloat(values, "display.eye.overload_recovery_seconds", display.eye.overloadRecoverySeconds);
+    display.eye.nitsPerSceneUnit = detail::ReadFloat(values, "display.eye.nits_per_scene_unit", display.eye.nitsPerSceneUnit);
+    display.eye.highlightProtection = detail::ReadBool(values, "display.eye.highlight_protection", display.eye.highlightProtection);
+    display.eye.glareThresholdNits = detail::ReadFloat(values, "display.eye.glare_threshold_nits", display.eye.glareThresholdNits);
+    display.eye.highlightAttackSeconds = detail::ReadFloat(values, "display.eye.highlight_attack_seconds", display.eye.highlightAttackSeconds);
+    display.eye.daylightAdaptationNits = detail::ReadFloat(values, "display.eye.daylight_adaptation_nits", display.eye.daylightAdaptationNits);
+    display.eye.maximumBoostStops = detail::ReadFloat(values, "display.eye.maximum_boost_stops", display.eye.maximumBoostStops);
 
     display.highlights.bloomEnabled = detail::ReadBool(values, "display.highlights.bloom_enabled", display.highlights.bloomEnabled);
     display.highlights.glareEnabled = detail::ReadBool(values, "display.highlights.glare_enabled", display.highlights.glareEnabled);
@@ -364,6 +370,12 @@ inline void SaveLightingDisplaySettings(
     detail::WriteNumber(output, "display.eye.overload_p99_start", d.eye.overloadP99StartStops);
     detail::WriteNumber(output, "display.eye.overload_peak_start", d.eye.overloadPeakStartStops);
     detail::WriteNumber(output, "display.eye.overload_range", d.eye.overloadSoftRangeStops);
+    detail::WriteNumber(output, "display.eye.nits_per_scene_unit", d.eye.nitsPerSceneUnit);
+    detail::WriteBool(output, "display.eye.highlight_protection", d.eye.highlightProtection);
+    detail::WriteNumber(output, "display.eye.glare_threshold_nits", d.eye.glareThresholdNits);
+    detail::WriteNumber(output, "display.eye.highlight_attack_seconds", d.eye.highlightAttackSeconds);
+    detail::WriteNumber(output, "display.eye.daylight_adaptation_nits", d.eye.daylightAdaptationNits);
+    detail::WriteNumber(output, "display.eye.maximum_boost_stops", d.eye.maximumBoostStops);
     detail::WriteNumber(output, "display.eye.overload_attack_seconds", d.eye.overloadAttackSeconds);
     detail::WriteNumber(output, "display.eye.overload_recovery_seconds", d.eye.overloadRecoverySeconds);
 

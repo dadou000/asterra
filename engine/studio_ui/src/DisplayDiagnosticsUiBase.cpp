@@ -149,6 +149,19 @@ void DisplayDiagnosticsUi::DrawViewport(
                     eye.photopicCeilingExcessStops,
                     eye.p99ExcessStops,
                     eye.peakExcessStops));
+
+            context.Text(
+                std::format(
+                    "Brightest pixel {:12.1f} cd/m2  | adapted to {:10.1f} cd/m2",
+                    eye.peakNits,
+                    std::exp2(eye.exposureAdaptationLog2) *
+                        diagnostics->eyeConfig.nitsPerSceneUnit));
+
+            context.Text(
+                std::format(
+                    "Highlight protection -{:5.2f} stops  | boost limit refused +{:5.2f} stops",
+                    eye.highlightProtectionStops,
+                    eye.boostLimitStops));
         }
 
         const auto available =
@@ -400,6 +413,18 @@ void DisplayDiagnosticsUi::DrawViewport(
         eyeConfig.overloadAttackSeconds;
     f64 overloadRecovery =
         eyeConfig.overloadRecoverySeconds;
+    f64 nitsPerSceneUnit =
+        eyeConfig.nitsPerSceneUnit;
+    f64 glareThresholdNits =
+        eyeConfig.glareThresholdNits;
+    f64 highlightAttack =
+        eyeConfig.highlightAttackSeconds;
+    f64 daylightAdaptationNits =
+        eyeConfig.daylightAdaptationNits;
+    f64 maximumBoostStops =
+        eyeConfig.maximumBoostStops;
+    bool highlightProtection =
+        eyeConfig.highlightProtection;
 
     bool eyeConfigChanged = false;
 
@@ -493,6 +518,36 @@ void DisplayDiagnosticsUi::DrawViewport(
             ("Overload Recovery Seconds##eye-overload-recovery-" +
              std::string(viewportId)),
             overloadRecovery);
+    eyeConfigChanged |=
+        context.Checkbox(
+            ("Protect Highlights (brightest pixel = display peak)##eye-protect-" +
+             std::string(viewportId)),
+            highlightProtection);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Glare Threshold cd/m2##eye-glare-" +
+             std::string(viewportId)),
+            glareThresholdNits);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Highlight Attack Seconds##eye-highlight-attack-" +
+             std::string(viewportId)),
+            highlightAttack);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Daylight Adaptation cd/m2##eye-daylight-" +
+             std::string(viewportId)),
+            daylightAdaptationNits);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("Maximum Boost stops##eye-boost-" +
+             std::string(viewportId)),
+            maximumBoostStops);
+    eyeConfigChanged |=
+        context.InputDouble(
+            ("cd/m2 per Scene Unit##eye-nits-per-unit-" +
+             std::string(viewportId)),
+            nitsPerSceneUnit);
 
     if (eyeConfigChanged)
     {
@@ -532,6 +587,18 @@ void DisplayDiagnosticsUi::DrawViewport(
             static_cast<f32>(overloadAttack);
         eyeConfig.overloadRecoverySeconds =
             static_cast<f32>(overloadRecovery);
+        eyeConfig.highlightProtection =
+            highlightProtection;
+        eyeConfig.glareThresholdNits =
+            static_cast<f32>(glareThresholdNits);
+        eyeConfig.highlightAttackSeconds =
+            static_cast<f32>(highlightAttack);
+        eyeConfig.daylightAdaptationNits =
+            static_cast<f32>(daylightAdaptationNits);
+        eyeConfig.maximumBoostStops =
+            static_cast<f32>(maximumBoostStops);
+        eyeConfig.nitsPerSceneUnit =
+            static_cast<f32>(nitsPerSceneUnit);
 
         renderer_->
             SetHumanEyeAdaptationConfig(

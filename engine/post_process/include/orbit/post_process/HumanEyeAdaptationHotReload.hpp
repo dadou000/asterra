@@ -11,7 +11,7 @@ inline constexpr char kHumanEyeAdaptationHotReloadModuleName[] =
 inline constexpr char kHumanEyeAdaptationHotReloadInterfaceName[] =
     "orbit.post_process.human_eye_adaptation";
 inline constexpr std::uint32_t
-    kHumanEyeAdaptationHotReloadInterfaceVersion = 1U;
+    kHumanEyeAdaptationHotReloadInterfaceVersion = 2U;
 
 struct HumanEyeAdaptationHotReloadInterface
 {

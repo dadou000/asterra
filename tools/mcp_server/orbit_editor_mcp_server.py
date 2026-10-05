@@ -293,6 +293,9 @@ def orbit_view_terrain_layers_set(
     cloud_godray_strength: float | None = None,
     cloud_light_volume: bool | None = None,
     bypass_cloud_shadow: bool | None = None,
+    bypass_proxy_sun_shadow: bool | None = None,
+    bypass_proxy_surfaces: bool | None = None,
+    bypass_sky_cache: bool | None = None,
     bypass_indirect_lighting: bool | None = None,
     bypass_near_field_water: bool | None = None,
     bypass_atmosphere: bool | None = None,
@@ -337,6 +340,9 @@ def orbit_view_terrain_layers_set(
     off. cloud_light_volume (default true) caches the optical depth towards the sun around
     the camera (out to ~370 km) so cloud-on-cloud shadows and god rays reach far at a low sun;
     false marches everything per sample (for comparison). bypass_cloud_shadow,
+    bypass_proxy_sun_shadow (the hardware-ray-query sun shadow cast by authored Visibility Proxies),
+    bypass_proxy_surfaces (draw authored Visibility Proxies as lit geometry; true leaves them invisible occluders),
+    bypass_sky_cache (the radiance cache's sky-only fill: sky irradiance occluded by terrain and proxies, applied to every near-field surface),
     bypass_indirect_lighting (final gather + hybrid reflections), bypass_hybrid_reflections (only the reflections stage, to tell the two apart), bypass_radiance_cache (only the radiance-cache fallback of the final gather), bypass_near_field_water and
     bypass_atmosphere (also skips the clouds drawn after it) each skip one stage of the frame
     for this view, to bisect a rendering artefact (default false). indirect_coverage_view
@@ -382,6 +388,9 @@ def orbit_view_terrain_layers_set(
         "cloud_godray_strength": cloud_godray_strength,
         "cloud_light_volume": cloud_light_volume,
         "bypass_cloud_shadow": bypass_cloud_shadow,
+        "bypass_proxy_sun_shadow": bypass_proxy_sun_shadow,
+        "bypass_proxy_surfaces": bypass_proxy_surfaces,
+        "bypass_sky_cache": bypass_sky_cache,
         "bypass_indirect_lighting": bypass_indirect_lighting,
         "bypass_near_field_water": bypass_near_field_water,
         "bypass_hybrid_reflections": bypass_hybrid_reflections,
@@ -1181,8 +1190,59 @@ def orbit_viewport_navigate(
 
 @mcp.tool()
 def orbit_view_mode_set(mode: str, view_id: str = "studio.primary") -> dict[str, Any]:
-    """Set a viewport's mode: perspective, body_map, debug or system."""
+    """Set a viewport's mode: perspective, body_map, debug, system or flat_map."""
     return _rpc("view.mode_set", {"id": view_id, "mode": mode})
+
+
+@mcp.tool()
+def orbit_map_open(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Open the flat planet map in a viewport (the viewport mode selector's
+    "Flat Map"): an equirectangular image of the planet with a lat/long grid
+    and a red marker for the camera. It is generated progressively, so poll
+    orbit_map_status until complete. Switch back with orbit_view_mode_set
+    perspective, or travel somewhere with orbit_map_travel."""
+    return _rpc("map.open", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_map_status(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Flat map state: active layer and the available layers, whether a terrain
+    source is bound, rows_generated / rows_total, complete, and the camera
+    marker as latitude/longitude in degrees (HUD convention; null if unknown)."""
+    return _rpc("map.status", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_map_layer_set(layer: str, view_id: str = "studio.primary") -> dict[str, Any]:
+    """Choose what the flat map colours the planet by: elevation, biomes,
+    temperature, precipitation or water_depth. Switching never re-samples."""
+    return _rpc("map.layer_set", {"id": view_id, "layer": layer})
+
+
+@mcp.tool()
+def orbit_map_travel(
+    latitude_degrees: float | None = None,
+    longitude_degrees: float | None = None,
+    u: float | None = None,
+    v: float | None = None,
+    perspective: bool = True,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Travel to a point on the planet, like double-clicking the flat map: the
+    terrain camera moves to a low vantage over it. Give latitude_degrees and
+    longitude_degrees, or u and v (0..1, origin top-left) of a position in the
+    viewport that currently shows the map. perspective (default true) returns
+    the viewport to perspective mode afterwards; false stays on the map."""
+    params: dict[str, Any] = {"id": view_id, "perspective": perspective}
+    for key, value in {
+        "latitude_degrees": latitude_degrees,
+        "longitude_degrees": longitude_degrees,
+        "u": u,
+        "v": v,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("map.travel", params)
 
 
 @mcp.tool()
@@ -1671,6 +1731,69 @@ def orbit_reports_export(
         if value is not None:
             params[key] = value
     return _rpc("reports.export", params)
+
+
+@mcp.tool()
+def orbit_eye_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Eye adaptation (auto-exposure) of a viewport, in cd/m2: config
+    (highlight_protection, glare_threshold_nits, daylight_adaptation_nits,
+    max_boost_stops, nits_per_scene_unit, ...) and live state (exposure_scale,
+    brightest_pixel_nits, adapted_nits, highlight_protection_stops,
+    boost_limit_stops). One scene unit is 929563 cd/m2."""
+    return _rpc("display.eye_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_eye_set(
+    view_id: str = "studio.primary",
+    highlight_protection: bool | None = None,
+    glare_threshold_nits: float | None = None,
+    highlight_attack_seconds: float | None = None,
+    daylight_adaptation_nits: float | None = None,
+    max_boost_stops: float | None = None,
+    nits_per_scene_unit: float | None = None,
+    photopic_ceiling_log2: float | None = None,
+    exposure_middle_gray: float | None = None,
+    min_exposure_scale: float | None = None,
+    max_exposure_scale: float | None = None,
+    photopic_brighten_seconds: float | None = None,
+    photopic_darken_seconds: float | None = None,
+    dark_adapt_seconds: float | None = None,
+    overload_attack_seconds: float | None = None,
+    overload_recovery_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Change eye adaptation settings; only the given fields change.
+    highlight_protection keeps the brightest pixel at or below the display peak
+    (glare sources above glare_threshold_nits are ignored); max_boost_stops
+    limits how far the gain may exceed the daylight_adaptation_nits setting.
+    Not persisted to the display settings file. Returns config and state."""
+    params: dict[str, Any] = {"id": view_id}
+    for key, value in {
+        "highlight_protection": highlight_protection,
+        "glare_threshold_nits": glare_threshold_nits,
+        "highlight_attack_seconds": highlight_attack_seconds,
+        "daylight_adaptation_nits": daylight_adaptation_nits,
+        "max_boost_stops": max_boost_stops,
+        "nits_per_scene_unit": nits_per_scene_unit,
+        "photopic_ceiling_log2": photopic_ceiling_log2,
+        "exposure_middle_gray": exposure_middle_gray,
+        "min_exposure_scale": min_exposure_scale,
+        "max_exposure_scale": max_exposure_scale,
+        "photopic_brighten_seconds": photopic_brighten_seconds,
+        "photopic_darken_seconds": photopic_darken_seconds,
+        "dark_adapt_seconds": dark_adapt_seconds,
+        "overload_attack_seconds": overload_attack_seconds,
+        "overload_recovery_seconds": overload_recovery_seconds,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("display.eye_set", params)
+
+
+@mcp.tool()
+def orbit_eye_reset(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Restart eye adaptation (as after a cut): the next frame adapts instantly."""
+    return _rpc("display.eye_reset", {"id": view_id})
 
 
 @mcp.tool()

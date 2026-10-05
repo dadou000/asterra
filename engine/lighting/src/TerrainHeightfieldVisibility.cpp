@@ -430,10 +430,15 @@ TerrainHeightfieldVisibilityProvider::Trace(
         direction *
             previousDistance;
 
+    // Is the ray origin below the ground? Ask at the finest footprint: the
+    // march samples coarser the farther it goes, but the origin is a point we
+    // are standing on. Sampling it at the coarsest footprint smooths a valley
+    // floor up to the height of its surroundings, so an origin a few metres
+    // above the real ground read as buried and every ray from it was a hit.
     f64 previousSigned =
         SignedHeightDistanceMeters(
             previousPoint,
-            config_.maximumStepMeters);
+            config_.minimumStepMeters);
 
     if (previousSigned <= 0.0)
     {

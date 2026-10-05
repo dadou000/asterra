@@ -144,6 +144,7 @@ constexpr std::array<std::string_view, 4> kSurfaceViews{
     case studio_session::ViewportMode::BodyMap: return "Body Map";
     case studio_session::ViewportMode::Debug: return "Debug";
     case studio_session::ViewportMode::System: return "System";
+    case studio_session::ViewportMode::FlatMap: return "Flat Map";
     }
     return "Perspective";
 }
@@ -1325,6 +1326,18 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                 context.Checkbox(
                     "Bypass cloud shadow##bypass-cloud-shadow",
                     layers.bypassCloudShadow) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass proxy sun shadow##bypass-proxy-sun-shadow",
+                    layers.bypassProxySunShadow) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass proxy surfaces (draw proxies as geometry)##bypass-proxy-surfaces",
+                    layers.bypassProxySurfaces) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass sky cache fill (sky-only radiance cache channel)##bypass-sky-cache",
+                    layers.bypassSkyCache) || layersChanged;
             layersChanged =
                 context.Checkbox(
                     "Bypass indirect lighting (final gather + reflections)##bypass-indirect",
@@ -4495,19 +4508,21 @@ void StudioExpansionShell::DrawViewportBand(
 
         if (target != nullptr)
         {
-            static constexpr std::array<std::string_view, 4>
+            static constexpr std::array<std::string_view, 5>
                 kViewportModes{
                     "Perspective",
                     "Body Map",
                     "Debug",
-                    "System"
+                    "System",
+                    "Flat Map"
                 };
-            static constexpr std::array<studio_session::ViewportMode, 4>
+            static constexpr std::array<studio_session::ViewportMode, 5>
                 kViewportModeValues{
                     studio_session::ViewportMode::Perspective,
                     studio_session::ViewportMode::BodyMap,
                     studio_session::ViewportMode::Debug,
-                    studio_session::ViewportMode::System
+                    studio_session::ViewportMode::System,
+                    studio_session::ViewportMode::FlatMap
                 };
 
             i32 viewportMode = 0;
@@ -4525,6 +4540,9 @@ void StudioExpansionShell::DrawViewportBand(
             case studio_session::ViewportMode::System:
                 viewportMode = 3;
                 break;
+            case studio_session::ViewportMode::FlatMap:
+                viewportMode = 4;
+                break;
             }
 
             context.SameLine();
@@ -4533,7 +4551,7 @@ void StudioExpansionShell::DrawViewportBand(
                     kViewportModes,
                     viewportMode))
             {
-                viewportMode = std::clamp(viewportMode, 0, 3);
+                viewportMode = std::clamp(viewportMode, 0, 4);
                 try
                 {
                     owner_->InvokeViewportMode(
@@ -4599,6 +4617,32 @@ void StudioExpansionShell::DrawViewportBand(
                     owner_->views_->SetDebugField(
                         id,
                         catalog[static_cast<std::size_t>(selected)].field);
+                }
+                break;
+            }
+
+            case studio_session::ViewportMode::FlatMap:
+            {
+                context.SameLine();
+                static constexpr std::array<std::string_view, 5>
+                    kMapLayers{
+                        "Elevation",
+                        "Biomes",
+                        "Temperature",
+                        "Precipitation",
+                        "Water depth"
+                    };
+                i32 layer = static_cast<i32>(
+                    owner_->views_->FlatMapLayerOf(id));
+                if (context.Combo(
+                        "##flat-map-layer",
+                        kMapLayers,
+                        layer))
+                {
+                    layer = std::clamp(layer, 0, 4);
+                    owner_->views_->SetFlatMapLayer(
+                        id,
+                        static_cast<FlatMapLayer>(layer));
                 }
                 break;
             }

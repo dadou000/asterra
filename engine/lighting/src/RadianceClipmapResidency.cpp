@@ -780,6 +780,23 @@ bool RadianceClipmapResidency::CommitUpdate(
     const u32 sampleCount,
     const u64 sourceRevision)
 {
+    return CommitUpdate(
+        key,
+        irradiance,
+        SkyIrradianceL1{},
+        0.0F,
+        sampleCount,
+        sourceRevision);
+}
+
+bool RadianceClipmapResidency::CommitUpdate(
+    const RadianceCellKey& key,
+    const DirectionalIrradianceL1& irradiance,
+    const SkyIrradianceL1& sky,
+    const f32 skyTransport,
+    const u32 sampleCount,
+    const u64 sourceRevision)
+{
     if (sourceRevision !=
             sourceRevision_ ||
         !BelongsToCurrentWindow(key))
@@ -799,6 +816,10 @@ bool RadianceClipmapResidency::CommitUpdate(
 
     slot->cell.irradiance =
         irradiance;
+    slot->cell.sky =
+        sky;
+    slot->cell.skyTransport =
+        skyTransport;
     slot->cell.revision =
         sourceRevision;
     slot->cell.updateAgeSeconds =

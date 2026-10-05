@@ -171,6 +171,8 @@ private:
         terrain_dependency::TerrainInvalidationRequest>
         pendingTerrainInvalidations_;
     u64 terrainDebugUniverseGeneration_{~u64{0}};
+    // World generation the physical page service was last reconciled with.
+    u64 terrainPagesWorldGeneration_{~u64{0}};
     editor_rpc::EditorSessionRpcHost rpc_;
 };
 } // namespace orbit::studio_session

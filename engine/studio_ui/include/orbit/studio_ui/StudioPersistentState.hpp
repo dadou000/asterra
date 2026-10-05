@@ -45,6 +45,7 @@ struct StudioPersistentState
     case studio_session::ViewportMode::BodyMap: return "body_map";
     case studio_session::ViewportMode::Debug: return "debug";
     case studio_session::ViewportMode::System: return "system";
+    case studio_session::ViewportMode::FlatMap: return "flat_map";
     }
     return "perspective";
 }
@@ -78,6 +79,7 @@ ParseViewportMode(const std::string_view value) noexcept
     if (value == "body_map") return ViewportMode::BodyMap;
     if (value == "debug") return ViewportMode::Debug;
     if (value == "system") return ViewportMode::System;
+    if (value == "flat_map") return ViewportMode::FlatMap;
     return std::nullopt;
 }
 

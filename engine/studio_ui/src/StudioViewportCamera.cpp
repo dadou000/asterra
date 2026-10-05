@@ -98,6 +98,27 @@ ComposeViewportCamera(
             1.04719755F;
         break;
 
+    case studio_session::ViewportMode::FlatMap:
+        // The flat map draws its own full-frame image; the camera only has to be valid.
+        camera.localPositionMeters = {
+            0.0,
+            radius * 3.2,
+            0.0
+        };
+        camera.forward = {
+            0.0F,
+            -1.0F,
+            0.0F
+        };
+        camera.up = {
+            0.0F,
+            0.0F,
+            1.0F
+        };
+        camera.verticalFovRadians =
+            1.04719755F;
+        break;
+
     case studio_session::ViewportMode::Debug:
         camera.localPositionMeters = {
             -radius * 2.4,

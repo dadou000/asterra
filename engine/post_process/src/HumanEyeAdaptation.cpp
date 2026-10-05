@@ -65,6 +65,169 @@ std::atomic<HumanEyeAdaptationUpdateOverride>
 // metered "median" is floored at p90 minus this span. Scenes whose p90 is
 // within the span of the median are untouched.
 constexpr f32 kBrightRegionSpanStops = 3.0F;
+
+// "No limit" for an adaptation level in log2 scene luminance.
+constexpr f32 kNoLimitLog2 = -64.0F;
+
+// Photometric limits on the exposure, from this frame's statistics:
+//  - the brightest metered pixel (peak) and the adaptation level above which
+//    the exposure keeps it at or below the display's peak luminance, and
+//  - the natural boost floor: the lowest adaptation level the photopic gain can
+//    reach, `maximumBoostStops` below the daylight adaptation luminance.
+// Luminance is converted to cd/m^2 through config.nitsPerSceneUnit.
+void UpdatePhotometricLimits(
+    HumanEyeAdaptationState& state,
+    const LuminanceHistogramStatistics& statistics,
+    const f32 peakLog2,
+    const HumanEyeAdaptationConfig& config) noexcept
+{
+    const f32 nitsPerUnit =
+        std::max(
+            FiniteOr(
+                config.nitsPerSceneUnit,
+                kSceneLuminanceNitsPerUnit),
+            1.0e-3F);
+
+    // Hand-built statistics may leave the linear peak unset; the log2 value
+    // is then authoritative.
+    const f32 peakScene =
+        std::isfinite(statistics.peakLuminance) &&
+                statistics.peakLuminance > 0.0F
+            ? statistics.peakLuminance
+            : std::exp2(peakLog2);
+
+    state.peakNits =
+        peakScene * nitsPerUnit;
+
+    const f32 middleGray =
+        std::max(
+            FiniteOr(
+                config.exposureMiddleGray,
+                0.18F),
+            1.0e-6F);
+
+    const f32 glareScene =
+        std::max(
+            FiniteOr(
+                config.glareThresholdNits,
+                1.0e6F),
+            1.0e-3F) /
+        nitsPerUnit;
+    const f32 protectedScene =
+        std::min(
+            peakScene,
+            glareScene);
+
+    const f32 referenceWhite =
+        std::max(
+            FiniteOr(
+                config.referenceWhiteNits,
+                203.0F),
+            1.0e-3F);
+    const f32 headroom =
+        std::max(
+            FiniteOr(
+                config.highlightTargetNits,
+                1000.0F) /
+                referenceWhite,
+            1.0F);
+
+    // exposure = middleGray / 2^A and the protected pixel must satisfy
+    // exposure * protectedScene <= headroom, hence A >= log2(middleGray *
+    // protectedScene / headroom).
+    state.peakProtectTargetLog2 =
+        config.highlightProtection &&
+                protectedScene > 0.0F
+            ? std::log2(
+                  middleGray *
+                  protectedScene /
+                  headroom)
+            : kNoLimitLog2;
+
+    const f32 daylightScene =
+        std::max(
+            FiniteOr(
+                config.daylightAdaptationNits,
+                50000.0F),
+            1.0e-3F) /
+        nitsPerUnit;
+
+    state.minimumAdaptationLog2 =
+        std::log2(daylightScene) -
+        std::max(
+            FiniteOr(
+                config.maximumBoostStops,
+                6.0F),
+            0.0F);
+}
+
+// Builds the presentation exposure from the adapted level and the two limits.
+// The adapted level is never lower than the natural boost floor and never
+// lower than what keeps the brightest protected pixel on screen.
+void ApplyExposure(
+    HumanEyeAdaptationState& state,
+    const HumanEyeAdaptationConfig& config) noexcept
+{
+    const f32 middleGray =
+        std::max(
+            FiniteOr(
+                config.exposureMiddleGray,
+                0.18F),
+            1.0e-6F);
+    const f32 minimumExposure =
+        std::max(
+            FiniteOr(
+                config.minimumExposureScale,
+                1.0F / 4096.0F),
+            1.0e-8F);
+    const f32 maximumExposure =
+        std::max(
+            FiniteOr(
+                config.maximumExposureScale,
+                4096.0F),
+            minimumExposure);
+
+    const f32 boostLimited =
+        std::max(
+            state.photopicLog2,
+            state.minimumAdaptationLog2);
+
+    state.exposureAdaptationLog2 =
+        std::max(
+            boostLimited,
+            state.peakProtectLog2);
+    state.boostLimitStops =
+        std::max(
+            state.minimumAdaptationLog2 -
+                state.photopicLog2,
+            0.0F);
+    state.highlightProtectionStops =
+        std::max(
+            state.peakProtectLog2 -
+                boostLimited,
+            0.0F);
+
+    state.exposureScale =
+        std::clamp(
+            middleGray /
+                std::exp2(state.exposureAdaptationLog2),
+            minimumExposure,
+            maximumExposure);
+
+    const f32 targetAdaptation =
+        std::max(
+            std::max(
+                state.photopicTargetLog2,
+                state.minimumAdaptationLog2),
+            state.peakProtectTargetLog2);
+
+    state.targetExposureScale =
+        std::clamp(
+            middleGray /
+                std::exp2(targetAdaptation),
+            minimumExposure,
+            maximumExposure);
+}
 } // namespace
 
 HumanEyeAdaptationState
@@ -195,6 +358,12 @@ UpdateHumanEyeAdaptationBuiltin(
             peak - photopicCeiling,
             0.0F);
 
+    UpdatePhotometricLimits(
+        state,
+        statistics,
+        peak,
+        config);
+
     const f32 darkThreshold =
         FiniteOr(
             config.darkThresholdLog2,
@@ -251,37 +420,12 @@ UpdateHumanEyeAdaptationBuiltin(
         state.overload =
             state.overloadTarget;
 
-        const f32 middleGray =
-            std::max(
-                FiniteOr(
-                    config.exposureMiddleGray,
-                    0.18F),
-                1.0e-6F);
-        const f32 minimumExposure =
-            std::max(
-                FiniteOr(
-                    config.minimumExposureScale,
-                    1.0F / 4096.0F),
-                1.0e-8F);
-        const f32 maximumExposure =
-            std::max(
-                FiniteOr(
-                    config.maximumExposureScale,
-                    4096.0F),
-                minimumExposure);
+        state.peakProtectLog2 =
+            state.peakProtectTargetLog2;
 
-        state.exposureScale =
-            std::clamp(
-                middleGray /
-                    std::exp2(state.photopicLog2),
-                minimumExposure,
-                maximumExposure);
-        state.targetExposureScale =
-            std::clamp(
-                middleGray /
-                    std::exp2(state.photopicTargetLog2),
-                minimumExposure,
-                maximumExposure);
+        ApplyExposure(
+            state,
+            config);
         return state;
     }
 
@@ -337,38 +481,21 @@ UpdateHumanEyeAdaptationBuiltin(
     state.overload =
         Saturate(state.overload);
 
-    const f32 middleGray =
-        std::max(
-            FiniteOr(
-                config.exposureMiddleGray,
-                0.18F),
-            1.0e-6F);
+    // Protecting the highlights is a fast reflex (the pupil closes at once when
+    // something bright appears); letting go follows the normal darkening time.
+    state.peakProtectLog2 =
+        ExpApproach(
+            state.peakProtectLog2,
+            state.peakProtectTargetLog2,
+            deltaSeconds,
+            state.peakProtectTargetLog2 >
+                    state.peakProtectLog2
+                ? config.highlightAttackSeconds
+                : config.photopicDarkenSeconds);
 
-    const f32 minimumExposure =
-        std::max(
-            FiniteOr(
-                config.minimumExposureScale,
-                1.0F / 4096.0F),
-            1.0e-8F);
-    const f32 maximumExposure =
-        std::max(
-            FiniteOr(
-                config.maximumExposureScale,
-                4096.0F),
-            minimumExposure);
-
-    state.exposureScale =
-        std::clamp(
-            middleGray /
-                std::exp2(state.photopicLog2),
-            minimumExposure,
-            maximumExposure);
-    state.targetExposureScale =
-        std::clamp(
-            middleGray /
-                std::exp2(state.photopicTargetLog2),
-            minimumExposure,
-            maximumExposure);
+    ApplyExposure(
+        state,
+        config);
 
     return state;
 }

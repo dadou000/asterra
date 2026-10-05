@@ -2,6 +2,7 @@ add_library(OrbitStudioUi STATIC
     src/CelestialAuthoringUi.cpp
     src/DebugViewUi.cpp
     src/DisplayDiagnosticsUi.cpp
+    src/DisplayEyeRpc.cpp
     src/ProfilerModel.cpp
     src/ProfilerPanelRpc.cpp
     src/ProfilerUi.cpp
@@ -12,6 +13,8 @@ add_library(OrbitStudioUi STATIC
     src/ShadingUi.cpp
     src/SimulationControlsUi.cpp
     src/StudioExpansionShell.cpp
+    src/StudioFlatMap.cpp
+    src/StudioFlatMapRpc.cpp
     src/StudioRenderViewRpc.cpp
     src/StudioRenderViewSet.cpp
     src/StudioSurfacePicking.cpp
@@ -121,6 +124,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioTerrainOverlayGeometry
         COMMAND OrbitStudioTerrainOverlayGeometryTests
+    )
+
+    add_executable(OrbitStudioFlatMapTests
+        tests/StudioFlatMapTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioFlatMapTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStudioFlatMapTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioFlatMapTests)
+
+    add_test(
+        NAME Orbit.StudioFlatMap
+        COMMAND OrbitStudioFlatMapTests
     )
 
     add_executable(OrbitStudioSurfacePickingTests

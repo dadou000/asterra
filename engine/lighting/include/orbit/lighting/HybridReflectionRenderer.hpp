@@ -31,6 +31,8 @@ public:
         rhi::Texture& sceneColor,
         rhi::Texture& surfaceBaseRoughness,
         rhi::Texture& surfaceNormalMetallic,
+        // Class 3 (authored proxy) pixels skip the cache fallback.
+        rhi::Texture& surfaceEmissionClass,
         rhi::Texture& depth,
         rhi::Buffer& radianceCells,
         rhi::Buffer& radianceLevels,

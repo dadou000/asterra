@@ -27,6 +27,12 @@ public:
     [[nodiscard]] frames::FrameId SceneFrame() const noexcept;
     [[nodiscard]] math::Double3 GpuOriginInFrameMeters() const noexcept;
 
+    // The built scene, for passes that trace it with their own shader (the
+    // proxy sun shadow). Null until Ready(); valid until the next RebuildScene.
+    [[nodiscard]] rhi::AccelerationStructure*
+    SceneAccelerationStructure() const noexcept;
+    [[nodiscard]] rhi::Buffer* PrimitiveBuffer() const noexcept;
+
     [[nodiscard]] GpuVisibilityQuery EncodeQuery(
         const VisibilityQuery& query) const;
 

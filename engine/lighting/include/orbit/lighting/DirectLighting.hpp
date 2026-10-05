@@ -58,6 +58,18 @@ public:
         // Optional reduced-resolution sun transmittance from the cloud layer
         // (red channel, 1 = lit); multiplies the direct stellar term.
         rhi::Texture* cloudShadow = nullptr,
+        // Optional full-resolution lighting from authored Visibility Proxies:
+        // red = sun visibility (1 = lit) multiplies the direct stellar term;
+        // green-blue-alpha = sky irradiance weighted by the open hemisphere,
+        // added as albedo / pi fill (non-zero on proxy surfaces only).
+        rhi::Texture* proxySunShadow = nullptr,
+        // Optional radiance cache (cells and levels, as built for the cache
+        // sampler): the sky-only channel is added as albedo / pi fill at
+        // `skyCacheStrength` (1 = physical). Null or zero turns it off.
+        rhi::Buffer* radianceCells = nullptr,
+        rhi::Buffer* radianceLevels = nullptr,
+        u32 radianceLevelCount = 0U,
+        f32 skyCacheStrength = 1.0F,
         const DirectLightingSettings& settings = {});
 
 private:

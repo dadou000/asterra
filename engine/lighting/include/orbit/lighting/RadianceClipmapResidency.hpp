@@ -108,6 +108,16 @@ public:
         u32 sampleCount,
         u64 sourceRevision);
 
+    // Also stores the cell's sky-only irradiance (see SkyIrradianceL1) and the
+    // one-bounce transport its L1 was estimated with.
+    [[nodiscard]] bool CommitUpdate(
+        const RadianceCellKey& key,
+        const DirectionalIrradianceL1& irradiance,
+        const SkyIrradianceL1& sky,
+        f32 skyTransport,
+        u32 sampleCount,
+        u64 sourceRevision);
+
     [[nodiscard]] const RadianceResidentCell* Lookup(
         const RadianceCellKey& key,
         u64 requiredRevision) const noexcept;

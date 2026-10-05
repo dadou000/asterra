@@ -306,6 +306,120 @@ int main()
         Check(std::abs(a.darkTarget - b.darkTarget) < 0.1F);
     }
 
+    // Photometric units and the two exposure limits.
+    {
+        // One scene-linear unit is 1361 W/(m^2 sr) at 683 lm/W.
+        Check(std::abs(kSceneLuminanceNitsPerUnit - 929'563.0F) < 1.0F);
+
+        const HumanEyeAdaptationConfig defaults{};
+        const float headroom =
+            defaults.highlightTargetNits /
+            defaults.referenceWhiteNits;
+
+        const auto settle =
+            [](const LuminanceHistogramStatistics& stats,
+               const HumanEyeAdaptationConfig& config)
+        {
+            HumanEyeAdaptationState adapted{};
+            for (int frame = 0; frame < 60 * 20; ++frame)
+            {
+                adapted =
+                    UpdateHumanEyeAdaptation(
+                        adapted,
+                        stats,
+                        1.0F / 60.0F,
+                        config);
+            }
+            return adapted;
+        };
+
+        // A dark room (median 2^-10 scene units) with one small sunlit patch
+        // (peak 1.0). Without protection the eye opens ~10 stops on the dark
+        // majority and the patch is far above what the display can show.
+        const auto room = Stats(-10.0F, -10.0F, -10.0F, -10.0F, 0.0F);
+
+        auto unprotectedConfig = defaults;
+        unprotectedConfig.highlightProtection = false;
+
+        const auto unprotected = settle(room, unprotectedConfig);
+        const auto protectedRoom = settle(room, defaults);
+
+        Check(std::abs(
+                  protectedRoom.peakNits /
+                      (1.0F * defaults.nitsPerSceneUnit) -
+                  1.0F) < 1.0e-3F);
+
+        // The brightest pixel lands on the display's peak, not above it.
+        Check(protectedRoom.exposureScale * 1.0F <= headroom * 1.002F);
+        Check(protectedRoom.exposureScale * 1.0F >= headroom * 0.98F);
+        Check(protectedRoom.highlightProtectionStops > 3.0F);
+        Check(unprotected.highlightProtectionStops == 0.0F);
+        Check(unprotected.exposureScale * 1.0F > headroom * 20.0F);
+
+        // Protection never raises exposure, and an ordinary scene whose peak
+        // is within ~5 stops of its median is left alone.
+        const auto ordinary = Stats(-3.0F, -2.5F, -2.0F, -1.5F, -1.0F);
+        const auto ordinaryProtected = settle(ordinary, defaults);
+        const auto ordinaryUnprotected = settle(ordinary, unprotectedConfig);
+        Check(ordinaryProtected.highlightProtectionStops == 0.0F);
+        Check(std::abs(
+                  ordinaryProtected.exposureScale -
+                  ordinaryUnprotected.exposureScale) < 1.0e-4F);
+
+        // Glare sources (the sun disc) are not protected: a brighter source
+        // does not push exposure down any further.
+        const auto sun12 = settle(Stats(-3.0F, -3.0F, -3.0F, -3.0F, 12.0F), defaults);
+        const auto sun20 = settle(Stats(-3.0F, -3.0F, -3.0F, -3.0F, 20.0F), defaults);
+        Check(std::abs(sun12.exposureScale - sun20.exposureScale) < 1.0e-5F);
+        Check(sun20.peakNits > sun12.peakNits);
+        const float glareScene =
+            defaults.glareThresholdNits / defaults.nitsPerSceneUnit;
+        Check(sun20.exposureScale * glareScene <= headroom * 1.002F);
+
+        // Natural boost limit: a very dark scene (median 2^-14) cannot raise
+        // the gain past `maximumBoostStops` above the daylight setting.
+        const auto black = Stats(-14.0F, -14.0F, -14.0F, -14.0F, -13.0F);
+        auto noProtection = defaults;
+        noProtection.highlightProtection = false;
+        const auto limited = settle(black, noProtection);
+
+        const float limitExposure =
+            defaults.exposureMiddleGray /
+            std::exp2(limited.minimumAdaptationLog2);
+        Check(limited.boostLimitStops > 3.0F);
+        Check(std::abs(limited.exposureScale / limitExposure - 1.0F) < 1.0e-3F);
+
+        // The limit is stated against a daylight luminance in nits: the floor
+        // sits `maximumBoostStops` below it.
+        const float daylightLog2 =
+            std::log2(
+                defaults.daylightAdaptationNits /
+                defaults.nitsPerSceneUnit);
+        Check(std::abs(
+                  limited.minimumAdaptationLog2 -
+                  (daylightLog2 - defaults.maximumBoostStops)) < 1.0e-3F);
+
+        auto wideBoost = noProtection;
+        wideBoost.maximumBoostStops = 20.0F;
+        const auto unlimited = settle(black, wideBoost);
+        Check(unlimited.boostLimitStops == 0.0F);
+        Check(unlimited.exposureScale > limited.exposureScale * 8.0F);
+
+        // Releasing protection follows the normal darkening time, not a jump.
+        auto release = settle(room, defaults);
+        const float held = release.exposureScale;
+        for (int frame = 0; frame < 6; ++frame)
+        {
+            release =
+                UpdateHumanEyeAdaptation(
+                    release,
+                    Stats(-10.0F, -10.0F, -10.0F, -10.0F, -10.0F),
+                    1.0F / 60.0F,
+                    defaults);
+        }
+        Check(release.exposureScale < held * 2.0F);
+    }
+
     ResetHumanEyeAdaptation(state);
     Check(!state.initialized);
     Check(state.darkAdaptation == 0.0F);

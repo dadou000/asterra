@@ -75,10 +75,11 @@ void AddDirectionalLobe(
 
     return smooth * smooth;
 }
-} // namespace
 
-DirectionalIrradianceL1
-EstimateRadianceCell(
+// `skyInIndirect` keeps the historical behaviour (the sky is folded into the
+// L1 at one-bounce transport). False moves a summary-based sky into
+// `estimate.sky` at full strength and leaves it out of the L1.
+[[nodiscard]] RadianceCellEstimate EstimateImpl(
     const RadianceCellKey& key,
     const RadianceClipmapConfig& config,
     const LightingView& view,
@@ -87,9 +88,11 @@ EstimateRadianceCell(
     const VisibilityRegistry* const visibility,
     const RadianceEstimateSettings& settings,
     const std::span<const EmissiveVolumeSource> emissiveVolumes,
-    const std::span<const EmissiveSampledEmitter> emissiveSurfaces)
+    const std::span<const EmissiveSampledEmitter> emissiveSurfaces,
+    const bool skyInIndirect)
 {
-    DirectionalIrradianceL1 result;
+    RadianceCellEstimate estimate;
+    DirectionalIrradianceL1& result = estimate.indirect;
 
     const f32 transport =
         std::max(
@@ -175,28 +178,57 @@ EstimateRadianceCell(
             skyVisibility.visibleFraction;
     }
 
-    result.l0 = {
-        ambientEnergy.x * transport,
-        ambientEnergy.y * transport,
-        ambientEnergy.z * transport
-    };
-
-    if (hasSkySummary &&
-        skyVisibility.visibleFraction > 0.0F &&
-        math::LengthSquared(
-            skyVisibility.openDirection) >
-            1.0e-10F)
+    if (hasSkySummary && !skyInIndirect)
     {
-        const math::Float3 directionalSky{
-            ambientEnergy.x * transport * 0.35F,
-            ambientEnergy.y * transport * 0.35F,
-            ambientEnergy.z * transport * 0.35F
+        // Sky-only channel: full-strength irradiance (no one-bounce transport)
+        // weighted by the open fraction of the hemisphere. `ambientEnergy`
+        // already carries that fraction when a registry was supplied. The
+        // lobe points at the open sky; with no occlusion information it
+        // points along the body's up direction.
+        const bool open =
+            skyVisibility.visibleFraction > 0.0F;
+        const bool hasOpenDirection =
+            math::LengthSquared(
+                skyVisibility.openDirection) >
+            1.0e-10F;
+
+        estimate.sky.l0 = {
+            ambientEnergy.x * 0.5F,
+            ambientEnergy.y * 0.5F,
+            ambientEnergy.z * 0.5F
+        };
+        estimate.sky.gradient =
+            !open
+                ? math::Float3{}
+                : (hasOpenDirection
+                       ? skyVisibility.openDirection
+                       : liftDirection);
+    }
+    else
+    {
+        result.l0 = {
+            ambientEnergy.x * transport,
+            ambientEnergy.y * transport,
+            ambientEnergy.z * transport
         };
 
-        AddDirectionalLobe(
-            result,
-            skyVisibility.openDirection,
-            directionalSky);
+        if (hasSkySummary &&
+            skyVisibility.visibleFraction > 0.0F &&
+            math::LengthSquared(
+                skyVisibility.openDirection) >
+                1.0e-10F)
+        {
+            const math::Float3 directionalSky{
+                ambientEnergy.x * transport * 0.35F,
+                ambientEnergy.y * transport * 0.35F,
+                ambientEnergy.z * transport * 0.35F
+            };
+
+            AddDirectionalLobe(
+                result,
+                skyVisibility.openDirection,
+                directionalSky);
+        }
     }
 
     const math::Float3 stellarEnergy{
@@ -701,6 +733,57 @@ EstimateRadianceCell(
             energy);
     }
 
-    return result;
+    return estimate;
+}
+} // namespace
+
+DirectionalIrradianceL1
+EstimateRadianceCell(
+    const RadianceCellKey& key,
+    const RadianceClipmapConfig& config,
+    const LightingView& view,
+    const DirectionalLight& stellar,
+    const std::span<const ResolvedLocalLight> localLights,
+    const VisibilityRegistry* const visibility,
+    const RadianceEstimateSettings& settings,
+    const std::span<const EmissiveVolumeSource> emissiveVolumes,
+    const std::span<const EmissiveSampledEmitter> emissiveSurfaces)
+{
+    return EstimateImpl(
+        key,
+        config,
+        view,
+        stellar,
+        localLights,
+        visibility,
+        settings,
+        emissiveVolumes,
+        emissiveSurfaces,
+        true).indirect;
+}
+
+RadianceCellEstimate
+EstimateRadianceCellWithSky(
+    const RadianceCellKey& key,
+    const RadianceClipmapConfig& config,
+    const LightingView& view,
+    const DirectionalLight& stellar,
+    const std::span<const ResolvedLocalLight> localLights,
+    const VisibilityRegistry* const visibility,
+    const RadianceEstimateSettings& settings,
+    const std::span<const EmissiveVolumeSource> emissiveVolumes,
+    const std::span<const EmissiveSampledEmitter> emissiveSurfaces)
+{
+    return EstimateImpl(
+        key,
+        config,
+        view,
+        stellar,
+        localLights,
+        visibility,
+        settings,
+        emissiveVolumes,
+        emissiveSurfaces,
+        false);
 }
 } // namespace orbit::lighting

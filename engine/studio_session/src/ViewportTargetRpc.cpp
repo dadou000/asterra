@@ -78,10 +78,14 @@ namespace
     {
         return ViewportMode::System;
     }
+    if (text == "flat_map")
+    {
+        return ViewportMode::FlatMap;
+    }
 
     throw rpc::Error(
         -32602,
-        "Viewport mode must be perspective, body_map, debug, or system.");
+        "Viewport mode must be perspective, body_map, debug, system, or flat_map.");
 }
 
 [[nodiscard]] const char* ModeName(
@@ -97,6 +101,8 @@ namespace
         return "debug";
     case ViewportMode::System:
         return "system";
+    case ViewportMode::FlatMap:
+        return "flat_map";
     }
 
     return "perspective";

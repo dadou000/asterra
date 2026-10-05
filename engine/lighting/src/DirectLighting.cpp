@@ -66,41 +66,74 @@ StructuredBuffer<uint> g_tileLightIndices;
 [[vk::binding(3, 0)]]
 StructuredBuffer<uint4> g_particleLightGrid;
 
+// Radiance cache (cells and per-level layout), read for the sky-only fill.
+struct GpuRadianceCell
+{
+    float4 irradiance0;
+    float4 irradianceX;
+    float4 irradianceY;
+    float4 irradianceZ;
+    float4 skyIrradiance; // rgb sky-only L0
+    float4 skyGradient;   // xyz sky-only gradient, w one-bounce transport
+};
+
+struct GpuRadianceLevelInfo
+{
+    float4 centerCellSize;
+    uint4 moduloAxis;
+    uint4 offsetCountLevel;
+};
+
 [[vk::binding(4, 0)]]
+StructuredBuffer<GpuRadianceCell> g_radianceCells;
+[[vk::binding(5, 0)]]
+StructuredBuffer<GpuRadianceLevelInfo> g_radianceLevels;
+
+[[vk::binding(6, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness;
-[[vk::binding(4, 0)]]
+[[vk::binding(6, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler;
 
-[[vk::binding(5, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic;
-[[vk::binding(5, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler;
 
-[[vk::binding(6, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass;
-[[vk::binding(6, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler;
 
-[[vk::binding(7, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(7, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
 // Sun transmittance through the cloud layer (red), reduced resolution.
-[[vk::binding(8, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_cloudShadow;
-[[vk::binding(8, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_cloudShadowSampler;
+
+// Lighting from authored Visibility Proxies at full resolution (red = sun
+// visibility, 1 = lit; gba = sky irradiance x open hemisphere); written by
+// ProxySunShadowRenderer.
+[[vk::binding(11, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_proxySunShadow;
+[[vk::binding(11, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_proxySunShadowSampler;
 
 struct Constants
 {
@@ -111,7 +144,7 @@ struct Constants
     float4 depthRangeAndPhotometry;
     uint4 localGrid;
     float4 cameraFrameAndParticleGrid;
-    float4 extra; // x: cloud shadow texture bound
+    float4 extra; // x: cloud shadow bound, y: proxy sun shadow bound, z: radiance level count, w: sky cache strength
 };
 [[vk::push_constant]] Constants g;
 
@@ -121,6 +154,63 @@ struct VSOutput
     float2 uv : TEXCOORD0;
 };
 
+// Sky-only irradiance from the finest radiance cache level that holds a valid
+// cell at `position` (camera-relative); zero when no level covers it. Same
+// addressing as the cache sampler: the level's window is
+// [-axis/2, axis/2 - 1] cells around its centre.
+float3 CacheSkyIrradiance(float3 position, float3 normal, uint levelCount)
+{
+    [loop]
+    for (uint levelIndex = 0u; levelIndex < levelCount; ++levelIndex)
+    {
+        const GpuRadianceLevelInfo level = g_radianceLevels[levelIndex];
+        const float cellSize = max(level.centerCellSize.w, 1.0e-5);
+        const int axis = int(level.moduloAxis.w);
+
+        if (axis <= 0)
+        {
+            continue;
+        }
+
+        const int3 delta =
+            int3(round((position - level.centerCellSize.xyz) / cellSize));
+        const int halfAxis = axis / 2;
+
+        if (any(delta < -halfAxis) || any(delta >= halfAxis))
+        {
+            continue;
+        }
+
+        const int px = (int(level.moduloAxis.x) + delta.x + 4 * axis) % axis;
+        const int py = (int(level.moduloAxis.y) + delta.y + 4 * axis) % axis;
+        const int pz = (int(level.moduloAxis.z) + delta.z + 4 * axis) % axis;
+        const uint localIndex =
+            uint(px) + uint(axis) * (uint(py) + uint(axis) * uint(pz));
+
+        if (localIndex >= level.offsetCountLevel.y)
+        {
+            continue;
+        }
+
+        const GpuRadianceCell cell =
+            g_radianceCells[level.offsetCountLevel.x + localIndex];
+
+        if (cell.irradiance0.w <= 0.5)
+        {
+            continue;
+        }
+
+        return max(
+            cell.skyIrradiance.rgb *
+                (1.0 + dot(cell.skyGradient.xyz, normal)),
+            0.0);
+    }
+
+    return 0.0;
+}
+
+)"
+R"(
 float3 FresnelSchlick(float cosTheta, float3 f0)
 {
     const float f =
@@ -364,6 +454,8 @@ float ParticleGridTransmittance(float3 framePosition,float3 direction,float maxi
     return exp(-min(optical,20.0));
 }
 
+)"
+R"(
 float4 main(VSOutput input) : SV_Target0
 {
     const float4 baseRoughness =
@@ -449,12 +541,28 @@ float4 main(VSOutput input) : SV_Target0
             g_cloudShadow.SampleLevel(g_cloudShadowSampler, input.uv, 0).r;
     }
 
+    // Authored Visibility Proxies: red scales the sun, green-blue-alpha is sky
+    // irradiance already weighted by the open hemisphere (proxy surfaces only).
+    float3 proxySkyFill = 0.0;
+    if (g.extra.y > 0.0)
+    {
+        const float4 proxyLight =
+            g_proxySunShadow.SampleLevel(g_proxySunShadowSampler, input.uv, 0);
+        stellarLinear *= proxyLight.r;
+        proxySkyFill =
+            baseColor *
+            (1.0 - metallic) *
+            max(proxyLight.gba, 0.0) /
+            3.14159265;
+    }
+
     const float ambient =
         max(g.lightColorAndAmbient.w, 0.0);
     const float3 ambientLinear =
         baseColor *
         (1.0 - metallic) *
-        ambient;
+        ambient +
+        proxySkyFill;
     float3 sceneLinear = stellarLinear + ambientLinear;
 
     const float depth =
@@ -473,6 +581,29 @@ float4 main(VSOutput input) : SV_Target0
         const float3 particleEmission =
             SampleParticleLightGrid(framePosition).yzw;
         sceneLinear = stellarLinear * stellarParticleT + ambientLinear + particleEmission;
+    }
+
+    // Sky-only radiance-cache fill: the sky irradiance reaching this cell
+    // (open fraction of the hemisphere, occluded by terrain and proxies),
+    // applied at full strength whether or not the screen-space gather
+    // resolved the pixel. Authored proxy surfaces get a ray-traced version
+    // above instead.
+    const uint skyLevelCount =
+        uint(g.extra.z + 0.5);
+
+    if (depth > 0.0 &&
+        skyLevelCount > 0u &&
+        g.extra.w > 0.0 &&
+        floor(emissionClass.a + 0.01) != 3.0)
+    {
+        const float3 skyPosition =
+            ReconstructSurfacePosition(depth, cameraRay, cameraForward);
+
+        sceneLinear +=
+            baseColor *
+            (1.0 - metallic) *
+            CacheSkyIrradiance(skyPosition, n, skyLevelCount) *
+            (g.extra.w / 3.14159265);
     }
 
     // Reverse-Z depth 0 is the untouched/far clear value. Analytic globe
@@ -614,8 +745,8 @@ DirectLightingRenderer::DirectLightingRenderer(
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
             .pushConstantDwords = 32U,
-            .shaderResourceBuffers = 4U,
-            .sampledTextures = 5U,
+            .shaderResourceBuffers = 6U,
+            .sampledTextures = 6U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -656,6 +787,11 @@ void DirectLightingRenderer::Draw(
     const TiledLightGrid& localLightGrid,
     rhi::Buffer* particleLightGrid,
     rhi::Texture* cloudShadow,
+    rhi::Texture* proxySunShadow,
+    rhi::Buffer* radianceCells,
+    rhi::Buffer* radianceLevels,
+    const u32 radianceLevelCount,
+    const f32 skyCacheStrength,
     const DirectLightingSettings& settings)
 {
     if (width == 0U || height == 0U)
@@ -722,9 +858,13 @@ void DirectLightingRenderer::Draw(
         bits(particleLightGrid != nullptr ? 1.0F : 0.0F),
 
         bits(cloudShadow != nullptr ? 1.0F : 0.0F),
-        0U,
-        0U,
-        0U
+        bits(proxySunShadow != nullptr ? 1.0F : 0.0F),
+        bits(
+            radianceCells != nullptr &&
+                    radianceLevels != nullptr
+                ? static_cast<f32>(radianceLevelCount)
+                : 0.0F),
+        bits(std::max(skyCacheStrength, 0.0F))
     };
 
     commands.SetRenderTarget(targetSceneColor);
@@ -760,6 +900,18 @@ void DirectLightingRenderer::Draw(
         particleLightGrid != nullptr
             ? *particleLightGrid
             : *dummyParticleLightGrid_);
+    // Without a radiance cache the sky fill is off (level count 0); the
+    // shader never reads these, but both slots still need a buffer.
+    commands.SetGraphicsBuffer(
+        4U,
+        radianceCells != nullptr
+            ? *radianceCells
+            : *dummyParticleLightGrid_);
+    commands.SetGraphicsBuffer(
+        5U,
+        radianceLevels != nullptr
+            ? *radianceLevels
+            : *dummyParticleLightGrid_);
 
     commands.SetGraphicsTexture(
         0U,
@@ -777,6 +929,11 @@ void DirectLightingRenderer::Draw(
         4U,
         cloudShadow != nullptr
             ? *cloudShadow
+            : depth);
+    commands.SetGraphicsTexture(
+        5U,
+        proxySunShadow != nullptr
+            ? *proxySunShadow
             : depth);
 
     commands.Draw(6U);

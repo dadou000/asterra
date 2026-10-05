@@ -123,6 +123,12 @@ struct StudioTerrainLayerOptions
     // the indirect lighting (final gather + hybrid reflections), the near-field water pass, and the
     // atmosphere (which also skips the clouds drawn after it).
     bool bypassCloudShadow{false};
+    // Skips the authored Visibility Proxy sun shadow (hardware ray query) that direct lighting reads.
+    bool bypassProxySunShadow{false};
+    // Skips drawing authored Visibility Proxies as lit geometry (they stay invisible occluders).
+    bool bypassProxySurfaces{false};
+    // Skips the radiance cache's sky-only fill (sky irradiance occluded by terrain and proxies, added by direct lighting).
+    bool bypassSkyCache{false};
     bool bypassIndirectLighting{false};
     bool bypassNearFieldWater{false};
     bool bypassAtmosphere{false};

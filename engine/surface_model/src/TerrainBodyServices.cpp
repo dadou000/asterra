@@ -1,5 +1,6 @@
 #include <orbit/surface_model/TerrainBodyServices.hpp>
 
+#include <atomic>
 #include <stdexcept>
 
 namespace orbit::surface_model
@@ -16,10 +17,20 @@ bool TerrainProcessService::IsValid() const noexcept
         coastal.IsValid();
 }
 
+namespace
+{
+[[nodiscard]] u64 NextInstanceId() noexcept
+{
+    static std::atomic<u64> next{1U};
+    return next.fetch_add(1U, std::memory_order_relaxed);
+}
+} // namespace
+
 TerrainBodyServices::TerrainBodyServices(
     const universe::BodyId body,
     const terrain_gpu::PersistentGpuTerrainCacheConfig cacheConfig)
     : body_(body),
+      instanceId_(NextInstanceId()),
       geology_(
           terrain_geology::
               LoadReferenceGeologicalMaterialLibrary()),
@@ -43,6 +54,11 @@ TerrainBodyServices::TerrainBodyServices(
 universe::BodyId TerrainBodyServices::Body() const noexcept
 {
     return body_;
+}
+
+u64 TerrainBodyServices::InstanceId() const noexcept
+{
+    return instanceId_;
 }
 
 terrain_geology::GeologicalMaterialLibrary&

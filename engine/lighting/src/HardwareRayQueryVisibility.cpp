@@ -609,6 +609,18 @@ HardwareRayQueryVisibilityBatch::GpuOriginInFrameMeters() const noexcept
     return gpuOriginInFrameMeters_;
 }
 
+rhi::AccelerationStructure*
+HardwareRayQueryVisibilityBatch::SceneAccelerationStructure() const noexcept
+{
+    return accelerationStructure_.get();
+}
+
+rhi::Buffer*
+HardwareRayQueryVisibilityBatch::PrimitiveBuffer() const noexcept
+{
+    return primitiveBuffer_.get();
+}
+
 GpuVisibilityQuery
 HardwareRayQueryVisibilityBatch::EncodeQuery(
     const VisibilityQuery& query) const

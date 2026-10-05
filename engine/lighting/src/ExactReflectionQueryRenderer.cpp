@@ -324,6 +324,8 @@ struct GpuRadianceCell
     float4 irradianceX;
     float4 irradianceY;
     float4 irradianceZ;
+    float4 skyIrradiance; // rgb sky-only L0
+    float4 skyGradient;   // xyz sky-only gradient, w one-bounce transport
 };
 
 struct GpuRadianceLevelInfo
@@ -469,11 +471,20 @@ float3 SampleCache(
         const float3 d =
             normalize(direction);
 
+        // The sky now lives in its own channel; reflections keep the
+        // one-bounce sky the L1 used to carry: 2 * l0 * transport is the
+        // scaled sky irradiance, with the old L0 / L1 lobe weights.
+        const float3 legacySky =
+            cell.skyIrradiance.rgb *
+            (2.0 * cell.skyGradient.w) *
+            (1.175 + 0.175 * dot(cell.skyGradient.xyz, d));
+
         return max(
             cell.irradiance0.rgb +
             cell.irradianceX.rgb * d.x +
             cell.irradianceY.rgb * d.y +
-            cell.irradianceZ.rgb * d.z,
+            cell.irradianceZ.rgb * d.z +
+            legacySky,
             0.0);
     }
 

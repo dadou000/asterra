@@ -4,6 +4,7 @@
 #include <orbit/render_view/RenderView.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/StudioFlatMap.hpp>
 #include <orbit/studio_ui/StudioSurfacePicking.hpp>
 #include <orbit/studio_ui/StudioTerrainLayerOptions.hpp>
 #include <orbit/studio_ui/StudioViewportTextDiagnostics.hpp>
@@ -140,6 +141,7 @@ struct StudioRenderViewInfo
     bool hasLiveDebugPage{false};
     StudioTerrainDiagnosticOverlayOptions diagnostics{};
     StudioTerrainLayerOptions layers{};
+    FlatMapLayer flatMapLayer{FlatMapLayer::Elevation};
 };
 
 // Owns the actual resizable GPU RenderViews corresponding to logical Studio
@@ -346,6 +348,49 @@ public:
     [[nodiscard]] lighting::SurfaceDebugMode
     SurfaceDebugMode(std::string_view id) const;
 
+    // Which layer the flat map of a view shows (Flat Map viewport mode).
+    void SetFlatMapLayer(
+        std::string_view id,
+        FlatMapLayer layer);
+
+    [[nodiscard]] FlatMapLayer FlatMapLayerOf(
+        std::string_view id) const;
+
+    // The flat map's progress and marker, pushed in by the host each frame.
+    void SetFlatMapStatus(
+        std::string_view id,
+        const std::optional<StudioFlatMapStatus>& status);
+
+    [[nodiscard]] std::optional<StudioFlatMapStatus> FlatMapStatusOf(
+        std::string_view id) const;
+
+    // Moves the terrain observer of a view to the surface point in the given
+    // direction (unit vector in the planet's body-fixed frame), exactly like
+    // double-clicking that point on the terrain. Returns false when the view
+    // has no current terrain runtime.
+    [[nodiscard]] bool FocusTerrainDirection(
+        std::string_view id,
+        const math::Double3& unitDirection);
+
+    // The point of the planet under a viewport position (u, v in 0..1, origin
+    // top-left) in a view that shows the planet as a map: the flat map
+    // (flat_map mode) or the globe (body_map mode). Returns the unit direction
+    // in the planet's body-fixed frame, or nullopt when the position misses the
+    // map or planet (letterbox bars, space) or the view shows neither.
+    [[nodiscard]] std::optional<math::Double3> PickPlanetDirection(
+        std::string_view id,
+        f32 u,
+        f32 v) const;
+
+    // Switches the viewport mode of a view (the mode selector's operation).
+    void SetViewportMode(
+        std::string_view id,
+        studio_session::ViewportMode mode);
+
+    // Width and height of a view's image, or nullopt for an unknown view.
+    [[nodiscard]] std::optional<std::pair<u32, u32>> ViewSize(
+        std::string_view id) const;
+
     void SetDebugPhysicalPageLevel(
         std::string_view id,
         u8 level);
@@ -455,6 +500,9 @@ private:
         u8,
         std::less<>>
         debugPhysicalPageLevels_;
+
+    std::map<std::string, FlatMapLayer, std::less<>> flatMapLayers_;
+    std::map<std::string, StudioFlatMapStatus, std::less<>> flatMapStatuses_;
 
     std::map<
         std::string,

@@ -24,6 +24,8 @@
 #include <orbit/lighting/ExactReflectionQueryRenderer.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/MaterialEmissionSurfaceOverride.hpp>
+#include <orbit/lighting/ProxySunShadow.hpp>
+#include <orbit/lighting/ProxySurface.hpp>
 #include <orbit/lighting/RadianceCacheSampler.hpp>
 #include <orbit/lighting/RadianceEstimator.hpp>
 #include <orbit/lighting/RadianceClipmapResidency.hpp>
@@ -47,6 +49,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/StudioFlatMap.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/terrain_debug/TerrainDebugTexture.hpp>
 #include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
@@ -312,6 +315,7 @@ enum class StudioViewportPresentation : u8
     Blank,
     BodyPreview,
     MacroGlobe,
+    FlatMap,
     ProductionTerrain,
     TerrainDebug,
     TerrainDebugUnavailable
@@ -326,6 +330,10 @@ SelectStudioViewportPresentation(
     const bool hasLiveDebugPage,
     const bool hasSelectedDebugField) noexcept
 {
+    if (mode == studio_session::ViewportMode::FlatMap && hasBody)
+    {
+        return StudioViewportPresentation::FlatMap;
+    }
     if (mode == studio_session::ViewportMode::Debug)
     {
         return hasLiveDebugPage && hasSelectedDebugField
@@ -357,7 +365,15 @@ public:
     // keep rendering at full rate until the view has finished refining.
     [[nodiscard]] bool HasPendingTerrainWork() const noexcept
     {
-        return macroGlobeRenderer_.HasPendingWork();
+        return macroGlobeRenderer_.HasPendingWork() ||
+            flatMapRenderer_.Generating();
+    }
+
+    // What the flat map of a view is doing (nullopt when it never showed one).
+    [[nodiscard]] std::optional<StudioFlatMapStatus> FlatMapStatus(
+        const std::string_view viewportId) const
+    {
+        return flatMapRenderer_.Status(viewportId);
     }
 
     [[nodiscard]] celestial_globe::MacroGlobeWorkStats TerrainWorkStats() const noexcept
@@ -575,6 +591,7 @@ private:
         lighting::SoftwareProxyScene scene;
         std::unique_ptr<lighting::SoftwareProxyVisibilityProvider> provider;
         std::unique_ptr<lighting::HardwareRayQueryVisibilityBatch> hardware;
+        lighting::ProxySurfaceGeometry surfaces;
     };
     struct TerrainPresentation
     {
@@ -617,9 +634,12 @@ private:
     lighting::MaterialEmissionSurfaceOverrideRenderer materialEmissionSurfaceOverride_;
     lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;
     lighting::RadianceCacheSampler radianceCacheSampler_;
+    lighting::ProxySunShadowRenderer proxySunShadowRenderer_;
+    lighting::ProxySurfaceRenderer proxySurfaceRenderer_;
     lighting::HybridReflectionRenderer hybridReflectionRenderer_;
     lighting::ExactReflectionQueryRenderer exactReflectionQueryRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
+    StudioFlatMapRenderer flatMapRenderer_;
     post_process::LuminanceHistogramRenderer luminanceHistogramRenderer_;
     post_process::HighlightEffectsRenderer highlightEffectsRenderer_;
     post_process::DisplayResolveRenderer displayResolveRenderer_;
@@ -681,6 +701,8 @@ private:
         cloudLightVolumes_;
     // Half-resolution sun transmittance through the clouds, read by direct lighting.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudShadowTargets_;
+    // Full-resolution sun visibility against authored Visibility Proxies, read by direct lighting.
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> proxySunShadowTargets_;
     // Where each view's cloud lab cloud was placed (body-fixed unit direction).
     struct CloudLabAnchor
     {

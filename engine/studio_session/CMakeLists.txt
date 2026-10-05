@@ -162,6 +162,25 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioTerrainPhysicalPageServiceTests
     )
 
+    add_executable(OrbitStudioTerrainWorldReopenTests
+        tests/StudioTerrainWorldReopenTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainWorldReopenTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(
+        OrbitStudioTerrainWorldReopenTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainWorldReopenTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainWorldReopen
+        COMMAND OrbitStudioTerrainWorldReopenTests
+    )
+
     add_executable(OrbitStudioTerrainRoundTripVerifierTests
         tests/StudioTerrainRoundTripVerifierTests.cpp
     )

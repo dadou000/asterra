@@ -18,7 +18,7 @@ int main()
         BuildRadianceClipmapMemoryLayout(
             config);
 
-    if (memory.bytesPerCell != 64U ||
+    if (memory.bytesPerCell != 96U ||
         memory.levels.size() != 4U ||
         memory.levels[0].cellSizeMeters != 2.0 ||
         memory.levels[1].cellSizeMeters != 8.0 ||
@@ -28,10 +28,10 @@ int main()
         return 1;
     }
 
-    // 8^3 cells * 64 bytes = 32768 bytes/level.
+    // 8^3 cells * 96 bytes = 49152 bytes/level.
     if (memory.levels[0].cellCount != 512U ||
-        memory.levels[0].byteSize != 32'768U ||
-        memory.totalBytes != 131'072U)
+        memory.levels[0].byteSize != 49'152U ||
+        memory.totalBytes != 196'608U)
     {
         return 2;
     }
@@ -135,6 +135,11 @@ int main()
 
     const RadianceCell cell{
         .irradiance = irradiance,
+        .sky = {
+            .l0 = {0.25F, 0.5F, 1.0F},
+            .gradient = {0.0F, 1.0F, 0.0F}
+        },
+        .skyTransport = 0.18F,
         .revision = 0x123456U,
         .updateAgeSeconds = 2.5F,
         .sampleCount = 32U,
@@ -144,7 +149,11 @@ int main()
     const auto gpu =
         EncodeGpuRadianceCell(cell);
 
-    if (sizeof(gpu) != 64U ||
+    if (sizeof(gpu) != 96U ||
+        gpu.skyIrradiance.x != 0.25F ||
+        gpu.skyIrradiance.z != 1.0F ||
+        gpu.skyGradient.y != 1.0F ||
+        gpu.skyGradient.w != 0.18F ||
         gpu.irradiance0.w != 1.0F ||
         gpu.irradianceX.w != 2.5F ||
         gpu.irradianceY.w != 32.0F ||

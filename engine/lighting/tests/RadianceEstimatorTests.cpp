@@ -1,5 +1,7 @@
 #include <orbit/lighting/RadianceEstimator.hpp>
 
+#include <cmath>
+
 namespace
 {
 class AlwaysHitProvider final
@@ -218,6 +220,112 @@ int main()
         blockedSky.l0.z != 0.0F)
     {
         return 5;
+    }
+
+    // Sky-only channel: full strength (no one-bounce transport), kept out of
+    // the L1, pointing at the open sky.
+    const RadianceEstimateSettings skySettings{
+        .diffuseTransportScale = 0.18F,
+        .ambientIrradianceScale = 0.0F,
+        .skyIrradianceLinear = {0.1F, 0.2F, 0.5F}
+    };
+
+    const auto channelSky =
+        EstimateRadianceCellWithSky(
+            key,
+            config,
+            view,
+            DirectionalLight{
+                .irradianceScale = 0.0F
+            },
+            {},
+            nullptr,
+            skySettings);
+
+    const f32 gradientLength =
+        math::Length(channelSky.sky.gradient);
+
+    if (channelSky.indirect.l0.x != 0.0F ||
+        channelSky.indirect.l0.y != 0.0F ||
+        channelSky.indirect.l0.z != 0.0F ||
+        std::fabs(channelSky.sky.l0.x - 0.05F) > 1.0e-6F ||
+        std::fabs(channelSky.sky.l0.y - 0.10F) > 1.0e-6F ||
+        std::fabs(channelSky.sky.l0.z - 0.25F) > 1.0e-6F ||
+        std::fabs(gradientLength - 1.0F) > 1.0e-4F)
+    {
+        return 20;
+    }
+
+    // Facing the open sky gives the full irradiance, facing away gives none.
+    const auto facingSky =
+        EvaluateSkyIrradiance(
+            channelSky.sky,
+            channelSky.sky.gradient);
+    const auto facingAway =
+        EvaluateSkyIrradiance(
+            channelSky.sky,
+            channelSky.sky.gradient * -1.0F);
+
+    if (std::fabs(facingSky.z - 0.5F) > 1.0e-5F ||
+        facingAway.x != 0.0F ||
+        facingAway.z != 0.0F)
+    {
+        return 21;
+    }
+
+    // An occluder removes the sky channel, as it removes the legacy term.
+    const auto channelBlocked =
+        EstimateRadianceCellWithSky(
+            key,
+            config,
+            view,
+            DirectionalLight{
+                .irradianceScale = 0.0F
+            },
+            {},
+            &skyBlockerRegistry,
+            skySettings);
+
+    if (channelBlocked.sky.l0.x != 0.0F ||
+        channelBlocked.sky.l0.y != 0.0F ||
+        channelBlocked.sky.l0.z != 0.0F)
+    {
+        return 22;
+    }
+
+    // The historical entry point still folds the sky into the L1 at transport.
+    const auto legacySky =
+        EstimateRadianceCell(
+            key,
+            config,
+            view,
+            DirectionalLight{
+                .irradianceScale = 0.0F
+            },
+            {},
+            nullptr,
+            skySettings);
+
+    if (legacySky.l0.z <= 0.0F)
+    {
+        return 23;
+    }
+
+    // Without a sky summary nothing lands in the sky channel.
+    const auto noSky =
+        EstimateRadianceCellWithSky(
+            key,
+            config,
+            view,
+            stellar,
+            {},
+            nullptr);
+
+    if (noSky.sky.l0.x != 0.0F ||
+        noSky.sky.l0.y != 0.0F ||
+        noSky.sky.l0.z != 0.0F)
+    {
+        return 24;
     }
 
     AlwaysHitProvider blocker;

@@ -1994,6 +1994,7 @@ public:
             std::shared_ptr<
                 SharedBodyInputs> sharedIn,
             terrain_gpu::PersistentGpuTerrainCache& cache,
+            const u64 servicesInstanceIdIn,
             const StudioTerrainPhysicalPageConfig& config)
             : shared(
                   std::move(
@@ -2027,7 +2028,8 @@ public:
                           config.
                               rebuildRequestsPerTick
                   }),
-              cache(&cache)
+              cache(&cache),
+              servicesInstanceId(servicesInstanceIdIn)
         {
         }
 
@@ -2041,6 +2043,12 @@ public:
             scheduler;
         terrain_gpu::PersistentGpuTerrainCache*
             cache{nullptr};
+
+        // The TerrainBodyServices instance `cache` belongs to. The same BodyId
+        // can reappear with new services (a world switch, a recomposition
+        // that failed and was redone), which frees the cache this runtime
+        // still points at; Sync drops the runtime when the instance differs.
+        u64 servicesInstanceId{0U};
 
         terrain::TerrainGenerationRevisions
             baseRevisions{};
@@ -2497,11 +2505,16 @@ void StudioTerrainPhysicalPageService::Sync(
          iterator !=
              impl_->bodies.end();)
     {
-        if (impl_->world->
+        const auto* currentServices =
+            impl_->world->
                 Surfaces().
                 ServicesForBody(
-                    iterator->first) ==
-            nullptr)
+                    iterator->first);
+
+        if (currentServices == nullptr ||
+            currentServices->InstanceId() !=
+                iterator->second->
+                    servicesInstanceId)
         {
             iterator =
                 impl_->bodies.erase(
@@ -2565,6 +2578,7 @@ void StudioTerrainPhysicalPageService::Sync(
                         std::move(
                             shared),
                         services->Cache(),
+                        services->InstanceId(),
                         impl_->config);
 
             body->baseRevisions =
@@ -2974,6 +2988,19 @@ StudioTerrainPhysicalPageService::Catalog(
         ? body->scheduler.Catalog()
         : std::vector<
               StudioTerrainPageRebuildStatus>{};
+}
+
+const terrain_gpu::PersistentGpuTerrainCache*
+StudioTerrainPhysicalPageService::BoundCache(
+    const world::PlanetId planet) const noexcept
+{
+    const auto* body =
+        impl_->FindBody(
+            planet);
+
+    return body != nullptr
+        ? body->cache
+        : nullptr;
 }
 
 void StudioTerrainPhysicalPageService::Clear()

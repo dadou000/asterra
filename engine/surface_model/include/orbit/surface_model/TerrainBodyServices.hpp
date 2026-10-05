@@ -60,6 +60,15 @@ public:
 
     [[nodiscard]] universe::BodyId Body() const noexcept;
 
+    // Unique for every TerrainBodyServices ever constructed in the process
+    // (a move keeps it with the object). A BodyId is not enough to know that
+    // two lookups reached the same services: a world switch or a failed
+    // recomposition destroys the services, and the next ones for the same
+    // BodyId own a different GPU terrain cache. Holders of a pointer into the
+    // services (the physical page service keeps the cache) compare this to
+    // notice they went stale instead of dereferencing a freed cache.
+    [[nodiscard]] u64 InstanceId() const noexcept;
+
     [[nodiscard]] terrain_geology::GeologicalMaterialLibrary& Geology() noexcept;
     [[nodiscard]] const terrain_geology::GeologicalMaterialLibrary& Geology() const noexcept;
 
@@ -85,6 +94,7 @@ public:
 
 private:
     universe::BodyId body_{};
+    u64 instanceId_{0U};
     terrain_geology::GeologicalMaterialLibrary geology_{};
     terrain_geology::RockTypeId defaultBedrock_{
         terrain_geology::reference_rock::Basalt};

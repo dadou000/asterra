@@ -10,6 +10,8 @@ add_library(OrbitLighting STATIC
     src/ScreenSpaceVisibility.cpp
     src/SoftwareProxyVisibility.cpp
     src/HardwareRayQueryVisibility.cpp
+    src/ProxySunShadow.cpp
+    src/ProxySurface.cpp
     src/LightingScheduler.cpp
     src/RadianceClipmap.cpp
     src/RadianceClipmapResidency.cpp
@@ -93,6 +95,11 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingSoftwareProxyVisibilityTests
         tests/SoftwareProxyVisibilityTests.cpp
+    )
+
+    add_executable(OrbitLightingProxySunShadowTests
+        tests/ProxySunShadowTests.cpp
+        tests/ProxySurfaceTests.cpp
     )
 
     add_executable(OrbitLightingSchedulerTests
@@ -251,6 +258,15 @@ if(BUILD_TESTING)
         OrbitLightingSoftwareProxyVisibilityTests PRIVATE cxx_std_23)
     orbit_enable_warnings(
         OrbitLightingSoftwareProxyVisibilityTests)
+
+    target_link_libraries(OrbitLightingProxySunShadowTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingProxySunShadowTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitLightingProxySunShadowTests)
 
     target_link_libraries(OrbitLightingSchedulerTests
         PRIVATE
@@ -444,6 +460,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingSoftwareProxyVisibility
         COMMAND OrbitLightingSoftwareProxyVisibilityTests
+    )
+
+    add_test(
+        NAME Orbit.LightingProxySunShadow
+        COMMAND OrbitLightingProxySunShadowTests
     )
 
     add_test(

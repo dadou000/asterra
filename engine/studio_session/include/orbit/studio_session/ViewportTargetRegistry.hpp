@@ -17,7 +17,9 @@ enum class ViewportMode : u8
     Perspective,
     BodyMap,
     Debug,
-    System
+    System,
+    // Flat equirectangular map of the target planet (layer picker, camera marker, click to travel).
+    FlatMap
 };
 
 struct ViewportTargetState

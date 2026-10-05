@@ -48,8 +48,33 @@ struct RadianceEstimateSettings
     f32 solarReferenceIrradiance{1361.0F};
 };
 
+// The cell's one-bounce L1 plus its sky-only irradiance. Unlike
+// EstimateRadianceCell, the sky is not folded into the L1 (and not scaled by the
+// one-bounce transport): it comes out separately at full strength, occluded by
+// whatever the visibility registry knows (terrain, authored proxies).
+struct RadianceCellEstimate
+{
+    DirectionalIrradianceL1 indirect{};
+    SkyIrradianceL1 sky{};
+};
+
 [[nodiscard]] DirectionalIrradianceL1
 EstimateRadianceCell(
+    const RadianceCellKey& key,
+    const RadianceClipmapConfig& config,
+    const LightingView& view,
+    const DirectionalLight& stellar,
+    std::span<const ResolvedLocalLight> localLights,
+    const VisibilityRegistry* visibility = nullptr,
+    const RadianceEstimateSettings& settings = {},
+    std::span<const EmissiveVolumeSource> emissiveVolumes = {},
+    std::span<const EmissiveSampledEmitter> emissiveSurfaces = {});
+
+// Same inputs and the same non-sky terms as EstimateRadianceCell. With no sky
+// summary in the settings the scalar ambient fallback stays in the L1 and the
+// sky channel is zero.
+[[nodiscard]] RadianceCellEstimate
+EstimateRadianceCellWithSky(
     const RadianceCellKey& key,
     const RadianceClipmapConfig& config,
     const LightingView& view,

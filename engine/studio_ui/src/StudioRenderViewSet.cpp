@@ -607,6 +607,153 @@ bool StudioRenderViewSet::FocusTerrainSurfacePoint(
     return true;
 }
 
+void StudioRenderViewSet::SetFlatMapLayer(
+    const std::string_view id,
+    const FlatMapLayer layer)
+{
+    if (Find(id) == nullptr)
+    {
+        throw std::out_of_range("Studio render-view ID is not registered.");
+    }
+    flatMapLayers_.insert_or_assign(std::string(id), layer);
+}
+
+FlatMapLayer StudioRenderViewSet::FlatMapLayerOf(
+    const std::string_view id) const
+{
+    const auto found = flatMapLayers_.find(id);
+    return found == flatMapLayers_.end()
+        ? FlatMapLayer::Elevation
+        : found->second;
+}
+
+void StudioRenderViewSet::SetFlatMapStatus(
+    const std::string_view id,
+    const std::optional<StudioFlatMapStatus>& status)
+{
+    if (!status.has_value())
+    {
+        const auto found = flatMapStatuses_.find(id);
+        if (found != flatMapStatuses_.end())
+        {
+            flatMapStatuses_.erase(found);
+        }
+        return;
+    }
+    flatMapStatuses_.insert_or_assign(std::string(id), *status);
+}
+
+std::optional<StudioFlatMapStatus> StudioRenderViewSet::FlatMapStatusOf(
+    const std::string_view id) const
+{
+    const auto found = flatMapStatuses_.find(id);
+    if (found == flatMapStatuses_.end())
+    {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+std::optional<math::Double3> StudioRenderViewSet::PickPlanetDirection(
+    const std::string_view id,
+    const f32 u,
+    const f32 v) const
+{
+    const auto* view = Find(id);
+    if (view == nullptr || session_ == nullptr)
+    {
+        return std::nullopt;
+    }
+    const auto* target = session_->Viewports().Find(id);
+    if (target == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    if (target->mode == studio_session::ViewportMode::FlatMap)
+    {
+        const auto mapUv =
+            FlatMapUvFromViewUv(view->Width(), view->Height(), u, v);
+        if (!mapUv.has_value())
+        {
+            return std::nullopt;
+        }
+        const auto latLon = FlatMapLatLonFromUv(*mapUv);
+        return FlatMapDirectionFromLatLon(
+            latLon.latitudeDegrees, latLon.longitudeDegrees);
+    }
+
+    if (target->mode == studio_session::ViewportMode::BodyMap)
+    {
+        const auto terrain = session_->TerrainRuntime().Capture(id);
+        if (!terrain.has_value())
+        {
+            return std::nullopt;
+        }
+        return GlobePickDirection(
+            view->Camera(),
+            terrain->planet.radiusMeters,
+            view->Width(),
+            view->Height(),
+            u,
+            v);
+    }
+
+    return std::nullopt;
+}
+
+void StudioRenderViewSet::SetViewportMode(
+    const std::string_view id,
+    const studio_session::ViewportMode mode)
+{
+    if (session_ == nullptr || Find(id) == nullptr)
+    {
+        throw std::out_of_range("Studio render-view ID is not registered.");
+    }
+    session_->Viewports().SetMode(id, mode);
+}
+
+std::optional<std::pair<u32, u32>> StudioRenderViewSet::ViewSize(
+    const std::string_view id) const
+{
+    const auto* view = Find(id);
+    if (view == nullptr)
+    {
+        return std::nullopt;
+    }
+    return std::pair<u32, u32>{view->Width(), view->Height()};
+}
+
+bool StudioRenderViewSet::FocusTerrainDirection(
+    const std::string_view id,
+    const math::Double3& unitDirection)
+{
+    if (session_ == nullptr)
+    {
+        return false;
+    }
+
+    const auto terrain = session_->TerrainRuntime().Capture(id);
+    if (!terrain.has_value() ||
+        !session_->TerrainRuntime().IsCurrent(*terrain))
+    {
+        return false;
+    }
+
+    auto& state = RequireNavigationState(id);
+    const auto& source = session_->TerrainRuntime().TerrainSource(*terrain);
+
+    const StudioTerrainNavigationUpdate update = FocusTerrainSurface(
+        state,
+        *terrain,
+        source,
+        math::Normalize(unitDirection));
+
+    static_cast<void>(
+        session_->TerrainRuntime().SetObserver(id, update.observer));
+    return true;
+}
+
 f64 StudioRenderViewSet::ViewFovRadians(const std::string_view id) const
 {
     const render_view::RenderView* view = Find(id);
@@ -951,6 +1098,9 @@ StudioViewportTextReport StudioRenderViewSet::TextDiagnostics(
             break;
         case studio_session::ViewportMode::System:
             report.viewMode = "system";
+            break;
+        case studio_session::ViewportMode::FlatMap:
+            report.viewMode = "flat_map";
             break;
         }
     }
@@ -1750,7 +1900,9 @@ StudioRenderViewSet::Catalog() const
             .diagnostics =
                 TerrainDiagnosticOverlays(id),
             .layers =
-                TerrainLayers(id)
+                TerrainLayers(id),
+            .flatMapLayer =
+                FlatMapLayerOf(id)
         });
     }
 

@@ -83,9 +83,47 @@ math::Float3 EvaluateIrradiance(
     };
 }
 
+math::Float3 EvaluateSkyIrradiance(
+    const SkyIrradianceL1& sky,
+    math::Float3 unitDirection) noexcept
+{
+    const f32 lengthSquared =
+        math::LengthSquared(unitDirection);
+
+    if (!std::isfinite(lengthSquared) ||
+        lengthSquared <= 1.0e-12F)
+    {
+        unitDirection =
+            {0.0F, 1.0F, 0.0F};
+    }
+    else
+    {
+        unitDirection =
+            math::Normalize(unitDirection);
+    }
+
+    const f32 gradient =
+        1.0F +
+        sky.gradient.x * unitDirection.x +
+        sky.gradient.y * unitDirection.y +
+        sky.gradient.z * unitDirection.z;
+
+    return {
+        std::max(sky.l0.x * gradient, 0.0F),
+        std::max(sky.l0.y * gradient, 0.0F),
+        std::max(sky.l0.z * gradient, 0.0F)
+    };
+}
+
 GpuRadianceCell EncodeGpuRadianceCell(
     const RadianceCell& cell) noexcept
 {
+    const auto finite =
+        [](const f32 value)
+        {
+            return std::isfinite(value) ? value : 0.0F;
+        };
+
     return {
         .irradiance0 = {
             FiniteNonNegative(
@@ -134,6 +172,18 @@ GpuRadianceCell EncodeGpuRadianceCell(
                 : 0.0F,
             SaturatingRevision24(
                 cell.revision)
+        },
+        .skyIrradiance = {
+            FiniteNonNegative(cell.sky.l0.x),
+            FiniteNonNegative(cell.sky.l0.y),
+            FiniteNonNegative(cell.sky.l0.z),
+            0.0F
+        },
+        .skyGradient = {
+            finite(cell.sky.gradient.x),
+            finite(cell.sky.gradient.y),
+            finite(cell.sky.gradient.z),
+            FiniteNonNegative(cell.skyTransport)
         }
     };
 }

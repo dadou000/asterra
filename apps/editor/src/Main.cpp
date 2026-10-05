@@ -30,6 +30,7 @@
 #include <orbit/frames/FrameGraph.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/editor_rpc/ProfilerRpc.hpp>
+#include <orbit/studio_ui/StudioFlatMapRpc.hpp>
 #include <orbit/profiler/Profiler.hpp>
 #include <orbit/render_graph/GpuPassTimer.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
@@ -67,6 +68,7 @@
 #include <orbit/studio_ui/SimulationControlsUi.hpp>
 #include <orbit/studio_ui/ViewportCaptureService.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
+#include <orbit/studio_ui/DisplayEyeRpc.hpp>
 #include <orbit/studio_ui/ProjectAuthoringUi.hpp>
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
@@ -2394,6 +2396,9 @@ int main(
             displayDiagnosticsUi(
                 studioViewportRenderer);
         displayDiagnosticsUi.Register(ui);
+        orbit::studio_ui::RegisterDisplayEyeRpc(
+            rpcHost.Dispatcher(),
+            studioViewportRenderer);
 
         orbit::studio_ui::DebugViewUi
             debugViewUi(
@@ -2455,6 +2460,9 @@ int main(
             });
 
         orbit::studio_ui::RegisterStudioRenderViewRpc(
+            rpcHost.Dispatcher(),
+            studioViews);
+        orbit::studio_ui::RegisterStudioFlatMapRpc(
             rpcHost.Dispatcher(),
             studioViews);
 
@@ -2870,7 +2878,7 @@ int main(
                 {
                     .name = "view.mode_set",
                     .description =
-                        "Sets a viewport's mode (perspective | body_map | debug | system), like the viewport mode selector. id defaults to studio.primary.",
+                        "Sets a viewport's mode (perspective | body_map | debug | system | flat_map), like the viewport mode selector. id defaults to studio.primary.",
                     .mutating = true
                 },
                 [&studioSession](const Value& params)
@@ -2887,7 +2895,7 @@ int main(
                     {
                         throw orbit::rpc::Error(
                             -32602,
-                            "mode must be perspective, body_map, debug or system.");
+                            "mode must be perspective, body_map, debug, system or flat_map.");
                     }
 
                     const std::string& mode = modeFound->second.AsString();
@@ -2908,11 +2916,15 @@ int main(
                     {
                         parsed = orbit::studio_session::ViewportMode::System;
                     }
+                    else if (mode == "flat_map")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::FlatMap;
+                    }
                     else
                     {
                         throw orbit::rpc::Error(
                             -32602,
-                            "mode must be perspective, body_map, debug or system.");
+                            "mode must be perspective, body_map, debug, system or flat_map.");
                     }
 
                     studioSession.Viewports().SetMode(id, parsed);
@@ -5659,7 +5671,41 @@ int main(
                         return;
                     }
 
+                    const auto* primaryTarget =
+                        studioSession.Viewports().Find(
+                            "studio.primary");
+                    const bool primaryShowsPlanetMap =
+                        primaryTarget != nullptr &&
+                        (primaryTarget->mode ==
+                             orbit::studio_session::
+                                 ViewportMode::FlatMap ||
+                         primaryTarget->mode ==
+                             orbit::studio_session::
+                                 ViewportMode::BodyMap);
+
                     if (interaction.doubleClicked &&
+                        !pathPlacementMode &&
+                        primaryShowsPlanetMap)
+                    {
+                        // Double-click on the flat map or the globe travels
+                        // there and returns to the perspective view.
+                        if (const auto direction =
+                                studioViews.PickPlanetDirection(
+                                    "studio.primary",
+                                    interaction.u,
+                                    interaction.v);
+                            direction.has_value() &&
+                            studioViews.FocusTerrainDirection(
+                                "studio.primary",
+                                *direction))
+                        {
+                            studioSession.Viewports().SetMode(
+                                "studio.primary",
+                                orbit::studio_session::
+                                    ViewportMode::Perspective);
+                        }
+                    }
+                    else if (interaction.doubleClicked &&
                         !pathPlacementMode)
                     {
                         static_cast<void>(
@@ -8628,6 +8674,14 @@ int main(
                         "studio.primary",
                         studioViewportRenderer.ClipmapPlanStats(
                             "studio.primary"));
+                    studioViews.SetFlatMapStatus(
+                        "studio.primary",
+                        studioViewportRenderer.FlatMapStatus(
+                            "studio.primary"));
+                    studioViews.SetFlatMapStatus(
+                        "studio.map",
+                        studioViewportRenderer.FlatMapStatus(
+                            "studio.map"));
                     {
                         const auto clouds =
                             studioViewportRenderer.CloudDiagnostics(

@@ -390,6 +390,20 @@ StudioSession::DispatchRpc(
 {
     auto response = rpc_.Dispatch(payload);
 
+    // world.open and world.close over RPC swap the world state (and with it
+    // every per-body GPU terrain cache) without passing through OpenWorld /
+    // CloseWorld above, which are what clear the physical page service on the
+    // UI path. Do the same here, before anything can use a runtime that still
+    // points at a freed cache or a queued change that belongs to the old world.
+    if (world_.Generation() !=
+        terrainPagesWorldGeneration_)
+    {
+        terrainPagesWorldGeneration_ =
+            world_.Generation();
+        pendingTerrainInvalidations_.clear();
+        terrainPhysicalPages_.Clear();
+    }
+
     if (world_.HasWorld())
     {
         static_cast<void>(

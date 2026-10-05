@@ -102,6 +102,14 @@ public:
     BodyStatus(
         world::PlanetId planet) const;
 
+    // The per-body GPU terrain cache this service's runtime for `planet` was
+    // bound to when it was created, or null without a runtime. A diagnostic:
+    // it must always equal the cache the surface layer currently owns for the
+    // body, or invalidations and publications would touch a freed cache.
+    [[nodiscard]] const terrain_gpu::PersistentGpuTerrainCache*
+    BoundCache(
+        world::PlanetId planet) const noexcept;
+
     // Workers, running and queued jobs of the pool that builds physical pages.
     [[nodiscard]] jobs::JobSystemTelemetry JobTelemetry() const noexcept;
 

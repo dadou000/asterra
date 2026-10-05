@@ -108,7 +108,7 @@ default view deterministic. Delete the file to reset.
 | `orbit_viewport_navigate(delta_seconds, mouse_dx, mouse_dy, move_right, move_forward, move_up, boost)` | `viewport.navigate` | One camera navigation step, same as right-mouse look + WASD/QE. Terrain navigation when the active body has terrain, reference-sphere navigation otherwise (same movement, no terrain). |
 | `orbit_viewport_focus_surface(u, v, view_id)` | `viewport.focus_surface` | Moves the camera to a low vantage point over the terrain under viewport position (u, v) in 0..1 (top-left origin), exactly like double-clicking the terrain. `focused: false` when the position misses terrain. |
 | `orbit_view_terrain_overlays_get/_set(view_id, flags...)` | `view.terrain_overlays_get` / `view.terrain_overlays_set` | Terrain diagnostic overlays: dirty_page_bounds, build_states, physical_lod, clipmap_rings (outlines the active clipmap levels only), clipmap_levels (tints the terrain by clipmap level), clipmap_sample_health (colours each vertex by what is wrong with its GPU sample: red bad elevation, green bad morph target, blue bad slope, grey healthy; rows of one colour are a corrupted strip), clipmap_hole_view (culls nothing and colours each vertex by why it would be culled: red beyond the horizon, green inside a finer level's hole, blue inside it while that level fades in, cyan culled by distance bands, grey drawn normally), clipmap_projection_view (culls nothing and colours each vertex by where its clip position lands: red non-finite, green behind the camera, blue outside the near/far range, cyan off screen sideways, grey on screen; to find triangles the GPU clips away), clipmap_shading_view (colours each terrain pixel by which interpolated shading input is bad, as emission: yellow biome weights sum to zero, magenta non-finite position, red/green/blue terrain normal / body-fixed normal / surface direction, dark grey fine), clipmap_wireframe (terrain as wireframe), clipmap_freeze (freezes the clipmap so the camera can fly away and inspect it), cache_status, authored_constraints, biome_weights, process_masks, drainage_vectors. Same toggles as the viewport Diagnostics properties. |
-| `orbit_view_terrain_layers_get/_set(view_id, production_surface?, full_clipmap?, macro_globe?, ocean?, surface_effects?, lod_bias_stops?, dynamic_clipmaps?, clipmap_pixels_per_vertex?, clipmap_fade_seconds?, experimental_distance_bands?, clipmap_band_edges_meters?, clipmap_band_scale?, clipmap_partial_updates?, physical_pages?, clouds?, cloud_resolution_scale?, cloud_godray_strength?, cloud_light_volume?, cloud_volume_debug_altitude?, cloud_temporal?, cloud_lab?)` | `view.terrain_layers_get` / `view.terrain_layers_set` | Which terrain layers a viewport draws (near-field clipmap terrain, orbital globe patches, ocean, surface effects) and its LOD bias in stops (clamped to [-4, 4]; +1 keeps richer representations longer and doubles orbital patch resolution). `full_clipmap` (default on) draws the production clipmap from the ground to orbit and never uses the orbital globe. `dynamic_clipmaps`, `clipmap_pixels_per_vertex` and `clipmap_fade_seconds` (how long a level dissolves in or out, default 0.4 s, 0 = pop) (and the EXPERIMENTAL `experimental_distance_bands` with its `clipmap_band_edges_meters` list and `clipmap_band_scale` multiplier: clipmap level k is drawn only where the camera's distance to the terrain is in its band, neighbours cross-fading) control the dynamic clipmap planner (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). `cloud_resolution_scale` (0.25-1, default 0.5) is the cloud ray-march resolution relative to the viewport (1 = crisp, about four times the cost). `cloud_godray_strength` (0-2, default 1) scales the crepuscular rays: the cloud pass removes the direct in-scatter of air that sits in cloud shadow from what the atmosphere pass added (0 = off and skips the extra march; same slider as the Terrain layers "God-ray strength"). `bypass_cloud_shadow`, `bypass_indirect_lighting` (final gather + hybrid reflections), `bypass_hybrid_reflections` (only the reflections stage, to tell the two apart), `bypass_radiance_cache` (only the radiance-cache fallback of the final gather), `bypass_near_field_water` and `bypass_atmosphere` (also skips the clouds drawn after it) (default false) each skip one stage of the frame for this view, to bisect a rendering artefact by toggling them one at a time (same checkboxes as the Terrain layers "Bypass ..." rows). `indirect_coverage_view` (default false) replaces the final gather's contribution with its coverage: red confidence, green gathered brightness on a log scale, magenta where the gather returned nothing, i.e. the pixel gets no indirect light. `cloud_light_volume` (default on) keeps a camera-centred cache of the optical depth towards the sun (three toroidal cascades, 250 m, 2 km and 8 km cells, usable out to about 11, 92 and 368 km from the camera, refreshed a few voxels per frame): cloud lighting then sees shadows from other clouds beyond the 6.7 km of in-march sun steps (a storm shadowing cirrus at a low sun) and god rays cost one lookup per step; off marches everything per sample, for comparison. `cloud_volume_debug_altitude` (metres, 0-40000, default 0 = off; -1 shows the scene depth buffer as log view-space distance instead, magenta where no depth was written) draws a horizontal slice of the light volume at that altitude over the view as a heatmap of the optical depth towards the sun (blue clear, yellow, red, white opaque; magenta = the voxel is not ready; nothing outside the three cascades; darker for the coarser cascades), to see where cloud shadows are in the volume. `cloud_temporal` (default on) accumulates the march over frames (reprojected through the cloud shell and clamped to the current neighbourhood) so the half-resolution march averages its sampling jitter away; off shows the raw single-frame march. `cloud_lab` (object) is the cloud lab: it replaces the weather with ONE isolated cloud of a chosen type (`type`: 0.05 stratus, 0.2 stratocumulus, 0.32 nimbostratus, 0.5 cumulus, 0.72 congestus, 1.0 cumulonimbus) with `coverage`, `cirrus` (anvil / high cloud), `precipitation`, `radius_meters`, exaggerated vertical development (`height_scale`, 0.25-4), `distance_meters` ahead of the camera, `maturity` (life cycle: 0 towering cumulus, 0.3 growing cumulonimbus, 0.6 mature with anvil, 0.9 dissipating), `organisation` (0 single cell, 0.5 multicell of mixed ages, 1 organised), `density` (0.2-6), `cirrus_sheet` (0-1, default 0: a patchy thin-cirrus layer on the anti-sun side of the cell, where the storm's shadow falls, to see clouds shadowing cirrus), `seed`, an optional sun (`sun_override`, `sun_elevation_degrees`, `sun_azimuth_degrees`) and `place: true` to (re)place it ahead of the camera; `get` returns the stored values plus `place_serial`. `clouds` (default on) ray-marches the body's cloud layer in the viewport (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). Same controls as the viewport Diagnostics "Terrain layers" section. |
+| `orbit_view_terrain_layers_get/_set(view_id, production_surface?, full_clipmap?, macro_globe?, ocean?, surface_effects?, lod_bias_stops?, dynamic_clipmaps?, clipmap_pixels_per_vertex?, clipmap_fade_seconds?, experimental_distance_bands?, clipmap_band_edges_meters?, clipmap_band_scale?, clipmap_partial_updates?, physical_pages?, clouds?, cloud_resolution_scale?, cloud_godray_strength?, cloud_light_volume?, cloud_volume_debug_altitude?, cloud_temporal?, cloud_lab?)` | `view.terrain_layers_get` / `view.terrain_layers_set` | Which terrain layers a viewport draws (near-field clipmap terrain, orbital globe patches, ocean, surface effects) and its LOD bias in stops (clamped to [-4, 4]; +1 keeps richer representations longer and doubles orbital patch resolution). `full_clipmap` (default on) draws the production clipmap from the ground to orbit and never uses the orbital globe. `dynamic_clipmaps`, `clipmap_pixels_per_vertex` and `clipmap_fade_seconds` (how long a level dissolves in or out, default 0.4 s, 0 = pop) (and the EXPERIMENTAL `experimental_distance_bands` with its `clipmap_band_edges_meters` list and `clipmap_band_scale` multiplier: clipmap level k is drawn only where the camera's distance to the terrain is in its band, neighbours cross-fading) control the dynamic clipmap planner (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). `cloud_resolution_scale` (0.25-1, default 0.5) is the cloud ray-march resolution relative to the viewport (1 = crisp, about four times the cost). `cloud_godray_strength` (0-2, default 1) scales the crepuscular rays: the cloud pass removes the direct in-scatter of air that sits in cloud shadow from what the atmosphere pass added (0 = off and skips the extra march; same slider as the Terrain layers "God-ray strength"). `bypass_cloud_shadow`, `bypass_proxy_sun_shadow` (the sun shadow cast by authored Visibility Proxies) and `bypass_proxy_surfaces` (drawing them as lit geometry), see [Proxy sun shadow](#proxy-sun-shadow-and-visible-proxies), `bypass_sky_cache` (the radiance cache's sky-only fill, see [Sky-only cache channel](#sky-only-radiance-cache-channel)), `bypass_indirect_lighting` (final gather + hybrid reflections), `bypass_hybrid_reflections` (only the reflections stage, to tell the two apart), `bypass_radiance_cache` (only the radiance-cache fallback of the final gather), `bypass_near_field_water` and `bypass_atmosphere` (also skips the clouds drawn after it) (default false) each skip one stage of the frame for this view, to bisect a rendering artefact by toggling them one at a time (same checkboxes as the Terrain layers "Bypass ..." rows). `indirect_coverage_view` (default false) replaces the final gather's contribution with its coverage: red confidence, green gathered brightness on a log scale, magenta where the gather returned nothing, i.e. the pixel gets no indirect light. `cloud_light_volume` (default on) keeps a camera-centred cache of the optical depth towards the sun (three toroidal cascades, 250 m, 2 km and 8 km cells, usable out to about 11, 92 and 368 km from the camera, refreshed a few voxels per frame): cloud lighting then sees shadows from other clouds beyond the 6.7 km of in-march sun steps (a storm shadowing cirrus at a low sun) and god rays cost one lookup per step; off marches everything per sample, for comparison. `cloud_volume_debug_altitude` (metres, 0-40000, default 0 = off; -1 shows the scene depth buffer as log view-space distance instead, magenta where no depth was written) draws a horizontal slice of the light volume at that altitude over the view as a heatmap of the optical depth towards the sun (blue clear, yellow, red, white opaque; magenta = the voxel is not ready; nothing outside the three cascades; darker for the coarser cascades), to see where cloud shadows are in the volume. `cloud_temporal` (default on) accumulates the march over frames (reprojected through the cloud shell and clamped to the current neighbourhood) so the half-resolution march averages its sampling jitter away; off shows the raw single-frame march. `cloud_lab` (object) is the cloud lab: it replaces the weather with ONE isolated cloud of a chosen type (`type`: 0.05 stratus, 0.2 stratocumulus, 0.32 nimbostratus, 0.5 cumulus, 0.72 congestus, 1.0 cumulonimbus) with `coverage`, `cirrus` (anvil / high cloud), `precipitation`, `radius_meters`, exaggerated vertical development (`height_scale`, 0.25-4), `distance_meters` ahead of the camera, `maturity` (life cycle: 0 towering cumulus, 0.3 growing cumulonimbus, 0.6 mature with anvil, 0.9 dissipating), `organisation` (0 single cell, 0.5 multicell of mixed ages, 1 organised), `density` (0.2-6), `cirrus_sheet` (0-1, default 0: a patchy thin-cirrus layer on the anti-sun side of the cell, where the storm's shadow falls, to see clouds shadowing cirrus), `seed`, an optional sun (`sun_override`, `sun_elevation_degrees`, `sun_azimuth_degrees`) and `place: true` to (re)place it ahead of the camera; `get` returns the stored values plus `place_serial`. `clouds` (default on) ray-marches the body's cloud layer in the viewport (see [ORBIT_PERFORMANCE.md](ORBIT_PERFORMANCE.md)). Same controls as the viewport Diagnostics "Terrain layers" section. |
 | `orbit_view_text_diagnostics(view_id, cursor_u?, cursor_v?)` | `view.text_diagnostics` | Complete numeric and text diagnostic for a viewport: camera position/heading/pitch, distance from the planet core, height above datum (sea level), above terrain and above the water surface, plus for the point below the camera and (with cursor_u/cursor_v) under the cursor: latitude/longitude, terrain and coarse elevation, detail delta, water depth and surface, radius from core, slope, downhill bearing, climate and biome weights, physical page/LOD, terrain runtime revisions, and `cpu_terrain` (physical-page pool workers/running/queued, page rebuild counts and products, orbital patches building/resident), and `clipmap_plan` (which clipmap levels the planner keeps active, with each level's `grid_resolution`, `drawn_vertices` vs `expected_vertices` and `fully_drawn` (false = rows of that level are not submitted): first/last level, finest spacing, coarsest reach, nearest ground, the spacing the screen asks for, plan changes) and `clouds` (the target body's built cloud field: layer count, mean coverage and optical depth, time bucket, whether it is GPU-resident; absent without a cloud layer). `text` is exactly what the HUD shows. |
 | `orbit_view_text_diagnostics_set(enabled, view_id)` | `view.text_diagnostics_set` | Shows or hides that HUD over the viewport (the "Text readout" checkbox in the viewport Diagnostics properties). |
 | `orbit_renderdoc_status` | `renderdoc.status` | RenderDoc availability (Studio must be launched with `ORBIT_RENDERDOC=1` and RenderDoc installed), whether a capture is in progress, and the path of the last `.rdc`. |
@@ -119,7 +119,12 @@ default view deterministic. Delete the file to reset.
 | `orbit_profiler_panel_get` | `profiler.panel_get` | State of the Profiler panel (View menu > Profiler): paused/live, snapshot source, options, visible range, selected slice. |
 | `orbit_profiler_panel_set(paused?, window_ms?, grouping?, freeze_on_hitch?, min_slice_ms?, filter?, reset_view?, view_begin_ms?, view_span_ms?, zoom_frame?, select_thread?, select_time_ms?, clear_selection?, zoom_to_selection?, load_trace?)` | `profiler.panel_set` | Everything the panel's controls do: Pause / Resume live, history window, by-thread or by-core lanes, pause-on-hitch, hide short slices, highlight a scope, zoom and pan, pick a frame or slice, open a saved hitch trace. |
 | `orbit_profiler_snapshot(top_scopes?, slowest?)` | `profiler.snapshot` | Analysis of the visible range of the panel's snapshot: frame stats, lane busy time, heaviest scopes, heaviest GPU passes (`top_gpu_passes`), longest slices with thread/core/self time, stall stack samples. |
-| `orbit_view_mode_set(mode, view_id?)` / `orbit_view_debug_field_set(field?, view_id?)` | `view.mode_set` / `view.debug_field_set` | Viewport mode (perspective, body_map, debug, system) and, in debug mode, which terrain field is shown (omit `field` to list names). Same operations as the viewport mode selector and Debug tab. |
+| `orbit_map_open(view_id?)` | `map.open` | Opens the flat planet map in a viewport (switches it to `flat_map` mode, the viewport mode selector's **Flat Map**). The map is an equirectangular image of the target planet (1024x512, north up, longitude -180 at the left) with a 30-degree graticule, stronger equator/prime-meridian lines and a red marker for the camera, drawn after the output transform so exposure and tone mapping never touch it. It is generated progressively on the main thread (a blue bar at the bottom shows progress), so poll `map.status` until `complete`. |
+| (same viewport, `body_map` mode) | `view.mode_set` | In the globe (`body_map`) view the viewport also draws a 30-degree lat/long graticule (equator and prime meridian stronger) and a marker for the camera, and double-clicking the globe travels there like the flat map; `map.travel` with `u`/`v` picks on the globe too. The overlay and the picking use the same lat/long convention as the HUD. |
+| `orbit_map_status(view_id?)` | `map.status` | Active `layer`, the available `layers`, `has_source`, `rows_generated` / `rows_total`, `complete`, and the camera `marker` as `latitude_degrees` / `longitude_degrees` (same convention as the viewport text HUD: latitude = asin(y) with +Y the spin pole, longitude = atan2(z, x); `null` when unknown). |
+| `orbit_map_layer_set(layer, view_id?)` | `map.layer_set` | `layer`: `elevation`, `biomes`, `temperature`, `precipitation` or `water_depth`. All layers come from the same samples, so switching never re-samples the planet. Same as the layer combo shown next to the mode selector in Flat Map mode. |
+| `orbit_map_travel(latitude_degrees?, longitude_degrees?, u?, v?, perspective?, view_id?)` | `map.travel` | Travels to a point of the planet like double-clicking the map: the terrain camera moves to a low vantage over it. Give latitude/longitude, or `u`/`v` (0..1, origin top-left) of a position in the viewport showing the map (fails on the letterbox bars). `perspective` (default true) then returns the viewport to perspective mode; false stays on the map, where the marker follows. |
+| `orbit_view_mode_set(mode, view_id?)` / `orbit_view_debug_field_set(field?, view_id?)` | `view.mode_set` / `view.debug_field_set` | Viewport mode (perspective, body_map, debug, system, flat_map) and, in debug mode, which terrain field is shown (omit `field` to list names). Same operations as the viewport mode selector and Debug tab. |
 | `orbit_workspace_get` / `orbit_workspace_set(mode)` | `studio.workspace_get` / `studio.workspace_set` | Scene, Planet, Celestial, Simulation, Shading; same as the Mode selector. |
 | `orbit_bubble_open(object_id)` | `studio.bubble_open` | Opens the element parameter bubble shown in the active mode toolbar. |
 
@@ -217,6 +222,7 @@ simulation state afterwards. Any custom size above 8K is tiled the same way.
 | MCP tool | RPC method | Notes |
 | --- | --- | --- |
 | `orbit_view_zoom_get(view_id?)` / `orbit_view_zoom_set(zoom, view_id?)` | `view.zoom_get` / `view.zoom_set` | Same as the Zoom control. |
+| `orbit_eye_get(view_id?)` / `orbit_eye_set(view_id?, highlight_protection?, glare_threshold_nits?, highlight_attack_seconds?, daylight_adaptation_nits?, max_boost_stops?, nits_per_scene_unit?, ...)` / `orbit_eye_reset(view_id?)` | `display.eye_get` / `display.eye_set` / `display.eye_reset` | The Display Diagnostics eye-adaptation controls (see "Eye adaptation" below): read config and live state in cd/m2, change any subset of fields (validated; not persisted to the display settings file), or restart adaptation. |
 | `orbit_viewport_capture_start(kind, width?, height?, path?, settle_frames?)` | `viewport.capture_start` | `kind`: `fullscreen`, `ultra`, `custom`. Returns at once. |
 | `orbit_viewport_screenshots_open` | `viewport.screenshots_open` | Opens `<project>/Screenshots` in the file browser (the viewport **Screenshot Files** button). |
 | `orbit_viewport_capture_status` | `viewport.capture_status` | Poll until `state` is `idle`; `last` has the file path, size or error. |
@@ -360,6 +366,121 @@ Notes:
   next frame; see the Studio camera notes).
 - `object.create` also attaches other capabilities the same way, e.g. Orbit /
   Ephemeris (`4f524249-5443-454c-4f52-424341500001`) to put the Moon in orbit.
+
+## Proxy sun shadow and visible proxies
+
+Authored Visibility Proxies (`object.create` with type
+`4f524249-5456-4953-5052-4f5859000001`, shape box/sphere, body-local position
+and Euler rotation) are invisible lighting occluders. Besides the radiance cache
+and exact reflections they now shadow the **direct sun**: a compute pass
+(`ProxySunShadowRenderer`, `engine/lighting`) traces one hardware ray per visible
+pixel toward the star through the same acceleration structure the exact
+reflections use, writes a full-resolution visibility texture and
+`DirectLightingRenderer` multiplies it into the stellar term next to the cloud
+shadow. Terrain and sky are not proxies, so only authored structures cast.
+
+- It runs only when the device supports ray queries and the target body has at
+  least one proxy; otherwise direct lighting is unchanged.
+- **Visible proxies.** `ProxySurfaceRenderer` also rasterises every proxy as lit,
+  depth-tested geometry (boxes by triangles, spheres ray-traced in the pixel
+  shader) into the deferred surface buffer right after the terrain pass, as
+  `RigidGeometry` / `LocalMesh` surfaces: neutral grey for Material ID 0, a
+  stable tint per other Material ID, roughness 0.85. They therefore receive the
+  direct sun, the proxy sun shadow, the screen-space gather and the radiance
+  cache like any surface, and the gather can bounce light off them. This needs
+  no ray-query support. `bypass_proxy_surfaces=true` (UI checkbox "Bypass proxy
+  surfaces", `view.terrain_layers_set`) returns to invisible occluders.
+- Toggle it with `orbit_view_terrain_layers_set(bypass_proxy_sun_shadow=true)`
+  (RPC `view.terrain_layers_set`, the Terrain layers "Bypass proxy sun shadow"
+  checkbox); `orbit_view_terrain_layers_get` reports `bypass_proxy_sun_shadow`.
+- Hot iteration: proxy property edits take the existing semantic-revision
+  rebuild (no restart; the primitive buffers for both passes are rebuilt with it). Saving `ProxySunShadow.cpp` or `DirectLighting.cpp`
+  takes the automatic Studio-generation handoff; the embedded HLSL compiles at
+  startup, so a failed shader leaves the running generation alive.
+- **Sky fill on proxy surfaces.** The same compute pass also traces 12
+  cosine-weighted rays per proxy-surface pixel against the other proxies (150 m)
+  and writes the atmosphere's sky irradiance times the open fraction; direct
+  lighting adds it as albedo / pi fill on proxy surfaces only. Terrain keeps its
+  existing lighting, so a closed room is dark inside except for what the
+  openings let in (sun shafts, and sky through the openings), and a roof's
+  underside or an enclosed floor is not lit by the open sky. `bypass_proxy_sun_shadow`
+  turns off the sun shadow and this fill together.
+- **Proxy surfaces ignore the radiance cache.** They are lit exactly (ray-traced
+  sun and sky fill), so the cache fallback of the final gather and the hybrid
+  reflections' cache fallback skip pixels of surface class 3. A cache cell is a
+  cube aligned to the planet frame that straddles thin walls and roofs: its
+  lifted sample point can sit on the other side of the wall, which lit inner
+  walls and ceilings with outside light and, because cells fill in a few at a
+  time and the finest valid level wins, made the wall pop between light and dark
+  in cell-shaped triangles one cell after another. Terrain keeps using the cache.
+- **GPU origin refresh.** The proxy scenes (acceleration structure and primitive
+  buffers) are float32 relative to the GPU origin they were built at. A scene
+  built while the camera was far away (a world reopened from a planet-scale
+  view) resolves only about a metre, which showed up as bands of wrongly
+  occluded rays on proxy walls. The renderer now rebuilds with a fresh origin
+  once the camera is more than 1.5 km from it while within 20 km of the
+  proxies (`ProxyGpuOriginIsStale`); farther away they are sub-pixel and are
+  left alone. The exact reflections share the same scene and benefit too.
+- Proxy shadows still do not darken terrain's own sky or bounce light: the
+  radiance cache traces proxies for those, but only for pixels the screen-space
+  gather leaves unresolved.
+
+## Sky-only radiance cache channel
+
+Each radiance cache cell now carries a **sky-only** irradiance next to its
+one-bounce L1 (cell grew from 64 to 96 bytes: `skyIrradiance.rgb` = L0,
+`skyGradient.xyz` = direction toward the open sky, `skyGradient.w` = the
+one-bounce transport the L1 used). The estimator
+(`EstimateRadianceCellWithSky`) fills it with the atmosphere's sky irradiance
+times the open fraction of the cell's hemisphere, traced against everything the
+visibility registry knows: **terrain** (ridges and valleys), **authored
+proxies**, and analytic bodies. Unlike the old L1 sky it is not scaled by the
+0.18 one-bounce transport.
+
+`DirectLightingRenderer` reads the cache and adds the sky as `albedo / pi *
+E(n)` fill, with `E(n) = l0 * (1 + dot(gradient, n))`, on every near-field
+surface, independent of how confident the screen-space gather is. This is what
+lights cast shadows and enclosed spaces from the sky instead of leaving them
+black. It is added to scene colour after the gather has read it, never into the
+gather's history, so it cannot accumulate frame to frame. Authored proxy
+surfaces keep their ray-traced sky fill instead (more accurate than a cell).
+
+- Reflections are unchanged: the hybrid and exact reflection shaders rebuild the
+  legacy one-bounce sky from the new channel (`2 * l0 * transport`, old lobe
+  weights), and the cache fallback no longer carries a sky (the fill replaces it).
+- Toggle: `orbit_view_terrain_layers_set(bypass_sky_cache=true)` (RPC
+  `view.terrain_layers_set`, the Terrain layers "Bypass sky cache fill"
+  checkbox); `get` reports `bypass_sky_cache`. It only changes the fill; the
+  cache keeps estimating the channel.
+- Hot iteration: the estimator, cell layout and shaders are lighting-library
+  sources (automatic Studio-generation handoff). The change needs no content
+  migration: a new generation starts with an empty cache that refills.
+- Night side and space: the atmosphere's sky summary is zero without sunlight,
+  so the fill vanishes; it is also off whenever the near-field indirect stack is
+  (planet seen from orbit, `bypass_indirect_lighting`).
+
+## Eye adaptation: highlight protection and boost limit
+
+Auto-exposure (`engine/post_process/HumanEyeAdaptation`) works in cd/m^2. One scene-linear unit is
+1361 W/(m^2 sr) x 683 lm/W = 929,563 cd/m^2 (`kSceneLuminanceNitsPerUnit`, `nitsPerSceneUnit`).
+
+- **Highlight protection** (`display.eye.highlight_protection`, on by default): the brightest metered
+  pixel never exceeds the display peak. Exposure is capped so that pixel maps to the tone-mapping
+  `peakNits` (reference white and peak are copied from the tone-mapping config each frame, so there is
+  one source of truth). Sources above `glare_threshold_nits` (default 1e6, the sun disc and glints) are
+  glare, not protected. The cap engages quickly (`highlight_attack_seconds`, 0.04 s) and releases at the
+  normal photopic darkening time.
+- **Natural boost limit**: the photopic gain may exceed the full-daylight setting
+  (`daylight_adaptation_nits`, 50,000) by at most `max_boost_stops` (6), so dark interiors stay dark
+  instead of being lifted to mid-gray.
+
+The Display Diagnostics panel shows the brightest pixel in cd/m^2, the stops removed by protection and the
+stops the boost limit refused. Settings persist as `display.eye.*`. The same controls and state are
+available as `orbit_eye_get` / `orbit_eye_set` / `orbit_eye_reset` (`display.eye_*`).
+
+Hot iteration: the eye update lives in the hot-reloadable post-process module (interface version 2), so
+saving `HumanEyeAdaptation.cpp` swaps the implementation in-process; the new state fields default to
+"no limit" so the running state survives the swap.
 
 ## Verifying
 

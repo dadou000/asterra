@@ -306,6 +306,9 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"cloud_godray_strength", static_cast<f64>(layers.cloudGodrayStrength)},
         {"cloud_light_volume", layers.cloudLightVolume},
         {"bypass_cloud_shadow", layers.bypassCloudShadow},
+        {"bypass_proxy_sun_shadow", layers.bypassProxySunShadow},
+        {"bypass_proxy_surfaces", layers.bypassProxySurfaces},
+        {"bypass_sky_cache", layers.bypassSkyCache},
         {"bypass_indirect_lighting", layers.bypassIndirectLighting},
         {"bypass_near_field_water", layers.bypassNearFieldWater},
         {"bypass_atmosphere", layers.bypassAtmosphere},
@@ -833,6 +836,9 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("cloud_temporal", layers.cloudTemporal);
                 applyFlag("cloud_light_volume", layers.cloudLightVolume);
                 applyFlag("bypass_cloud_shadow", layers.bypassCloudShadow);
+                applyFlag("bypass_proxy_sun_shadow", layers.bypassProxySunShadow);
+                applyFlag("bypass_proxy_surfaces", layers.bypassProxySurfaces);
+                applyFlag("bypass_sky_cache", layers.bypassSkyCache);
                 applyFlag("bypass_indirect_lighting", layers.bypassIndirectLighting);
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
                 applyFlag("bypass_atmosphere", layers.bypassAtmosphere);

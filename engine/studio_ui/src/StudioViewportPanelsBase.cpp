@@ -331,6 +331,7 @@ void StudioViewportPanels::InvokeViewportMode(
         return;
 
     case studio_session::ViewportMode::System:
+    case studio_session::ViewportMode::FlatMap:
     {
         const std::string_view id =
             expansion_.ControlledViewportId();
@@ -339,9 +340,7 @@ void StudioViewportPanels::InvokeViewportMode(
             throw std::logic_error(
                 "Controlled viewport is unavailable.");
         }
-        session_->Viewports().SetMode(
-            id,
-            studio_session::ViewportMode::System);
+        session_->Viewports().SetMode(id, mode);
         return;
     }
     }

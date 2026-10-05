@@ -16,6 +16,8 @@ struct GpuRadianceCell
     float4 irradianceX;
     float4 irradianceY;
     float4 irradianceZ;
+    float4 skyIrradiance; // rgb sky-only L0
+    float4 skyGradient;   // xyz sky-only gradient, w one-bounce transport
 };
 
 struct GpuRadianceLevelInfo
@@ -54,6 +56,13 @@ Texture2D g_depth : register(t5);
 [[vk::binding(5, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler : register(s5);
+
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+Texture2D g_emissionClass : register(t6);
+[[vk::binding(6, 0)]]
+[[vk::combinedImageSampler]]
+SamplerState g_emissionSampler : register(s6);
 
 struct Constants
 {
@@ -171,6 +180,23 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             0).r;
 
     if (depth <= 0.0)
+    {
+        return;
+    }
+
+    // Authored proxy surfaces (class 3) are lit exactly: ray-traced sun and sky
+    // fill. A cache cell is a cube of the planet frame that straddles thin
+    // walls and roofs, so reading it there only leaks light through them and
+    // paints the cell boundaries on the wall as triangles; the cells also fill
+    // in one by one, so the leak pops as they arrive.
+    const float surfaceClass =
+        floor(
+            g_emissionClass.SampleLevel(
+                g_emissionSampler,
+                uv,
+                0).a + 0.01);
+
+    if (surfaceClass == 3.0)
     {
         return;
     }
@@ -340,7 +366,7 @@ RadianceCacheSampler::RadianceCacheSampler(
             .pushConstantDwords = 16U,
             .shaderResourceBuffers = 2U,
             .storageTextures = 1U,
-            .sampledTextures = 3U
+            .sampledTextures = 4U
         });
 }
 
@@ -349,6 +375,7 @@ void RadianceCacheSampler::ResolveFallback(
     rhi::Texture& indirect,
     rhi::Texture& surfaceBaseRoughness,
     rhi::Texture& surfaceNormalMetallic,
+    rhi::Texture& surfaceEmissionClass,
     rhi::Texture& depth,
     rhi::Buffer& radianceCells,
     rhi::Buffer& radianceLevels,
@@ -420,6 +447,9 @@ void RadianceCacheSampler::ResolveFallback(
     commands.SetComputeTexture(
         2U,
         depth);
+    commands.SetComputeTexture(
+        3U,
+        surfaceEmissionClass);
 
     commands.SetComputeBuffer(
         0U,

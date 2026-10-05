@@ -1,6 +1,7 @@
 #include <orbit/profiler/Profiler.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
+#include <orbit/celestial_atmosphere/SkyIrradiance.hpp>
 #include <orbit/celestial_radiometry/Radiometry.hpp>
 #include <orbit/content/ContentService.hpp>
 #include <orbit/lighting/MaterialEmission.hpp>
@@ -207,42 +208,23 @@ CelestialWorkKeyFor(
         return {};
     }
 
-    math::Double3 sum{};
-
-    for (const auto& texel : sky->skyView.texels)
-    {
-        sum.x += std::max(
-            static_cast<f64>(texel.x),
-            0.0);
-        sum.y += std::max(
-            static_cast<f64>(texel.y),
-            0.0);
-        sum.z += std::max(
-            static_cast<f64>(texel.z),
-            0.0);
-    }
-
-    const f64 inverseCount =
-        1.0 /
-        static_cast<f64>(
-            sky->skyView.texels.size());
-
-    // Convert average sky radiance to an approximate hemispherical
-    // irradiance and normalize by Orbit's solar reference irradiance.
-    constexpr f64 kPi =
-        3.14159265358979323846;
+    // Cosine-weighted sky irradiance on an up-facing surface, from the sky
+    // radiance's spherical-harmonic projection, normalized by Orbit's solar
+    // reference irradiance. The sky table is in the sky frame (+Z = zenith).
     constexpr f64 kReferenceIrradiance =
         1361.0;
 
-    const f64 scale =
-        inverseCount *
-        kPi /
-        kReferenceIrradiance;
+    const auto irradiance =
+        celestial_atmosphere::EvaluateSkyIrradiance(
+            celestial_atmosphere::
+                ProjectSkyViewToSphericalHarmonics(
+                    sky->skyView),
+            {0.0, 0.0, 1.0});
 
     return {
-        static_cast<f32>(sum.x * scale),
-        static_cast<f32>(sum.y * scale),
-        static_cast<f32>(sum.z * scale)
+        static_cast<f32>(irradiance.x / kReferenceIrradiance),
+        static_cast<f32>(irradiance.y / kReferenceIrradiance),
+        static_cast<f32>(irradiance.z / kReferenceIrradiance)
     };
 }
 
@@ -2611,9 +2593,12 @@ StudioViewportRenderer::StudioViewportRenderer(
       materialEmissionSurfaceOverride_(device, compiler),
       finalGatherRenderer_(device, compiler),
       radianceCacheSampler_(device, compiler),
+      proxySunShadowRenderer_(device, compiler),
+      proxySurfaceRenderer_(device, compiler),
       hybridReflectionRenderer_(device, compiler),
       exactReflectionQueryRenderer_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
+      flatMapRenderer_(device, compiler, framesInFlight),
       luminanceHistogramRenderer_(device, compiler),
       highlightEffectsRenderer_(device, compiler),
       displayResolveRenderer_(device, compiler),
@@ -4078,7 +4063,22 @@ StudioViewportRenderer::Compose(
                     visibilityProxyPresentations_[
                         info.id];
 
+                // The GPU scenes are float32 relative to the origin they were
+                // built at; refresh it when the camera has drifted away while
+                // it is near the proxies (see ProxyGpuOriginIsStale).
+                const bool gpuOriginStale =
+                    proxyPresentation.surfaces.Ready() &&
+                    lighting::ProxyGpuOriginIsStale(
+                        view->Lighting().cameraPositionInFrameMeters,
+                        proxyPresentation.surfaces.
+                            GpuOriginInFrameMeters(),
+                        proxyPresentation.surfaces.
+                            CentroidInFrameMeters(),
+                        proxyPresentation.surfaces.
+                            BoundingRadiusMeters());
+
                 const bool requiresRebuild =
+                    gpuOriginStale ||
                     proxyPresentation.provider ==
                         nullptr ||
                     proxyPresentation.body !=
@@ -4157,6 +4157,14 @@ StudioViewportRenderer::Compose(
                                 view->Lighting().
                                     gpuOriginInFrameMeters);
                     }
+
+                    // The visible proxy surfaces need only the primitive
+                    // buffer, so they do not depend on ray-query support.
+                    proxyPresentation.surfaces.Rebuild(
+                        *device_,
+                        proxyPresentation.scene,
+                        view->Lighting().
+                            gpuOriginInFrameMeters);
 
                     const auto& stats =
                         proxyPresentation.scene.
@@ -5190,14 +5198,20 @@ StudioViewportRenderer::Compose(
                 skyInput{
                     .observerRadiusMeters =
                         observerRadius,
-                    .sunDirectionBody = {
-                        studioDirectLight.
-                            directionBody.x,
-                        studioDirectLight.
-                            directionBody.y,
-                        studioDirectLight.
-                            directionBody.z
-                    },
+                    // The sky table lives in a sky frame (+Z = this observer's
+                    // zenith, sun at azimuth 0), so the sun goes in as that
+                    // frame's direction, not as a body-fixed one.
+                    .sunDirectionBody =
+                        celestial_atmosphere::SkyFrameSunDirection(
+                            view->Camera().localPositionMeters,
+                            {
+                                studioDirectLight.
+                                    directionBody.x,
+                                studioDirectLight.
+                                    directionBody.y,
+                                studioDirectLight.
+                                    directionBody.z
+                            }),
                     .incidentIrradianceWattsPerSquareMeter = {
                         irradiance,
                         irradiance,
@@ -8199,6 +8213,72 @@ StudioViewportRenderer::Compose(
             break;
         }
 
+        case StudioViewportPresentation::FlatMap:
+        {
+            transitionDiagnostics_.erase(info.id);
+            clipmapPlanStats_.erase(info.id);
+
+            macroGlobePresentations_.erase(
+                info.id);
+            terrainPresentations_.erase(
+                info.id);
+
+            // The map itself is drawn after the output transform (see the
+            // ".FlatMap" pass below) so exposure and tone mapping leave it
+            // alone; the scene underneath is just cleared.
+            std::optional<StudioFlatMapRenderer::SourceBinding> flatMapSource;
+            std::optional<math::Double3> flatMapMarker;
+            if (terrainRuntime.has_value())
+            {
+                flatMapSource = StudioFlatMapRenderer::SourceBinding{
+                    .terrain =
+                        &session.TerrainRuntime().TerrainSource(
+                            *terrainRuntime),
+                    .planet = terrainRuntime->planet.id,
+                    .radiusMeters = terrainRuntime->planet.radiusMeters,
+                    .revision =
+                        terrainRuntime->terrainSourceRevision ^
+                        (terrainRuntime->surfaceSourceRevision *
+                         0x9E3779B97F4A7C15ULL)
+                };
+                if (math::LengthSquared(terrainRuntime->observer.meters) >
+                    0.0)
+                {
+                    flatMapMarker = terrainRuntime->observer.meters;
+                }
+            }
+            flatMapRenderer_.Advance(
+                info.id,
+                flatMapSource.has_value() ? &*flatMapSource : nullptr,
+                info.flatMapLayer,
+                flatMapMarker,
+                8.0);
+
+            graph.AddPass(
+                prefix + ".FlatMapClear",
+                {
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [color](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    commands.ClearColorTarget(
+                        *color,
+                        {
+                            .red = 0.0F,
+                            .green = 0.0F,
+                            .blue = 0.0F,
+                            .alpha = 1.0F
+                        });
+                });
+            break;
+        }
+
         case StudioViewportPresentation::Blank:
         {
             transitionDiagnostics_.erase(info.id);
@@ -9147,8 +9227,11 @@ StudioViewportRenderer::Compose(
 
             for (const auto& update : radianceUpdates)
             {
+                // The sky is estimated as its own channel (full strength,
+                // occluded by terrain and proxies) rather than folded into the
+                // one-bounce L1; direct lighting applies it as fill.
                 const auto estimate =
-                    lighting::EstimateRadianceCell(
+                    lighting::EstimateRadianceCellWithSky(
                         update.key,
                         finalGather.radianceResidency->Config(),
                         lightingView,
@@ -9161,7 +9244,9 @@ StudioViewportRenderer::Compose(
                 static_cast<void>(
                     finalGather.radianceResidency->CommitUpdate(
                         update.key,
-                        estimate,
+                        estimate.indirect,
+                        estimate.sky,
+                        radianceEstimateSettings.diffuseTransportScale,
                         1U,
                         radianceSourceRevision));
             }
@@ -9452,16 +9537,234 @@ StudioViewportRenderer::Compose(
                         .access = render_graph::Access::Read};
                 }
             }
+
+            // Authored Visibility Proxies as visible, lit geometry: drawn into
+            // the surface buffer after the terrain so direct sun, the proxy sun
+            // shadow, the final gather and the radiance cache all treat them as
+            // ordinary rigid surfaces.
+            if (!info.layers.bypassProxySurfaces &&
+                logicalTarget->mode != studio_session::ViewportMode::Debug)
+            {
+                if (const auto surfaceFound =
+                        visibilityProxyPresentations_.find(info.id);
+                    surfaceFound != visibilityProxyPresentations_.end() &&
+                    surfaceFound->second.surfaces.Ready())
+                {
+                    graph.AddPass(
+                        prefix + ".ProxySurfaces",
+                        {
+                            {
+                                .texture = targets.color,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.surfaceBaseRoughness,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.surfaceNormalMetallic,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.surfaceEmissionClass,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthWrite,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         geometry = &surfaceFound->second.surfaces,
+                         color,
+                         lightingBaseRoughness,
+                         lightingNormalMetallic,
+                         lightingEmissionClass,
+                         lightingDepth,
+                         width,
+                         height,
+                         lightingView](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            proxySurfaceRenderer_.Draw(
+                                commands,
+                                *geometry,
+                                *color,
+                                *lightingBaseRoughness,
+                                *lightingNormalMetallic,
+                                *lightingEmissionClass,
+                                *lightingDepth,
+                                width,
+                                height,
+                                lightingView);
+                        });
+                }
+            }
+
+            // Sun visibility against authored Visibility Proxies: one hardware
+            // ray per visible pixel toward the star, read by direct lighting.
+            // Terrain and sky are not proxies, so only authored structures cast.
+            rhi::Texture* proxySunShadowTexture = nullptr;
+            std::optional<render_graph::TextureUse> proxySunShadowUse;
+            if (!info.layers.bypassProxySunShadow &&
+                proxySunShadowRenderer_.Supported() &&
+                studioDirectLight.direct.has_value() &&
+                logicalTarget->mode != studio_session::ViewportMode::Debug)
+            {
+                if (const auto proxyFound =
+                        visibilityProxyPresentations_.find(info.id);
+                    proxyFound != visibilityProxyPresentations_.end() &&
+                    proxyFound->second.hardware != nullptr &&
+                    proxyFound->second.hardware->Ready())
+                {
+                    auto& shadowTarget = proxySunShadowTargets_[info.id];
+                    if (shadowTarget == nullptr ||
+                        shadowTarget->Width() != width ||
+                        shadowTarget->Height() != height)
+                    {
+                        shadowTarget = device_->CreateTexture({
+                            .width = width,
+                            .height = height,
+                            .format = rhi::TextureFormat::RGBA16_Float,
+                            .initialState = rhi::ResourceState::ShaderResource,
+                            .allowUnorderedAccess = true});
+                    }
+                    proxySunShadowTexture = shadowTarget.get();
+                    const auto proxyShadowHandle = graph.ImportTexture(
+                        prefix + ".ProxySunShadowTarget",
+                        *proxySunShadowTexture,
+                        rhi::ResourceState::ShaderResource);
+
+                    // Sky fill for proxy surfaces uses the same atmosphere
+                    // summary the radiance cache does; zero without a sky.
+                    math::Float3 proxySkyIrradiance{};
+                    if (const auto skyFound =
+                            atmospherePresentations_.find(info.id);
+                        skyFound != atmospherePresentations_.end() &&
+                        skyFound->second.skyView != nullptr)
+                    {
+                        proxySkyIrradiance =
+                            AtmosphereSkyIrradianceSummary(
+                                skyFound->second.skyView.get());
+                    }
+
+                    graph.AddPass(
+                        prefix + ".ProxySunShadow",
+                        {
+                            {
+                                .texture = targets.surfaceNormalMetallic,
+                                .state = rhi::ResourceState::ShaderResource,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = targets.surfaceEmissionClass,
+                                .state = rhi::ResourceState::ShaderResource,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthRead,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = proxyShadowHandle,
+                                .state = rhi::ResourceState::UnorderedAccess,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         proxyHardware = proxyFound->second.hardware.get(),
+                         lightingNormalMetallic,
+                         lightingEmissionClass,
+                         lightingDepth,
+                         proxySkyIrradiance,
+                         shadowTexture = proxySunShadowTexture,
+                         width,
+                         height,
+                         lightingView,
+                         sunDirection = studioDirectLight.directionBody](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            proxySunShadowRenderer_.Draw(
+                                commands,
+                                *proxyHardware,
+                                *shadowTexture,
+                                *lightingNormalMetallic,
+                                *lightingEmissionClass,
+                                *lightingDepth,
+                                width,
+                                height,
+                                lightingView,
+                                sunDirection,
+                                lighting::ProxySunShadowSettings{
+                                    .skyIrradiance = proxySkyIrradiance});
+                        });
+
+                    proxySunShadowUse = render_graph::TextureUse{
+                        .texture = proxyShadowHandle,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read};
+                }
+            }
+
             const auto withCloudShadow =
-                [&cloudShadowUse](
+                [&cloudShadowUse, &proxySunShadowUse](
                     std::vector<render_graph::TextureUse> uses)
             {
                 if (cloudShadowUse.has_value())
                 {
                     uses.push_back(*cloudShadowUse);
                 }
+                if (proxySunShadowUse.has_value())
+                {
+                    uses.push_back(*proxySunShadowUse);
+                }
                 return uses;
             };
+
+            // The sky-only radiance cache fill is read by direct lighting, so
+            // the cache buffers join its inputs when it is active.
+            const bool skyCacheFill =
+                nearFieldIndirect &&
+                radianceLevelCount > 0U &&
+                !info.layers.bypassSkyCache;
+            constexpr f32 kSkyCacheStrength = 1.0F;
+
+            std::vector<render_graph::BufferUse> directBufferUses{
+                {
+                    .buffer = localLightsHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read
+                },
+                {
+                    .buffer = localOffsetsHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read
+                },
+                {
+                    .buffer = localIndicesHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read
+                }
+            };
+            if (skyCacheFill)
+            {
+                directBufferUses.push_back({
+                    .buffer = radianceCellsHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read});
+                directBufferUses.push_back({
+                    .buffer = radianceLevelsHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read});
+            }
 
             graph.AddPass(
                 prefix + ".SharedDirectLighting",
@@ -9515,38 +9818,7 @@ StudioViewportRenderer::Compose(
                                 Write
                     }
                 }),
-                {
-                    {
-                        .buffer =
-                            localLightsHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .buffer =
-                            localOffsetsHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    },
-                    {
-                        .buffer =
-                            localIndicesHandle,
-                        .state =
-                            rhi::ResourceState::
-                                ShaderResource,
-                        .access =
-                            render_graph::Access::
-                                Read
-                    }
-                },
+                directBufferUses,
                 [this,
                  lightingBaseRoughness,
                  lightingNormalMetallic,
@@ -9563,6 +9835,11 @@ StudioViewportRenderer::Compose(
                  localIndicesHandle,
                  particleLightGridForDirect,
                  cloudShadowTexture,
+                 proxySunShadowTexture,
+                 skyCacheFill,
+                 radianceCellsHandle,
+                 radianceLevelsHandle,
+                 radianceLevelCount,
                  lightingTimestamps,
                  frameIndex,
                  nearFieldIndirect](
@@ -9598,6 +9875,15 @@ StudioViewportRenderer::Compose(
                         localLightGrid,
                         particleLightGridForDirect,
                         cloudShadowTexture,
+                        proxySunShadowTexture,
+                        skyCacheFill
+                            ? &resources.Buffer(radianceCellsHandle)
+                            : nullptr,
+                        skyCacheFill
+                            ? &resources.Buffer(radianceLevelsHandle)
+                            : nullptr,
+                        skyCacheFill ? radianceLevelCount : 0U,
+                        kSkyCacheStrength,
                         // The sky/ground fill floor tracks the stellar
                         // irradiance actually reaching this body, so distant
                         // planets are not washed flat by a fixed 3.5% floor.
@@ -9938,6 +10224,17 @@ StudioViewportRenderer::Compose(
                             },
                             {
                                 .texture =
+                                    targets.
+                                        surfaceEmissionClass,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
+                                .texture =
                                     targets.depth,
                                 .state =
                                     rhi::ResourceState::
@@ -9973,6 +10270,7 @@ StudioViewportRenderer::Compose(
                          currentIndirect,
                          lightingBaseRoughness,
                          lightingNormalMetallic,
+                         lightingEmissionClass,
                          lightingDepth,
                          radianceCellsHandle,
                          radianceLevelsHandle,
@@ -9990,6 +10288,7 @@ StudioViewportRenderer::Compose(
                                     *currentIndirect,
                                     *lightingBaseRoughness,
                                     *lightingNormalMetallic,
+                                    *lightingEmissionClass,
                                     *lightingDepth,
                                     resources.Buffer(
                                         radianceCellsHandle),
@@ -10355,6 +10654,17 @@ StudioViewportRenderer::Compose(
                                         Read
                             },
                             {
+                                .texture =
+                                    targets.
+                                        surfaceEmissionClass,
+                                .state =
+                                    rhi::ResourceState::
+                                        ShaderResource,
+                                .access =
+                                    render_graph::Access::
+                                        Read
+                            },
+                            {
                                 .texture = targets.depth,
                                 .state =
                                     rhi::ResourceState::
@@ -10400,6 +10710,7 @@ StudioViewportRenderer::Compose(
                          color,
                          lightingBaseRoughness,
                          lightingNormalMetallic,
+                         lightingEmissionClass,
                          lightingDepth,
                          gatherScratch,
                          radianceCellsHandle,
@@ -10432,6 +10743,7 @@ StudioViewportRenderer::Compose(
                                     *color,
                                     *lightingBaseRoughness,
                                     *lightingNormalMetallic,
+                                    *lightingEmissionClass,
                                     *lightingDepth,
                                     resources.Buffer(
                                         radianceCellsHandle),
@@ -12685,13 +12997,25 @@ StudioViewportRenderer::Compose(
 
                 if (!histogram.diagnostics.eyeAdaptationLocked)
                 {
+                    // The display's reference white and peak luminance (nits)
+                    // are the tone-mapping config's: the eye protects the
+                    // highlights against what that display can actually show.
+                    auto eyeConfig =
+                        histogram.diagnostics.eyeConfig;
+                    eyeConfig.referenceWhiteNits =
+                        histogram.diagnostics.toneMapping.
+                            referenceWhiteNits;
+                    eyeConfig.highlightTargetNits =
+                        histogram.diagnostics.toneMapping.
+                            peakNits;
+
                     histogram.diagnostics.eyeState =
                         post_process::
                             UpdateHumanEyeAdaptation(
                                 histogram.diagnostics.eyeState,
                                 histogram.diagnostics.statistics,
                                 eyeDeltaSeconds,
-                                histogram.diagnostics.eyeConfig);
+                                eyeConfig);
                 }
 
                 histogram.lastEyeUpdate =
@@ -13409,6 +13733,75 @@ StudioViewportRenderer::Compose(
                     rhi::CommandList&,
                     const render_graph::Resources&)
                 {
+                });
+        }
+
+        if (presentation == StudioViewportPresentation::FlatMap)
+        {
+            graph.AddPass(
+                prefix + ".FlatMap",
+                {
+                    {
+                        .texture = targets.display,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [this,
+                 displayColor,
+                 width,
+                 height,
+                 viewId = info.id,
+                 frameSlot = frameIndex % framesInFlight_](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    flatMapRenderer_.Draw(
+                        commands,
+                        *displayColor,
+                        width,
+                        height,
+                        viewId,
+                        frameSlot);
+                });
+        }
+
+        if (logicalTarget->mode == studio_session::ViewportMode::BodyMap &&
+            terrainRuntime.has_value())
+        {
+            // Graticule and observer marker over the globe view, drawn after
+            // the output transform like the flat map.
+            graph.AddPass(
+                prefix + ".GlobeOverlay",
+                {
+                    {
+                        .texture = targets.display,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [this,
+                 displayColor,
+                 width,
+                 height,
+                 camera = view->Camera(),
+                 radius = terrainRuntime->planet.radiusMeters,
+                 marker = math::LengthSquared(
+                              terrainRuntime->observer.meters) > 0.0
+                     ? std::optional<math::Double3>(
+                           terrainRuntime->observer.meters)
+                     : std::nullopt](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    flatMapRenderer_.DrawGlobeOverlay(
+                        commands,
+                        *displayColor,
+                        width,
+                        height,
+                        camera,
+                        radius,
+                        marker);
                 });
         }
 
