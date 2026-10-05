@@ -166,6 +166,21 @@ void VulkanQueue::Submit(CommandList& commandList)
             "Orbit failed to submit a Vulkan command buffer.");
     }
 
+    // TEMPORARY UI-CORRUPTION DIAGNOSTIC:
+    // EditorUi currently rewrites one host-visible vertex/index-buffer pair
+    // every frame. Force the submitted GPU work to retire before the CPU can
+    // reach the next frame and overwrite those buffers. If the malformed text
+    // and menu geometry disappear with this guard in place, the corruption is
+    // confirmed to be a CPU/GPU lifetime race and EditorUi should be moved to
+    // per-frame-in-flight upload buffers. Do not keep this stall as the final
+    // performance solution.
+    if (vkQueueWaitIdle(nativeQueue_) != VK_SUCCESS)
+    {
+        throw std::runtime_error(
+            "Orbit failed while waiting for the Vulkan queue during the UI "
+            "buffer lifetime diagnostic.");
+    }
+
     pendingImageAvailable_ = VK_NULL_HANDLE;
     pendingRenderFinished_ = VK_NULL_HANDLE;
     pendingImageAvailableRetired_ = VK_NULL_HANDLE;
