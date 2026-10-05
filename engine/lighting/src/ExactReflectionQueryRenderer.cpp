@@ -420,7 +420,10 @@ float3 SampleCache(
         const int halfAxis =
             axis / 2;
 
-        if (any(abs(delta) > halfAxis))
+        // The level's window is [-halfAxis, halfAxis - 1] cells around its centre (ScrollTo keeps
+        // cellsPerAxis cells). +halfAxis is outside it and aliases to the -halfAxis slot on the far
+        // side of the cube, which painted a one-cell-wide wrong-valued plane at the window edge.
+        if (any(delta < -halfAxis) || any(delta >= halfAxis))
         {
             continue;
         }

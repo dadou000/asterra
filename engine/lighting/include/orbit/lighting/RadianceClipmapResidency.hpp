@@ -16,6 +16,11 @@ struct RadianceResidentCell
     f32 invalidationPriorityBoost{0.0F};
     bool occupied{false};
     bool dirty{true};
+    // Set when a source revision change made a previously estimated cell stale. The CPU lookup stays strict,
+    // but the GPU snapshot keeps serving the old irradiance until the refresh lands, so a revision change (terrain
+    // streaming, camera motion) does not blank the whole cache and leave grid-aligned dark slabs while the
+    // budgeted updates catch up.
+    bool staleReusable{false};
 };
 
 struct RadianceUpdateCandidate

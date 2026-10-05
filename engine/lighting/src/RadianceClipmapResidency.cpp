@@ -380,6 +380,9 @@ RadianceClipmapResidency::ScrollTo(
                                 sourceRevision_)
                         {
                             slot->dirty = true;
+                            slot->staleReusable =
+                                slot->staleReusable ||
+                                slot->cell.valid;
                             slot->cell.valid = false;
                             UpdateGpuSnapshotCell(
                                 level.level,
@@ -511,6 +514,7 @@ void RadianceClipmapResidency::InvalidateSphere(
                 if (!preservePreviousValue)
                 {
                     slot.cell.valid = false;
+                    slot.staleReusable = false;
                 }
 
                 slot.sourceRevision =
@@ -809,6 +813,7 @@ bool RadianceClipmapResidency::CommitUpdate(
     slot->invalidationPriorityBoost =
         0.0F;
     slot->dirty = false;
+    slot->staleReusable = false;
 
     UpdateGpuSnapshotCell(
         key.level,
@@ -952,11 +957,12 @@ RadianceClipmapResidency::BuildGpuSnapshotRef(
                 slot.occupied &&
                 BelongsToCurrentWindow(
                     slot.key) &&
-                slot.cell.valid &&
-                slot.sourceRevision ==
-                    sourceRevision_ &&
-                slot.cell.revision ==
-                    sourceRevision_;
+                ((slot.cell.valid &&
+                  slot.sourceRevision ==
+                      sourceRevision_ &&
+                  slot.cell.revision ==
+                      sourceRevision_) ||
+                 slot.staleReusable);
 
             exportCell.valid =
                 current;
@@ -1057,9 +1063,11 @@ void RadianceClipmapResidency::UpdateGpuSnapshotCell(
     const auto& slot = level.slots[slotIndex];
     RadianceCell exportCell = slot.cell;
     exportCell.valid = slot.occupied &&
-        BelongsToCurrentWindow(slot.key) && slot.cell.valid &&
-        slot.sourceRevision == sourceRevision_ &&
-        slot.cell.revision == sourceRevision_;
+        BelongsToCurrentWindow(slot.key) &&
+        ((slot.cell.valid &&
+          slot.sourceRevision == sourceRevision_ &&
+          slot.cell.revision == sourceRevision_) ||
+         slot.staleReusable);
     gpuSnapshotCache_.cells[destination] =
         EncodeGpuRadianceCell(exportCell);
     for (std::size_t frameSlot = 0U;

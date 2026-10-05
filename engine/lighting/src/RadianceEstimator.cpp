@@ -117,35 +117,57 @@ EstimateRadianceCell(
                   fallbackAmbient,
                   fallbackAmbient};
 
+    // A surface pixel reads the cell that contains it, and that cell's centre
+    // can sit on either side of the ground. A centre inside the terrain makes
+    // every visibility ray an immediate hit, so whole grid-aligned slabs of
+    // ground lost their sky and sun terms. Trace from a point lifted 1.5 cell
+    // edges along the body's up direction so a cell that contains the surface
+    // always looks out from above it.
+    const auto cellCenterFrame =
+        RadianceCellCenterInFrame(
+            key,
+            config);
+
+    math::Float3 bodyUp{
+        static_cast<f32>(cellCenterFrame.x),
+        static_cast<f32>(cellCenterFrame.y),
+        static_cast<f32>(cellCenterFrame.z)
+    };
+
+    if (math::LengthSquared(bodyUp) <=
+        1.0e-10F)
+    {
+        bodyUp =
+            {0.0F, 1.0F, 0.0F};
+    }
+
+    const math::Float3 liftDirection =
+        math::Normalize(bodyUp);
+    const f64 liftMeters =
+        1.5 *
+        RadianceCellSizeMeters(
+            config,
+            key.level);
+    const math::Double3 liftedCellCenter{
+        cellCenterFrame.x +
+            static_cast<f64>(liftDirection.x) * liftMeters,
+        cellCenterFrame.y +
+            static_cast<f64>(liftDirection.y) * liftMeters,
+        cellCenterFrame.z +
+            static_cast<f64>(liftDirection.z) * liftMeters
+    };
+
     SkyVisibilityEstimate skyVisibility;
 
     if (hasSkySummary &&
         visibility != nullptr)
     {
-        const auto skyCellCenter =
-            RadianceCellCenterInFrame(
-                key,
-                config);
-
-        math::Float3 bodyUp{
-            static_cast<f32>(skyCellCenter.x),
-            static_cast<f32>(skyCellCenter.y),
-            static_cast<f32>(skyCellCenter.z)
-        };
-
-        if (math::LengthSquared(bodyUp) <=
-            1.0e-10F)
-        {
-            bodyUp =
-                {0.0F, 1.0F, 0.0F};
-        }
-
         skyVisibility =
             EstimateSkyVisibility(
                 *visibility,
                 view.frame,
                 view.body,
-                skyCellCenter,
+                liftedCellCenter,
                 bodyUp);
 
         ambientEnergy =
@@ -201,11 +223,6 @@ EstimateRadianceCell(
             transport
     };
 
-    const auto cellCenterFrame =
-        RadianceCellCenterInFrame(
-            key,
-            config);
-
     bool stellarVisible = true;
 
     if (visibility != nullptr)
@@ -216,7 +233,7 @@ EstimateRadianceCell(
             .frame = view.frame,
             .body = view.body,
             .originInFrameMeters =
-                cellCenterFrame,
+                liftedCellCenter,
             .direction =
                 stellar.directionToLight,
             .minimumDistanceMeters = 0.05F,
