@@ -1593,6 +1593,26 @@ void GpuAtmosphereLuts::EnsureUploaded(
         skyView_);
 }
 
+math::Double3 SunTransmittanceAt(
+    const AtmosphereParameters& parameters,
+    const AtmosphereStaticLuts& staticLuts,
+    const f64 radiusMeters,
+    const f64 sunCosineZenith)
+{
+    if (staticLuts.transmittance.width == 0U ||
+        staticLuts.transmittance.height == 0U)
+    {
+        return {1.0, 1.0, 1.0};
+    }
+
+    return LutRgb(
+        staticLuts.transmittance,
+        std::clamp(sunCosineZenith, -1.0, 1.0) * 0.5 + 0.5,
+        UnitFromRadius(
+            parameters,
+            radiusMeters));
+}
+
 void GpuAtmosphereLuts::ReplaceSkyView(
     const AtmosphereSkyView& skyView)
 {

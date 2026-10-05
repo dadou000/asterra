@@ -8282,15 +8282,44 @@ StudioViewportRenderer::Compose(
             const auto lightingView =
                 view->Lighting();
 
+            // Starlight reaches the ground through the atmosphere: tint the
+            // direct term by the same transmittance LUT the sky and clouds use,
+            // evaluated at the surface under the observer (sea level; terrain
+            // relief changes it by a few percent). Without an atmosphere the
+            // light stays untinted.
+            math::Float3 stellarTransmittance{1.0F, 1.0F, 1.0F};
+            if (terrainRuntime.has_value())
+            {
+                if (const auto atmosphereFound =
+                        atmospherePresentations_.find(info.id);
+                    atmosphereFound != atmospherePresentations_.end() &&
+                    atmosphereFound->second.staticLuts != nullptr)
+                {
+                    const auto up =
+                        math::Normalize(terrainRuntime->observer.meters);
+                    const auto toStar =
+                        math::Normalize(math::Double3{
+                            static_cast<f64>(studioDirectLight.directionBody.x),
+                            static_cast<f64>(studioDirectLight.directionBody.y),
+                            static_cast<f64>(studioDirectLight.directionBody.z)});
+                    const auto transmittance =
+                        celestial_atmosphere::SunTransmittanceAt(
+                            atmosphereFound->second.parameters,
+                            *atmosphereFound->second.staticLuts,
+                            atmosphereFound->second.parameters.bottomRadiusMeters,
+                            math::Dot(up, toStar));
+                    stellarTransmittance = {
+                        static_cast<f32>(transmittance.x),
+                        static_cast<f32>(transmittance.y),
+                        static_cast<f32>(transmittance.z)};
+                }
+            }
+
             const lighting::DirectionalLight
                 directLight{
                     .directionToLight =
                         studioDirectLight.directionBody,
-                    .colorLinear = {
-                        1.0F,
-                        1.0F,
-                        1.0F
-                    },
+                    .colorLinear = stellarTransmittance,
                     .irradianceScale =
                         studioDirectLight.irradianceScale
                 };

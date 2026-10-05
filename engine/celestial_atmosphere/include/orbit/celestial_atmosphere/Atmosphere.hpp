@@ -120,6 +120,17 @@ struct AtmosphereSkyView
     const SkyViewInput& input,
     const AtmosphereLutConfig& config = {});
 
+// Per-channel transmittance of direct starlight down to a receiver at
+// `radiusMeters` from the planet centre whose local zenith makes
+// `sunCosineZenith` with the direction to the star. Looked up in the same
+// transmittance LUT the sky and cloud passes use, so a surface lit with it
+// receives the same reddened sunlight the sky is made of.
+[[nodiscard]] math::Double3 SunTransmittanceAt(
+    const AtmosphereParameters& parameters,
+    const AtmosphereStaticLuts& staticLuts,
+    f64 radiusMeters,
+    f64 sunCosineZenith);
+
 class GpuAtmosphereLuts
 {
 public:

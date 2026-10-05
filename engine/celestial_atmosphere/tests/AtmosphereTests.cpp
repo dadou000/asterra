@@ -76,6 +76,21 @@ int main()
         return 3;
     }
 
+    // Sunlight at the ground reddens toward the horizon: more extinction in
+    // blue than red, and less light overall than at the zenith.
+    const auto zenithSun =
+        SunTransmittanceAt(earth, a, earth.bottomRadiusMeters, 1.0);
+    const auto lowSun =
+        SunTransmittanceAt(earth, a, earth.bottomRadiusMeters, 0.08);
+
+    if (!(zenithSun.x > lowSun.x) ||
+        !(lowSun.x > lowSun.z) ||
+        !(zenithSun.z > lowSun.z) ||
+        !(zenithSun.x <= 1.0))
+    {
+        return 5;
+    }
+
     const auto sky =
         BuildSkyView(
             earth,
