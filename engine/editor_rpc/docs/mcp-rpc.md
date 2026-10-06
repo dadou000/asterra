@@ -33,12 +33,14 @@ verify = [
   "python -m py_compile tools/mcp_server/orbit_editor_mcp_server.py (CI does this).",
   "ctest -R EditorRpc (engine/editor_rpc/tests) for registration and dispatch behaviour.",
 ]
-verified = "00d8c5b6"
+verified = "04d589b3"
 
 [routes]
 "which RPC methods exist for views and terrain overlays" = "/legacy/orbit-mcp/panels-and-the-shading-tab"
 "objects, bodies and properties" = "/legacy/orbit-mcp/objects-bodies-and-properties"
 "profiler capture over MCP" = "/legacy/orbit-profiler"
+"run the atmosphere solver or apply an atmosphere preset" = "/rendering/atmosphere/authoring-solver"
+"terrain GPU cache hit/miss/resident statistics" = "/rendering/terrain/gpu-cache"
 +++
 
 ```text

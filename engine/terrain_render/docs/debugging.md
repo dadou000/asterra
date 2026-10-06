@@ -29,7 +29,7 @@ depends_on = ["/rendering/terrain/clipmaps", "/editor/mcp-rpc", "/editor/viewpor
 verify = [
   "After debugging, restore: every overlay false, clipmap_freeze false, bypass_* false (orbit_view_terrain_overlays_get / orbit_view_terrain_layers_get).",
 ]
-verified = "b0a0de7f"
+verified = "04d589b3"
 
 [routes]
 "I need to see which levels are active" = "/rendering/terrain/clipmaps/level-planning"
@@ -96,6 +96,7 @@ docs = ["/rendering/lighting", "/rendering/lighting/sky-cache-fill", "/rendering
 | terrain overlays | `orbit_view_terrain_overlays_get/_set` -> `view.terrain_overlays_*` | rings, level tint, sample health, hole/projection/shading views, wireframe, freeze, cache status, drainage vectors... |
 | terrain layers and bypasses | `orbit_view_terrain_layers_get/_set` -> `view.terrain_layers_*` | which layers draw, LOD bias, planner knobs, `bypass_*` stage skips, coverage views |
 | numbers and HUD text | `orbit_view_text_diagnostics` -> `view.text_diagnostics` | camera/altitude, terrain/water at nadir and cursor, `clipmap_plan`, CPU terrain workers |
+| GPU terrain cache | `orbit_terrain_cache_stats(terrain_id)` -> `terrain.cache_stats` | hits/misses/generations/evictions/resident pages and bytes; stationary-camera hit rate (`/rendering/terrain/gpu-cache`) |
 | GPU capture | `orbit_renderdoc_capture` (Studio started with `ORBIT_RENDERDOC=1`) | a frame in RenderDoc |
 | CPU/GPU timeline | `orbit_profiler_capture` | Perfetto trace of every thread |
 

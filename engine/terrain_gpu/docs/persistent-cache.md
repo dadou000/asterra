@@ -38,7 +38,7 @@ verify = [
   "ctest -R Orbit.TerrainGpuPersistentCache: RHI byte accounting, one generation after stationary warmup, revisit reuse, physical-LOD/revision identity, LRU behaviour, external lifetime after eviction, address invalidation, stable physical-only fingerprints.",
   "Stationary camera after warmup: hits grow, generations and misses do not.",
 ]
-verified = "b0a0de7f"
+verified = "04d589b3"
 
 [[diagnose]]
 symptom = "terrain pages regenerate while the camera is stationary, or revisiting terrain is slow"

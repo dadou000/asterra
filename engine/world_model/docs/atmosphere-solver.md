@@ -42,7 +42,7 @@ verify = [
   "ctest -R Orbit.AtmospherePropertySolver: Earth-like derived scale height, provenance persistence, expert value preservation, imported/locked preservation, conflict reporting, one-transaction preset + solve undo/redo, pressure edit invalidating the fingerprint, Expert mode performing no derivation, Inspector edit promotion.",
   "ctest -R Orbit.PropertyProvenance and Orbit.CelestialAtmosphereBinding.",
 ]
-verified = "b0a0de7f"
+verified = "04d589b3"
 
 [[diagnose]]
 symptom = "derived atmosphere values did not change after editing pressure or composition"
