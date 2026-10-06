@@ -22,7 +22,7 @@ invariants = [
 ]
 related = ["/authoring/scene", "/editor/mcp-rpc", "/rules/placement", "/legacy/v0-0-3-spec/12-command-transaction-and-selection-model"]
 depends_on = ["/authoring/scene", "/authoring/schema", "/foundation/core"]
-used_by = ["/authoring/plugins", "/world/paths", "/world/surface-composition"]
+used_by = ["/apps/studio", "/authoring/plugins", "/editor/model", "/editor/session", "/world/paths", "/world/surface-composition", "/world/world-model"]
 verify = [
   "ctest -R Orbit.AuthoringModel",
   "ctest -R Orbit.CommandSurfaces",

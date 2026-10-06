@@ -18,7 +18,8 @@ invariants = [
   "With a finer fine-region cache, wherever it has ready coverage the finer segment or lake cell is drawn instead of the coarse one, never both (which would z-fight or double up water at slightly different elevations).",
 ]
 related = ["/rendering/terrain", "/legacy/standing-water-rendering"]
-depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/world/planet-coordinates"]
+depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/regions", "/rendering/terrain/water", "/world/planet-coordinates"]
+used_by = ["/apps/sandbox"]
 verify = [
   "ctest -R Orbit.OceanMesh",
 ]

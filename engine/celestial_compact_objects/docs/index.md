@@ -16,8 +16,8 @@ invariants = [
   "The runtime model is a deliberately replaceable Schwarzschild baseline that fixes the semantic contracts for later Kerr, ray-integrated lensing and radiative transfer; it does not claim to be full general relativity.",
 ]
 related = ["/celestial/compact-render", "/legacy/research-v006-compact-objects"]
-depends_on = ["/celestial/representation", "/foundation/core", "/foundation/math", "/rendering/terrain"]
-used_by = ["/celestial/compact-render"]
+depends_on = ["/celestial/representation", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
+used_by = ["/celestial/compact-render", "/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialCompactObjects",
 ]

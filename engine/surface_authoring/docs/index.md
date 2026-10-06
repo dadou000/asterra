@@ -16,8 +16,8 @@ invariants = [
   "Constraint edits invalidate terrain through the dependency graph as TerrainAuthoring changes (/rendering/terrain/invalidation).",
 ]
 related = ["/rendering/terrain/invalidation", "/legacy/v0-0-4-m04-authored-terrain-constraints"]
-depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain", "/world/planet-coordinates"]
-used_by = ["/world/surface-composition"]
+depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts", "/rendering/terrain/geology", "/world/planet-coordinates"]
+used_by = ["/editor/model", "/rendering/terrain/erosion", "/rendering/terrain/macro-geology", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.TerrainAuthoredConstraints",
 ]

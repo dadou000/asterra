@@ -17,7 +17,8 @@ invariants = [
   "The legacy detached OceanRenderer is not reintroduced into the production planetary path.",
 ]
 related = ["/rendering/water", "/celestial/appearance", "/legacy/research-v006-orbital-ocean", "/legacy/standing-water-rendering"]
-depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain"]
+depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
+used_by = ["/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialOcean",
 ]

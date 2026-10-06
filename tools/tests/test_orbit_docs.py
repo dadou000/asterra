@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from orbit_docs import DocsError, DocsIndex  # noqa: E402
 from orbit_docs.api import DocsApi, extract_section, headings  # noqa: E402
+from orbit_docs.scaffold import TODO_MARKER, scaffold  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -108,6 +109,17 @@ class DocsIndexTests(unittest.TestCase):
         top = self.index.search("clouds ray marched resolution")[0]["path"]
         self.assertEqual(top, "/legacy/old-notes/cloud-march")
 
+    def test_stopwords_alone_are_an_empty_query(self) -> None:
+        with self.assertRaises(DocsError) as caught:
+            self.index.search("how do I the of")
+        self.assertEqual(caught.exception.code, "EMPTY_QUERY")
+
+    def test_specific_leaf_outranks_router_section(self) -> None:
+        # The root's route table mentions "terrain looks wrong"; the leaf that actually
+        # documents the symptom must still win over the router.
+        top = self.index.search("terrain looks wrong holes")[0]["path"]
+        self.assertEqual(top, "/gfx/terrain")
+
     def test_empty_query_is_an_error(self) -> None:
         with self.assertRaises(DocsError) as caught:
             self.index.search("   ")
@@ -190,6 +202,48 @@ class DocsIndexTests(unittest.TestCase):
         self.assertFalse(self.index.refresh())
 
 
+class CoverageAndScaffoldTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repo = TempRepo()
+        self.addCleanup(self.repo.cleanup)
+        r = self.repo
+        r.write("docs/tree/index.md", block("/", "Root", "Root.", 'kind = "root"\n[routes]\n"old stuff" = "/legacy/old-spec"'))
+        # two modules: one with a card, one without
+        r.write("engine/alpha/CMakeLists.txt", "add_library(OrbitAlpha STATIC a.cpp)\nadd_test(NAME Orbit.Alpha COMMAND x)\n")
+        r.write("engine/alpha/include/orbit/alpha/Alpha.hpp", "namespace orbit::alpha {\nclass AlphaThing\n{\n};\n}\n")
+        r.write(
+            "engine/alpha/docs/index.md",
+            block("/alpha", "Alpha", "Alpha module.", 'sources = ["engine/alpha/include/orbit/alpha/Alpha.hpp"]\nsymbols = ["AlphaThing"]'),
+        )
+        r.write("engine/beta/CMakeLists.txt", "add_library(OrbitBeta STATIC b.cpp)\ntarget_link_libraries(OrbitBeta PUBLIC Orbit::Alpha)\n")
+        r.write("engine/beta/include/orbit/beta/Beta.hpp", "namespace orbit::beta {\nstruct BetaData\n{\n};\n}\n")
+        r.write("docs/OLD_SPEC.md", "# Old spec\n\nIntro.\n\n## Part\n\ntext\n")
+        r.write("docs/ORPHAN.md", "# Orphan\n\nNobody links here.\n")
+        self.index = DocsIndex(r.root)
+
+    def test_coverage_lists_uncovered_modules_and_unlinked_documents(self) -> None:
+        report = self.index.coverage()
+        self.assertEqual(report["modules_uncovered"], ["engine/beta"])
+        unlinked = [d["path"] for d in report["documents_unlinked"]]
+        self.assertEqual(unlinked, ["/legacy/orphan"])
+
+    def test_scaffold_drafts_a_card_with_real_facts_and_cannot_pass_check(self) -> None:
+        draft = scaffold(self.index, "engine/beta", "/beta")
+        self.assertIn(TODO_MARKER, draft)
+        self.assertIn('"BetaData"', draft)
+        self.assertIn('depends_on = ["/alpha"]', draft)
+        self.repo.write("engine/beta/docs/index.md", draft)
+        self.index.refresh()
+        codes = {e["code"] for e in self.index.check()["errors"]}
+        self.assertIn("UNFINISHED_BLOCK", codes)
+        report = self.index.coverage()
+        self.assertEqual(report["modules_uncovered"], [])
+
+    def test_scaffold_rejects_unknown_module(self) -> None:
+        with self.assertRaises(ValueError):
+            scaffold(self.index, "engine/missing")
+
+
 class DocsApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = TempRepo()
@@ -262,6 +316,17 @@ class RealRepositoryTests(unittest.TestCase):
             stack.extend(c.path for c in self.index.children(path))
         structured = {p for p, b in self.index.blocks.items() if not b.legacy}
         self.assertEqual(structured - seen, set())
+
+    def test_every_module_has_a_card_and_every_document_is_linked(self) -> None:
+        report = self.index.coverage()
+        self.assertEqual(report["modules_uncovered"], [])
+        self.assertEqual([d["path"] for d in report["documents_unlinked"]], [])
+
+    def test_module_cards_live_in_their_module_and_have_sources(self) -> None:
+        cards = [b for b in self.index.blocks.values() if not b.legacy and b.module_dir]
+        self.assertGreater(len(cards), 60)
+        for card in cards:
+            self.assertTrue(card.sources, card.path)
 
     def test_root_routes_point_somewhere(self) -> None:
         node = self.index.node(self.index.get_block("/"))

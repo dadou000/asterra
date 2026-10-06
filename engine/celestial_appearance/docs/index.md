@@ -16,8 +16,8 @@ invariants = [
   "The product is disposable and revisioned: it is rebuilt when the TerrainSource or generation revisions change.",
 ]
 related = ["/celestial/globe", "/celestial/far-render", "/rendering/terrain", "/legacy/research-v006-planetary-appearance"]
-depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/rendering/terrain"]
-used_by = ["/celestial/far-render", "/celestial/giants", "/celestial/globe", "/celestial/ocean", "/celestial/small-bodies"]
+depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/rendering/terrain/contracts"]
+used_by = ["/celestial/far-render", "/celestial/giants", "/celestial/globe", "/celestial/ocean", "/celestial/small-bodies", "/editor/studio-session"]
 verify = [
   "ctest -R Orbit.PlanetaryAppearance",
 ]

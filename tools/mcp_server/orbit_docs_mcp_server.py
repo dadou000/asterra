@@ -101,6 +101,13 @@ def orbit_docs_for_target(target: str) -> str:
 
 
 @mcp.tool()
+def orbit_docs_coverage() -> str:
+    """What the structured tree does not reach yet: engine/apps modules without a card and
+    legacy documents no structured node links to. Use it to find undocumented areas."""
+    return _out(_api.coverage())
+
+
+@mcp.tool()
 def orbit_docs_check() -> str:
     """Validate the documentation tree: parents, links, routes, source files and
     symbols that must exist, required fields. Errors fail CI; warnings are advice."""

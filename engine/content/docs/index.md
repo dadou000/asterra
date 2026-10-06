@@ -26,8 +26,8 @@ invariants = [
   "A ShadingShader (*.shade.hlsl) holds the Shade() contract function; it is not a standalone HLSL stage, needs no .orbitshader.toml sidecar and is not cooked as a Shader.",
 ]
 related = ["/legacy/orbit-shading", "/legacy/v0-0-3-spec/17-asset-database-and-material-service", "/authoring/content-wic"]
-depends_on = ["/foundation/core", "/rules/hot-iteration"]
-used_by = ["/authoring/content-wic", "/rendering/shading"]
+depends_on = ["/foundation/core", "/foundation/hot-reload"]
+used_by = ["/apps/build-service", "/apps/studio", "/authoring/content-wic", "/rendering/shading"]
 verify = [
   "ctest -R Orbit.Content",
   "ctest -R Orbit.AssetPipeline",

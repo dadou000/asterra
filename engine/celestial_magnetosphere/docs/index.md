@@ -16,8 +16,8 @@ invariants = [
   "This is a presentation seam, not magnetohydrodynamics.",
 ]
 related = ["/celestial/magnetosphere-render", "/legacy/research-v006-magnetosphere-aurora"]
-depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain"]
-used_by = ["/celestial/magnetosphere-render"]
+depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
+used_by = ["/celestial/magnetosphere-render", "/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialMagnetosphere",
 ]

@@ -16,7 +16,7 @@ invariants = [
 ]
 related = ["/authoring/content", "/legacy/orbit-shading"]
 depends_on = ["/authoring/content"]
-used_by = ["/rendering/shading"]
+used_by = ["/apps/build-service", "/apps/studio", "/rendering/shading"]
 verify = [
   "No test is registered for this module under its own name; changes are exercised through the tests of the modules that use it (see used_by).",
 ]

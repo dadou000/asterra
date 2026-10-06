@@ -16,7 +16,8 @@ invariants = [
   "The semantic Reference Shape remains the physical scale authority; the radial product is derived, fingerprinted, disposable and cube-sphere sampled so later mesh or ray representations can share one deterministic source.",
 ]
 related = ["/celestial", "/legacy/research-v006-small-body-rendering"]
-depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain"]
+depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
+used_by = ["/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialSmallBodies",
 ]

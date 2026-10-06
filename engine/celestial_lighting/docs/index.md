@@ -19,7 +19,7 @@ invariants = [
 ]
 related = ["/celestial/radiometry", "/rendering/atmosphere", "/legacy/research-v006-eclipse-reflected-light"]
 depends_on = ["/celestial/radiometry", "/foundation/core", "/foundation/math"]
-used_by = ["/celestial/far-render"]
+used_by = ["/celestial/far-render", "/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialLighting",
 ]

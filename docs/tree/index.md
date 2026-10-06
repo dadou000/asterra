@@ -13,13 +13,21 @@ related = ["/docs-system"]
 [routes]
 "rendering, terrain, clipmaps, GPU, shaders, lighting, atmosphere, clouds" = "/rendering"
 "terrain looks wrong, holes, cracks, rings, popping, wrong detail level" = "/rendering/terrain/clipmaps/debugging"
-"editor, Studio UI, viewport, panels, camera, toolbar" = "/editor"
+"terrain edit rebuilds too much, GPU terrain cache, regeneration" = "/rendering/terrain/invalidation"
+"planets, stars, orbits, rotation, rings, gas giants, black holes" = "/celestial"
+"editor, Studio UI, viewport, panels, camera, toolbar, reports" = "/editor"
 "add or change an editor capability, RPC method, MCP tool" = "/editor/mcp-rpc"
+"projects, worlds, scene, commands, undo, assets, plugins" = "/authoring"
+"planet coordinates, universe, fields, paths, procedural graph" = "/world"
+"types, math, jobs, time, frames, platform, window, hot reload core" = "/foundation"
+"executables: Studio, player, sandbox, build CLI" = "/apps"
+"dev server, probes, python tooling" = "/tools"
 "hot reload, save-to-reflect, rebuild, restart" = "/rules/hot-iteration"
 "where should this change go, avoiding duplicate systems" = "/rules/placement"
 "module dependencies, ownership, what may include what" = "/rules/architecture"
 "how are these docs organised, how do I write a block" = "/docs-system"
-"an old design document, milestone spec or research note" = "/legacy"
+"old specs, milestone records, release state, known problems" = "/history"
+"an old long document that has no structured node yet" = "/legacy"
 +++
 
 ## How to use this tree
@@ -36,11 +44,18 @@ related = ["/docs-system"]
 
 | Section | What lives there |
 | --- | --- |
-| `/rendering` | Terrain (generation, clipmaps, GPU caches, water), atmosphere and clouds, lighting, shading, performance work. |
-| `/editor` | Studio: viewport, navigation, panels, the RPC/MCP automation layer. |
+| `/rendering` | Terrain (generation, clipmaps, GPU caches, invalidation, water), atmosphere, clouds, lighting, post-process, RHI and render graph, volumes, shading. |
+| `/celestial` | Bodies as astronomical objects: orbits, rotation, gravity, stars, eclipses, representation ladder, globes, rings, giants, compact objects, small bodies. |
+| `/editor` | Studio: viewport, session, model, UI toolkit, issue reports, the RPC/MCP automation layer. |
+| `/authoring` | Documents, schema, semantic scene, commands/undo, selection, plugins, content/assets, cooked projects. |
+| `/world` | Planet coordinates, universe and frames, fields, surfaces, authored constraints, procedural graph, paths. |
+| `/foundation` | Core, math, jobs, time, frames, platform, runtime session, JSON-RPC core, hot reload. |
+| `/apps` | Studio (Orbit.exe), Player, Sandbox, build CLI and BuildService. |
+| `/tools` | Dev server, hot-reload probe/module, Python tooling. |
 | `/rules` | Normative rules: architecture, hot iteration, MCP parity, change placement, UI, completion checks. |
 | `/docs-system` | The block format, the docs tools and how to keep blocks fresh. |
-| `/legacy` | Existing long documents, indexed per section until they are migrated. |
+| `/history` | Version specs and milestone records (V0.0.3-V0.0.7), problem tracker, Godot-era documents. Records, not rules. |
+| `/legacy` | Remaining long documents indexed per section. |
 
 ## Repository map
 

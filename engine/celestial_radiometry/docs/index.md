@@ -18,7 +18,7 @@ invariants = [
 ]
 related = ["/celestial/stellar", "/celestial/lighting", "/rendering/lighting/eye-adaptation", "/legacy/research-v006-radiometry-hdr-exposure"]
 depends_on = ["/foundation/core", "/foundation/math"]
-used_by = ["/celestial/lighting"]
+used_by = ["/celestial/lighting", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialRadiometry",
 ]

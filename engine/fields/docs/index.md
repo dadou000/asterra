@@ -16,7 +16,7 @@ invariants = [
 ]
 related = ["/legacy/v0-0-3-spec/8-generic-field-system", "/legacy/v0-0-3-spec/5-cpu-gpu-residency-rules"]
 depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/world/universe"]
-used_by = ["/world/path-routing"]
+used_by = ["/apps/sandbox", "/world/path-routing"]
 verify = [
   "ctest -R Orbit.FieldRegistry",
 ]

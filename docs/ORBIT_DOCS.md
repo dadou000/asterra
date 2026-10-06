@@ -42,10 +42,11 @@ verified = "b0a0de7f"
 | `orbit_docs_children(path)` | cheap navigation |
 | `orbit_docs_search(query)` | ranked search over titles, keywords, symptoms, symbols, invariants, text |
 | `orbit_docs_for_target(file_or_symbol)` | impact analysis before editing: owning blocks, invariants, depends/used-by, applicable rules |
+| `orbit_docs_coverage` | engine/apps modules with no card and documents nothing links to |
 | `orbit_docs_check` | validate the tree |
 
 Register: `claude mcp add orbit-docs -- python <repo>/tools/mcp_server/orbit_docs_mcp_server.py`.
-The same operations exist in `python tools/orbit_docs_cli.py {check,tree,get,search,task,target,stale}`.
+The same operations exist in `python tools/orbit_docs_cli.py {check,tree,get,search,task,target,stale,coverage,scaffold}`.
 
 Every response uses one envelope: `ok`, `operation`, `request_id`, `duration_ms`, `result` / `error`
 (`code`, `message`, details), `warnings`, `suggestions`. Errors carry stable codes
@@ -95,6 +96,18 @@ docs = ["/rendering/terrain/clipmaps/level-planning"]
 - **Set `verified`** to the commit you checked the block against; `python tools/orbit_docs_cli.py stale`
   lists blocks whose `sources` changed since then.
 - **Do not invent.** A step or invariant you have not checked against code or a measurement does not belong in a block.
+
+## Module cards and coverage
+
+Every directory under `engine/` and `apps/` must have a card: a block that lives in `<module>/docs/` (or names the module's files in `sources`).
+`python tools/orbit_docs_cli.py coverage --require-modules` fails when one is missing and CI runs it. To add a module:
+
+1. `python tools/orbit_docs_cli.py scaffold engine/my_module --path /rendering/my-module > engine/my_module/docs/index.md`
+   (creates a draft from the public headers, top-level types, CMake dependencies mapped to existing cards and registered test names).
+2. Replace every `TODO(docs)` (check rejects a block that still has one): write the summary and keywords, then invariants **only from what you verified**
+   in code, specs or tests, then route the parent section to the card and set `verified`.
+
+Dependency edges (`depends_on` / `used_by`) in module cards follow the CMake link graph; keep them in step when CMake changes.
 
 ## Migrating a long document
 

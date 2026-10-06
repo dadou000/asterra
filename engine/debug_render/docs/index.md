@@ -15,7 +15,8 @@ invariants = [
   "Overlay text is sanitised and truncated; replacing it is safe to call every frame.",
 ]
 related = ["/editor/viewport"]
-depends_on = ["/foundation/core", "/rendering/rhi"]
+depends_on = ["/foundation/core", "/rendering/rhi", "/rendering/shader-compiler"]
+used_by = ["/apps/sandbox"]
 verify = [
   "No test is registered for this module under its own name; changes are exercised through the tests of the modules that use it (see used_by).",
 ]

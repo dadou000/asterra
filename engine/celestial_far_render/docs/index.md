@@ -16,7 +16,7 @@ invariants = [
   "Terrain-capable bodies derive appearance from the planetary appearance product; non-terrain bodies take their reference shape from BodyRegistry and select stellar behaviour from ordinary capabilities such as RadiativeEmitter.",
 ]
 related = ["/celestial/representation", "/celestial/appearance", "/legacy/research-v006-far-celestial-representations"]
-depends_on = ["/celestial/appearance", "/celestial/lighting", "/celestial/representation", "/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/terrain", "/world/universe"]
+depends_on = ["/celestial/appearance", "/celestial/lighting", "/celestial/representation", "/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts", "/world/universe"]
 verify = [
   "ctest -R Orbit.CelestialFarRender",
 ]

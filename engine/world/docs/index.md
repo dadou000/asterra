@@ -21,7 +21,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/invalidation", "/world/universe"]
 depends_on = ["/foundation/core", "/foundation/math"]
-used_by = ["/rendering/water", "/world/surface-registry", "/world/terrain-constraints"]
+used_by = ["/apps/sandbox", "/editor/studio-session", "/rendering/terrain/contracts", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/hydrology", "/rendering/terrain/impacts", "/rendering/terrain/macro-geology", "/rendering/terrain/page-cache", "/rendering/terrain/regions", "/rendering/terrain/relief", "/rendering/terrain/scatter", "/rendering/terrain/streaming", "/rendering/terrain/water", "/rendering/water", "/world/surface-registry", "/world/terrain-constraints"]
 verify = [
   "ctest -R Orbit.WorldCoordinates",
   "ctest -R Orbit.PlanetTileNeighborhood",

@@ -201,6 +201,16 @@ class DocsApi:
 
         return self._run("docs.for_task", go)
 
+    def coverage(self) -> dict[str, Any]:
+        def go() -> tuple[Any, list[str], list[str]]:
+            report = self.index.coverage()
+            suggestions = []
+            if report["modules_uncovered"]:
+                suggestions.append("Draft a card with `python tools/orbit_docs_cli.py scaffold <module>`.")
+            return report, [], suggestions
+
+        return self._run("docs.coverage", go)
+
     def check(self) -> dict[str, Any]:
         def go() -> tuple[Any, list[str], list[str]]:
             report = self.index.check()

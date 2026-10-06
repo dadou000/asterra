@@ -8,6 +8,8 @@
     python tools/orbit_docs_cli.py task "add a viewport toolbar button"
     python tools/orbit_docs_cli.py target engine/terrain_view/src/ClipmapPlanner.cpp
     python tools/orbit_docs_cli.py stale            # blocks whose sources changed
+    python tools/orbit_docs_cli.py coverage         # modules/documents the tree does not reach
+    python tools/orbit_docs_cli.py scaffold engine/foo --path /rendering/foo   # draft a card
 
 Same code as the MCP server (tools/mcp_server/orbit_docs_mcp_server.py).
 """
@@ -63,6 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("stale", help="structured blocks whose sources changed since `verified`")
     cov = sub.add_parser("coverage", help="engine modules and documents the structured tree does not reach")
     cov.add_argument("--fail-under", type=float, default=None, help="exit 1 if module coverage percent is below this")
+    cov.add_argument("--require-modules", action="store_true", help="exit 1 if any engine/apps module has no card")
+    scaf = sub.add_parser("scaffold", help="print a draft card for a module (engine/<m> or apps/<m>)")
+    scaf.add_argument("module")
+    scaf.add_argument("--path", default=None, help="tree path for the new node")
     args = parser.parse_args(argv)
 
     index = DocsIndex(args.root or default_root())
@@ -96,6 +102,17 @@ def main(argv: list[str] | None = None) -> int:
         for doc in report["documents_unlinked"]:
             print(f"  unlinked document: {doc['path']} ({doc['sections']} sections) {doc['file']}")
         if args.fail_under is not None and percent < args.fail_under:
+            return 1
+        if args.require_modules and report["modules_uncovered"]:
+            return 1
+        return 0
+    if args.command == "scaffold":
+        from orbit_docs.scaffold import scaffold
+
+        try:
+            print(scaffold(index, args.module.rstrip("/"), args.path))
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
             return 1
         return 0
     if args.command == "stale":

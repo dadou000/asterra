@@ -17,7 +17,8 @@ invariants = [
   "The existing Photosphere capability is the only stellar surface authoring object: no new Star subclass or separate stellar editor exists; its radius and effective temperature are shared with radiometry.",
 ]
 related = ["/celestial/radiometry", "/legacy/research-v006-stellar-rendering"]
-depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain"]
+depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
+used_by = ["/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialStellar",
 ]

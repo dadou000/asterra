@@ -22,7 +22,7 @@ invariants = [
 ]
 related = ["/legacy/v0-0-3-spec/10-project-and-document-format", "/authoring/scene"]
 depends_on = ["/foundation/core"]
-used_by = ["/authoring/cooked-project", "/authoring/plugins", "/authoring/scene", "/world/paths", "/world/surface-composition"]
+used_by = ["/apps/build-cli", "/apps/build-service", "/apps/player", "/apps/studio", "/authoring/cooked-project", "/authoring/plugins", "/authoring/scene", "/editor/model", "/editor/session", "/editor/studio-session", "/world/paths", "/world/surface-composition", "/world/world-model"]
 verify = [
   "ctest -R Orbit.Documents",
   "ctest -R Orbit.AuthoringModel",

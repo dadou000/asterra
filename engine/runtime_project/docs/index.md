@@ -12,7 +12,8 @@ sources = [
 ]
 symbols = ["CookedAssetRecord"]
 related = ["/legacy/v0-0-3-spec/21-build-cook-package-system", "/authoring/content"]
-depends_on = ["/authoring/documents", "/authoring/scene", "/foundation/core"]
+depends_on = ["/apps/build-service", "/authoring/documents", "/authoring/scene", "/foundation/core"]
+used_by = ["/apps/player"]
 verify = [
   "ctest -R Orbit.RuntimeProject",
 ]

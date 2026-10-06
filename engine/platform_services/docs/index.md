@@ -17,6 +17,7 @@ invariants = [
 ]
 related = ["/legacy/v0-0-3-spec/22-platform-services-and-steam"]
 depends_on = ["/foundation/core"]
+used_by = ["/apps/build-service", "/apps/player", "/apps/studio"]
 verify = [
   "ctest -R Orbit.PlatformServices",
 ]

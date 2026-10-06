@@ -39,6 +39,10 @@ jobs:
       - name: Validate documentation tree
         run: python tools/orbit_docs_cli.py check
 
+      # Every engine/apps module must have a card in the tree.
+      - name: Module coverage
+        run: python tools/orbit_docs_cli.py coverage --require-modules
+
       - name: Docs tooling tests
         run: python -m unittest discover -s tools/tests -p "test_orbit_docs.py"
 

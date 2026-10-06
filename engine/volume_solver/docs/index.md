@@ -12,7 +12,8 @@ sources = [
 ]
 symbols = ["SurfaceVolumeSolverSettings"]
 related = ["/rendering/volumes", "/legacy/research-v007-universal-volumetrics"]
-depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/rendering/render-graph", "/rendering/rhi", "/rendering/volumes/fields", "/rendering/volumes/representation"]
+depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/rendering/render-graph", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/volumes/fields", "/rendering/volumes/representation", "/world/world-model"]
+used_by = ["/apps/studio"]
 verify = [
   "ctest -R Orbit.SurfaceVolumeSolver",
 ]

@@ -17,6 +17,7 @@ invariants = [
 ]
 related = ["/world/paths", "/rules/architecture"]
 depends_on = ["/authoring/scene", "/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time", "/world/path-routing", "/world/paths", "/world/universe"]
+used_by = ["/apps/studio", "/editor/studio-session", "/editor/ui-toolkit"]
 verify = [
   "ctest -R Orbit.PathGeometry",
   "ctest -R Orbit.PathSource",

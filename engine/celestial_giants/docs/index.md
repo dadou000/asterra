@@ -16,7 +16,8 @@ invariants = [
   "Giant Appearance does not own shape, mass/gravity, rotation/orbit, atmospheric density and scattering (the Atmosphere capability stays the physical authority), radiative emission, ring systems or a terrain surface.",
 ]
 related = ["/rendering/atmosphere", "/celestial", "/legacy/research-v006-gas-ice-giants"]
-depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain"]
+depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
+used_by = ["/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialGiants",
 ]

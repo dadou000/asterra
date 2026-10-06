@@ -19,7 +19,8 @@ invariants = [
   "Plugin panels draw through a restricted PanelContext bridge; a panel that no longer exists makes the draw return false.",
 ]
 related = ["/authoring/commands", "/rules/hot-iteration", "/legacy/v0-0-3-spec/18-external-plugin-system"]
-depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/authoring/selection", "/foundation/core"]
+depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/authoring/selection", "/editor/model", "/editor/ui-toolkit", "/foundation/core"]
+used_by = ["/apps/studio", "/editor/session"]
 verify = [
   "ctest -R Orbit.Plugins",
 ]

@@ -16,7 +16,8 @@ invariants = [
   "Ring geometry is never persisted as celestial authority; near and far products are derived and disposable.",
 ]
 related = ["/celestial", "/legacy/research-v006-ring-system"]
-depends_on = ["/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/terrain"]
+depends_on = ["/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts"]
+used_by = ["/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialRings",
 ]

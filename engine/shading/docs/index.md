@@ -25,7 +25,7 @@ invariants = [
   "A ShadingShader holds only the Shade() function and is not a standalone HLSL stage (/authoring/content).",
 ]
 related = ["/legacy/orbit-shading", "/authoring/content", "/editor/mcp-rpc"]
-depends_on = ["/authoring/content", "/authoring/content-wic", "/foundation/core", "/foundation/math", "/rendering/rhi"]
+depends_on = ["/authoring/content", "/authoring/content-wic", "/foundation/core", "/foundation/math", "/foundation/rpc", "/rendering/rhi", "/rendering/shader-compiler"]
 verify = [
   "ctest -R Orbit.Shading",
 ]

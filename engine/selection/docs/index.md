@@ -13,7 +13,7 @@ sources = [
 symbols = ["SelectionService"]
 related = ["/authoring/scene", "/legacy/v0-0-3-spec/12-command-transaction-and-selection-model"]
 depends_on = ["/authoring/scene", "/foundation/core"]
-used_by = ["/authoring/plugins"]
+used_by = ["/apps/studio", "/authoring/plugins", "/editor/model", "/editor/session"]
 verify = [
   "ctest -R Orbit.AuthoringModel",
 ]

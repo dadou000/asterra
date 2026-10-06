@@ -18,6 +18,7 @@ invariants = [
 ]
 related = ["/celestial/orbits", "/foundation/frames", "/legacy/research-v006-gravity-capability"]
 depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time"]
+used_by = ["/world/world-model"]
 verify = [
   "ctest -R Orbit.GravityService",
 ]

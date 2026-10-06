@@ -33,7 +33,7 @@ invariants = [
 ]
 related = ["/rendering/render-graph", "/rendering/lighting/proxy-sun-shadow", "/legacy/orbit-profiler"]
 depends_on = ["/foundation/core", "/foundation/math"]
-used_by = ["/celestial/appearance", "/celestial/compact-render", "/celestial/far-render", "/celestial/globe", "/celestial/magnetosphere-render", "/celestial/rings", "/foundation/runtime-session", "/rendering/debug-overlay", "/rendering/planet-map", "/rendering/render-graph", "/rendering/render-view", "/rendering/shading", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver", "/rendering/water"]
+used_by = ["/apps/player", "/celestial/appearance", "/celestial/compact-render", "/celestial/far-render", "/celestial/globe", "/celestial/magnetosphere-render", "/celestial/rings", "/editor/ui-toolkit", "/foundation/runtime-session", "/rendering/debug-overlay", "/rendering/planet-map", "/rendering/post-process", "/rendering/render-graph", "/rendering/render-view", "/rendering/shading", "/rendering/terrain/debug-fields", "/rendering/terrain/material-column", "/rendering/terrain/regions", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver", "/rendering/water", "/tools/eye-adaptation-module"]
 verify = [
   "ctest -R Orbit.RhiCompute",
 ]

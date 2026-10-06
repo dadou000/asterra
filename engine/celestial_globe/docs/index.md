@@ -21,7 +21,7 @@ invariants = [
   "With full_clipmap on (default) no globe is drawn at any altitude; the globe path is used when it is off (/rendering/terrain/clipmaps).",
 ]
 related = ["/celestial/representation", "/celestial/appearance", "/rendering/terrain/clipmaps", "/legacy/research-v006-macro-orbital-globe", "/legacy/planet-patch1"]
-depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/terrain", "/world/universe"]
+depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts", "/world/universe"]
 verify = [
   "ctest -R Orbit.MacroGlobe",
   "ctest -R Orbit.PlanetPatchHierarchy",

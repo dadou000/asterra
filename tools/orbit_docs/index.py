@@ -50,6 +50,14 @@ KINDS = (
 )
 _FRONT_MATTER = re.compile(r"\A\+\+\+\r?\n(.*?)\r?\n\+\+\+[ \t]*\r?\n?", re.DOTALL)
 _WORD = re.compile(r"[a-z0-9_]+")
+# Filler words dropped from search QUERIES (never from the index).
+_STOPWORDS = frozenset(
+    "a an and are as at be but by can do does did for from has have how i if in into is it its me my no not of on or our "
+    "so than that the their then there these this to up us was we what when where which who why will with without would you your "
+    "should could get got make makes using use used want need needs show tell".split()
+)
+# `scaffold` drafts start the summary and a body line with this marker; prose may mention it mid-line.
+_UNFINISHED = re.compile(r"^\s*TODO\(docs\)", re.MULTILINE)
 _HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 
 
@@ -530,7 +538,7 @@ class DocsIndex:
 
     def search(self, query: str, limit: int = 8, include_legacy: bool = True) -> list[dict[str, Any]]:
         self.refresh()
-        terms = list(dict.fromkeys(_tokens(query)))
+        terms = [t for t in dict.fromkeys(_tokens(query)) if t not in _STOPWORDS]
         if not terms:
             raise DocsError("EMPTY_QUERY", "The search query has no searchable words.")
         needle = " ".join(query.lower().split())
@@ -560,6 +568,9 @@ class DocsIndex:
             score *= 0.5 + coverage
             if block.status in ("historical", "unstructured"):
                 score *= 0.7
+            # Router nodes match many words through their route table; a specific leaf should win.
+            if block.kind in ("root", "section"):
+                score *= 0.55
             scored.append((score, block, hit))
         scored.sort(key=lambda s: (-s[0], s[1].path))
         results = []
@@ -722,6 +733,8 @@ class DocsIndex:
                 error(path, "BAD_KIND", f"kind {block.kind!r} is not one of {KINDS}")
             if block.status not in STATUSES:
                 error(path, "BAD_STATUS", f"status {block.status!r} is not one of {STATUSES}")
+            if _UNFINISHED.search(block.summary) or _UNFINISHED.search(block.body):
+                error(path, "UNFINISHED_BLOCK", "contains a TODO(docs) marker from `scaffold`; write the block before committing")
             if not block.summary:
                 error(path, "NO_SUMMARY", "every node needs a summary (it is what parents show)")
             elif len(block.summary) > 600:
@@ -791,7 +804,7 @@ class DocsIndex:
             for top in ("engine", "apps")
             if (self.root / top).is_dir()
             for p in (self.root / top).iterdir()
-            if p.is_dir() and p.name != "build"
+            if p.is_dir()
         )
         modules = []
         for module in roots:

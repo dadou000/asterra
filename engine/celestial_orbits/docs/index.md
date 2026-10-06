@@ -23,7 +23,7 @@ invariants = [
 ]
 related = ["/world/universe", "/celestial/rotation", "/celestial/gravity", "/legacy/research-v006-analytic-orbits", "/legacy/research-v006-imported-ephemeris", "/legacy/research-v006-dynamic-nbody"]
 depends_on = ["/foundation/core", "/foundation/math", "/foundation/time"]
-used_by = ["/celestial/rotation", "/world/universe"]
+used_by = ["/celestial/rotation", "/world/universe", "/world/world-model"]
 verify = [
   "ctest -R Orbit.AnalyticConics",
   "ctest -R Orbit.ImportedEphemeris",

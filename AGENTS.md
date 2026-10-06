@@ -46,6 +46,7 @@ Read `docs/ORBIT_MCP.md` before adding or changing editor capabilities.
 - Documentation is a tree of small blocks (`docs/ORBIT_DOCS.md`). Blocks live next to the code in `engine/<module>/docs/`.
 - If a change makes a block's `invariants`, `diagnose` steps or `sources` untrue, update the block in the same change and set its `verified` commit.
 - `python tools/orbit_docs_cli.py check` must pass (CI runs it). New long-form notes should be blocks, not new monolithic Markdown files.
+- Every new module under `engine/` or `apps/` needs a card (`python tools/orbit_docs_cli.py scaffold <module>`); CI fails on `coverage --require-modules`.
 
 ## Completion check for code changes
 

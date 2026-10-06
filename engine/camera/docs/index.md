@@ -16,6 +16,7 @@ invariants = [
 ]
 related = ["/editor/viewport"]
 depends_on = ["/foundation/core", "/foundation/math"]
+used_by = ["/apps/sandbox"]
 verify = [
   "ctest -R Orbit.Camera",
 ]

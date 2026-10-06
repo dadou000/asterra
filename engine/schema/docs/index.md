@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/legacy/v0-0-3-spec/11-schema-property-registry", "/authoring/scene", "/authoring/commands"]
 depends_on = ["/foundation/core", "/foundation/math"]
-used_by = ["/authoring/commands", "/authoring/plugins", "/authoring/scene", "/world/paths", "/world/surface-composition"]
+used_by = ["/apps/studio", "/authoring/commands", "/authoring/plugins", "/authoring/scene", "/editor/model", "/editor/session", "/world/paths", "/world/surface-composition", "/world/world-model"]
 verify = [
   "ctest -R Orbit.AuthoringModel",
 ]

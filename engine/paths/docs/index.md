@@ -20,7 +20,7 @@ invariants = [
 ]
 related = ["/world/path-geometry", "/world/path-routing", "/legacy/v0-0-3-spec/20-procedural-path-network-system"]
 depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/foundation/core", "/foundation/frames", "/foundation/math", "/world/universe"]
-used_by = ["/world/path-geometry", "/world/path-routing"]
+used_by = ["/apps/studio", "/editor/model", "/editor/studio-session", "/world/path-geometry", "/world/path-routing"]
 verify = [
   "ctest -R Orbit.PathNetwork",
   "ctest -R Orbit.PathProfile",

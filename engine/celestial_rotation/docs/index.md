@@ -18,7 +18,7 @@ invariants = [
 ]
 related = ["/celestial/orbits", "/world/universe", "/legacy/research-v006-rotation-orientation"]
 depends_on = ["/celestial/orbits", "/foundation/core", "/foundation/math", "/foundation/time"]
-used_by = ["/world/universe"]
+used_by = ["/world/universe", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialRotation",
 ]

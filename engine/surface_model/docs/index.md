@@ -19,7 +19,8 @@ invariants = [
   "Terrain process state remains in the canonical M08/M14 physical products; the service-level process configuration is solver policy only.",
 ]
 related = ["/rendering/terrain", "/authoring/scene"]
-depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/foundation/core", "/rendering/terrain", "/rendering/terrain/clipmaps", "/rendering/terrain/gpu-cache", "/world/surface-registry", "/world/terrain-constraints", "/world/universe"]
+depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/foundation/core", "/rendering/terrain/biomes", "/rendering/terrain/clipmaps", "/rendering/terrain/contracts", "/rendering/terrain/erosion", "/rendering/terrain/geology", "/rendering/terrain/gpu-cache", "/rendering/terrain/material-column", "/rendering/terrain/water", "/world/surface-registry", "/world/terrain-constraints", "/world/universe", "/world/world-model"]
+used_by = ["/editor/model", "/editor/session", "/editor/studio-session"]
 verify = [
   "ctest -R Orbit.SurfaceComposition",
   "ctest -R Orbit.SurfaceMaterialResolver",

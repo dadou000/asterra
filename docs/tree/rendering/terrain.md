@@ -21,15 +21,27 @@ invariants = [
 related = ["/rendering/terrain/clipmaps"]
 
 [routes]
+"frozen contracts: authority, revisions, page identity, analytic source, tectonics" = "contracts"
+"sample streaming, toroidal residency, strip refresh" = "streaming"
 "clipmap levels, rings, LOD, camera-relative terrain" = "clipmaps"
 "terrain debugging overlays" = "clipmaps/debugging"
-"geology, stratigraphy, materials" = "/legacy/v0-0-4-m02-geological-materials"
-"erosion (hydraulic, thermal, aeolian, glacial, stream power)" = "/legacy/v0-0-4-m11-hydraulic-erosion"
-"drainage, rivers, lakes, coast" = "/legacy/v0-0-4-m09-drainage"
+"geology, rock types, stratigraphy" = "geology"
+"uplift, tectonics, mountain belts" = "macro-geology"
+"base relief, ridges, valleys, derivatives" = "relief"
+"craters, impacts, ejecta" = "impacts"
+"material column, regolith, soil, exposed surface, caves/local 3D" = "material-column"
+"drainage, flow routing, depression filling" = "hydrology"
+"erosion (stream power, hydraulic, thermal, aeolian, glacial), sediment" = "erosion"
+"river network, meanders" = "rivers"
+"water service, coastal process, lakes, rivers as water" = "water"
+"biomes, base biome, placement" = "biomes"
+"vegetation/instance scatter" = "scatter"
+"derived regions, page boundary exchange, halo" = "regions"
+"CPU terrain page cache" = "page-cache"
 "persistent GPU terrain cache, regenerating while stationary, resident bytes" = "gpu-cache"
 "edit invalidation, what rebuilds after a terrain or biome edit" = "invalidation"
-"biomes, scatter, surface material" = "/legacy/v0-0-4-m20-biome-placement"
-"water service, standing water" = "/legacy/v0-0-4-water-service"
+"terrain debug fields (the 21 views)" = "debug-fields"
+"V0.0.4 milestone specs M00-M31" = "/history"
 "whole V0.0.4 terrain specification" = "/legacy/v0-0-4-spec"
 +++
 
@@ -50,5 +62,5 @@ related = ["/rendering/terrain/clipmaps"]
 Rule of thumb: **what** the terrain is lives in the generator/process modules; **which levels exist and
 where they sit** lives in `terrain_view`; **how they are drawn** lives in `terrain_render`.
 
-The V0.0.4 milestone documents (M00-M31) are the design and acceptance records of each stage; they are
-historical specifications, reachable through the routes above.
+Each module card lists the V0.0.4 milestone specs it implements; the full M00-M31 index is `/history` (the milestone documents are
+design and acceptance records, historical rather than normative).

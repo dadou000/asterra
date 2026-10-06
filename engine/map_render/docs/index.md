@@ -16,7 +16,8 @@ invariants = [
   "The UV-to-direction inverse of the equirectangular projection is a free function (a fixed mapping with no renderer state): normalized UV with origin top-left, matching the texture's row/column order.",
 ]
 related = ["/rendering"]
-depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/rendering/terrain"]
+depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts"]
+used_by = ["/apps/sandbox"]
 verify = [
   "No test is registered for this module under its own name; changes are exercised through the tests of the modules that use it (see used_by).",
 ]

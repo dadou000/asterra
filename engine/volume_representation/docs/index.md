@@ -23,8 +23,8 @@ invariants = [
   "The pending request batch is handed to its consumer in one transfer that atomically leaves the queue empty, so requests are never observed twice.",
 ]
 related = ["/rendering/volumes", "/legacy/research-v007-universal-volumetrics"]
-depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/foundation/time"]
-used_by = ["/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver"]
+depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/foundation/time", "/world/world-model"]
+used_by = ["/editor/studio-session", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver"]
 verify = [
   "ctest -R Orbit.VolumeRepresentation",
 ]

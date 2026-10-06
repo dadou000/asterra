@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/foundation/frames", "/world/universe", "/legacy/v0-0-3-spec/6-universe-frames-and-time"]
 depends_on = ["/foundation/core"]
-used_by = ["/celestial/gravity", "/celestial/orbits", "/celestial/rotation", "/foundation/frames", "/rendering/volumes/representation", "/world/path-geometry", "/world/path-routing", "/world/universe"]
+used_by = ["/celestial/gravity", "/celestial/orbits", "/celestial/rotation", "/foundation/frames", "/rendering/volumes/representation", "/world/path-geometry", "/world/path-routing", "/world/universe", "/world/world-model"]
 verify = [
   "ctest -R Orbit.TimeAndIds",
 ]

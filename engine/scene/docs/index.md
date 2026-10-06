@@ -18,7 +18,7 @@ invariants = [
 ]
 related = ["/authoring/commands", "/authoring/documents", "/authoring/schema", "/rules/placement"]
 depends_on = ["/authoring/documents", "/authoring/schema", "/foundation/core"]
-used_by = ["/authoring/commands", "/authoring/cooked-project", "/authoring/plugins", "/authoring/selection", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/representation", "/rendering/volumes/solver", "/world/path-geometry", "/world/paths", "/world/surface-composition"]
+used_by = ["/apps/player", "/apps/studio", "/authoring/commands", "/authoring/cooked-project", "/authoring/plugins", "/authoring/selection", "/editor/model", "/editor/session", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/representation", "/rendering/volumes/solver", "/world/path-geometry", "/world/paths", "/world/surface-composition", "/world/world-model"]
 verify = [
   "ctest -R Orbit.AuthoringModel",
 ]

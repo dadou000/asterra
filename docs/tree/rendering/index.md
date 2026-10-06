@@ -19,22 +19,30 @@ related = ["/editor/viewport"]
 "proxy sun shadow, visible proxies" = "lighting/proxy-sun-shadow"
 "sky-only radiance cache, sky fill, enclosed spaces black" = "lighting/sky-cache-fill"
 "eye adaptation, highlight protection, exposure" = "lighting/eye-adaptation"
-"shader contract, shading assets, material shaders" = "/legacy/orbit-shading"
-"frame cost, idle pacing, far terrain, clouds in clipmap view" = "/legacy/orbit-performance"
-"CPU profiler, GPU timing, Perfetto trace" = "/legacy/orbit-profiler"
-"standing water, near-field water pass" = "/legacy/standing-water-rendering"
+"tone mapping, color LUT, histogram, display resolve" = "post-process"
 "clouds, cloud shadows, god rays, cloud cost" = "clouds"
 "atmosphere, sky, scattering, limb, sunset, atmosphere LUTs" = "atmosphere"
 "author an atmosphere from pressure/composition, presets, locked values" = "atmosphere/authoring-solver"
-"rings, stars, orbits, celestial research" = "/legacy/research-v006-celestial-research-baseline"
+"GPU API, Vulkan, command lists, barriers, ray query capability" = "rhi"
+"render graph, passes, GPU pass timing" = "render-graph"
+"render views, screenshots, captures" = "render-view"
+"free camera, altitude-scaled navigation" = "free-camera"
+"shader compile, DXC, SPIR-V" = "shader-compiler"
+"shader contract, shading tab, material preview" = "shading"
+"volumes, fog, particles, volumetrics" = "volumes"
+"ocean mesh, river and lake water rendering" = "water"
+"planet map, overview" = "planet-map"
+"version overlay, F3 HUD text" = "debug-overlay"
+"frame cost, idle pacing, far terrain, clouds in clipmap view" = "/legacy/orbit-performance"
+"CPU profiler, GPU timing, Perfetto trace" = "/legacy/orbit-profiler"
+"standing water, near-field water pass" = "/legacy/standing-water-rendering"
+"planets seen from orbit, rings, stars, orbits" = "/celestial"
 +++
 
 Rendering module families (each is `engine/<name>/`):
 
 - **terrain stack:** `terrain` and the `terrain_*` modules (see `/rendering/terrain`).
-- **celestial:** `celestial_atmosphere`, `celestial_clouds`, `celestial_globe`, `celestial_far_render`,
-  `celestial_rings`, `celestial_stellar`, `celestial_ocean`, `celestial_radiometry`, ... (specs and research
-  under `/legacy`, starting from `docs/V0.0.6_SPEC.md`).
+- **celestial:** `celestial_atmosphere` (`/rendering/atmosphere`), `celestial_clouds` (`/rendering/clouds`); the other `celestial_*` modules are under `/celestial`.
 - **lighting / shading / post:** `lighting`, `shading`, `post_process`, `shader`, `render_graph`.
 - **device layer:** `rhi` (interface) and `rhi/vulkan` backend; world state never holds GPU handles
   (`/rules/architecture`).

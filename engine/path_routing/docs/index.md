@@ -16,8 +16,8 @@ invariants = [
   "For bodies without a terrain capability, candidates are snapped to the body's sphere or ellipsoid reference shape (reference-shape domain).",
 ]
 related = ["/world/paths", "/world/surface-registry"]
-depends_on = ["/foundation/core", "/foundation/frames", "/foundation/jobs", "/foundation/math", "/foundation/time", "/rendering/terrain", "/world/fields", "/world/paths", "/world/surface-registry", "/world/universe"]
-used_by = ["/world/path-geometry"]
+depends_on = ["/foundation/core", "/foundation/frames", "/foundation/jobs", "/foundation/math", "/foundation/time", "/rendering/terrain/contracts", "/world/fields", "/world/paths", "/world/surface-registry", "/world/universe"]
+used_by = ["/apps/studio", "/editor/studio-session", "/world/path-geometry"]
 verify = [
   "ctest -R Orbit.PathRouting",
   "ctest -R Orbit.PathRoutingStale",

@@ -12,7 +12,7 @@ sources = [
 ]
 symbols = ["CompactObjectDraw"]
 related = ["/celestial/compact-objects", "/rendering/render-view"]
-depends_on = ["/celestial/compact-objects", "/rendering/render-view", "/rendering/rhi"]
+depends_on = ["/celestial/compact-objects", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler"]
 verify = [
   "No test is registered for this module under its own name; changes are exercised through the tests of the modules that use it (see used_by).",
 ]
