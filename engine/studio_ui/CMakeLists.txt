@@ -20,7 +20,6 @@ add_library(OrbitStudioUi STATIC
     src/StudioSurfacePicking.cpp
     src/StudioTerrainDiagnosticOverlayGeometry.cpp
     src/StudioTerrainOverlayGeometry.cpp
-    src/StudioUiBundle.cpp
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp

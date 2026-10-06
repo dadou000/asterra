@@ -51,10 +51,11 @@ rivers and surrounding terrain but cannot replace a lake with a separately
 solved fine-region level. Existing regional overlap and footprint fades remain;
 water and its bed fade together. Generator revisions invalidate the old recipe.
 
-The sandbox no longer constructs/draws `OceanRenderer`. Legacy lake cell drawing
-is opt-in (`maximumLakeCells`, default zero); rivers retain their separate pass.
-The legacy ocean class remains available for other clients. Do not combine it
-with this filled terrain surface: that recreates the independent-mesh problem.
+The sandbox no longer constructs/draws `OceanRenderer`, and the class itself was
+removed in 0.0.9 (nothing used it). Legacy lake cell drawing is opt-in
+(`maximumLakeCells`, default zero); rivers retain their separate pass. Do not
+combine a detached ocean mesh with this filled terrain surface: that recreates
+the independent-mesh problem.
 
 ## Cost and validation
 

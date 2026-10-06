@@ -7,7 +7,6 @@ add_library(OrbitLighting STATIC
     src/Visibility.cpp
     src/AnalyticBodyVisibility.cpp
     src/TerrainHeightfieldVisibility.cpp
-    src/ScreenSpaceVisibility.cpp
     src/SoftwareProxyVisibility.cpp
     src/HardwareRayQueryVisibility.cpp
     src/ProxySunShadow.cpp
