@@ -1,0 +1,46 @@
+name: Orbit Docs
+
+on:
+  push:
+    branches: [orbit]
+    paths:
+      - "docs/**"
+      - "code_change/**"
+      - "engine/**"
+      - "apps/**"
+      - "tools/**"
+      - ".github/workflows/orbit-docs.yml"
+  pull_request:
+    branches: [orbit]
+    paths:
+      - "docs/**"
+      - "code_change/**"
+      - "engine/**"
+      - "apps/**"
+      - "tools/**"
+      - ".github/workflows/orbit-docs.yml"
+
+concurrency:
+  group: orbit-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Every block's links, routes, source files and symbols must still exist.
+      - name: Validate documentation tree
+        run: python tools/orbit_docs_cli.py check
+
+      - name: Docs tooling tests
+        run: python -m unittest discover -s tools/tests -p "test_orbit_docs.py"
+
+      - name: Validate docs MCP server
+        run: python -m py_compile tools/mcp_server/orbit_docs_mcp_server.py tools/orbit_docs_cli.py

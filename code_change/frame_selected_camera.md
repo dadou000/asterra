@@ -1,3 +1,36 @@
++++
+path = "/editor/viewport/frame-selected"
+title = "Frame Selected camera (placement note)"
+kind = "placement"
+status = "planned"
+owner_module = "OrbitStudioUi"
+summary = """
+Worked example of a placement note: a smooth 2-second Frame Selected camera transition owned by \
+StudioRenderViewSet's navigation pose (not by the toolbar and not by the transient RenderView \
+camera), triggered by the Scene toolbar, the F shortcut and an editor command that RPC/MCP share."""
+keywords = ["frame selected", "camera", "framing", "transition", "toolbar", "navigation pose", "focus"]
+sources = [
+  "engine/studio_ui/src/StudioViewportPanels.cpp",
+  "engine/studio_ui/include/orbit/studio_ui/StudioRenderViewSet.hpp",
+  "engine/studio_ui/src/StudioRenderViewSet.cpp",
+  "engine/studio_ui/include/orbit/studio_ui/StudioQol.inl",
+]
+symbols = ["StudioViewportPanels::DrawSceneToolbar", "StudioRenderViewSet", "NavigateTerrain"]
+invariants = [
+  "Canonical camera state is the navigation pose (StudioViewPose), not RenderView::Camera(); Refresh() rebuilds the rendered camera every frame.",
+  "The panel may compute or request the framing target but must not hold the animation state.",
+  "No FrameCameraController, second free camera or parallel navigation system.",
+  "Toolbar, F shortcut, command palette and RPC/MCP all reach one operation.",
+  "Any meaningful manual navigation input cancels an active transition; re-triggering starts a new transition from the current pose.",
+]
+related = ["/rules/placement", "/editor/viewport"]
+verify = [
+  "Box selected + Frame fits the whole box; hierarchy frames the aggregate extent; point-like objects get a minimum radius.",
+  "Camera move takes 2.0 s with smooth ease; WASD/mouse input cancels it.",
+]
+verified = "b0a0de7f"
++++
+
 # Frame Selected Camera
 
 ## Behavior

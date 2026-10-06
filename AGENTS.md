@@ -2,7 +2,12 @@
 
 These rules apply to automated coding agents and human contributors working on the `orbit` branch.
 
-Before changing engine/editor/runtime architecture, read:
+Start from the documentation tree instead of reading whole documents. With the docs MCP server registered
+(`claude mcp add orbit-docs -- python tools/mcp_server/orbit_docs_mcp_server.py`) call `orbit_docs_for_task("<what you are about to do>")`,
+and `orbit_docs_for_target("<file or symbol>")` before editing a file. Without MCP use `python tools/orbit_docs_cli.py task "<task>"`
+and `python tools/orbit_docs_cli.py target <file>`. See `docs/ORBIT_DOCS.md`.
+
+Before changing engine/editor/runtime architecture, read (or fetch the matching nodes `/rules/architecture`, `/rules/hot-iteration`, `/rules/ui`):
 
 - `docs/ORBIT_ARCHITECTURE.md`
 - `docs/ORBIT_HOT_ITERATION.md`
@@ -35,6 +40,12 @@ Read `docs/ORBIT_MCP.md` before adding or changing editor capabilities.
 
 - Anything reachable in Orbit Studio must also be reachable over RPC and MCP. If a workflow step exists only as a UI click, extract the operation the button runs, make the button call it, register an RPC method for it, add a dedicated tool in `tools/mcp_server/orbit_editor_mcp_server.py`, and document it in `docs/ORBIT_MCP.md` in the same change.
 - Do not drive Studio by simulating mouse or keyboard input to reach a goal. A missing RPC/MCP path is a gap to implement.
+
+## Documentation upkeep
+
+- Documentation is a tree of small blocks (`docs/ORBIT_DOCS.md`). Blocks live next to the code in `engine/<module>/docs/`.
+- If a change makes a block's `invariants`, `diagnose` steps or `sources` untrue, update the block in the same change and set its `verified` commit.
+- `python tools/orbit_docs_cli.py check` must pass (CI runs it). New long-form notes should be blocks, not new monolithic Markdown files.
 
 ## Completion check for code changes
 

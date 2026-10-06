@@ -1,3 +1,27 @@
++++
+path = "/rules/placement"
+title = "Code change placement rules"
+kind = "rule"
+status = "stable"
+summary = """
+Before changing existing behaviour, write a short placement note in code_change/ that names the \
+existing owner, the primary insertion point, the canonical state and what must not be duplicated. \
+Extend the owner before creating a subsystem; UI initiates and owners execute; patch the narrowest \
+existing seam; respect rebuild authority; keep UI and automation on one operation."""
+keywords = ["placement", "owner", "insertion point", "duplicate", "state authority", "seam", "controller", "change note"]
+include_in_tasks = true
+applies_to = ["engine/**", "apps/**"]
+invariants = [
+  "Extend the class that already owns the state or behaviour before creating a second controller, cache, navigation state, renderer, command path or UI model.",
+  "UI initiates; domain/state owners execute (UI -> command/service/owner -> canonical state -> renderer/presentation).",
+  "Prefer an existing public method or command seam over a new parallel route; if none fits, add one to the current owner and route all callers through it.",
+  "Before mutating an object, check whether it is rebuilt each frame from another source; if so change the upstream authoritative state, not the transient result.",
+  "Expose one operation through the command registry / RPC seam; buttons and shortcuts invoke that same operation.",
+  "A new file is justified only by a reusable concept with a clear owner, not by avoiding an edit to the file that already owns the responsibility.",
+]
+related = ["/rules/architecture", "/editor/mcp-rpc", "/editor/viewport/frame-selected"]
++++
+
 # Code Change Placement Rules
 
 This directory defines **where a requested change belongs inside existing Orbit code before implementation starts**.

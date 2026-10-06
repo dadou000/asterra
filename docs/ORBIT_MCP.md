@@ -51,6 +51,25 @@ toast with the error. Read-only queries stay silent so polling does not flood
 the screen. See `RecordRpcNotifications` in `apps/editor/src/Main.cpp` and
 `EditorUi::PushNotification`.
 
+## Documentation server (offline)
+
+Separate from Studio automation: `tools/mcp_server/orbit_docs_mcp_server.py` serves the documentation tree
+(`docs/ORBIT_DOCS.md`). It reads the repository's Markdown blocks directly, so it works without Studio running.
+
+```text
+claude mcp add orbit-docs -- python <repo>/tools/mcp_server/orbit_docs_mcp_server.py
+```
+
+| Tool | Purpose |
+| --- | --- |
+| `orbit_docs_root` | engine summary, sections and routing; start here |
+| `orbit_docs_for_task(task)` | starting packet for a task: nodes, invariants, playbooks, verification, rules |
+| `orbit_docs_get(path, section?, offset?, max_chars?)` | read one node (or one section of it) |
+| `orbit_docs_children(path)` | list a node's children |
+| `orbit_docs_search(query)` | ranked search (legacy documents are indexed per section) |
+| `orbit_docs_for_target(target)` | invariants, dependants and rules for a file, module or symbol |
+| `orbit_docs_check` | validate links, routes, sources and symbols |
+
 ## Projects: create, open, switch
 
 | MCP tool | RPC method | Notes |
