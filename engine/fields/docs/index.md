@@ -8,18 +8,15 @@ owner_module = "OrbitFields"
 keywords = ["field", "field registry", "scalar field", "residency", "resolution", "surface field", "volume field", "domain"]
 sources = [
   "engine/fields/include/orbit/fields/FieldRegistry.hpp",
-  "engine/fields/CMakeLists.txt",
-]
+  "engine/fields/CMakeLists.txt"]
 symbols = ["FieldResolutionPolicy"]
 invariants = [
-  "Material field values are semantic class IDs plus blend weights, not renderer material asset handles.",
-]
-related = ["/legacy/v0-0-3-spec/8-generic-field-system", "/legacy/v0-0-3-spec/5-cpu-gpu-residency-rules"]
+  "Material field values are semantic class IDs plus blend weights, not renderer material asset handles."]
+related = []
 depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/world/universe"]
 used_by = ["/apps/sandbox", "/world/path-routing"]
 verify = [
-  "ctest -R Orbit.FieldRegistry",
-]
+  "ctest -R Orbit.FieldRegistry"]
 verified = "b0a0de7f"
 +++
 

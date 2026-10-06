@@ -12,9 +12,9 @@ The first milestone establishes a strict modular engine layout, a native Windows
 
 The next architecture milestone generalizes Orbit from a terrain-focused planetary runtime into a frame-aware celestial authoring engine with a permanent project/editor/plugin/MCP scaffold.
 
-Read [docs/V0.0.3_SPEC.md](docs/V0.0.3_SPEC.md) before adding new world, editor, asset, path, plugin, build or platform-service systems. It defines the small implementation milestones, CPU/GPU residency rules, Orbit Studio editor architecture, Luau plugin model, project persistence, Material Service, dynamic path networks, MCP V2 and Steam integration boundary.
+Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) and the module blocks ([docs/ORBIT_DOCS.md](docs/ORBIT_DOCS.md)) before adding new world, editor, asset, path, plugin, build or platform-service systems. The original V0.0.3-V0.0.6 milestone specifications were retired in 0.0.9 and remain in git history.
 
-World and celestial setup is tracked explicitly by **M20A — World & Celestial Authoring** in [docs/V0.0.3_WORLD_AUTHORING.md](docs/V0.0.3_WORLD_AUTHORING.md). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. The production foundation now includes semantic World/System/Body schemas, runtime-backed body properties, transactional contextual system/body creation, multi-world project enumeration/creation/startup-world selection, metadata-driven command surfaces and regression coverage. Project-browser UI, active-world session switching and live semantic-to-runtime universe synchronization remain M20A acceptance items rather than placeholders.
+World and celestial setup was tracked by **M20A — World & Celestial Authoring** (its document was retired in 0.0.9 and remains in git history). M20A is a normative extension of the V0.0.3 scaffold between path derivation and build/package work. The production foundation now includes semantic World/System/Body schemas, runtime-backed body properties, transactional contextual system/body creation, multi-world project enumeration/creation/startup-world selection, metadata-driven command surfaces and regression coverage. Project-browser UI, active-world session switching and live semantic-to-runtime universe synchronization remain M20A acceptance items rather than placeholders.
 
 
 ## V0.0.6 — Celestial Systems & Orbital Rendering
@@ -23,7 +23,7 @@ V0.0.6 is the next major scaffold after the accepted V0.0.5 terrain/Studio loop.
 
 The release keeps one semantic body authority while allowing independent simulation and rendering representations. Production toroidal terrain remains the ground path; orbital and far-distance representations are derived from the same world data.
 
-Read [docs/V0.0.6_SPEC.md](docs/V0.0.6_SPEC.md) before implementing celestial systems. Progress is tracked in [docs/V0.0.6_PROGRESS.md](docs/V0.0.6_PROGRESS.md), and the initial research contract is in [docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
+Read the celestial module blocks under `/world` ([docs/ORBIT_DOCS.md](docs/ORBIT_DOCS.md)) before implementing celestial systems. The V0.0.6 SPEC and PROGRESS documents were retired in 0.0.9 and remain in git history; the research contract is in [docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
 
 ## V0.0.7 — Dynamic Lighting, GI & HDR Presentation
 

@@ -16,7 +16,6 @@ sources = [
   "engine/terrain_gpu/tests/PersistentGpuTerrainCacheTests.cpp",
   "engine/studio_session/src/StudioTerrainPhysicalPageService.cpp",
   "engine/studio_ui/src/StudioViewportRendererBase.cpp",
-  "docs/V0.0.4_M26_PERSISTENT_GPU_TERRAIN_CACHE.md",
   "engine/studio_session/src/StudioTerrainStatusRpc.cpp",
 ]
 symbols = ["PersistentGpuTerrainCache", "PersistentGpuTerrainCacheKey", "CachedGpuTerrainPage", "CachedTerrainProduct", "PersistentGpuTerrainCacheConfig", "PersistentGpuTerrainCacheFingerprint", "InvalidateAddress", "GetOrCreate"]

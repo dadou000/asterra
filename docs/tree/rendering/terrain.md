@@ -9,7 +9,7 @@ surface -> biome dressing. Generated terrain is derived state; persistent GPU pa
 generated terrain and regenerate only on invalidation. The near-field and far views are drawn by a \
 20-level GPU clipmap (see clipmaps)."""
 keywords = ["terrain", "planet", "geology", "erosion", "hydrology", "biome", "gpu pages", "cache", "surface", "water", "streaming"]
-sources = ["docs/V0.0.4_SPEC.md", "engine/terrain/include/orbit/terrain/TerrainContracts.hpp"]
+sources = ["engine/terrain/include/orbit/terrain/TerrainContracts.hpp"]
 invariants = [
   "Surface authority chain: geology -> terrain processes -> exposed surface -> biome dressing; no stage writes around the chain.",
   "Procedural fields are sampled in canonical body coordinates, never in per-face 2D noise domains; tangent derivatives use one consistent frame.",
@@ -43,7 +43,6 @@ related = ["/rendering/terrain/clipmaps"]
 "edit invalidation, what rebuilds after a terrain or biome edit" = "invalidation"
 "terrain debug fields (the 21 views)" = "debug-fields"
 "V0.0.4 milestone specs M00-M31" = "/history"
-"whole V0.0.4 terrain specification" = "/legacy/v0-0-4-spec"
 +++
 
 ## Module map

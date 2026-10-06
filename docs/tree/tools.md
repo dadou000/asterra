@@ -18,5 +18,5 @@ related = ["/editor/mcp-rpc", "/docs-system", "/foundation/hot-reload"]
 +++
 
 `tools/` contains: `mcp_server/orbit_editor_mcp_server.py` (Studio over JSON-RPC, port 4320), `mcp_server/orbit_mcp_server.py` (sandbox dev server, port 4319),
-`mcp_server/orbit_docs_mcp_server.py` (this documentation tree), `orbit_docs_cli.py`, the `check_v004_*`/`validate_*`/`import_*` terrain and performance scripts, and
+`mcp_server/orbit_docs_mcp_server.py` (this documentation tree), `orbit_docs_cli.py`, `render_terrain_survey.py` and
 `TerrainBenchmark.cpp` (a manual survey that is deliberately not a CTest gate).

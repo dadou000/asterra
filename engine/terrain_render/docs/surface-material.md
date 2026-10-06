@@ -20,8 +20,7 @@ sources = [
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffectGpuBinding.hpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffects.hpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceMaterial.hpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
-]
+  "engine/studio_ui/src/StudioViewportRendererBase.cpp"]
 symbols = [
   "MakeSurfaceMaterialRenderInput",
   "MakePhysicalSurfaceRenderInput",
@@ -32,8 +31,7 @@ symbols = [
   "SurfaceEffectGpuBinding",
   "MaximumStampCount",
   "GraphicsBufferSlot",
-  "BuildVolumeSurfaceEffectRenderBatch",
-]
+  "BuildVolumeSurfaceEffectRenderBatch"]
 invariants = [
   "MakeSurfaceMaterialRenderInput throws std::invalid_argument for an invalid ResolvedSurfaceMaterialBlend and std::logic_error if a RenderedSurfaceMaterialKind index does not fit the 9-slot weights array (MaterialCount = 9: Bedrock, Regolith, Soil, Sand, Debris, Snow, Moss, Litter, Dust). Adding a kind means raising MaterialCount.",
   "PhysicalSurfaceRenderInput is built only from the canonical ExposedSurfaceState (MakePhysicalSurfaceRenderInput) so rendering never picks rock identity from biome weights; BedrockExposed() is simply material == Bedrock.",
@@ -44,23 +42,19 @@ invariants = [
   "Influence of one stamp is amount * (1 - angle/radius)^2 inside the radius and 0 outside; wetness/soot/ash/sediment sum then saturate to [0,1], heat sums and is only floored at 0. The CPU functions and the HLSL implement the same formula and the same coating constants; edit both and Orbit.TerrainSurfaceEffects together.",
   "Effects touch only the exposed ground: the shader multiplies every influence by (1 - waterCoverage). In the clipmap bed variant waterCoverage is the constant 0 (water is a separate pass), and the water pass does not bind the stamp buffer at all.",
   "The effect stage is injected by exact-text replacement (struct VSOutput marker, the first `SurfaceOutputs output;` line, and the emission w-component line); each missing marker throws std::runtime_error ('could not locate terrain shader injection marker'). It must be applied after BuildClipmapBedPixelShader on the clipmap path.",
-  "Bind writes the whole 512-stamp snapshot into a per-frame-in-flight host-visible structured buffer (frameIndex < framesInFlight, else std::out_of_range) and binds it at GraphicsBufferSlot 1, which is shader binding(1, 0); the terrain and uniform-planet pipelines both declare two shader-resource buffers for this.",
-]
+  "Bind writes the whole 512-stamp snapshot into a per-frame-in-flight host-visible structured buffer (frameIndex < framesInFlight, else std::out_of_range) and binds it at GraphicsBufferSlot 1, which is shader binding(1, 0); the terrain and uniform-planet pipelines both declare two shader-resource buffers for this."]
 related = [
   "/rendering/terrain/clipmaps/shaders",
   "/rendering/terrain/water-volume-shader",
   "/rendering/volumes/render",
   "/world/surface-composition",
   "/rendering/terrain/scatter",
-  "/legacy/v0-0-4-m21-surface-material-resolver",
-  "/legacy/v0-0-7-spec/m38-particle-surface-output-coupling",
-]
+  "/legacy/v0-0-7-spec/m38-particle-surface-output-coupling"]
 depends_on = ["/rendering/terrain/clipmaps", "/rendering/terrain/material-column", "/rendering/rhi"]
 verify = [
   "ctest -R Orbit.TerrainSurfaceEffects (CPU falloff, saturation and coating results).",
   "ctest -R Orbit.TerrainSurfaceShader (the effect variant compiles with DXC).",
-  "In Studio, toggle surface_effects (orbit_view_terrain_layers_set) with stamps present: the coating must appear and vanish with it.",
-]
+  "In Studio, toggle surface_effects (orbit_view_terrain_layers_set) with stamps present: the coating must appear and vanish with it."]
 verified = "55d48117"
 
 [routes]
@@ -74,24 +68,21 @@ steps = [
   "Check the view's surface_effects layer is on (view.terrain_layers_get / _set): the Studio passes an empty stamp list to SetSurfaceEffects when it is off.",
   "Check the stamps reach the renderer: the batch is built by BuildVolumeSurfaceEffectRenderBatch(body, stamps, MaximumStampCount) and SurfaceEffectGpuBinding::ActiveStampCount() is the number uploaded (capped at 512).",
   "Check each stamp has angularRadiusRadians > 0 and amount > 0, a normalised body-fixed direction and effect id 0..4, and that no zero-radius stamp precedes it (the shader stops at the first one).",
-  "Remember water-covered pixels show no effect (influence * (1 - waterCoverage)) and the water pass never binds the stamps.",
-]
+  "Remember water-covered pixels show no effect (influence * (1 - waterCoverage)) and the water pass never binds the stamps."]
 docs = ["/rendering/volumes/render", "/rendering/terrain/clipmaps/shaders"]
 
 [[diagnose]]
 symptom = "a value in SurfaceMaterialRenderInput or PhysicalSurfaceRenderInput has no effect on the rendered terrain"
 steps = [
   "Confirm with a search for MakeSurfaceMaterialRenderInput / MakePhysicalSurfaceRenderInput that no renderer code consumes the result: at this revision only tests call them.",
-  "Terrain colour is computed in TerrainSurfaceShader.hpp from the eight biome weights packed in each sample (TerrainSampleValue.biomeWeights0/1) and drySurface; to make material or physical-surface data visible it has to be packed into the sample buffer or bound as a new resource, with the shader and BuildDrawConstants/pipeline resource counts updated together.",
-]
+  "Terrain colour is computed in TerrainSurfaceShader.hpp from the eight biome weights packed in each sample (TerrainSampleValue.biomeWeights0/1) and drySurface; to make material or physical-surface data visible it has to be packed into the sample buffer or bound as a new resource, with the shader and BuildDrawConstants/pipeline resource counts updated together."]
 docs = ["/rendering/terrain/clipmaps/shaders", "/rendering/terrain/material-column"]
 
 [[diagnose]]
 symptom = "terrain construction throws 'could not locate terrain shader injection marker'"
 steps = [
   "Someone edited the text of TerrainSurfaceShader.hpp that SurfaceEffectShader.cpp matches (struct VSOutput, SurfaceOutputs output;, or the emissionClass zero/EncodeSurfaceMeta lines).",
-  "Restore the text or move the marker in SurfaceEffectShader.cpp, then run ctest -R Orbit.TerrainSurfaceShader.",
-]
+  "Restore the text or move the marker in SurfaceEffectShader.cpp, then run ctest -R Orbit.TerrainSurfaceShader."]
 docs = ["/rendering/terrain/clipmaps/shaders"]
 +++
 

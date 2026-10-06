@@ -9,19 +9,16 @@ keywords = ["universe", "body", "system", "sphere", "ellipsoid", "mass", "rotati
 sources = [
   "engine/universe/include/orbit/universe/BodyRegistry.hpp",
   "engine/universe/include/orbit/universe/ReferenceSurface.hpp",
-  "engine/universe/CMakeLists.txt",
-]
+  "engine/universe/CMakeLists.txt"]
 symbols = ["SphereShape", "SurfaceCoordinate"]
 invariants = [
   "Orbital translation and body-fixed orientation are independent providers, composed only when the FrameGraph asks for parentFromBody (the M06 permanent composition path); the orbit-driven uniform rotation is a compatibility bridge.",
-  "SurfaceCoordinate uses radians for latitude/longitude and metres along the reference ellipsoid normal for offset.",
-]
-related = ["/foundation/frames", "/foundation/time", "/celestial", "/legacy/v0-0-3-spec/7-celestial-body-composition"]
+  "SurfaceCoordinate uses radians for latitude/longitude and metres along the reference ellipsoid normal for offset."]
+related = ["/foundation/frames", "/foundation/time", "/celestial"]
 depends_on = ["/celestial/orbits", "/celestial/rotation", "/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time"]
 used_by = ["/apps/sandbox", "/apps/studio", "/celestial/far-render", "/celestial/globe", "/editor/ui-toolkit", "/rendering/lighting/radiance-cache", "/rendering/terrain/biomes", "/rendering/terrain/water", "/world/fields", "/world/path-geometry", "/world/path-routing", "/world/paths", "/world/surface-composition", "/world/surface-registry", "/world/world-model"]
 verify = [
-  "ctest -R Orbit.BodyRegistry",
-]
+  "ctest -R Orbit.BodyRegistry"]
 verified = "b0a0de7f"
 +++
 

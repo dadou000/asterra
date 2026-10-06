@@ -14,8 +14,7 @@ sources = [
   "engine/terrain/include/orbit/terrain/TerrainFields.hpp",
   "engine/terrain/include/orbit/terrain/TerrainPosition.hpp",
   "engine/terrain/include/orbit/terrain/TerrainSource.hpp",
-  "engine/terrain/CMakeLists.txt",
-]
+  "engine/terrain/CMakeLists.txt"]
 symbols = ["TerrainAuthorityDomain", "TerrainGenerationRevisions", "TerrainGenerationTrigger", "PhysicalTerrainPageAddress", "PlanetSurfacePosition", "TerrainSample", "AnalyticTerrainSource", "GlobalTerrainFields"]
 invariants = [
   "Authored intent, canonical physical state and derived/view state stay separate so editor, renderer and cache code cannot silently become terrain simulation authorities: only TerrainAuthorityDomain::TerrainPhysical owns canonical terrain, only WaterPhysical owns canonical water, and DerivedCache and ViewInterest are derived-only.",
@@ -26,16 +25,14 @@ invariants = [
   "Persisted/cache identity and procedural seeds use fixed, platform-independent mixing (StableCombine64); std::hash is deliberately excluded because its representation is not an Orbit persistence contract; TerrainSeedDomain numeric values are persisted domain separators: append new domains, never renumber.",
   "Terrain locations are canonical physical surface positions in planet/body space, never a cube face, clipmap or render patch (PlanetSurfacePosition, TerrainSampleFootprint).",
   "The GPU and CPU generators must render the SAME plates and hotspots: GlobalTerrainFields exports the tectonic state for the GPU to upload verbatim instead of regenerating it from a different hash, so a range on the 2D map is the range the 3D clipmap shows (/rendering/terrain/clipmaps/generator-parity).",
-  "Plate convergence/divergence/transform masks are direction-only (never footprint-dependent), and nearby plate types let a caller tell a continental collision from a subduction zone or a spreading ridge from a rift.",
-]
-related = ["/rendering/terrain", "/rendering/terrain/macro-geology", "/rendering/terrain/invalidation", "/world/planet-coordinates", "/legacy/v0-0-4-m00-contracts", "/legacy/v0-0-4-m01-surface-coordinates"]
+  "Plate convergence/divergence/transform masks are direction-only (never footprint-dependent), and nearby plate types let a caller tell a continental collision from a subduction zone or a spreading ridge from a rift."]
+related = ["/rendering/terrain", "/rendering/terrain/macro-geology", "/rendering/terrain/invalidation", "/world/planet-coordinates"]
 depends_on = ["/foundation/core", "/foundation/math", "/world/planet-coordinates"]
 used_by = ["/apps/sandbox", "/celestial/appearance", "/celestial/compact-objects", "/celestial/far-render", "/celestial/giants", "/celestial/globe", "/celestial/magnetosphere", "/celestial/ocean", "/celestial/rings", "/celestial/small-bodies", "/celestial/stellar", "/editor/studio-session", "/rendering/lighting/radiance-cache", "/rendering/planet-map", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/geology", "/rendering/terrain/gpu-passes", "/rendering/terrain/hydrology", "/rendering/terrain/impacts", "/rendering/terrain/macro-geology", "/rendering/terrain/material-column", "/rendering/terrain/page-cache", "/rendering/terrain/regions", "/rendering/terrain/relief", "/rendering/terrain/streaming", "/world/path-routing", "/world/surface-composition", "/world/surface-registry", "/world/terrain-constraints"]
 verify = [
   "ctest -R Orbit.PlanetTerrain",
   "ctest -R Orbit.TerrainMountains",
-  "ctest -R Orbit.TerrainFields",
-]
+  "ctest -R Orbit.TerrainFields"]
 verified = "b0a0de7f"
 +++
 

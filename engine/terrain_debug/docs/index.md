@@ -13,16 +13,14 @@ sources = [
   "engine/terrain_debug/include/orbit/terrain_debug/TerrainDebugRaster.hpp",
   "engine/terrain_debug/include/orbit/terrain_debug/TerrainDebugSeam.hpp",
   "engine/terrain_debug/include/orbit/terrain_debug/TerrainDebugTexture.hpp",
-  "engine/terrain_debug/CMakeLists.txt",
-]
+  "engine/terrain_debug/CMakeLists.txt"]
 symbols = ["TerrainDebugField", "TerrainDebugFieldDescriptor", "TerrainDebugPageData", "TerrainDebugLivePages", "TerrainDebugTexture", "TerrainDebugSeamInspection"]
 invariants = [
   "TerrainDebugField contains exactly the 21 V0.0.4 views: Uplift, Bedrock Type, Strata, Regolith, Soil, Sand, Debris, Moisture, Exposed Material, Drainage, Water Flux, Sediment Flux, Wind, Aeolian Flux, Erosion/Deposition, Biome Weights, Final Biome, Scatter Density, Cache Residency, Cache Invalidation, Physical LOD.",
   "Every field has a stable value class and a typed upstream stage trace, so the meaning of a debug mode is defined here and renderer code cannot redefine it.",
   "The debug layer never mutates or replaces source terrain products: TerrainDebugPageData copies from canonical/derived products so returned spans stay stable, and TerrainDebugTexture never owns terrain authority.",
-  "A live-page capture is one immutable snapshot of the products a physical page actually owns; every pointer/span is optional and absent products stay absent instead of being synthesised.",
-]
-related = ["/rendering/terrain/clipmaps/debugging", "/rendering/terrain/gpu-cache", "/legacy/v0-0-4-m29-debug-field-visualizer"]
+  "A live-page capture is one immutable snapshot of the products a physical page actually owns; every pointer/span is optional and absent products stay absent instead of being synthesised."]
+related = ["/rendering/terrain/clipmaps/debugging", "/rendering/terrain/gpu-cache"]
 depends_on = ["/foundation/core", "/rendering/rhi", "/rendering/terrain/biomes", "/rendering/terrain/contracts", "/rendering/terrain/erosion", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/macro-geology", "/rendering/terrain/material-column", "/rendering/terrain/regions", "/rendering/terrain/scatter", "/world/planet-coordinates"]
 used_by = ["/editor/studio-session", "/editor/studio-ui"]
 verify = [
@@ -30,8 +28,7 @@ verify = [
   "ctest -R Orbit.TerrainDebugRaster",
   "ctest -R Orbit.TerrainDebugPageData",
   "ctest -R Orbit.TerrainDebugLivePages",
-  "ctest -R Orbit.TerrainDebugSeam",
-]
+  "ctest -R Orbit.TerrainDebugSeam"]
 verified = "b0a0de7f"
 +++
 

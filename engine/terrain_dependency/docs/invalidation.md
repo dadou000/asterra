@@ -15,7 +15,6 @@ sources = [
   "engine/terrain_dependency/src/TerrainDependencyGraph.cpp",
   "engine/terrain_dependency/tests/TerrainDependencyGraphTests.cpp",
   "engine/terrain/include/orbit/terrain/TerrainContracts.hpp",
-  "docs/V0.0.4_M27_DEPENDENCY_INVALIDATION.md",
 ]
 symbols = ["TerrainDependencyGraph", "TerrainChangeKind", "TerrainInvalidationRequest", "TerrainSpatialInvalidationScope", "TerrainInvalidationResult", "TerrainDependencyProduct", "TerrainGenerationRevisions", "ProductsForChange", "ApplyChange", "UnregisterPage"]
 invariants = [

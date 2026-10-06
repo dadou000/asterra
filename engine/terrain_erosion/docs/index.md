@@ -14,8 +14,7 @@ sources = [
   "engine/terrain_erosion/include/orbit/terrain_erosion/GlacialErosion.hpp",
   "engine/terrain_erosion/include/orbit/terrain_erosion/SedimentExchange.hpp",
   "engine/terrain_erosion/include/orbit/terrain_erosion/MultiScaleTerrain.hpp",
-  "engine/terrain_erosion/CMakeLists.txt",
-]
+  "engine/terrain_erosion/CMakeLists.txt"]
 symbols = ["StreamPowerErosion", "HydraulicErosionConfig", "ThermalErosion", "AeolianErosionConfig", "GlacialErosionConfig", "SedimentExchangePage", "MultiScaleTerrainPlanner"]
 invariants = [
   "M08 is the only physical terrain authority; every process reads and writes the same material column and never creates its own heightfield. Mobile material is process state that always returns to M08 layers when deposited.",
@@ -25,9 +24,8 @@ invariants = [
   "Aeolian erosion (M13) consumes one coarse wind/process sample per cell (east and north wind in the page-local tangent frame plus a generic surfaceResistance in [0, 1]) and owns two transient airborne lanes (sand, soil/fines); it owns no vegetation assets.",
   "Glacial erosion (M15) eligibility = cold-temperature factor x snowfall factor x process mask, clamped to [0, 1]; a zero mask or zero eligibility is a hard boundary: no retained ice, accumulation or flow.",
   "Sediment exchange (M14) is the sole mobile-sediment authority: three classes (sand, fines, coarse debris) map to M08 sand, soil and debris (removed regolith is classified as fines while mobile) and move in three media (waterborne, airborne, surface-mobile).",
-  "Multi-scale terrain (M23) tiers are simulation/amplification scales, not render clipmap levels; their numeric values are stable array indices and the process mask says which families are eligible at a tier, not which must be enabled.",
-]
-related = ["/rendering/terrain/hydrology", "/rendering/terrain/rivers", "/rendering/terrain/material-column", "/rendering/terrain/water", "/legacy/v0-0-4-m10-stream-power", "/legacy/v0-0-4-m11-hydraulic-erosion", "/legacy/v0-0-4-m12-thermal-erosion", "/legacy/v0-0-4-m13-aeolian-erosion", "/legacy/v0-0-4-m14-unified-sediment-exchange", "/legacy/v0-0-4-m15-glacial-erosion", "/legacy/v0-0-4-m23-multi-scale-terrain"]
+  "Multi-scale terrain (M23) tiers are simulation/amplification scales, not render clipmap levels; their numeric values are stable array indices and the process mask says which families are eligible at a tier, not which must be enabled."]
+related = ["/rendering/terrain/hydrology", "/rendering/terrain/rivers", "/rendering/terrain/material-column", "/rendering/terrain/water"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/macro-geology", "/rendering/terrain/material-column", "/world/planet-coordinates", "/world/terrain-constraints"]
 used_by = ["/apps/sandbox", "/rendering/terrain/debug-fields", "/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/terrain/water", "/world/surface-composition"]
 verify = [
@@ -37,8 +35,7 @@ verify = [
   "ctest -R Orbit.TerrainAeolianErosion",
   "ctest -R Orbit.TerrainSedimentExchange",
   "ctest -R Orbit.TerrainGlacialErosion",
-  "ctest -R Orbit.TerrainMultiScale",
-]
+  "ctest -R Orbit.TerrainMultiScale"]
 verified = "b0a0de7f"
 +++
 

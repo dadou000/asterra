@@ -6,7 +6,6 @@ on:
     branches: [orbit]
     paths:
       - '.github/workflows/orbit-studio-real-device.yml'
-      - '.github/workflows/orbit-v006-celestial.yml'
       - 'engine/celestial_*/**'
       - 'engine/world_model/**'
       - 'engine/studio_session/**'
