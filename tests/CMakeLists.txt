@@ -150,6 +150,23 @@ add_test(
     COMMAND OrbitRhiComputeTests
 )
 
+add_executable(OrbitRhiHostHazardTests
+    RhiHostHazardTests.cpp
+)
+
+target_link_libraries(OrbitRhiHostHazardTests
+    PRIVATE
+        Orbit::RhiVulkan
+)
+
+target_compile_features(OrbitRhiHostHazardTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitRhiHostHazardTests)
+
+add_test(
+    NAME Orbit.RhiHostHazard
+    COMMAND OrbitRhiHostHazardTests
+)
+
 
 add_executable(OrbitTerrainGpuFieldTests
     TerrainGpuFieldTests.cpp
@@ -689,6 +706,7 @@ add_test(NAME Orbit.StandingWater COMMAND OrbitStandingWaterTests)
 # ctest runs still execute them normally on Vulkan-capable hardware.
 set_tests_properties(
     Orbit.RhiCompute
+    Orbit.RhiHostHazard
     Orbit.TerrainGpuField
     Orbit.TerrainGpuRegionDelta
     Orbit.TerrainGpuElevationQuery

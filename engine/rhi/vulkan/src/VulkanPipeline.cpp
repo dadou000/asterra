@@ -117,7 +117,8 @@ VulkanGraphicsPipeline::VulkanGraphicsPipeline(
     const u32 pushConstantDwords,
     const u32 shaderResourceBuffers,
     const u32 sampledTextures,
-    const PrimitiveTopology topology)
+    const PrimitiveTopology topology,
+    GpuProgress* const progress)
     : device_(device),
       pipeline_(pipeline),
       layout_(layout),
@@ -125,26 +126,44 @@ VulkanGraphicsPipeline::VulkanGraphicsPipeline(
       pushConstantDwords_(pushConstantDwords),
       shaderResourceBuffers_(shaderResourceBuffers),
       sampledTextures_(sampledTextures),
-      topology_(topology)
+      topology_(topology),
+      progress_(progress)
 {
 }
 
 VulkanGraphicsPipeline::~VulkanGraphicsPipeline()
 {
-    if (pipeline_ != VK_NULL_HANDLE)
+    const VkDevice device = device_;
+    const VkPipeline pipeline = pipeline_;
+    const VkPipelineLayout layout = layout_;
+    const VkDescriptorSetLayout setLayout = descriptorSetLayout_;
+    auto destroy = [device, pipeline, layout, setLayout]
     {
-        vkDestroyPipeline(device_, pipeline_, nullptr);
-    }
+        if (pipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(device, pipeline, nullptr);
+        }
 
-    if (layout_ != VK_NULL_HANDLE)
-    {
-        vkDestroyPipelineLayout(device_, layout_, nullptr);
-    }
+        if (layout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(device, layout, nullptr);
+        }
 
-    if (descriptorSetLayout_ != VK_NULL_HANDLE)
+        if (setLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+        }
+    };
+
+    // Submitted work may still be executing with this pipeline bound (a hot
+    // shader swap replaces pipelines while frames are in flight).
+    if (progress_ != nullptr)
     {
-        vkDestroyDescriptorSetLayout(
-            device_, descriptorSetLayout_, nullptr);
+        progress_->Retire(progress_->NextSerial(), std::move(destroy));
+    }
+    else
+    {
+        destroy();
     }
 }
 
@@ -529,7 +548,8 @@ std::unique_ptr<GraphicsPipeline> VulkanDevice::CreateGraphicsPipeline(
         desc.pushConstantDwords,
         desc.shaderResourceBuffers,
         desc.sampledTextures,
-        desc.topology);
+        desc.topology,
+        progress_.get());
 }
 
 VulkanComputePipeline::VulkanComputePipeline(
@@ -541,7 +561,8 @@ VulkanComputePipeline::VulkanComputePipeline(
     const u32 shaderResourceBuffers,
     const u32 storageTextures,
     const u32 sampledTextures,
-    const u32 accelerationStructures)
+    const u32 accelerationStructures,
+    GpuProgress* const progress)
     : device_(device),
       pipeline_(pipeline),
       layout_(layout),
@@ -550,26 +571,44 @@ VulkanComputePipeline::VulkanComputePipeline(
       shaderResourceBuffers_(shaderResourceBuffers),
       storageTextures_(storageTextures),
       sampledTextures_(sampledTextures),
-      accelerationStructures_(accelerationStructures)
+      accelerationStructures_(accelerationStructures),
+      progress_(progress)
 {
 }
 
 VulkanComputePipeline::~VulkanComputePipeline()
 {
-    if (pipeline_ != VK_NULL_HANDLE)
+    const VkDevice device = device_;
+    const VkPipeline pipeline = pipeline_;
+    const VkPipelineLayout layout = layout_;
+    const VkDescriptorSetLayout setLayout = descriptorSetLayout_;
+    auto destroy = [device, pipeline, layout, setLayout]
     {
-        vkDestroyPipeline(device_, pipeline_, nullptr);
-    }
+        if (pipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(device, pipeline, nullptr);
+        }
 
-    if (layout_ != VK_NULL_HANDLE)
-    {
-        vkDestroyPipelineLayout(device_, layout_, nullptr);
-    }
+        if (layout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(device, layout, nullptr);
+        }
 
-    if (descriptorSetLayout_ != VK_NULL_HANDLE)
+        if (setLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+        }
+    };
+
+    // Submitted work may still be executing with this pipeline bound (a hot
+    // shader swap replaces pipelines while frames are in flight).
+    if (progress_ != nullptr)
     {
-        vkDestroyDescriptorSetLayout(
-            device_, descriptorSetLayout_, nullptr);
+        progress_->Retire(progress_->NextSerial(), std::move(destroy));
+    }
+    else
+    {
+        destroy();
     }
 }
 
@@ -788,6 +827,7 @@ std::unique_ptr<ComputePipeline> VulkanDevice::CreateComputePipeline(
         desc.shaderResourceBuffers,
         desc.storageTextures,
         desc.sampledTextures,
-        desc.accelerationStructures);
+        desc.accelerationStructures,
+        progress_.get());
 }
 } // namespace orbit::rhi::vulkan::detail

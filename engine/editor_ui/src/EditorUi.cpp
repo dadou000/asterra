@@ -883,25 +883,37 @@ public:
                 *fontTexture));
     }
 
+    // Advances to the next upload slot. The UI rewrites its vertex/index
+    // data every frame while the GPU may still be reading the previous
+    // frames' copies, so each frame in flight gets its own pair. (Buffer::Map
+    // additionally waits for any submit still using a slot, so the ring size
+    // is a performance choice, never a correctness one.)
+    void BeginUploadSlot()
+    {
+        activeUploadSlot = (activeUploadSlot + 1U) % kUploadSlots;
+    }
+
     void EnsureBuffers(
         const std::size_t vertexCount,
         const std::size_t indexCount)
     {
+        UploadSlot& slot = uploadSlots[activeUploadSlot];
+
         if (vertexCount >
-            vertexCapacity)
+            slot.vertexCapacity)
         {
-            vertexCapacity =
+            slot.vertexCapacity =
                 std::max<std::size_t>(
                     vertexCount,
-                    vertexCapacity *
+                    slot.vertexCapacity *
                             2U +
                         4096U);
 
-            vertexBuffer =
+            slot.vertexBuffer =
                 device.CreateBuffer({
                     .sizeBytes =
                         static_cast<u64>(
-                            vertexCapacity *
+                            slot.vertexCapacity *
                             sizeof(UiVertex)),
                     .usage =
                         rhi::BufferUsage::Vertex,
@@ -915,20 +927,20 @@ public:
         }
 
         if (indexCount >
-            indexCapacity)
+            slot.indexCapacity)
         {
-            indexCapacity =
+            slot.indexCapacity =
                 std::max<std::size_t>(
                     indexCount,
-                    indexCapacity *
+                    slot.indexCapacity *
                             2U +
                         8192U);
 
-            indexBuffer =
+            slot.indexBuffer =
                 device.CreateBuffer({
                     .sizeBytes =
                         static_cast<u64>(
-                            indexCapacity *
+                            slot.indexCapacity *
                             sizeof(u32)),
                     .usage =
                         rhi::BufferUsage::Index,
@@ -940,6 +952,16 @@ public:
                             IndexBuffer
                 });
         }
+    }
+
+    [[nodiscard]] rhi::Buffer& ActiveVertexBuffer()
+    {
+        return *uploadSlots[activeUploadSlot].vertexBuffer;
+    }
+
+    [[nodiscard]] rhi::Buffer& ActiveIndexBuffer()
+    {
+        return *uploadSlots[activeUploadSlot].indexBuffer;
     }
 
     rhi::Device& device;
@@ -1115,12 +1137,18 @@ public:
         pipeline;
     std::unique_ptr<rhi::Texture>
         fontTexture;
-    std::unique_ptr<rhi::Buffer>
-        vertexBuffer;
-    std::unique_ptr<rhi::Buffer>
-        indexBuffer;
-    std::size_t vertexCapacity{0};
-    std::size_t indexCapacity{0};
+    static constexpr std::size_t kUploadSlots = 3U;
+
+    struct UploadSlot
+    {
+        std::unique_ptr<rhi::Buffer> vertexBuffer;
+        std::unique_ptr<rhi::Buffer> indexBuffer;
+        std::size_t vertexCapacity{0};
+        std::size_t indexCapacity{0};
+    };
+
+    std::array<UploadSlot, kUploadSlots> uploadSlots;
+    std::size_t activeUploadSlot{0};
     std::vector<UiVertex> convertedVertices;
     std::vector<u32> convertedIndices;
     bool frameBegun{false};
@@ -3480,6 +3508,7 @@ void EditorUi::Render(
         return;
     }
 
+    impl_->BeginUploadSlot();
     impl_->EnsureBuffers(
         static_cast<std::size_t>(
             drawData->TotalVtxCount),
@@ -3535,18 +3564,18 @@ void EditorUi::Render(
     }
 
     std::memcpy(
-        impl_->vertexBuffer->Map(),
+        impl_->ActiveVertexBuffer().Map(),
         impl_->convertedVertices.data(),
         impl_->convertedVertices.size() *
             sizeof(UiVertex));
-    impl_->vertexBuffer->Unmap();
+    impl_->ActiveVertexBuffer().Unmap();
 
     std::memcpy(
-        impl_->indexBuffer->Map(),
+        impl_->ActiveIndexBuffer().Map(),
         impl_->convertedIndices.data(),
         impl_->convertedIndices.size() *
             sizeof(u32));
-    impl_->indexBuffer->Unmap();
+    impl_->ActiveIndexBuffer().Unmap();
 
     commands.SetRenderTarget(target);
     commands.SetViewport({
@@ -3565,10 +3594,10 @@ void EditorUi::Render(
     commands.SetGraphicsPipeline(
         *impl_->pipeline);
     commands.SetVertexBuffer(
-        *impl_->vertexBuffer,
+        impl_->ActiveVertexBuffer(),
         sizeof(UiVertex));
     commands.SetIndexBuffer(
-        *impl_->indexBuffer,
+        impl_->ActiveIndexBuffer(),
         rhi::IndexFormat::UInt32);
 
     const f32 displayWidth =

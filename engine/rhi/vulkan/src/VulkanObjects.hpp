@@ -12,6 +12,9 @@
 #include <orbit/rhi/Device.hpp>
 #include <orbit/rhi/vulkan/RenderDocCapture.hpp>
 
+#include "VulkanGpuProgress.hpp"
+
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -113,7 +116,8 @@ public:
         VkQueue nativeQueue,
         u32 familyIndex,
         QueueType type,
-        const DeviceFunctions& functions);
+        const DeviceFunctions& functions,
+        GpuProgress* progress = nullptr);
 
     [[nodiscard]] QueueType Type() const noexcept override;
     void Submit(CommandList& commandList) override;
@@ -140,6 +144,7 @@ private:
     u32 familyIndex_{0};
     QueueType type_{QueueType::Graphics};
     const DeviceFunctions* functions_{nullptr};
+    GpuProgress* progress_{nullptr};
 
     VkSemaphore pendingImageAvailable_{VK_NULL_HANDLE};
     VkSemaphore pendingRenderFinished_{VK_NULL_HANDLE};
@@ -153,7 +158,8 @@ public:
         VmaAllocator allocator,
         VkBuffer nativeBuffer,
         VmaAllocation allocation,
-        BufferDesc desc);
+        BufferDesc desc,
+        GpuProgress* progress = nullptr);
     ~VulkanBuffer() override;
 
     VulkanBuffer(const VulkanBuffer&) = delete;
@@ -168,12 +174,20 @@ public:
 
     [[nodiscard]] VkBuffer Native() const noexcept;
 
+    // Non-null only for host-visible/readback buffers on a tracked device:
+    // the serial of the last submit that referenced this buffer, which
+    // Map() waits on. VulkanCommandList raises it at submit time.
+    [[nodiscard]] const std::shared_ptr<std::atomic<u64>>&
+    UseTracker() const noexcept;
+
 private:
     VmaAllocator allocator_{nullptr};
     VkBuffer nativeBuffer_{VK_NULL_HANDLE};
     VmaAllocation allocation_{nullptr};
     BufferDesc desc_{};
     bool mapped_{false};
+    GpuProgress* progress_{nullptr};
+    std::shared_ptr<std::atomic<u64>> lastUse_;
 };
 
 class VulkanAccelerationStructure final
@@ -194,7 +208,8 @@ public:
         VmaAllocation aabbAllocation,
         VkBuffer instanceBuffer,
         VmaAllocation instanceAllocation,
-        u32 primitiveCount);
+        u32 primitiveCount,
+        GpuProgress* progress = nullptr);
     ~VulkanAccelerationStructure() override;
 
     [[nodiscard]] u32 PrimitiveCount() const noexcept override;
@@ -219,6 +234,7 @@ private:
     VmaAllocation instanceAllocation_{nullptr};
 
     u32 primitiveCount_{0U};
+    GpuProgress* progress_{nullptr};
 };
 
 class VulkanTexture final : public Texture
@@ -236,7 +252,8 @@ public:
         u32 width,
         u32 height,
         TextureFormat format,
-        bool ownsImage);
+        bool ownsImage,
+        GpuProgress* progress = nullptr);
     ~VulkanTexture() override;
 
     VulkanTexture(const VulkanTexture&) = delete;
@@ -283,6 +300,7 @@ private:
     bool ownsImage_{true};
     std::optional<VkClearValue> pendingClear_{};
     bool everUsed_{true};
+    GpuProgress* progress_{nullptr};
 };
 
 class VulkanTimestampQueryPool final : public TimestampQueryPool
@@ -291,7 +309,8 @@ public:
     VulkanTimestampQueryPool(
         VkDevice device,
         VkQueryPool pool,
-        u32 count);
+        u32 count,
+        GpuProgress* progress = nullptr);
     ~VulkanTimestampQueryPool() override;
 
     VulkanTimestampQueryPool(const VulkanTimestampQueryPool&) = delete;
@@ -311,6 +330,7 @@ private:
     VkDevice device_{VK_NULL_HANDLE};
     VkQueryPool pool_{VK_NULL_HANDLE};
     u32 count_{0};
+    GpuProgress* progress_{nullptr};
 };
 
 class VulkanGraphicsPipeline final : public GraphicsPipeline
@@ -324,7 +344,8 @@ public:
         u32 pushConstantDwords,
         u32 shaderResourceBuffers,
         u32 sampledTextures,
-        PrimitiveTopology topology);
+        PrimitiveTopology topology,
+        GpuProgress* progress = nullptr);
     ~VulkanGraphicsPipeline() override;
 
     VulkanGraphicsPipeline(const VulkanGraphicsPipeline&) = delete;
@@ -347,6 +368,7 @@ private:
     u32 shaderResourceBuffers_{0};
     u32 sampledTextures_{0};
     PrimitiveTopology topology_{PrimitiveTopology::TriangleList};
+    GpuProgress* progress_{nullptr};
 };
 
 class VulkanComputePipeline final : public ComputePipeline
@@ -361,7 +383,8 @@ public:
         u32 shaderResourceBuffers,
         u32 storageTextures,
         u32 sampledTextures,
-        u32 accelerationStructures);
+        u32 accelerationStructures,
+        GpuProgress* progress = nullptr);
     ~VulkanComputePipeline() override;
 
     VulkanComputePipeline(const VulkanComputePipeline&) = delete;
@@ -386,6 +409,7 @@ private:
     u32 storageTextures_{0};
     u32 sampledTextures_{0};
     u32 accelerationStructures_{0};
+    GpuProgress* progress_{nullptr};
 };
 
 class VulkanCommandAllocator final : public CommandAllocator
@@ -394,7 +418,8 @@ public:
     VulkanCommandAllocator(
         VkDevice device,
         QueueType type,
-        VkCommandPool pool);
+        VkCommandPool pool,
+        GpuProgress* progress = nullptr);
     ~VulkanCommandAllocator() override;
 
     VulkanCommandAllocator(const VulkanCommandAllocator&) = delete;
@@ -405,10 +430,18 @@ public:
 
     [[nodiscard]] VkCommandPool Native() const noexcept;
 
+    // Serial of the last submit recorded from this pool; Reset() waits on
+    // it, so a per-frame allocator whose slot fence already passed never
+    // stalls and a one-shot upload allocator cannot be reset under the GPU.
+    [[nodiscard]] const std::shared_ptr<std::atomic<u64>>&
+    UseTracker() const noexcept;
+
 private:
     VkDevice device_{VK_NULL_HANDLE};
     QueueType type_{QueueType::Graphics};
     VkCommandPool pool_{VK_NULL_HANDLE};
+    GpuProgress* progress_{nullptr};
+    std::shared_ptr<std::atomic<u64>> lastSubmit_;
 };
 
 class VulkanCommandList final : public CommandList
@@ -420,7 +453,8 @@ public:
         VkCommandPool pool,
         VkCommandBuffer nativeCommandList,
         const DeviceFunctions& functions,
-        VkSampler defaultSampler);
+        VkSampler defaultSampler,
+        GpuProgress* progress = nullptr);
 
     [[nodiscard]] QueueType Type() const noexcept override;
 
@@ -556,7 +590,20 @@ public:
 
     [[nodiscard]] VkCommandBuffer Native() const noexcept;
 
+    // Called by VulkanQueue::Submit with the serial this recording will
+    // signal: stamps every host-visible buffer it referenced and the
+    // allocator it was recorded from.
+    void FinalizeSubmit(u64 serial);
+
+    // Remembers the allocator this recording draws from so a submit stamps
+    // it (called by Reset and by CreateCommandList).
+    void NoteAllocator(VulkanCommandAllocator& allocator);
+
 private:
+    // Native handle of a buffer being recorded against; registers a
+    // host-visible one so FinalizeSubmit can stamp it.
+    [[nodiscard]] VkBuffer UseBuffer(VulkanBuffer& buffer);
+
     void EndRenderingIfActive();
     void BeginRendering(
         std::span<const VkRenderingAttachmentInfo> colorAttachments,
@@ -600,6 +647,10 @@ private:
     // vkFreeCommandBuffers itself.
     std::vector<std::pair<VkCommandPool, VkCommandBuffer>>
         commandBuffersByPool_;
+
+    GpuProgress* progress_{nullptr};
+    std::shared_ptr<std::atomic<u64>> allocatorTracker_;
+    std::vector<std::shared_ptr<std::atomic<u64>>> usedBuffers_;
 };
 
 class VulkanSwapchain final : public Swapchain
@@ -755,5 +806,6 @@ private:
     VkDebugUtilsMessengerEXT debugMessenger_{VK_NULL_HANDLE};
     std::unique_ptr<RenderDocCapture> renderDoc_;
     VkSampler defaultSampler_{VK_NULL_HANDLE};
+    std::unique_ptr<GpuProgress> progress_;
 };
 } // namespace orbit::rhi::vulkan::detail

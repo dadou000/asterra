@@ -18,6 +18,7 @@ FetchContent_MakeAvailable(VulkanMemoryAllocator)
 add_library(OrbitRhiVulkan STATIC
     src/VulkanDevice.cpp
     src/VulkanQueue.cpp
+    src/VulkanGpuProgress.cpp
     src/VulkanCommands.cpp
     src/VulkanPipeline.cpp
     src/VulkanResources.cpp
