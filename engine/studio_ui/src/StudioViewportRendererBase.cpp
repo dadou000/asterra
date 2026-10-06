@@ -11551,6 +11551,45 @@ StudioViewportRenderer::Compose(
                         *historyTexture,
                         rhi::ResourceState::ShaderResource);
 
+                    // The sun optical-depth cache update is its own pass so the GPU
+                    // pass timer reports it separately from the ray march. It declares
+                    // the same cloud target as the march, which keeps it ordered
+                    // before it; the recorded commands are unchanged.
+                    graph.AddPass(
+                        prefix + ".CloudLightVolume",
+                        {
+                            {
+                                .texture = cloudHandle,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         cloudGpu,
+                         cloudLayer,
+                         cloudReferenceRadius,
+                         atmosphereParameters,
+                         cloudView,
+                         cloudLab,
+                         cloudFrame,
+                         cloudLightVolume,
+                         cloudVolume](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            cloudRenderer_.UpdateLightVolume(
+                                commands,
+                                *cloudVolume,
+                                *cloudGpu,
+                                cloudReferenceRadius,
+                                cloudLayer,
+                                atmosphereParameters,
+                                cloudView,
+                                cloudLab,
+                                cloudFrame,
+                                cloudLightVolume);
+                        });
+
                     graph.AddPass(
                         prefix + ".Clouds",
                         {
@@ -11579,23 +11618,11 @@ StudioViewportRenderer::Compose(
                          cloudLab,
                          cloudFrame,
                          cloudGodrays,
-                         cloudLightVolume,
                          cloudVolumeDebug,
                          cloudVolume](
                             rhi::CommandList& commands,
                             const render_graph::Resources&)
                         {
-                            cloudRenderer_.UpdateLightVolume(
-                                commands,
-                                *cloudVolume,
-                                *cloudGpu,
-                                cloudReferenceRadius,
-                                cloudLayer,
-                                atmosphereParameters,
-                                cloudView,
-                                cloudLab,
-                                cloudFrame,
-                                cloudLightVolume);
                             cloudRenderer_.Draw(
                                 commands,
                                 *cloudVolume,

@@ -66,6 +66,16 @@ public:
         bool anchorSet{false};
         bool active{false};
         u32 generation{0U};
+
+        // Exact skip of redundant refreshes (see UpdateLightVolume): a hash of every input the
+        // update reads, and how many consecutive frames it has been unchanged.
+        u64 inputFingerprint{0U};
+        u32 settledFrames{0U};
+        // True when the last UpdateLightVolume skipped its dispatch because every voxel already
+        // holds the result for the current inputs.
+        bool refreshSkipped{false};
+        // Tests set this to false to get the original refresh-forever behaviour as a reference.
+        bool allowRefreshSkip{true};
     };
 
     CloudRenderer(const CloudRenderer&) = delete;

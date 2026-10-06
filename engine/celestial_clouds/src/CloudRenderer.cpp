@@ -4,6 +4,8 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -2246,6 +2248,16 @@ std::unique_ptr<CloudRenderer::LightVolume> CloudRenderer::CreateLightVolume() c
     {
         throw std::runtime_error("Failed to allocate the cloud light volume.");
     }
+
+    // ORBIT_CLOUD_VOLUME_ALWAYS_REFRESH=1 turns the settled-input skip off, restoring the
+    // original refresh-every-frame schedule (for A/B timing and bug isolation).
+    char* value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, "ORBIT_CLOUD_VOLUME_ALWAYS_REFRESH") == 0 && value != nullptr)
+    {
+        volume->allowRefreshSkip = value[0] != '1';
+        std::free(value);
+    }
     return volume;
 }
 
@@ -2340,6 +2352,55 @@ namespace
     constants[63] = f(volumeDebugAltitude);
     return constants;
 }
+
+// Every voxel refreshes at least once in any 12 consecutive frames: a valid voxel every 6th
+// (12th for the far cascade), a missing one every 3rd (see kVolumeCompute). The schedule uses
+// frameIndex % 4096, and 4096 is not a multiple of 12, so a window that straddles that wrap sees
+// the residues in two runs. Two full cycles guarantee one run is at least 12 frames long, which
+// covers every residue wherever the wrap falls.
+constexpr u32 kLightVolumeSettleFrames = 24U;
+
+// Hash of everything the light-volume compute shader reads, so a frame whose inputs are exactly
+// the previous frame's can be recognised. The dwords are the Constants members reachable from
+// the shader's main(): camera position, sun direction, shell, optics.w, atmosphere.z,
+// lod.yzw, the cloud lab, temporal.z (lab cirrus), temporal.w (voxel generation) and the
+// anchor. temporal.x (the frame index) only schedules which voxels refresh, so it is left out.
+// View orientation, field of view, the atmosphere scattering terms and the debug altitude are
+// not read by this shader and are left out too. The voxels also depend on the cloud field and
+// on the volume buffer itself, so their identities are mixed in.
+[[nodiscard]] u64 LightVolumeInputFingerprint(
+    const std::array<u32, 64>& constants,
+    const GpuCloudFieldProduct& field,
+    const rhi::Buffer& volumeBuffer)
+{
+    static constexpr std::array<u32, 29> kReadDwords{
+        0U, 1U, 2U,                                           // cameraAspect.xyz
+        12U, 13U, 14U,                                        // sunFar.xyz
+        16U, 17U, 18U, 19U,                                   // shell
+        23U,                                                  // optics.w
+        26U,                                                  // atmosphere.z
+        29U, 30U, 31U,                                        // lod.yzw
+        32U, 33U, 34U, 35U, 36U, 37U, 38U, 39U, 40U, 41U, 42U, 43U, // lab, labParams, labLife
+        58U, 59U,                                             // temporal.z, temporal.w
+    };
+
+    u64 hash = 14695981039346656037ULL;
+    const auto mix = [&hash](const u64 value)
+    {
+        hash ^= value;
+        hash *= 1099511628211ULL;
+    };
+    for (const u32 index : kReadDwords)
+    {
+        mix(constants[index]);
+    }
+    mix(constants[60]);
+    mix(constants[61]);
+    mix(constants[62]);
+    mix(field.Fingerprint());
+    mix(static_cast<u64>(reinterpret_cast<std::uintptr_t>(&volumeBuffer)));
+    return hash;
+}
 } // namespace
 
 void CloudRenderer::Draw(
@@ -2417,9 +2478,14 @@ void CloudRenderer::UpdateLightVolume(
     const bool enabled)
 {
     volume.active = false;
+    volume.refreshSkipped = false;
     if (!enabled || field.LayerCount() == 0U || field.FaceResolution() < 2U ||
         !volumePipeline_ || !volume.buffer)
     {
+        // Frames without a dispatch break the "every voxel refreshed within the last N frames"
+        // guarantee the skip below relies on.
+        volume.inputFingerprint = 0U;
+        volume.settledFrames = 0U;
         return;
     }
 
@@ -2427,6 +2493,8 @@ void CloudRenderer::UpdateLightVolume(
     const f64 cameraLength = std::sqrt(camera.x * camera.x + camera.y * camera.y + camera.z * camera.z);
     if (cameraLength < 1.0)
     {
+        volume.inputFingerprint = 0U;
+        volume.settledFrames = 0U;
         return;
     }
     const math::Double3 direction{camera.x / cameraLength, camera.y / cameraLength, camera.z / cameraLength};
@@ -2467,6 +2535,29 @@ void CloudRenderer::UpdateLightVolume(
         volume.generation,
         volume.anchor,
         0.0F);
+
+    // The voxels are a pure function of the inputs hashed here, and the shader refreshes every
+    // voxel at least once in kLightVolumeSettleFrames consecutive dispatches. So once the inputs
+    // have been identical for that many dispatched frames, every voxel already holds the result
+    // for them and another refresh would recompute bit-identical values: skip it. Any change
+    // (sun, camera, weather, parameters, a re-anchor) restarts the count, and the original
+    // refresh schedule runs unchanged until it settles again.
+    const u64 fingerprint = LightVolumeInputFingerprint(constants, field, *volume.buffer);
+    if (fingerprint != volume.inputFingerprint)
+    {
+        volume.inputFingerprint = fingerprint;
+        volume.settledFrames = 0U;
+    }
+    else if (volume.settledFrames < kLightVolumeSettleFrames)
+    {
+        ++volume.settledFrames;
+    }
+
+    if (volume.allowRefreshSkip && volume.settledFrames >= kLightVolumeSettleFrames)
+    {
+        volume.refreshSkipped = true;
+        return;
+    }
 
     commands.Transition(*volume.buffer, rhi::ResourceState::ShaderResource, rhi::ResourceState::UnorderedAccess);
     commands.SetComputePipeline(*volumePipeline_);
