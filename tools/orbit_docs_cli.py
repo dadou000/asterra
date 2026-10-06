@@ -61,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     target = sub.add_parser("target", help="docs for a file/module/symbol")
     target.add_argument("target")
     sub.add_parser("stale", help="structured blocks whose sources changed since `verified`")
+    cov = sub.add_parser("coverage", help="engine modules and documents the structured tree does not reach")
+    cov.add_argument("--fail-under", type=float, default=None, help="exit 1 if module coverage percent is below this")
     args = parser.parse_args(argv)
 
     index = DocsIndex(args.root or default_root())
@@ -81,6 +83,20 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if failed else 0
     if args.command == "tree":
         _print_tree(index, args.path, 0, args.depth, not args.all)
+        return 0
+    if args.command == "coverage":
+        report = index.coverage()
+        done = report["modules_total"] - len(report["modules_uncovered"])
+        percent = 100.0 * done / max(1, report["modules_total"])
+        print(f"modules: {done}/{report['modules_total']} covered ({percent:.0f}%)")
+        for module in report["modules_uncovered"]:
+            print(f"  uncovered module: {module}")
+        linked = report["documents_total"] - len(report["documents_unlinked"])
+        print(f"documents: {linked}/{report['documents_total']} linked from the structured tree")
+        for doc in report["documents_unlinked"]:
+            print(f"  unlinked document: {doc['path']} ({doc['sections']} sections) {doc['file']}")
+        if args.fail_under is not None and percent < args.fail_under:
+            return 1
         return 0
     if args.command == "stale":
         stale = 0

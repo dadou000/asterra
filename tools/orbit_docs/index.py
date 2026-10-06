@@ -775,6 +775,65 @@ class DocsIndex:
 
         return {"errors": errors, "warnings": warnings}
 
+    def coverage(self) -> dict[str, Any]:
+        """What the structured tree does not reach yet.
+
+        * modules: `engine/<m>` and `apps/<m>` directories that no structured
+          block names (a source under it, or a block living in its docs/).
+        * documents: legacy files that no structured block links to (route,
+          related/depends_on/used_by, diagnose docs, or listing the file in
+          `sources`).
+        """
+        self.refresh()
+        structured = [b for b in self.blocks.values() if not b.legacy]
+        roots = sorted(
+            f"{top}/{p.name}"
+            for top in ("engine", "apps")
+            if (self.root / top).is_dir()
+            for p in (self.root / top).iterdir()
+            if p.is_dir() and p.name != "build"
+        )
+        modules = []
+        for module in roots:
+            prefix = module + "/"
+            owners = [
+                b.path
+                for b in structured
+                if b.module_dir == module or any(src.startswith(prefix) for src in b.sources)
+            ]
+            modules.append({"module": module, "blocks": owners})
+
+        linked: set[str] = set()
+        for block in structured:
+            targets = list(block.related) + list(block.depends_on) + list(block.used_by)
+            targets += [self.resolve_target(block.path, t) for t in block.routes.values()]
+            for item in block.diagnose:
+                targets += _as_list(item.get("docs"))
+            for target in targets:
+                target = normalize_path(target)
+                if target.startswith(LEGACY_ROOT + "/"):
+                    linked.add("/".join(target.split("/")[:3]))
+            for src in block.sources:
+                linked.add(f"{LEGACY_ROOT}/" + slugify("-".join(Path(src).with_suffix("").parts[1:]))) if src.startswith("docs/") else None
+        documents = []
+        for path, block in sorted(self.blocks.items()):
+            if block.legacy and path.count("/") == 2:
+                documents.append(
+                    {
+                        "path": path,
+                        "title": block.title,
+                        "file": block.file,
+                        "sections": len(self.children_of.get(path, [])),
+                        "linked": path in linked,
+                    }
+                )
+        return {
+            "modules_uncovered": [m["module"] for m in modules if not m["blocks"]],
+            "modules_total": len(modules),
+            "documents_unlinked": [d for d in documents if not d["linked"]],
+            "documents_total": len(documents),
+        }
+
     def stats(self) -> dict[str, Any]:
         self.refresh()
         structured = [b for b in self.blocks.values() if not b.legacy]
