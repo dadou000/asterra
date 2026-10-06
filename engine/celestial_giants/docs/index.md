@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/rendering/atmosphere", "/celestial", "/legacy/research-v006-gas-ice-giants"]
 depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
-used_by = ["/editor/studio-session", "/world/world-model"]
+used_by = ["/editor/studio-session", "/editor/studio-ui", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialGiants",
 ]

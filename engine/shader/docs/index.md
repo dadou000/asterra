@@ -20,7 +20,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/clipmaps/rebuild-hitches", "/rendering/rhi", "/rules/hot-iteration"]
 depends_on = ["/foundation/core"]
-used_by = ["/celestial/compact-render", "/celestial/far-render", "/celestial/globe", "/celestial/magnetosphere-render", "/celestial/rings", "/editor/ui-toolkit", "/rendering/debug-overlay", "/rendering/planet-map", "/rendering/post-process", "/rendering/render-view", "/rendering/shading", "/rendering/volumes/render", "/rendering/volumes/solver", "/rendering/water", "/tools/eye-adaptation-module"]
+used_by = ["/celestial/compact-render", "/celestial/far-render", "/celestial/globe", "/celestial/magnetosphere-render", "/celestial/rings", "/editor/ui-toolkit", "/rendering/debug-overlay", "/rendering/lighting/radiance-cache", "/rendering/planet-map", "/rendering/post-process", "/rendering/render-view", "/rendering/shading", "/rendering/terrain/gpu-passes", "/rendering/volumes/render", "/rendering/volumes/solver", "/rendering/water", "/tools/eye-adaptation-module"]
 verify = [
   "ctest -R Orbit.ShaderCompiler",
 ]

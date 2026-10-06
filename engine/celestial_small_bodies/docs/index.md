@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/celestial", "/legacy/research-v006-small-body-rendering"]
 depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
-used_by = ["/editor/studio-session", "/world/world-model"]
+used_by = ["/editor/studio-session", "/editor/studio-ui", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialSmallBodies",
 ]

@@ -27,7 +27,7 @@ invariants = [
 ]
 related = ["/legacy/orbit-shading", "/legacy/v0-0-3-spec/17-asset-database-and-material-service", "/authoring/content-wic"]
 depends_on = ["/foundation/core", "/foundation/hot-reload"]
-used_by = ["/apps/build-service", "/apps/studio", "/authoring/content-wic", "/rendering/shading"]
+used_by = ["/apps/build-service", "/apps/studio", "/authoring/content-wic", "/editor/studio-ui", "/rendering/lighting/radiance-cache", "/rendering/shading"]
 verify = [
   "ctest -R Orbit.Content",
   "ctest -R Orbit.AssetPipeline",

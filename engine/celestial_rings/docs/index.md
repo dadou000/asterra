@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/celestial", "/legacy/research-v006-ring-system"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts"]
-used_by = ["/world/world-model"]
+used_by = ["/editor/studio-ui", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialRings",
 ]

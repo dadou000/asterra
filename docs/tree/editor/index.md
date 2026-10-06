@@ -12,6 +12,7 @@ keywords = ["editor", "studio", "ui", "viewport", "panels", "automation", "rpc",
 related = ["/rules/ui", "/rules/placement"]
 
 [routes]
+"which Studio UI file/panel owns X, view continuity, high-res capture, flat map, inspector extension" = "studio-ui"
 "viewport, navigation, camera, diagnostic overlays, text HUD" = "viewport"
 "add an RPC method or an MCP tool, drive Studio from an agent" = "mcp-rpc"
 "explorer, inspector, command surfaces, recipes, shortcuts" = "model"

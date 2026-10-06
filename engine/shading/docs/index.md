@@ -26,6 +26,7 @@ invariants = [
 ]
 related = ["/legacy/orbit-shading", "/authoring/content", "/editor/mcp-rpc"]
 depends_on = ["/authoring/content", "/authoring/content-wic", "/foundation/core", "/foundation/math", "/foundation/rpc", "/rendering/rhi", "/rendering/shader-compiler"]
+used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.Shading",
 ]

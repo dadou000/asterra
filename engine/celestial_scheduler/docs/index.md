@@ -22,6 +22,7 @@ invariants = [
 ]
 related = ["/celestial", "/rendering/atmosphere/lut-pipeline", "/rendering/clouds", "/rendering/terrain/invalidation"]
 depends_on = ["/foundation/core"]
+used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.CelestialScheduler",
 ]

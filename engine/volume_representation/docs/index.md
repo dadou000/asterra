@@ -24,7 +24,7 @@ invariants = [
 ]
 related = ["/rendering/volumes", "/legacy/research-v007-universal-volumetrics"]
 depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/foundation/time", "/world/world-model"]
-used_by = ["/editor/studio-session", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver"]
+used_by = ["/editor/studio-session", "/editor/studio-ui", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver"]
 verify = [
   "ctest -R Orbit.VolumeRepresentation",
 ]

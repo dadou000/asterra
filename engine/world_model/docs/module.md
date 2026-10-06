@@ -29,7 +29,7 @@ invariants = [
 ]
 related = ["/world/universe", "/celestial", "/rendering/atmosphere/authoring-solver", "/editor/model", "/legacy/research-v006-physical-property-solver-v1"]
 depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/celestial/compact-objects", "/celestial/giants", "/celestial/gravity", "/celestial/lighting", "/celestial/magnetosphere", "/celestial/ocean", "/celestial/orbits", "/celestial/radiometry", "/celestial/rings", "/celestial/rotation", "/celestial/small-bodies", "/celestial/stellar", "/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time", "/rendering/atmosphere", "/rendering/clouds", "/world/universe"]
-used_by = ["/apps/studio", "/editor/model", "/editor/session", "/editor/studio-session", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/representation", "/rendering/volumes/solver", "/world/surface-composition"]
+used_by = ["/apps/studio", "/editor/model", "/editor/session", "/editor/studio-session", "/rendering/lighting/radiance-cache", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/representation", "/rendering/volumes/solver", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.UniverseComposition",
   "ctest -R Orbit.CelestialCapabilitySchemas",

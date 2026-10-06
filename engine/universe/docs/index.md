@@ -18,7 +18,7 @@ invariants = [
 ]
 related = ["/foundation/frames", "/foundation/time", "/celestial", "/legacy/v0-0-3-spec/7-celestial-body-composition"]
 depends_on = ["/celestial/orbits", "/celestial/rotation", "/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time"]
-used_by = ["/apps/sandbox", "/apps/studio", "/celestial/far-render", "/celestial/globe", "/editor/ui-toolkit", "/rendering/terrain/biomes", "/rendering/terrain/water", "/world/fields", "/world/path-geometry", "/world/path-routing", "/world/paths", "/world/surface-composition", "/world/surface-registry", "/world/world-model"]
+used_by = ["/apps/sandbox", "/apps/studio", "/celestial/far-render", "/celestial/globe", "/editor/ui-toolkit", "/rendering/lighting/radiance-cache", "/rendering/terrain/biomes", "/rendering/terrain/water", "/world/fields", "/world/path-geometry", "/world/path-routing", "/world/paths", "/world/surface-composition", "/world/surface-registry", "/world/world-model"]
 verify = [
   "ctest -R Orbit.BodyRegistry",
 ]

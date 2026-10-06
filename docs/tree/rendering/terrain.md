@@ -21,6 +21,7 @@ invariants = [
 related = ["/rendering/terrain/clipmaps"]
 
 [routes]
+"GPU compute passes: field generation, drainage, flow accumulation, hydraulic/thermal/aeolian/coastal on the GPU, readback" = "gpu-passes"
 "frozen contracts: authority, revisions, page identity, analytic source, tectonics" = "contracts"
 "sample streaming, toroidal residency, strip refresh" = "streaming"
 "clipmap levels, rings, LOD, camera-relative terrain" = "clipmaps"

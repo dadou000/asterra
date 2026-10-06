@@ -24,7 +24,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/erosion", "/rendering/terrain/scatter", "/legacy/v0-0-4-m08-material-column", "/legacy/v0-0-4-m18-surface-resolver", "/legacy/v0-0-4-m24-local-3d-promotion"]
 depends_on = ["/foundation/core", "/rendering/rhi", "/rendering/terrain/clipmaps", "/rendering/terrain/contracts", "/rendering/terrain/geology", "/rendering/terrain/impacts", "/rendering/terrain/scatter"]
-used_by = ["/editor/studio-session", "/rendering/terrain/biomes", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/hydrology", "/rendering/terrain/regions", "/rendering/terrain/scatter", "/rendering/terrain/water", "/world/surface-composition"]
+used_by = ["/editor/studio-session", "/rendering/terrain/biomes", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/gpu-passes", "/rendering/terrain/hydrology", "/rendering/terrain/regions", "/rendering/terrain/scatter", "/rendering/terrain/water", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.TerrainMaterialColumn",
   "ctest -R Orbit.TerrainSurfaceResolver",

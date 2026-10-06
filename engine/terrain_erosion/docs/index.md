@@ -29,7 +29,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/hydrology", "/rendering/terrain/rivers", "/rendering/terrain/material-column", "/rendering/terrain/water", "/legacy/v0-0-4-m10-stream-power", "/legacy/v0-0-4-m11-hydraulic-erosion", "/legacy/v0-0-4-m12-thermal-erosion", "/legacy/v0-0-4-m13-aeolian-erosion", "/legacy/v0-0-4-m14-unified-sediment-exchange", "/legacy/v0-0-4-m15-glacial-erosion", "/legacy/v0-0-4-m23-multi-scale-terrain"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/macro-geology", "/rendering/terrain/material-column", "/world/planet-coordinates", "/world/terrain-constraints"]
-used_by = ["/apps/sandbox", "/rendering/terrain/debug-fields", "/rendering/terrain/regions", "/rendering/terrain/water", "/world/surface-composition"]
+used_by = ["/apps/sandbox", "/rendering/terrain/debug-fields", "/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/terrain/water", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.TerrainStreamPower",
   "ctest -R Orbit.TerrainHydraulicErosion",

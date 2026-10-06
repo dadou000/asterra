@@ -24,7 +24,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/material-column", "/rendering/terrain/macro-geology", "/legacy/v0-0-4-m02-geological-materials", "/legacy/v0-0-4-m03-virtual-stratigraphy"]
 depends_on = ["/foundation/core", "/rendering/terrain/contracts"]
-used_by = ["/rendering/terrain/biomes", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/material-column", "/rendering/terrain/scatter", "/rendering/terrain/water", "/world/surface-composition", "/world/terrain-constraints"]
+used_by = ["/rendering/terrain/biomes", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/gpu-passes", "/rendering/terrain/material-column", "/rendering/terrain/scatter", "/rendering/terrain/water", "/world/surface-composition", "/world/terrain-constraints"]
 verify = [
   "ctest -R Orbit.TerrainGeologyMaterials",
   "ctest -R Orbit.TerrainStratigraphy",

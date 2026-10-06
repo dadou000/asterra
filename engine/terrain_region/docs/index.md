@@ -25,7 +25,7 @@ invariants = [
   "When a GPU device is configured, region tiles build on the GPU: Request() only queues the tile and the caller's per-frame Flush() records the dispatch (same pattern as GpuElevationQuery).",
 ]
 related = ["/rendering/terrain/water", "/rendering/terrain/erosion", "/world/planet-coordinates", "/legacy/v0-0-4-m25-boundary-exchange"]
-depends_on = ["/foundation/core", "/foundation/jobs", "/foundation/math", "/rendering/rhi", "/rendering/terrain/contracts", "/rendering/terrain/erosion", "/rendering/terrain/gpu-cache", "/rendering/terrain/hydrology", "/rendering/terrain/material-column", "/rendering/terrain/water", "/world/planet-coordinates"]
+depends_on = ["/foundation/core", "/foundation/jobs", "/foundation/math", "/rendering/rhi", "/rendering/terrain/contracts", "/rendering/terrain/erosion", "/rendering/terrain/gpu-passes", "/rendering/terrain/hydrology", "/rendering/terrain/material-column", "/rendering/terrain/water", "/world/planet-coordinates"]
 used_by = ["/apps/sandbox", "/rendering/terrain/debug-fields", "/rendering/water"]
 verify = [
   "ctest -R Orbit.TerrainBoundaryExchange",

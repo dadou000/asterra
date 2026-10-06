@@ -23,7 +23,7 @@ invariants = [
 ]
 related = ["/rules/ui", "/editor/viewport", "/authoring/plugins"]
 depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/platform", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/world/path-geometry", "/world/universe"]
-used_by = ["/apps/studio", "/authoring/plugins"]
+used_by = ["/apps/studio", "/authoring/plugins", "/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.EditorDockLayout",
   "ctest -R Orbit.EditorPanelExtensions",

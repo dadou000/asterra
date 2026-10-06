@@ -30,7 +30,7 @@ invariants = [
 ]
 related = ["/authoring/commands", "/world/world-model", "/editor/studio-session", "/rendering/atmosphere/authoring-solver", "/rules/placement"]
 depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/authoring/selection", "/foundation/core", "/foundation/platform", "/rendering/terrain/biomes", "/world/paths", "/world/surface-composition", "/world/terrain-constraints", "/world/world-model"]
-used_by = ["/apps/studio", "/authoring/plugins", "/editor/session", "/editor/studio-session"]
+used_by = ["/apps/studio", "/authoring/plugins", "/editor/session", "/editor/studio-session", "/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.EditorModel",
   "ctest -R Orbit.ExplorerInspector",

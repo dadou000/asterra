@@ -18,7 +18,7 @@ invariants = [
 ]
 related = ["/rendering/water", "/celestial/appearance", "/legacy/research-v006-orbital-ocean", "/legacy/standing-water-rendering"]
 depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
-used_by = ["/world/world-model"]
+used_by = ["/editor/studio-ui", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialOcean",
 ]

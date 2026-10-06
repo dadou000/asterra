@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/editor/mcp-rpc", "/tools/dev-server"]
 depends_on = ["/foundation/core"]
-used_by = ["/editor/reports", "/editor/studio-session", "/rendering/shading"]
+used_by = ["/editor/reports", "/editor/studio-session", "/editor/studio-ui", "/rendering/shading"]
 verify = [
   "ctest -R Orbit.Rpc",
 ]

@@ -23,7 +23,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/clipmaps/lattice-and-tracking", "/rendering/terrain/contracts", "/rendering/terrain/clipmaps", "/foundation/jobs", "/legacy/problems"]
 depends_on = ["/foundation/core", "/foundation/jobs", "/rendering/terrain/clipmaps", "/rendering/terrain/contracts", "/world/planet-coordinates"]
-used_by = ["/apps/sandbox", "/editor/studio-session"]
+used_by = ["/apps/sandbox", "/editor/studio-session", "/rendering/terrain/gpu-passes"]
 verify = [
   "ctest -R Orbit.TerrainStream",
   "ctest -R Orbit.TerrainSampleStreamer",

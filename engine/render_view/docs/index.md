@@ -19,8 +19,8 @@ invariants = [
   "PNG capture drops the display alpha and needs the Windows imaging codec (it throws elsewhere); large captures stream in row chunks.",
 ]
 related = ["/rendering/render-graph", "/editor/viewport"]
-depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/rendering/lighting", "/rendering/render-graph", "/rendering/rhi", "/rendering/shader-compiler"]
-used_by = ["/apps/sandbox", "/apps/studio", "/celestial/compact-render", "/celestial/far-render", "/celestial/globe", "/celestial/magnetosphere-render", "/celestial/rings", "/editor/ui-toolkit", "/rendering/volumes/render"]
+depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/rendering/lighting/radiance-cache", "/rendering/render-graph", "/rendering/rhi", "/rendering/shader-compiler"]
+used_by = ["/apps/sandbox", "/apps/studio", "/celestial/compact-render", "/celestial/far-render", "/celestial/globe", "/celestial/magnetosphere-render", "/celestial/rings", "/editor/studio-ui", "/editor/ui-toolkit", "/rendering/volumes/render"]
 verify = [
   "ctest -R Orbit.ViewRay",
   "ctest -R Orbit.CapturePng",

@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/celestial/globe", "/celestial/far-render", "/rendering/terrain", "/legacy/research-v006-planetary-appearance"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/rendering/terrain/contracts"]
-used_by = ["/celestial/far-render", "/celestial/giants", "/celestial/globe", "/celestial/ocean", "/celestial/small-bodies", "/editor/studio-session"]
+used_by = ["/celestial/far-render", "/celestial/giants", "/celestial/globe", "/celestial/ocean", "/celestial/small-bodies", "/editor/studio-session", "/editor/studio-ui", "/rendering/lighting/radiance-cache"]
 verify = [
   "ctest -R Orbit.PlanetaryAppearance",
 ]

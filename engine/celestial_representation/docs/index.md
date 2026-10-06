@@ -22,7 +22,7 @@ invariants = [
 ]
 related = ["/celestial/globe", "/celestial/far-render", "/rendering/terrain/clipmaps", "/legacy/research-v006-representation-resolver", "/legacy/research-v006-surface-globe-transition"]
 depends_on = ["/foundation/core"]
-used_by = ["/celestial/compact-objects", "/celestial/far-render", "/editor/studio-session"]
+used_by = ["/celestial/compact-objects", "/celestial/far-render", "/editor/studio-session", "/editor/studio-ui", "/rendering/lighting/radiance-cache"]
 verify = [
   "ctest -R Orbit.CelestialRepresentation",
 ]

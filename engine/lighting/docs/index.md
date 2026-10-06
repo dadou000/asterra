@@ -38,6 +38,9 @@ verify = [
 verified = "b0a0de7f"
 
 [routes]
+"cache cells, residency, dark slabs, relighting, 96-byte cell" = "radiance-cache"
+"visibility queries, providers, terminal miss, reflections, final gather" = "visibility-and-reflections"
+"lighting budget, quality policy, overload/recovery, stable view" = "scheduler"
 "no or wrong sun shadow from authored boxes/spheres, proxy walls look wrong" = "proxy-sun-shadow"
 "shadowed or enclosed areas are black instead of sky-lit" = "sky-cache-fill"
 "exposure, blown highlights, dark interiors lifted to grey" = "eye-adaptation"

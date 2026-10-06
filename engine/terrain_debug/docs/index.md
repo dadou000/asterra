@@ -24,7 +24,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/clipmaps/debugging", "/rendering/terrain/gpu-cache", "/legacy/v0-0-4-m29-debug-field-visualizer"]
 depends_on = ["/foundation/core", "/rendering/rhi", "/rendering/terrain/biomes", "/rendering/terrain/contracts", "/rendering/terrain/erosion", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/macro-geology", "/rendering/terrain/material-column", "/rendering/terrain/regions", "/rendering/terrain/scatter", "/world/planet-coordinates"]
-used_by = ["/editor/studio-session"]
+used_by = ["/editor/studio-session", "/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.TerrainDebug",
   "ctest -R Orbit.TerrainDebugRaster",

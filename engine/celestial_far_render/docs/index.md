@@ -17,6 +17,7 @@ invariants = [
 ]
 related = ["/celestial/representation", "/celestial/appearance", "/legacy/research-v006-far-celestial-representations"]
 depends_on = ["/celestial/appearance", "/celestial/lighting", "/celestial/representation", "/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts", "/world/universe"]
+used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.CelestialFarRender",
 ]

@@ -21,7 +21,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/biomes", "/rendering/terrain/material-column", "/rendering/terrain/invalidation", "/legacy/v0-0-4-m22-biome-scatter"]
 depends_on = ["/foundation/core", "/rendering/terrain/biomes", "/rendering/terrain/geology", "/rendering/terrain/material-column", "/world/planet-coordinates"]
-used_by = ["/editor/studio-session", "/rendering/terrain/debug-fields", "/rendering/terrain/material-column"]
+used_by = ["/editor/studio-session", "/rendering/terrain/debug-fields", "/rendering/terrain/gpu-passes", "/rendering/terrain/material-column"]
 verify = [
   "ctest -R Orbit.TerrainScatter",
 ]

@@ -24,7 +24,7 @@ invariants = [
 ]
 related = ["/rendering/water", "/rendering/terrain/erosion", "/rendering/terrain/regions", "/legacy/standing-water-rendering", "/legacy/v0-0-4-water-service", "/legacy/v0-0-4-m17-coastal-process"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/erosion", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/material-column", "/world/planet-coordinates", "/world/universe"]
-used_by = ["/rendering/terrain/regions", "/rendering/water", "/world/surface-composition"]
+used_by = ["/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/water", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.TerrainCoastalProcess",
   "ctest -R Orbit.WaterService",

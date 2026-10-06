@@ -27,7 +27,7 @@ invariants = [
 ]
 related = ["/rendering/lighting/eye-adaptation", "/rendering/lighting", "/tools/eye-adaptation-module"]
 depends_on = ["/foundation/core", "/rendering/rhi", "/rendering/shader-compiler"]
-used_by = ["/apps/studio"]
+used_by = ["/apps/studio", "/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.ColorLut",
   "ctest -R Orbit.LuminanceHistogram",

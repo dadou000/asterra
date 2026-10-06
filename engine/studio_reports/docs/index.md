@@ -19,6 +19,7 @@ invariants = [
 ]
 related = ["/editor/mcp-rpc", "/legacy/orbit-mcp/issue-reports"]
 depends_on = ["/foundation/core", "/foundation/rpc"]
+used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.StudioReports",
 ]
