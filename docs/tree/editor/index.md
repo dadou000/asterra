@@ -21,7 +21,7 @@ related = ["/rules/ui", "/rules/placement"]
 "ImGui shell, panel extensions, DPI scale, previews" = "ui-toolkit"
 "issue reports, capturing a reproducible problem" = "reports"
 "button/shortcut/toolbar change" = "/rules/placement"
-"profiler, performance trace" = "/legacy/orbit-profiler"
+"profiler, hitch capture, performance trace" = "/editor/profiler"
 "shading assets, shader contract" = "/rendering/shading"
 +++
 

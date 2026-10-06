@@ -38,7 +38,7 @@ steps = [
   "Find what changed at that altitude (clipmap config, sky-view table, coverage tier) and what ComposeBase rebuilt because of it.",
   "Fix by narrowing the rebuild to what the changed input actually feeds (recreateGenerator pattern), not by caching around it.",
 ]
-docs = ["/legacy/orbit-profiler"]
+docs = ["/editor/profiler"]
 +++
 
 ## Remaining known cost
