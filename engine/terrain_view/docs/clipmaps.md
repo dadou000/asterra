@@ -47,6 +47,9 @@ verified = "00d8c5b6"
 "multi-second freeze when altitude crosses a threshold" = "rebuild-hitches"
 "experimental distance-banded levels" = "distance-bands"
 "something looks wrong and I need to see the levels" = "debugging"
+"shader edit does not show up, push-constant or sample layout is wrong" = "/rendering/terrain/clipmaps/shaders"
+"soot, ash, wetness or heat stamps missing, material input has no visible effect" = "/rendering/terrain/surface-material"
+"water plane over land, missing shoreline, opaque sea, sandbox planet mesh" = "/rendering/terrain/water-volume-shader"
 +++
 
 ## Pipeline (per frame)

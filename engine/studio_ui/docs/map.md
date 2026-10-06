@@ -43,6 +43,11 @@ verify = [
   "ctest -R Orbit.ProfilerModel",
 ]
 verified = "b0a0de7f"
+[routes]
+"Celestial panel, Celestial Tools, atmosphere preset buttons, System View canvas or orbit handles misbehave" = "/editor/studio-ui/celestial-authoring"
+"Project Browser, World Documents, Project Settings, create/open project or world" = "/editor/studio-ui/world-and-project"
+"Surface panel cache, revision or rebuild numbers look wrong, or a Surface edit has no RPC" = "/editor/studio-ui/surface-authoring"
+"Volumes panel, Representation/LOD, cache bake, particle output, or Shading tab panel misbehaves" = "/editor/studio-ui/volume-authoring"
 +++
 
 Area to file map (`engine/studio_ui/include/orbit/studio_ui`): shell and persistence - `StudioUiBundle`, `StudioShellModel`, `StudioExpansionShell`, `StudioPersistentState`, `StudioViewContinuity`, `StudioUiContributions`; authoring panels - `ProjectAuthoringUi`, `ProjectSettingsUi`, `WorldDocumentsUi`, `CelestialAuthoringUi`, `SurfaceAuthoringUi`, `VolumeAuthoringUi`, `SimulationControlsUi`, `SystemViewUi`, `ShadingUi`; viewport - see `/editor/viewport`; diagnostics - `DisplayDiagnosticsUi`, `DisplayEyeRpc`, `StudioTextDiagnosticsHud`, `ProfilerUi`/`ProfilerModel`/`ProfilerPanelRpc`, `ReportsUi`; release evidence - `V007ValidationScenarios`, `V007PerformanceCapture`, `V007ValidationCommands`.
