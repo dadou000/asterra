@@ -26,7 +26,7 @@ invariants = [
 related = ["/rules/completion-check"]
 used_by = ["/rules/completion-check"]
 verify = ["python tools/orbit_docs_cli.py check", "python -m unittest discover -s tools/tests -p 'test_orbit_docs.py'"]
-verified = "b0a0de7f"
+verified = "00d8c5b6"
 
 +++
 
@@ -72,7 +72,7 @@ related = ["/other/node"]                              # links that must exist
 depends_on = ["/other/node"]                           # this relies on that
 used_by = ["/other/node"]                              # that relies on this
 verify = ["How to prove the invariants still hold."]
-verified = "b0a0de7f"                                  # commit the facts were checked against
+verified = "00d8c5b6"                                  # commit the facts were checked against
 applies_to = ["engine/**"]                             # rules: globs of files they govern
 include_in_tasks = false                               # rules: always listed by docs.for_task
 

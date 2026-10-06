@@ -35,7 +35,7 @@ verify = [
   "orbit_view_text_diagnostics: clipmap_plan.levels lists the active levels; fully_drawn must be true for each.",
   "Dynamic and fixed (dynamic_clipmaps=false) renders at the same pose are pixel-identical.",
 ]
-verified = "b0a0de7f"
+verified = "00d8c5b6"
 
 [routes]
 "which levels are drawn, wrong detail level, too many/few levels" = "level-planning"

@@ -33,7 +33,7 @@ verify = [
   "python -m py_compile tools/mcp_server/orbit_editor_mcp_server.py (CI does this).",
   "ctest -R EditorRpc (engine/editor_rpc/tests) for registration and dispatch behaviour.",
 ]
-verified = "b0a0de7f"
+verified = "00d8c5b6"
 
 [routes]
 "which RPC methods exist for views and terrain overlays" = "/legacy/orbit-mcp/panels-and-the-shading-tab"

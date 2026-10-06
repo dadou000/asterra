@@ -29,7 +29,7 @@ verify = [
   "0 -> orbit -> 0 altitude sweep (933 navigate steps, 6,297 frames) shows no hitch after startup (before: nine ~3 s stalls).",
   "Micro-profiler capture (orbit_profiler_capture): no multi-ms slice under dxcompiler.dll during motion.",
 ]
-verified = "b0a0de7f"
+verified = "00d8c5b6"
 
 [[diagnose]]
 symptom = "multi-second freeze when the altitude crosses a threshold"

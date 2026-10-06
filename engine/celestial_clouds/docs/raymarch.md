@@ -34,7 +34,7 @@ verify = [
   "Frame-time average with clouds on vs off at 8 km (Release, Earth): original numbers were +0.7 ms looking at the horizon and +1.65 ms looking down; a regression beyond that needs an explanation.",
   "Side-on grazing clouds at the horizon are sharp, not striped or see-through.",
 ]
-verified = "b0a0de7f"
+verified = "00d8c5b6"
 
 [[diagnose]]
 symptom = "side-on or grazing clouds look blurry, striped or see-through"

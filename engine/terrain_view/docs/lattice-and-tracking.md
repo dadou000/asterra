@@ -21,9 +21,10 @@ invariants = [
   "The anchor surface frame is stable across ordinary cell shifts, so retained toroidal samples keep an identical world-space address; only a rebase changes it.",
   "A rebase of the exponential-map chart is deliberately rare (about 150 km of travel on a 6000 km planet) versus toroidal strip updates every sample cell.",
   "InvalidateSamples() refreshes data without relocating the stable sampling lattice; Reset() forgets everything.",
+  "A terrain source revision must refresh through InvalidateSamples(), never Reset(): Reset relocated every grid around the current observer and therefore changed the sampling phase even for distant levels whose spacing and field were unchanged (problem tracker entry 'Terrain changes shape on source refresh / rebase', corrected 2026-09-13 and listed as awaiting visual confirmation in /legacy/problems).",
   "fullRefresh on a level means every sample of that level must be regenerated; otherwise only the reported strips.",
 ]
-related = ["/rendering/terrain/clipmaps/precision-and-pages"]
+related = ["/rendering/terrain/clipmaps/precision-and-pages", "/legacy/problems"]
 depends_on = ["/rendering/terrain/clipmaps"]
 verify = [
   "ctest -R Orbit.ClipmapPlanner plus the terrain stream tests (engine/terrain_stream) for residency behaviour.",
