@@ -54,7 +54,7 @@ related = ["/docs-system"]
 | `/tools` | Dev server, hot-reload probe/module, Python tooling. |
 | `/rules` | Normative rules: architecture, hot iteration, MCP parity, change placement, UI, completion checks. |
 | `/docs-system` | The block format, the docs tools and how to keep blocks fresh. |
-| `/history` | Version specs and milestone records (V0.0.3-V0.0.7), problem tracker, Godot-era documents. Records, not rules. |
+| `/history` | Version specs and milestone records (V0.0.3-V0.0.7), problem tracker and notes. Records, not rules. |
 | `/legacy` | Remaining long documents indexed per section. |
 
 ## Repository map
