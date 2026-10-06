@@ -6,7 +6,10 @@
 
 #include <orbit/math/Vector.hpp>
 #include <orbit/paths/PathNetwork.hpp>
+#include <orbit/world_model/AtmospherePropertySolver.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
@@ -108,6 +111,102 @@ RequireObjectId(
     }
 
     return *id;
+}
+
+[[nodiscard]] const char* AtmosphereOutcomeName(
+    const world_model::AtmosphereSolveOutcome outcome) noexcept
+{
+    switch (outcome)
+    {
+    case world_model::AtmosphereSolveOutcome::NoChange:
+        return "no_change";
+    case world_model::AtmosphereSolveOutcome::Derived:
+        return "derived";
+    case world_model::AtmosphereSolveOutcome::Conflict:
+        return "conflict";
+    case world_model::AtmosphereSolveOutcome::InvalidInput:
+        return "invalid_input";
+    }
+
+    return "unknown";
+}
+
+[[nodiscard]] scene::ObjectId RequireAtmosphereCapability(
+    const rpc::Value::Object& values,
+    const scene::ObjectStore& objects)
+{
+    const auto id =
+        RequireObjectId(
+            values,
+            "atmosphere");
+
+    const auto object =
+        objects.Find(
+            id);
+
+    if (!object.has_value())
+    {
+        throw rpc::Error(
+            1004,
+            "Object not found.");
+    }
+
+    if (object->type !=
+        world_model::kAtmosphereCapabilityType)
+    {
+        throw rpc::Error(
+            -32602,
+            "atmosphere must be the id of an atmosphere capability object (see celestial.capabilities and object.list).");
+    }
+
+    return id;
+}
+
+[[nodiscard]] rpc::Value AtmosphereReportToValue(
+    const world_model::AtmosphereSolveReport& report,
+    const schema::SchemaRegistry& schemas)
+{
+    rpc::Value::Array events;
+
+    for (const auto& event :
+         report.events)
+    {
+        const auto* property =
+            schemas.FindProperty(
+                world_model::kAtmosphereCapabilityType,
+                event.target);
+
+        events.emplace_back(
+            rpc::Value(
+                rpc::Value::Object{
+                    {"property",
+                     event.target.ToString()},
+                    {"name",
+                     property != nullptr
+                         ? property->name
+                         : std::string{}},
+                    {"outcome",
+                     std::string(
+                         AtmosphereOutcomeName(
+                             event.outcome))},
+                    {"explanation",
+                     event.explanation}
+                }));
+    }
+
+    return rpc::Value(
+        rpc::Value::Object{
+            {"events",
+             rpc::Value(
+                 std::move(events))},
+            {"derived_count",
+             static_cast<f64>(
+                 report.DerivedCount())},
+            {"has_conflict",
+             report.HasConflict()},
+            {"has_invalid_input",
+             report.HasInvalidInput()}
+        });
 }
 
 [[nodiscard]] schema::TypeId
@@ -1823,6 +1922,110 @@ EditorRpcService::EditorRpcService(
                 rpc::Value::Object{
                     {"ok", true}
                 });
+        });
+
+    Register(
+        {
+            .name = "atmosphere.presets",
+            .description =
+                "Lists the named atmosphere presets accepted by atmosphere.apply_preset.",
+            .mutating = false
+        },
+        [](const rpc::Value&)
+        {
+            rpc::Value::Array names;
+
+            for (const auto name :
+                 world_model::AtmospherePropertySolver::
+                     Presets())
+            {
+                names.emplace_back(
+                    rpc::Value(
+                        std::string(name)));
+            }
+
+            return rpc::Value(
+                std::move(names));
+        });
+
+    Register(
+        {
+            .name = "atmosphere.solve",
+            .description =
+                "Runs the atmosphere property solver on an atmosphere capability object, deriving dependent properties from the authored ones. Returns the per-property solve report (derived, no_change, conflict, invalid_input) with explanations.",
+            .mutating = true
+        },
+        [&objects,
+         &schemas,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            world_model::AtmospherePropertySolver solver(
+                objects,
+                commandService);
+
+            return AtmosphereReportToValue(
+                solver.Solve(
+                    RequireAtmosphereCapability(
+                        values,
+                        objects)),
+                schemas);
+        });
+
+    Register(
+        {
+            .name = "atmosphere.apply_preset",
+            .description =
+                "Applies a named atmosphere preset (see atmosphere.presets) to an atmosphere capability object as one undoable transaction and returns the solve report.",
+            .mutating = true
+        },
+        [&objects,
+         &schemas,
+         &commandService](
+            const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            const std::string preset =
+                RequireString(
+                    values,
+                    "preset");
+
+            const auto known =
+                world_model::AtmospherePropertySolver::
+                    Presets();
+
+            if (std::find(
+                    known.begin(),
+                    known.end(),
+                    std::string_view(preset)) ==
+                known.end())
+            {
+                throw rpc::Error(
+                    -32602,
+                    "Unknown atmosphere preset: " +
+                        preset +
+                        " (see atmosphere.presets).");
+            }
+
+            const auto atmosphere =
+                RequireAtmosphereCapability(
+                    values,
+                    objects);
+
+            world_model::AtmospherePropertySolver solver(
+                objects,
+                commandService);
+
+            return AtmosphereReportToValue(
+                solver.ApplyPreset(
+                    atmosphere,
+                    preset),
+                schemas);
         });
 
     Register(

@@ -18,8 +18,10 @@ sources = [
   "engine/studio_ui/src/CelestialAuthoringUi.cpp",
   "engine/editor_model/src/CelestialRecipeService.cpp",
   "engine/world_model/tests/AtmospherePropertySolverTests.cpp",
+  "engine/editor_rpc/src/EditorRpcService.cpp",
+  "engine/editor_rpc/tests/EditorRpcServiceTests.cpp",
 ]
-symbols = ["AtmospherePropertySolver", "AtmosphereSolveReport", "AtmosphereSolveOutcome", "PropertyProvenance", "PropertySourceMode", "PropertySolveState", "PropertyProvenanceStore"]
+symbols = ["AtmospherePropertySolver", "AtmosphereReportToValue", "AtmosphereSolveReport", "AtmosphereSolveOutcome", "PropertyProvenance", "PropertySourceMode", "PropertySolveState", "PropertyProvenanceStore"]
 invariants = [
   "There is still one persistent Atmosphere capability and one set of runtime coefficients; the solver writes the same physical properties ResolveAtmosphereBody reads, so any successful solve changes the ordinary AtmosphereFingerprint. No parallel representation or solver cache exists.",
   "Write policy per predicted coefficient: Default/Derived/Procedural writable authority may be solved; Explicit, Imported and Locked authority is preserved and any disagreement is returned as AtmosphereSolveOutcome::Conflict, never silently overwritten.",
@@ -31,6 +33,7 @@ invariants = [
   "Absorber layer: centre = 3.125 H_R, half width = 1.875 H_R (reproduces the 25 km / 15 km Earth-like baseline at H_R about 8 km); the absorber coefficients scale with the absorber column scale.",
   "Atmosphere top radius (when writable) = bodyRadius + max(10 H_R, 12 H_M, absorberCenter + 2 absorberHalfWidth, 1 m); recipe-authored explicit extents stay authoritative.",
   "A manual Inspector edit of a property that has a provenance record promotes it to Explicit/Locked in the same transaction; undo restores value and provenance atomically. Provenance lives as a child record under the owning capability and is removed atomically with it.",
+  "Every solver operation reachable from the Celestial panel (Solve, presets) is also an RPC method and MCP tool (atmosphere.solve / atmosphere.apply_preset / atmosphere.presets); keep them calling AtmospherePropertySolver, never duplicating its logic.",
   "Presets (Earth-like, Thin CO2, Dense CO2, Dry Nitrogen) write ordinary semantic properties with Procedural/Solved provenance and immediately run the same solver; no preset creates a hidden runtime type.",
 ]
 related = ["/rendering/atmosphere/lut-pipeline", "/editor/mcp-rpc"]
@@ -51,15 +54,23 @@ steps = [
 docs = ["/rendering/atmosphere/lut-pipeline"]
 +++
 
-## Known gap: no RPC/MCP path for the solver
+## RPC / MCP
 
-`AtmospherePropertySolver::Solve` and `ApplyPreset` are called from two places only: the Celestial panel
-(`CelestialAuthoringUi.cpp`, the preset buttons and "Solve Derived Coefficients") and recipe creation
-(`CelestialRecipeService.cpp`, reachable over RPC as `celestial.create_from_recipe`). A client driving Studio over MCP can
-set the raw properties or create a body from a recipe, but cannot run the solver or apply a preset to an existing
-atmosphere. That conflicts with the MCP parity rule (`/editor/mcp-rpc`): the operation behind those buttons should be an RPC
-method (for example `atmosphere.solve` / `atmosphere.apply_preset`) with a dedicated tool in
-`tools/mcp_server/orbit_editor_mcp_server.py` and an entry in `docs/ORBIT_MCP.md`.
+The solver is reachable without the UI (MCP parity, `/editor/mcp-rpc`). Registered in `EditorRpcService.cpp` next to the celestial
+methods; each calls the same `AtmospherePropertySolver` the Celestial panel buttons call:
+
+| RPC method | MCP tool | Effect |
+|---|---|---|
+| `atmosphere.presets` | `orbit_atmosphere_presets` | Lists preset names (Earth-like, Thin CO2, Dense CO2, Dry Nitrogen). |
+| `atmosphere.solve` | `orbit_atmosphere_solve(atmosphere_id)` | `Solve`: derives writable coefficients from the authored inputs. |
+| `atmosphere.apply_preset` | `orbit_atmosphere_apply_preset(atmosphere_id, preset)` | `ApplyPreset`: one undoable transaction, then the same solve. |
+
+`atmosphere_id` is the atmosphere **capability** object (a child of the body), not the body id. Both solver methods return
+`{events: [{property, name, outcome, explanation}], derived_count, has_conflict, has_invalid_input}` with outcome one of
+`derived`, `no_change`, `conflict`, `invalid_input`. A conflict is a normal result, not an RPC error: it
+means a Locked/Explicit/Imported property was preserved. A non-atmosphere object or an unknown preset is a `-32602` error and
+changes nothing. Tests: `engine/editor_rpc/tests/EditorRpcServiceTests.cpp` (preset conflict on a locked top radius, wrong
+object type, unknown preset, idempotent re-solve).
 
 ## Intentional limits (stated at the M22 baseline)
 

@@ -888,6 +888,50 @@ def orbit_celestial_set_capability(
 
 
 @mcp.tool()
+def orbit_atmosphere_presets() -> list[str]:
+    """List the atmosphere preset names accepted by orbit_atmosphere_apply_preset."""
+    return _rpc("atmosphere.presets", {})
+
+
+@mcp.tool()
+def orbit_atmosphere_solve(atmosphere_id: str) -> dict[str, Any]:
+    """Run the atmosphere property solver on an atmosphere capability object
+    (the same operation as the Celestial panel's Solve button). Returns the
+    per-property report: events[] with outcome derived / no_change / conflict /
+    invalid_input and an explanation, plus derived_count, has_conflict and
+    has_invalid_input. Locked or explicit properties are never overwritten;
+    they come back as conflicts."""
+    return _rpc("atmosphere.solve", {"atmosphere": atmosphere_id})
+
+
+@mcp.tool()
+def orbit_atmosphere_apply_preset(atmosphere_id: str, preset: str) -> dict[str, Any]:
+    """Apply a named atmosphere preset (see orbit_atmosphere_presets) to an
+    atmosphere capability object as one undoable transaction and return the
+    solve report (same shape as orbit_atmosphere_solve)."""
+    return _rpc(
+        "atmosphere.apply_preset",
+        {"atmosphere": atmosphere_id, "preset": preset},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_cache_stats(
+    terrain_id: str,
+    viewport: str = "studio.primary",
+) -> dict[str, Any]:
+    """Persistent GPU terrain cache statistics for a terrain surface object:
+    cache{hits, misses, generations, insertions, evictions, resident_pages,
+    resident_bytes, hit_rate_percent} plus stationary{frames, cache_hits,
+    cache_misses, hit_rate_percent} for the viewport. With a stationary camera
+    after warmup, hits may grow but misses and generations must not."""
+    return _rpc(
+        "terrain.cache_stats",
+        {"terrain": terrain_id, "viewport": viewport},
+    )
+
+
+@mcp.tool()
 def orbit_property_set(
     object_id: str,
     property_id: str,

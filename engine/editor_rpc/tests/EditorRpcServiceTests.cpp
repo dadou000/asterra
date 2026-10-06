@@ -8,6 +8,8 @@
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
+#include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -68,6 +70,36 @@ orbit::rpc::Value Call(
 
     Check(result != nullptr);
     return *result;
+}
+// Dispatches a request that must fail and returns the error object.
+orbit::rpc::Value CallError(
+    orbit::rpc::Dispatcher& dispatcher,
+    std::string id,
+    std::string method,
+    orbit::rpc::Value params)
+{
+    orbit::rpc::Value request(
+        orbit::rpc::Value::Object{
+            {"jsonrpc", "2.0"},
+            {"id", std::move(id)},
+            {"method", std::move(method)},
+            {"params", std::move(params)}
+        });
+
+    const auto response =
+        dispatcher.Dispatch(
+            orbit::rpc::Serialize(request));
+
+    Check(response.has_value());
+
+    orbit::rpc::Value document =
+        orbit::rpc::ParseValue(*response);
+
+    const auto* error =
+        document.Find("error");
+
+    Check(error != nullptr);
+    return *error;
 }
 } // namespace
 
@@ -1008,6 +1040,163 @@ int main()
     Check(
         !objects.Find(*pathEdgeObject).
             has_value());
+
+
+    {
+        using namespace orbit::world_model;
+
+        const auto worldObject =
+            commandService.CreateObject(
+                kWorldType,
+                "Atmosphere World");
+        const auto system =
+            commandService.CreateObject(
+                kCelestialSystemType,
+                "Atmosphere System",
+                worldObject);
+        const auto body =
+            commandService.CreateObject(
+                kCelestialBodyType,
+                "Atmosphere Planet",
+                system);
+
+        commandService.SetProperty(
+            body,
+            kBodyRadius,
+            6.371e6);
+        commandService.SetProperty(
+            body,
+            kBodyMass,
+            5.9722e24);
+
+        const auto atmosphere =
+            commandService.CreateObject(
+                kAtmosphereCapabilityType,
+                "Atmosphere",
+                body);
+
+        commandService.SetProperty(
+            atmosphere,
+            kCapabilityModel,
+            std::string{"Physical Scattering"});
+
+        const auto presets =
+            Call(
+                dispatcher,
+                "30",
+                "atmosphere.presets");
+
+        Check(presets.IsArray());
+        Check(presets.AsArray().size() == 4);
+        Check(presets.AsArray()[0].AsString() == "Earth-like");
+
+        const auto solveParams =
+            [&](const std::string& objectId)
+        {
+            return orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"atmosphere", objectId}
+                });
+        };
+
+        // Wrong object type, missing object and unknown preset are
+        // rejected with actionable errors and change nothing.
+        Check(
+            CallError(
+                dispatcher,
+                "31",
+                "atmosphere.solve",
+                solveParams(body.ToString())).
+                    Find("message")->AsString().find(
+                        "atmosphere capability") !=
+            std::string::npos);
+
+        Check(
+            CallError(
+                dispatcher,
+                "32",
+                "atmosphere.solve",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{})).
+                        Find("message") != nullptr);
+
+        const orbit::u64 revisionBeforePreset =
+            objects.Revision();
+
+        Check(
+            CallError(
+                dispatcher,
+                "33",
+                "atmosphere.apply_preset",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"atmosphere",
+                         atmosphere.ToString()},
+                        {"preset", "No Such Preset"}
+                    })).
+                Find("message")->AsString().find(
+                    "Unknown atmosphere preset") !=
+            std::string::npos);
+
+        Check(objects.Revision() == revisionBeforePreset);
+
+        // A raw expert field authored before provenance exists is
+        // locked, so the preset reports a conflict instead of
+        // overwriting it, and still derives the rest.
+        commandService.SetProperty(
+            atmosphere,
+            kAtmosphereTopRadiusMeters,
+            6.371e6 + 200000.0);
+
+        const auto applied =
+            Call(
+                dispatcher,
+                "34",
+                "atmosphere.apply_preset",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"atmosphere",
+                         atmosphere.ToString()},
+                        {"preset", "Earth-like"}
+                    }));
+
+        Check(applied.Find("has_conflict")->AsBool());
+        Check(!applied.Find("has_invalid_input")->AsBool());
+        Check(
+            applied.Find("derived_count")->AsNumber() >=
+            5.0);
+        Check(!applied.Find("events")->AsArray().empty());
+
+        bool sawConflict = false;
+
+        for (const auto& event :
+             applied.Find("events")->AsArray())
+        {
+            Check(event.Find("property") != nullptr);
+            Check(event.Find("explanation") != nullptr);
+            Check(
+                !event.Find("name")->AsString().empty());
+
+            sawConflict =
+                sawConflict ||
+                event.Find("outcome")->AsString() ==
+                    "conflict";
+        }
+
+        Check(sawConflict);
+
+        // The solve method on an already solved object derives
+        // nothing new.
+        const auto solved =
+            Call(
+                dispatcher,
+                "35",
+                "atmosphere.solve",
+                solveParams(atmosphere.ToString()));
+
+        Check(solved.Find("derived_count")->AsNumber() == 0.0);
+        Check(!solved.Find("has_invalid_input")->AsBool());
+    }
 
     }
 

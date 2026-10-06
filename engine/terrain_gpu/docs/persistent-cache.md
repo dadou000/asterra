@@ -17,6 +17,7 @@ sources = [
   "engine/studio_session/src/StudioTerrainPhysicalPageService.cpp",
   "engine/studio_ui/src/StudioViewportRendererBase.cpp",
   "docs/V0.0.4_M26_PERSISTENT_GPU_TERRAIN_CACHE.md",
+  "engine/studio_session/src/StudioTerrainStatusRpc.cpp",
 ]
 symbols = ["PersistentGpuTerrainCache", "PersistentGpuTerrainCacheKey", "CachedGpuTerrainPage", "CachedTerrainProduct", "PersistentGpuTerrainCacheConfig", "PersistentGpuTerrainCacheFingerprint", "InvalidateAddress", "GetOrCreate"]
 invariants = [
@@ -28,7 +29,7 @@ invariants = [
   "Revision changes create new keys naturally; InvalidateAddress(address) removes EVERY physical-LOD and revision entry of one page address and returns how many were removed - it is the M27 dependency-invalidation handoff.",
   "ResidentBytes counts each distinct buffer/texture once even if shared by several slots.",
   "The class has no internal synchronisation (no mutex in PersistentGpuTerrainCache): callers must serialise access.",
-  "Telemetry (PersistentGpuTerrainCacheStats): hits, misses, generations, insertions, evictions, resident pages and resident GPU bytes.",
+  "Telemetry (PersistentGpuTerrainCacheStats): hits, misses, generations, insertions, evictions, resident pages and resident GPU bytes; exposed read-only over RPC as terrain.cache_stats (MCP orbit_terrain_cache_stats).",
 ]
 related = ["/rendering/terrain/invalidation", "/rendering/terrain/clipmaps"]
 depends_on = ["/rendering/terrain"]
@@ -45,7 +46,7 @@ steps = [
   "Read the cache Stats(): after warmup generations must stop growing; misses growing while stationary means the key is unstable (something camera- or frame-dependent leaked into it) or entries are being invalidated every frame.",
   "Check for a revision that changes every frame (TerrainGenerationRevisions) or a repeated ApplyChange: every affected address is invalidated through InvalidateAddress.",
   "Check the budget: if resident pages sit at maximumPages or resident bytes at maximumResidentBytes with evictions growing, the working set exceeds the cache; a page bigger than the byte budget will never stay resident.",
-  "The statistics are shown in Studio panels (SurfaceAuthoringUi, ProjectAuthoringUi); I found no dedicated RPC/MCP method for them, so read them in the UI or add one.",
+  "Read the statistics without the UI over RPC/MCP: terrain.cache_stats / orbit_terrain_cache_stats(terrain_id, viewport) returns cache{hits, misses, generations, insertions, evictions, resident_pages, resident_bytes, hit_rate_percent} plus the stationary-camera counters; the same numbers appear in SurfaceAuthoringUi and the terrain cache overlay.",
 ]
 docs = ["/rendering/terrain/invalidation"]
 +++
