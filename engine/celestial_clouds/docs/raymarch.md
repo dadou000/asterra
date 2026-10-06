@@ -60,7 +60,7 @@ docs = ["/rendering/clouds/shadows-and-light-volume"]
 `docs/ORBIT_PERFORMANCE.md` (section "Clouds in the clipmap view") was written when the march was first made
 half resolution. Its numbers have moved with the code; trust the constants in `CloudRenderer.cpp`, which at the
 verified commit are `kMaxSteps = 224` (the note says 112), `kOpaqueCutoff = 0.004` (the note says 2 %) and
-`kBaseStep = 60 m`. The note also lists the cached light volume and temporal reprojection as "not done"; both now
+`kBaseStep = 60 m`. The note says the cloud passes run "before `<view>.Atmosphere`"; the render graph adds the atmosphere pass first and the cloud shader's own comment says the cloud is composited after it. The note also lists the cached light volume and temporal reprojection as "not done"; both now
 exist (`/rendering/clouds/shadows-and-light-volume`). The measured costs in the note are for the earlier version.
 
 ## Pass graph (per view)
@@ -68,5 +68,6 @@ exist (`/rendering/clouds/shadows-and-light-volume`). The measured costs in the 
 ```text
 <view>.Clouds           half-resolution march -> RGBA16F (radiance + transmittance)
 <view>.CloudsResolve    temporal accumulation (reprojected through the cloud shell, clamped to the neighbourhood)
-<view>.CloudsComposite  composited over the scene before <view>.Atmosphere
+<view>.CloudsComposite  composited over the scene AFTER <view>.Atmosphere has been drawn;
+                        the march itself adds aerial perspective over the camera-to-cloud distance
 ```

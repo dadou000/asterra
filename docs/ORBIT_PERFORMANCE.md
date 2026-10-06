@@ -314,7 +314,7 @@ budget step made side-on clouds blurry, striped and see-through), stratified per
 sun march, a 4-step sun march (100-500 m steps on the base shape + a coarse tail) instead of per-sample LUT reads, and
 **half-resolution** marching into an RGBA16F target (radiance + transmittance) bounded by the nearest full-resolution
 depth, composited over the scene with an alpha blend (`L/(1-T), 1-T` -> `L + T*scene`) and bilinear upsampling, with no
-scene copy. Passes: `<view>.Clouds`, `<view>.CloudsComposite`, before `<view>.Atmosphere`. Not done at the time (both were added later: `cloud_light_volume` and
+scene copy. Passes: `<view>.Clouds`, `<view>.CloudsComposite` (correction: these run after `<view>.Atmosphere`, not before; see `/rendering/clouds/raymarch`). Not done at the time (both were added later: `cloud_light_volume` and
 `cloud_temporal`, see `/rendering/clouds/shadows-and-light-volume`): the reference also time-slices a cached light
 volume and reprojects across frames. Constants below have moved since: see `/rendering/clouds/raymarch`.
 

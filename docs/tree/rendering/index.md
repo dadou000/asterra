@@ -6,7 +6,7 @@ status = "stable"
 summary = """
 Everything that turns the planet into pixels: the terrain stack (generation, clipmaps, persistent GPU \
 caches, water), celestial rendering (atmosphere, clouds, globe, rings, stars), lighting (radiance cache, \
-proxy sun shadow, eye adaptation), shading, post-process and performance. Terrain/clipmaps, lighting and clouds are \
+proxy sun shadow, eye adaptation), shading, post-process and performance. Terrain/clipmaps, lighting, clouds and the atmosphere are \
 documented as blocks; other areas are reachable through the section routes below."""
 keywords = ["rendering", "gpu", "vulkan", "terrain", "atmosphere", "clouds", "lighting", "shading", "performance", "post process"]
 related = ["/editor/viewport"]
@@ -24,7 +24,9 @@ related = ["/editor/viewport"]
 "CPU profiler, GPU timing, Perfetto trace" = "/legacy/orbit-profiler"
 "standing water, near-field water pass" = "/legacy/standing-water-rendering"
 "clouds, cloud shadows, god rays, cloud cost" = "clouds"
-"atmosphere, rings, stars, orbits, celestial research" = "/legacy/research-v006-physical-atmosphere"
+"atmosphere, sky, scattering, limb, sunset, atmosphere LUTs" = "atmosphere"
+"author an atmosphere from pressure/composition, presets, locked values" = "atmosphere/authoring-solver"
+"rings, stars, orbits, celestial research" = "/legacy/research-v006-celestial-research-baseline"
 +++
 
 Rendering module families (each is `engine/<name>/`):

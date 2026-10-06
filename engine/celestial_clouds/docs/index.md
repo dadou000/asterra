@@ -22,7 +22,7 @@ invariants = [
   "The cloud field is built once per body on the GPU and shared: the orbital globe composite and the ray-marched shell read the same field, so both views agree on where the weather is.",
   "CloudRenderer draws only when the view uses the clipmap (full_clipmap) or has no macro globe; clouds are never composited twice.",
   "Turning the view's `clouds` flag off stops the ray march and the cloud shadow; the cloud field itself is still built and used for shadows and orbital globes.",
-  "Passes run in this order per view: Clouds -> CloudsResolve (temporal) -> CloudsComposite, all before the Atmosphere pass; CloudShadow runs before SharedDirectLighting.",
+  "Passes are added in this order per view: Atmosphere, then Clouds -> CloudsResolve (temporal) -> CloudsComposite; CloudShadow runs earlier, before SharedDirectLighting. Clouds are composited AFTER the atmosphere pass, so the cloud shader applies its own aerial perspective over the camera-to-cloud distance (the atmosphere pass only knows the terrain/sky behind a cloud).",
   "Cloud type is a continuous axis in each texel: 0 stratus, 0.5 cumulus, 1 cumulonimbus (lab labels: 0.05 stratus, 0.2 stratocumulus, 0.32 nimbostratus, 0.5 cumulus, 0.72 congestus, 1.0 cumulonimbus).",
 ]
 related = ["/rendering/lighting", "/rendering/terrain/clipmaps"]
