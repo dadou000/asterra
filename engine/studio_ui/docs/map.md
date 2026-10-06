@@ -48,6 +48,9 @@ verified = "b0a0de7f"
 "Project Browser, World Documents, Project Settings, create/open project or world" = "/editor/studio-ui/world-and-project"
 "Surface panel cache, revision or rebuild numbers look wrong, or a Surface edit has no RPC" = "/editor/studio-ui/surface-authoring"
 "Volumes panel, Representation/LOD, cache bake, particle output, or Shading tab panel misbehaves" = "/editor/studio-ui/volume-authoring"
+"Report has no screenshot, or reports.restore leaves the camera or clock wrong" = "/editor/studio-ui/reports"
+"Text HUD, view.text_diagnostics, eye adaptation, Debug panel or transport band misbehaves; a Display Diagnostics control has no RPC" = "/editor/studio-ui/diagnostics-hud"
+"V0.0.7 validation commands, performance JSON, 16K captures, or what is still unvalidated" = "/editor/studio-ui/validation-and-capture"
 +++
 
 Area to file map (`engine/studio_ui/include/orbit/studio_ui`): shell and persistence - `StudioUiBundle`, `StudioShellModel`, `StudioExpansionShell`, `StudioPersistentState`, `StudioViewContinuity`, `StudioUiContributions`; authoring panels - `ProjectAuthoringUi`, `ProjectSettingsUi`, `WorldDocumentsUi`, `CelestialAuthoringUi`, `SurfaceAuthoringUi`, `VolumeAuthoringUi`, `SimulationControlsUi`, `SystemViewUi`, `ShadingUi`; viewport - see `/editor/viewport`; diagnostics - `DisplayDiagnosticsUi`, `DisplayEyeRpc`, `StudioTextDiagnosticsHud`, `ProfilerUi`/`ProfilerModel`/`ProfilerPanelRpc`, `ReportsUi`; release evidence - `V007ValidationScenarios`, `V007PerformanceCapture`, `V007ValidationCommands`.
