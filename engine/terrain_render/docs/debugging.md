@@ -86,7 +86,7 @@ steps = [
   "orbit_view_terrain_layers_set(view_id, indirect_coverage_view=true): replaces the final gather with its coverage: red confidence, green gathered brightness (log), magenta = the gather returned nothing so that pixel gets no indirect light.",
   "Bisect: bypass_indirect_lighting (final gather + hybrid reflections), bypass_hybrid_reflections (reflections only), bypass_radiance_cache (cache fallback only).",
 ]
-docs = ["/legacy/orbit-mcp/sky-only-radiance-cache-channel"]
+docs = ["/rendering/lighting", "/rendering/lighting/sky-cache-fill", "/rendering/lighting/proxy-sun-shadow"]
 +++
 
 ## Instruments

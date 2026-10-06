@@ -6,7 +6,7 @@ status = "stable"
 summary = """
 Everything that turns the planet into pixels: the terrain stack (generation, clipmaps, persistent GPU \
 caches, water), celestial rendering (atmosphere, clouds, globe, rings, stars), lighting (radiance cache, \
-proxy sun shadow, eye adaptation), shading, post-process and performance. Terrain/clipmaps is fully \
+proxy sun shadow, eye adaptation), shading, post-process and performance. Terrain/clipmaps and lighting are \
 documented as blocks; other areas are reachable through the section routes below."""
 keywords = ["rendering", "gpu", "vulkan", "terrain", "atmosphere", "clouds", "lighting", "shading", "performance", "post process"]
 related = ["/editor/viewport"]
@@ -15,9 +15,10 @@ related = ["/editor/viewport"]
 "terrain generation, clipmaps, water, GPU terrain cache" = "terrain"
 "terrain looks wrong: holes, cracks, rings, popping, wrong detail" = "terrain/clipmaps/debugging"
 "hitch or multi-second freeze when altitude changes" = "terrain/clipmaps/rebuild-hitches"
-"proxy sun shadow, visible proxies" = "/legacy/orbit-mcp/proxy-sun-shadow-and-visible-proxies"
-"sky-only radiance cache, final gather, indirect lighting" = "/legacy/orbit-mcp/sky-only-radiance-cache-channel"
-"eye adaptation, highlight protection, exposure" = "/legacy/orbit-mcp/eye-adaptation-highlight-protection-and-boost-limit"
+"lighting, direct/indirect light, reflections, bypass flags" = "lighting"
+"proxy sun shadow, visible proxies" = "lighting/proxy-sun-shadow"
+"sky-only radiance cache, sky fill, enclosed spaces black" = "lighting/sky-cache-fill"
+"eye adaptation, highlight protection, exposure" = "lighting/eye-adaptation"
 "shader contract, shading assets, material shaders" = "/legacy/orbit-shading"
 "frame cost, idle pacing, far terrain, clouds in clipmap view" = "/legacy/orbit-performance"
 "CPU profiler, GPU timing, Perfetto trace" = "/legacy/orbit-profiler"
