@@ -66,32 +66,4 @@ if(BUILD_TESTING)
         NAME Orbit.CelestialClouds
         COMMAND OrbitCelestialCloudTests
     )
-
-    # Real Vulkan execution test (hence the gpu label, which CI builds but does not run): proves
-    # the light-volume refresh skip is bit-identical to refreshing every frame.
-    add_executable(
-        OrbitCloudLightVolumeTests
-        tests/CloudLightVolumeTests.cpp
-    )
-    target_link_libraries(
-        OrbitCloudLightVolumeTests
-        PRIVATE
-            Orbit::CelestialClouds
-            Orbit::RhiVulkan
-            Orbit::ShaderDxc
-    )
-    target_compile_features(
-        OrbitCloudLightVolumeTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(
-        OrbitCloudLightVolumeTests)
-    add_custom_command(TARGET OrbitCloudLightVolumeTests POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ORBIT_DXCOMPILER_DLL}"
-            "$<TARGET_FILE_DIR:OrbitCloudLightVolumeTests>"
-    )
-    add_test(
-        NAME Orbit.CloudLightVolume
-        COMMAND OrbitCloudLightVolumeTests
-    )
-    set_tests_properties(Orbit.CloudLightVolume PROPERTIES LABELS "gpu")
 endif()

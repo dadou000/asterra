@@ -13,7 +13,7 @@ keywords = ["cloud shadow", "light volume", "god rays", "crepuscular", "cascade"
 sources = [
   "engine/celestial_clouds/src/CloudRenderer.cpp",
   "engine/celestial_clouds/include/orbit/celestial_clouds/CloudRenderer.hpp",
-  "engine/celestial_clouds/tests/CloudLightVolumeTests.cpp",
+  "tests/CloudLightVolumeTests.cpp",
   "engine/lighting/include/orbit/lighting/DirectLighting.hpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioTerrainLayerOptions.hpp",
   "engine/studio_ui/src/StudioViewportRendererBase.cpp",

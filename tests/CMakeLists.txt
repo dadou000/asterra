@@ -167,6 +167,36 @@ add_test(
     COMMAND OrbitRhiHostHazardTests
 )
 
+# Proves the cloud light-volume refresh skip is bit-identical to refreshing every frame. It lives
+# here rather than in engine/celestial_clouds because the DXC runtime copy needs variables that
+# engine/shader/dxc defines, and engine/ configures celestial_clouds before it.
+add_executable(OrbitCloudLightVolumeTests
+    CloudLightVolumeTests.cpp
+)
+
+target_link_libraries(OrbitCloudLightVolumeTests
+    PRIVATE
+        Orbit::CelestialClouds
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+)
+
+target_compile_features(OrbitCloudLightVolumeTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitCloudLightVolumeTests)
+
+# dxcompiler.dll is loaded at runtime, not just link time -- see the identical comment on
+# OrbitShaderCompilerTests above.
+add_custom_command(TARGET OrbitCloudLightVolumeTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitCloudLightVolumeTests>"
+)
+
+add_test(
+    NAME Orbit.CloudLightVolume
+    COMMAND OrbitCloudLightVolumeTests
+)
+
 
 add_executable(OrbitTerrainGpuFieldTests
     TerrainGpuFieldTests.cpp
@@ -707,6 +737,7 @@ add_test(NAME Orbit.StandingWater COMMAND OrbitStandingWaterTests)
 set_tests_properties(
     Orbit.RhiCompute
     Orbit.RhiHostHazard
+    Orbit.CloudLightVolume
     Orbit.TerrainGpuField
     Orbit.TerrainGpuRegionDelta
     Orbit.TerrainGpuElevationQuery
