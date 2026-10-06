@@ -1849,6 +1849,120 @@ void PanelContext::OverlayTextOnLastItem(const std::string_view text)
     drawList->PopClipRect();
 }
 
+namespace
+{
+[[nodiscard]] ImU32 ToImColor(const math::Float4& color) noexcept
+{
+    return ImGui::ColorConvertFloat4ToU32(
+        ImVec4(color.x, color.y, color.z, color.w));
+}
+} // namespace
+
+void PanelContext::OverlayShapesOnLastItem(
+    const std::span<const OverlaySegment> segments,
+    const std::span<const OverlayDisc> discs)
+{
+    if (segments.empty() && discs.empty())
+    {
+        return;
+    }
+
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(minimum, maximum, true);
+
+    for (const OverlaySegment& segment : segments)
+    {
+        drawList->AddLine(
+            ImVec2{minimum.x + segment.a.x, minimum.y + segment.a.y},
+            ImVec2{minimum.x + segment.b.x, minimum.y + segment.b.y},
+            ToImColor(segment.color),
+            segment.thickness);
+    }
+
+    for (const OverlayDisc& disc : discs)
+    {
+        const ImVec2 center{
+            minimum.x + disc.center.x,
+            minimum.y + disc.center.y};
+
+        if (disc.filled)
+        {
+            drawList->AddCircleFilled(
+                center,
+                disc.radiusPixels,
+                ToImColor(disc.color));
+        }
+        else
+        {
+            drawList->AddCircle(
+                center,
+                disc.radiusPixels,
+                ToImColor(disc.color),
+                0,
+                2.0F);
+        }
+    }
+
+    drawList->PopClipRect();
+}
+
+void PanelContext::OverlayLabelOnLastItem(
+    const math::Float2 position,
+    const math::Float4 color,
+    const std::string_view text)
+{
+    if (text.empty())
+    {
+        return;
+    }
+
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    const char* const begin = text.data();
+    const char* const end = text.data() + text.size();
+    const ImVec2 size = ImGui::CalcTextSize(begin, end);
+    constexpr f32 kPadX = 6.0F;
+    constexpr f32 kPadY = 3.0F;
+
+    ImDrawList* const drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(minimum, maximum, true);
+    const ImVec2 plateMinimum{
+        minimum.x + position.x,
+        minimum.y + position.y};
+    drawList->AddRectFilled(
+        plateMinimum,
+        ImVec2{
+            plateMinimum.x + size.x + kPadX * 2.0F,
+            plateMinimum.y + size.y + kPadY * 2.0F},
+        IM_COL32(8, 10, 14, 170),
+        3.0F);
+    drawList->AddText(
+        ImVec2{plateMinimum.x + kPadX, plateMinimum.y + kPadY},
+        ToImColor(color),
+        begin,
+        end);
+    drawList->PopClipRect();
+}
+
+ItemPointer PanelContext::LastItemPointer() const
+{
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const bool hovered = ImGui::IsItemHovered();
+
+    return {
+        .hovered = hovered,
+        .pressed =
+            hovered &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left),
+        .down = ImGui::IsMouseDown(ImGuiMouseButton_Left),
+        .released = ImGui::IsMouseReleased(ImGuiMouseButton_Left),
+        .position = {mouse.x - minimum.x, mouse.y - minimum.y}
+    };
+}
+
 void PanelContext::CanvasText(
     const math::Float2 position,
     const math::Float4 color,

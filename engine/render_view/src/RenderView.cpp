@@ -178,6 +178,100 @@ ViewportRay(
     };
 }
 
+std::optional<ViewportProjection>
+ProjectToViewport(
+    const CameraState& camera,
+    const u32 width,
+    const u32 height,
+    const math::Double3& pointLocalMeters) noexcept
+{
+    if (width == 0 ||
+        height == 0 ||
+        !std::isfinite(
+            camera.verticalFovRadians) ||
+        camera.verticalFovRadians <= 0.0F ||
+        camera.verticalFovRadians >=
+            3.14159265F)
+    {
+        return std::nullopt;
+    }
+
+    const math::Double3 forward =
+        math::Normalize(
+            math::Double3{
+                camera.forward.x,
+                camera.forward.y,
+                camera.forward.z
+            });
+    const math::Double3 requestedUp =
+        math::Normalize(
+            math::Double3{
+                camera.up.x,
+                camera.up.y,
+                camera.up.z
+            });
+    // Same basis as ViewportRay: up x forward is screen-right.
+    const math::Double3 right =
+        math::Normalize(
+            math::Cross(
+                requestedUp,
+                forward));
+
+    if (math::LengthSquared(forward) <=
+            1.0e-20 ||
+        math::LengthSquared(right) <=
+            1.0e-20)
+    {
+        return std::nullopt;
+    }
+
+    const math::Double3 cameraUp =
+        math::Normalize(
+            math::Cross(
+                forward,
+                right));
+
+    const math::Double3 offset{
+        pointLocalMeters.x -
+            camera.localPositionMeters.x,
+        pointLocalMeters.y -
+            camera.localPositionMeters.y,
+        pointLocalMeters.z -
+            camera.localPositionMeters.z
+    };
+
+    const f64 depth =
+        math::Dot(offset, forward);
+
+    if (!std::isfinite(depth) ||
+        depth <= 1.0e-9)
+    {
+        return std::nullopt;
+    }
+
+    const f64 aspect =
+        static_cast<f64>(width) /
+        static_cast<f64>(height);
+    const f64 tanHalfFov =
+        std::tan(
+            static_cast<f64>(
+                camera.verticalFovRadians) *
+            0.5);
+
+    const f64 pX =
+        math::Dot(offset, right) /
+        (depth * aspect * tanHalfFov);
+    const f64 pY =
+        -math::Dot(offset, cameraUp) /
+        (depth * tanHalfFov);
+
+    return ViewportProjection{
+        .u = static_cast<f32>((pX + 1.0) * 0.5),
+        .v = static_cast<f32>((pY + 1.0) * 0.5),
+        .depthMeters = depth
+    };
+}
+
 RenderView::RenderView(
     rhi::Device& device,
     const RenderViewDesc& desc)

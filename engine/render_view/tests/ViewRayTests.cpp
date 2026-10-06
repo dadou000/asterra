@@ -107,5 +107,50 @@ int main()
             0.5F).
             has_value());
 
+    // ProjectToViewport is the exact inverse of ViewportRay: a point on a
+    // pixel's ray projects back to that pixel, for a tilted camera too.
+    {
+        orbit::render_view::CameraState tilted{
+            .localPositionMeters = {5.0, 3.0, -20.0},
+            .forward = {0.2F, -0.3F, 1.0F},
+            .up = {0.0F, 1.0F, 0.0F},
+            .verticalFovRadians = 1.0F
+        };
+
+        for (const float u : {0.1F, 0.5F, 0.85F})
+        {
+            for (const float v : {0.2F, 0.5F, 0.9F})
+            {
+                const auto ray =
+                    orbit::render_view::ViewportRay(
+                        tilted, 320, 180, u, v);
+                ORBIT_TEST_CHECK(ray.has_value());
+
+                const orbit::math::Double3 point{
+                    ray->origin.x + ray->direction.x * 37.0,
+                    ray->origin.y + ray->direction.y * 37.0,
+                    ray->origin.z + ray->direction.z * 37.0};
+
+                const auto projected =
+                    orbit::render_view::ProjectToViewport(
+                        tilted, 320, 180, point);
+                ORBIT_TEST_CHECK(projected.has_value());
+                ORBIT_TEST_CHECK(
+                    Near(projected->u, u, 1.0e-5));
+                ORBIT_TEST_CHECK(
+                    Near(projected->v, v, 1.0e-5));
+                ORBIT_TEST_CHECK(projected->depthMeters > 0.0);
+            }
+        }
+
+        // Behind the camera and degenerate sizes do not project.
+        ORBIT_TEST_CHECK(
+            !orbit::render_view::ProjectToViewport(
+                tilted, 320, 180, {5.0, 3.0, -40.0}).has_value());
+        ORBIT_TEST_CHECK(
+            !orbit::render_view::ProjectToViewport(
+                tilted, 0, 180, {5.0, 3.0, 0.0}).has_value());
+    }
+
     return 0;
 }

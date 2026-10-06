@@ -1730,4 +1730,32 @@ void StudioViewportPanels::DrawView(
 {
     DrawViewBase(context, id);
 }
+
+bool StudioViewportPanels::HandleViewportGizmo(
+    editor_ui::PanelContext& context,
+    const std::string_view id)
+{
+    if (views_ == nullptr || session_ == nullptr)
+    {
+        return false;
+    }
+
+    // Handles only make sense in a perspective view of a body; the map and
+    // debug views have no 3D camera to project them with.
+    const auto* const target = session_->Viewports().Find(id);
+
+    if (target == nullptr ||
+        target->mode != studio_session::ViewportMode::Perspective)
+    {
+        manipulatorUi_.Cancel();
+        return false;
+    }
+
+    return manipulatorUi_.Handle(
+        context,
+        *views_,
+        *session_,
+        id,
+        expansion_.ViewportState().gizmo);
+}
 } // namespace orbit::studio_ui

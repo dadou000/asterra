@@ -747,6 +747,9 @@ void StudioViewportPanels::DrawView(
 
     textHud_.Draw(context, *views_, id, imageInteraction);
 
+    const bool gizmoOwnsPointer =
+        HandleViewportGizmo(context, id);
+
     if (target->mode ==
             studio_session::ViewportMode::Debug ||
         terrainTool_ ==
@@ -858,7 +861,7 @@ void StudioViewportPanels::DrawView(
         views_->ClearTerrainAuthoringOverlay(id);
     }
 
-    if (imageInteraction.clicked)
+    if (imageInteraction.clicked && !gizmoOwnsPointer)
     {
         if (target->mode ==
             studio_session::ViewportMode::Debug)

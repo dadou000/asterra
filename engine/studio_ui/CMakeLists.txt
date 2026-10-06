@@ -30,6 +30,7 @@ add_library(OrbitStudioUi STATIC
     src/VolumeAuthoringM36.cpp
     src/StudioViewContinuity.cpp
     src/StudioViewportCamera.cpp
+    src/StudioViewportManipulatorUi.cpp
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
     src/StudioViewportRenderer.cpp

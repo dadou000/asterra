@@ -1,6 +1,6 @@
 # Orbit Primitives
 
-Status: **Slice 1 (data model) implemented. Rendering, picking and the viewport gizmo are not built yet.**
+Status: **Slice 1 (data model) and the Move/Rotate/Scale gizmo of slice 3 are implemented. Mesh rendering and click-picking are not built yet.**
 
 A `Primitive` is an ordinary semantic object (`kPrimitiveType`, category *Scene / Geometry*): a box, sphere,
 cylinder, capsule or plane placed relative to its parent object's frame. It is the first scene object that is
@@ -31,8 +31,10 @@ Explorer, the Properties panel and element bubbles.
 1. **Data model** (done): schema, resolver, test.
 2. **Rendering**: a mesh pass in the Studio viewport drawing resolved primitives, lit and shadowed, with the
    assigned material.
-3. **Picking and gizmo**: click-select in the viewport and Move/Rotate/Scale drags that write the transform
-   properties (one undo step per drag). The gizmo state (`GizmoSettings`) exists; the viewport drag code does not.
+3. **Picking and gizmo**: click-select in the viewport (not built) and Move/Rotate/Scale drags that write the
+   transform properties, one undo step per drag (**done**: handles over the perspective viewport driven by the Scene
+   toolbar; `editor_model::ViewportManipulator`, `object.transform` RPC / `orbit_object_transform` MCP tool; see
+   `/editor/viewport/transform-gizmo`). Primitives are not drawn yet, so their handles sit on an invisible object.
 4. **Toolbar**: switch the Scene toolbar's `+ Box` / `+ Sphere` from Visibility Proxies to Primitives and add
    Cylinder, Capsule and Plane.
 

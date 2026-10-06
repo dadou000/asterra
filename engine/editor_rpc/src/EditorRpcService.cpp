@@ -3,6 +3,7 @@
 #include <orbit/editor_model/CelestialAuthoringModel.hpp>
 #include <orbit/editor_model/CelestialRecipeService.hpp>
 #include <orbit/editor_model/PlanetSurface.hpp>
+#include <orbit/editor_model/ViewportManipulator.hpp>
 
 #include <orbit/math/Vector.hpp>
 #include <orbit/paths/PathNetwork.hpp>
@@ -207,6 +208,93 @@ RequireObjectId(
             {"has_invalid_input",
              report.HasInvalidInput()}
         });
+}
+
+[[nodiscard]] editor_model::ManipulatorTool ParseManipulatorTool(
+    const std::string& text)
+{
+    if (text == "translate" || text == "move")
+    {
+        return editor_model::ManipulatorTool::Translate;
+    }
+
+    if (text == "rotate")
+    {
+        return editor_model::ManipulatorTool::Rotate;
+    }
+
+    if (text == "scale")
+    {
+        return editor_model::ManipulatorTool::Scale;
+    }
+
+    throw rpc::Error(
+        -32602,
+        "tool must be translate, rotate or scale.");
+}
+
+[[nodiscard]] editor_model::ManipulatorAxis ParseManipulatorAxis(
+    const std::string& text)
+{
+    if (text == "x")
+    {
+        return editor_model::ManipulatorAxis::X;
+    }
+
+    if (text == "y")
+    {
+        return editor_model::ManipulatorAxis::Y;
+    }
+
+    if (text == "z")
+    {
+        return editor_model::ManipulatorAxis::Z;
+    }
+
+    if (text == "uniform")
+    {
+        return editor_model::ManipulatorAxis::Uniform;
+    }
+
+    throw rpc::Error(
+        -32602,
+        "axis must be x, y, z or uniform.");
+}
+
+[[nodiscard]] rpc::Value Double3ToValue(
+    const math::Double3& value)
+{
+    return rpc::Value(
+        rpc::Value::Array{
+            rpc::Value(value.x),
+            rpc::Value(value.y),
+            rpc::Value(value.z)});
+}
+
+[[nodiscard]] editor_model::ManipulatorTarget RequireManipulatorTarget(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId object)
+{
+    if (!objects.Find(object).has_value())
+    {
+        throw rpc::Error(
+            1004,
+            "Object not found.");
+    }
+
+    const auto target =
+        editor_model::ResolveManipulatorTarget(
+            objects,
+            object);
+
+    if (!target.has_value())
+    {
+        throw rpc::Error(
+            -32602,
+            "This object type has no move/rotate/scale properties (supported: Primitive, Visibility Proxy, Point Light, Spot Light).");
+    }
+
+    return *target;
 }
 
 [[nodiscard]] schema::TypeId
@@ -2026,6 +2114,147 @@ EditorRpcService::EditorRpcService(
                     atmosphere,
                     preset),
                 schemas);
+        });
+
+    Register(
+        {
+            .name = "object.transform_info",
+            .description =
+                "Describes how an object can be moved, rotated and scaled with object.transform: which tools it supports, its position and its local axes.",
+            .mutating = false
+        },
+        [&objects](const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+            const auto target =
+                RequireManipulatorTarget(
+                    objects,
+                    RequireObjectId(
+                        values,
+                        "object"));
+
+            rpc::Value::Array tools;
+
+            if (target.canTranslate)
+            {
+                tools.emplace_back(rpc::Value("translate"));
+            }
+
+            if (target.canRotate)
+            {
+                tools.emplace_back(rpc::Value("rotate"));
+            }
+
+            if (target.canScale)
+            {
+                tools.emplace_back(rpc::Value("scale"));
+            }
+
+            return rpc::Value(
+                rpc::Value::Object{
+                    {"object", target.object.ToString()},
+                    {"tools", rpc::Value(std::move(tools))},
+                    {"position", Double3ToValue(target.position)},
+                    {"axis_x", Double3ToValue(target.rotation.xAxis)},
+                    {"axis_y", Double3ToValue(target.rotation.yAxis)},
+                    {"axis_z", Double3ToValue(target.rotation.zAxis)}
+                });
+        });
+
+    Register(
+        {
+            .name = "object.transform",
+            .description =
+                "Moves, rotates or scales an object along one axis as ONE undoable step, exactly like dragging a viewport gizmo handle. tool: translate (amount in meters), rotate (degrees) or scale (positive factor, axis uniform allowed). axis: x, y, z or uniform. space: world (default) or local; scale always uses the object's own axes.",
+            .mutating = true
+        },
+        [&objects,
+         &commandService](const rpc::Value& params)
+        {
+            const auto& values =
+                RequireObject(params);
+
+            const auto target =
+                RequireManipulatorTarget(
+                    objects,
+                    RequireObjectId(
+                        values,
+                        "object"));
+
+            const auto tool =
+                ParseManipulatorTool(
+                    RequireString(
+                        values,
+                        "tool"));
+            const auto axis =
+                ParseManipulatorAxis(
+                    RequireString(
+                        values,
+                        "axis"));
+
+            auto space =
+                editor_model::ManipulatorSpace::World;
+
+            if (const auto found =
+                    values.find("space");
+                found != values.end() &&
+                !found->second.IsNull())
+            {
+                if (!found->second.IsString() ||
+                    (found->second.AsString() != "world" &&
+                     found->second.AsString() != "local"))
+                {
+                    throw rpc::Error(
+                        -32602,
+                        "space must be world or local.");
+                }
+
+                if (found->second.AsString() == "local")
+                {
+                    space =
+                        editor_model::ManipulatorSpace::Local;
+                }
+            }
+
+            const auto& amount =
+                Require(
+                    values,
+                    "amount");
+
+            if (!amount.IsNumber())
+            {
+                throw rpc::Error(
+                    -32602,
+                    "amount must be a number.");
+            }
+
+            editor_model::ViewportManipulator manipulator(
+                objects,
+                commandService);
+
+            try
+            {
+                const std::string summary =
+                    manipulator.ApplyDelta(
+                        target,
+                        tool,
+                        space,
+                        axis,
+                        amount.AsNumber());
+
+                return rpc::Value(
+                    rpc::Value::Object{
+                        {"ok", true},
+                        {"summary", summary}
+                    });
+            }
+            catch (const std::invalid_argument& error)
+            {
+                throw rpc::Error(
+                    -32602,
+                    error.what());
+            }
         });
 
     Register(

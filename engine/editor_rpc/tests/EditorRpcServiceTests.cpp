@@ -1198,6 +1198,129 @@ int main()
         Check(!solved.Find("has_invalid_input")->AsBool());
     }
 
+
+    {
+        using namespace orbit::world_model;
+
+        const auto worldObject =
+            commandService.CreateObject(
+                kWorldType,
+                "Transform World");
+        const auto box =
+            commandService.CreateObject(
+                kPrimitiveType,
+                "Transform Box",
+                worldObject);
+        commandService.SetProperty(
+            box,
+            kPrimitivePositionMeters,
+            orbit::math::Double3{1.0, 2.0, 3.0});
+        commandService.SetProperty(
+            box,
+            kPrimitiveSizeMeters,
+            orbit::math::Double3{1.0, 1.0, 1.0});
+
+        const auto info =
+            Call(
+                dispatcher,
+                "40",
+                "object.transform_info",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"object", box.ToString()}}));
+        Check(info.Find("tools")->AsArray().size() == 3);
+        Check(info.Find("position")->AsArray()[1].AsNumber() == 2.0);
+
+        const auto transformParams =
+            [&](const std::string& tool,
+                const std::string& axis,
+                const double amount)
+        {
+            return orbit::rpc::Value(
+                orbit::rpc::Value::Object{
+                    {"object", box.ToString()},
+                    {"tool", tool},
+                    {"axis", axis},
+                    {"amount", amount}});
+        };
+
+        const auto moved =
+            Call(
+                dispatcher,
+                "41",
+                "object.transform",
+                transformParams("translate", "x", 4.0));
+        Check(moved.Find("summary")->AsString().find("Move X") == 0);
+
+        const auto position =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitivePositionMeters));
+        Check(std::abs(position.x - 5.0) < 1.0e-9);
+        Check(std::abs(position.y - 2.0) < 1.0e-9);
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "42",
+                "object.transform",
+                transformParams("rotate", "z", 90.0)));
+        const auto euler =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitiveEulerDegrees));
+        Check(std::abs(euler.z - 90.0) < 1.0e-6);
+
+        static_cast<void>(
+            Call(
+                dispatcher,
+                "43",
+                "object.transform",
+                transformParams("scale", "uniform", 3.0)));
+        const auto size =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitiveSizeMeters));
+        Check(std::abs(size.x - 3.0) < 1.0e-9);
+
+        // One undo step per call.
+        static_cast<void>(
+            Call(dispatcher, "44", "history.undo"));
+        const auto afterUndo =
+            std::get<orbit::math::Double3>(
+                *objects.GetProperty(box, kPrimitiveSizeMeters));
+        Check(std::abs(afterUndo.x - 1.0) < 1.0e-9);
+
+        // Bad requests are parameter errors and change nothing.
+        Check(
+            CallError(
+                dispatcher,
+                "45",
+                "object.transform",
+                transformParams("scale", "x", -2.0)).
+                    Find("code")->AsNumber() == -32602.0);
+        Check(
+            CallError(
+                dispatcher,
+                "46",
+                "object.transform",
+                transformParams("shear", "x", 1.0)).
+                    Find("code")->AsNumber() == -32602.0);
+        Check(
+            CallError(
+                dispatcher,
+                "47",
+                "object.transform",
+                transformParams("translate", "w", 1.0)).
+                    Find("code")->AsNumber() == -32602.0);
+        Check(
+            CallError(
+                dispatcher,
+                "48",
+                "object.transform_info",
+                orbit::rpc::Value(
+                    orbit::rpc::Value::Object{
+                        {"object", worldObject.ToString()}})).
+                    Find("code")->AsNumber() == -32602.0);
+    }
+
     }
 
     std::filesystem::remove_all(root);

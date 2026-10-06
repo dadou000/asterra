@@ -20,13 +20,15 @@ sources = [
   "engine/editor_model/include/orbit/editor_model/SurfaceAuthoringModel.hpp",
   "engine/editor_model/include/orbit/editor_model/SystemViewModel.hpp",
   "engine/editor_model/CMakeLists.txt",
+  "engine/editor_model/include/orbit/editor_model/ViewportManipulator.hpp",
 ]
-symbols = ["CelestialDiagnostic", "StarRecipe", "PresentedCommand", "ExplorerModel", "InspectedProperty", "OutputEntry", "ShortcutChord", "SurfaceAuthoringSelection"]
+symbols = ["CelestialDiagnostic", "StarRecipe", "PresentedCommand", "ExplorerModel", "InspectedProperty", "OutputEntry", "ShortcutChord", "SurfaceAuthoringSelection", "ViewportManipulator"]
 invariants = [
   "editor_model does not depend on the UI toolkit (engine/editor_ui): it is the shared model panels render and plugins reuse; every mutation goes through the command layer (/authoring/commands).",
   "Material-specific commands stay in the same shared command registry but in their own translation unit so the core authoring command implementation stays focused on hierarchy/path operations.",
   "BuiltinSchemas keeps compatibility aliases for existing editor/plugin code while the permanent ownership of world semantic IDs lives in Orbit::WorldModel.",
   "Recipes create ordinary semantic objects inside one transaction (for example rocky-planet recipes also run the atmosphere solver); they never create hidden runtime types.",
+  "The viewport Move/Rotate/Scale math and writes live in ViewportManipulator (UI-free, headless via object.transform); panels forward pointer rays and never compute transform values (/editor/viewport/transform-gizmo).",
 ]
 related = ["/authoring/commands", "/world/world-model", "/editor/studio-session", "/rendering/atmosphere/authoring-solver", "/rules/placement"]
 depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/authoring/selection", "/foundation/core", "/foundation/platform", "/rendering/terrain/biomes", "/world/paths", "/world/surface-composition", "/world/terrain-constraints", "/world/world-model"]

@@ -8,6 +8,7 @@
 #include <orbit/studio_ui/StudioExpansionShell.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioTextDiagnosticsHud.hpp>
+#include <orbit/studio_ui/StudioViewportManipulatorUi.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 
 #include <array>
@@ -116,6 +117,16 @@ public:
     {
         bubbleOpenRequest_ = object;
     }
+
+    // Move / Rotate / Scale handles of the single selected object over the
+    // perspective viewport `id`, driven by the Scene toolbar's tool, space and
+    // snap settings. Call right after the viewport Image is submitted.
+    // Returns true while the handles own the left button (hovering one or
+    // dragging), so that press must not also select or place something.
+    // The same operation without a pointer is the object.transform RPC.
+    [[nodiscard]] bool HandleViewportGizmo(
+        editor_ui::PanelContext& context,
+        std::string_view id);
 
 private:
     friend class StudioExpansionShell;
@@ -239,6 +250,7 @@ private:
     bool contextualAdvancedProperties_{false};
 
     StudioExpansionShell expansion_{*this};
+    StudioViewportManipulatorUi manipulatorUi_;
 };
 } // namespace orbit::studio_ui
 

@@ -16,6 +16,7 @@ sources = [
   "engine/studio_ui/src/StudioViewportPanels.cpp",
   "engine/studio_ui/src/StudioRenderViewRpc.cpp",
   "engine/studio_ui/src/StudioTextDiagnosticsHud.cpp",
+  "engine/studio_ui/src/StudioViewportManipulatorUi.cpp",
 ]
 symbols = ["StudioRenderViewSet", "NavigateTerrain", "StudioViewportPanels", "StudioTextDiagnosticsHud"]
 invariants = [
@@ -23,8 +24,9 @@ invariants = [
   "Panels request operations; they do not own camera, terrain or renderer state.",
   "Every Diagnostics toggle in the viewport panel has an equivalent view.* RPC method and MCP tool (same flags, same defaults).",
   "Terrain diagnostic stats (clipmap_plan, etc.) are only valid while the production terrain is drawn.",
+  "The Scene toolbar's Move / Rotate / Scale tools draw handles over the perspective viewport through StudioViewportPanels::HandleViewportGizmo, called right after the viewport Image; while the handles own the left button the press must not also select, pick terrain or place a path node (/editor/viewport/transform-gizmo).",
 ]
-related = ["/editor/mcp-rpc", "/rules/placement", "/rendering/terrain/clipmaps/debugging"]
+related = ["/editor/viewport/transform-gizmo", "/editor/mcp-rpc", "/rules/placement", "/rendering/terrain/clipmaps/debugging"]
 depends_on = ["/rendering/terrain/clipmaps"]
 verify = ["view.text_diagnostics returns the same text the HUD shows (its `text` field)."]
 verified = "b0a0de7f"

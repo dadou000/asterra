@@ -14,6 +14,7 @@ add_library(OrbitEditorModel STATIC
     src/PlanetSurface.cpp
     src/SurfaceAuthoringModel.cpp
     src/SystemViewModel.cpp
+    src/ViewportManipulator.cpp
 )
 
 add_library(Orbit::EditorModel ALIAS OrbitEditorModel)
@@ -43,6 +44,24 @@ target_compile_features(OrbitEditorModel PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitEditorModel)
 
 if(BUILD_TESTING)
+    add_executable(OrbitViewportManipulatorTests
+        tests/ViewportManipulatorTests.cpp
+    )
+
+    target_link_libraries(OrbitViewportManipulatorTests
+        PRIVATE
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitViewportManipulatorTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitViewportManipulatorTests)
+
+    add_test(
+        NAME Orbit.ViewportManipulator
+        COMMAND OrbitViewportManipulatorTests
+    )
+
     add_executable(OrbitTerrainAuthoringCommandTests
         tests/TerrainAuthoringCommandTests.cpp
     )

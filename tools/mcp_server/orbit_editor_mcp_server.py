@@ -932,6 +932,39 @@ def orbit_terrain_cache_stats(
 
 
 @mcp.tool()
+def orbit_object_transform_info(object_id: str) -> dict[str, Any]:
+    """Which move/rotate/scale tools an object supports, its position and its
+    local axes. Supported types: Primitive, Visibility Proxy, Point Light
+    (move only) and Spot Light (move and rotate)."""
+    return _rpc("object.transform_info", {"object": object_id})
+
+
+@mcp.tool()
+def orbit_object_transform(
+    object_id: str,
+    tool: str,
+    axis: str,
+    amount: float,
+    space: str = "world",
+) -> dict[str, Any]:
+    """Move, rotate or scale an object along one axis as ONE undoable step,
+    exactly like dragging a viewport gizmo handle. tool: translate (amount in
+    meters), rotate (degrees) or scale (positive factor). axis: x, y, z, or
+    uniform (scale only). space: world or local; scale always uses the
+    object's own axes. Check orbit_object_transform_info first."""
+    return _rpc(
+        "object.transform",
+        {
+            "object": object_id,
+            "tool": tool,
+            "axis": axis,
+            "amount": amount,
+            "space": space,
+        },
+    )
+
+
+@mcp.tool()
 def orbit_property_set(
     object_id: str,
     property_id: str,

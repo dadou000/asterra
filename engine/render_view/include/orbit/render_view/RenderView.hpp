@@ -44,6 +44,26 @@ ViewportRay(
     f32 u,
     f32 v) noexcept;
 
+// Where a camera-local point lands in the viewport. u and v use the same
+// 0..1 convention as ViewportRay (v grows downwards) and may lie outside
+// 0..1 when the point is off screen; depthMeters is the distance along the
+// camera forward axis.
+struct ViewportProjection
+{
+    f32 u{0.0F};
+    f32 v{0.0F};
+    f64 depthMeters{0.0};
+};
+
+// Exact inverse of ViewportRay for points in front of the camera. Returns
+// nothing for a point behind or on the camera plane or a degenerate camera.
+[[nodiscard]] std::optional<ViewportProjection>
+ProjectToViewport(
+    const CameraState& camera,
+    u32 width,
+    u32 height,
+    const math::Double3& pointLocalMeters) noexcept;
+
 struct RenderViewDesc
 {
     u32 width{1};

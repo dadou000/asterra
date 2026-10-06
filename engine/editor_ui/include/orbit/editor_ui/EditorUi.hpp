@@ -100,6 +100,36 @@ enum class UiKey : u8
     Escape
 };
 
+// Drawing and pointer helpers for overlays on the item submitted just before
+// (typically the viewport Image). Positions are pixels from that item's
+// top-left corner.
+struct OverlaySegment
+{
+    math::Float2 a{};
+    math::Float2 b{};
+    math::Float4 color{1.0F, 1.0F, 1.0F, 1.0F};
+    f32 thickness{2.0F};
+};
+
+struct OverlayDisc
+{
+    math::Float2 center{};
+    f32 radiusPixels{5.0F};
+    math::Float4 color{1.0F, 1.0F, 1.0F, 1.0F};
+    bool filled{true};
+};
+
+struct ItemPointer
+{
+    bool hovered{false};
+    // Left button went down this frame while the item was hovered.
+    bool pressed{false};
+    // Left button is held (stays true when the pointer leaves the item).
+    bool down{false};
+    bool released{false};
+    math::Float2 position{};
+};
+
 class ShellBandRegistry;
 
 class PanelContext
@@ -172,6 +202,19 @@ public:
     // before (typically the viewport Image) on a translucent plate, clipped to
     // that item. For HUD-style readouts; it takes no input.
     void OverlayTextOnLastItem(std::string_view text);
+    // Lines and discs over the last item, clipped to it. No input.
+    void OverlayShapesOnLastItem(
+        std::span<const OverlaySegment> segments,
+        std::span<const OverlayDisc> discs);
+    // A short text label at `position` (pixels from the last item's
+    // top-left) on a small translucent plate.
+    void OverlayLabelOnLastItem(
+        math::Float2 position,
+        math::Float4 color,
+        std::string_view text);
+    // Left-button state relative to the last item, for gizmos that need to
+    // keep tracking a drag after the pointer leaves it.
+    [[nodiscard]] ItemPointer LastItemPointer() const;
     [[nodiscard]] CanvasInteraction Canvas(std::string_view id, UiSize size);
     void CanvasLine(math::Float2 a, math::Float2 b, math::Float4 color, f32 thickness = 1.0F);
     void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);

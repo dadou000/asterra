@@ -5224,6 +5224,7 @@ int main(
                  &bodies,
                  &bodyId,
                  &studioSession,
+                 &studioViewportPanels,
                  &worldSession,
                  &window,
                  &viewportNavigationSpeedScale,
@@ -5446,7 +5447,7 @@ int main(
                             std::pair{width, height};
                     }
 
-                    const auto interaction =
+                    auto interaction =
                         context.Image(
                             primaryView->DisplayColor(),
                             {
@@ -5461,6 +5462,17 @@ int main(
                                             primaryView->
                                                 Height())
                             });
+
+                    // Move / Rotate / Scale handles of the selected object.
+                    // While they own the pointer the press is not a
+                    // selection or path-placement click.
+                    if (studioViewportPanels.HandleViewportGizmo(
+                            context,
+                            "studio.primary"))
+                    {
+                        interaction.clicked = false;
+                        interaction.doubleClicked = false;
+                    }
 
                     if (interaction.hovered &&
                         interaction.wheel != 0.0F &&
