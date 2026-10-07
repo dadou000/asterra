@@ -14,7 +14,7 @@ sources = [
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/Atmosphere.hpp",
   "engine/celestial_atmosphere/src/Atmosphere.cpp",
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/SkyIrradiance.hpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
   "engine/celestial_atmosphere/tests/AtmosphereTests.cpp",
 ]
 symbols = ["AtmosphereLutConfig", "BuildStaticLuts", "BuildSkyView", "AtmosphereFingerprint", "AtmosphereSkyFingerprint", "SkyViewInput", "ReplaceSkyView", "SkyFrameSunDirection", "QuantizedSkyObserverRadius"]

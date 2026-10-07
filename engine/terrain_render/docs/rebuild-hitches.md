@@ -11,7 +11,7 @@ clipmap-only change now rebuilds just TerrainPreviewRenderer, and DxcShaderCompi
 What remains is a one-time cost on the first terrain build of a process."""
 keywords = ["hitch", "freeze", "stall", "dxc", "shader compile", "composebase", "recreate generator", "altitude", "pipeline cache", "frame time"]
 sources = [
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
   "engine/shader/dxc/include/orbit/shader/dxc/DxcShaderCompiler.hpp",
   "engine/terrain_gpu/src/GpuFieldGenerator.cpp",
   "docs/ORBIT_PERFORMANCE.md",

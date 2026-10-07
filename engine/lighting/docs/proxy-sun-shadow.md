@@ -52,7 +52,7 @@ docs = ["/rendering/lighting"]
 symptom = "bands of wrongly occluded rays or shadow stripes on proxy walls"
 steps = [
   "Suspect a stale GPU origin: a scene built while the camera was far away (for example a world reopened from a planet-scale view) resolves only about a metre in float32.",
-  "Move to within 20 km of the proxies and more than 1.5 km from the build origin: ProxyGpuOriginIsStale should trigger a rebuild; if it does not, check the thresholds in ProxySurface.hpp and the call site in StudioViewportRendererBase.cpp.",
+  "Move to within 20 km of the proxies and more than 1.5 km from the build origin: ProxyGpuOriginIsStale should trigger a rebuild; if it does not, check the thresholds in ProxySurface.hpp and the call site in StudioViewportRenderer.cpp.",
   "The exact reflections share the same scene, so a reflection artefact with the same pattern confirms it.",
 ]
 docs = ["/rendering/lighting"]

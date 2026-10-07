@@ -13,7 +13,7 @@ keywords = ["ray march", "cloud shape", "billow", "noise", "step", "empty space 
 sources = [
   "engine/celestial_clouds/src/CloudRenderer.cpp",
   "engine/celestial_clouds/include/orbit/celestial_clouds/CloudRenderer.hpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
   "docs/ORBIT_PERFORMANCE.md",
 ]
 symbols = ["kMaxSteps", "kBaseStep", "kEmptySkip", "kOpaqueCutoff", "kInCloudScheduleFraction", "kFootprintStep"]

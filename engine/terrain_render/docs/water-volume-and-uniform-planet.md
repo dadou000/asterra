@@ -14,7 +14,7 @@ sources = [
   "engine/terrain_render/src/WaterVolumeShader.cpp",
   "engine/terrain_render/include/orbit/terrain_render/WaterVolumeShader.hpp",
   "engine/terrain_render/src/TerrainPreviewRenderer.cpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
 ]
 symbols = [
   "BuildClipmapBedPixelShader",
@@ -92,7 +92,7 @@ pass, see `/rendering/terrain/clipmaps/shaders`), two shader-resource buffers, o
 `seaLevelMeters` and fades of 1, binds the optics buffer at buffer slot 1 and the terrain depth at texture slot 0, and draws
 `patchVertexCounts_[level]` vertices per level. The render graph runs it as the `NearFieldWater` pass after lighting and
 before the atmosphere, only for the production-terrain presentation with a resolved ocean and `bypass_near_field_water` off
-(`StudioViewportRendererBase.cpp`).
+(`StudioViewportRenderer.cpp`).
 
 For the physical story (why water became a separate object, limits, validation) read
 `/legacy/standing-water-rendering`.

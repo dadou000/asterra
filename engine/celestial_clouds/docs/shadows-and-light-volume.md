@@ -16,7 +16,7 @@ sources = [
   "tests/CloudLightVolumeTests.cpp",
   "engine/lighting/include/orbit/lighting/DirectLighting.hpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioTerrainLayerOptions.hpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
 ]
 symbols = ["kShadowSteps", "kVolCascades", "DirectLightingRenderer", "cloudShadow", "cloudLightVolume", "cloudGodrayStrength", "cloudVolumeDebugAltitude"]
 invariants = [
@@ -72,7 +72,7 @@ docs = ["/rendering/clouds/raymarch"]
 
 ## Where it is wired
 
-`StudioViewportRendererBase.cpp` builds the passes (`prefix + ".CloudShadow"` then `".SharedDirectLighting"`); the shadow
+`StudioViewportRenderer.cpp` builds the passes (`prefix + ".CloudShadow"` then `".SharedDirectLighting"`); the shadow
 texture is handed to `DirectLightingRenderer::Draw` (`engine/lighting`). The light volume and the god-ray option live in
 `CloudRenderer.cpp` and are controlled through `StudioTerrainLayerOptions` (`cloudLightVolume`, `cloudGodrayStrength`,
 `cloudVolumeDebugAltitude`).

@@ -18,7 +18,7 @@ sources = [
   "engine/terrain_render/src/SurfaceEffectGpuBinding.cpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffectGpuBinding.hpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffects.hpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp"]
+  "engine/studio_ui/src/StudioViewportRenderer.cpp"]
 symbols = [
   "MakePhysicalSurfaceRenderInput",
   "SurfaceEffectGpuStamp",
@@ -95,7 +95,7 @@ docs = ["/rendering/terrain/clipmaps/shaders"]
 
 1. Studio fills the renderer each frame: `terrain.renderer->SetSurfaceEffects(...)` with the batch built from the shared
    volume surface-effect stamps, or an empty list when the view's `surface_effects` layer is off
-   (`StudioViewportRendererBase.cpp`).
+   (`StudioViewportRenderer.cpp`).
 2. `Draw` calls `surfaceEffects_.Bind(commandList, frameIndex)` before the level loop; the buffer is bound at graphics buffer
    slot 1 while slot 0 is the level's sample buffer.
 3. The pixel shader is built as `BuildSurfaceEffectPixelShader(base)` where `base` is the raw terrain pixel shader

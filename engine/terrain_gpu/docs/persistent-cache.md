@@ -15,7 +15,7 @@ sources = [
   "engine/terrain_gpu/src/PersistentGpuTerrainCache.cpp",
   "engine/terrain_gpu/tests/PersistentGpuTerrainCacheTests.cpp",
   "engine/studio_session/src/StudioTerrainPhysicalPageService.cpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
   "engine/studio_session/src/StudioTerrainStatusRpc.cpp",
 ]
 symbols = ["PersistentGpuTerrainCache", "PersistentGpuTerrainCacheKey", "CachedGpuTerrainPage", "CachedTerrainProduct", "PersistentGpuTerrainCacheConfig", "PersistentGpuTerrainCacheFingerprint", "InvalidateAddress", "GetOrCreate"]
@@ -59,7 +59,7 @@ RiverGeometry, PhysicalSurface. The final M12 physical surface has an explicit `
 ## Consumers
 
 - `StudioTerrainPhysicalPageService` (session) owns the cache (`Cache()`), the per-page status and upload revisions.
-- `StudioViewportRendererBase.cpp` uses `Find` / `Insert` / `Erase` (not `GetOrCreate`, which only the tests call) to attach the
+- `StudioViewportRenderer.cpp` uses `Find` / `Insert` / `Erase` (not `GetOrCreate`, which only the tests call) to attach the
   PhysicalSurface product: it skips snapshots whose `revisionFingerprint` no longer matches the page status, builds the key from
   the snapshot's address, physical LOD and revisions, and when the cached page lacks the product it uploads the buffer, inserts an
   augmented COPY of the page, and `Erase`s the key again if `CompleteUpload` reports failure.

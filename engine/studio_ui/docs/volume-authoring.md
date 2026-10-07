@@ -5,27 +5,26 @@ kind = "subsystem"
 status = "stable"
 summary = """
 VolumeAuthoringUi is the "Volumes" panel and the contextual "Volume Tools" inspector section: Volume presets, sources and \
-effectors, rendering and live-solver controls (VolumeAuthoringUi.cpp), plus the Representation/LOD policy, the M37 cache \
-bake/import and the M38 particle/surface output controls (VolumeAuthoringM36.cpp, built as one translation unit). \
+effectors, rendering and live-solver controls (RegisterBase / DrawBase), plus the Representation/LOD policy, the M37 cache \
+bake/import and the M38 particle/surface output controls (Register / Draw), all in VolumeAuthoringUi.cpp. \
 SurfaceVolumeDebugRenderer draws the density/velocity/field-slice debug lines. ShadingUi is the two-panel Shading tab \
 (browser plus editor/preview) over ShadingWorkspace. None of the Volume runtime controls has a dedicated RPC or MCP tool."""
 owner_module = "OrbitStudioUi"
 keywords = ["volume authoring", "volumes panel", "volume tools", "representation lod", "volume cache", "bake", "orbitvol", "particle output", "surface deposits", "field debug", "density slice", "field slice", "surface volume debug", "live solver", "local 3d", "M36", "M37", "M38", "shading tab", "shading panel", "shading materials", "ShadingUi", "shader preview panel"]
 sources = [
   "engine/studio_ui/src/VolumeAuthoringUi.cpp",
-  "engine/studio_ui/src/VolumeAuthoringM36.cpp",
   "engine/studio_ui/include/orbit/studio_ui/VolumeAuthoringUi.hpp",
   "engine/studio_ui/src/SurfaceVolumeDebugRenderer.cpp",
   "engine/studio_ui/include/orbit/studio_ui/SurfaceVolumeDebugRenderer.hpp",
   "engine/studio_ui/src/ShadingUi.cpp",
   "engine/studio_ui/include/orbit/studio_ui/ShadingUi.hpp",
   "engine/studio_ui/CMakeLists.txt",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
   "engine/editor_model/src/VolumeAuthoringCommands.cpp",
 ]
 symbols = ["VolumeAuthoringUi", "DrawRepresentationPolicy", "RegisterBase", "DrawBase", "ContextInstance", "RelevantToSelection", "SurfaceVolumeDebugRenderer", "surfaceVolumeDebugRenderer_", "BakeVolumeCache", "VolumeCaches", "VolumeOutputRuntimeService", "RegisterVolumeCommands", "kCreateVolume", "ShadingUi", "TakePreviewResizeRequest", "ShadingWorkspace"]
 invariants = [
-  "VolumeAuthoringUi.cpp is not a CMake source of OrbitStudioUi (only VolumeAuthoringM36.cpp is): M36 #includes it under `#define Register RegisterBase` / `#define Draw DrawBase`, then defines the real Register (panel 'Volumes', right dock, order 35, min 320x300) and Draw = DrawBase + DrawRepresentationPolicy. Adding VolumeAuthoringUi.cpp to the target would define Register and Draw twice; extend the base workflow in VolumeAuthoringUi.cpp and the representation, cache and output controls in VolumeAuthoringM36.cpp.",
+  "VolumeAuthoringUi.cpp holds two layers: RegisterBase / DrawBase (the base workflow) and the real Register (panel 'Volumes', right dock, order 35, min 320x300) and Draw = DrawBase + DrawRepresentationPolicy. Extend the base workflow in RegisterBase / DrawBase and the representation, cache and output controls in Register / Draw.",
   "There is one authoring stack: the Studio-owned VolumeAuthoringUi registers itself as ContextInstance(), and the contextual provider 'orbit.volume-authoring' ('Volume Tools', order 120) calls the same Draw so it shares the field storage, solver, renderer, caches and status line. It is relevant only when exactly one object is selected and it is a Volume or a Volume Source/Effector whose parent is a Volume; StudioExpansionShell consults ContextInstance()->RelevantToSelection() so volume authoring wins over terrain ancestry.",
   "Authored values go through world.Commands().SetProperty with the panel's clamps (e.g. render steps 8-256, shadow steps 0-32, temporal weight 0-0.98, anisotropy +-0.95, solver resolution 8-1024, surface layers 1-32, output particle budget 1-1000000) and are reachable with the generic property.set. Structure goes through the command registry: kCreateVolume (preset: Empty, Smoke, Fire, Fog, Dust, Snow, Surface Flow), kRemoveVolume, kAddVolumeSource (kind), kAddVolumeEffector (kind), kMoveVolumeInputUp/Down, kRemoveVolumeInput, kPaintVolumeTerrainSource (position, radius, strength), registered by RegisterVolumeCommands and so visible to command.catalog / command.invoke.",
   "Runtime-only state is mutated directly, with no command, no undo and no persistence: renderer_->VolumeRenderSettings (temporal enable, render debug mode, follow target and object, Live/Passive distances and projected pixels, hysteresis, Coarse/Passive resolution and steps, region map), solver_->Settings (live, pause, step, reset, time step, dissipation, source scale, iterations, GPU budget, debug view, slice axis and index) and the VolumeCaches() registry. The Representation mode (Auto, Live, Coarse, Passive, Baked) itself is authored (kVolumeRepresentationMode).",

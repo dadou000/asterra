@@ -16,7 +16,7 @@ sources = [
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/AtmosphereRenderer.hpp",
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/SkyIrradiance.hpp",
   "engine/world_model/include/orbit/world_model/CelestialAtmosphereBinding.hpp",
-  "engine/studio_ui/src/StudioViewportRendererBase.cpp",
+  "engine/studio_ui/src/StudioViewportRenderer.cpp",
 ]
 symbols = ["AtmosphereParameters", "AtmosphereRenderer", "GpuAtmosphereLuts", "ResolveAtmosphereBody", "SunTransmittanceAt"]
 invariants = [
@@ -54,7 +54,7 @@ verified = "b0a0de7f"
 | sky irradiance for lighting | `SkyIrradiance.hpp/.cpp` |
 | capability -> parameters | `engine/world_model/CelestialAtmosphereBinding.hpp` |
 | authoring solver and provenance | `engine/world_model/AtmospherePropertySolver.hpp`, `PropertyProvenance*.hpp` |
-| per-view cache, diagnostics, pass wiring | `engine/studio_ui/src/StudioViewportRendererBase.cpp` (`AtmospherePresentation`, `StudioAtmosphereDiagnostics`) |
+| per-view cache, diagnostics, pass wiring | `engine/studio_ui/src/StudioViewportRenderer.cpp` (`AtmospherePresentation`, `StudioAtmosphereDiagnostics`) |
 
 ## Frame order (per view)
 

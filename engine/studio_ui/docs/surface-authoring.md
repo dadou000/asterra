@@ -101,7 +101,7 @@ Counts (`Semantic Revision`, terrain surfaces, biome services/definitions, unive
 | Terrain overlays that draw constraints, biome weights, process masks | yes: `view.terrain_overlays_set` (flags `authored_constraints`, `biome_weights`, `process_masks`) |
 | Make sure planets have a Terrain Surface | yes: `world.ensure_planet_surfaces` |
 | Generic object and property access (`object.get`, `object.create`, `property.set`, `command.invoke`) | yes, as raw schema access; none of them is a Surface-specific tool |
-| Relief, process, biome, biome preference, mask, moss and tree buttons | no dedicated RPC or MCP tool was found; `QueueTerrainInvalidation(s)` is called from the panel, the viewport tools (StudioViewportPanelsBase.cpp) and the studio validation scenario, and no RPC handler found calls it |
+| Relief, process, biome, biome preference, mask, moss and tree buttons | no dedicated RPC or MCP tool was found; `QueueTerrainInvalidation(s)` is called from the panel, the viewport tools (StudioViewportPanels.cpp) and the studio validation scenario, and no RPC handler found calls it |
 | Revisions beyond those two, M06 page counters, M16 timings, M30 reference | no |
 
 Under the MCP-parity rule in AGENTS.md these are gaps: extract the operation the button runs, register an RPC for it, add a tool in `tools/mcp_server/orbit_editor_mcp_server.py` and document it in `docs/ORBIT_MCP.md` in the same change.

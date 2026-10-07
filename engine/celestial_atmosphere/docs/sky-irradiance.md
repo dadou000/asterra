@@ -39,5 +39,5 @@ docs = ["/rendering/atmosphere/lut-pipeline"]
 +++
 
 Consumers: `engine/lighting` (`RadianceEstimator`, `RadianceClipmap`, `DirectLighting`) and
-`StudioViewportRendererBase.cpp` use the projected coefficients; the cell-level sky fill is described in
+`StudioViewportRenderer.cpp` use the projected coefficients; the cell-level sky fill is described in
 `/rendering/lighting/sky-cache-fill`.

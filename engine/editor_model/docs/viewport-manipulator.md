@@ -67,7 +67,7 @@ docs = ["/editor/viewport"]
 symptom = "dragging a handle does nothing, jumps, or selects the body instead"
 steps = [
   "'That handle cannot be grabbed from this angle' means the view ray runs parallel to the handle axis or plane; orbit the camera so the handle is not edge-on.",
-  "A press that selects the body means the handle did not claim it: check HandleViewportGizmo is called right after the viewport Image (it reads the last ImGui item) and its result suppresses interaction.clicked in the caller (apps/editor/src/Main.cpp and StudioViewportPanelsBase.cpp).",
+  "A press that selects the body means the handle did not claim it: check HandleViewportGizmo is called right after the viewport Image (it reads the last ImGui item) and its result suppresses interaction.clicked in the caller (apps/editor/src/Main.cpp and StudioViewportPanels.cpp).",
   "Jumps near an object far from the origin are a precision symptom of the local frame: positions are camera-local doubles, so check the object's frame assumption (property space note above).",
   "Reproduce headlessly with object.transform (same code path) to separate input handling from math.",
 ]

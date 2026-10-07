@@ -15,7 +15,7 @@ sources = [
   "engine/studio_ui/src/StudioRenderViewRpc.cpp",
   "engine/studio_ui/include/orbit/studio_ui/DisplayDiagnosticsUi.hpp",
   "engine/studio_ui/src/DisplayDiagnosticsUi.cpp",
-  "engine/studio_ui/src/DisplayDiagnosticsUiBase.cpp",
+  "engine/studio_ui/src/DisplayDiagnosticsUi.cpp",
   "engine/studio_ui/include/orbit/studio_ui/DisplayEyeRpc.hpp",
   "engine/studio_ui/src/DisplayEyeRpc.cpp",
   "engine/studio_ui/include/orbit/studio_ui/DebugViewUi.hpp",
@@ -35,7 +35,7 @@ invariants = [
   "display.eye_get / display.eye_set / display.eye_reset (RegisterDisplayEyeRpc) act on a view id that defaults to studio.primary and need luminance metering for that view (otherwise error 1072). eye_set changes only the given fields, rejects a non-boolean highlight_protection or any of the 14 numeric fields in kNumberFields that is non-finite or outside its range (error -32602), and is not persisted to the display settings file.",
   "The Debug panel (DebugViewUi), each viewport's Surface View buttons and view.surface_debug_set all call StudioRenderViewSet::SetSurfaceDebugMode; the modes are lit, base_color_roughness, normal_metallic and emission_metadata.",
   "SimulationControls is the one owner of the transport: the bottom band (SimulationControlsUi, id 'orbit.simulation') and time.get / time.set / time.step all call it. time.set applies rate, step_seconds, time_microseconds, then playing; step size is positive and finite (default 60 s); time_microseconds beyond +-9.0e18 is rejected.",
-  "DisplayDiagnosticsUi.cpp #includes DisplayDiagnosticsUiBase.cpp with `#define Register RegisterBase` and `#define DrawViewport DrawViewportBase`; the Base file is not a CMake source. Per-view luminance, eye, LUT, output, tone mapping and bloom sections live in the Base file; lighting runtime override, lighting inspection overlays and the lighting/volume profiler live in the wrapper, and project defaults are applied to both studio.primary and studio.map by ApplyDisplayDefaults.",
+  "DisplayDiagnosticsUi.cpp holds two layers: the base methods RegisterBase and DrawViewportBase (per-view luminance, eye, LUT, output, tone mapping and bloom sections) and the Register and DrawViewport wrappers that call them and add the lighting runtime override, lighting inspection overlays and the lighting/volume profiler. Project defaults are applied to both studio.primary and studio.map by ApplyDisplayDefaults.",
 ]
 related = ["/editor/viewport", "/editor/mcp-rpc", "/editor/profiler", "/rendering/post-process", "/rendering/lighting", "/rendering/volumes", "/foundation/time", "/rendering/terrain/clipmaps/debugging", "/editor/studio-ui/reports", "/editor/studio-ui/validation-and-capture"]
 depends_on = ["/editor/viewport", "/rendering/post-process", "/foundation/time"]
@@ -98,7 +98,7 @@ docs = ["/editor/mcp-rpc"]
 | report struct, terrain point sampling, formatting | `StudioViewportTextDiagnostics.cpp` (`SampleStudioTerrainPoint`, `FormatStudioViewportTextReport`) |
 | building the report for a view | `StudioRenderViewSet::TextDiagnostics` |
 | `view.text_diagnostics`, `view.text_diagnostics_set`, `view.surface_debug_get/set` | `StudioRenderViewRpc.cpp` |
-| luminance histogram, eye state, LUT, tone mapping, bloom, lighting override panel | `DisplayDiagnosticsUi` (+ `DisplayDiagnosticsUiBase.cpp`) |
+| luminance histogram, eye state, LUT, tone mapping, bloom, lighting override panel | `DisplayDiagnosticsUi` (`RegisterBase` / `DrawViewportBase` in `DisplayDiagnosticsUi.cpp`) |
 | `display.eye_*` | `DisplayEyeRpc.cpp` |
 | GBuffer channel toolbar | `DebugViewUi` |
 | transport band, `time.*` | `SimulationControls`, `SimulationControlsUi`, `RegisterSimulationRpc` |
