@@ -15,7 +15,7 @@ int main()
         {1'000'000.0, -5'000.0, 0.0};
     a.gpuOriginRevision = 7U;
 
-    const math::Double3 point{
+    const orbit::math::Double3 point{
         1'000'160.0,
         -4'992.0,
         64.0

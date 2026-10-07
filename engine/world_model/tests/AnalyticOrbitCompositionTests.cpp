@@ -16,6 +16,20 @@
 
 namespace
 {
+// The quarter instant below is truncated to whole microseconds, which moves a body up
+// to speed * 1 us along its track (millimetres). Quarter-orbit positions are therefore
+// compared against the orbit radius, not against a near-zero coordinate.
+bool NearOnScale(
+    const double a,
+    const double b,
+    const double scale,
+    const double relative = 1.0e-8)
+{
+    const double bound =
+        std::max({1.0, scale, std::abs(a), std::abs(b)});
+    return std::abs(a - b) <= relative * bound;
+}
+
 bool Near(
     const double a,
     const double b,
@@ -159,8 +173,8 @@ int main()
                 quarter);
 
         if (!atQuarter.has_value() ||
-            !Near(atQuarter->translation.x, 0.0) ||
-            !Near(atQuarter->translation.y, axis))
+            !NearOnScale(atQuarter->translation.x, 0.0, axis) ||
+            !NearOnScale(atQuarter->translation.y, axis, axis))
         {
             return FailCode(4);
         }

@@ -9,7 +9,7 @@ int main()
     lighting::LightingView view{};
     view.frame = frames::FrameId{1U, 2U};
     view.body = universe::BodyId{3U, 4U};
-    view.cameraInFrameMeters = {0.0, 0.0, 0.0};
+    view.cameraPositionInFrameMeters = {0.0, 0.0, 0.0};
     view.gpuOriginInFrameMeters = {0.0, 0.0, 0.0};
 
     const lighting::RadianceClipmapConfig config{

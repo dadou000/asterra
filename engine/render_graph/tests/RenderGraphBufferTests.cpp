@@ -103,6 +103,13 @@ public:
         return {};
     }
 
+    std::unique_ptr<orbit::rhi::AccelerationStructure>
+    CreateAabbAccelerationStructure(
+        std::span<const orbit::rhi::AccelerationAabb>) override
+    {
+        return {};
+    }
+
     std::unique_ptr<orbit::rhi::GraphicsPipeline>
     CreateGraphicsPipeline(
         const orbit::rhi::GraphicsPipelineDesc&) override
@@ -232,6 +239,18 @@ public:
         orbit::rhi::Texture*) override
     {
     }
+
+    void SetRenderTargetsReadOnlyDepth(
+        std::span<orbit::rhi::Texture* const>,
+        orbit::rhi::Texture&) override {}
+
+    void SetComputeAccelerationStructure(
+        orbit::u32,
+        orbit::rhi::AccelerationStructure&) override {}
+
+    void DrawIndirect(
+        orbit::rhi::Buffer&,
+        orbit::u64) override {}
 
     void SetViewport(
         const orbit::rhi::Viewport&) override

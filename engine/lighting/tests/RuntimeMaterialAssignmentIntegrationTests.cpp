@@ -27,18 +27,12 @@ void Write(
 
     output << text;
 }
-} // namespace
 
-int main()
+// Everything that opens the project database lives in Run(): remove_all() throws on
+// Windows while SQLite still holds the files open, so it must run after Run() returns.
+int Run(const std::filesystem::path& root)
 {
     using namespace orbit;
-
-    const auto root =
-        std::filesystem::temp_directory_path() /
-        ("orbit-runtime-material-assignment-" +
-         documents::ProjectId::Random().ToString());
-
-    std::filesystem::remove_all(root);
 
     Write(
         root /
@@ -124,8 +118,10 @@ int main()
         return 3;
     }
 
+    // The edit changes the hue (0.2, 1.0, 0.3 at twice the luminance), so red falls
+    // to 40% and green rises to 500% of the original; green is the channel that grows.
     const auto before =
-        surface.emissionRadianceSceneLinear.x;
+        surface.emissionRadianceSceneLinear.y;
 
     content.SetMaterialEmission(
         materials.front().id,
@@ -141,7 +137,7 @@ int main()
         content,
         resolved.front().assetId);
 
-    if (surface.emissionRadianceSceneLinear.x <=
+    if (surface.emissionRadianceSceneLinear.y <=
             before ||
         surface.emissionGiScale !=
             0.0F)
@@ -149,6 +145,19 @@ int main()
         return 4;
     }
 
-    std::filesystem::remove_all(root);
     return 0;
+}
+} // namespace
+
+int main()
+{
+    const auto root =
+        std::filesystem::temp_directory_path() /
+        ("orbit-runtime-material-assignment-" +
+         orbit::documents::ProjectId::Random().ToString());
+
+    std::filesystem::remove_all(root);
+    const int result = Run(root);
+    std::filesystem::remove_all(root);
+    return result;
 }

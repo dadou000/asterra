@@ -190,9 +190,8 @@ int main()
     VisibilityRegistry starvedRegistry;
     starvedRegistry.Register(starved);
 
-    query.direction =
-        {1.0F, 0.0F, 0.0F};
-
+    // The ray must enter the root bounds (it does along +Z), otherwise the miss is
+    // provable without visiting a single child and is correctly terminal.
     const auto starvedResult =
         starvedRegistry.Trace(query);
 

@@ -1,3 +1,7 @@
+// These tests are written with assert(); keep it live in Release builds, where
+// NDEBUG would otherwise compile every check away.
+#undef NDEBUG
+
 #include <orbit/render_graph/RenderGraph.hpp>
 #include <orbit/render_view/RenderView.hpp>
 
@@ -100,6 +104,13 @@ public:
     {
         ++textureCreates_;
         return std::make_unique<FakeTexture>(desc);
+    }
+
+    [[nodiscard]] std::unique_ptr<orbit::rhi::AccelerationStructure>
+    CreateAabbAccelerationStructure(
+        std::span<const orbit::rhi::AccelerationAabb>) override
+    {
+        return nullptr;
     }
 
     [[nodiscard]] std::unique_ptr<orbit::rhi::GraphicsPipeline>
@@ -215,6 +226,24 @@ public:
         orbit::rhi::Texture&,
         orbit::rhi::Texture&) override {}
 
+    void GenerateMipmaps(orbit::rhi::Texture&) override {}
+
+    void SetRenderTargets(
+        std::span<orbit::rhi::Texture* const>,
+        orbit::rhi::Texture*) override {}
+
+    void SetRenderTargetsReadOnlyDepth(
+        std::span<orbit::rhi::Texture* const>,
+        orbit::rhi::Texture&) override {}
+
+    void SetComputeAccelerationStructure(
+        orbit::u32,
+        orbit::rhi::AccelerationStructure&) override {}
+
+    void DrawIndirect(
+        orbit::rhi::Buffer&,
+        orbit::u64) override {}
+
     void SetViewport(
         const orbit::rhi::Viewport&) override {}
 
@@ -308,14 +337,16 @@ int main()
         &viewA.Color() !=
         &viewB.Color());
 
-    // Three persistent targets per view.
-    assert(device.TextureCreates() == 6);
+    // RenderView::CreateTargets allocates nine persistent targets per view (HDR
+    // colour, G-buffer surface targets, display colour, depth, picking, ...).
+    constexpr orbit::u32 kTargetsPerView = 9U;
+    assert(device.TextureCreates() == 2U * kTargetsPerView);
 
     viewB.Resize(800, 600);
 
     assert(viewB.Width() == 800);
     assert(viewB.Height() == 600);
-    assert(device.TextureCreates() == 9);
+    assert(device.TextureCreates() == 3U * kTargetsPerView);
 
     orbit::render_graph::RenderGraph graph(
         device);

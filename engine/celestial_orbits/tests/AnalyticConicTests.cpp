@@ -16,6 +16,19 @@ bool Near(
     return std::abs(a - b) <=
         relative * scale;
 }
+// The quarter instant below is truncated to whole microseconds, which moves a body up
+// to speed * 1 us along its track (millimetres). Quarter-orbit positions are therefore
+// compared against the orbit radius, not against a near-zero coordinate.
+bool NearOnScale(
+    const double a,
+    const double b,
+    const double scale,
+    const double relative = 1.0e-8)
+{
+    const double bound =
+        std::max({1.0, scale, std::abs(a), std::abs(b)});
+    return std::abs(a - b) <= relative * bound;
+}
 } // namespace
 
 int main()
@@ -60,8 +73,8 @@ int main()
     const auto circularQuarter =
         EvaluateAnalyticConic(circular, quarter);
 
-    if (!Near(circularQuarter.positionMeters.x, 0.0, 2.0e-6) ||
-        !Near(circularQuarter.positionMeters.y, 7.0e6, 2.0e-6))
+    if (!NearOnScale(circularQuarter.positionMeters.x, 0.0, 7.0e6) ||
+        !NearOnScale(circularQuarter.positionMeters.y, 7.0e6, 7.0e6))
     {
         return 2;
     }

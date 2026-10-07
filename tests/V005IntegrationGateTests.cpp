@@ -56,6 +56,7 @@ int main()
                     true,
                     true,
                     false,
+                    false,
                     false) ==
                 studio_ui::
                     StudioViewportPresentation::

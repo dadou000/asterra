@@ -70,8 +70,10 @@ int main()
                     32.0F,
                 .smallEmitterPeakLuminance =
                     10.0,
+                // Peak over average inside a 2x2 leaf cannot exceed 4, and the lit
+                // pixel here is about 3.97x its leaf average.
                 .smallEmitterContrast =
-                    4.0F,
+                    3.0F,
                 .promotedMaximumProjectedPixels =
                     8.0F,
                 .maximumSamples =

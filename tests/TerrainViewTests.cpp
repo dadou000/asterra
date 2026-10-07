@@ -452,12 +452,15 @@ int main()
 
     const auto oneCell = tracker.Update(makeObserver(101.0));
 
+    // The lattice shifts by two cells, but a ladder level whose window scrolls is
+    // rebuilt in full (ClipmapTracker::Update: samples bake the edge morph, and
+    // partial toroidal updates are only enabled for banded levels).
     if (oneCell.levels[0].cellShiftX != 2 ||
         oneCell.levels[0].cellShiftY != 0 ||
-        oneCell.levels[0].fullRefresh)
+        !oneCell.levels[0].fullRefresh)
     {
         std::cerr
-            << "Phase-locked spherical lattice did not reuse a two-cell toroidal shift.\n";
+            << "Phase-locked spherical lattice did not shift by two cells and rebuild the moved level.\n";
         return 1;
     }
 
@@ -560,10 +563,10 @@ int main()
     const auto multiCell = tracker.Update(makeObserver(451.0));
 
     if (std::abs(multiCell.levels[0].cellShiftX) != 2 ||
-        multiCell.levels[0].fullRefresh)
+        !multiCell.levels[0].fullRefresh)
     {
         std::cerr
-            << "Multi-cell clipmap jump did not stay on the toroidal fast path.\n";
+            << "Multi-cell clipmap jump did not shift by whole parent cells and rebuild the moved level.\n";
         return 1;
     }
 

@@ -83,11 +83,8 @@ int main()
         return 2;
     }
 
-    if (sizeof(GpuVisibilityQuery) != 48U ||
-        sizeof(GpuVisibilityResult) != 48U)
-    {
-        return 3;
-    }
+    static_assert(sizeof(GpuVisibilityQuery) == 48U);
+    static_assert(sizeof(GpuVisibilityResult) == 48U);
 
     if (encoded.requirements.x != 0.25F ||
         encoded.requirements.y != 0.6F ||

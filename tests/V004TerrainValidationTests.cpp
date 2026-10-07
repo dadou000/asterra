@@ -6150,6 +6150,7 @@ void Test18ClipmapPhysicalPageIndependence()
 
     bool anyViewMotion = false;
     bool anyPartialRefresh = false;
+    bool anyMovedLevelRebuilt = false;
     u64 refreshedCells = 0U;
 
     for (u32 index = 0U;
@@ -6166,6 +6167,13 @@ void Test18ClipmapPhysicalPageIndependence()
             movement.cellShiftY != 0)
         {
             anyViewMotion = true;
+
+            // A scrolled ladder level is rebuilt in full (ClipmapTracker::Update);
+            // only banded levels refresh just the strip that came into view.
+            if (levelResidency.fullRefresh)
+            {
+                anyMovedLevelRebuilt = true;
+            }
         }
 
         if (!levelResidency.fullRefresh &&
@@ -6188,9 +6196,9 @@ void Test18ClipmapPhysicalPageIndependence()
 
     Require(
         anyViewMotion &&
-        anyPartialRefresh &&
-        refreshedCells > 0U,
-        "M30-18 moving the observer must alter toroidal view residency and refresh strips.");
+        (anyMovedLevelRebuilt ||
+         (anyPartialRefresh && refreshedCells > 0U)),
+        "M30-18 moving the observer must alter view residency and refresh the moved levels.");
 
     const terrain::PhysicalTerrainPageKey
         physicalKeyAfter =

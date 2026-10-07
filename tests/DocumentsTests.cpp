@@ -1,3 +1,7 @@
+// These tests are written with assert(); keep it live in Release builds, where
+// NDEBUG would otherwise compile every check away.
+#undef NDEBUG
+
 #include <orbit/core/BuildInfo.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
 #include <orbit/documents/WorldDatabase.hpp>

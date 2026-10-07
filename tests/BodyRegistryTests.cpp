@@ -1,3 +1,7 @@
+// These tests are written with assert(); keep it live in Release builds, where
+// NDEBUG would otherwise compile every check away.
+#undef NDEBUG
+
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
 
@@ -189,9 +193,19 @@ int main()
     assert(
         frames.Contains(
             persistentBodyFrame));
+    // A body owns two frames: the body-fixed frame (orientation) hangs under the
+    // body's center frame (translation), which hangs under the system frame.
+    const auto* persistentRecord =
+        bodies.FindBody(stableBody);
+    assert(persistentRecord != nullptr);
     assert(
         frames.Parent(
             persistentBodyFrame) ==
+        std::optional<orbit::frames::FrameId>(
+            persistentRecord->centerFrame));
+    assert(
+        frames.Parent(
+            persistentRecord->centerFrame) ==
         std::optional<orbit::frames::FrameId>(
             persistentSystemFrame));
 

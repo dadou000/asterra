@@ -39,7 +39,7 @@ int main()
     }
 
     bool referenced = false;
-    for (const u32 index : grid.lightIndices)
+    for (const orbit::u32 index : grid.lightIndices)
     {
         if (index == 0U)
         {
