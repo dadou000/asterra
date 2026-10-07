@@ -1,5 +1,6 @@
 add_executable(OrbitStudio
     src/Main.cpp
+    src/EditorAppSupport.cpp
     src/RelaunchStudio.cpp
     src/HotReloadBootstrap.cpp
 )
