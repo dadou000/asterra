@@ -9,6 +9,18 @@ sources = [
   "apps/editor/src/Main.cpp",
   "apps/editor/src/EditorAppSupport.hpp",
   "apps/editor/src/EditorAppSupport.cpp",
+  "apps/editor/src/StudioPanels.hpp",
+  "apps/editor/src/StudioViewportPanel.cpp",
+  "apps/editor/src/StudioExplorerPanel.cpp",
+  "apps/editor/src/StudioPropertiesPanel.cpp",
+  "apps/editor/src/StudioPluginsPanel.cpp",
+  "apps/editor/src/StudioMaterialServicePanel.cpp",
+  "apps/editor/src/StudioPlatformServicesPanel.cpp",
+  "apps/editor/src/StudioOutputPanel.cpp",
+  "apps/editor/src/StudioBuildHost.hpp",
+  "apps/editor/src/StudioBuildHost.cpp",
+  "apps/editor/src/StudioPathNetworkHost.hpp",
+  "apps/editor/src/StudioPathNetworkHost.cpp",
   "apps/editor/src/HotReloadBootstrap.cpp",
   "apps/editor/src/RelaunchStudio.cpp",
   "apps/editor/CMakeLists.txt",
@@ -21,6 +33,7 @@ invariants = [
   "RelaunchStudio starts a fresh Studio process opened on a project manifest; the caller exits its own event loop afterwards and project-bound runtime state is intentionally rebuilt from scratch rather than hot-swapped.",
   "The RPC server listens on 127.0.0.1:4320 (/editor/mcp-rpc).",
   "Main.cpp is the composition root; the helpers it calls that do not capture its locals (path-network queries and routing profiles, project and initial-body bootstrap, id encoding for drag payloads, plugin panel sync, material preview colour, RPC notification toasts, FindPlayerExecutable, the per-frame CpuFrameTelemetry) live in EditorAppSupport.{hpp,cpp}, namespace orbit::editor_app::support, so editing one recompiles a small unit instead of the whole composition root.",
+  "Panels and hosts that used to be lambdas inside main() are classes with the same names for everything they captured: StudioPanelBase (StudioPanels.hpp) carries the application references (ui, worldSession, content, ...) and the world-session accessors (objects(), selection(), ...), and each panel class (Viewport, Explorer, Properties, Plugins, Material Service, Platform Services, Output) owns the state its draw callback keeps between frames and registers itself with Register(). StudioBuildHost owns the BuildService, the validate / cook / package actions, the build.* RPC methods and the Build panel; StudioPathNetworkHost owns route planning, the derived path products, their route/derived events and the path.route / path.geometry RPC queries. The frame loop and the menus call them (viewportPanel.pathPlacementMode, buildHost.PackageProjectBuild(...), pathNetwork.PollRoutes()); the process entry point is main() in HotReloadBootstrap.cpp, which calls OrbitStudioMain in Main.cpp.",
 ]
 related = ["/rules/ui", "/rules/hot-iteration", "/editor/mcp-rpc", "/editor/viewport"]
 depends_on = ["/apps/build-service", "/authoring/commands", "/authoring/content", "/authoring/content-wic", "/authoring/documents", "/authoring/plugins", "/authoring/scene", "/authoring/schema", "/authoring/selection", "/editor/mcp-rpc", "/editor/model", "/editor/studio-session", "/editor/studio-ui", "/editor/ui-toolkit", "/foundation/core", "/foundation/frames", "/foundation/hot-reload", "/foundation/jobs", "/foundation/platform", "/foundation/platform-services", "/foundation/runtime-session", "/rendering/post-process", "/rendering/render-graph", "/rendering/render-view", "/rendering/volumes/fields", "/rendering/volumes/solver", "/tools/dev-server", "/world/path-geometry", "/world/path-routing", "/world/paths", "/world/universe", "/world/world-model"]

@@ -1,17 +1,17 @@
 add_executable(OrbitStudio
     src/Main.cpp
     src/EditorAppSupport.cpp
+    src/StudioBuildHost.cpp
+    src/StudioPathNetworkHost.cpp
+    src/StudioExplorerPanel.cpp
+    src/StudioMaterialServicePanel.cpp
+    src/StudioOutputPanel.cpp
+    src/StudioPlatformServicesPanel.cpp
+    src/StudioPluginsPanel.cpp
+    src/StudioPropertiesPanel.cpp
+    src/StudioViewportPanel.cpp
     src/RelaunchStudio.cpp
     src/HotReloadBootstrap.cpp
-)
-
-# Keep the large editor translation unit unchanged while giving the small
-# bootstrap TU ownership of the real process entry point. This guarantees
-# hot-reload startup happens after C++ global initialization has completed.
-set_property(
-    SOURCE src/Main.cpp
-    APPEND PROPERTY COMPILE_DEFINITIONS
-        main=OrbitStudioMain
 )
 
 add_dependencies(OrbitStudio
