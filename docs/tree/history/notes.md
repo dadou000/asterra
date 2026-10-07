@@ -15,6 +15,12 @@ keywords = ["problems", "known issues", "primitives", "static mesh", "code chang
 "code change note: Eco mode" = "/legacy/code-change-eco-mode"
 "code change note: gizmo live drag" = "/legacy/code-change-gizmo-live-drag"
 "code change note: multibody viewport rendering" = "/legacy/code-change-multibody-viewport-rendering"
+"code change note: queue submit lifetime tracking" = "/legacy/code-change-queue-submit-lifetime-tracking"
+"code change note: cloud light-volume refresh skip" = "/legacy/code-change-cloud-light-volume-skip"
+"code change note: dead code removal (0.0.9 cleanup)" = "/legacy/code-change-dead-code-removal"
+"code change note: Studio Main.cpp split" = "/legacy/code-change-studio-main-split"
+"code change note: include/macro wrapper retirement" = "/legacy/code-change-wrapper-pattern-retirement"
+"code change note: test suite repair" = "/legacy/code-change-test-suite-repair"
 "Mountain terrain synthesis and optimization" = "/legacy/research-terrain-synthesis-and-optimization"
 +++
 

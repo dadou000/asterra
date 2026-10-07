@@ -9,7 +9,7 @@ Perspective Studio viewports show the other bodies in the active celestial syste
 - Canonical state: `UniverseComposition` body/frame geometry, authored appearance bindings, and the shared `SimulationClock` time.
 
 ## Primary insertion point
-- File: `engine/studio_ui/src/StudioViewportRendererBase.cpp`.
+- File: `engine/studio_ui/src/StudioViewportRenderer.cpp`.
 - Symbol/function: `StudioViewportRenderer::Compose`.
 - Reason: this is where active-body-only passes are selected and rendered. Background bodies belong in the same render graph and camera.
 

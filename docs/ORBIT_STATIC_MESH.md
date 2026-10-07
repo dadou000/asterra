@@ -13,7 +13,7 @@ Parent-frame Position (m), Euler Rotation (deg, Rz*Ry*Rx), Uniform Scale, Cast S
 | --- | --- |
 | Parse `.glb` / `.gltf` (sparse accessors, quantized attributes, node transforms baked, tangents and normals generated when missing, geometry grouped per material) | `engine/mesh_import` (CPU only, unit tested) |
 | Worker-thread load, PNG/JPEG decode (WIC `DecodeTextureMemory`), GPU upload through the frame's command list, mip chains, hot reload on file change | `engine/mesh_render` `MeshLibrary` |
-| Rasterise into the deferred surface buffer after terrain and proxies (class RigidGeometry / LocalMesh) | `MeshSurfaceRenderer`, wired in `StudioViewportRendererBase.cpp` |
+| Rasterise into the deferred surface buffer after terrain and proxies (class RigidGeometry / LocalMesh) | `MeshSurfaceRenderer`, wired in `StudioViewportRenderer.cpp` |
 
 Textures are uploaded as sRGB (base colour, emissive) or linear (normal, metallic-roughness) with a full mip chain and
 repeat addressing (`TextureDesc::mipLevels`, `repeatAddress`, `CommandList::GenerateMipmaps`).

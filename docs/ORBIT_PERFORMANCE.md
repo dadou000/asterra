@@ -117,7 +117,7 @@ Hot iteration: engine C++ change, picked up by the generation handoff; nothing i
 
 Found with the micro-profiler ([ORBIT_PROFILER.md](ORBIT_PROFILER.md)): climbing from the ground to orbit and back
 produced nine ~3 s main-thread stalls, every one inside `dxcompiler.dll` under
-`GpuFieldGenerator::GpuFieldGenerator` (`StudioViewportRendererBase.cpp`, `ComposeBase`).
+`GpuFieldGenerator::GpuFieldGenerator` (`StudioViewportRenderer.cpp`, `ComposeBase`).
 
 Cause: the adaptive coverage tier changes the clipmap config at a few altitudes, and `ComposeBase` treated any
 clipmap change as "rebuild everything", including the `GpuFieldGenerator`, which recompiles its compute shader on
