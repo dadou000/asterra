@@ -97,8 +97,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <cstddef>
 #include <cstring>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <functional>
@@ -106,6 +108,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -117,6 +120,59 @@ namespace orbit::editor_app
 {
 [[nodiscard]] bool RelaunchStudioWithProject(
     const std::filesystem::path& projectManifest);
+
+namespace
+{
+[[nodiscard]] orbit::u16 RpcPortFromEnvironment()
+{
+    constexpr unsigned int defaultPort = 4320;
+    std::array<char, 16> environmentValue{};
+    const char* configuredPort = nullptr;
+    bool hasConfiguredPort = false;
+#if defined(_MSC_VER)
+    std::size_t environmentSize = 0;
+    if (getenv_s(
+            &environmentSize,
+            environmentValue.data(),
+            environmentValue.size(),
+            "ORBIT_RPC_PORT") != 0)
+    {
+        throw std::invalid_argument(
+            "ORBIT_RPC_PORT could not be read.");
+    }
+    configuredPort = environmentValue.data();
+    hasConfiguredPort = environmentSize > 1;
+#else
+    configuredPort = std::getenv("ORBIT_RPC_PORT");
+    hasConfiguredPort =
+        configuredPort != nullptr &&
+        *configuredPort != '\0';
+#endif
+
+    if (!hasConfiguredPort)
+    {
+        return static_cast<orbit::u16>(defaultPort);
+    }
+
+    unsigned int port = 0;
+    const std::string_view value(configuredPort);
+    const auto [end, error] = std::from_chars(
+        value.data(),
+        value.data() + value.size(),
+        port);
+
+    if (error != std::errc{} ||
+        end != value.data() + value.size() ||
+        port == 0 ||
+        port > 65535)
+    {
+        throw std::invalid_argument(
+            "ORBIT_RPC_PORT must be an integer from 1 to 65535.");
+    }
+
+    return static_cast<orbit::u16>(port);
+}
+} // namespace
 }
 
 using namespace orbit::editor_app::support;
@@ -429,7 +485,7 @@ int orbit::editor_app::StudioApplication::Run(
 
         orbit::dev_server::DevServer
             rpcServer({
-                .port = 4320,
+                .port = RpcPortFromEnvironment(),
                 .maxMessageBytes =
                     1024U * 1024U
             });

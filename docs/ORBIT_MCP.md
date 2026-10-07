@@ -39,9 +39,34 @@ Start Studio (`Orbit.exe` / `OrbitStudio.exe <project>`). It listens on
 claude mcp add orbit-studio -- python <repo>/tools/mcp_server/orbit_editor_mcp_server.py
 ```
 
-`ORBIT_RPC_HOST`, `ORBIT_RPC_PORT`, `ORBIT_RPC_TIMEOUT` override the defaults.
+`ORBIT_RPC_HOST`, `ORBIT_RPC_PORT`, `ORBIT_RPC_TIMEOUT` configure the MCP
+adapter. Studio uses `ORBIT_RPC_PORT` too (default `4320`), so isolated local
+smoke runs can use a private loopback port without connecting to another Studio.
 The bridge opens one short connection per call, so a Studio relaunch never
 leaves it holding a dead socket.
+
+### Live crash smoke test
+
+`examples/mcp-smoke/` is a small, complete project with a startup world and a
+celestial system. The live smoke runner copies it into a unique directory under
+`build/`, points `LOCALAPPDATA` at disposable run data, launches the built
+unified Studio on a private RPC port, calls every tool advertised by the MCP
+adapter, then probes every unique RPC method referenced by the adapter. A
+normal JSON-RPC error (for example, a required argument was omitted) is an
+expected response; a dropped request, timeout, or Studio exit fails the run.
+All project and user-data mutations stay in the disposable copy.
+
+Build Orbit first, then run:
+
+```powershell
+python tools/tests/mcp_live_smoke.py --exe Orbit.exe
+```
+
+This is an opt-in Windows/Vulkan smoke test, not part of the fast headless CTest
+suite. It may exercise tool defaults that mutate the disposable project. On a
+failure, the runner retains `studio.log`, the adapter log and the mutated
+project under `build/mcp-live-smoke/` for diagnosis; `--keep-run` retains them
+after a successful run as well.
 
 ### In-app feedback
 

@@ -2,11 +2,55 @@
 import re
 import shutil
 import subprocess
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def cmake_generator_args():
+    """Reuse the configured toolchain when the repo already has a build tree."""
+    if os.name == "nt" and shutil.which("ninja"):
+        compiler = None
+        vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / \
+            "Microsoft Visual Studio/Installer/vswhere.exe"
+        if vswhere.exists():
+            install = subprocess.run(
+                [str(vswhere), "-latest", "-property", "installationPath"],
+                capture_output=True, text=True, check=False).stdout.strip()
+            compiler_root = Path(install) / "VC/Tools/MSVC" if install else None
+            if compiler_root and compiler_root.exists():
+                compilers = sorted(compiler_root.glob("*/bin/Hostx64/x64/cl.exe"))
+                if compilers:
+                    compiler = compilers[-1].as_posix()
+        if compiler:
+            # This harness only inspects CMake targets. Ninja plus a forced
+            # compiler avoids running a throwaway MSBuild compile probe.
+            return ["-G", "Ninja", "-DCMAKE_SYSTEM_NAME=Generic",
+                    f"-DCMAKE_CXX_COMPILER={compiler}",
+                    "-DCMAKE_CXX_COMPILER_ID=MSVC",
+                    "-DCMAKE_CXX_COMPILER_VERSION=19.44",
+                    "-DCMAKE_CXX_COMPILER_FORCED=TRUE",
+                    "-DCMAKE_CXX_COMPILER_WORKS=TRUE",
+                    "-DCMAKE_CXX_COMPILE_FEATURES=cxx_std_23"]
+    cache = ROOT / "build" / "CMakeCache.txt"
+    if not cache.exists():
+        return []
+    values = {}
+    for line in cache.read_text(errors="replace").splitlines():
+        if line.startswith("CMAKE_GENERATOR:") or line.startswith("CMAKE_GENERATOR_INSTANCE:"):
+            key, _, value = line.partition("=")
+            values[key.split(":", 1)[0]] = value
+    args = []
+    generator = values.get("CMAKE_GENERATOR")
+    instance = values.get("CMAKE_GENERATOR_INSTANCE")
+    if generator:
+        args.extend(["-G", generator])
+    if instance:
+        args.append(f"-DCMAKE_GENERATOR_INSTANCE={instance}")
+    return args
 
 
 @unittest.skipUnless(shutil.which("cmake"), "CMake is needed for target graph checks")
@@ -65,6 +109,7 @@ endif()
                         build = directory / f"build-{testing}-{validation}"
                         result = subprocess.run([
                             "cmake", "-S", str(source), "-B", str(build),
+                            *cmake_generator_args(),
                             f"-DBUILD_TESTING={'ON' if testing else 'OFF'}",
                             f"-DORBIT_ENABLE_VALIDATION_TOOLS={'ON' if validation else 'OFF'}",
                         ], capture_output=True, text=True)
