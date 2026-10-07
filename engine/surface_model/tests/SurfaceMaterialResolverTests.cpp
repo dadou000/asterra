@@ -1,6 +1,5 @@
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain_material_column/SurfaceResolver.hpp>
-#include <orbit/terrain_render/SurfaceMaterial.hpp>
 
 #include <array>
 #include <cmath>
@@ -296,24 +295,6 @@ void TestWetBasaltForestAddsMoss()
                 Bedrock) >
             0.0F,
         "Forest biome erased exposed basalt without a full physical overlay.");
-
-    const auto packed =
-        terrain_render::
-            MakeSurfaceMaterialRenderInput(
-                blend);
-
-    RequireNear(
-        packed.TotalWeight(),
-        1.0,
-        2.0e-5,
-        "Renderer changed the canonical M21 blend normalization.");
-
-    Require(
-        packed.exposedBedrock ==
-            terrain_geology::
-                reference_rock::
-                    Basalt,
-        "Renderer lost exposed basalt identity.");
 }
 
 void TestDryBasaltDesertAddsDust()

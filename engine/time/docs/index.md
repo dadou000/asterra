@@ -1,18 +1,17 @@
 +++
 path = "/foundation/time"
-title = "Simulation time and clock"
+title = "Simulation time"
 kind = "subsystem"
 status = "stable"
-summary = "SimulationTime is the authoritative simulation timeline; SimulationClock advances it in running, paused or manually stepped modes and accumulates interpolation time separately."
+summary = "SimulationTime is the authoritative simulation timeline (header-only). The running, paused and stepped clock that advances it for Studio lives in studio_session (SimulationClock)."
 owner_module = "OrbitTime"
-keywords = ["time", "simulation clock", "simulation time", "step", "pause", "fixed step"]
+keywords = ["time", "simulation time", "epoch"]
 sources = [
-  "engine/time/include/orbit/time/SimulationClock.hpp",
   "engine/time/include/orbit/time/SimulationTime.hpp",
   "engine/time/CMakeLists.txt"]
-symbols = ["SimulationClockDesc", "SimulationTime"]
+symbols = ["SimulationTime"]
 invariants = [
-  "Manual fixed stepping is valid in either paused or running mode: it advances authoritative simulation time immediately and leaves interpolation accumulation unchanged."]
+  "OrbitTime is an interface library: SimulationTime is the only type and it is header-only. The clock that advances it for Studio is engine/studio_session SimulationClock (/editor/studio-session)."]
 related = ["/foundation/frames", "/world/universe"]
 depends_on = ["/foundation/core"]
 used_by = ["/celestial/gravity", "/celestial/orbits", "/celestial/rotation", "/foundation/frames", "/rendering/volumes/representation", "/world/path-geometry", "/world/path-routing", "/world/universe", "/world/world-model"]

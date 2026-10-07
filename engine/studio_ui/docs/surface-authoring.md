@@ -33,7 +33,7 @@ invariants = [
   "terrain.cache_stats (read-only, MCP orbit_terrain_cache_stats) returns terrain, viewport, cache{hits, misses, generations, insertions, evictions, resident_pages, resident_bytes, hit_rate_percent}, stationary{frames, cache_hits, cache_misses, hit_rate_percent}, physical_lod, semantic_revision and surface_source_revision. It matches the panel's 'M26 Cache' row (status.cacheStats) and the stationary part of its 'M26 cache' row; geology/biome revisions, process summary, base biome, frame CPU, M06 page counters, edit-to-Ready times and streaming totals are visible only in the panel.",
   "SetAutomationCoverageMode(true) forces the Advanced biome and process sections open so the real-device smoke gate renders every control; normal Studio leaves it off and keeps the user's disclosure choices.",
 ]
-related = ["/editor/studio-ui", "/editor/studio-session", "/editor/model", "/editor/mcp-rpc", "/editor/viewport", "/rendering/terrain/gpu-cache", "/rendering/terrain/invalidation", "/rendering/terrain/biomes", "/rendering/terrain/erosion", "/rendering/terrain/relief"]
+related = ["/editor/studio-ui", "/editor/studio-session", "/editor/model", "/editor/mcp-rpc", "/editor/viewport", "/rendering/terrain/gpu-cache", "/rendering/terrain/invalidation", "/rendering/terrain/biomes", "/rendering/terrain/erosion"]
 depends_on = ["/editor/studio-session", "/editor/model"]
 used_by = ["/editor/studio-ui"]
 verify = [

@@ -25,7 +25,6 @@
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 #include <orbit/terrain_material_column/SurfaceResolver.hpp>
-#include <orbit/terrain_render/SurfaceMaterial.hpp>
 #include <orbit/terrain_scatter/DeterministicScatter.hpp>
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
 #include <orbit/terrain_water/WaterService.hpp>
@@ -1044,24 +1043,18 @@ void TestExposureBurialDrivesRenderedMaterial()
 
             return std::tuple{
                 physical,
-                blend,
-                terrain_render::
-                    MakeSurfaceMaterialRenderInput(
-                        blend)
+                blend
             };
         };
 
     const auto [
         covered,
-        coveredBlend,
-        coveredRender] =
+        coveredBlend] =
         resolve();
 
     Require(
         covered.material ==
                 ExposedSurfaceKind::Debris &&
-        !coveredRender.
-            exposedBedrock.IsValid() &&
         NearlyEqual(
             coveredBlend.Weight(
                 RenderedSurfaceMaterialKind::
@@ -1085,16 +1078,12 @@ void TestExposureBurialDrivesRenderedMaterial()
 
     const auto [
         exposed,
-        exposedBlend,
-        exposedRender] =
+        exposedBlend] =
         resolve();
 
     Require(
         exposed.BedrockExposed() &&
         exposed.exposedRock ==
-            terrain_geology::
-                reference_rock::Basalt &&
-        exposedRender.exposedBedrock ==
             terrain_geology::
                 reference_rock::Basalt &&
         NearlyEqual(
@@ -1124,8 +1113,7 @@ void TestExposureBurialDrivesRenderedMaterial()
 
     const auto [
         buried,
-        buriedBlend,
-        buriedRender] =
+        buriedBlend] =
         resolve();
 
     Require(
@@ -1134,8 +1122,6 @@ void TestExposureBurialDrivesRenderedMaterial()
             substrate &&
         buried.material ==
             ExposedSurfaceKind::Sand &&
-        !buriedRender.
-            exposedBedrock.IsValid() &&
         NearlyEqual(
             buriedBlend.Weight(
                 RenderedSurfaceMaterialKind::

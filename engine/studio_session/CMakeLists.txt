@@ -1,8 +1,4 @@
 add_library(OrbitStudioSession STATIC
-    src/BezierHandleEditor.cpp
-    src/StudioAuthoringBinding.cpp
-    src/StudioCelestialRoundTripVerifier.cpp
-    src/StudioCelestialValidationScenario.cpp
     src/StudioSession.cpp
     src/SimulationClock.cpp
     src/StudioRuntimeBinding.cpp
@@ -17,9 +13,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioTerrainStatusRpc.cpp
     src/StudioTerrainValidationScenario.cpp
     src/StudioWorkspace.cpp
-    src/StudioWorkspaceRpcHost.cpp
     src/ProjectBrowserModel.cpp
-    src/ProjectSettingsModel.cpp
     src/UniverseBoundPathCache.cpp
     src/UniverseBoundRoutePlanner.cpp
     src/ViewportTargetRegistry.cpp
@@ -107,8 +101,6 @@ if(BUILD_TESTING)
         NAME Orbit.StudioRuntimeBinding
         COMMAND OrbitStudioRuntimeBindingTests
     )
-
-
 
     add_executable(OrbitStudioTerrainAuthoringInvalidationTests
         tests/StudioTerrainAuthoringInvalidationTests.cpp
@@ -282,41 +274,6 @@ if(BUILD_TESTING)
         COMMAND OrbitStudioTerrainRuntimeBridgeTests
     )
 
-    add_executable(OrbitStudioAuthoringBindingTests
-        tests/StudioAuthoringBindingTests.cpp
-    )
-
-    target_link_libraries(OrbitStudioAuthoringBindingTests
-        PRIVATE
-            Orbit::StudioSession
-            Orbit::WorldModel
-    )
-
-    target_compile_features(OrbitStudioAuthoringBindingTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitStudioAuthoringBindingTests)
-
-    add_test(
-        NAME Orbit.StudioAuthoringBinding
-        COMMAND OrbitStudioAuthoringBindingTests
-    )
-
-    add_executable(OrbitBezierHandleEditorTests
-        tests/BezierHandleEditorTests.cpp
-    )
-
-    target_link_libraries(OrbitBezierHandleEditorTests
-        PRIVATE
-            Orbit::StudioSession
-    )
-
-    target_compile_features(OrbitBezierHandleEditorTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitBezierHandleEditorTests)
-
-    add_test(
-        NAME Orbit.BezierHandleEditor
-        COMMAND OrbitBezierHandleEditorTests
-    )
-
     add_executable(OrbitStudioWorkspaceTests
         tests/StudioWorkspaceTests.cpp
     )
@@ -350,41 +307,6 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.ProjectBrowserModel
         COMMAND OrbitProjectBrowserModelTests
-    )
-
-    add_executable(OrbitProjectSettingsModelTests
-        tests/ProjectSettingsModelTests.cpp
-    )
-
-    target_link_libraries(OrbitProjectSettingsModelTests
-        PRIVATE
-            Orbit::StudioSession
-    )
-
-    target_compile_features(OrbitProjectSettingsModelTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitProjectSettingsModelTests)
-
-    add_test(
-        NAME Orbit.ProjectSettingsModel
-        COMMAND OrbitProjectSettingsModelTests
-    )
-
-    add_executable(OrbitStudioWorkspaceRpcHostTests
-        tests/StudioWorkspaceRpcHostTests.cpp
-    )
-
-    target_link_libraries(OrbitStudioWorkspaceRpcHostTests
-        PRIVATE
-            Orbit::StudioSession
-            Orbit::WorldModel
-    )
-
-    target_compile_features(OrbitStudioWorkspaceRpcHostTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitStudioWorkspaceRpcHostTests)
-
-    add_test(
-        NAME Orbit.StudioWorkspaceRpcHost
-        COMMAND OrbitStudioWorkspaceRpcHostTests
     )
 
     add_executable(OrbitUniverseBoundRoutePlannerTests
@@ -477,45 +399,4 @@ if(BUILD_TESTING)
         COMMAND OrbitSimulationClockTests
     )
 
-
-    add_executable(OrbitStudioCelestialRoundTripVerifierTests
-        tests/StudioCelestialRoundTripVerifierTests.cpp
-    )
-
-    target_link_libraries(OrbitStudioCelestialRoundTripVerifierTests
-        PRIVATE
-            Orbit::StudioSession
-            Orbit::WorldModel
-    )
-
-    target_compile_features(
-        OrbitStudioCelestialRoundTripVerifierTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(
-        OrbitStudioCelestialRoundTripVerifierTests)
-
-    add_test(
-        NAME Orbit.StudioCelestialRoundTripVerifier
-        COMMAND OrbitStudioCelestialRoundTripVerifierTests
-    )
-
-
-    add_executable(OrbitStudioCelestialValidationScenarioTests
-        tests/StudioCelestialValidationScenarioTests.cpp
-    )
-
-    target_link_libraries(OrbitStudioCelestialValidationScenarioTests
-        PRIVATE
-            Orbit::StudioSession
-            Orbit::WorldModel
-    )
-
-    target_compile_features(
-        OrbitStudioCelestialValidationScenarioTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(
-        OrbitStudioCelestialValidationScenarioTests)
-
-    add_test(
-        NAME Orbit.StudioCelestialValidationScenario
-        COMMAND OrbitStudioCelestialValidationScenarioTests
-    )
 endif()

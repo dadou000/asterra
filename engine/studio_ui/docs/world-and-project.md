@@ -8,7 +8,7 @@ ProjectAuthoringUi (the Project Browser), WorldDocumentsUi and ProjectSettingsUi
 wrapping ProjectSettingsUiBase with project lighting/display defaults) are presentation over studio_session models, ProjectDocument and StudioSession. \
 This block maps each button to its model call and to the project.* / world.* RPC and MCP tools, and lists the project operations that have none."""
 owner_module = "OrbitStudioUi"
-keywords = ["project browser", "world documents", "project settings", "recent projects", "create project", "open project", "startup world", "create world", "rename world", "close world", "project switch", "relaunch", "lighting display defaults", "LightingDisplay.orbitcfg", "project.open", "world.open", "ProjectBrowserModel", "ProjectSettingsModel"]
+keywords = ["project browser", "world documents", "project settings", "recent projects", "create project", "open project", "startup world", "create world", "rename world", "close world", "project switch", "relaunch", "lighting display defaults", "LightingDisplay.orbitcfg", "project.open", "world.open", "ProjectBrowserModel"]
 sources = [
   "engine/studio_ui/src/ProjectAuthoringUi.cpp",
   "engine/studio_ui/include/orbit/studio_ui/ProjectAuthoringUi.hpp",
@@ -18,9 +18,7 @@ sources = [
   "engine/studio_ui/src/ProjectSettingsUiBase.cpp",
   "engine/studio_ui/include/orbit/studio_ui/ProjectSettingsUi.hpp",
   "engine/studio_session/include/orbit/studio_session/ProjectBrowserModel.hpp",
-  "engine/studio_session/include/orbit/studio_session/ProjectSettingsModel.hpp",
   "engine/studio_session/src/StudioSession.cpp",
-  "engine/studio_session/src/StudioWorkspaceRpcHost.cpp",
   "engine/editor_session/src/WorldDocumentsModel.cpp",
   "engine/editor_rpc/src/EditorSessionRpcHost.cpp",
   "apps/editor/src/Main.cpp",
@@ -30,11 +28,9 @@ symbols = [
   "WorldDocumentsUi",
   "ProjectSettingsUi",
   "ProjectBrowserModel",
-  "ProjectSettingsModel",
   "SetWorkspaceChangedCallback",
   "DispatchWorldLifecycle",
   "WorldDocumentsModel",
-  "StudioWorkspaceRpcHost",
   "RelaunchStudioWithProject",
 ]
 invariants = [
@@ -44,7 +40,7 @@ invariants = [
   "Project create/open/close in the Project Browser go through ProjectBrowserModel into StudioWorkspace, which builds and validates a complete candidate project + session before replacing the current one; a failed open leaves the workspace and the recent-projects (MRU) order unchanged. The only persisted browser state is the MRU list of Project.orbit.toml paths.",
   "ProjectAuthoringUi::CreateProject / OpenProject are the single callable operations behind the buttons and the project.create / project.open RPC registered in apps/editor/src/Main.cpp; both run NotifyWorkspaceChanged. In the editor the browser's own StudioWorkspace is separate from the editing one: a switch saves the project, checkpoints the world, closes the browser workspace and relaunches Studio on the chosen project (RPC result carries relaunching=true), so clients must poll project.info for the new project id.",
   "ProjectSettingsUi.cpp includes ProjectSettingsUiBase.cpp with `Register` and `Draw` macro-renamed to RegisterBase / DrawBase and appends the 'Lighting / Display Defaults' section; the base file is not its own CMake source and must stay includable. Lighting and display defaults are project-owned (LightingDisplay.orbitcfg in the project root), clamped on input, and applied through lighting::SetStudioLightingRuntimeConfig and PublishStudioDisplayDefaultsRuntime; Display Diagnostics overrides them per session without rewriting the file.",
-  "Project display name is written through ProjectDocument (ProjectSettingsModel::SetDisplayName); startup-world changes go through StudioSession::SetStartupWorld. ProjectSettingsUi::SynchronizeAuthority re-reads the manifest name each draw and resets the edit buffer when the persisted name changes.",
+  "Project display name is written through ProjectDocument; startup-world changes go through StudioSession::SetStartupWorld. ProjectSettingsUi::SynchronizeAuthority re-reads the manifest name each draw and resets the edit buffer when the persisted name changes.",
   "Project Settings and World Documents are registered only by ProjectSettingsUi and WorldDocumentsUi (session-bound); ProjectAuthoringUi registers only the Project Browser (RegisterProjectBrowser). Its workspace-bound copies of the settings and world panels, and StudioUiBundle which registered them, were removed in 0.0.9 because nothing used them.",
   "A project operation reachable only through a button is a parity gap (AGENTS.md): see 'Known gaps' before adding UI-only project actions.",
 ]
@@ -53,9 +49,7 @@ depends_on = ["/editor/studio-session", "/editor/session", "/authoring/documents
 used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.ProjectBrowserModel",
-  "ctest -R Orbit.ProjectSettingsModel",
   "ctest -R Orbit.WorldDocumentsModel",
-  "ctest -R Orbit.StudioWorkspaceRpcHost",
   "ctest -R Orbit.StudioSession",
 ]
 verified = "55d48117"
@@ -153,14 +147,14 @@ The Project Browser has Recent Projects (filter box above six entries), Find Pro
 | world catalog | `world.active`, `world.list`, `world.describe` | `orbit_world_active`, `orbit_world_list`, `orbit_world_describe` |
 | world lifecycle and metadata | `world.create`, `world.open`, `world.close`, `world.set_startup`, `world.set_display_name` | `orbit_world_create`, `orbit_world_open`, `orbit_world_close`, `orbit_world_set_startup`, `orbit_world_set_display_name` |
 
-`world.open` and `world.close` must be standalone requests (`EditorSessionRpcHost` rejects them inside a batch). `project.create` / `project.open` are registered by `apps/editor/src/Main.cpp` over `ProjectAuthoringUi`; the in-process, transactional variants in `StudioWorkspaceRpcHost` (`project.create/open/close/set_display_name`) are instantiated only by tests in this repository.
+`world.open` and `world.close` must be standalone requests (`EditorSessionRpcHost` rejects them inside a batch). `project.create` / `project.open` are registered by `apps/editor/src/Main.cpp` over `ProjectAuthoringUi`. The in-process, transactional variants that used to live in `StudioWorkspaceRpcHost` were removed in 0.0.9 (no app instantiated them).
 
 ## Known gaps
 
 Verified by searching every `.name = "..."` registration under `engine/` and `apps/` and every tool in `tools/mcp_server/orbit_editor_mcp_server.py`:
 
-- Close Project (Project Browser): `project.close` exists only in `StudioWorkspaceRpcHost`, which no app instantiates, and has no MCP tool.
-- Save Project Name (Project Settings): `project.set_display_name` is likewise only in `StudioWorkspaceRpcHost`; no MCP tool.
+- Close Project (Project Browser): there is no `project.close` RPC or MCP tool.
+- Save Project Name (Project Settings): there is no `project.set_display_name` RPC or MCP tool.
 - Developer Validation buttons (Save, Reopen & Verify Terrain; Run M15 Terrain Validation Scenario): no RPC or MCP tool.
 - Lighting / Display Defaults (Save, Reload Project Defaults, Adopt Session Lighting): no RPC or MCP tool reads or writes `LightingDisplay.orbitcfg`.
 

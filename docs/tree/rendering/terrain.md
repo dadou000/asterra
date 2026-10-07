@@ -28,7 +28,6 @@ related = ["/rendering/terrain/clipmaps"]
 "terrain debugging overlays" = "clipmaps/debugging"
 "geology, rock types, stratigraphy" = "geology"
 "uplift, tectonics, mountain belts" = "macro-geology"
-"base relief, ridges, valleys, derivatives" = "relief"
 "craters, impacts, ejecta" = "impacts"
 "material column, regolith, soil, exposed surface, caves/local 3D" = "material-column"
 "drainage, flow routing, depression filling" = "hydrology"
@@ -50,7 +49,7 @@ related = ["/rendering/terrain/clipmaps"]
 | Module (`engine/`) | Role (see public headers) |
 | --- | --- |
 | `terrain` | contracts, analytic terrain source, global fields, tectonic descriptors |
-| `terrain_geology`, `terrain_macro_geology`, `terrain_relief`, `terrain_impacts` | materials/stratigraphy, macro geology field, base relief, impact craters |
+| `terrain_geology`, `terrain_macro_geology`, `terrain_impacts` | materials/stratigraphy, macro geology field, impact craters |
 | `terrain_hydrology`, `terrain_erosion`, `terrain_water` | drainage pages and river graph, erosion operators, lake/river/coastal water and `WaterService` |
 | `terrain_material_column`, `terrain_biome`, `terrain_scatter` | physical material column and surface resolver, biome service, deterministic scatter |
 | `terrain_region`, `terrain_cache`, `terrain_dependency`, `terrain_stream` | derived regions and boundary exchange, page cache, dependency invalidation graph, toroidal residency/streaming |

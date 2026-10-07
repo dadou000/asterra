@@ -1,8 +1,7 @@
 #include <orbit/core/StrongId.hpp>
-#include <orbit/time/SimulationClock.hpp>
 
 #include <cassert>
-#include <chrono>
+#include <string>
 
 namespace
 {
@@ -47,59 +46,6 @@ int main()
     assert(
         TestId::Parse(random.ToString()) ==
         random);
-
-    using namespace std::chrono_literals;
-
-    orbit::time::SimulationClock clock({
-        .epoch = {
-            .microsecondsFromEpoch =
-                1'000'000
-        },
-        .fixedStep = 10ms,
-        .maximumFixedStepsPerAdvance = 8
-    });
-
-    auto advance =
-        clock.Advance(25ms);
-
-    assert(advance.fixedSteps == 2);
-    assert(
-        advance.fixedTime.microsecondsFromEpoch ==
-        1'020'000);
-    assert(
-        advance.renderTime.microsecondsFromEpoch ==
-        1'025'000);
-    assert(
-        advance.interpolationAlpha > 0.49 &&
-        advance.interpolationAlpha < 0.51);
-
-    clock.SetPaused(true);
-    advance = clock.Advance(100ms);
-    assert(advance.fixedSteps == 0);
-    assert(
-        advance.renderTime.microsecondsFromEpoch ==
-        1'025'000);
-
-    const auto stepped =
-        clock.Step(2);
-    assert(
-        stepped.fixedTime.microsecondsFromEpoch ==
-        1'040'000);
-    assert(
-        stepped.renderTime.microsecondsFromEpoch ==
-        1'045'000);
-
-    clock.SetPaused(false);
-    clock.SetTimeScale(2.0);
-    advance = clock.Advance(5ms);
-
-    assert(advance.fixedSteps == 1);
-    assert(
-        advance.fixedTime.microsecondsFromEpoch ==
-        1'050'000);
-    assert(
-        advance.renderTime.microsecondsFromEpoch ==
-        1'055'000);
 
     return 0;
 }

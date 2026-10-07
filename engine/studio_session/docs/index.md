@@ -3,24 +3,18 @@ path = "/editor/studio-session"
 title = "Studio session, terrain runtime bridge and viewport targets"
 kind = "subsystem"
 status = "stable"
-summary = "The composition layer of Studio's runtime: StudioSession and authoring/runtime bindings, the terrain runtime bridge with its rebuild scheduler and physical-page service, project browser and settings models, viewport target registry and workspace RPC host, the simulation clock binding, the Bezier handle editor and the validation/round-trip scenarios."
+summary = "The composition layer of Studio's runtime: StudioSession and runtime bindings, the terrain runtime bridge with its rebuild scheduler and physical-page service, the project browser model, the viewport target registry, the simulation clock binding and the terrain validation/round-trip scenarios. The authoring binding, project settings model, workspace RPC host, Bezier handle editor and celestial validation scenarios were removed in 0.0.9 because no application linked them."
 owner_module = "OrbitStudioSession"
-keywords = ["studio session", "runtime binding", "terrain runtime bridge", "rebuild scheduler", "physical page service", "project browser", "project settings", "viewport target", "workspace", "bezier handle", "validation scenario"]
+keywords = ["studio session", "runtime binding", "terrain runtime bridge", "rebuild scheduler", "physical page service", "project browser", "viewport target", "workspace", "validation scenario"]
 sources = [
-  "engine/studio_session/include/orbit/studio_session/BezierHandleEditor.hpp",
   "engine/studio_session/include/orbit/studio_session/ProjectBrowserModel.hpp",
-  "engine/studio_session/include/orbit/studio_session/ProjectSettingsModel.hpp",
   "engine/studio_session/include/orbit/studio_session/SimulationClock.hpp",
-  "engine/studio_session/include/orbit/studio_session/StudioAuthoringBinding.hpp",
-  "engine/studio_session/include/orbit/studio_session/StudioCelestialRoundTripVerifier.hpp",
-  "engine/studio_session/include/orbit/studio_session/StudioCelestialValidationScenario.hpp",
   "engine/studio_session/include/orbit/studio_session/StudioRuntimeBinding.hpp",
   "engine/studio_session/src/StudioTerrainStatusRpc.cpp",
   "engine/studio_session/CMakeLists.txt",
 ]
-symbols = ["BezierHandleEditor", "RecentProjectItem", "ProjectSettingsSnapshot", "SimulationClock", "StudioAuthoringBinding", "StudioCelestialRoundTripReport", "StudioCelestialValidationScenarioStep", "StudioRuntimeSnapshot"]
+symbols = ["RecentProjectItem", "SimulationClock", "StudioRuntimeSnapshot"]
 invariants = [
-  "A viewport Bezier-handle drag is one transactional edit session committed as ONE undoable command transaction; intermediate drag samples never become independent undo entries.",
   "Terrain authoring edits flow through StudioTerrainAuthoringInvalidation into the dependency graph (/rendering/terrain/invalidation) and the rebuild scheduler; physical page uploads carry an upload revision (BeginUpload/CompleteUpload) so a stale completion can be rejected (/rendering/terrain/gpu-cache).",
   "StudioSession registers its own RPC methods on the session dispatcher in its constructor: the viewport-target methods (view.*) and the read-only terrain.cache_stats (StudioTerrainStatusRpc.cpp, a thin reader over StudioTerrainStatusInspector and StudioTerrainPerformanceDiagnostics that never mutates terrain state).",
 ]
@@ -35,11 +29,8 @@ verify = [
   "ctest -R Orbit.StudioTerrainPhysicalPageService",
   "ctest -R Orbit.StudioTerrainWorldReopen",
   "ctest -R Orbit.StudioTerrainRuntimeBridge",
-  "ctest -R Orbit.StudioAuthoringBinding",
-  "ctest -R Orbit.BezierHandleEditor",
   "ctest -R Orbit.StudioWorkspace",
   "ctest -R Orbit.ProjectBrowserModel",
-  "ctest -R Orbit.ProjectSettingsModel",
   "ctest -R Orbit.ViewportTargetRegistry",
   "ctest -R Orbit.SimulationClock",
 ]

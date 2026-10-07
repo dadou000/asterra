@@ -3,9 +3,9 @@ path = "/world/world-model"
 title = "World model (capability bindings and composition)"
 kind = "subsystem"
 status = "stable"
-summary = "Maps the semantic scene's capabilities to the runtime parameters of every celestial and surface subsystem (ResolveAtmosphereBody, cloud/ocean/ring/giant/compact/magnetosphere/small-body bindings, UniverseComposition, lighting service, primitive/proxy/light/material bindings), defines the capability schemas and hosts property provenance and the physical property and atmosphere solvers."
+summary = "Maps the semantic scene's capabilities to the runtime parameters of every celestial and surface subsystem (ResolveAtmosphereBody, cloud/ocean/ring/giant/compact/magnetosphere/small-body bindings, UniverseComposition, lighting service, primitive/proxy/light/material bindings), defines the capability schemas and hosts property provenance and the atmosphere property solver. The V0.0.6 physical property solver (mean density, rotation speed relations) was removed in 0.0.9 because nothing linked it."
 owner_module = "OrbitWorldModel"
-keywords = ["world model", "binding", "capability", "universe composition", "resolve body", "schema", "provenance", "physical property solver", "composition", "semantic to runtime"]
+keywords = ["world model", "binding", "capability", "universe composition", "resolve body", "schema", "provenance", "composition", "semantic to runtime"]
 sources = [
   "engine/world_model/include/orbit/world_model/AtmospherePropertySolver.hpp",
   "engine/world_model/include/orbit/world_model/CelestialAtmosphereBinding.hpp",
@@ -25,7 +25,6 @@ invariants = [
   "Duplicate enabled capabilities of one kind on a body are rejected (for example Physical Scattering for the atmosphere).",
   "A stored property with no provenance record counts as Explicit + Locked, so solvers never overwrite legacy or hand-authored values; solvers return conflicts instead (/rendering/atmosphere/authoring-solver).",
   "The permanent ownership of world semantic IDs lives in Orbit::WorldModel; editor aliases exist only for compatibility.",
-  "All physical quantities are SI internally (Physical Property Solver v1: mean density, equatorial rotation speed and related relations).",
 ]
 related = ["/world/universe", "/celestial", "/rendering/atmosphere/authoring-solver", "/editor/model", "/legacy/research-v006-physical-property-solver-v1"]
 depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/celestial/compact-objects", "/celestial/giants", "/celestial/gravity", "/celestial/lighting", "/celestial/magnetosphere", "/celestial/ocean", "/celestial/orbits", "/celestial/radiometry", "/celestial/rings", "/celestial/rotation", "/celestial/small-bodies", "/celestial/stellar", "/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time", "/rendering/atmosphere", "/rendering/clouds", "/world/universe"]
@@ -34,7 +33,6 @@ verify = [
   "ctest -R Orbit.UniverseComposition",
   "ctest -R Orbit.CelestialCapabilitySchemas",
   "ctest -R Orbit.PropertyProvenance",
-  "ctest -R Orbit.PhysicalPropertySolver",
   "ctest -R Orbit.AtmospherePropertySolver",
   "ctest -R Orbit.CelestialAtmosphereBinding",
   "ctest -R Orbit.CelestialCloudComposition",

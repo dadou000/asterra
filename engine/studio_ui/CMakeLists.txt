@@ -23,7 +23,6 @@ add_library(OrbitStudioUi STATIC
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
-    src/V007PerformanceCapture.cpp
     src/V007ValidationCommands.cpp
     src/V007ValidationScenarios.cpp
     src/VolumeAuthoringM36.cpp
@@ -402,24 +401,6 @@ if(BUILD_TESTING)
     # M44 pins the durable report schema plus RT/non-RT budget independence and
     # near/far volume Auto work reduction. Real GPU captures remain a hardware
     # validation activity and are never fabricated by this CPU regression.
-    add_executable(OrbitV007PerformanceCaptureTests
-        tests/V007PerformanceCaptureTests.cpp
-    )
-
-    target_link_libraries(OrbitV007PerformanceCaptureTests
-        PRIVATE
-            Orbit::StudioUi
-    )
-
-    target_compile_features(
-        OrbitV007PerformanceCaptureTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitV007PerformanceCaptureTests)
-
-    add_test(
-        NAME Orbit.V007PerformanceCapture
-        COMMAND OrbitV007PerformanceCaptureTests
-    )
-
     # M45 destroys and reconstructs project/session/content authority around a
     # real SQLite world checkpoint, material asset, project display settings
     # and .orbitvol cache. Runtime-only radiance state is required to start
@@ -502,6 +483,6 @@ if(BUILD_TESTING)
     set_tests_properties(
         Orbit.V007IntegrationGate
         PROPERTIES
-            DEPENDS "Orbit.VolumeAuthoringWorkflow;Orbit.StudioLightingOverlayGeometry;Orbit.LightingSelectionInspection;Orbit.RuntimeProfilerSnapshot;Orbit.V007DeterministicValidation;Orbit.V007PerformanceCapture;Orbit.V007ProjectEquivalence"
+            DEPENDS "Orbit.VolumeAuthoringWorkflow;Orbit.StudioLightingOverlayGeometry;Orbit.LightingSelectionInspection;Orbit.RuntimeProfilerSnapshot;Orbit.V007DeterministicValidation;Orbit.V007ProjectEquivalence"
     )
 endif()

@@ -15,9 +15,9 @@ invariants = [
   "Baseline uplift reuses the existing deterministic tectonic state of GlobalTerrainFields (convergence/divergence masks, nearest and secondary plate continental identity, hotspot elevation) so 2D/global and 3D terrain never invent separate plate systems.",
   "Convergent boundaries give positive uplift forcing and divergent boundaries subsidence/rift forcing; continental/continental, mixed and oceanic/oceanic collisions have separate authored scales.",
   "No new authority types: MakeMountainBeltConstraint and MakeBasinConstraint create ordinary M04 uplift constraints, and imported rasters use the M04 RasterMaskConstraintPrimitive, so the editor, serializer and procedural graph keep one terrain-authoring model; no renderer texture or raster ownership path is added."]
-related = ["/world/terrain-constraints", "/rendering/terrain/relief", "/rendering/terrain/erosion"]
+related = ["/world/terrain-constraints", "/rendering/terrain/erosion"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts", "/world/planet-coordinates", "/world/terrain-constraints"]
-used_by = ["/editor/studio-session", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/relief"]
+used_by = ["/editor/studio-session", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion"]
 verify = [
   "ctest -R Orbit.TerrainMacroGeology"]
 verified = "b0a0de7f"

@@ -2,7 +2,7 @@
 path = "/editor/viewport/gizmo-camera-alignment"
 title = "Viewport gizmo lateral alignment"
 kind = "placement"
-status = "implemented"
+status = "stable"
 owner_module = "OrbitStudioUi"
 summary = "Align transform gizmo projections and hit rays with the Studio renderer's horizontal camera basis so lateral camera turns do not make the gizmo drift or rotate at an apparent double rate."
 keywords = ["gizmo", "viewport", "lateral", "camera", "projection", "basis"]

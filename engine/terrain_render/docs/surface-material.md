@@ -5,24 +5,21 @@ kind = "concept"
 status = "stable"
 owner_module = "OrbitTerrainRender"
 summary = """
-Of the five surface files in terrain_render only the surface effects (M38 stamps) reach the GPU: SurfaceEffectGpuBinding \
+Of the surface files in terrain_render only the surface effects (M38 stamps) reach the GPU: SurfaceEffectGpuBinding \
 uploads up to 512 body-fixed stamps to buffer slot 1 and BuildSurfaceEffectPixelShader splices a coating/emission stage \
-into the terrain pixel shader just before G-buffer output. SurfaceMaterial (M21) and PhysicalSurface (M18) are CPU \
-adapters that pack a resolved blend or exposed-surface state for a renderer; no shader or draw path reads them yet, and \
-terrain colour still comes from the eight packed biome weights."""
-keywords = ["surface effects", "stamps", "wetness", "soot", "ash", "sediment", "heat", "M38", "M21", "M18", "surface material", "physical surface", "SurfaceEffectGpuStamp", "g_surfaceEffects", "biome weights", "emission", "coating", "BuildSurfaceEffectPixelShader"]
+into the terrain pixel shader just before G-buffer output. PhysicalSurface (M18) is a CPU adapter that packs an \
+exposed-surface state for a renderer; no shader or draw path reads it yet, and terrain colour still comes from the \
+eight packed biome weights. The M21 SurfaceMaterial adapter was removed in 0.0.9 (nothing linked it)."""
+keywords = ["surface effects", "stamps", "wetness", "soot", "ash", "sediment", "heat", "M38", "M18", "physical surface", "SurfaceEffectGpuStamp", "g_surfaceEffects", "biome weights", "emission", "coating", "BuildSurfaceEffectPixelShader"]
 sources = [
-  "engine/terrain_render/src/SurfaceMaterial.cpp",
   "engine/terrain_render/src/PhysicalSurface.cpp",
   "engine/terrain_render/src/SurfaceEffects.cpp",
   "engine/terrain_render/src/SurfaceEffectShader.cpp",
   "engine/terrain_render/src/SurfaceEffectGpuBinding.cpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffectGpuBinding.hpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffects.hpp",
-  "engine/terrain_render/include/orbit/terrain_render/SurfaceMaterial.hpp",
   "engine/studio_ui/src/StudioViewportRendererBase.cpp"]
 symbols = [
-  "MakeSurfaceMaterialRenderInput",
   "MakePhysicalSurfaceRenderInput",
   "SurfaceEffectGpuStamp",
   "EvaluateSurfaceEffects",
@@ -33,9 +30,8 @@ symbols = [
   "GraphicsBufferSlot",
   "BuildVolumeSurfaceEffectRenderBatch"]
 invariants = [
-  "MakeSurfaceMaterialRenderInput throws std::invalid_argument for an invalid ResolvedSurfaceMaterialBlend and std::logic_error if a RenderedSurfaceMaterialKind index does not fit the 9-slot weights array (MaterialCount = 9: Bedrock, Regolith, Soil, Sand, Debris, Snow, Moss, Litter, Dust). Adding a kind means raising MaterialCount.",
   "PhysicalSurfaceRenderInput is built only from the canonical ExposedSurfaceState (MakePhysicalSurfaceRenderInput) so rendering never picks rock identity from biome weights; BedrockExposed() is simply material == Bedrock.",
-  "Neither SurfaceMaterialRenderInput nor PhysicalSurfaceRenderInput is consumed by a shader or by TerrainPreviewRenderer at this revision (only tests include them). The visible terrain colour comes from biome0/biome1 and drySurface in TerrainSurfaceShader.hpp; changing a material/physical-surface value cannot change pixels until a binding is written.",
+  "PhysicalSurfaceRenderInput is not consumed by a shader or by TerrainPreviewRenderer at this revision (only tests include it). The visible terrain colour comes from biome0/biome1 and drySurface in TerrainSurfaceShader.hpp; changing a material/physical-surface value cannot change pixels until a binding is written.",
   "SurfaceEffectGpuStamp is 32 bytes (static_assert) and matches the HLSL SurfaceEffectStamp field for field: float3 body-fixed direction, angular radius (rad), amount, effect id, two reserved floats. Stamps store a unit body-fixed direction, not a metre position, so footprints stay sub-metre at planet scale and survive floating-origin shifts.",
   "SurfaceEffectKind values are the shader's integer ids: Wetness 0, Soot 1, Ash 2, Sediment 3, Heat 4. Adding a kind changes the enum, SurfaceEffectInfluence, EvaluateSurfaceEffects, ApplySurfaceEffects and the HLSL if/else chain together.",
   "Capacity is SurfaceEffectGpuBinding::MaximumStampCount = 512, equal to the shader's loop bound; Set copies at most 512 stamps and zero-fills the rest. angularRadiusRadians <= 0 is the end sentinel: the shader breaks at the first such entry, so valid stamps must be packed first with a positive radius.",
@@ -72,9 +68,9 @@ steps = [
 docs = ["/rendering/volumes/render", "/rendering/terrain/clipmaps/shaders"]
 
 [[diagnose]]
-symptom = "a value in SurfaceMaterialRenderInput or PhysicalSurfaceRenderInput has no effect on the rendered terrain"
+symptom = "a value in PhysicalSurfaceRenderInput has no effect on the rendered terrain"
 steps = [
-  "Confirm with a search for MakeSurfaceMaterialRenderInput / MakePhysicalSurfaceRenderInput that no renderer code consumes the result: at this revision only tests call them.",
+  "Confirm with a search for MakePhysicalSurfaceRenderInput that no renderer code consumes the result: at this revision only tests call it.",
   "Terrain colour is computed in TerrainSurfaceShader.hpp from the eight biome weights packed in each sample (TerrainSampleValue.biomeWeights0/1) and drySurface; to make material or physical-surface data visible it has to be packed into the sample buffer or bound as a new resource, with the shader and BuildDrawConstants/pipeline resource counts updated together."]
 docs = ["/rendering/terrain/clipmaps/shaders", "/rendering/terrain/material-column"]
 
@@ -90,7 +86,6 @@ docs = ["/rendering/terrain/clipmaps/shaders"]
 
 | File | Role | Reaches the GPU? |
 | --- | --- | --- |
-| `SurfaceMaterial.cpp` | `MakeSurfaceMaterialRenderInput`: sums a validated `ResolvedSurfaceMaterialBlend`'s contributions into `weights[kind]` and records the bedrock `rock` id in `exposedBedrock`; `TotalWeight()` | no |
 | `PhysicalSurface.cpp` | `MakePhysicalSurfaceRenderInput`: copies material kind, substrate/exposed rock, exposed layer depth, moisture, standing-water depth and snow depth from `ExposedSurfaceState` | no |
 | `SurfaceEffects.cpp` | CPU reference of the effect maths: `EvaluateSurfaceEffects` (stamp falloff) and `ApplySurfaceEffects` (coating on a `SurfacePbrState`) | no (tests and parity) |
 | `SurfaceEffectShader.cpp` | `BuildSurfaceEffectPixelShader`: HLSL declarations plus the material stage injected into the pixel shader | yes |
@@ -119,7 +114,5 @@ The G-buffer meaning of the targets is described in `/rendering/terrain/clipmaps
 
 ## Not yet wired
 
-`SurfaceMaterialRenderInput` (nine material weights) and `PhysicalSurfaceRenderInput` are renderer-facing contracts: the
-milestone notes (`/legacy/v0-0-4-m21-surface-material-resolver`) say the first accepts only a validated blend and does not
-re-evaluate biome, slope, moisture or geology rules, and the second accepts only an `ExposedSurfaceState`, never biome
-weights or a raw geology override. Today only tests construct them; shading is driven by biome weights.
+`PhysicalSurfaceRenderInput` is a renderer-facing contract that accepts only an `ExposedSurfaceState`, never biome weights
+or a raw geology override. Today only tests construct it; shading is driven by biome weights.

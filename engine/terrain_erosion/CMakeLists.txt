@@ -3,10 +3,8 @@ add_library(OrbitTerrainErosion STATIC
     src/GlacialErosion.cpp
     src/HydraulicErosion.cpp
     src/HydrologyRefinement.cpp
-    src/MultiScaleTerrain.cpp
     src/RegionalElevationDelta.cpp
     src/RiverCarving.cpp
-    src/RiverCarvedTerrainSource.cpp
     src/RiverNetwork.cpp
     src/SedimentExchange.cpp
     src/SedimentTransport.cpp
@@ -170,22 +168,5 @@ if(BUILD_TESTING)
     )
 endif()
 
-
 if(BUILD_TESTING)
-    add_executable(OrbitTerrainMultiScaleTests
-        tests/MultiScaleTerrainTests.cpp
-    )
-
-    target_link_libraries(OrbitTerrainMultiScaleTests
-        PRIVATE
-            Orbit::TerrainErosion
-    )
-
-    target_compile_features(OrbitTerrainMultiScaleTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitTerrainMultiScaleTests)
-
-    add_test(
-        NAME Orbit.TerrainMultiScale
-        COMMAND OrbitTerrainMultiScaleTests
-    )
 endif()

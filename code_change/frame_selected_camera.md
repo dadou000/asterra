@@ -2,7 +2,7 @@
 path = "/editor/viewport/frame-selected"
 title = "Frame Selected camera (placement note)"
 kind = "placement"
-status = "implemented"
+status = "stable"
 owner_module = "OrbitStudioUi"
 summary = """
 Worked example of a placement note: a smooth 2-second Frame Selected camera transition owned by \

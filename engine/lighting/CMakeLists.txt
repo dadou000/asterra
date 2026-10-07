@@ -25,10 +25,6 @@ add_library(OrbitLighting STATIC
     src/EmissiveInvalidation.cpp
     src/RuntimeMaterialEmission.cpp
     src/RuntimeEmissiveSurface.cpp
-    src/PlanetaryEmissionField.cpp
-    src/PlanetaryEmissionAppearance.cpp
-    src/PlanetaryEmissionService.cpp
-    src/ReflectionPolicy.cpp
     src/HybridReflectionRenderer.cpp
     src/ExactReflectionQueryRenderer.cpp
     src/RepresentationLightingContinuity.cpp
@@ -151,26 +147,6 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingRuntimeEmissiveSurfaceTests
         tests/RuntimeEmissiveSurfaceTests.cpp
-    )
-
-    add_executable(OrbitLightingPlanetaryEmissionFieldTests
-        tests/PlanetaryEmissionFieldTests.cpp
-    )
-
-    add_executable(OrbitLightingPlanetaryEmissionAppearanceTests
-        tests/PlanetaryEmissionAppearanceTests.cpp
-    )
-
-    add_executable(OrbitLightingPlanetaryEmissionServiceTests
-        tests/PlanetaryEmissionServiceTests.cpp
-    )
-
-    add_executable(OrbitLightingPlanetaryEmissionContinuityTests
-        tests/PlanetaryEmissionContinuityTests.cpp
-    )
-
-    add_executable(OrbitLightingReflectionPolicyTests
-        tests/ReflectionPolicyTests.cpp
     )
 
     add_executable(OrbitLightingRepresentationLightingContinuityTests
@@ -371,46 +347,6 @@ if(BUILD_TESTING)
         OrbitLightingRuntimeEmissiveSurfaceTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingRuntimeEmissiveSurfaceTests)
 
-    target_link_libraries(OrbitLightingPlanetaryEmissionFieldTests
-        PRIVATE
-            Orbit::Lighting
-    )
-    target_compile_features(
-        OrbitLightingPlanetaryEmissionFieldTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitLightingPlanetaryEmissionFieldTests)
-
-    target_link_libraries(OrbitLightingPlanetaryEmissionAppearanceTests
-        PRIVATE
-            Orbit::Lighting
-    )
-    target_compile_features(
-        OrbitLightingPlanetaryEmissionAppearanceTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitLightingPlanetaryEmissionAppearanceTests)
-
-    target_link_libraries(OrbitLightingPlanetaryEmissionServiceTests
-        PRIVATE
-            Orbit::Lighting
-    )
-    target_compile_features(
-        OrbitLightingPlanetaryEmissionServiceTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitLightingPlanetaryEmissionServiceTests)
-
-    target_link_libraries(OrbitLightingPlanetaryEmissionContinuityTests
-        PRIVATE
-            Orbit::Lighting
-    )
-    target_compile_features(
-        OrbitLightingPlanetaryEmissionContinuityTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitLightingPlanetaryEmissionContinuityTests)
-
-    target_link_libraries(OrbitLightingReflectionPolicyTests
-        PRIVATE
-            Orbit::Lighting
-    )
-    target_compile_features(
-        OrbitLightingReflectionPolicyTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitLightingReflectionPolicyTests)
-
     target_link_libraries(OrbitLightingRepresentationLightingContinuityTests
         PRIVATE
             Orbit::Lighting
@@ -529,31 +465,6 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingRuntimeEmissiveSurface
         COMMAND OrbitLightingRuntimeEmissiveSurfaceTests
-    )
-
-    add_test(
-        NAME Orbit.LightingPlanetaryEmissionField
-        COMMAND OrbitLightingPlanetaryEmissionFieldTests
-    )
-
-    add_test(
-        NAME Orbit.LightingPlanetaryEmissionAppearance
-        COMMAND OrbitLightingPlanetaryEmissionAppearanceTests
-    )
-
-    add_test(
-        NAME Orbit.LightingPlanetaryEmissionService
-        COMMAND OrbitLightingPlanetaryEmissionServiceTests
-    )
-
-    add_test(
-        NAME Orbit.LightingPlanetaryEmissionContinuity
-        COMMAND OrbitLightingPlanetaryEmissionContinuityTests
-    )
-
-    add_test(
-        NAME Orbit.LightingReflectionPolicy
-        COMMAND OrbitLightingReflectionPolicyTests
     )
 
     add_test(

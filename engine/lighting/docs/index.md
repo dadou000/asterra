@@ -54,10 +54,10 @@ verified = "b0a0de7f"
 | --- | --- |
 | direct light (stellar term, cloud shadow, sky fill) | `DirectLighting.hpp`, `ProxySunShadow.hpp`, `SkyVisibility.hpp` |
 | indirect light | `RadianceClipmap.hpp`, `RadianceClipmapResidency.hpp`, `RadianceEstimator.hpp`, `ScreenSpaceFinalGather.hpp` |
-| reflections | `HybridReflectionRenderer.hpp`, `ExactReflectionQueryRenderer.hpp`, `ReflectionPolicy.hpp` |
+| reflections | `HybridReflectionRenderer.hpp`, `ExactReflectionQueryRenderer.hpp` |
 | visibility sources | `Visibility.hpp`, `AnalyticBodyVisibility.hpp`, `TerrainHeightfieldVisibility.hpp`, `SoftwareProxyVisibility.hpp`, `HardwareRayQueryVisibility.hpp` |
 | authored occluders drawn as geometry | `ProxySurface.hpp`, `SurfaceBuffer.hpp`, `SurfaceData.hpp` |
-| emission | `MaterialEmission.hpp`, `Emissive*.hpp`, `PlanetaryEmission*.hpp`, `LocalLightRegistry.hpp` |
+| emission | `MaterialEmission.hpp`, `Emissive*.hpp`, `LocalLightRegistry.hpp` |
 
 ## Per-view bypasses (bisecting a frame)
 

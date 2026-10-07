@@ -23,12 +23,10 @@
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
-#include <orbit/terrain_erosion/MultiScaleTerrain.hpp>
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 #include <orbit/terrain_material_column/SurfaceResolver.hpp>
 #include <orbit/terrain_region/SurfaceBoundaryExchange.hpp>
-#include <orbit/terrain_render/SurfaceMaterial.hpp>
 #include <orbit/terrain_scatter/DeterministicScatter.hpp>
 #include <orbit/terrain_scatter/PhysicalSurface.hpp>
 #include <orbit/terrain_stream/ToroidalResidency.hpp>
@@ -4615,23 +4613,16 @@ void Test14ExposedRockMaterialResolution()
                     biomeWeights,
                     features);
 
-            const auto render =
-                terrain_render::
-                    MakeSurfaceMaterialRenderInput(
-                        blend);
-
             return
                 std::tuple{
                     physical,
-                    blend,
-                    render
+                    blend
                 };
         };
 
     const auto [
         coveredPhysical,
-        coveredBlend,
-        coveredRender] =
+        coveredBlend] =
         resolve();
 
     Require(
@@ -4663,10 +4654,8 @@ void Test14ExposedRockMaterialResolution()
                 RenderedSurfaceMaterialKind::
                     Moss),
             0.0,
-            0.0) &&
-        !coveredRender.
-            exposedBedrock.IsValid(),
-        "M30-14 M21/renderer must not expose or dress buried basalt through incompatible loose cover.");
+            0.0),
+        "M30-14 M21 must not expose or dress buried basalt through incompatible loose cover.");
 
     const auto removed =
         page.Erode(
@@ -4700,8 +4689,7 @@ void Test14ExposedRockMaterialResolution()
 
     const auto [
         exposedPhysical,
-        exposedBlend,
-        exposedRender] =
+        exposedBlend] =
         resolve();
 
     Require(
@@ -4756,16 +4744,8 @@ void Test14ExposedRockMaterialResolution()
                 RenderedSurfaceMaterialKind::
                     Moss),
             0.40,
-            1.0e-6) &&
-        exposedRender.exposedBedrock ==
-            terrain_geology::
-                reference_rock::
-                    Basalt &&
-        NearlyEqual(
-            exposedRender.TotalWeight(),
-            1.0,
-            2.0e-5),
-        "M30-14 M21 may add a compatible moss overlay, but the renderer must retain exposed basalt identity underneath the deterministic normalized blend.");
+            1.0e-6),
+        "M30-14 M21 may add a compatible moss overlay over exposed basalt in the deterministic normalized blend.");
 
     const auto substrateBeforeBurial =
         page.At(
@@ -4798,8 +4778,7 @@ void Test14ExposedRockMaterialResolution()
 
     const auto [
         buriedPhysical,
-        buriedBlend,
-        buriedRender] =
+        buriedBlend] =
         resolve();
 
     Require(
@@ -4837,14 +4816,8 @@ void Test14ExposedRockMaterialResolution()
                 RenderedSurfaceMaterialKind::
                     Moss),
             0.0,
-            0.0) &&
-        !buriedRender.
-            exposedBedrock.IsValid() &&
-        NearlyEqual(
-            buriedRender.TotalWeight(),
-            1.0,
-            2.0e-5),
-        "M30-14 M21 and renderer must follow the newly exposed physical sand instead of caching the previously visible basalt/moss material.");
+            0.0),
+        "M30-14 M21 must follow the newly exposed physical sand instead of caching the previously visible basalt/moss material.");
 }
 
 
@@ -6091,38 +6064,12 @@ void Test18ClipmapPhysicalPageIndependence()
                 HydraulicErosion,
             physicalKey.address);
 
-    const MultiScaleTerrainPlanner planner;
-
-    const terrain::TerrainSampleFootprint
-        physicalFootprint{
-            .diameterMeters = 4.0
-        };
-
-    const auto physicalSelectionBefore =
-        planner.Select(
-            physicalFootprint);
-
-    const u64 macroScaleKeyBefore =
-        planner.StableScaleKey(
-            PhysicalTerrainScale::Macro,
-            planet.generationSeed,
-            revisions.processes);
-
-    const u64 localScaleKeyBefore =
-        planner.StableScaleKey(
-            PhysicalTerrainScale::Local,
-            planet.generationSeed,
-            revisions.processes);
-
     const terrain_gpu::
         PersistentGpuTerrainCacheKey
         gpuKeyBefore{
             .address =
                 physicalKey.address,
-            .physicalLod =
-                static_cast<u8>(
-                    physicalSelectionBefore.
-                        finestScale),
+            .physicalLod = 0U,
             .revisions = revisions
         };
 
@@ -6245,10 +6192,6 @@ void Test18ClipmapPhysicalPageIndependence()
         refreshedCells > 0U,
         "M30-18 moving the observer must alter toroidal view residency and refresh strips.");
 
-    const auto physicalSelectionAfter =
-        planner.Select(
-            physicalFootprint);
-
     const terrain::PhysicalTerrainPageKey
         physicalKeyAfter =
             physicalKey;
@@ -6258,32 +6201,10 @@ void Test18ClipmapPhysicalPageIndependence()
         gpuKeyAfter{
             .address =
                 physicalKeyAfter.address,
-            .physicalLod =
-                static_cast<u8>(
-                    physicalSelectionAfter.
-                        finestScale),
+            .physicalLod = 0U,
             .revisions =
                 physicalKeyAfter.revisions
         };
-
-    Require(
-        physicalSelectionAfter.
-                requestedSampleSpacingMeters ==
-            physicalSelectionBefore.
-                requestedSampleSpacingMeters &&
-        physicalSelectionAfter.
-                activeLevelCount ==
-            physicalSelectionBefore.
-                activeLevelCount &&
-        physicalSelectionAfter.
-                finestScale ==
-            physicalSelectionBefore.
-                finestScale &&
-        physicalSelectionAfter.
-                activeProcessMask ==
-            physicalSelectionBefore.
-                activeProcessMask,
-        "M30-18 render clipmap motion must not select a different M23 physical process hierarchy.");
 
     Require(
         physicalKeyAfter ==
@@ -6298,19 +6219,6 @@ void Test18ClipmapPhysicalPageIndependence()
             physicalKeyAfter.address) ==
                 hydraulicSeedBefore,
         "M30-18 camera/clipmap motion must not alter physical page address, authority revisions, fingerprint or process seed.");
-
-    Require(
-        planner.StableScaleKey(
-            PhysicalTerrainScale::Macro,
-            planet.generationSeed,
-            revisions.processes) ==
-                macroScaleKeyBefore &&
-        planner.StableScaleKey(
-            PhysicalTerrainScale::Local,
-            planet.generationSeed,
-            revisions.processes) ==
-                localScaleKeyBefore,
-        "M30-18 clipmap movement must not re-seed or re-phase stable M23 physical tiers.");
 
     Require(
         gpuKeyAfter ==
@@ -6356,13 +6264,8 @@ void Test18ClipmapPhysicalPageIndependence()
         terrain_gpu::
             PersistentGpuTerrainCacheFingerprint(
                 gpuKeyBefore) ==
-                gpuFingerprintBefore &&
-        planner.StableScaleKey(
-            PhysicalTerrainScale::Macro,
-            planet.generationSeed,
-            revisions.processes) ==
-                macroScaleKeyBefore,
-        "M30-18 changing render clipmap spacing/tier must leave physical page, M26 cache and M23 macro identities unchanged.");
+                gpuFingerprintBefore,
+        "M30-18 changing render clipmap spacing/tier must leave physical page and M26 cache identities unchanged.");
 }
 
 
