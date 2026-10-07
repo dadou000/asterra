@@ -3,9 +3,6 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/platform/FileDialog.hpp>
 #include <orbit/studio_session/ProjectBrowserModel.hpp>
-#include <orbit/studio_session/ProjectSettingsModel.hpp>
-#include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
-#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 
 #include <filesystem>
@@ -29,15 +26,11 @@ public:
         studio_session::StudioWorkspace& workspace,
         std::filesystem::path recentProjectsFile);
 
-    void Register(editor_ui::EditorUi& ui);
+    // The Project Browser is the only panel this class registers; Project
+    // Settings and World Documents are ProjectSettingsUi and WorldDocumentsUi.
     void RegisterProjectBrowser(
         editor_ui::EditorUi& ui,
         bool dockToMainViewport = false);
-    void RegisterProjectSettings(
-        editor_ui::EditorUi& ui);
-    void RegisterWorldDocuments(
-        editor_ui::EditorUi& ui,
-        bool allowCloseWorld = true);
 
     // Called synchronously after a successful project create/open/close. This
     // lets the application rebuild project-bound GPU/session presentation in
@@ -75,30 +68,15 @@ public:
         .low = 0x50524f4a42525753ULL
     };
 
-    inline static constexpr editor_ui::PanelId kProjectSettingsPanel{
-        .high = 0x4f52424954535455ULL,
-        .low = 0x50524f4a53455454ULL
-    };
-
-    inline static constexpr editor_ui::PanelId kWorldDocumentsPanel{
-        .high = 0x4f52424954535455ULL,
-        .low = 0x574f524c44444f43ULL
-    };
-
 private:
     void DrawProjectBrowser(editor_ui::PanelContext& context);
-    void DrawProjectSettings(editor_ui::PanelContext& context);
-    void DrawWorldDocuments(editor_ui::PanelContext& context);
-    void SynchronizeProjectBuffers();
     void NotifyWorkspaceChanged();
 
     studio_session::StudioWorkspace* workspace_{nullptr};
     studio_session::ProjectBrowserModel projectBrowser_;
-    studio_session::ProjectSettingsModel projectSettings_;
     std::function<void()> workspaceChanged_;
     const platform::Window* dialogOwner_{nullptr};
 
-    u64 observedWorkspaceGeneration_{~u64{0}};
     std::string openProjectName_;
     std::filesystem::path openProjectManifest_;
     std::string openProjectWorld_;
@@ -112,20 +90,7 @@ private:
     std::string newProjectRoot_;
     std::string newProjectName_{"New Orbit Project"};
     std::string openProjectPath_;
-    std::string projectDisplayName_;
 
-    std::string createWorldPath_{"Worlds/NewWorld.orbitworld"};
-    std::string createWorldName_{"New World"};
-    std::optional<std::filesystem::path> selectedWorld_;
-    std::string selectedWorldName_;
-    std::optional<
-        studio_session::StudioTerrainRoundTripReport>
-        terrainRoundTripReport_;
-    u64 terrainRoundTripReportGeneration_{~u64{0}};
-    std::optional<
-        studio_session::StudioTerrainValidationScenarioReport>
-        terrainValidationScenarioReport_;
     std::string status_;
-    bool allowCloseWorld_{true};
 };
 } // namespace orbit::studio_ui

@@ -4,7 +4,7 @@ title = "World Documents, Project Browser and Project Settings panels"
 kind = "subsystem"
 status = "stable"
 summary = """
-ProjectAuthoringUi (Project Browser, and a StudioWorkspace-bound copy of the settings and world panels), WorldDocumentsUi and ProjectSettingsUi (session-bound, \
+ProjectAuthoringUi (the Project Browser), WorldDocumentsUi and ProjectSettingsUi (session-bound, \
 wrapping ProjectSettingsUiBase with project lighting/display defaults) are presentation over studio_session models, ProjectDocument and StudioSession. \
 This block maps each button to its model call and to the project.* / world.* RPC and MCP tools, and lists the project operations that have none."""
 owner_module = "OrbitStudioUi"
@@ -31,7 +31,6 @@ symbols = [
   "ProjectSettingsUi",
   "ProjectBrowserModel",
   "ProjectSettingsModel",
-  "SynchronizeProjectBuffers",
   "SetWorkspaceChangedCallback",
   "DispatchWorldLifecycle",
   "WorldDocumentsModel",
@@ -44,10 +43,9 @@ invariants = [
   "The world catalog is diagnostic, not all-or-nothing: an unreadable world document appears as valid=false with its diagnostic and an [Invalid] label, and gets no Open / Set Startup / Rename controls; it never makes the catalog or settings panel unavailable.",
   "Project create/open/close in the Project Browser go through ProjectBrowserModel into StudioWorkspace, which builds and validates a complete candidate project + session before replacing the current one; a failed open leaves the workspace and the recent-projects (MRU) order unchanged. The only persisted browser state is the MRU list of Project.orbit.toml paths.",
   "ProjectAuthoringUi::CreateProject / OpenProject are the single callable operations behind the buttons and the project.create / project.open RPC registered in apps/editor/src/Main.cpp; both run NotifyWorkspaceChanged. In the editor the browser's own StudioWorkspace is separate from the editing one: a switch saves the project, checkpoints the world, closes the browser workspace and relaunches Studio on the chosen project (RPC result carries relaunching=true), so clients must poll project.info for the new project id.",
-  "ProjectAuthoringUi::SynchronizeProjectBuffers runs at the start of every draw and operation and, when StudioWorkspace::Generation() changes, clears the selected world and any stale terrain round-trip report and re-reads the project display name. 'Save, Reopen & Verify Terrain' ends its draw immediately because the workspace then owns a new StudioSession.",
   "ProjectSettingsUi.cpp includes ProjectSettingsUiBase.cpp with `Register` and `Draw` macro-renamed to RegisterBase / DrawBase and appends the 'Lighting / Display Defaults' section; the base file is not its own CMake source and must stay includable. Lighting and display defaults are project-owned (LightingDisplay.orbitcfg in the project root), clamped on input, and applied through lighting::SetStudioLightingRuntimeConfig and PublishStudioDisplayDefaultsRuntime; Display Diagnostics overrides them per session without rewriting the file.",
   "Project display name is written through ProjectDocument (ProjectSettingsModel::SetDisplayName); startup-world changes go through StudioSession::SetStartupWorld. ProjectSettingsUi::SynchronizeAuthority re-reads the manifest name each draw and resets the edit buffer when the persisted name changes.",
-  "ProjectAuthoringUi::kProjectSettingsPanel equals ProjectSettingsUi::kPanelId, and kWorldDocumentsPanel equals WorldDocumentsUi::kPanelId (identical 128-bit ids). Register only one implementation of each per EditorUi: the editor app registers ProjectAuthoringUi::RegisterProjectBrowser plus WorldDocumentsUi and ProjectSettingsUi; StudioUiBundle registers all three through ProjectAuthoringUi::Register.",
+  "Project Settings and World Documents are registered only by ProjectSettingsUi and WorldDocumentsUi (session-bound); ProjectAuthoringUi registers only the Project Browser (RegisterProjectBrowser). Its workspace-bound copies of the settings and world panels, and StudioUiBundle which registered them, were removed in 0.0.9 because nothing used them.",
   "A project operation reachable only through a button is a parity gap (AGENTS.md): see 'Known gaps' before adding UI-only project actions.",
 ]
 related = ["/editor/studio-ui", "/editor/mcp-rpc", "/editor/studio-session", "/editor/session", "/authoring/documents", "/apps/studio"]
@@ -117,7 +115,6 @@ steps = [
 [[diagnose]]
 symptom = "Two 'Project Settings' or 'World Documents' panels, or a panel is missing"
 steps = [
-  "Panel ids are shared between ProjectAuthoringUi and the session-bound classes; only one registration of each should exist in one EditorUi.",
   "apps/editor/src/Main.cpp registers the browser from ProjectAuthoringUi and the other two from WorldDocumentsUi / ProjectSettingsUi; check studio.panel_list (orbit_panel_list) for what is registered.",
 ]
 +++
@@ -126,7 +123,7 @@ steps = [
 
 | Class | Bound to | Registers | Notes |
 | --- | --- | --- | --- |
-| `ProjectAuthoringUi` | `StudioWorkspace` (+ recent-projects file) | Project Browser (default open, centre), Project Settings (right), World Documents (left, default open) via `Register`, or one at a time via `RegisterProjectBrowser` / `RegisterProjectSettings` / `RegisterWorldDocuments` | Owns `ProjectBrowserModel` and `ProjectSettingsModel`. `SetOpenProject` lets the editor report the project it is really bound to, because the browser's own workspace is empty while editing. |
+| `ProjectAuthoringUi` | `StudioWorkspace` (+ recent-projects file) | Project Browser (default open, centre) via `RegisterProjectBrowser` | Owns `ProjectBrowserModel`. `SetOpenProject` lets the editor report the project it is really bound to, because the browser's own workspace is empty while editing. |
 | `WorldDocumentsUi` | `StudioSession` (already-open project) | World Documents (left, default closed) | Create World, world list with ID and schema, Open Selected, Set Selected As Startup, Rename, Close Active World (hidden when `allowCloseWorld` is false). |
 | `ProjectSettingsUi` | `ProjectDocument` + `StudioSession` | Project Settings (right, closed) | Sections: Project (name, folder, manifest, id, engine compatibility), Worlds (startup world, Set Startup), Developer Validation (terrain round trip, M15 scenario), Lighting / Display Defaults. |
 
