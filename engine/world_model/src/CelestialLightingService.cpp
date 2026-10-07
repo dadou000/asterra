@@ -16,6 +16,49 @@ CelestialLightingService::CelestialLightingService(
 {
 }
 
+std::optional<DirectBodyLighting>
+CelestialLightingService::DominantDirectLightingAtBody(
+    const universe::BodyId receiver,
+    const time::SimulationTime atTime) const
+{
+    const auto* receiverBody = universe_.Bodies().FindBody(receiver);
+    if (receiverBody == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const auto candidates = universe_.Bodies().Bodies(receiverBody->system);
+    std::optional<DirectBodyLighting> strongest;
+    for (const auto emitter : candidates)
+    {
+        if (emitter == receiver)
+        {
+            continue;
+        }
+
+        std::vector<universe::BodyId> occluders;
+        occluders.reserve(candidates.size());
+        for (const auto other : candidates)
+        {
+            if (other != receiver && other != emitter)
+            {
+                occluders.push_back(other);
+            }
+        }
+
+        const auto direct = DirectLightingAtBody(
+            receiver, emitter, occluders, atTime);
+        if (direct.has_value() &&
+            (!strongest.has_value() ||
+             direct->irradianceWattsPerSquareMeter >
+                 strongest->irradianceWattsPerSquareMeter))
+        {
+            strongest = direct;
+        }
+    }
+    return strongest;
+}
+
 std::optional<math::Double3>
 CelestialLightingService::CenterOfBodyInFrame(
     const universe::BodyId body,

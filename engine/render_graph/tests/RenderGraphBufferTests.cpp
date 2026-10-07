@@ -198,6 +198,8 @@ public:
     {
     }
 
+    void GenerateMipmaps(orbit::rhi::Texture&) override {}
+
     void CopyTextureToBuffer(
         orbit::rhi::Texture&,
         orbit::rhi::Buffer&,

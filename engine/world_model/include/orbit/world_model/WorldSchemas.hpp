@@ -170,6 +170,44 @@ inline constexpr schema::PropertyId kPrimitiveCastShadows{
     .low = 0x4341535453484144ULL
 };
 
+// Imported triangle mesh (glTF/GLB) placed relative to its parent object's
+// frame: lit, textured and drawn through the deferred surface pass.
+// See docs/ORBIT_STATIC_MESH.md.
+inline constexpr schema::TypeId kStaticMeshType{
+    .high = 0x4f52424954534d48ULL,
+    .low = 0x5459504500000001ULL
+};
+
+inline constexpr schema::PropertyId kStaticMeshEnabled{
+    .high = 0x4f52424954534d48ULL,
+    .low = 0x454e41424c454401ULL
+};
+
+inline constexpr schema::PropertyId kStaticMeshAsset{
+    .high = 0x4f52424954534d48ULL,
+    .low = 0x4153534554000001ULL
+};
+
+inline constexpr schema::PropertyId kStaticMeshPositionMeters{
+    .high = 0x4f52424954534d48ULL,
+    .low = 0x504f534954494f4eULL
+};
+
+inline constexpr schema::PropertyId kStaticMeshEulerDegrees{
+    .high = 0x4f52424954534d48ULL,
+    .low = 0x45554c4552000001ULL
+};
+
+inline constexpr schema::PropertyId kStaticMeshScale{
+    .high = 0x4f52424954534d48ULL,
+    .low = 0x5343414c45000001ULL
+};
+
+inline constexpr schema::PropertyId kStaticMeshCastShadows{
+    .high = 0x4f52424954534d48ULL,
+    .low = 0x4341535453484144ULL
+};
+
 inline constexpr schema::TypeId kMaterialAssignmentType{
     .high = 0x4f524249544d4154ULL,
     .low = 0x41535349474e0001ULL

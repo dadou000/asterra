@@ -2,7 +2,7 @@
 path = "/editor/viewport/frame-selected"
 title = "Frame Selected camera (placement note)"
 kind = "placement"
-status = "planned"
+status = "implemented"
 owner_module = "OrbitStudioUi"
 summary = """
 Worked example of a placement note: a smooth 2-second Frame Selected camera transition owned by \
@@ -167,13 +167,15 @@ Manual interruption:
 
 ## Validation
 
-- [ ] Selecting a box and pressing Frame fits the full box in view.
-- [ ] Selecting a hierarchy frames its aggregate visible/spatial extent.
-- [ ] Point-like objects receive a sensible minimum radius.
-- [ ] Camera movement takes 2.0 seconds by default.
+Implementation reintroduces the Scene toolbar and viewport-row actions through one panel operation also used by the F shortcut and RPC. Visibility-proxy bounds are resolved from the selected semantic hierarchy in body-fixed metres; selected bodies use the existing body-focus path. The camera transition is owned by StudioRenderViewSet and updates its navigation pose.
+
+- [x] Selecting a box and pressing Frame fits the full box in view (live Roof A capture).
+- [x] Selecting a hierarchy aggregates its visibility-proxy and local-light bounds.
+- [x] Point-like local lights receive a minimum 0.5 m radius.
+- [x] Camera movement takes 2.0 seconds by default.
 - [ ] Position and look direction change smoothly with no end-of-transition snap.
 - [ ] Manual mouse/WASD input cancels the transition immediately.
 - [ ] Re-triggering during a transition starts cleanly from the current pose.
-- [ ] `StudioRenderViewSet::Refresh()` does not overwrite the requested motion.
-- [ ] Toolbar and shortcut use the same framing operation.
-- [ ] No second camera/navigation authority is introduced.
+- [x] `StudioRenderViewSet::Refresh()` advances the navigation pose; the live roof framing completed without a snap or process exit after spherical interpolation.
+- [x] Toolbar, shortcut, command palette, RPC and MCP use the same framing operation.
+- [x] No second camera/navigation authority is introduced.

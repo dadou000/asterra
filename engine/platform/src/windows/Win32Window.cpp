@@ -688,6 +688,14 @@ public:
             MWMO_INPUTAVAILABLE);
     }
 
+    void WakeForActivity() override
+    {
+        if (hwnd_ != nullptr)
+        {
+            PostMessageW(hwnd_, WM_NULL, 0, 0);
+        }
+    }
+
     [[nodiscard]] bool KeyDown(
         const Key key) const override
     {

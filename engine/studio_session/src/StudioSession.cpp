@@ -1,6 +1,7 @@
 #include <orbit/studio_session/StudioSession.hpp>
 
 #include <orbit/rpc/JsonRpc.hpp>
+#include <orbit/studio_session/StudioMeshRpc.hpp>
 #include <orbit/studio_session/StudioTerrainStatusRpc.hpp>
 #include <orbit/studio_session/ViewportTargetRpc.hpp>
 #include <orbit/studio_session/VolumeParticleOutputState.hpp>
@@ -126,6 +127,9 @@ StudioSession::StudioSession(
         rpc_.Dispatcher(),
         viewports_);
     RegisterStudioTerrainStatusRpc(
+        rpc_.Dispatcher(),
+        *this);
+    RegisterStudioMeshRpc(
         rpc_.Dispatcher(),
         *this);
     static_cast<void>(activeBody_.Refresh());

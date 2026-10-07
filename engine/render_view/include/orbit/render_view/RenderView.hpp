@@ -42,7 +42,8 @@ ViewportRay(
     u32 width,
     u32 height,
     f32 u,
-    f32 v) noexcept;
+    f32 v,
+    bool allowOutsideViewport = false) noexcept;
 
 // Where a camera-local point lands in the viewport. u and v use the same
 // 0..1 convention as ViewportRay (v grows downwards) and may lie outside

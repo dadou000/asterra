@@ -18,6 +18,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/math/RigidTransform.hpp>
 #include <orbit/lighting/EmissiveInvalidation.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/HybridReflectionRenderer.hpp>
@@ -32,7 +33,12 @@
 #include <orbit/lighting/RepresentationLightingContinuity.hpp>
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
+#include <orbit/mesh_render/MeshLibrary.hpp>
+#include <orbit/mesh_render/MeshSdfScene.hpp>
+#include <orbit/mesh_render/MeshShadow.hpp>
+#include <orbit/mesh_render/MeshSurface.hpp>
 #include <orbit/lighting/SurfaceDebugRenderer.hpp>
+#include <orbit/post_process/AntiAliasing.hpp>
 #include <orbit/post_process/ColorLut.hpp>
 #include <orbit/post_process/DisplayResolve.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
@@ -593,6 +599,24 @@ private:
         std::unique_ptr<lighting::HardwareRayQueryVisibilityBatch> hardware;
         lighting::ProxySurfaceGeometry surfaces;
     };
+    // Imported Static Meshes of the view's target body, resolved at plan time
+    // and drawn by the mesh surface pass.
+    struct StaticMeshPresentation
+    {
+        std::vector<mesh_render::MeshInstance> instances;
+        u32 requested{0U};
+        // First placed mesh (frame coordinates) and the frame/body transform
+        // of this view: where non-mesh geometry is gathered for the field.
+        bool hasAnchor{false};
+        math::Double3 anchorInFrame{};
+        math::RigidTransformD targetFromBody{};
+        // Proxies and a terrain patch around the meshes (distance field).
+        std::shared_ptr<mesh_render::SdfExtraGeometry> sdfExtra;
+        std::shared_ptr<const mesh_render::SdfTerrainPatch> terrainPatch;
+        math::Double3 terrainPatchAnchor{};
+        u64 terrainPatchSourceRevision{~0ULL};
+        u64 terrainPatchCounter{0U};
+    };
     struct TerrainPresentation
     {
         u64 universeGeneration{0U};
@@ -636,6 +660,44 @@ private:
     lighting::RadianceCacheSampler radianceCacheSampler_;
     lighting::ProxySunShadowRenderer proxySunShadowRenderer_;
     lighting::ProxySurfaceRenderer proxySurfaceRenderer_;
+    std::unique_ptr<mesh_render::MeshLibrary> meshLibrary_;
+    mesh_render::MeshSurfaceRenderer meshSurfaceRenderer_;
+    mesh_render::MeshSdfScene meshSdfScene_;
+    mesh_render::MeshSdfDebugRenderer meshSdfDebugRenderer_;
+    // Scratch target of the SDF debug view, per view.
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>>
+        sdfDebugScratch_;
+    mesh_render::MeshShadowMapRenderer meshShadowMapRenderer_;
+    mesh_render::MeshSunShadowRenderer meshSunShadowRenderer_;
+    post_process::AntiAliasingRenderer antiAliasingRenderer_;
+    // Per-view anti-aliasing state: the history ping-pong, the previous
+    // (jittered) camera, and the un-jittered camera the jitter was applied to.
+    struct AntiAliasingPresentation
+    {
+        u32 width{0U};
+        u32 height{0U};
+        std::array<std::unique_ptr<rhi::Texture>, 2> history;
+        std::unique_ptr<rhi::Texture> scratch;
+        u32 readIndex{0U};
+        bool hasHistory{false};
+        u32 frameCounter{0U};
+        post_process::TaaCamera previousCamera{};
+        bool hasBase{false};
+        render_view::CameraState base{};
+        render_view::CameraState applied{};
+    };
+    std::map<std::string, AntiAliasingPresentation, std::less<>>
+        antiAliasingPresentations_;
+    // Sun-space depth map of each view's meshes (colour R32_Float + depth).
+    struct MeshShadowTargets
+    {
+        std::unique_ptr<rhi::Texture> color;
+        std::unique_ptr<rhi::Texture> depth;
+        // Sky-direction occlusion atlas (see mesh_render::MeshShadow.hpp).
+        std::unique_ptr<rhi::Texture> skyColor;
+        std::unique_ptr<rhi::Texture> skyDepth;
+    };
+    std::map<std::string, MeshShadowTargets, std::less<>> meshShadowTargets_;
     lighting::HybridReflectionRenderer hybridReflectionRenderer_;
     lighting::ExactReflectionQueryRenderer exactReflectionQueryRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
@@ -717,6 +779,7 @@ private:
     std::map<std::string, StudioVisibilityProxyDiagnostics, std::less<>> visibilityProxyDiagnostics_;
     std::map<std::string, StudioEmissiveGiDiagnostics, std::less<>> emissiveGiDiagnostics_;
     std::map<std::string, VisibilityProxyPresentation, std::less<>> visibilityProxyPresentations_;
+    std::map<std::string, StaticMeshPresentation, std::less<>> staticMeshPresentations_;
     std::map<std::string, FinalGatherPresentation, std::less<>> finalGatherPresentations_;
     std::map<std::string, LuminanceHistogramPresentation, std::less<>> luminanceHistogramPresentations_;
     std::map<std::string, MacroGlobePresentation, std::less<>> macroGlobePresentations_;

@@ -1336,6 +1336,22 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                     layers.bypassProxySurfaces) || layersChanged;
             layersChanged =
                 context.Checkbox(
+                    "Bypass mesh surfaces (imported Static Meshes)##bypass-mesh-surfaces",
+                    layers.bypassMeshSurfaces) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Bypass SDF GI (world-space fallback of the final gather)##bypass-sdf-gi",
+                    layers.bypassSdfGi) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Leave terrain out of the SDF##bypass-sdf-terrain",
+                    layers.bypassSdfTerrain) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "Leave proxies out of the SDF##bypass-sdf-proxies",
+                    layers.bypassSdfProxies) || layersChanged;
+            layersChanged =
+                context.Checkbox(
                     "Bypass sky cache fill (sky-only radiance cache channel)##bypass-sky-cache",
                     layers.bypassSkyCache) || layersChanged;
             layersChanged =
@@ -1362,6 +1378,66 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                 context.Checkbox(
                     "Indirect lighting coverage view##indirect-coverage",
                     layers.indirectCoverageView) || layersChanged;
+            layersChanged =
+                context.Checkbox(
+                    "GI only view (final gather + radiance cascades)##gi-only",
+                    layers.giOnlyView) || layersChanged;
+            {
+                static constexpr std::array<std::string_view, 3>
+                    kAntiAliasingModes{"Off", "FXAA", "TAA (FXAA fallback)"};
+                i32 antiAliasing = static_cast<i32>(layers.antiAliasing);
+                if (context.Combo(
+                        "Anti-aliasing##layer-anti-aliasing",
+                        kAntiAliasingModes,
+                        antiAliasing))
+                {
+                    layers.antiAliasing =
+                        static_cast<u8>(std::clamp(antiAliasing, 0, 2));
+                    layersChanged = true;
+                }
+                f64 giIntensity = static_cast<f64>(layers.giIntensity);
+                if (context.SliderDouble(
+                        "GI intensity (pi = physical)##layer-gi-intensity",
+                        giIntensity,
+                        0.0,
+                        8.0))
+                {
+                    layers.giIntensity = static_cast<f32>(giIntensity);
+                    layersChanged = true;
+                }
+                static constexpr std::array<std::string_view, 6> kSdfModes{
+                    "Off", "Shaded", "Steps", "Distance", "Split (SDF | scene)",
+                    "Surface radiance"};
+                i32 sdfMode = static_cast<i32>(layers.sdfDebugView);
+                if (context.Combo(
+                        "Mesh SDF debug view##layer-sdf-debug",
+                        kSdfModes,
+                        sdfMode))
+                {
+                    layers.sdfDebugView = static_cast<u8>(std::clamp(sdfMode, 0, 5));
+                    layersChanged = true;
+                }
+                f64 jitterScale = static_cast<f64>(layers.taaJitterScale);
+                if (context.SliderDouble(
+                        "TAA jitter scale##layer-taa-jitter",
+                        jitterScale,
+                        0.0,
+                        1.0))
+                {
+                    layers.taaJitterScale = static_cast<f32>(jitterScale);
+                    layersChanged = true;
+                }
+                f64 shadowSoftness = static_cast<f64>(layers.meshShadowSoftness);
+                if (context.SliderDouble(
+                        "Mesh shadow softness (x real sun)##layer-mesh-shadow-softness",
+                        shadowSoftness,
+                        0.0,
+                        8.0))
+                {
+                    layers.meshShadowSoftness = static_cast<f32>(shadowSoftness);
+                    layersChanged = true;
+                }
+            }
             f64 volumeDebugAltitude = static_cast<f64>(layers.cloudVolumeDebugAltitude);
             if (context.SliderDouble(
                     "Light volume debug slice (m, 0 = off)##layer-cloud-volume-debug",

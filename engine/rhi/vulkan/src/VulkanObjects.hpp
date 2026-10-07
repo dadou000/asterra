@@ -253,6 +253,8 @@ public:
         u32 height,
         TextureFormat format,
         bool ownsImage,
+        u32 mipLevels = 1U,
+        VkSampler sampler = VK_NULL_HANDLE,
         GpuProgress* progress = nullptr);
     ~VulkanTexture() override;
 
@@ -262,6 +264,11 @@ public:
     [[nodiscard]] u32 Width() const noexcept override;
     [[nodiscard]] u32 Height() const noexcept override;
     [[nodiscard]] TextureFormat Format() const noexcept override;
+    [[nodiscard]] u32 MipLevels() const noexcept override;
+
+    // A texture-owned sampler (mip chain and/or repeat addressing), or
+    // VK_NULL_HANDLE to use the device's default clamp sampler.
+    [[nodiscard]] VkSampler Sampler() const noexcept;
 
     [[nodiscard]] VkImage Native() const noexcept;
     [[nodiscard]] VkImageView View() const noexcept;
@@ -298,6 +305,8 @@ private:
     u32 height_{};
     TextureFormat format_{TextureFormat::RGBA8_UNorm};
     bool ownsImage_{true};
+    u32 mipLevels_{1U};
+    VkSampler sampler_{VK_NULL_HANDLE};
     std::optional<VkClearValue> pendingClear_{};
     bool everUsed_{true};
     GpuProgress* progress_{nullptr};
@@ -484,6 +493,8 @@ public:
         Buffer& source,
         u64 sourceOffsetBytes,
         Texture& destination) override;
+
+    void GenerateMipmaps(Texture& texture) override;
 
     void CopyTextureToBuffer(
         Texture& source,

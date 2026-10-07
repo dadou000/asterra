@@ -1,6 +1,7 @@
 #include <orbit/profiler/Profiler.hpp>
 #include "VulkanObjects.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -114,7 +115,7 @@ void TransitionNewImageBlocking(
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
     barrier.subresourceRange = {
-        aspectMask, 0, 1, 0, 1
+        aspectMask, 0, VK_REMAINING_MIP_LEVELS, 0, 1
     };
 
     VkDependencyInfo dependencyInfo{};
@@ -161,6 +162,8 @@ VkFormat ToNativeTextureFormat(const TextureFormat format)
         return VK_FORMAT_R32_SFLOAT;
     case TextureFormat::RG32_Float:
         return VK_FORMAT_R32G32_SFLOAT;
+    case TextureFormat::RGBA8_SRGB:
+        return VK_FORMAT_R8G8B8A8_SRGB;
     }
 
     throw std::invalid_argument(
@@ -352,6 +355,8 @@ VulkanTexture::VulkanTexture(
     const u32 height,
     const TextureFormat format,
     const bool ownsImage,
+    const u32 mipLevels,
+    const VkSampler sampler,
     GpuProgress* const progress)
     : device_(device),
       allocator_(allocator),
@@ -362,6 +367,8 @@ VulkanTexture::VulkanTexture(
       height_(height),
       format_(format),
       ownsImage_(ownsImage),
+      mipLevels_(mipLevels),
+      sampler_(sampler),
       // Regular (ownsImage=true) textures are already pre-warmed into
       // their real initial layout by TransitionNewImageBlocking
       // before this constructor runs; a swapchain-provided
@@ -376,12 +383,19 @@ VulkanTexture::~VulkanTexture()
 {
     const VkDevice device = device_;
     const VmaAllocator allocator = allocator_;
+    const VkSampler sampler = sampler_;
     const VkImageView imageView = imageView_;
     const VkImage image =
         ownsImage_ ? nativeImage_ : static_cast<VkImage>(VK_NULL_HANDLE);
     const VmaAllocation allocation = allocation_;
-    auto destroy = [device, allocator, imageView, image, allocation]
+    auto destroy =
+        [device, allocator, sampler, imageView, image, allocation]
     {
+        if (sampler != VK_NULL_HANDLE)
+        {
+            vkDestroySampler(device, sampler, nullptr);
+        }
+
         if (imageView != VK_NULL_HANDLE)
         {
             vkDestroyImageView(device, imageView, nullptr);
@@ -402,6 +416,16 @@ VulkanTexture::~VulkanTexture()
     {
         destroy();
     }
+}
+
+u32 VulkanTexture::MipLevels() const noexcept
+{
+    return mipLevels_;
+}
+
+VkSampler VulkanTexture::Sampler() const noexcept
+{
+    return sampler_;
 }
 
 u32 VulkanTexture::Width() const noexcept
@@ -1287,7 +1311,15 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
     imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
     imageCreateInfo.format = nativeFormat;
     imageCreateInfo.extent = {desc.width, desc.height, 1};
-    imageCreateInfo.mipLevels = 1;
+    // Full chain length for the extent; never more than requested.
+    u32 fullChain = 1U;
+    for (u32 extent = std::max(desc.width, desc.height); extent > 1U;
+         extent >>= 1U)
+    {
+        ++fullChain;
+    }
+    const u32 mipLevels = std::clamp(desc.mipLevels, 1U, fullChain);
+    imageCreateInfo.mipLevels = mipLevels;
     imageCreateInfo.arrayLayers = 1;
     imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -1342,7 +1374,7 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
     viewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewCreateInfo.format = nativeFormat;
     viewCreateInfo.subresourceRange = {
-        aspectMask, 0, 1, 0, 1
+        aspectMask, 0, mipLevels, 0, 1
     };
 
     VkImageView imageView = VK_NULL_HANDLE;
@@ -1353,6 +1385,36 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         vmaDestroyImage(allocator_, nativeImage, allocation);
         throw std::runtime_error(
             "Orbit failed to create a Vulkan texture view.");
+    }
+
+    // Textures with a mip chain or wrap addressing bring their own sampler;
+    // everything else keeps using the device's default clamp sampler.
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (mipLevels > 1U || desc.repeatAddress)
+    {
+        VkSamplerCreateInfo samplerCreateInfo{};
+        samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerCreateInfo.magFilter = VK_FILTER_LINEAR;
+        samplerCreateInfo.minFilter = VK_FILTER_LINEAR;
+        samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        const VkSamplerAddressMode address =
+            desc.repeatAddress
+                ? VK_SAMPLER_ADDRESS_MODE_REPEAT
+                : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerCreateInfo.addressModeU = address;
+        samplerCreateInfo.addressModeV = address;
+        samplerCreateInfo.addressModeW = address;
+        samplerCreateInfo.maxLod = static_cast<float>(mipLevels);
+
+        if (vkCreateSampler(
+                nativeDevice_, &samplerCreateInfo, nullptr, &sampler) !=
+            VK_SUCCESS)
+        {
+            vkDestroyImageView(nativeDevice_, imageView, nullptr);
+            vmaDestroyImage(allocator_, nativeImage, allocation);
+            throw std::runtime_error(
+                "Orbit failed to create a Vulkan texture sampler.");
+        }
     }
 
     TransitionNewImageBlocking(
@@ -1372,6 +1434,8 @@ std::unique_ptr<Texture> VulkanDevice::CreateTexture(
         desc.height,
         desc.format,
         true,
+        mipLevels,
+        sampler,
         progress_.get());
 }
 

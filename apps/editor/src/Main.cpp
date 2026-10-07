@@ -617,6 +617,32 @@ int main(
 
         orbit::platform::Window& window =
             runtime.Window();
+        std::atomic_bool ecoMode{false};
+        rpcHost.SetActivityCallback([&window] { window.WakeForActivity(); });
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.eco_mode_get",
+             .description = "Read whether Eco mode is enabled.",
+             .mutating = false},
+            [&ecoMode](const orbit::rpc::Value&)
+            {
+                return orbit::rpc::Value::Object{
+                    {"enabled", ecoMode.load(std::memory_order_relaxed)}};
+            });
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.eco_mode_set",
+             .description = "Enable or disable Eco mode.",
+             .mutating = true},
+            [&ecoMode](const orbit::rpc::Value& params)
+            {
+                const auto* enabled = params.Find("enabled");
+                if (enabled == nullptr || !enabled->IsBool())
+                {
+                    throw std::invalid_argument("enabled must be a boolean");
+                }
+                ecoMode.store(enabled->AsBool(), std::memory_order_relaxed);
+                return orbit::rpc::Value::Object{
+                    {"enabled", enabled->AsBool()}};
+            });
         orbit::rhi::Device& device =
             runtime.Device();
         rpcHost.Dispatcher().Register(
@@ -1089,6 +1115,12 @@ int main(
                 studioViews,
                 studioSession);
         studioViewportPanels.SetContentService(&content);
+        studioViewportPanels.SetEcoModeAccessors(
+            [&ecoMode] { return ecoMode.load(std::memory_order_relaxed); },
+            [&ecoMode](const bool enabled)
+            {
+                ecoMode.store(enabled, std::memory_order_relaxed);
+            });
 
         shortcuts.RegisterCallback(
             {
@@ -1158,11 +1190,13 @@ int main(
         orbit::studio_ui::SimulationControls simulationControls(
             studioSession.Clock());
         orbit::studio_ui::SimulationControlsUi simulationUi(
-            simulationControls);
+            simulationControls,
+            studioSession);
         simulationUi.Register(ui);
         orbit::studio_ui::RegisterSimulationRpc(
             rpcHost.Dispatcher(),
-            simulationControls);
+            simulationControls,
+            studioSession);
 
         // Issue reports: a Reports panel and reports.* RPC over one store,
         // saved with the project so a report survives a crash.
@@ -1805,6 +1839,20 @@ int main(
                         Value::Object{
                             {"requested", true}
                         });
+                });
+
+            rpcHost.Dispatcher().Register(
+                {
+                    .name = "viewport.frame_selected",
+                    .description =
+                        "Frame the selected object in the controlled perspective viewport, like the Scene toolbar and F shortcut.",
+                    .mutating = true
+                },
+                [&studioViewportPanels](const Value&)
+                {
+                    return Value(Value::Object{
+                        {"framed", studioViewportPanels.FrameSelectedObject()}
+                    });
                 });
 
             rpcHost.Dispatcher().Register(
@@ -4039,6 +4087,13 @@ int main(
                     }
 
                     context.SameLine();
+                    if (context.Button("Frame Selected"))
+                    {
+                        static_cast<void>(
+                            studioViewportPanels.FrameSelectedObject());
+                    }
+
+                    context.SameLine();
                     if (context.Button(
                             "Reset View"))
                     {
@@ -4211,6 +4266,16 @@ int main(
                     {
                         interaction.clicked = false;
                         interaction.doubleClicked = false;
+                    }
+
+                    if (studioViewportPanels.GizmoDragging())
+                    {
+                        window.SetRelativeMouseMode(true);
+                    }
+                    else if (!viewportRightGestureActive &&
+                             window.RelativeMouseMode())
+                    {
+                        window.SetRelativeMouseMode(false);
                     }
 
                     if (interaction.hovered &&
@@ -7347,10 +7412,11 @@ int main(
         // Frame pacing. The loop is vsync-bound, so an idle editor still
         // re-renders the whole scene at the display refresh rate. Render at
         // full rate while the user interacts, automation is talking to Studio
-        // or terrain is still refining; otherwise hold to a low rate that
-        // still wakes immediately on input. ORBIT_IDLE_FPS overrides the
-        // default of 30 (0 disables the throttle).
-        orbit::i32 idleFramesPerSecond = 30;
+        // or terrain is still refining. A static scene is NOT capped unless
+        // Eco mode is on (1 FPS, still waking immediately on input); setting
+        // ORBIT_IDLE_FPS to a positive rate opts in to an idle cap while Eco
+        // is off.
+        orbit::i32 idleFramesPerSecond = 0;
         if (const std::string configured =
                 orbit::platform::EnvironmentVariable("ORBIT_IDLE_FPS");
             !configured.empty())
@@ -7407,9 +7473,11 @@ int main(
             {
                 const auto paceNow = Clock::now();
                 const orbit::u64 rpcRequests = rpcHost.RequestCount();
+                const bool inputActivity = window.ConsumeInputActivity();
+                const bool rpcActivity = rpcRequests != lastRpcRequestCount;
                 const bool busy =
-                    window.ConsumeInputActivity() ||
-                    rpcRequests != lastRpcRequestCount ||
+                    inputActivity ||
+                    rpcActivity ||
                     studioSession.Clock().Playing() ||
                     studioViewportRenderer.HasPendingTerrainWork();
                 lastRpcRequestCount = rpcRequests;
@@ -7457,12 +7525,18 @@ int main(
                     lastActivity = paceNow;
                 }
                 else if (
-                    idleFramesPerSecond > 0 &&
+                    (ecoMode.load(std::memory_order_relaxed)
+                        ? 1
+                        : idleFramesPerSecond) > 0 &&
                     paceNow - lastActivity > kIdleAfter)
                 {
+                    const orbit::i32 targetFps =
+                        ecoMode.load(std::memory_order_relaxed)
+                            ? 1
+                            : idleFramesPerSecond;
                     const auto target =
                         std::chrono::microseconds(
-                            1'000'000 / idleFramesPerSecond);
+                            1'000'000 / targetFps);
                     const auto elapsed =
                         std::chrono::duration_cast<std::chrono::microseconds>(
                             paceNow - lastIterationStart);
@@ -7471,6 +7545,29 @@ int main(
                         window.WaitForActivity(
                             static_cast<orbit::u32>(
                                 (target - elapsed).count() / 1000));
+                    }
+                }
+
+                if (ecoMode.load(std::memory_order_relaxed) && busy &&
+                    !rpcActivity)
+                {
+                    constexpr auto kEcoActiveFrame =
+                        std::chrono::milliseconds(67);
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            paceNow - lastIterationStart);
+                    if (elapsed < kEcoActiveFrame)
+                    {
+                        window.WaitForActivity(static_cast<orbit::u32>(
+                            (kEcoActiveFrame - elapsed).count()));
+                        // Input wakes may arrive before the frame deadline.
+                        // Keep servicing the message queue, but defer CPU and
+                        // render work until 15 FPS is due. RPC bypasses this
+                        // gate so automation always gets its immediate frame.
+                        if (rpcHost.RequestCount() == lastRpcRequestCount)
+                        {
+                            continue;
+                        }
                     }
                 }
 
@@ -7888,6 +7985,13 @@ int main(
                 deltaSeconds;
             viewportFrameMouseDelta =
                 window.ConsumeMouseDelta();
+            studioViewportPanels.SetGizmoRelativeMouseDelta(
+                {
+                    static_cast<orbit::f32>(
+                        viewportFrameMouseDelta.x),
+                    static_cast<orbit::f32>(
+                        viewportFrameMouseDelta.y)
+                });
 
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::PreUi,

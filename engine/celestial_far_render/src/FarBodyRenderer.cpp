@@ -888,7 +888,8 @@ float4 main(VSOutput input) : SV_Target0
 {
     const uint mode = (uint)round(g.proxy.x);
     const float opacity = saturate(g.emissionAndOpacity.w);
-    const float2 p = input.uv;
+    const float2 p = input.uv -
+        (mode == 0u ? float2(0.0, 0.0) : g.cameraAndTanHalfFov.xy);
 
     if (mode == 1u)
     {
@@ -2970,12 +2971,12 @@ void FarBodyRenderer::Draw(
             bits(static_cast<f32>(width) /
                  static_cast<f32>(height)),
 
-            bits(static_cast<f32>(
-                draw.camera.localPositionMeters.x /
-                scale)),
-            bits(static_cast<f32>(
-                draw.camera.localPositionMeters.y /
-                scale)),
+            bits(mode == 0U
+                ? static_cast<f32>(draw.camera.localPositionMeters.x / scale)
+                : draw.screenCenterNdc.x),
+            bits(mode == 0U
+                ? static_cast<f32>(draw.camera.localPositionMeters.y / scale)
+                : draw.screenCenterNdc.y),
             bits(static_cast<f32>(
                 draw.camera.localPositionMeters.z /
                 scale)),

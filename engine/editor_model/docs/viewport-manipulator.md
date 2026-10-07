@@ -30,11 +30,13 @@ invariants = [
   "Transform math and writes live ONLY in editor_model::ViewportManipulator; the UI never computes a property value. The Scene toolbar sets GizmoSettings (tool, space, snap), the viewport handles feed pointer rays, and the object.transform RPC calls ApplyDelta, so a drag and an agent produce the same result.",
   "Supported objects: Primitive (move, rotate, scale), Visibility Proxy (move, rotate, scale: box half extents or sphere radius), Point Light (move), Spot Light (move, rotate its direction). Anything else has no handles (volumes, bodies, decals and reference nodes are not manipulable yet) and the viewport shows a hint instead of failing.",
   "One drag = one command transaction: Begin opens it, every Update writes the ABSOLUTE result for the current pointer (never incremental, so there is no drift), Commit is one undo step and Cancel/Esc rolls back to the exact start. Begin throws if another transaction is active.",
+  "An active drag uses the ObjectStore preview revision to invalidate the proxy render scene each frame while the committed semantic revision stays unchanged. The final commit advances the committed revision once; rollback advances the preview revision to refresh the restored state. No universe identity change is published, so terrain navigation does not reset the camera.",
+  "The Studio host enables platform relative-mouse capture only while a gizmo drag is active. The native cursor recenters and the gizmo accumulates relative deltas as an unbounded virtual viewport pointer, so movement keeps going beyond every screen edge. Capture is released on commit, cancel or target/world loss; standard camera right-drag retains its existing behavior.",
   "Drag math: translate = closest point on the handle axis to the pointer ray; rotate = angle swept in the plane normal to the axis; scale = ratio of axis parameters (uniform: ratio of distances on a plane perpendicular to the grab ray, so it is approximate in perspective). Rays that run parallel to a handle cannot grab it (Begin returns false).",
   "Spaces: Move and Rotate follow the toolbar's World/Local choice; Scale ALWAYS uses the object's own axes (EffectiveSpace). Euler angles use the intrinsic XYZ convention (Rz * Ry * Rx) shared with the renderer; rotation is composed as a matrix and converted back, folding roll into X at gimbal lock.",
   "Property space: authored positions, directions and Euler angles are treated as living in the viewport's local frame (camera.localPositionMeters frame), the same assumption the light and volume gizmos make. A parent frame with its own rotation is not accounted for yet.",
   "Snap comes from the toolbar settings: translate snaps the displacement from the drag start, rotate snaps the swept angle, scale snaps the factor to steps and never below one step. Surface snap and pivot modes are stored in GizmoSettings but not used (single selection only).",
-  "Handles keep a constant on-screen size (about 110 px, scaled by the UI scale) by converting pixels to meters at the object's depth; they are 2D ImGui overlays drawn after the viewport Image (OverlayShapesOnLastItem), so they never depend on the render graph or GPU resources and survive generation reloads.",
+  "Handles keep a constant on-screen size (about 110 px, scaled by the UI scale) by converting pixels to meters at the object's depth; they are 2D ImGui overlays drawn after the viewport Image (OverlayShapesOnLastItem), so handle drawing never depends on GPU resources and the overlay survives generation reloads.",
   "While the handles own the left button (hovering one or dragging) HandleViewportGizmo returns true and the caller must not treat the press as a selection, terrain pick or path-placement click. A drag is cancelled when the selection changes or the authoring world is replaced.",
   "The handles draw only for a single selected object in a Perspective-mode viewport; the Body Map and Debug views have no 3D camera to project with.",
 ]
@@ -86,8 +88,9 @@ docs = ["/editor/mcp-rpc"]
 ## Controls
 
 Left-drag a coloured axis arrow (Move), ring (Rotate) or axis dot (Scale; the circle at the centre scales uniformly).
-The handle under the pointer highlights. Esc cancels the drag; Undo reverts a finished drag in one step. Right-drag and
-the keyboard still navigate the camera.
+The object follows the drag continuously while the camera stays put. The pointer is captured and loops through the
+viewport so the drag can continue indefinitely. Esc cancels the drag; Undo reverts a finished drag in one step.
+Right-drag and the keyboard still navigate the camera.
 
 ## Hot iteration
 

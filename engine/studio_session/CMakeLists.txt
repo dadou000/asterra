@@ -13,6 +13,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioTerrainRoundTripVerifier.cpp
     src/StudioTerrainRuntimeBridge.cpp
     src/StudioTerrainServiceStatus.cpp
+    src/StudioMeshRpc.cpp
     src/StudioTerrainStatusRpc.cpp
     src/StudioTerrainValidationScenario.cpp
     src/StudioWorkspace.cpp
@@ -47,6 +48,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::EditorRpc
         Orbit::EditorSession
         Orbit::Jobs
+        Orbit::MeshImport
         Orbit::PathGeometry
         Orbit::PathRouting
         Orbit::Paths

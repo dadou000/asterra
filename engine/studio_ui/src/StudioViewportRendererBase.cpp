@@ -23,6 +23,7 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/LocalLightBinding.hpp>
+#include <orbit/world_model/StaticMeshBinding.hpp>
 #include <orbit/world_model/VisibilityProxyBinding.hpp>
 #include <orbit/world_model/VolumeSchemas.hpp>
 #include <orbit/lighting/LocalLightRegistry.hpp>
@@ -34,6 +35,7 @@
 #include <orbit/world/PlanetTileNeighborhood.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -2049,110 +2051,292 @@ ResolveStudioDirectLight(
     const time::SimulationTime atTime)
 {
     ResolvedStudioDirectLight result;
-
-    auto& universe =
-        session.World().
-            Universe();
-
-    const auto* receiverBody =
-        universe.Bodies().
-            FindBody(receiver);
-
-    if (receiverBody == nullptr)
-    {
-        return result;
-    }
-
-    const auto candidates =
-        universe.Bodies().
-            Bodies(
-                receiverBody->system);
-
     world_model::CelestialLightingService
         lighting(
             session.World().Objects(),
-            universe);
-
-    f64 bestIrradiance = -1.0;
-
-    for (const auto emitter :
-         candidates)
+            session.World().Universe());
+    result.direct = lighting.DominantDirectLightingAtBody(receiver, atTime);
+    if (result.direct.has_value())
     {
-        if (emitter == receiver)
-        {
-            continue;
-        }
-
-        const auto emitterObject =
-            universe.ObjectForBody(
-                emitter);
-
-        if (!emitterObject.has_value() ||
-            !world_model::
-                ResolveRadiativeBody(
-                    session.World().
-                        Objects(),
-                    *emitterObject).
-                has_value())
-        {
-            continue;
-        }
-
-        std::vector<universe::BodyId>
-            occluders;
-
-        for (const auto other :
-             candidates)
-        {
-            if (other != receiver &&
-                other != emitter)
-            {
-                occluders.push_back(
-                    other);
-            }
-        }
-
-        const auto direct =
-            lighting.DirectLightingAtBody(
-                receiver,
-                emitter,
-                occluders,
-                atTime);
-
-        if (!direct.has_value() ||
-            direct->
-                irradianceWattsPerSquareMeter <=
-                bestIrradiance)
-        {
-            continue;
-        }
-
-        bestIrradiance =
-            direct->
-                irradianceWattsPerSquareMeter;
-
-        const auto direction =
-            math::Normalize(
-                direct->
-                    receiverBodyFixedToEmitterMeters);
-
+        const auto direction = math::Normalize(
+            result.direct->receiverBodyFixedToEmitterMeters);
         result.directionBody = {
             static_cast<f32>(direction.x),
             static_cast<f32>(direction.y),
             static_cast<f32>(direction.z)
         };
-
-        result.irradianceScale =
-            static_cast<f32>(
-                direct->
-                    irradianceWattsPerSquareMeter /
-                kStudioReferenceIrradianceWattsPerSquareMeter);
-
-        result.direct =
-            direct;
+        result.irradianceScale = static_cast<f32>(
+            result.direct->irradianceWattsPerSquareMeter /
+            kStudioReferenceIrradianceWattsPerSquareMeter);
     }
 
     return result;
+}
+
+[[nodiscard]] std::optional<editor_ui::PreviewMaterial>
+ResolveRuntimeBodyMaterialIfAssigned(
+    content::ContentService* content,
+    scene::ObjectStore& objects,
+    std::optional<scene::ObjectId> bodyObject);
+
+[[nodiscard]] std::vector<celestial_far_render::FarBodyDraw>
+ResolveSystemBodyDraws(
+    studio_session::StudioSession& session,
+    content::ContentService* content,
+    const universe::BodyId activeBody,
+    const render_view::CameraState& camera,
+    const time::SimulationTime atTime,
+    const u32 width,
+    const u32 height)
+{
+    struct DistanceDraw
+    {
+        f64 distanceMeters{0.0};
+        celestial_far_render::FarBodyDraw draw;
+    };
+    std::vector<DistanceDraw> sorted;
+    const auto& universe = session.World().Universe();
+    const auto* active = universe.Bodies().FindBody(activeBody);
+    if (active == nullptr || !camera.frame)
+    {
+        return {};
+    }
+    const auto& frames = universe.Frames();
+    const auto& objects = session.World().Objects();
+    const world_model::CelestialLightingService lighting(objects, universe);
+    for (const auto bodyId : universe.Bodies().Bodies(active->system))
+    {
+        if (bodyId == activeBody)
+        {
+            continue;
+        }
+        const auto* body = universe.Bodies().FindBody(bodyId);
+        if (body == nullptr)
+        {
+            continue;
+        }
+        const auto center = frames.TransformPoint(
+            {.frame = body->frame, .localMeters = {}},
+            camera.frame, atTime);
+        const auto bodyFromCamera = frames.ResolveTransform(
+            camera.frame, body->frame, atTime);
+        if (!center.has_value() || !bodyFromCamera.has_value())
+        {
+            continue;
+        }
+        const auto projected = render_view::ProjectToViewport(
+            camera, width, height, center->localMeters);
+        if (!projected.has_value())
+        {
+            continue;
+        }
+        const f64 distance = math::Length(
+            center->localMeters - camera.localPositionMeters);
+        const auto bodyObject = universe.ObjectForBody(bodyId);
+        const auto radiative = bodyObject.has_value()
+            ? world_model::ResolveRadiativeBody(objects, *bodyObject)
+            : std::nullopt;
+        const f64 radius = radiative.has_value()
+            ? radiative->photosphereRadiusMeters
+            : ReferenceRadiusForShape(body->shape);
+        if (!std::isfinite(distance) || !std::isfinite(radius) ||
+            radius <= 0.0 || distance <= radius)
+        {
+            continue;
+        }
+        const f64 tanHalfFov = std::tan(
+            static_cast<f64>(camera.verticalFovRadians) * 0.5);
+        const f64 apparentRadius =
+            radius / std::sqrt(distance * distance - radius * radius);
+        const f64 radiusPixels = apparentRadius /
+            std::max(tanHalfFov, 1.0e-6) * static_cast<f64>(height) * 0.5;
+        const f64 radiusNdc = 2.0 * radiusPixels / static_cast<f64>(height);
+        const f64 aspect = static_cast<f64>(width) / static_cast<f64>(height);
+        // ProjectToViewport uses up x forward for screen-right, whereas the
+        // Studio sky and far-body shaders use forward x up. Match the rendered
+        // view so a distant body stays aligned while the camera yaws.
+        const f64 centerX = 1.0 - 2.0 * projected->u;
+        const f64 centerY = 1.0 - 2.0 * projected->v;
+        if (std::abs(centerX) > 1.0 + radiusNdc / aspect + 0.1 ||
+            std::abs(centerY) > 1.0 + radiusNdc + 0.1)
+        {
+            continue;
+        }
+
+        celestial_far_render::FarBodyDraw draw;
+        draw.shape = body->shape;
+        draw.camera = camera;
+        draw.camera.frame = body->frame;
+        draw.camera.localPositionMeters = math::TransformPoint(
+            *bodyFromCamera, camera.localPositionMeters);
+        const auto forward = math::TransformVector(
+            bodyFromCamera->rotation,
+            {camera.forward.x, camera.forward.y, camera.forward.z});
+        const auto up = math::TransformVector(
+            bodyFromCamera->rotation,
+            {camera.up.x, camera.up.y, camera.up.z});
+        draw.camera.forward = {
+            static_cast<f32>(forward.x),
+            static_cast<f32>(forward.y),
+            static_cast<f32>(forward.z)};
+        draw.camera.up = {
+            static_cast<f32>(up.x),
+            static_cast<f32>(up.y),
+            static_cast<f32>(up.z)};
+        draw.projectedRadiusPixels = radiusPixels;
+        draw.screenCenterNdc = {
+            static_cast<f32>(centerX), static_cast<f32>(centerY)};
+
+        draw.stellar = radiative.has_value();
+        draw.representation = radiusPixels >= 10.0 && !draw.stellar
+            ? celestial_representation::Representation::SmoothGlobe
+            : radiusPixels >= 0.55
+                ? celestial_representation::Representation::AnalyticDiscImpostor
+                : draw.stellar
+                    ? celestial_representation::Representation::StellarPointProxy
+                    : celestial_representation::Representation::PointProxy;
+        if (draw.representation !=
+            celestial_representation::Representation::SmoothGlobe)
+        {
+            // Disc normals face the body's actual camera direction even when
+            // its centre is far from the middle of the viewport.
+            const auto toCenter = math::Normalize(
+                draw.camera.localPositionMeters * -1.0);
+            draw.camera.forward = {
+                static_cast<f32>(toCenter.x),
+                static_cast<f32>(toCenter.y),
+                static_cast<f32>(toCenter.z)};
+        }
+
+        if (radiative.has_value())
+        {
+            draw.shape = universe::SphereShape{
+                radiative->photosphereRadiusMeters};
+            draw.appearance.albedoLinear = {
+                static_cast<f32>(radiative->stellarColorLinear.x),
+                static_cast<f32>(radiative->stellarColorLinear.y),
+                static_cast<f32>(radiative->stellarColorLinear.z)};
+            draw.stellarColorLinear = draw.appearance.albedoLinear;
+            draw.radiometricIntensity = static_cast<f32>(
+                draw.representation ==
+                    celestial_representation::Representation::StellarPointProxy
+                    ? celestial_radiometry::EncodeIrradianceSceneLinear(
+                          celestial_radiometry::IrradianceWattsPerSquareMeter(
+                              radiative->radiative.luminosityWatts, distance))
+                    : radiative->radiative.surfaceRadianceWattsPerSquareMeterSteradian /
+                          kStudioReferenceIrradianceWattsPerSquareMeter);
+            const auto& appearance = radiative->stellarAppearance;
+            draw.stellarLimbDarkening = static_cast<f32>(appearance.limbDarkening);
+            draw.stellarGranulationStrength = static_cast<f32>(appearance.granulationStrength);
+            draw.stellarGranulationScale = static_cast<f32>(appearance.granulationScale);
+            draw.stellarActivityLevel = static_cast<f32>(appearance.activityLevel);
+            draw.stellarActivitySeed = static_cast<u32>(appearance.activitySeed);
+            draw.stellarChromosphereStrength = static_cast<f32>(appearance.chromosphereStrength);
+            draw.stellarChromosphereExtent = static_cast<f32>(appearance.chromosphereExtent);
+            draw.stellarCoronaStrength = static_cast<f32>(appearance.coronaStrength);
+            draw.stellarCoronaExtent = static_cast<f32>(appearance.coronaExtent);
+            draw.stellarGlareStrength = static_cast<f32>(appearance.glareStrength);
+            draw.stellarGlareRadiusPixels = static_cast<f32>(appearance.glareRadiusPixels);
+        }
+        else
+        {
+            draw.appearance.albedoLinear = {0.18F, 0.21F, 0.23F};
+            if (const auto material = ResolveRuntimeBodyMaterialIfAssigned(
+                    content, session.World().Objects(), bodyObject))
+            {
+                draw.appearance.albedoLinear = material->baseColor;
+                draw.appearance.roughness = material->roughness;
+                draw.appearance.emissionLinear = material->emissionRadiance;
+            }
+            if (const auto direct = lighting.DominantDirectLightingAtBody(bodyId, atTime))
+            {
+                const auto direction = math::Normalize(
+                    direct->receiverBodyFixedToEmitterMeters);
+                draw.lightDirectionBody = {
+                    static_cast<f32>(direction.x),
+                    static_cast<f32>(direction.y),
+                    static_cast<f32>(direction.z)};
+                draw.incidentLightScale = static_cast<f32>(
+                    direct->irradianceWattsPerSquareMeter /
+                    kStudioReferenceIrradianceWattsPerSquareMeter);
+            }
+            else
+            {
+                draw.incidentLightScale = 0.0F;
+            }
+            if (bodyObject.has_value())
+            {
+                if (const auto giant = world_model::ResolveGiantAppearance(
+                        objects, *bodyObject))
+                {
+                    const auto& p = giant->parameters;
+                    draw.giantEnabled = true;
+                    draw.giantBaseColorLinear = {
+                        static_cast<f32>(p.baseColorLinear.x),
+                        static_cast<f32>(p.baseColorLinear.y),
+                        static_cast<f32>(p.baseColorLinear.z)};
+                    draw.giantBandColorLinear = {
+                        static_cast<f32>(p.bandColorLinear.x),
+                        static_cast<f32>(p.bandColorLinear.y),
+                        static_cast<f32>(p.bandColorLinear.z)};
+                    draw.giantPolarColorLinear = {
+                        static_cast<f32>(p.polarColorLinear.x),
+                        static_cast<f32>(p.polarColorLinear.y),
+                        static_cast<f32>(p.polarColorLinear.z)};
+                    draw.giantBandFrequency = static_cast<f32>(p.bandFrequency);
+                    draw.giantBandStrength = static_cast<f32>(p.bandStrength);
+                    draw.giantZonalShear = static_cast<f32>(p.zonalShear);
+                    draw.giantStormStrength = static_cast<f32>(p.stormStrength);
+                    draw.giantStormScale = static_cast<f32>(p.stormScale);
+                    draw.giantPolarStrength = static_cast<f32>(p.polarStrength);
+                    draw.giantDepthContrast = static_cast<f32>(p.depthContrast);
+                    draw.giantTurbulenceStrength = static_cast<f32>(p.turbulenceStrength);
+                    draw.giantSeed = static_cast<u32>(p.seed);
+                }
+                if (const auto small = world_model::ResolveSmallBodyAppearance(
+                        objects, *bodyObject))
+                {
+                    const auto& p = small->parameters;
+                    draw.smallBodyEnabled = true;
+                    draw.appearance.albedoLinear = {
+                        static_cast<f32>(p.regolithColorLinear.x),
+                        static_cast<f32>(p.regolithColorLinear.y),
+                        static_cast<f32>(p.regolithColorLinear.z)};
+                    draw.smallBodyAxisScale = {
+                        static_cast<f32>(p.axisScale.x),
+                        static_cast<f32>(p.axisScale.y),
+                        static_cast<f32>(p.axisScale.z)};
+                    draw.smallBodyIrregularity = static_cast<f32>(p.irregularity);
+                    draw.smallBodyLargeLobeStrength = static_cast<f32>(p.largeLobeStrength);
+                    draw.smallBodyCraterDensity = static_cast<f32>(p.craterDensity);
+                    draw.smallBodyCraterDepth = static_cast<f32>(p.craterDepth);
+                    draw.smallBodyCraterRimStrength = static_cast<f32>(p.craterRimStrength);
+                    draw.smallBodyFreshMaterialColorLinear = {
+                        static_cast<f32>(p.freshMaterialColorLinear.x),
+                        static_cast<f32>(p.freshMaterialColorLinear.y),
+                        static_cast<f32>(p.freshMaterialColorLinear.z)};
+                    draw.smallBodyColorVariation = static_cast<f32>(p.colorVariation);
+                    draw.smallBodyOppositionStrength = static_cast<f32>(p.oppositionStrength);
+                    draw.smallBodyOppositionWidthRadians = static_cast<f32>(p.oppositionWidthRadians);
+                    draw.smallBodySingleScatteringAlbedo = static_cast<f32>(p.singleScatteringAlbedo);
+                    draw.smallBodyMacroscopicRoughnessRadians = static_cast<f32>(p.macroscopicRoughnessRadians);
+                    draw.smallBodySeed = static_cast<u32>(p.seed);
+                }
+            }
+        }
+        sorted.push_back({distance, draw});
+    }
+    std::stable_sort(sorted.begin(), sorted.end(),
+        [](const DistanceDraw& a, const DistanceDraw& b) {
+            return a.distanceMeters > b.distanceMeters;
+        });
+    std::vector<celestial_far_render::FarBodyDraw> draws;
+    draws.reserve(sorted.size());
+    for (auto& item : sorted)
+    {
+        draws.push_back(std::move(item.draw));
+    }
+    return draws;
 }
 
 
@@ -2595,6 +2779,13 @@ StudioViewportRenderer::StudioViewportRenderer(
       radianceCacheSampler_(device, compiler),
       proxySunShadowRenderer_(device, compiler),
       proxySurfaceRenderer_(device, compiler),
+      meshLibrary_(std::make_unique<mesh_render::MeshLibrary>(device)),
+      meshSurfaceRenderer_(device, compiler),
+      meshSdfScene_(device, compiler),
+      meshSdfDebugRenderer_(device, compiler),
+      meshShadowMapRenderer_(device, compiler),
+      meshSunShadowRenderer_(device, compiler),
+      antiAliasingRenderer_(device, compiler),
       hybridReflectionRenderer_(device, compiler),
       exactReflectionQueryRenderer_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
@@ -2611,6 +2802,8 @@ StudioViewportRenderer::StudioViewportRenderer(
                   post_process::
                       BuildIdentityColorLut()))
 {
+    meshSurfaceRenderer_.SetSdfScene(&meshSdfScene_);
+
     if (framesInFlight_ == 0U)
     {
         throw std::invalid_argument(
@@ -3940,6 +4133,58 @@ StudioViewportRenderer::Compose(
                 "Studio RenderView catalog contains a missing view.");
         }
 
+        // Anti-aliasing camera jitter. The camera is re-derived from
+        // navigation every frame; if it is still exactly what we jittered last
+        // frame, start again from the un-jittered camera so jitter never
+        // accumulates, then apply this frame's sub-pixel rotation.
+        const auto antiAliasingMode =
+            static_cast<post_process::AntiAliasingMode>(
+                std::min<u8>(info.layers.antiAliasing, 2U));
+        {
+            auto& aa = antiAliasingPresentations_[info.id];
+            auto& camera = view->Camera();
+
+            const auto sameCamera =
+                [](const render_view::CameraState& a,
+                   const render_view::CameraState& b)
+            {
+                return a.forward.x == b.forward.x &&
+                       a.forward.y == b.forward.y &&
+                       a.forward.z == b.forward.z &&
+                       a.up.x == b.up.x && a.up.y == b.up.y &&
+                       a.up.z == b.up.z &&
+                       a.localPositionMeters.x == b.localPositionMeters.x &&
+                       a.localPositionMeters.y == b.localPositionMeters.y &&
+                       a.localPositionMeters.z == b.localPositionMeters.z &&
+                       a.verticalFovRadians == b.verticalFovRadians;
+            };
+
+            if (aa.hasBase && sameCamera(camera, aa.applied))
+            {
+                camera = aa.base;
+            }
+            aa.base = camera;
+            aa.hasBase = true;
+
+            if (antiAliasingMode == post_process::AntiAliasingMode::Taa &&
+                view->SurfaceDebugMode() == lighting::SurfaceDebugMode::Lit)
+            {
+                post_process::ApplyCameraJitter(
+                    camera.forward,
+                    camera.up,
+                    camera.verticalFovRadians,
+                    view->Height(),
+                    {post_process::TaaJitterPixels(aa.frameCounter)[0] *
+                         info.layers.taaJitterScale,
+                     post_process::TaaJitterPixels(aa.frameCounter)[1] *
+                         info.layers.taaJitterScale},
+                    camera.forward,
+                    camera.up);
+            }
+            ++aa.frameCounter;
+            aa.applied = camera;
+        }
+
         const std::string prefix =
             "StudioViewport." + info.id;
         const auto targets =
@@ -4057,7 +4302,7 @@ StudioViewportRenderer::Compose(
                 const u64 semanticRevision =
                     session.World().
                         Objects().
-                        Revision();
+                        PreviewRevision();
 
                 auto& proxyPresentation =
                     visibilityProxyPresentations_[
@@ -4241,6 +4486,96 @@ StudioViewportRenderer::Compose(
                 erase(info.id);
         }
 
+        // Imported Static Meshes of the target body: placed every frame in
+        // double precision relative to the camera, drawn by the mesh surface
+        // pass. Models load on a worker thread and appear once resident.
+        {
+            auto& meshPresentation = staticMeshPresentations_[info.id];
+            meshPresentation.instances.clear();
+            meshPresentation.requested = 0U;
+            meshPresentation.hasAnchor = false;
+
+            if (logicalTarget->target.has_value() &&
+                snapshot.hasWorld &&
+                bodies != nullptr &&
+                frames != nullptr)
+            {
+                const auto meshBody = logicalTarget->target->body;
+                const auto* meshBodyRecord = bodies->FindBody(meshBody);
+                const auto meshBodyObject =
+                    session.World().Universe().ObjectForBody(meshBody);
+
+                if (meshBodyRecord != nullptr && meshBodyObject.has_value())
+                {
+                    const auto targetFromBody =
+                        frames->ResolveTransform(
+                            meshBodyRecord->frame,
+                            view->Lighting().frame,
+                            atTime);
+
+                    if (targetFromBody.has_value())
+                    {
+                        const auto projectRoot =
+                            session.World().Project().RootDirectory()
+                                .lexically_normal();
+                        const auto& cameraInFrame =
+                            view->Lighting().cameraPositionInFrameMeters;
+
+                        for (const auto& mesh :
+                             world_model::ResolveStaticMeshes(
+                                 session.World().Objects(),
+                                 *meshBodyObject))
+                        {
+                            ++meshPresentation.requested;
+
+                            // Asset paths are project-relative and may not
+                            // leave the project folder.
+                            const auto absolute =
+                                (projectRoot /
+                                 std::filesystem::path(mesh.meshAsset))
+                                    .lexically_normal();
+                            if (absolute.string().rfind(
+                                    projectRoot.string(), 0U) != 0U)
+                            {
+                                continue;
+                            }
+
+                            const mesh_render::MeshModel* model =
+                                meshLibrary_->Acquire(absolute);
+                            if (model == nullptr)
+                            {
+                                continue;
+                            }
+
+                            // (Not math::Compose: this translation unit
+                            // renames that identifier for the renderer.)
+                            const auto placementRotation = math::Multiply(
+                                targetFromBody->rotation,
+                                EulerDegreesToRotation(mesh.eulerDegrees));
+                            const auto placementOrigin = math::TransformPoint(
+                                *targetFromBody, mesh.positionMeters);
+
+                            if (!meshPresentation.hasAnchor)
+                            {
+                                meshPresentation.hasAnchor = true;
+                                meshPresentation.anchorInFrame =
+                                    placementOrigin;
+                                meshPresentation.targetFromBody =
+                                    *targetFromBody;
+                            }
+
+                            meshPresentation.instances.push_back({
+                                .model = model,
+                                .rows = mesh_render::MakeInstanceRows(
+                                    placementRotation,
+                                    mesh.uniformScale,
+                                    placementOrigin - cameraInFrame)});
+                        }
+                    }
+                }
+            }
+        }
+
         const auto terrainRuntime =
             session.TerrainRuntime().
                 Capture(
@@ -4262,6 +4597,181 @@ StudioViewportRenderer::Compose(
         {
             throw std::logic_error(
                 "Studio terrain viewport runtime is stale for the current session generation.");
+        }
+
+        // Non-mesh geometry the mesh distance field also needs, so the sunlit
+        // ground and nearby structures bounce light onto meshes: Visibility
+        // Proxies (analytic boxes / spheres) and a terrain height patch.
+        if (auto meshFound = staticMeshPresentations_.find(info.id);
+            meshFound != staticMeshPresentations_.end())
+        {
+            auto& meshPresentation = meshFound->second;
+            if (!meshPresentation.hasAnchor ||
+                meshPresentation.instances.empty())
+            {
+                meshPresentation.sdfExtra.reset();
+            }
+            else
+            {
+                auto extra =
+                    std::make_shared<mesh_render::SdfExtraGeometry>();
+                const auto anchor = meshPresentation.anchorInFrame;
+
+                if (const auto proxyFound =
+                        visibilityProxyPresentations_.find(info.id);
+                    !info.layers.bypassSdfProxies &&
+                    proxyFound != visibilityProxyPresentations_.end() &&
+                    proxyFound->second.scene.Frame() ==
+                        view->Lighting().frame)
+                {
+                    // Centres come back relative to the anchor so float32
+                    // keeps millimetres at planetary distances.
+                    for (const auto& gpu :
+                         proxyFound->second.scene.GpuPrimitives(anchor))
+                    {
+                        const bool box = gpu.centerType.w > 0.5F;
+                        mesh_render::SdfProxyPrimitive primitive;
+                        primitive.center = {
+                            anchor.x + static_cast<f64>(gpu.centerType.x),
+                            anchor.y + static_cast<f64>(gpu.centerType.y),
+                            anchor.z + static_cast<f64>(gpu.centerType.z)};
+                        primitive.box = box;
+                        primitive.axisX = {
+                            gpu.axisXExtent.x, gpu.axisXExtent.y,
+                            gpu.axisXExtent.z};
+                        primitive.axisY = {
+                            gpu.axisYExtent.x, gpu.axisYExtent.y,
+                            gpu.axisYExtent.z};
+                        primitive.axisZ = {
+                            gpu.axisZExtent.x, gpu.axisZExtent.y,
+                            gpu.axisZExtent.z};
+                        primitive.halfExtents = {
+                            gpu.axisXExtent.w,
+                            box ? gpu.axisYExtent.w : gpu.axisXExtent.w,
+                            box ? gpu.axisZExtent.w : gpu.axisXExtent.w};
+                        extra->primitives.push_back(primitive);
+                    }
+                }
+
+                if (terrainRuntime.has_value() &&
+                    !info.layers.bypassSdfTerrain)
+                {
+                    const auto& patchSource =
+                        session.TerrainRuntime().TerrainSource(
+                            *terrainRuntime);
+                    const u64 sourceRevision = patchSource.Revision();
+                    const f64 moved = math::Length(
+                        anchor - meshPresentation.terrainPatchAnchor);
+                    if (meshPresentation.terrainPatch == nullptr ||
+                        meshPresentation.terrainPatchSourceRevision !=
+                            sourceRevision ||
+                        moved > 2.0)
+                    {
+                        constexpr u32 kCount = 193U;
+                        constexpr f64 kCell = 1.0;
+                        const auto bodyFromFrame =
+                            math::Inverse(meshPresentation.targetFromBody);
+                        const math::Double3 anchorBody =
+                            math::TransformPoint(bodyFromFrame, anchor);
+                        const f64 anchorRadius = math::Length(anchorBody);
+                        if (anchorRadius > 1.0)
+                        {
+                            const math::Double3 upBody =
+                                anchorBody * (1.0 / anchorRadius);
+                            const math::Double3 helper =
+                                std::abs(upBody.y) < 0.99
+                                ? math::Double3{0.0, 1.0, 0.0}
+                                : math::Double3{1.0, 0.0, 0.0};
+                            math::Double3 eastBody =
+                                math::Cross(helper, upBody);
+                            eastBody = eastBody *
+                                (1.0 / math::Length(eastBody));
+                            const math::Double3 northBody =
+                                math::Cross(upBody, eastBody);
+
+                            const auto& rotation =
+                                meshPresentation.targetFromBody.rotation;
+                            const auto toFrame =
+                                [&](const math::Double3& v)
+                            {
+                                return math::TransformVector(rotation, v);
+                            };
+                            const math::Double3 upFrame = toFrame(upBody);
+                            const math::Double3 eastFrame =
+                                toFrame(eastBody);
+                            const math::Double3 northFrame =
+                                toFrame(northBody);
+
+                            auto patch = std::make_shared<
+                                mesh_render::SdfTerrainPatch>();
+                            patch->center = anchor;
+                            patch->east = {
+                                static_cast<f32>(eastFrame.x),
+                                static_cast<f32>(eastFrame.y),
+                                static_cast<f32>(eastFrame.z)};
+                            patch->north = {
+                                static_cast<f32>(northFrame.x),
+                                static_cast<f32>(northFrame.y),
+                                static_cast<f32>(northFrame.z)};
+                            patch->up = {
+                                static_cast<f32>(upFrame.x),
+                                static_cast<f32>(upFrame.y),
+                                static_cast<f32>(upFrame.z)};
+                            patch->cellMeters = static_cast<f32>(kCell);
+                            patch->count = kCount;
+                            patch->revision =
+                                ++meshPresentation.terrainPatchCounter;
+                            patch->heights.resize(
+                                static_cast<std::size_t>(kCount) * kCount);
+                            const f64 half =
+                                0.5 * static_cast<f64>(kCount - 1U);
+                            for (u32 j = 0U; j < kCount; ++j)
+                            {
+                                for (u32 i = 0U; i < kCount; ++i)
+                                {
+                                    const math::Double3 planar =
+                                        anchorBody +
+                                        eastBody *
+                                            ((static_cast<f64>(i) - half) *
+                                             kCell) +
+                                        northBody *
+                                            ((static_cast<f64>(j) - half) *
+                                             kCell);
+                                    const f64 radius = math::Length(planar);
+                                    const math::Double3 direction =
+                                        planar * (1.0 / radius);
+                                    const auto sample = patchSource.Sample({
+                                        .unitDirection = direction,
+                                        .footprintMeters = kCell,
+                                        .planet =
+                                            terrainRuntime->planet.id,
+                                        .radialOffsetMeters = 0.0});
+                                    const f64 elevation =
+                                        std::isfinite(sample.elevationMeters)
+                                        ? sample.elevationMeters
+                                        : 0.0;
+                                    const math::Double3 ground =
+                                        direction *
+                                        (terrainRuntime->planet
+                                             .radiusMeters +
+                                         elevation);
+                                    patch->heights
+                                        [static_cast<std::size_t>(j) *
+                                             kCount + i] =
+                                        static_cast<f32>(math::Dot(
+                                            ground - anchorBody, upBody));
+                                }
+                            }
+                            meshPresentation.terrainPatch = patch;
+                            meshPresentation.terrainPatchAnchor = anchor;
+                            meshPresentation.terrainPatchSourceRevision =
+                                sourceRevision;
+                        }
+                    }
+                    extra->terrain = meshPresentation.terrainPatch;
+                }
+                meshPresentation.sdfExtra = std::move(extra);
+            }
         }
 
         const surface::TerrainSurfaceCapability* macroGlobeSurface = nullptr;
@@ -5417,6 +5927,47 @@ StudioViewportRenderer::Compose(
         const u32 width = view->Width();
         const u32 height = view->Height();
         auto* color = &view->Color();
+        const auto systemBodies =
+            snapshot.hasWorld && logicalTarget->target.has_value() &&
+                    logicalTarget->mode == studio_session::ViewportMode::Perspective
+                ? ResolveSystemBodyDraws(
+                      session, content_, logicalTarget->target->body,
+                      view->Camera(), atTime, width, height)
+                : std::vector<celestial_far_render::FarBodyDraw>{};
+        auto backgroundBodies = std::make_shared<std::vector<
+            celestial_far_render::FarBodyDraw>>();
+        auto foregroundBodies = std::make_shared<std::vector<
+            celestial_far_render::FarBodyDraw>>();
+        const f64 activeDistance = math::Length(
+            view->Camera().localPositionMeters);
+        // Draw far bodies before the active presentation and closer bodies
+        // after it. Stable far-to-near order also handles mutual transits.
+        for (const auto& draw : systemBodies)
+        {
+            (math::Length(draw.camera.localPositionMeters) < activeDistance
+                 ? *foregroundBodies
+                 : *backgroundBodies).push_back(draw);
+        }
+        const auto drawBackgroundBodies =
+            [this, color, width, height, backgroundBodies](
+                rhi::CommandList& commands)
+            {
+                for (const auto& draw : *backgroundBodies)
+                {
+                    farBodyRenderer_.Draw(
+                        commands, *color, width, height, draw);
+                }
+            };
+        const auto drawForegroundBodies =
+            [this, color, width, height, foregroundBodies](
+                rhi::CommandList& commands)
+            {
+                for (const auto& draw : *foregroundBodies)
+                {
+                    farBodyRenderer_.Draw(
+                        commands, *color, width, height, draw);
+                }
+            };
 
         // Only the production-terrain presentation clears depth itself.
         // Every other presentation must start from an empty depth buffer, or
@@ -6071,6 +6622,7 @@ StudioViewportRenderer::Compose(
                      performanceObserver,
                      performanceCacheStats,
                      performanceAdapter,
+                     drawBackgroundBodies,
                      framesInFlight =
                         framesInFlight_](
                         rhi::CommandList& commands,
@@ -6097,6 +6649,8 @@ StudioViewportRenderer::Compose(
                         commands.ClearDepthTarget(
                             *depth,
                             0.0F);
+
+                        drawBackgroundBodies(commands);
 
                         const std::array<rhi::Texture*, 4> surfaceTargets{
                             color,
@@ -6431,6 +6985,7 @@ StudioViewportRenderer::Compose(
                      surfaceNormalMetallic,
                      surfaceEmissionClass,
                      clearForFarOnly,
+                     drawBackgroundBodies,
                      richer,
                      lower,
                      lowerOpacity,
@@ -6481,6 +7036,7 @@ StudioViewportRenderer::Compose(
                                 *surfaceEmissionClass,
                                 {0.0F, 0.0F, 0.0F, 0.0F});
                             commands.SetRenderTargets(clearTargets, depth);
+                            drawBackgroundBodies(commands);
                         }
 
                         if (richer == celestial_representation::Representation::ProductionSurface)
@@ -6785,6 +7341,7 @@ StudioViewportRenderer::Compose(
                  camera,
                  studioDirectLight,
                  resolvedOceanForView,
+                 drawBackgroundBodies,
                  globeLodBias = info.layers.lodBiasStops,
                  macroGlobeLayer = (info.layers.macroGlobe && !info.layers.fullClipmap)](
                     rhi::CommandList& commands,
@@ -6807,6 +7364,8 @@ StudioViewportRenderer::Compose(
                     commands.ClearColorTarget(
                         *macroSurfaceEmissionClass,
                         {0.0F, 0.0F, 0.0F, 0.0F});
+
+                    drawBackgroundBodies(commands);
 
                     if (globe == nullptr || !macroGlobeLayer)
                     {
@@ -7181,6 +7740,7 @@ StudioViewportRenderer::Compose(
                      bodySurfaceEmissionClass,
                      width,
                      height,
+                     drawBackgroundBodies,
                      compactDraw](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
@@ -7202,6 +7762,8 @@ StudioViewportRenderer::Compose(
                         commands.ClearColorTarget(
                             *bodySurfaceEmissionClass,
                             {0.0F, 0.0F, 0.0F, 0.0F});
+
+                        drawBackgroundBodies(commands);
 
                         compactObjectRenderer_.Draw(
                             commands,
@@ -7829,6 +8391,7 @@ StudioViewportRenderer::Compose(
                      bodySurfaceEmissionClass,
                      width,
                      height,
+                     drawBackgroundBodies,
                      bodyShape,
                      camera,
                      appearance,
@@ -7864,6 +8427,8 @@ StudioViewportRenderer::Compose(
                         commands.ClearColorTarget(
                             *bodySurfaceEmissionClass,
                             {0.0F, 0.0F, 0.0F, 0.0F});
+
+                        drawBackgroundBodies(commands);
 
                         const auto draw =
                             [&](const celestial_representation::
@@ -8169,6 +8734,7 @@ StudioViewportRenderer::Compose(
                      bodySurfaceEmissionClass,
                      width,
                      height,
+                     drawBackgroundBodies,
                      camera,
                      bodyShape,
                      bodyMaterial](
@@ -8187,6 +8753,8 @@ StudioViewportRenderer::Compose(
                         commands.ClearColorTarget(
                             *bodySurfaceEmissionClass,
                             {0.0F, 0.0F, 0.0F, 0.0F});
+
+                        drawBackgroundBodies(commands);
 
                         bodyRenderer_.Draw(
                             commands,
@@ -9607,21 +10175,189 @@ StudioViewportRenderer::Compose(
                 }
             }
 
+            // Imported Static Meshes (glTF/GLB) as lit, textured rigid surfaces
+            // in the same surface buffer, after the terrain and proxies.
+            if (!info.layers.bypassMeshSurfaces &&
+                logicalTarget->mode != studio_session::ViewportMode::Debug)
+            {
+                if (const auto meshFound =
+                        staticMeshPresentations_.find(info.id);
+                    meshFound != staticMeshPresentations_.end() &&
+                    // Also while nothing is resident yet: the pass is what
+                    // pumps the library (uploads) that makes models resident.
+                    (!meshFound->second.instances.empty() ||
+                     meshFound->second.requested > 0U))
+                {
+                    graph.AddPass(
+                        prefix + ".MeshSurfaces",
+                        {
+                            {
+                                .texture = targets.color,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.surfaceBaseRoughness,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.surfaceNormalMetallic,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.surfaceEmissionClass,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            },
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthWrite,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this,
+                         instances = meshFound->second.instances,
+                         sdfExtra = meshFound->second.sdfExtra,
+                         color,
+                         lightingBaseRoughness,
+                         lightingNormalMetallic,
+                         lightingEmissionClass,
+                         lightingDepth,
+                         width,
+                         height,
+                         lightingView](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            meshSurfaceRenderer_.Draw(
+                                commands,
+                                *meshLibrary_,
+                                instances,
+                                *color,
+                                *lightingBaseRoughness,
+                                *lightingNormalMetallic,
+                                *lightingEmissionClass,
+                                *lightingDepth,
+                                width,
+                                height,
+                                lightingView,
+                                sdfExtra.get());
+                        });
+
+                    // Light the mesh distance field's surface voxels (sun,
+                    // sky and multi-bounce) for the world-space GI fallback.
+                    {
+                        mesh_render::SdfLightingInput sdfLight;
+                        sdfLight.toSun = studioDirectLight.directionBody;
+                        sdfLight.sunIrradiance =
+                            studioDirectLight.direct.has_value()
+                                ? studioDirectLight.irradianceScale
+                                : 0.0F;
+                        if (const auto skyFound =
+                                atmospherePresentations_.find(info.id);
+                            skyFound != atmospherePresentations_.end() &&
+                            skyFound->second.skyView != nullptr)
+                        {
+                            sdfLight.skyIrradiance =
+                                AtmosphereSkyIrradianceSummary(
+                                    skyFound->second.skyView.get());
+                        }
+                        const auto& cameraFrame =
+                            view->Lighting().cameraPositionInFrameMeters;
+                        const f64 radial = math::Length(cameraFrame);
+                        if (radial > 1.0)
+                        {
+                            sdfLight.up = {
+                                static_cast<f32>(cameraFrame.x / radial),
+                                static_cast<f32>(cameraFrame.y / radial),
+                                static_cast<f32>(cameraFrame.z / radial)};
+                        }
+                        sdfLight.frame =
+                            antiAliasingPresentations_[info.id].frameCounter;
+
+                        graph.AddPass(
+                            prefix + ".MeshSdfLighting",
+                            {},
+                            [this, sdfLight](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&)
+                            {
+                                meshSdfScene_.Light(commands, sdfLight);
+                            });
+                    }
+                }
+            }
+
             // Sun visibility against authored Visibility Proxies: one hardware
             // ray per visible pixel toward the star, read by direct lighting.
             // Terrain and sky are not proxies, so only authored structures cast.
             rhi::Texture* proxySunShadowTexture = nullptr;
             std::optional<render_graph::TextureUse> proxySunShadowUse;
+
+            // Imported Static Meshes cast sun shadows through a sun-space
+            // depth map (works without ray-query hardware); it is folded into
+            // the same sun-visibility texture the proxy pass writes.
+            std::optional<mesh_render::MeshShadowFrame> meshShadowFrame;
+            std::vector<mesh_render::MeshInstance> meshShadowInstances;
             if (!info.layers.bypassProxySunShadow &&
-                proxySunShadowRenderer_.Supported() &&
+                !info.layers.bypassMeshSurfaces &&
                 studioDirectLight.direct.has_value() &&
                 logicalTarget->mode != studio_session::ViewportMode::Debug)
             {
-                if (const auto proxyFound =
-                        visibilityProxyPresentations_.find(info.id);
+                if (const auto meshShadowFound =
+                        staticMeshPresentations_.find(info.id);
+                    meshShadowFound != staticMeshPresentations_.end() &&
+                    !meshShadowFound->second.instances.empty())
+                {
+                    meshShadowInstances = meshShadowFound->second.instances;
+                    meshShadowFrame = mesh_render::BuildMeshShadowFrame(
+                        meshShadowInstances,
+                        studioDirectLight.directionBody,
+                        view->Lighting().cameraPositionInFrameMeters);
+
+                    // The sun's real angular size (emitter radius over its
+                    // distance) sets how fast shadows soften with distance.
+                    if (meshShadowFrame.has_value() &&
+                        studioDirectLight.direct.has_value() &&
+                        bodies != nullptr &&
+                        studioDirectLight.direct->sourceDistanceMeters > 0.0)
+                    {
+                        if (const auto* emitter = bodies->FindBody(
+                                studioDirectLight.direct->emitter);
+                            emitter != nullptr)
+                        {
+                            const f64 sine = std::clamp(
+                                ReferenceRadiusForShape(emitter->shape) /
+                                    studioDirectLight.direct->sourceDistanceMeters,
+                                0.0, 0.5);
+                            meshShadowFrame->sunTanHalfAngle =
+                                static_cast<f32>(std::tan(std::asin(sine)));
+                        }
+                    }
+                    if (meshShadowFrame.has_value())
+                    {
+                        // Scale for art direction / debugging (0 = hard shadows).
+                        meshShadowFrame->sunTanHalfAngle *=
+                            info.layers.meshShadowSoftness;
+                    }
+                }
+            }
+
+            if (!info.layers.bypassProxySunShadow &&
+                studioDirectLight.direct.has_value() &&
+                logicalTarget->mode != studio_session::ViewportMode::Debug)
+            {
+                const auto proxyFound =
+                    visibilityProxyPresentations_.find(info.id);
+                const bool proxiesReady =
+                    proxySunShadowRenderer_.Supported() &&
                     proxyFound != visibilityProxyPresentations_.end() &&
                     proxyFound->second.hardware != nullptr &&
-                    proxyFound->second.hardware->Ready())
+                    proxyFound->second.hardware->Ready();
+
+                if (proxiesReady || meshShadowFrame.has_value())
                 {
                     auto& shadowTarget = proxySunShadowTargets_[info.id];
                     if (shadowTarget == nullptr ||
@@ -9654,6 +10390,7 @@ StudioViewportRenderer::Compose(
                                 skyFound->second.skyView.get());
                     }
 
+                    if (proxiesReady)
                     graph.AddPass(
                         prefix + ".ProxySunShadow",
                         {
@@ -9679,7 +10416,9 @@ StudioViewportRenderer::Compose(
                             }
                         },
                         [this,
-                         proxyHardware = proxyFound->second.hardware.get(),
+                         proxyHardware = proxiesReady
+                             ? proxyFound->second.hardware.get()
+                             : nullptr,
                          lightingNormalMetallic,
                          lightingEmissionClass,
                          lightingDepth,
@@ -9706,6 +10445,193 @@ StudioViewportRenderer::Compose(
                                 lighting::ProxySunShadowSettings{
                                     .skyIrradiance = proxySkyIrradiance});
                         });
+
+                    if (meshShadowFrame.has_value())
+                    {
+                        auto& mapTargets = meshShadowTargets_[info.id];
+                        const u32 mapSize = meshShadowFrame->mapSize;
+                        if (mapTargets.color == nullptr ||
+                            mapTargets.color->Width() != mapSize)
+                        {
+                            mapTargets.color = device_->CreateTexture({
+                                .width = mapSize,
+                                .height = mapSize,
+                                .format = rhi::TextureFormat::R32_Float,
+                                .initialState =
+                                    rhi::ResourceState::ShaderResource});
+                            mapTargets.depth = device_->CreateTexture({
+                                .width = mapSize,
+                                .height = mapSize,
+                                .format = rhi::TextureFormat::D32_Float,
+                                .initialState =
+                                    rhi::ResourceState::DepthWrite});
+                            mapTargets.skyColor = device_->CreateTexture({
+                                .width = mesh_render::kMeshSkyAtlasWidth,
+                                .height = mesh_render::kMeshSkyAtlasHeight,
+                                .format = rhi::TextureFormat::R32_Float,
+                                .initialState =
+                                    rhi::ResourceState::ShaderResource});
+                            mapTargets.skyDepth = device_->CreateTexture({
+                                .width = mesh_render::kMeshSkyAtlasWidth,
+                                .height = mesh_render::kMeshSkyAtlasHeight,
+                                .format = rhi::TextureFormat::D32_Float,
+                                .initialState =
+                                    rhi::ResourceState::DepthWrite});
+                        }
+
+                        const auto skyColorHandle = graph.ImportTexture(
+                            prefix + ".MeshSkyAtlas",
+                            *mapTargets.skyColor,
+                            rhi::ResourceState::ShaderResource);
+                        const auto skyDepthHandle = graph.ImportTexture(
+                            prefix + ".MeshSkyDepth",
+                            *mapTargets.skyDepth,
+                            rhi::ResourceState::DepthWrite);
+                        const auto meshLocalUp = mesh_render::MeshLocalUp(
+                            *meshShadowFrame,
+                            view->Lighting().cameraPositionInFrameMeters);
+
+                        graph.AddPass(
+                            prefix + ".MeshSkyMap",
+                            {
+                                {
+                                    .texture = skyColorHandle,
+                                    .state = rhi::ResourceState::RenderTarget,
+                                    .access = render_graph::Access::Write
+                                },
+                                {
+                                    .texture = skyDepthHandle,
+                                    .state = rhi::ResourceState::DepthWrite,
+                                    .access = render_graph::Access::Write
+                                }
+                            },
+                            [this,
+                             instances = meshShadowInstances,
+                             frame = *meshShadowFrame,
+                             localUp = meshLocalUp,
+                             colorAtlas = mapTargets.skyColor.get(),
+                             depthAtlas = mapTargets.skyDepth.get()](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&)
+                            {
+                                meshShadowMapRenderer_.DrawSky(
+                                    commands,
+                                    *meshLibrary_,
+                                    instances,
+                                    frame,
+                                    localUp,
+                                    *colorAtlas,
+                                    *depthAtlas);
+                            });
+
+                        const auto mapColorHandle = graph.ImportTexture(
+                            prefix + ".MeshShadowMap",
+                            *mapTargets.color,
+                            rhi::ResourceState::ShaderResource);
+                        const auto mapDepthHandle = graph.ImportTexture(
+                            prefix + ".MeshShadowDepth",
+                            *mapTargets.depth,
+                            rhi::ResourceState::DepthWrite);
+
+                        graph.AddPass(
+                            prefix + ".MeshShadowMap",
+                            {
+                                {
+                                    .texture = mapColorHandle,
+                                    .state = rhi::ResourceState::RenderTarget,
+                                    .access = render_graph::Access::Write
+                                },
+                                {
+                                    .texture = mapDepthHandle,
+                                    .state = rhi::ResourceState::DepthWrite,
+                                    .access = render_graph::Access::Write
+                                }
+                            },
+                            [this,
+                             instances = meshShadowInstances,
+                             frame = *meshShadowFrame,
+                             colorMap = mapTargets.color.get(),
+                             depthMap = mapTargets.depth.get()](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&)
+                            {
+                                meshShadowMapRenderer_.Draw(
+                                    commands,
+                                    *meshLibrary_,
+                                    instances,
+                                    frame,
+                                    *colorMap,
+                                    *depthMap);
+                            });
+
+                        graph.AddPass(
+                            prefix + ".MeshSunShadow",
+                            {
+                                {
+                                    .texture = targets.surfaceNormalMetallic,
+                                    .state = rhi::ResourceState::ShaderResource,
+                                    .access = render_graph::Access::Read
+                                },
+                                {
+                                    .texture = targets.surfaceEmissionClass,
+                                    .state = rhi::ResourceState::ShaderResource,
+                                    .access = render_graph::Access::Read
+                                },
+                                {
+                                    .texture = targets.depth,
+                                    .state = rhi::ResourceState::DepthRead,
+                                    .access = render_graph::Access::Read
+                                },
+                                {
+                                    .texture = mapColorHandle,
+                                    .state = rhi::ResourceState::ShaderResource,
+                                    .access = render_graph::Access::Read
+                                },
+                                {
+                                    .texture = skyColorHandle,
+                                    .state = rhi::ResourceState::ShaderResource,
+                                    .access = render_graph::Access::Read
+                                },
+                                {
+                                    .texture = proxyShadowHandle,
+                                    .state = rhi::ResourceState::UnorderedAccess,
+                                    .access = render_graph::Access::Write
+                                }
+                            },
+                            [this,
+                             lightingNormalMetallic,
+                             lightingEmissionClass,
+                             lightingDepth,
+                             frame = *meshShadowFrame,
+                             colorMap = mapTargets.color.get(),
+                             skyAtlas = mapTargets.skyColor.get(),
+                             skyFill = mesh_render::MeshSkyFill{
+                                 .irradiance = proxySkyIrradiance,
+                                 .localUp = meshLocalUp},
+                             shadowTexture = proxySunShadowTexture,
+                             initialize = !proxiesReady,
+                             width,
+                             height,
+                             lightingView](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&)
+                            {
+                                meshSunShadowRenderer_.Draw(
+                                    commands,
+                                    *shadowTexture,
+                                    *lightingNormalMetallic,
+                                    *lightingEmissionClass,
+                                    *lightingDepth,
+                                    *colorMap,
+                                    *skyAtlas,
+                                    width,
+                                    height,
+                                    lightingView,
+                                    frame,
+                                    skyFill,
+                                    initialize);
+                            });
+                    }
 
                     proxySunShadowUse = render_graph::TextureUse{
                         .texture = proxyShadowHandle,
@@ -10025,6 +10951,7 @@ StudioViewportRenderer::Compose(
                     ScreenSpaceFinalGatherSettings
                         gatherSettings;
 
+                gatherSettings.intensity = info.layers.giIntensity;
                 gatherSettings.stepsPerRay =
                     std::clamp(
                         static_cast<u32>(
@@ -10150,10 +11077,27 @@ StudioViewportRenderer::Compose(
                      gatherSettings,
                      particleLightGridForDirect,
                      lightingTimestamps,
-                     frameIndex](
+                     frameIndex,
+                     useSdfGi = !info.layers.bypassSdfGi](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
+                        // World-space fallback: the merged mesh distance field.
+                        lighting::SdfGatherInput sdfGather;
+                        if (const auto& volume = meshSdfScene_.Volume();
+                            useSdfGi && volume.ready &&
+                            volume.radiance != nullptr)
+                        {
+                            sdfGather.distance = volume.distance;
+                            sdfGather.albedo = volume.albedo;
+                            sdfGather.normal = volume.normal;
+                            sdfGather.radiance = volume.radiance;
+                            sdfGather.originInFrameMeters =
+                                volume.originInFrameMeters;
+                            sdfGather.voxelSize = volume.voxelSize;
+                            sdfGather.dimensions = volume.dimensions;
+                        }
+
                         if (lightingTimestamps != nullptr)
                         {
                             lightingTimestamps->
@@ -10181,7 +11125,9 @@ StudioViewportRenderer::Compose(
                             lightingView,
                             historyCompatible,
                             particleLightGridForDirect,
-                            gatherSettings);
+                            gatherSettings,
+                            sdfGather.distance != nullptr ? &sdfGather
+                                                          : nullptr);
                     });
 
                 if (radianceLevelCount > 0U &&
@@ -10340,7 +11286,8 @@ StudioViewportRenderer::Compose(
                      gatherScratch,
                      width,
                      height,
-                     coverageView = info.layers.indirectCoverageView](
+                     coverageView = info.layers.indirectCoverageView,
+                     giOnlyView = info.layers.giOnlyView](
                         rhi::CommandList& commands,
                         const render_graph::Resources&)
                     {
@@ -10352,7 +11299,8 @@ StudioViewportRenderer::Compose(
                             width,
                             height,
                             1.0F,
-                            coverageView);
+                            coverageView,
+                            giOnlyView);
                     });
 
                 graph.AddPass(
@@ -11876,6 +12824,23 @@ StudioViewportRenderer::Compose(
                 });
         }
 
+        if (!foregroundBodies->empty())
+        {
+            graph.AddPass(
+                prefix + ".ForegroundBodies",
+                {{
+                    .texture = targets.color,
+                    .state = rhi::ResourceState::RenderTarget,
+                    .access = render_graph::Access::Write
+                }},
+                [drawForegroundBodies](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    drawForegroundBodies(commands);
+                });
+        }
+
         if (drawPathDebug &&
             presentation ==
                 StudioViewportPresentation::BodyPreview &&
@@ -12842,6 +13807,297 @@ StudioViewportRenderer::Compose(
                         const render_graph::Resources&)
                     {
                     });
+            }
+        }
+
+        // Mesh distance-field debug view: sphere traces the merged field and
+        // shows it in place of (or beside) the rasterised scene.
+        if (info.layers.sdfDebugView != 0U &&
+            meshSdfScene_.Volume().ready &&
+            view->SurfaceDebugMode() == lighting::SurfaceDebugMode::Lit &&
+            width > 0U && height > 0U)
+        {
+            auto& scratch = sdfDebugScratch_[info.id];
+            if (scratch == nullptr || scratch->Width() != width ||
+                scratch->Height() != height)
+            {
+                scratch = device_->CreateTexture({
+                    .width = width,
+                    .height = height,
+                    .format = rhi::TextureFormat::RGBA16_Float,
+                    .initialState = rhi::ResourceState::ShaderResource,
+                    .allowUnorderedAccess = true});
+            }
+            const auto scratchHandle = graph.ImportTexture(
+                prefix + ".SdfDebugScratch",
+                *scratch,
+                rhi::ResourceState::ShaderResource);
+
+            graph.AddPass(
+                prefix + ".SdfDebug",
+                {
+                    {.texture = targets.color,
+                     .state = rhi::ResourceState::ShaderResource,
+                     .access = render_graph::Access::Read},
+                    {.texture = scratchHandle,
+                     .state = rhi::ResourceState::UnorderedAccess,
+                     .access = render_graph::Access::Write}
+                },
+                [this,
+                 color,
+                 scratch = scratch.get(),
+                 width,
+                 height,
+                 lightingView = view->Lighting(),
+                 sun = studioDirectLight.directionBody,
+                 mode = static_cast<u32>(info.layers.sdfDebugView)](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    meshSdfDebugRenderer_.Draw(
+                        commands,
+                        meshSdfScene_.Volume(),
+                        *color,
+                        *scratch,
+                        width,
+                        height,
+                        lightingView,
+                        sun,
+                        mode);
+                });
+            graph.AddPass(
+                prefix + ".SdfDebugCopyBack",
+                {
+                    {.texture = scratchHandle,
+                     .state = rhi::ResourceState::ShaderResource,
+                     .access = render_graph::Access::Read},
+                    {.texture = targets.color,
+                     .state = rhi::ResourceState::RenderTarget,
+                     .access = render_graph::Access::Write}
+                },
+                [this,
+                 color,
+                 scratch = scratch.get(),
+                 width,
+                 height](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    debugComposite_.Draw(
+                        commands, *scratch, *color, width, height);
+                });
+        }
+
+        // Anti-aliasing of the HDR scene colour, after every scene pass and
+        // before exposure / tone mapping. TAA reprojects its history with the
+        // (jittered) camera pair and depth; frames without usable history use
+        // FXAA instead.
+        if (antiAliasingMode != post_process::AntiAliasingMode::Off &&
+            view->SurfaceDebugMode() == lighting::SurfaceDebugMode::Lit &&
+            width > 0U && height > 0U)
+        {
+            auto& aa = antiAliasingPresentations_[info.id];
+
+            if (aa.scratch == nullptr || aa.width != width ||
+                aa.height != height)
+            {
+                const auto make = [&]
+                {
+                    return device_->CreateTexture({
+                        .width = width,
+                        .height = height,
+                        .format = rhi::TextureFormat::RGBA16_Float,
+                        .initialState = rhi::ResourceState::ShaderResource,
+                        .allowUnorderedAccess = true});
+                };
+                aa.scratch = make();
+                aa.history[0] = make();
+                aa.history[1] = make();
+                aa.width = width;
+                aa.height = height;
+                aa.hasHistory = false;
+                aa.readIndex = 0U;
+            }
+
+            // Reproject with the UN-jittered cameras: the history then stays
+            // in a fixed screen grid (a static scene reads the same history
+            // pixel every frame) and the jitter only changes what each frame
+            // samples. Reprojecting with the jittered pair would resample the
+            // history at a different sub-pixel phase each frame and shimmer.
+            const auto& camera = aa.base;
+            const post_process::TaaCamera currentCamera{
+                .positionMeters = camera.localPositionMeters,
+                .forward = camera.forward,
+                .up = camera.up,
+                .verticalFovRadians = camera.verticalFovRadians,
+                .nearPlaneMeters = camera.nearPlaneMeters,
+                .farPlaneMeters = camera.farPlaneMeters};
+
+            const auto useDepth = render_graph::TextureUse{
+                .texture = targets.depth,
+                .state = rhi::ResourceState::DepthRead,
+                .access = render_graph::Access::Read};
+            const auto colorRead = render_graph::TextureUse{
+                .texture = targets.color,
+                .state = rhi::ResourceState::ShaderResource,
+                .access = render_graph::Access::Read};
+            const auto colorWrite = render_graph::TextureUse{
+                .texture = targets.color,
+                .state = rhi::ResourceState::RenderTarget,
+                .access = render_graph::Access::Write};
+
+            if (antiAliasingMode == post_process::AntiAliasingMode::Taa)
+            {
+                const u32 readIndex = aa.readIndex;
+                const u32 writeIndex = 1U - readIndex;
+                const bool historyValid =
+                    aa.hasHistory &&
+                    post_process::TaaHistoryUsable(
+                        aa.previousCamera, currentCamera);
+
+                const auto historyReadHandle = graph.ImportTexture(
+                    prefix + ".TaaHistoryRead",
+                    *aa.history[readIndex],
+                    rhi::ResourceState::ShaderResource);
+                const auto historyWriteHandle = graph.ImportTexture(
+                    prefix + ".TaaHistoryWrite",
+                    *aa.history[writeIndex],
+                    rhi::ResourceState::ShaderResource);
+
+                if (historyValid)
+                {
+                    graph.AddPass(
+                        prefix + ".TaaResolve",
+                        {
+                            colorRead,
+                            useDepth,
+                            {.texture = historyReadHandle,
+                             .state = rhi::ResourceState::ShaderResource,
+                             .access = render_graph::Access::Read},
+                            {.texture = historyWriteHandle,
+                             .state = rhi::ResourceState::UnorderedAccess,
+                             .access = render_graph::Access::Write}
+                        },
+                        [this,
+                         color,
+                         depthTexture = &view->Depth(),
+                         historyRead = aa.history[readIndex].get(),
+                         historyWrite = aa.history[writeIndex].get(),
+                         width,
+                         height,
+                         currentCamera,
+                         previousCamera = aa.previousCamera](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            antiAliasingRenderer_.Taa(
+                                commands,
+                                *color,
+                                *depthTexture,
+                                *historyRead,
+                                *historyWrite,
+                                width,
+                                height,
+                                currentCamera,
+                                previousCamera,
+                                true);
+                        });
+                }
+                else
+                {
+                    graph.AddPass(
+                        prefix + ".TaaFallbackFxaa",
+                        {
+                            colorRead,
+                            {.texture = historyWriteHandle,
+                             .state = rhi::ResourceState::UnorderedAccess,
+                             .access = render_graph::Access::Write}
+                        },
+                        [this,
+                         color,
+                         historyWrite = aa.history[writeIndex].get(),
+                         width,
+                         height](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            antiAliasingRenderer_.Fxaa(
+                                commands, *color, *historyWrite, width, height);
+                        });
+                }
+
+                graph.AddPass(
+                    prefix + ".TaaCopyBack",
+                    {
+                        {.texture = historyWriteHandle,
+                         .state = rhi::ResourceState::ShaderResource,
+                         .access = render_graph::Access::Read},
+                        colorWrite
+                    },
+                    [this,
+                     color,
+                     historyWrite = aa.history[writeIndex].get(),
+                     width,
+                     height](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        debugComposite_.Draw(
+                            commands, *historyWrite, *color, width, height);
+                    });
+
+                aa.readIndex = writeIndex;
+                aa.hasHistory = true;
+                aa.previousCamera = currentCamera;
+            }
+            else
+            {
+                const auto scratchHandle = graph.ImportTexture(
+                    prefix + ".FxaaScratch",
+                    *aa.scratch,
+                    rhi::ResourceState::ShaderResource);
+
+                graph.AddPass(
+                    prefix + ".FxaaResolve",
+                    {
+                        colorRead,
+                        {.texture = scratchHandle,
+                         .state = rhi::ResourceState::UnorderedAccess,
+                         .access = render_graph::Access::Write}
+                    },
+                    [this,
+                     color,
+                     scratch = aa.scratch.get(),
+                     width,
+                     height](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        antiAliasingRenderer_.Fxaa(
+                            commands, *color, *scratch, width, height);
+                    });
+
+                graph.AddPass(
+                    prefix + ".FxaaCopyBack",
+                    {
+                        {.texture = scratchHandle,
+                         .state = rhi::ResourceState::ShaderResource,
+                         .access = render_graph::Access::Read},
+                        colorWrite
+                    },
+                    [this,
+                     color,
+                     scratch = aa.scratch.get(),
+                     width,
+                     height](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        debugComposite_.Draw(
+                            commands, *scratch, *color, width, height);
+                    });
+
+                aa.hasHistory = false;
             }
         }
 

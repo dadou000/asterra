@@ -1,10 +1,12 @@
 #pragma once
 
 #include <orbit/lighting/LightingView.hpp>
+#include <orbit/math/Vector.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
 
+#include <array>
 #include <memory>
 
 namespace orbit::lighting
@@ -23,6 +25,20 @@ struct ScreenSpaceFinalGatherSettings
 [[nodiscard]] bool CanReuseFinalGatherHistory(
     const LightingView& previous,
     const LightingView& current) noexcept;
+
+// The merged mesh distance field the gather falls back to for rays the screen
+// cannot resolve (see mesh_render::MeshSdfScene). Buffers are borrowed.
+struct SdfGatherInput
+{
+    rhi::Buffer* distance{nullptr};
+    rhi::Buffer* albedo{nullptr};
+    rhi::Buffer* normal{nullptr};
+    rhi::Buffer* radiance{nullptr};
+    // Frame coordinates of voxel (0,0,0)'s centre.
+    math::Double3 originInFrameMeters{};
+    f32 voxelSize{0.25F};
+    std::array<u32, 3> dimensions{};
+};
 
 class ScreenSpaceFinalGatherRenderer
 {
@@ -47,7 +63,8 @@ public:
         const LightingView& view,
         bool historyCompatible,
         rhi::Buffer* particleLightGrid = nullptr,
-        const ScreenSpaceFinalGatherSettings& settings = {});
+        const ScreenSpaceFinalGatherSettings& settings = {},
+        const SdfGatherInput* sdf = nullptr);
 
     void Combine(
         rhi::CommandList& commands,
@@ -59,11 +76,15 @@ public:
         f32 intensity = 1.0F,
         // Writes the gather's coverage (confidence / brightness, magenta = nothing) instead of
         // adding it to the scene colour.
-        bool coverageView = false);
+        bool coverageView = false,
+        // Writes only the indirect light (final gather + radiance cache cascades),
+        // replacing the scene colour. Ignored when coverageView is set.
+        bool indirectOnlyView = false);
 
 private:
     std::unique_ptr<rhi::ComputePipeline> gatherPipeline_;
     std::unique_ptr<rhi::ComputePipeline> combinePipeline_;
     std::unique_ptr<rhi::Buffer> dummyParticleLightGrid_;
+    std::unique_ptr<rhi::Buffer> dummySdf_;
 };
 } // namespace orbit::lighting

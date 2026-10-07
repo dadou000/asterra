@@ -198,6 +198,8 @@ template <typename T>
         return world_model::kPrimitivePositionMeters;
     case ManipulatedKind::VisibilityProxy:
         return world_model::kVisibilityProxyPositionMeters;
+    case ManipulatedKind::StaticMesh:
+        return world_model::kStaticMeshPositionMeters;
     case ManipulatedKind::PointLight:
     case ManipulatedKind::SpotLight:
         break;
@@ -209,6 +211,11 @@ template <typename T>
 [[nodiscard]] schema::PropertyId EulerProperty(
     const ManipulatedKind kind) noexcept
 {
+    if (kind == ManipulatedKind::StaticMesh)
+    {
+        return world_model::kStaticMeshEulerDegrees;
+    }
+
     return kind == ManipulatedKind::Primitive
         ? world_model::kPrimitiveEulerDegrees
         : world_model::kVisibilityProxyEulerDegrees;
@@ -218,7 +225,8 @@ template <typename T>
     const ManipulatedKind kind) noexcept
 {
     return kind == ManipulatedKind::Primitive ||
-        kind == ManipulatedKind::VisibilityProxy;
+        kind == ManipulatedKind::VisibilityProxy ||
+        kind == ManipulatedKind::StaticMesh;
 }
 } // namespace
 
@@ -400,6 +408,21 @@ ResolveManipulatorTarget(
         target.canRotate = true;
         target.canScale = true;
     }
+    else if (record->type == world_model::kStaticMeshType)
+    {
+        target.kind = ManipulatedKind::StaticMesh;
+        target.position =
+            ReadPropertyOr<math::Double3>(
+                objects, object,
+                world_model::kStaticMeshPositionMeters, {});
+        target.rotation = EulerDegreesToRotation(
+            ReadPropertyOr<math::Double3>(
+                objects, object,
+                world_model::kStaticMeshEulerDegrees, {}));
+        target.canTranslate = true;
+        target.canRotate = true;
+        target.canScale = true;
+    }
     else if (record->type == world_model::kVisibilityProxyType)
     {
         target.kind = ManipulatedKind::VisibilityProxy;
@@ -536,6 +559,16 @@ void ViewportManipulator::CaptureStartValues(
 
     if (tool != ManipulatorTool::Scale)
     {
+        return;
+    }
+
+    if (target.kind == ManipulatedKind::StaticMesh)
+    {
+        // The uniform scale is kept in startRadius_ (a single scalar).
+        startRadius_ =
+            ReadPropertyOr<f64>(
+                objects_, target.object,
+                world_model::kStaticMeshScale, 1.0);
         return;
     }
 
@@ -906,7 +939,15 @@ void ViewportManipulator::WriteAmount(const f64 amount)
                 kMinimumScaleFactor,
                 kMaximumScaleFactor);
 
-        if (target_.kind == ManipulatedKind::Primitive ||
+        if (target_.kind == ManipulatedKind::StaticMesh)
+        {
+            // A mesh scales uniformly whatever axis was grabbed.
+            commands_.SetProperty(
+                target_.object,
+                world_model::kStaticMeshScale,
+                std::max(startRadius_ * factor, 1.0e-6));
+        }
+        else if (target_.kind == ManipulatedKind::Primitive ||
             (target_.kind == ManipulatedKind::VisibilityProxy &&
              !sphereProxy_))
         {

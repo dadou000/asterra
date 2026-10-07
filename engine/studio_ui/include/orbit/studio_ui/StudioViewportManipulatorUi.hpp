@@ -39,7 +39,8 @@ public:
         StudioRenderViewSet& views,
         studio_session::StudioSession& session,
         std::string_view viewId,
-        const GizmoSettings& gizmo);
+        const GizmoSettings& gizmo,
+        math::Float2 relativeMouseDelta);
 
     // Abandons a drag in progress and restores the object.
     void Cancel() noexcept;

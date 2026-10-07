@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 
@@ -137,6 +138,7 @@ bool StudioRenderViewSet::Destroy(
     const std::string ownedId = found->first;
     views_.erase(found);
     navigationStates_.erase(ownedId);
+    frameTransitions_.erase(ownedId);
     compositionEnabled_.erase(ownedId);
     textDiagnosticsHud_.erase(ownedId);
     orbitalPatchStats_.erase(ownedId);
@@ -300,6 +302,12 @@ bool StudioRenderViewSet::NavigateReference(
     const std::string_view id,
     const StudioTerrainNavigationInput& input)
 {
+    if (input.mouseDeltaX != 0.0 || input.mouseDeltaY != 0.0 ||
+        input.moveRight != 0.0 || input.moveForward != 0.0 ||
+        input.moveUp != 0.0)
+    {
+        frameTransitions_.erase(id);
+    }
     render_view::RenderView* const view = Find(id);
     if (view == nullptr || session_ == nullptr)
     {
@@ -445,6 +453,12 @@ bool StudioRenderViewSet::NavigateTerrain(
     const std::string_view id,
     const StudioTerrainNavigationInput& input)
 {
+    if (input.mouseDeltaX != 0.0 || input.mouseDeltaY != 0.0 ||
+        input.moveRight != 0.0 || input.moveForward != 0.0 ||
+        input.moveUp != 0.0)
+    {
+        frameTransitions_.erase(id);
+    }
     if (session_ == nullptr)
     {
         return false;
@@ -508,12 +522,11 @@ bool StudioRenderViewSet::NavigateTerrain(
 bool StudioRenderViewSet::FocusTerrainBody(
     const std::string_view id)
 {
+    frameTransitions_.erase(id);
     if (session_ == nullptr)
     {
         return false;
     }
-
-    referenceNavigation_.erase(id);
 
     auto terrain =
         session_->TerrainRuntime().
@@ -523,8 +536,24 @@ bool StudioRenderViewSet::FocusTerrainBody(
         !session_->TerrainRuntime().
             IsCurrent(*terrain))
     {
-        return false;
+        static_cast<void>(NavigateReference(id, {}));
+        const auto found = referenceNavigation_.find(id);
+        const auto* target = session_->Viewports().Find(id);
+        if (found == referenceNavigation_.end() || target == nullptr ||
+            !target->target.has_value())
+        {
+            return false;
+        }
+        const ReferenceSphereSource source;
+        const auto snapshot = ReferenceSnapshot(
+            *session_, *target->target, found->second.observer);
+        const auto update = studio_ui::FocusTerrainBody(
+            found->second.navigation, snapshot, source);
+        found->second.observer = update.observer;
+        return true;
     }
+
+    referenceNavigation_.erase(id);
 
     auto& state =
         RequireNavigationState(id);
@@ -545,6 +574,48 @@ bool StudioRenderViewSet::FocusTerrainBody(
                 id,
                 update.observer));
 
+    return true;
+}
+
+bool StudioRenderViewSet::FrameSelectedBounds(
+    const std::string_view id,
+    const math::Double3& centerMeters,
+    const f64 radiusMeters)
+{
+    auto pose = ViewPose(id);
+    if (pose.has_value() && !pose->hasCamera)
+    {
+        static_cast<void>(NavigateReference(id, {}));
+        pose = ViewPose(id);
+    }
+    const auto* view = Find(id);
+    if (!pose.has_value() || !view || !pose->hasCamera ||
+        !std::isfinite(radiusMeters) || radiusMeters <= 0.0 ||
+        !std::isfinite(centerMeters.x) ||
+        !std::isfinite(centerMeters.y) ||
+        !std::isfinite(centerMeters.z))
+    {
+        return false;
+    }
+
+    const auto radial = math::Normalize(centerMeters);
+    if (math::LengthSquared(radial) <= 1.0e-20)
+    {
+        return false;
+    }
+    const f64 halfFov = std::max(
+        static_cast<f64>(view->Camera().verticalFovRadians) * 0.5,
+        0.05);
+    const f64 distance = std::max(
+        radiusMeters * 1.5 / std::tan(halfFov),
+        radiusMeters * 2.0);
+    frameTransitions_.insert_or_assign(
+        std::string(id),
+        FrameTransition{
+            .start = *pose,
+            .targetObserver = centerMeters + radial * distance,
+            .targetCenter = centerMeters,
+            .started = std::chrono::steady_clock::now()});
     return true;
 }
 
@@ -1613,6 +1684,75 @@ u32 StudioRenderViewSet::Refresh(
     const studio_session::StudioRuntimeSnapshot& snapshot)
 {
     RequireCurrentSnapshot(snapshot);
+
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = frameTransitions_.begin(); it != frameTransitions_.end();)
+    {
+        const auto& transition = it->second;
+        const f64 elapsed = std::chrono::duration<f64>(
+            now - transition.started).count();
+        const f64 t = std::clamp(elapsed / 2.0, 0.0, 1.0);
+        const f64 eased = t * t * (3.0 - 2.0 * t);
+        StudioViewPose pose = transition.start;
+        // Interpolating the Cartesian endpoints cuts through the planet when
+        // they are far apart. Travel along the spherical directions instead.
+        const auto from = math::Normalize(transition.start.observerMeters);
+        const auto to = math::Normalize(transition.targetObserver);
+        const f64 cosine = std::clamp(math::Dot(from, to), -1.0, 1.0);
+        math::Double3 direction{};
+        if (cosine < -0.9995)
+        {
+            const math::Double3 reference = std::abs(from.y) < 0.9
+                ? math::Double3{0.0, 1.0, 0.0}
+                : math::Double3{1.0, 0.0, 0.0};
+            const auto tangent = math::Normalize(math::Cross(reference, from));
+            direction = from * std::cos(std::numbers::pi * eased) +
+                tangent * std::sin(std::numbers::pi * eased);
+        }
+        else if (cosine > 0.9995)
+        {
+            direction = math::Normalize(from * (1.0 - eased) + to * eased);
+        }
+        else
+        {
+            const f64 angle = std::acos(cosine);
+            direction =
+                (from * std::sin((1.0 - eased) * angle) +
+                 to * std::sin(eased * angle)) / std::sin(angle);
+        }
+        const f64 radius =
+            math::Length(transition.start.observerMeters) * (1.0 - eased) +
+            math::Length(transition.targetObserver) * eased;
+        pose.observerMeters = direction * radius;
+        pose.surfaceFrame = world::TransportSurfaceFrameToDirection(
+            transition.start.surfaceFrame,
+            math::Normalize(pose.observerMeters));
+        const auto look = math::Normalize(
+            transition.targetCenter - pose.observerMeters);
+        if (math::LengthSquared(look) > 1.0e-20)
+        {
+            const f64 targetYaw = std::atan2(
+                math::Dot(look, pose.surfaceFrame.east),
+                math::Dot(look, pose.surfaceFrame.north));
+            const f64 targetPitch = std::asin(std::clamp(
+                math::Dot(look, pose.surfaceFrame.up),
+                -0.9998477, 0.9998477));
+            pose.yawRadians = transition.start.yawRadians +
+                std::remainder(
+                    targetYaw - transition.start.yawRadians,
+                    2.0 * std::numbers::pi) * eased;
+            pose.pitchRadians = transition.start.pitchRadians *
+                (1.0 - eased) + targetPitch * eased;
+        }
+        if (!RestoreViewPose(it->first, pose) || t >= 1.0)
+        {
+            it = frameTransitions_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 
     u32 targetedViews = 0;
 

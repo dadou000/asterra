@@ -91,6 +91,12 @@ struct StudioTerrainViewportRuntimeSnapshot
         cacheStats{};
 };
 
+struct StudioTerrainObserverSite
+{
+    universe::BodyId body{};
+    world::WorldPosition observer{};
+};
+
 // Session-side bridge between logical Studio viewport targets and the
 // production terrain streaming contracts. It owns only derived view interest;
 // semantic terrain authority stays in EditorWorldSession/SurfaceComposition.
@@ -125,6 +131,10 @@ public:
     [[nodiscard]] std::optional<
         StudioTerrainViewportRuntimeSnapshot>
     Capture(std::string_view viewportId) const;
+
+    // Lightweight body-fixed site for continuously updated local displays.
+    [[nodiscard]] std::optional<StudioTerrainObserverSite>
+    ObserverSite(std::string_view viewportId) const noexcept;
 
     [[nodiscard]] std::vector<
         StudioTerrainViewportRuntimeSnapshot>

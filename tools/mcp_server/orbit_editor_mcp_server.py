@@ -116,6 +116,14 @@ def orbit_project_info() -> dict[str, Any]:
     return _rpc("project.info")
 
 
+@mcp.tool()
+def orbit_studio_eco_mode(enabled: bool | None = None) -> dict[str, Any]:
+    """Read or set Studio Eco mode (15 FPS while active, 1 FPS while idle)."""
+    if enabled is None:
+        return _rpc("studio.eco_mode_get")
+    return _rpc("studio.eco_mode_set", {"enabled": enabled})
+
+
 def _wait_for_project(project_id: str, timeout_seconds: float) -> dict[str, Any]:
     """Poll project.info until Studio has relaunched into project_id.
 
@@ -295,6 +303,10 @@ def orbit_view_terrain_layers_set(
     bypass_cloud_shadow: bool | None = None,
     bypass_proxy_sun_shadow: bool | None = None,
     bypass_proxy_surfaces: bool | None = None,
+    bypass_mesh_surfaces: bool | None = None,
+    bypass_sdf_gi: bool | None = None,
+    bypass_sdf_terrain: bool | None = None,
+    bypass_sdf_proxies: bool | None = None,
     bypass_sky_cache: bool | None = None,
     bypass_indirect_lighting: bool | None = None,
     bypass_near_field_water: bool | None = None,
@@ -302,6 +314,12 @@ def orbit_view_terrain_layers_set(
     bypass_hybrid_reflections: bool | None = None,
     bypass_radiance_cache: bool | None = None,
     indirect_coverage_view: bool | None = None,
+    gi_only_view: bool | None = None,
+    anti_aliasing: str | None = None,
+    sdf_debug_view: int | None = None,
+    gi_intensity: float | None = None,
+    taa_jitter_scale: float | None = None,
+    mesh_shadow_softness: float | None = None,
     cloud_volume_debug_altitude: float | None = None,
     cloud_temporal: bool | None = None,
 ) -> dict[str, Any]:
@@ -348,7 +366,20 @@ def orbit_view_terrain_layers_set(
     for this view, to bisect a rendering artefact (default false). indirect_coverage_view
     replaces the final gather's contribution with its coverage (red confidence, green
     gathered brightness on a log scale, magenta = the gather returned nothing for the
-    pixel, i.e. no indirect light there). cloud_volume_debug_altitude
+    pixel, i.e. no indirect light there). gi_only_view shows ONLY the global illumination
+    (the final gather plus the radiance-cache cascade fallback; no direct sun, sky fill,
+    emission or reflections) so the cascades can be judged alone. anti_aliasing is "off", "fxaa" or
+    "taa" (default): TAA jitters the camera by a sub-pixel rotation, reprojects its history from the
+    camera pair and depth, clips it to the 3x3 neighbourhood and falls back to FXAA on frames with no
+    usable history (first frame, teleport, lens change, resize); all run on the HDR colour before
+    exposure and tone mapping, and only in the lit view. taa_jitter_scale (0..1, default 1) scales the
+    sub-pixel jitter; 0 disables the jitter (TAA becomes a plain temporal filter). bypass_sdf_terrain / bypass_sdf_proxies leave the terrain height patch / Visibility Proxies out of the mesh distance field (A/B what each adds to the GI fallback). bypass_sdf_gi skips the final gather's world-space fallback (rays the screen cannot resolve are traced
+    through the merged mesh distance field and read its lit surface voxels). gi_intensity (0-16, default pi = physically correct diffuse bounce; the gather multiplies its averaged
+    radiance by albedo / pi, so pi restores the energy) scales all gathered bounce light. sdf_debug_view (0-5)
+    sphere traces the merged mesh distance field and shows it: 1 shaded, 2 step heat map, 3 distance,
+    4 split (left half SDF, right half the scene), 5 the stored surface radiance (sun + sky + bounce), 0 off. mesh_shadow_softness
+    (0..32, default 1) multiplies the sun's angular size in the mesh sun shadow (PCSS): 0 = hard
+    shadows, 1 = the real sun, larger exaggerates the penumbra. cloud_volume_debug_altitude
     (metres, default 0 = off) draws a horizontal slice of that volume at the given altitude
     over the view as a heatmap of the optical depth towards the sun (blue clear to white
     opaque, magenta = voxel not ready, nothing outside the cascades). -1 shows the scene
@@ -390,6 +421,10 @@ def orbit_view_terrain_layers_set(
         "bypass_cloud_shadow": bypass_cloud_shadow,
         "bypass_proxy_sun_shadow": bypass_proxy_sun_shadow,
         "bypass_proxy_surfaces": bypass_proxy_surfaces,
+        "bypass_mesh_surfaces": bypass_mesh_surfaces,
+        "bypass_sdf_gi": bypass_sdf_gi,
+        "bypass_sdf_terrain": bypass_sdf_terrain,
+        "bypass_sdf_proxies": bypass_sdf_proxies,
         "bypass_sky_cache": bypass_sky_cache,
         "bypass_indirect_lighting": bypass_indirect_lighting,
         "bypass_near_field_water": bypass_near_field_water,
@@ -397,6 +432,12 @@ def orbit_view_terrain_layers_set(
         "bypass_radiance_cache": bypass_radiance_cache,
         "bypass_atmosphere": bypass_atmosphere,
         "indirect_coverage_view": indirect_coverage_view,
+        "gi_only_view": gi_only_view,
+        "anti_aliasing": anti_aliasing,
+        "sdf_debug_view": sdf_debug_view,
+        "gi_intensity": gi_intensity,
+        "taa_jitter_scale": taa_jitter_scale,
+        "mesh_shadow_softness": mesh_shadow_softness,
         "cloud_volume_debug_altitude": cloud_volume_debug_altitude,
         "cloud_temporal": cloud_temporal,
     }.items():
@@ -544,6 +585,12 @@ def orbit_viewport_focus_body() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_viewport_frame_selected() -> dict[str, Any]:
+    """Frame the selected scene object in the controlled perspective viewport."""
+    return _rpc("viewport.frame_selected")
+
+
+@mcp.tool()
 def orbit_cpu_timings() -> dict[str, Any]:
     """Return last and rolling 120-frame CPU timings for the live Studio frame loop."""
     return _rpc("studio.cpu_timings")
@@ -570,6 +617,81 @@ def orbit_profiler_status() -> dict[str, Any]:
     frame times, and recent hitch captures (Perfetto traces with one lane per
     thread and per CPU core, plus the stack frames that dominated each stall)."""
     return _rpc("profiler.status")
+
+
+@mcp.tool()
+def orbit_mesh_status() -> dict[str, Any]:
+    """Imported Static Mesh (glTF/GLB) status: for every mesh the renderer
+    requested, its load state (loading | ready | failed), error, triangle /
+    part / material counts, textures resident of total while they stream in,
+    bounds in metres and import warnings."""
+    return _rpc("mesh.status")
+
+
+_STATIC_MESH_TYPE = "4f524249-5453-4d48-5459-504500000001"
+_STATIC_MESH_ASSET = "4f524249-5453-4d48-4153-534554000001"
+_STATIC_MESH_POSITION = "4f524249-5453-4d48-504f-534954494f4e"
+_STATIC_MESH_EULER = "4f524249-5453-4d48-4555-4c4552000001"
+_STATIC_MESH_SCALE = "4f524249-5453-4d48-5343-414c45000001"
+
+
+@mcp.tool()
+def orbit_mesh_import(
+    source: str,
+    name: str | None = None,
+    parent_id: str | None = None,
+    position: list[float] | None = None,
+    euler_degrees: list[float] | None = None,
+    scale: float | None = None,
+) -> dict[str, Any]:
+    """Imports a glTF 2.0 model (.glb / .gltf, a folder containing one, or a
+    .zip of either) into the open project's Content/Models/<name>/ folder
+    (`mesh.import`). With `parent_id` (usually the planet body object) it also
+    creates a Static Mesh object there and sets its Mesh Asset, body-local
+    `position` (m), `euler_degrees` and uniform `scale` (glTF units are
+    metres). Returns the import result plus `object_id` when an object was
+    created. Meshes only draw while the viewport targets their body."""
+    import tempfile
+    import zipfile
+
+    path = source
+    extracted = None
+    if source.lower().endswith(".zip"):
+        extracted = tempfile.mkdtemp(prefix="orbit_mesh_")
+        with zipfile.ZipFile(source) as archive:
+            archive.extractall(extracted)
+        path = extracted
+    try:
+        params: dict[str, Any] = {"source": path}
+        if name:
+            params["name"] = name
+        result = _rpc("mesh.import", params)
+    finally:
+        if extracted is not None:
+            import shutil
+
+            shutil.rmtree(extracted, ignore_errors=True)
+
+    if parent_id:
+        label = name or result["asset_path"].split("/")[-2]
+        created = _rpc(
+            "object.create",
+            {"type": _STATIC_MESH_TYPE, "name": label, "parent": parent_id},
+        )
+        object_id = created.get("id") or created.get("object_id")
+        _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_ASSET,
+                              "value": result["asset_path"]})
+        if position is not None:
+            _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_POSITION,
+                                  "value": list(position)})
+        if euler_degrees is not None:
+            _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_EULER,
+                                  "value": list(euler_degrees)})
+        if scale is not None:
+            _rpc("property.set", {"object": object_id, "property": _STATIC_MESH_SCALE,
+                                  "value": float(scale)})
+        result["object_id"] = object_id
+    return result
 
 
 @mcp.tool()
@@ -1599,7 +1721,10 @@ def orbit_time_get() -> dict[str, Any]:
     """The simulation clock that drives planetary rotation, orbits, the sun and
     the atmosphere/weather: playing or paused, rate (simulation seconds per real
     second), time since the epoch (microseconds, seconds, text) and the step
-    size of the Step buttons. Studio starts paused."""
+    size of the Step buttons, active-body prime-meridian UTC and local solar
+    times, longitude-derived zone, and authored rotation period. The dominant
+    radiative star determines solar noon when available.
+    Studio starts paused."""
     return _rpc("time.get")
 
 
@@ -1609,16 +1734,20 @@ def orbit_time_set(
     rate: float | None = None,
     time_microseconds: int | None = None,
     step_seconds: float | None = None,
+    local_time_seconds: float | None = None,
 ) -> dict[str, Any]:
-    """Drive the simulation transport (the Simulate / Pause band at the bottom
+    """Drive the simulation transport (the Play / Pause band at the bottom
     of Studio). playing=True simulates, False pauses; rate is simulation seconds
     per real second (negative runs backwards); time_microseconds jumps to an
-    absolute time; step_seconds sets the size of the Step buttons."""
+    absolute time; local_time_seconds sets the active body's current viewpoint
+    zone clock time (0 through just under 86400 seconds); step_seconds sets the size of the
+    Step buttons."""
     params: dict[str, Any] = {}
     for key, value in {
         "playing": playing,
         "rate": rate,
         "time_microseconds": time_microseconds,
+        "local_time_seconds": local_time_seconds,
         "step_seconds": step_seconds,
     }.items():
         if value is not None:

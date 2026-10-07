@@ -52,6 +52,8 @@ namespace
         return L'E';
     case Key::C:
         return L'C';
+    case Key::F:
+        return L'F';
     case Key::G:
         return L'G';
     case Key::L:

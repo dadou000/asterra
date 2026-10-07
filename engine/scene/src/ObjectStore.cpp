@@ -103,6 +103,7 @@ public:
 
     void MarkChanged() noexcept
     {
+        ++previewRevision;
         if (transaction != nullptr)
         {
             transactionDirty = true;
@@ -118,6 +119,7 @@ public:
     std::unique_ptr<SQLite::Transaction>
         transaction;
     u64 revision{0};
+    u64 previewRevision{0};
     bool transactionDirty{false};
 };
 
@@ -752,6 +754,7 @@ void ObjectStore::RollbackTransaction(
         return;
     }
 
+    const bool changed = impl_->transactionDirty;
     try
     {
         impl_->transaction->rollback();
@@ -765,6 +768,10 @@ void ObjectStore::RollbackTransaction(
 
     impl_->transaction.reset();
     impl_->transactionDirty = false;
+    if (changed)
+    {
+        ++impl_->previewRevision;
+    }
 }
 
 bool ObjectStore::TransactionActive() const noexcept
@@ -775,5 +782,10 @@ bool ObjectStore::TransactionActive() const noexcept
 u64 ObjectStore::Revision() const noexcept
 {
     return impl_->revision;
+}
+
+u64 ObjectStore::PreviewRevision() const noexcept
+{
+    return impl_->previewRevision;
 }
 } // namespace orbit::scene

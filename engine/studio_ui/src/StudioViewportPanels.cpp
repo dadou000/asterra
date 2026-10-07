@@ -7,10 +7,13 @@
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world_model/VisibilityProxyBinding.hpp>
+#include <orbit/world_model/LocalLightBinding.hpp>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <format>
 #include <initializer_list>
@@ -684,6 +687,97 @@ void StudioViewportPanels::DrawCelestialToolbar(
     }
 }
 
+bool StudioViewportPanels::FrameSelectedObject()
+{
+    if (session_ == nullptr || views_ == nullptr ||
+        !session_->World().HasWorld())
+    {
+        return false;
+    }
+    std::string_view id = expansion_.ControlledViewportId();
+    const auto* viewport = session_->Viewports().Find(id);
+    if (viewport == nullptr ||
+        viewport->mode != studio_session::ViewportMode::Perspective)
+    {
+        id = "studio.primary";
+        viewport = session_->Viewports().Find(id);
+    }
+    if (viewport == nullptr || !viewport->target.has_value() ||
+        viewport->mode != studio_session::ViewportMode::Perspective)
+    {
+        return false;
+    }
+    auto& world = session_->World();
+    const auto& selected = world.Selection().Ordered();
+    if (selected.empty())
+    {
+        return false;
+    }
+    if (selected.size() == 1U &&
+        selected.front() == viewport->target->semanticObject)
+    {
+        return views_->FocusTerrainBody(id);
+    }
+
+    std::optional<math::Double3> boundsMin;
+    math::Double3 boundsMax{};
+    const auto includeSphere = [&](const math::Double3& position,
+                                   const f64 radius)
+    {
+        const math::Double3 extent{radius, radius, radius};
+        const auto low = position - extent;
+        const auto high = position + extent;
+        if (!boundsMin.has_value())
+        {
+            boundsMin = low;
+            boundsMax = high;
+        }
+        else
+        {
+            boundsMin = {
+                std::min(boundsMin->x, low.x),
+                std::min(boundsMin->y, low.y),
+                std::min(boundsMin->z, low.z)};
+            boundsMax = {
+                std::max(boundsMax.x, high.x),
+                std::max(boundsMax.y, high.y),
+                std::max(boundsMax.z, high.z)};
+        }
+    };
+    for (const auto object : selected)
+    {
+        const auto body = session_->ActiveBody().Resolve(object);
+        if (!body.has_value() ||
+            body->body != viewport->target->body)
+        {
+            continue;
+        }
+        for (const auto& proxy : world_model::ResolveVisibilityProxies(
+                 world.Objects(), object))
+        {
+            const f64 radius = proxy.shape ==
+                    world_model::ResolvedVisibilityProxyShape::Box
+                ? math::Length(proxy.halfExtentsMeters)
+                : proxy.radiusMeters;
+            includeSphere(proxy.positionMeters, radius);
+        }
+        for (const auto& light : world_model::ResolveAuthoredLocalLights(
+                 world.Objects(), object))
+        {
+            includeSphere(light.positionMeters, 0.5);
+        }
+    }
+
+    if (boundsMin.has_value())
+    {
+        const auto center = (*boundsMin + boundsMax) * 0.5;
+        const f64 radius = std::max(
+            math::Length(boundsMax - center), 0.5);
+        return views_->FrameSelectedBounds(id, center, radius);
+    }
+    return false;
+}
+
 void StudioViewportPanels::DrawSceneToolbar(
     editor_ui::PanelContext& context)
 {
@@ -802,6 +896,17 @@ void StudioViewportPanels::DrawSceneToolbar(
     context.SameLine();
 
     const bool hasSelection = !world.Selection().Ordered().empty();
+    if (context.Button("Frame Selected##scene-tb-frame") && hasSelection)
+    {
+        run([&]
+        {
+            if (!FrameSelectedObject())
+            {
+                throw std::logic_error("Selected object has no frameable bounds in this viewport.");
+            }
+        });
+    }
+    context.SameLine();
     if (context.Button("Duplicate##scene-tb-dup") && hasSelection)
     {
         run([&] { DuplicateSelection(); });
@@ -1373,6 +1478,25 @@ void StudioViewportPanels::DrawActivityBand(
                 1.0 / smoothedFrameSeconds));
     }
 
+    if (ecoModeGetter_ && ecoModeSetter_)
+    {
+        context.SameLine();
+        context.MutedText("|");
+        context.SameLine();
+        const bool enabled = ecoModeGetter_();
+        const editor_ui::ActionPresentation ecoAction{
+            .label = enabled ? "[Eco]" : "Eco",
+            .enabled = true,
+            .invoke = [this, enabled]
+            {
+                if (ecoModeSetter_)
+                {
+                    ecoModeSetter_(!enabled);
+                }
+            }};
+        context.Toolbar(std::span{&ecoAction, 1});
+    }
+
     const auto panels = g_workspaceUi->Panels();
     std::vector<editor_ui::ActionPresentation> actions;
 
@@ -1756,6 +1880,12 @@ bool StudioViewportPanels::HandleViewportGizmo(
         *views_,
         *session_,
         id,
-        expansion_.ViewportState().gizmo);
+        expansion_.ViewportState().gizmo,
+        gizmoRelativeMouseDelta_);
+}
+
+bool StudioViewportPanels::GizmoDragging() const noexcept
+{
+    return manipulatorUi_.Dragging();
 }
 } // namespace orbit::studio_ui

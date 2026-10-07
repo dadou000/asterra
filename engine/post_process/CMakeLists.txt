@@ -1,4 +1,5 @@
 add_library(OrbitPostProcess STATIC
+    src/AntiAliasing.cpp
     src/ColorLut.cpp
     src/DisplayResolve.cpp
     src/HumanEyeAdaptation.cpp
@@ -18,6 +19,7 @@ target_include_directories(OrbitPostProcess
 target_link_libraries(OrbitPostProcess
     PUBLIC
         Orbit::Core
+        Orbit::Math
         Orbit::RHI
         Orbit::Shader
 )
@@ -26,6 +28,22 @@ target_compile_features(OrbitPostProcess PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitPostProcess)
 
 if(BUILD_TESTING)
+    add_executable(OrbitAntiAliasingTests
+        tests/AntiAliasingTests.cpp
+    )
+
+    target_link_libraries(OrbitAntiAliasingTests
+        PRIVATE
+            Orbit::PostProcess
+    )
+    target_compile_features(OrbitAntiAliasingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitAntiAliasingTests)
+
+    add_test(
+        NAME Orbit.AntiAliasing
+        COMMAND OrbitAntiAliasingTests
+    )
+
     add_executable(OrbitColorLutTests
         tests/ColorLutTests.cpp
     )

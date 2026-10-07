@@ -145,6 +145,11 @@ public:
     // "Label   value" row with the label muted and the value wrapped.
     void KeyValue(std::string_view label, std::string_view value);
     [[nodiscard]] bool Button(std::string_view label);
+    // Native button template with a caller-provided status fill color.
+    [[nodiscard]] bool StateButton(
+        std::string_view label,
+        math::Float4 color,
+        f32 width);
     [[nodiscard]] bool PrimaryButton(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
     // Focuses the next widget submitted through this context.
@@ -162,7 +167,8 @@ public:
     [[nodiscard]] bool Combo(
         std::string_view label,
         std::span<const std::string_view> items,
-        i32& index);
+        i32& index,
+        f32 width = 0.0F);
     // Equal-width one-row choice surface for a small mutually exclusive set.
     // `id` is an automation/ImGui identity and is not rendered as a label.
     [[nodiscard]] bool SegmentedControl(
@@ -220,7 +226,17 @@ public:
     void CanvasCircle(math::Float2 center, f32 radiusPixels, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
     void CanvasText(math::Float2 position, math::Float4 color, std::string_view text);
     // Rectangle between two canvas positions (0..1 on both axes).
-    void CanvasRect(math::Float2 a, math::Float2 b, math::Float4 color, bool filled = true, f32 thickness = 1.0F);
+    void CanvasRect(
+        math::Float2 a,
+        math::Float2 b,
+        math::Float4 color,
+        bool filled = true,
+        f32 thickness = 1.0F);
+    void CanvasGradientRect(
+        math::Float2 a,
+        math::Float2 b,
+        math::Float4 leftColor,
+        math::Float4 rightColor);
     // Text that is cut off at `clipRight` (canvas x, 0..1), for labels inside
     // bars. Positions are canvas fractions like CanvasText.
     void CanvasTextClipped(math::Float2 position, f32 clipRight, math::Float4 color, std::string_view text);
@@ -229,7 +245,10 @@ public:
     [[nodiscard]] f32 TextWidthPixels(std::string_view text) const;
     [[nodiscard]] f32 TextHeightPixels() const;
     [[nodiscard]] bool Checkbox(std::string_view label, bool& value);
-    [[nodiscard]] bool InputDouble(std::string_view label, f64& value);
+    [[nodiscard]] bool InputDouble(
+        std::string_view label,
+        f64& value,
+        f32 width = 0.0F);
     [[nodiscard]] bool InputInteger(std::string_view label, i64& value);
     [[nodiscard]] bool InputDouble3(std::string_view label, math::Double3& value);
     [[nodiscard]] bool ControlDown() const noexcept;

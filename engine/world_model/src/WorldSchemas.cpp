@@ -959,6 +959,20 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kStaticMeshType,
+        .displayName = "Static Mesh",
+        .category = "Scene / Geometry",
+        .properties = {
+            {.id=kStaticMeshEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kStaticMeshAsset,.name="Mesh Asset",.kind=schema::PropertyKind::String,.defaultValue=std::string{}},
+            {.id=kStaticMeshPositionMeters,.name="Parent-frame Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
+            {.id=kStaticMeshEulerDegrees,.name="Parent-frame Euler Rotation",.kind=schema::PropertyKind::Vector3,.unit="deg",.defaultValue=math::Double3{}},
+            {.id=kStaticMeshScale,.name="Uniform Scale",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=1.0e-6}},
+            {.id=kStaticMeshCastShadows,.name="Cast Shadows",.kind=schema::PropertyKind::Boolean,.defaultValue=true,.advanced=true}
+        }
+    });
+
+    schemas.RegisterType({
         .id = kSurfaceDecalType,
         .displayName = "Surface Decal",
         .category = "Material",

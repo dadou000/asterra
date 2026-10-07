@@ -107,6 +107,15 @@ public:
         u64 sourceOffsetBytes,
         Texture& destination) = 0;
 
+    // Fills mip levels 1..N-1 of a texture created with
+    // TextureDesc::mipLevels > 1 by repeatedly box-filtering level 0 down
+    // (linear-space for *_SRGB formats). Level 0 must already hold the
+    // uploaded pixels; the texture must be in CopyDestination before and
+    // is in CopyDestination after, so the caller transitions it to
+    // ShaderResource afterwards, exactly as for CopyBufferToTexture. A
+    // single-level texture is left untouched.
+    virtual void GenerateMipmaps(Texture& texture) = 0;
+
     // Copies the complete texture into a tightly packed host/readback
     // buffer. The source must be in CopySource and the destination in
     // CopyDestination. RGBA8 is currently the supported readback format.

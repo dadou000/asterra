@@ -3,6 +3,7 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/SimulationClock.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
 
 #include <functional>
 #include <string>
@@ -52,7 +53,9 @@ private:
 class SimulationControlsUi
 {
 public:
-    explicit SimulationControlsUi(SimulationControls& controls) noexcept;
+    explicit SimulationControlsUi(
+        SimulationControls& controls,
+        studio_session::StudioSession& session) noexcept;
     ~SimulationControlsUi();
 
     SimulationControlsUi(const SimulationControlsUi&) = delete;
@@ -69,6 +72,7 @@ private:
     void Draw(editor_ui::PanelContext& context);
 
     SimulationControls* controls_{nullptr};
+    studio_session::StudioSession* session_{nullptr};
     std::function<void()> reportIssue_;
     bool registered_{false};
     i32 stepIndex_{2};
@@ -79,5 +83,6 @@ private:
 // time.get / time.set / time.step: the RPC face of the transport.
 void RegisterSimulationRpc(
     rpc::Dispatcher& dispatcher,
-    SimulationControls& controls);
+    SimulationControls& controls,
+    studio_session::StudioSession& session);
 } // namespace orbit::studio_ui

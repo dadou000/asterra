@@ -47,7 +47,9 @@ enum class ManipulatedKind : u8
     Primitive,
     VisibilityProxy,
     PointLight,
-    SpotLight
+    SpotLight,
+    // Imported glTF mesh: move, rotate and uniform scale.
+    StaticMesh
 };
 
 // A pointer ray in the same frame as the target (camera-local meters).

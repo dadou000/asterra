@@ -13,6 +13,7 @@
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 
 #include <map>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -209,6 +210,13 @@ public:
 
     [[nodiscard]] bool FocusTerrainBody(
         std::string_view id);
+
+    // Frames body-fixed selection bounds through the persistent navigation
+    // pose. Refresh advances the two-second camera move.
+    [[nodiscard]] bool FrameSelectedBounds(
+        std::string_view id,
+        const math::Double3& centerMeters,
+        f64 radiusMeters);
 
     [[nodiscard]] bool FocusTerrainSurfacePoint(
         std::string_view id,
@@ -464,6 +472,15 @@ private:
 
     std::map<std::string, ReferenceNavigation, std::less<>>
         referenceNavigation_;
+
+    struct FrameTransition
+    {
+        StudioViewPose start;
+        math::Double3 targetObserver{};
+        math::Double3 targetCenter{};
+        std::chrono::steady_clock::time_point started{};
+    };
+    std::map<std::string, FrameTransition, std::less<>> frameTransitions_;
 
     std::map<std::string, bool, std::less<>> compositionEnabled_;
     std::map<std::string, bool, std::less<>> textDiagnosticsHud_;

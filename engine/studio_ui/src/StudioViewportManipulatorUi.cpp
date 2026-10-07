@@ -113,6 +113,7 @@ struct StudioViewportManipulatorUi::DragState
     u64 worldGeneration{0U};
     ManipulatorAxis axis{ManipulatorAxis::X};
     scene::ObjectId object{};
+    math::Float2 virtualPointer{};
 };
 
 StudioViewportManipulatorUi::StudioViewportManipulatorUi() = default;
@@ -141,7 +142,8 @@ bool StudioViewportManipulatorUi::Handle(
     StudioRenderViewSet& views,
     studio_session::StudioSession& session,
     const std::string_view viewId,
-    const GizmoSettings& gizmo)
+    const GizmoSettings& gizmo,
+    const math::Float2 relativeMouseDelta)
 {
     // The pointer must be read first: it refers to the viewport Image, the
     // item submitted just before this call.
@@ -261,7 +263,7 @@ bool StudioViewportManipulatorUi::Handle(
         static_cast<f64>(kHandlePixels * editor_ui::CurrentUiScale()) /
         pixelsPerMeter;
     const math::Float2 originPixel{
-        origin->u * width,
+        (1.0F - origin->u) * width,
         origin->v * height};
 
     const auto project =
@@ -280,7 +282,9 @@ bool StudioViewportManipulatorUi::Handle(
         }
 
         return {
-            .pixel = {result->u * width, result->v * height},
+            // Studio shaders use forward x up for screen-right. The shared
+            // RenderView projector uses up x forward, so mirror its X here.
+            .pixel = {(1.0F - result->u) * width, result->v * height},
             .valid = true};
     };
 
@@ -394,8 +398,9 @@ bool StudioViewportManipulatorUi::Handle(
                 camera,
                 view->Width(),
                 view->Height(),
-                std::clamp(position.x / std::max(width, 1.0F), 0.0F, 1.0F),
-                std::clamp(position.y / std::max(height, 1.0F), 0.0F, 1.0F));
+                1.0F - position.x / std::max(width, 1.0F),
+                position.y / std::max(height, 1.0F),
+                true);
 
         if (!ray.has_value())
         {
@@ -438,6 +443,7 @@ bool StudioViewportManipulatorUi::Handle(
                         *target, tool, space, *hovered, *ray))
                 {
                     drag_ = std::move(candidate);
+                    drag_->virtualPointer = pointer.position;
                 }
                 else
                 {
@@ -457,6 +463,12 @@ bool StudioViewportManipulatorUi::Handle(
     {
         try
         {
+            if (pointer.down)
+            {
+                drag_->virtualPointer.x += relativeMouseDelta.x;
+                drag_->virtualPointer.y += relativeMouseDelta.y;
+            }
+
             if (context.KeyPressed(editor_ui::UiKey::Escape))
             {
                 drag_->manipulator.Cancel();
@@ -465,7 +477,7 @@ bool StudioViewportManipulatorUi::Handle(
             }
             else if (pointer.down)
             {
-                const auto ray = rayAt(pointer.position);
+                const auto ray = rayAt(drag_->virtualPointer);
 
                 if (ray.has_value())
                 {
@@ -479,6 +491,8 @@ bool StudioViewportManipulatorUi::Handle(
                 const std::string finished =
                     drag_->manipulator.Summary();
                 drag_->manipulator.Commit();
+                session.World().
+                    AcknowledgeViewportTransformCommit();
                 drag_.reset();
                 statusText = finished;
             }

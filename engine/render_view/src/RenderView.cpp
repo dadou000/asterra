@@ -82,16 +82,15 @@ ViewportRay(
     const u32 width,
     const u32 height,
     const f32 u,
-    const f32 v) noexcept
+    const f32 v,
+    const bool allowOutsideViewport) noexcept
 {
     if (width == 0 ||
         height == 0 ||
         !std::isfinite(u) ||
         !std::isfinite(v) ||
-        u < 0.0F ||
-        u > 1.0F ||
-        v < 0.0F ||
-        v > 1.0F ||
+        (!allowOutsideViewport &&
+         (u < 0.0F || u > 1.0F || v < 0.0F || v > 1.0F)) ||
         !std::isfinite(
             camera.verticalFovRadians) ||
         camera.verticalFovRadians <= 0.0F ||

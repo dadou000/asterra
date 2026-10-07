@@ -14,6 +14,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -105,6 +106,17 @@ public:
         expansion_.RequestCommandPaletteOpen();
     }
 
+    void SetEcoModeAccessors(
+        std::function<bool()> getter,
+        std::function<void(bool)> setter)
+    {
+        ecoModeGetter_ = std::move(getter);
+        ecoModeSetter_ = std::move(setter);
+    }
+
+    // Shared operation behind the Scene toolbar, F shortcut and RPC.
+    [[nodiscard]] bool FrameSelectedObject();
+
     // Shows the horizontal toolbar that belongs to the active workspace mode
     // (Scene today) and removes it for modes that have none.
     void SyncModeToolbar();
@@ -128,10 +140,19 @@ public:
         editor_ui::PanelContext& context,
         std::string_view id);
 
+    void SetGizmoRelativeMouseDelta(math::Float2 delta) noexcept
+    {
+        gizmoRelativeMouseDelta_ = delta;
+    }
+    [[nodiscard]] bool GizmoDragging() const noexcept;
+
 private:
     friend class StudioExpansionShell;
 
     struct ViewportModeCommandState;
+    math::Float2 gizmoRelativeMouseDelta_{};
+    std::function<bool()> ecoModeGetter_;
+    std::function<void(bool)> ecoModeSetter_;
 
     void RegisterBase(editor_ui::EditorUi& ui);
     void RegisterSecondaryBase(editor_ui::EditorUi& ui);

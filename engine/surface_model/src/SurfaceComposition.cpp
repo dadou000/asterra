@@ -1474,6 +1474,7 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
     };
 }
 
+
 surface::SurfaceRegistry& SurfaceComposition::Registry()
 {
     if (registry_ == nullptr)

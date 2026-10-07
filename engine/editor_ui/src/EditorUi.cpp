@@ -1282,6 +1282,33 @@ bool PanelContext::Button(
         owned.c_str());
 }
 
+bool PanelContext::StateButton(
+    const std::string_view label,
+    const math::Float4 color,
+    const f32 width)
+{
+    TraceWidget(label);
+    const std::string owned(label);
+    const ImVec4 base{color.x, color.y, color.z, color.w};
+    const ImVec4 hovered{
+        std::min(1.0F, color.x * 1.14F + 0.035F),
+        std::min(1.0F, color.y * 1.14F + 0.035F),
+        std::min(1.0F, color.z * 1.14F + 0.035F),
+        color.w};
+    const ImVec4 active{
+        color.x * 0.82F,
+        color.y * 0.82F,
+        color.z * 0.82F,
+        color.w};
+
+    ImGui::PushStyleColor(ImGuiCol_Button, base);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hovered);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
+    const bool pressed = ImGui::Button(owned.c_str(), ImVec2(width, 0.0F));
+    ImGui::PopStyleColor(3);
+    return pressed;
+}
+
 bool PanelContext::PrimaryButton(
     const std::string_view label)
 {
@@ -1380,7 +1407,8 @@ bool PanelContext::InputTextMultiline(
 bool PanelContext::Combo(
     const std::string_view label,
     const std::span<const std::string_view> items,
-    i32& index)
+    i32& index,
+    const f32 width)
 {
     TraceWidget(label);
     const std::string ownedLabel(label);
@@ -1393,6 +1421,11 @@ bool PanelContext::Combo(
     index = std::clamp(index, 0, static_cast<i32>(items.size()) - 1);
     const std::string preview(items[static_cast<std::size_t>(index)]);
     bool changed = false;
+
+    if (width > 0.0F)
+    {
+        ImGui::SetNextItemWidth(width);
+    }
 
     if (ImGui::BeginCombo(ownedLabel.c_str(), preview.c_str()))
     {
@@ -2051,6 +2084,33 @@ void PanelContext::CanvasRect(
     }
 }
 
+void PanelContext::CanvasGradientRect(
+    const math::Float2 a,
+    const math::Float2 b,
+    const math::Float4 leftColor,
+    const math::Float4 rightColor)
+{
+    if (!canvasActive_)
+    {
+        return;
+    }
+
+    const ImVec2 low{
+        canvasOrigin_.x + a.x * canvasSize_.width,
+        canvasOrigin_.y + a.y * canvasSize_.height};
+    const ImVec2 high{
+        canvasOrigin_.x + b.x * canvasSize_.width,
+        canvasOrigin_.y + b.y * canvasSize_.height};
+    const auto packed = [](const math::Float4 color) {
+        return ImGui::ColorConvertFloat4ToU32(
+            ImVec4(color.x, color.y, color.z, color.w));
+    };
+    ImGui::GetWindowDrawList()->AddRectFilledMultiColor(
+        low, high,
+        packed(leftColor), packed(rightColor),
+        packed(rightColor), packed(leftColor));
+}
+
 void PanelContext::CanvasTextClipped(
     const math::Float2 position,
     const f32 clipRight,
@@ -2118,10 +2178,16 @@ bool PanelContext::Checkbox(
 
 bool PanelContext::InputDouble(
     const std::string_view label,
-    f64& value)
+    f64& value,
+    const f32 width)
 {
     TraceWidget(label);
     const std::string owned(label);
+
+    if (width > 0.0F)
+    {
+        ImGui::SetNextItemWidth(width);
+    }
 
     return ImGui::InputDouble(
         owned.c_str(),

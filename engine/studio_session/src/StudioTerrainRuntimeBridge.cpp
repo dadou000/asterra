@@ -606,6 +606,20 @@ StudioTerrainRuntimeBridge::Capture(
         *found->second);
 }
 
+std::optional<StudioTerrainObserverSite>
+StudioTerrainRuntimeBridge::ObserverSite(
+    const std::string_view viewportId) const noexcept
+{
+    const auto found = runtimes_.find(viewportId);
+    if (found == runtimes_.end())
+    {
+        return std::nullopt;
+    }
+    return StudioTerrainObserverSite{
+        .body = found->second->body,
+        .observer = found->second->observer};
+}
+
 std::vector<
     StudioTerrainViewportRuntimeSnapshot>
 StudioTerrainRuntimeBridge::Catalog() const

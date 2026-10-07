@@ -26,6 +26,7 @@ enum class Key : u8
     Q,
     E,
     C,
+    F,
     G,
     L,
     M,
@@ -103,6 +104,10 @@ public:
     // Sleeps for up to the given time but wakes immediately when any window
     // message arrives, so a throttled loop still reacts to input at once.
     virtual void WaitForActivity(u32 milliseconds) = 0;
+
+    // Wake a throttled application loop from an external activity source
+    // such as an RPC request.
+    virtual void WakeForActivity() = 0;
 
     virtual void SetTitle(std::string_view title) = 0;
 

@@ -7,6 +7,7 @@ summary = "The display pipeline after lighting: luminance histogram metering, hu
 owner_module = "OrbitPostProcess"
 keywords = ["post process", "tone mapping", "exposure", "histogram", "color lut", "lut", "grading", "display resolve", "output transform", "hdr", "highlight effects", "metering"]
 sources = [
+  "engine/post_process/include/orbit/post_process/AntiAliasing.hpp",
   "engine/post_process/include/orbit/post_process/ColorLut.hpp",
   "engine/post_process/include/orbit/post_process/DisplayResolve.hpp",
   "engine/post_process/include/orbit/post_process/HighlightEffects.hpp",
@@ -17,8 +18,9 @@ sources = [
   "engine/post_process/include/orbit/post_process/ToneMapping.hpp",
   "engine/post_process/CMakeLists.txt",
 ]
-symbols = ["ColorLutMetadata", "DisplayResolveSettings", "HighlightEffectsConfig", "HumanEyeAdaptationConfig", "HumanEyeAdaptationHotReloadInterface", "LuminanceHistogramConfig", "OutputDisplayCapabilities", "ToneMappingConfig"]
+symbols = ["AntiAliasingRenderer", "ColorLutMetadata", "DisplayResolveSettings", "HighlightEffectsConfig", "HumanEyeAdaptationConfig", "HumanEyeAdaptationHotReloadInterface", "LuminanceHistogramConfig", "OutputDisplayCapabilities", "ToneMappingConfig"]
 invariants = [
+  "Anti-aliasing runs on the HDR scene colour after every scene pass and before exposure and tone mapping, only in the lit view. TAA jitters the camera by a sub-pixel rotation (so no scene pass knows about it) and reprojects its history from the jittered camera pair plus depth; any frame without usable history (first frame, over 2 km camera jump, lens change, resize) runs FXAA instead. Both work on a Karis-compressed copy of the colour.",
   "Physical/radiometric scene encoding happens before display resolve and must not depend on camera adaptation: view/presentation exposure is applied in the display stage.",
   "Tone mapping's shoulder begins at an exposed scene-linear value (default 1.0, keeping nominal reference white in the linear region) and approaches the peak headroom exponentially.",
   "Colour LUTs are display-referred: exposure and tone mapping are owned by the presentation pipeline, the LUT pass only grades display-linear data and rejects scene-referred or shaped LUT assets before GPU upload; a 3D LUT is stored as N horizontal NxN slices in one 2D texture with explicit blue-slice interpolation so correction is still trilinear.",

@@ -1,5 +1,7 @@
 #include "VulkanObjects.hpp"
 
+#include <algorithm>
+
 #include <stdexcept>
 
 namespace orbit::rhi::vulkan::detail
@@ -529,7 +531,7 @@ void VulkanCommandList::Transition(
         isDepth
             ? static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT)
             : static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT),
-        0, 1, 0, 1};
+        0, VK_REMAINING_MIP_LEVELS, 0, 1};
 
     VkDependencyInfo dependencyInfo{};
     dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -655,7 +657,7 @@ void VulkanCommandList::UavBarrier(Texture& texture)
         isDepth
             ? static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_DEPTH_BIT)
             : static_cast<VkImageAspectFlags>(VK_IMAGE_ASPECT_COLOR_BIT),
-        0, 1, 0, 1};
+        0, VK_REMAINING_MIP_LEVELS, 0, 1};
 
     VkDependencyInfo dependencyInfo{};
     dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -777,6 +779,110 @@ void VulkanCommandList::CopyBufferToTexture(
     copyInfo.pRegions = &region;
 
     vkCmdCopyBufferToImage2(nativeCommandList_, &copyInfo);
+
+    ResumeRenderingIfPaused(wasRendering);
+}
+
+void VulkanCommandList::GenerateMipmaps(Texture& texture)
+{
+    auto* vulkanTexture = dynamic_cast<VulkanTexture*>(&texture);
+
+    if (vulkanTexture == nullptr)
+    {
+        throw std::runtime_error(
+            "Orbit Vulkan received a resource from another backend.");
+    }
+
+    const u32 levels = vulkanTexture->MipLevels();
+
+    if (levels <= 1U)
+    {
+        return;
+    }
+
+    const bool wasRendering = PauseRenderingIfActive();
+
+    const auto transition =
+        [&](const u32 firstLevel,
+            const u32 levelCount,
+            const VkImageLayout oldLayout,
+            const VkImageLayout newLayout,
+            const VkAccessFlags2 srcAccess,
+            const VkAccessFlags2 dstAccess)
+        {
+            VkImageMemoryBarrier2 barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.srcAccessMask = srcAccess;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.dstAccessMask = dstAccess;
+            barrier.oldLayout = oldLayout;
+            barrier.newLayout = newLayout;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = vulkanTexture->Native();
+            barrier.subresourceRange = {
+                VK_IMAGE_ASPECT_COLOR_BIT, firstLevel, levelCount, 0, 1};
+
+            VkDependencyInfo dependencyInfo{};
+            dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependencyInfo.imageMemoryBarrierCount = 1;
+            dependencyInfo.pImageMemoryBarriers = &barrier;
+            vkCmdPipelineBarrier2(nativeCommandList_, &dependencyInfo);
+        };
+
+    i32 sourceWidth = static_cast<i32>(vulkanTexture->Width());
+    i32 sourceHeight = static_cast<i32>(vulkanTexture->Height());
+
+    for (u32 level = 1U; level < levels; ++level)
+    {
+        // The previous level was just written (or uploaded): make it a
+        // blit source. Level `level` is still in TRANSFER_DST.
+        transition(
+            level - 1U,
+            1U,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_ACCESS_2_TRANSFER_READ_BIT);
+
+        const i32 destinationWidth = std::max(sourceWidth / 2, 1);
+        const i32 destinationHeight = std::max(sourceHeight / 2, 1);
+
+        VkImageBlit2 region{};
+        region.sType = VK_STRUCTURE_TYPE_IMAGE_BLIT_2;
+        region.srcSubresource = {
+            VK_IMAGE_ASPECT_COLOR_BIT, level - 1U, 0, 1};
+        region.srcOffsets[1] = {sourceWidth, sourceHeight, 1};
+        region.dstSubresource = {
+            VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+        region.dstOffsets[1] = {destinationWidth, destinationHeight, 1};
+
+        VkBlitImageInfo2 blit{};
+        blit.sType = VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2;
+        blit.srcImage = vulkanTexture->Native();
+        blit.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        blit.dstImage = vulkanTexture->Native();
+        blit.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        blit.regionCount = 1;
+        blit.pRegions = &region;
+        blit.filter = VK_FILTER_LINEAR;
+
+        vkCmdBlitImage2(nativeCommandList_, &blit);
+
+        sourceWidth = destinationWidth;
+        sourceHeight = destinationHeight;
+    }
+
+    // Every level but the last was moved to TRANSFER_SRC: return the whole
+    // image to TRANSFER_DST, the layout CopyDestination promises.
+    transition(
+        0U,
+        levels - 1U,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_ACCESS_2_TRANSFER_READ_BIT,
+        VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
     ResumeRenderingIfPaused(wasRendering);
 }
@@ -1283,7 +1389,10 @@ void VulkanCommandList::SetGraphicsTexture(
     }
 
     VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = defaultSampler_;
+    imageInfo.sampler =
+        vulkanTexture->Sampler() != VK_NULL_HANDLE
+            ? vulkanTexture->Sampler()
+            : defaultSampler_;
     imageInfo.imageView = vulkanTexture->View();
     imageInfo.imageLayout =
         texture.Format() == TextureFormat::D32_Float
@@ -1482,7 +1591,10 @@ void VulkanCommandList::SetComputeTexture(
     }
 
     VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = defaultSampler_;
+    imageInfo.sampler =
+        vulkanTexture->Sampler() != VK_NULL_HANDLE
+            ? vulkanTexture->Sampler()
+            : defaultSampler_;
     imageInfo.imageView = vulkanTexture->View();
     imageInfo.imageLayout =
         texture.Format() == TextureFormat::D32_Float

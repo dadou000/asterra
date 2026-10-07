@@ -1,4 +1,5 @@
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
+#include <orbit/lighting/SdfTraceShader.hpp>
 
 #include <algorithm>
 #include <array>
@@ -14,57 +15,63 @@ constexpr const char* kGatherCs = R"(
 [[vk::binding(0, 0)]]
 StructuredBuffer<uint4> g_particleLightGrid : register(t0);
 
-[[vk::binding(1, 0)]]
+// Merged mesh distance field (world-space GI fallback); dummies when absent.
+[[vk::binding(1, 0)]] RWStructuredBuffer<float> g_sdfDist : register(u20);
+[[vk::binding(2, 0)]] RWStructuredBuffer<uint> g_sdfAlbedo : register(u21);
+[[vk::binding(3, 0)]] RWStructuredBuffer<uint> g_sdfNormal : register(u22);
+[[vk::binding(4, 0)]] RWStructuredBuffer<float4> g_sdfRadiance : register(u23);
+
+[[vk::binding(5, 0)]]
 RWTexture2D<float4> g_currentIndirect : register(u1);
-[[vk::binding(2, 0)]]
+[[vk::binding(6, 0)]]
 RWTexture2D<float4> g_currentMeta : register(u2);
 
-[[vk::binding(3, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_sceneColor : register(t3);
-[[vk::binding(3, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_sceneSampler : register(s3);
 
-[[vk::binding(4, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness : register(t4);
-[[vk::binding(4, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler : register(s4);
 
-[[vk::binding(5, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic : register(t5);
-[[vk::binding(5, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler : register(s5);
 
-[[vk::binding(6, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass : register(t6);
-[[vk::binding(6, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler : register(s6);
 
-[[vk::binding(7, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth : register(t7);
-[[vk::binding(7, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler : register(s7);
 
-[[vk::binding(8, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_previousIndirect : register(t8);
-[[vk::binding(8, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_previousIndirectSampler : register(s8);
 
-[[vk::binding(9, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_previousMeta : register(t9);
-[[vk::binding(9, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_previousMetaSampler : register(s9);
 
@@ -80,10 +87,19 @@ struct Constants
     float4 depthRangeRadius;
     float4 gatherTuning;
     float4 cameraFrameParticleGrid;
+    float4 sdfOriginVoxel;       // volume voxel (0,0,0) centre relative to the camera, voxel size
+    float4 sdfDimensionsEnable;  // dimensions, enable (1 = a field is bound)
 };
 
 [[vk::push_constant]]
 Constants g;
+
+#define SDF_ORIGIN g.sdfOriginVoxel.xyz
+#define SDF_VOXEL g.sdfOriginVoxel.w
+#define SDF_DIMS int3(g.sdfDimensionsEnable.xyz)
+//SDF_TRACE_INCLUDE
+
+static const float kSdfGatherDistance = 14.0;
 
 float ReverseZViewDepth(float depth)
 {
@@ -379,7 +395,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             (float(rayIndex) + 0.5) *
                 1.57079632679;
 
-        const float elevation =
+)"
+R"(        const float elevation =
             lerp(
                 0.28,
                 0.72,
@@ -398,7 +415,17 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 
         float previousDelta =
             -1.0e20;
+        float previousT = 0.0;
         bool resolved = false;
+
+        // A per-pixel, per-ray offset of the step positions turns the
+        // fixed step spacing (which quantised the hit distance and showed up
+        // as concentric bands around bright emitters) into fine noise that
+        // the temporal accumulation resolves.
+        const float stepJitter =
+            Hash12(
+                float2(pixel) +
+                float2(53.0, 7.0) * (float(rayIndex) + 1.0));
 
         [loop]
         for (uint step = 1u;
@@ -407,7 +434,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         {
             const float t =
                 radius *
-                (float(step) /
+                ((float(step) - 1.0 + stepJitter) /
                  float(steps));
 
             const float3 hitPoint =
@@ -436,6 +463,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             {
                 previousDelta =
                     -1.0e20;
+                previousT = t;
                 continue;
             }
 
@@ -450,6 +478,53 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             if (delta >= -thickness &&
                 previousDelta < -thickness)
             {
+                // Refine the crossing between the previous step and this one
+                // so the hit distance (and the distance weight) is continuous
+                // instead of snapping to a step.
+                float hitDistance = t;
+                {
+                    float lo = previousT;
+                    float hi = t;
+
+                    [unroll]
+                    for (int refine = 0; refine < 4; ++refine)
+                    {
+                        const float mid = 0.5 * (lo + hi);
+                        const float3 midPoint =
+                            surfacePosition +
+                            normal * 0.03 +
+                            direction * mid;
+
+                        float2 midUv;
+                        float midViewDepth;
+                        if (!ProjectPoint(midPoint, midUv, midViewDepth))
+                        {
+                            break;
+                        }
+
+                        const float midDepth =
+                            g_depth.SampleLevel(g_depthSampler, midUv, 0).r;
+                        if (midDepth <= 0.0)
+                        {
+                            lo = mid;
+                            continue;
+                        }
+
+                        const float midDelta =
+                            midViewDepth - ReverseZViewDepth(midDepth);
+                        if (midDelta >= -thickness)
+                        {
+                            hi = mid;
+                            hitUv = midUv;
+                        }
+                        else
+                        {
+                            lo = mid;
+                        }
+                    }
+                    hitDistance = hi;
+                }
+
                 const float4 hitMeta =
                     g_emissionClass.SampleLevel(
                         g_emissionSampler,
@@ -480,7 +555,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
                     const float distanceWeight =
                         saturate(
                             1.0 -
-                            t / radius);
+                            hitDistance / radius);
 
                     const float weight =
                         sourceFacing *
@@ -504,12 +579,12 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
                         ParticleGridTransmittance(
                             surfaceFramePosition,
                             direction,
-                            t);
+                            hitDistance);
                     const float3 particleEmission =
                         ParticleGridEmissionAlong(
                             surfaceFramePosition,
                             direction,
-                            t);
+                            hitDistance);
 
                     accumulated +=
                         (radiance * particleT + particleEmission) *
@@ -525,6 +600,29 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             }
 
             previousDelta = delta;
+            previousT = t;
+        }
+
+        // The screen could not answer (the ray left the screen, or ran past
+        // the screen-trace radius without a crossing): trace the mesh distance
+        // field and read the hit's stored radiance instead.
+        if (!resolved && g.sdfDimensionsEnable.w > 0.5)
+        {
+            float3 worldHit;
+            float worldT;
+            const float3 worldOrigin =
+                surfacePosition + normal * (0.6 * g.sdfOriginVoxel.w);
+            if (SdfTrace(worldOrigin, direction, kSdfGatherDistance, worldHit, worldT))
+            {
+                const float3 worldRadiance =
+                    SdfFetchRadiance(worldHit, -direction);
+                const float worldWeight =
+                    saturate(dot(normal, direction)) *
+                    max(saturate(1.0 - worldT / kSdfGatherDistance), 0.15);
+                accumulated += worldRadiance * worldWeight;
+                accumulatedWeight += worldWeight;
+                validRayCount += 1.0;
+            }
         }
     }
 
@@ -611,6 +709,16 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 }
 )";
 
+
+[[nodiscard]] std::string GatherSource()
+{
+    std::string source = kGatherCs;
+    const std::string marker = "//SDF_TRACE_INCLUDE";
+    source.replace(
+        source.find(marker), marker.size(), kSdfTraceHlsl);
+    return source;
+}
+
 constexpr const char* kCombineCs = R"(
 [[vk::binding(0, 0)]]
 RWTexture2D<float4> g_target : register(u0);
@@ -634,7 +742,8 @@ struct Constants
     uint width;
     uint height;
     float intensity;
-    uint debugMode;      // 1 = show the gather's coverage instead of adding it
+    uint debugMode;      // 1 = show the gather's coverage instead of adding it,
+                         // 2 = show only the indirect light (no direct, sky or emission)
 };
 
 [[vk::push_constant]]
@@ -688,6 +797,16 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
                     0.0,
                     scene.a);
         }
+        return;
+    }
+
+    if (g.debugMode == 2u)
+    {
+        // GI only: what the final gather and the radiance-cache cascades add.
+        g_target[pixel] =
+            float4(
+                max(indirect.rgb * max(g.intensity, 0.0), 0.0),
+                scene.a);
         return;
     }
 
@@ -761,7 +880,7 @@ ScreenSpaceFinalGatherRenderer(
 {
     const auto gather =
         compiler.Compile({
-            .source = kGatherCs,
+            .source = GatherSource(),
             .entryPoint = "main",
             .stage = shader::Stage::Compute,
             .debug = false
@@ -773,8 +892,8 @@ ScreenSpaceFinalGatherRenderer(
                 .data = gather.bytecode.data(),
                 .size = gather.bytecode.size()
             },
-            .pushConstantDwords = 24U,
-            .shaderResourceBuffers = 1U,
+            .pushConstantDwords = 32U,
+            .shaderResourceBuffers = 5U,
             .storageTextures = 2U,
             .sampledTextures = 7U
         });
@@ -787,6 +906,17 @@ ScreenSpaceFinalGatherRenderer(
     });
     std::memset(dummyParticleLightGrid_->Map(),0,static_cast<std::size_t>(dummyParticleLightGrid_->SizeBytes()));
     dummyParticleLightGrid_->Unmap();
+
+    // One zeroed element bound in place of every field buffer when no mesh
+    // distance field exists (the shader's enable flag stays 0).
+    dummySdf_ = device.CreateBuffer({
+        .sizeBytes = 4U * sizeof(f32),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource
+    });
+    std::memset(dummySdf_->Map(), 0, static_cast<std::size_t>(dummySdf_->SizeBytes()));
+    dummySdf_->Unmap();
 
     const auto combine =
         compiler.Compile({
@@ -825,12 +955,21 @@ void ScreenSpaceFinalGatherRenderer::Gather(
     const LightingView& view,
     const bool historyCompatible,
     rhi::Buffer* const particleLightGrid,
-    const ScreenSpaceFinalGatherSettings& settings)
+    const ScreenSpaceFinalGatherSettings& settings,
+    const SdfGatherInput* const sdf)
 {
     if (width == 0U || height == 0U)
     {
         return;
     }
+
+    const bool sdfAvailable =
+        sdf != nullptr && sdf->distance != nullptr &&
+        sdf->albedo != nullptr && sdf->normal != nullptr &&
+        sdf->radiance != nullptr;
+    const math::Double3 sdfOriginRelative = sdfAvailable
+        ? sdf->originInFrameMeters - view.cameraPositionInFrameMeters
+        : math::Double3{};
 
     const auto bits =
         [](const f32 value)
@@ -855,7 +994,7 @@ void ScreenSpaceFinalGatherRenderer::Gather(
             0.0F))
     };
 
-    const std::array<u32, 24> fullConstants{
+    const std::array<u32, 32> fullConstants{
         width,
         height,
         std::clamp(settings.stepsPerRay, 2U, 32U),
@@ -889,7 +1028,17 @@ void ScreenSpaceFinalGatherRenderer::Gather(
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.x)),
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.y)),
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.z)),
-        bits(particleLightGrid != nullptr ? 1.0F : 0.0F)
+        bits(particleLightGrid != nullptr ? 1.0F : 0.0F),
+
+        bits(static_cast<f32>(sdfOriginRelative.x)),
+        bits(static_cast<f32>(sdfOriginRelative.y)),
+        bits(static_cast<f32>(sdfOriginRelative.z)),
+        bits(sdfAvailable ? sdf->voxelSize : 0.25F),
+
+        bits(sdfAvailable ? static_cast<f32>(sdf->dimensions[0]) : 1.0F),
+        bits(sdfAvailable ? static_cast<f32>(sdf->dimensions[1]) : 1.0F),
+        bits(sdfAvailable ? static_cast<f32>(sdf->dimensions[2]) : 1.0F),
+        bits(sdfAvailable ? 1.0F : 0.0F)
     };
 
     commands.SetComputePipeline(
@@ -901,6 +1050,14 @@ void ScreenSpaceFinalGatherRenderer::Gather(
         particleLightGrid != nullptr
             ? *particleLightGrid
             : *dummyParticleLightGrid_);
+    commands.SetComputeBuffer(
+        1U, sdfAvailable ? *sdf->distance : *dummySdf_);
+    commands.SetComputeBuffer(
+        2U, sdfAvailable ? *sdf->albedo : *dummySdf_);
+    commands.SetComputeBuffer(
+        3U, sdfAvailable ? *sdf->normal : *dummySdf_);
+    commands.SetComputeBuffer(
+        4U, sdfAvailable ? *sdf->radiance : *dummySdf_);
 
     commands.SetComputeStorageTexture(
         0U,
@@ -945,7 +1102,8 @@ void ScreenSpaceFinalGatherRenderer::Combine(
     const u32 width,
     const u32 height,
     const f32 intensity,
-    const bool coverageView)
+    const bool coverageView,
+    const bool indirectOnlyView)
 {
     if (width == 0U || height == 0U)
     {
@@ -957,7 +1115,7 @@ void ScreenSpaceFinalGatherRenderer::Combine(
         height,
         std::bit_cast<u32>(
             std::max(intensity, 0.0F)),
-        coverageView ? 1U : 0U
+        coverageView ? 1U : (indirectOnlyView ? 2U : 0U)
     };
 
     commands.SetComputePipeline(

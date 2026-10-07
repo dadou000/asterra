@@ -127,6 +127,8 @@ struct StudioTerrainLayerOptions
     bool bypassProxySunShadow{false};
     // Skips drawing authored Visibility Proxies as lit geometry (they stay invisible occluders).
     bool bypassProxySurfaces{false};
+    // Skips drawing imported Static Meshes (glTF/GLB) into the surface buffer.
+    bool bypassMeshSurfaces{false};
     // Skips the radiance cache's sky-only fill (sky irradiance occluded by terrain and proxies, added by direct lighting).
     bool bypassSkyCache{false};
     bool bypassIndirectLighting{false};
@@ -139,6 +141,33 @@ struct StudioTerrainLayerOptions
     // Replaces the final gather's contribution with its coverage: red = confidence, green = gathered
     // brightness (log), magenta = the gather returned nothing for that pixel (it gets no indirect light).
     bool indirectCoverageView{false};
+    // Shows only the global illumination: the final gather and radiance-cache cascade light, with no
+    // direct sun, sky fill, emission or reflections. Needs indirect lighting on.
+    bool giOnlyView{false};
+    // Anti-aliasing of the HDR scene colour before tone mapping:
+    // 0 = off, 1 = FXAA, 2 = TAA (jittered camera, history reprojection; falls
+    // back to FXAA on frames without usable history). See post_process::AntiAliasingMode.
+    u8 antiAliasing{2U};
+    // Mesh distance-field debug view (sphere traces the merged field and shades it):
+    // 0 = off, 1 = shaded, 2 = step count heat map, 3 = distance, 4 = split (left SDF, right scene).
+    u8 sdfDebugView{0U};
+    // Skips the final gather's world-space fallback (rays the screen cannot resolve are traced
+    // through the mesh distance field), to compare with screen-space-only GI.
+    bool bypassSdfGi{false};
+    // Leave the terrain patch / Visibility Proxies out of the mesh distance
+    // field (A/B checks of what each contributes to the GI fallback).
+    bool bypassSdfTerrain{false};
+    bool bypassSdfProxies{false};
+    // Strength of the final gather's indirect light. The gather averages the radiance of what its
+    // rays hit and multiplies by albedo / pi, so a physically correct diffuse bounce
+    // (albedo x average radiance) needs pi here; lower values dim all gathered bounce light.
+    f32 giIntensity{1.0F};
+    // Scales the TAA sub-pixel jitter (1 = full +-0.5 px, 0 = no jitter, which turns TAA into a
+    // plain temporal filter). Lower values trade anti-aliasing for less visible shimmer.
+    f32 taaJitterScale{1.0F};
+    // Multiplies the sun's angular size in the mesh sun shadow (PCSS): 1 = the real sun, 0 = hard
+    // shadows, larger values exaggerate the penumbra.
+    f32 meshShadowSoftness{1.0F};
     // > 0 draws a horizontal slice of the light volume at this altitude (metres) over the view as a
     // heatmap of the optical depth towards the sun (magenta = voxel not ready). 0 = off.
     f32 cloudVolumeDebugAltitude{0.0F};

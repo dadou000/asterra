@@ -20,6 +20,7 @@ add_library(OrbitWorldModel STATIC
     src/LocalLightBinding.cpp
     src/VisibilityProxyBinding.cpp
     src/PrimitiveBinding.cpp
+    src/StaticMeshBinding.cpp
     src/MaterialAssignmentBinding.cpp
     src/UniverseComposition.cpp
 )
@@ -91,6 +92,25 @@ if(BUILD_TESTING)
 
     add_executable(OrbitPrimitiveBindingTests
         tests/PrimitiveBindingTests.cpp
+    )
+
+    add_executable(OrbitStaticMeshBindingTests
+        tests/StaticMeshBindingTests.cpp
+    )
+
+    target_link_libraries(OrbitStaticMeshBindingTests
+        PRIVATE
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+    target_compile_features(
+        OrbitStaticMeshBindingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStaticMeshBindingTests)
+
+    add_test(
+        NAME Orbit.StaticMeshBinding
+        COMMAND OrbitStaticMeshBindingTests
     )
 
     add_executable(OrbitMaterialAssignmentBindingTests

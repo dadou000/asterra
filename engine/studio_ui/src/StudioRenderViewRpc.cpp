@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <orbit/mesh_render/MeshLibrary.hpp>
+#include <orbit/post_process/AntiAliasing.hpp>
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 
 #include <cmath>
@@ -308,6 +310,10 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_cloud_shadow", layers.bypassCloudShadow},
         {"bypass_proxy_sun_shadow", layers.bypassProxySunShadow},
         {"bypass_proxy_surfaces", layers.bypassProxySurfaces},
+        {"bypass_mesh_surfaces", layers.bypassMeshSurfaces},
+        {"bypass_sdf_gi", layers.bypassSdfGi},
+        {"bypass_sdf_terrain", layers.bypassSdfTerrain},
+        {"bypass_sdf_proxies", layers.bypassSdfProxies},
         {"bypass_sky_cache", layers.bypassSkyCache},
         {"bypass_indirect_lighting", layers.bypassIndirectLighting},
         {"bypass_near_field_water", layers.bypassNearFieldWater},
@@ -315,6 +321,15 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_hybrid_reflections", layers.bypassHybridReflections},
         {"bypass_radiance_cache", layers.bypassRadianceCache},
         {"indirect_coverage_view", layers.indirectCoverageView},
+        {"gi_only_view", layers.giOnlyView},
+        {"sdf_debug_view", static_cast<f64>(layers.sdfDebugView)},
+        {"gi_intensity", static_cast<f64>(layers.giIntensity)},
+        {"taa_jitter_scale", static_cast<f64>(layers.taaJitterScale)},
+        {"mesh_shadow_softness", static_cast<f64>(layers.meshShadowSoftness)},
+        {"anti_aliasing",
+         std::string(post_process::AntiAliasingModeName(
+             static_cast<post_process::AntiAliasingMode>(
+                 std::min<u8>(layers.antiAliasing, 2U))))},
         {"cloud_volume_debug_altitude", static_cast<f64>(layers.cloudVolumeDebugAltitude)},
         {"cloud_lab", CloudLabToRpc(layers.cloudLab)},
         {"clipmap_band_edges_meters", BandEdgesToRpc(layers)}});
@@ -561,6 +576,55 @@ void RegisterStudioRenderViewRpc(
     rpc::Dispatcher& dispatcher,
     StudioRenderViewSet& views)
 {
+    dispatcher.Register(
+        {
+            .name = "mesh.status",
+            .description =
+                "Returns every imported mesh the renderer has requested: "
+                "path, state (loading | ready | failed), error, triangle, "
+                "part, material and texture counts (textures_resident of "
+                "textures_total while they stream in), bounds in metres and "
+                "import warnings.",
+            .mutating = false
+        },
+        [](const Value&)
+        {
+            Value::Array meshes;
+            for (const auto& status : mesh_render::LatestMeshStatuses())
+            {
+                Value::Array warnings;
+                for (const auto& warning : status.warnings)
+                {
+                    warnings.emplace_back(warning);
+                }
+                const auto bounds = [](const std::array<f64, 3>& v)
+                {
+                    return Value(Value::Array{
+                        Value(v[0]), Value(v[1]), Value(v[2])});
+                };
+                meshes.emplace_back(Value::Object{
+                    {"path", status.path},
+                    {"state",
+                     std::string(
+                         status.state == mesh_render::MeshLoadState::Ready
+                             ? "ready"
+                             : status.state == mesh_render::MeshLoadState::Failed
+                                   ? "failed"
+                                   : "loading")},
+                    {"error", status.error},
+                    {"triangles", static_cast<f64>(status.triangles)},
+                    {"parts", static_cast<f64>(status.parts)},
+                    {"materials", static_cast<f64>(status.materials)},
+                    {"textures_total", static_cast<f64>(status.texturesTotal)},
+                    {"textures_resident",
+                     static_cast<f64>(status.texturesResident)},
+                    {"bounds_min_meters", bounds(status.boundsMin)},
+                    {"bounds_max_meters", bounds(status.boundsMax)},
+                    {"warnings", Value(std::move(warnings))}});
+            }
+            return Value(Value::Object{{"meshes", Value(std::move(meshes))}});
+        });
+
     dispatcher.Register(
         {
             .name = "view.surface_debug_get",
@@ -838,6 +902,10 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("bypass_cloud_shadow", layers.bypassCloudShadow);
                 applyFlag("bypass_proxy_sun_shadow", layers.bypassProxySunShadow);
                 applyFlag("bypass_proxy_surfaces", layers.bypassProxySurfaces);
+                applyFlag("bypass_mesh_surfaces", layers.bypassMeshSurfaces);
+                applyFlag("bypass_sdf_gi", layers.bypassSdfGi);
+                applyFlag("bypass_sdf_terrain", layers.bypassSdfTerrain);
+                applyFlag("bypass_sdf_proxies", layers.bypassSdfProxies);
                 applyFlag("bypass_sky_cache", layers.bypassSkyCache);
                 applyFlag("bypass_indirect_lighting", layers.bypassIndirectLighting);
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
@@ -845,6 +913,65 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("bypass_hybrid_reflections", layers.bypassHybridReflections);
                 applyFlag("bypass_radiance_cache", layers.bypassRadianceCache);
                 applyFlag("indirect_coverage_view", layers.indirectCoverageView);
+                applyFlag("gi_only_view", layers.giOnlyView);
+                if (const auto giFound = values.find("gi_intensity");
+                    giFound != values.end())
+                {
+                    if (!giFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "gi_intensity must be a number.");
+                    }
+                    layers.giIntensity = std::clamp(
+                        static_cast<f32>(giFound->second.AsNumber()), 0.0F, 16.0F);
+                }
+                if (const auto sdfFound = values.find("sdf_debug_view");
+                    sdfFound != values.end())
+                {
+                    if (!sdfFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "sdf_debug_view must be a number 0..5.");
+                    }
+                    layers.sdfDebugView = static_cast<u8>(std::clamp(
+                        static_cast<i32>(sdfFound->second.AsNumber()), 0, 5));
+                }
+                if (const auto softFound = values.find("mesh_shadow_softness");
+                    softFound != values.end())
+                {
+                    if (!softFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "mesh_shadow_softness must be a number.");
+                    }
+                    layers.meshShadowSoftness = std::clamp(
+                        static_cast<f32>(softFound->second.AsNumber()), 0.0F, 32.0F);
+                }
+                if (const auto jitterFound = values.find("taa_jitter_scale");
+                    jitterFound != values.end())
+                {
+                    if (!jitterFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "taa_jitter_scale must be a number.");
+                    }
+                    layers.taaJitterScale = std::clamp(
+                        static_cast<f32>(jitterFound->second.AsNumber()), 0.0F, 1.0F);
+                }
+                if (const auto aaFound = values.find("anti_aliasing");
+                    aaFound != values.end())
+                {
+                    post_process::AntiAliasingMode mode{};
+                    if (!aaFound->second.IsString() ||
+                        !post_process::ParseAntiAliasingMode(
+                            aaFound->second.AsString(), mode))
+                    {
+                        throw rpc::Error(
+                            kInvalid,
+                            "anti_aliasing must be \"off\", \"fxaa\" or \"taa\".");
+                    }
+                    layers.antiAliasing = static_cast<u8>(mode);
+                }
                 if (const auto debugAltitude = values.find("cloud_volume_debug_altitude");
                     debugAltitude != values.end())
                 {

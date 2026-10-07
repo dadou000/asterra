@@ -14,15 +14,18 @@ Busy means any of:
 - any RPC/MCP request (`EditorSessionRpcHost::RequestCount`);
 - far terrain patches still being built (`StudioViewportRenderer::HasPendingTerrainWork`).
 
-After 1.5 s without any of these the loop paces to `ORBIT_IDLE_FPS` (default **30**). Set `ORBIT_IDLE_FPS=0` to
-disable the throttle (the old behaviour).
+With Eco off a static scene is **not** capped: the loop keeps rendering at the display rate (vsync) after the
+1.5 s idle mark. The status strip's Eco toggle uses 15 FPS while active and 1 FPS after 1.5 s idle. RPC dispatch
+posts a window wake message, so MCP commands are handled on the next loop iteration even during the 1 FPS wait.
+Set `ORBIT_IDLE_FPS` to a positive rate (default **0** = off) to opt in to an idle cap while Eco is off; Eco mode
+always applies its own limits.
 
 Measured on Earth (per-process GPU counters, Orbit alone):
 
 | State | GPU | CPU |
 | --- | --- | --- |
-| Unthrottled (`ORBIT_IDLE_FPS=0`) | 20.9% | 0.92 cores |
-| Idle throttled (default) | 3.7% | 0.26 cores |
+| Unthrottled (default, Eco off) | 20.9% | 0.92 cores |
+| Idle throttled (`ORBIT_IDLE_FPS=30`, opt-in) | 3.7% | 0.26 cores |
 
 ## Orbital terrain patches
 

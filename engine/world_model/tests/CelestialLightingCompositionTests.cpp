@@ -103,6 +103,39 @@ int main()
             orbit::world_model::kPhotosphereRadiusMeters,
             100.0);
 
+        const auto secondStar = commands.CreateObject(
+            orbit::world_model::kCelestialBodyType,
+            "Second Star",
+            system);
+        commands.SetProperty(
+            secondStar,
+            orbit::world_model::kBodyRadius,
+            100.0);
+        commands.SetProperty(
+            secondStar,
+            orbit::world_model::kBodyParentPositionMeters,
+            orbit::math::Double3{0.0, 0.0, 1000.0});
+        const auto secondEmitter = commands.CreateObject(
+            orbit::world_model::kRadiativeEmitterCapabilityType,
+            "Second Emitter",
+            secondStar);
+        commands.SetProperty(
+            secondEmitter,
+            orbit::world_model::kEmitterDeriveLuminosity,
+            false);
+        commands.SetProperty(
+            secondEmitter,
+            orbit::world_model::kEmitterLuminosityWatts,
+            1.0e17);
+        const auto secondPhotosphere = commands.CreateObject(
+            orbit::world_model::kPhotosphereCapabilityType,
+            "Second Photosphere",
+            secondStar);
+        commands.SetProperty(
+            secondPhotosphere,
+            orbit::world_model::kPhotosphereRadiusMeters,
+            100.0);
+
         const auto moon =
             commands.CreateObject(
                 orbit::world_model::kCelestialBodyType,
@@ -156,6 +189,7 @@ int main()
 
         const auto starId =
             universe.BodyForObject(star);
+        const auto secondStarId = universe.BodyForObject(secondStar);
         const auto moonId =
             universe.BodyForObject(moon);
         const auto planetId =
@@ -164,6 +198,7 @@ int main()
             universe.BodyForObject(observer);
 
         if (!starId.has_value() ||
+            !secondStarId.has_value() ||
             !moonId.has_value() ||
             !planetId.has_value() ||
             !observerId.has_value())
@@ -188,6 +223,14 @@ int main()
             clear->irradianceWattsPerSquareMeter <= 0.0)
         {
             return FailCode(2);
+        }
+
+        const auto dominant = lighting.DominantDirectLightingAtBody(
+            *planetId, {});
+        if (!dominant.has_value() || dominant->emitter != *starId ||
+            dominant->receiverBodyFixedToEmitterMeters.x >= 0.0)
+        {
+            return FailCode(5);
         }
 
         const auto eclipsed =
@@ -222,6 +265,18 @@ int main()
                 eclipsed->visibleFraction)
         {
             return FailCode(4);
+        }
+
+        commands.SetProperty(
+            secondEmitter,
+            orbit::world_model::kEmitterLuminosityWatts,
+            1.0e23);
+        const auto newDominant = lighting.DominantDirectLightingAtBody(
+            *planetId, {});
+        if (!newDominant.has_value() ||
+            newDominant->emitter != *secondStarId)
+        {
+            return FailCode(6);
         }
 
         world.Checkpoint();
