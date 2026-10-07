@@ -28,7 +28,7 @@ verify = [
   "Box selected + Frame fits the whole box; hierarchy frames the aggregate extent; point-like objects get a minimum radius.",
   "Camera move takes 2.0 s with smooth ease; WASD/mouse input cancels it.",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 # Frame Selected Camera

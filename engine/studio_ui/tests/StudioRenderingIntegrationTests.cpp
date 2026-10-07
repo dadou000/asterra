@@ -7,7 +7,7 @@
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 #include <orbit/post_process/OutputTransform.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
-#include <orbit/studio_ui/V007ValidationScenarios.hpp>
+#include <orbit/validation/SceneValidationScenarios.hpp>
 #include <orbit/volume_render/UniversalVolumeRenderer.hpp>
 #include <orbit/volume_representation/VolumeRepresentation.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
@@ -81,7 +81,7 @@ int main()
 
     // The named M43 matrix is the shared validation authority used by the
     // deterministic, visual-tolerance and performance capture workflows.
-    Check(studio_ui::kV007ValidationScenarios.size() == 13U);
+    Check(studio_ui::kSceneValidationScenarios.size() == 13U);
 
     // RT capability may select an exact-query backend, but it must not create a
     // second lighting model or silently increase work/budget.

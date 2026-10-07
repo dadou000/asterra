@@ -3,10 +3,18 @@ path = "/editor/studio-ui"
 title = "Studio UI map (panels, shell, continuity, captures, profiler)"
 kind = "subsystem"
 status = "stable"
-summary = "A map of the large studio_ui module by responsibility: the app-level UiBundle and shell model, authoring panels (project, world documents, celestial, surface, volume, simulation, system view, shading, display diagnostics, reports, profiler), the viewport stack (panels, render-view set, navigation, camera, capture), view continuity, the flat planet map and the V0.0.7 validation/capture tooling."
+summary = "A map of the large studio_ui module by responsibility: the app-level UiBundle and shell model, authoring panels (project, world documents, celestial, surface, volume, simulation, system view, shading, display diagnostics, reports, profiler), the viewport stack (panels, render-view set, navigation, camera, capture), view continuity, the flat planet map and the optional scene acceptance tooling and viewport capture."
 owner_module = "OrbitStudioUi"
 keywords = ["studio ui", "shell model", "view continuity", "viewport capture", "inspector extension", "flat map", "profiler panel", "panels", "workspace", "expansion shell", "authoring modes", "8k capture", "tiled capture"]
 sources = [
+  "engine/studio_ui/src/StudioShellQuickCreatePopup.cpp",
+  "engine/studio_ui/src/StudioShellQuickCreateBrowser.cpp",
+  "engine/studio_ui/src/StudioShellCommandPalettePopup.cpp",
+  "engine/studio_ui/src/StudioShellViewportBand.cpp",
+  "engine/studio_ui/src/StudioShellTerrainTools.cpp",
+  "engine/studio_ui/src/StudioShellPersistence.cpp",
+  "engine/studio_ui/src/StudioShellNavigation.cpp",
+  "engine/studio_ui/src/StudioShellInspector.cpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioShellModel.hpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioInspectorExtension.hpp",
@@ -20,6 +28,7 @@ sources = [
 ]
 symbols = ["StudioExpansionShell", "StudioInspectorProviderRegistration", "StudioViewContinuity", "ViewportCaptureService", "ProfilerUi", "StudioTerrainNavigationConfig"]
 invariants = [
+  "StudioExpansionShell owns lifecycle and contribution registration; StudioShellPersistence, StudioShellInspector, StudioShellTerrainTools, StudioShellNavigation and StudioShellViewportBand implement its independent responsibilities. Navigation delegates command palette, quick-create popup and full argument/browser forms to separate implementation units. All share the same shell-owned state and existing UI/RPC authority.",
   "Built-in authoring tools and hot-reloadable plugins share ONE inspector provider registry and ONE Properties-panel extension owned by StudioExpansionShell, so two visually identical contextual-inspector pipelines cannot drift; a registration lives exactly as long as its authoring UI instance, and headless/model workflows may populate the registry without an EditorUi host.",
   "There is one canonical Studio browser on the left (the world/assets browser contract); Explorer and Material Service stay registered as source implementations only. The authoring modes Scene, Planet, Celestial and Simulation share one spatial shell: switching changes contextual tools, never the navigation model or panel geography.",
   "Keyboard-first '+ Add' reuses the existing command palette (filtering for authoring verbs surfaces Create/Add/New descriptors with generated argument forms and project-asset pickers) instead of a second modal.",
@@ -40,7 +49,7 @@ verify = [
   "ctest -R Orbit.StudioViewportNavigation",
   "ctest -R Orbit.ProfilerModel",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 [routes]
 "Celestial panel, Celestial Tools, atmosphere preset buttons, System View canvas or orbit handles misbehave" = "/editor/studio-ui/celestial-authoring"
 "Project Browser, World Documents, Project Settings, create/open project or world" = "/editor/studio-ui/world-and-project"
@@ -51,4 +60,4 @@ verified = "b0a0de7f"
 "V0.0.7 validation commands, performance JSON, 16K captures, or what is still unvalidated" = "/editor/studio-ui/validation-and-capture"
 +++
 
-Area to file map (`engine/studio_ui/include/orbit/studio_ui`): shell and persistence - `StudioShellModel`, `StudioExpansionShell`, `StudioPersistentState`, `StudioViewContinuity`, `StudioUiContributions`; authoring panels - `ProjectAuthoringUi`, `ProjectSettingsUi`, `WorldDocumentsUi`, `CelestialAuthoringUi`, `SurfaceAuthoringUi`, `VolumeAuthoringUi`, `SimulationControlsUi`, `SystemViewUi`, `ShadingUi`; viewport - see `/editor/viewport`; diagnostics - `DisplayDiagnosticsUi`, `DisplayEyeRpc`, `StudioTextDiagnosticsHud`, `ProfilerUi`/`ProfilerModel`/`ProfilerPanelRpc`, `ReportsUi`; release evidence - `V007ValidationScenarios`, `V007ValidationCommands`.
+Area to file map (`engine/studio_ui/include/orbit/studio_ui`): shell and persistence - `StudioShellModel`, `StudioExpansionShell`, `StudioPersistentState`, `StudioViewContinuity`, `StudioUiContributions`; authoring panels - `ProjectAuthoringUi`, `ProjectSettingsUi`, `WorldDocumentsUi`, `CelestialAuthoringUi`, `SurfaceAuthoringUi`, `VolumeAuthoringUi`, `SimulationControlsUi`, `SystemViewUi`, `ShadingUi`; viewport - see `/editor/viewport`; diagnostics - `DisplayDiagnosticsUi`, `DisplayEyeRpc`, `StudioTextDiagnosticsHud`, `ProfilerUi`/`ProfilerModel`/`ProfilerPanelRpc`, `ReportsUi`; release evidence - `SceneValidationScenarios`, `V007ValidationCommands`.

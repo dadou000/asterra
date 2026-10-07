@@ -2,7 +2,7 @@ name: Orbit Studio Smoke
 
 on:
   push:
-    branches: [orbit]
+    branches: [orbit, pre0.0.9-experimental]
     paths:
       - '.github/workflows/orbit-studio-smoke.yml'
       - 'apps/editor/**'

@@ -3,7 +3,7 @@ path = "/editor/studio-session"
 title = "Studio session, terrain runtime bridge and viewport targets"
 kind = "subsystem"
 status = "stable"
-summary = "The composition layer of Studio's runtime: StudioSession and runtime bindings, the terrain runtime bridge with its rebuild scheduler and physical-page service, the project browser model, the viewport target registry, the simulation clock binding and the terrain validation/round-trip scenarios. The authoring binding, project settings model, workspace RPC host, Bezier handle editor and celestial validation scenarios were removed in 0.0.9 because no application linked them."
+summary = "The composition layer of Studio's runtime: StudioSession and runtime bindings, the terrain runtime bridge with its rebuild scheduler and physical-page service, the project browser model, the viewport target registry, the simulation clock binding and the production round-trip verification and optional tooling-owned terrain acceptance. The authoring binding, project settings model, workspace RPC host, Bezier handle editor and celestial validation scenarios were removed in 0.0.9 because no application linked them."
 owner_module = "OrbitStudioSession"
 keywords = ["studio session", "runtime binding", "terrain runtime bridge", "rebuild scheduler", "physical page service", "project browser", "viewport target", "workspace", "validation scenario"]
 sources = [
@@ -15,6 +15,7 @@ sources = [
 ]
 symbols = ["RecentProjectItem", "SimulationClock", "StudioRuntimeSnapshot"]
 invariants = [
+  "StudioTerrainValidationScenario is tooling-owned in tools/validation and compiled into OrbitTerrainValidationSupport only with BUILD_TESTING or ORBIT_ENABLE_VALIDATION_TOOLS. OrbitStudioSession never links back to this support library. Studio production UI includes it only with ORBIT_ENABLE_VALIDATION_TOOLS=ON.",
   "Terrain authoring edits flow through StudioTerrainAuthoringInvalidation into the dependency graph (/rendering/terrain/invalidation) and the rebuild scheduler; physical page uploads carry an upload revision (BeginUpload/CompleteUpload) so a stale completion can be rejected (/rendering/terrain/gpu-cache).",
   "StudioSession registers its own RPC methods on the session dispatcher in its constructor: the viewport-target methods (view.*) and the read-only terrain.cache_stats (StudioTerrainStatusRpc.cpp, a thin reader over StudioTerrainStatusInspector and StudioTerrainPerformanceDiagnostics that never mutates terrain state).",
 ]
@@ -34,7 +35,7 @@ verify = [
   "ctest -R Orbit.ViewportTargetRegistry",
   "ctest -R Orbit.SimulationClock",
 ]
-verified = "04d589b3"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

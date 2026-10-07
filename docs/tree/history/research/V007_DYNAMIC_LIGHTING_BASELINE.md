@@ -221,7 +221,7 @@ Performance results must name the tested GPU and settings rather than becoming u
 
 Primary internal anchors:
 
-- docs/research/V006_RADIOMETRY_HDR_EXPOSURE.md
+- docs/tree/history/research/V006_RADIOMETRY_HDR_EXPOSURE.md
 - engine/celestial_radiometry
 - engine/celestial_representation
 - engine/celestial_globe

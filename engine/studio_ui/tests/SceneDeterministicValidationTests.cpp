@@ -1,4 +1,4 @@
-#include <orbit/studio_ui/V007ValidationScenarios.hpp>
+#include <orbit/validation/SceneValidationScenarios.hpp>
 
 #include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/MaterialEmission.hpp>
@@ -49,8 +49,8 @@ int main()
     // The catalog is the authoritative named M43 matrix. Visual tolerance
     // capture remains a separate GPU/hardware gate; this binary pins only
     // deterministic numerical invariants.
-    Check(studio_ui::kV007ValidationScenarios.size() == 13U);
-    for (const auto& scenario : studio_ui::kV007ValidationScenarios)
+    Check(studio_ui::kSceneValidationScenarios.size() == 13U);
+    for (const auto& scenario : studio_ui::kSceneValidationScenarios)
     {
         Check(!scenario.name.empty());
         Check(!scenario.invariant.empty());

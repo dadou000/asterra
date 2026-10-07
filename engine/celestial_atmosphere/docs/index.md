@@ -35,14 +35,14 @@ verify = [
   "ctest -R Orbit.CelestialAtmosphere (Atmosphere and SkyIrradiance tests), Orbit.CelestialAtmosphereBinding and Orbit.AtmospherePropertySolver.",
   "orbit_view_terrain_layers_set(bypass_atmosphere=true): the sky, haze and limb disappear; restoring false brings them back without a restart.",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [routes]
 "how the LUTs are built, fingerprints, what invalidates what, sky view, limb" = "lut-pipeline"
 "how sky light reaches surfaces (spherical harmonics, sky frame, enclosed spaces)" = "sky-irradiance"
 "author an atmosphere from pressure/composition, presets, provenance, explicit vs derived values" = "authoring-solver"
-"research baseline and intentional limits of the physical model" = "/legacy/research-v006-physical-atmosphere"
-"rocky-planet recipes with atmospheres" = "/legacy/research-v006-atmosphere-authoring-solver/recipes"
+"research baseline and intentional limits of the physical model" = "/legacy/tree-history-research-v006-physical-atmosphere"
+"rocky-planet recipes with atmospheres" = "/legacy/tree-history-research-v006-atmosphere-authoring-solver/recipes"
 +++
 
 ## Where it lives

@@ -23,15 +23,35 @@ add_library(OrbitStudioUi STATIC
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
-    src/V007ValidationCommands.cpp
-    src/V007ValidationScenarios.cpp
     src/VolumeAuthoringUi.cpp
     src/StudioViewContinuity.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportManipulatorUi.cpp
     src/StudioViewportNavigation.cpp
     src/StudioViewportPanels.cpp
+    src/StudioViewportPostProcess.cpp
+    src/StudioViewportTerrainPass.cpp
+    src/StudioViewportVolumePass.cpp
+    src/StudioViewportLightingPass.cpp
+    src/StudioViewportAtmospherePass.cpp
+    src/StudioViewportBodyPass.cpp
     src/StudioViewportRenderer.cpp
+    src/StudioShellInspector.cpp
+    src/StudioShellNavigation.cpp
+    src/StudioShellQuickCreateBrowser.cpp
+    src/StudioShellQuickCreatePopup.cpp
+    src/StudioShellCommandPalettePopup.cpp
+    src/StudioShellPersistence.cpp
+    src/StudioShellTerrainTools.cpp
+    src/StudioShellViewportBand.cpp
+    src/StudioViewportCompose.cpp
+    src/StudioViewportDisplaySettings.cpp
+    src/StudioViewportOverlayGeometry.cpp
+    src/StudioViewportPresentation.cpp
+    src/StudioViewportQuickCreate.cpp
+    src/StudioViewportRenderUtilities.cpp
+    src/StudioViewportSceneResolution.cpp
+    src/StudioViewportTerrainResources.cpp
     src/ViewportCaptureService.cpp
     src/StudioTextDiagnosticsHud.cpp
     src/StudioViewportTextDiagnostics.cpp
@@ -89,7 +109,29 @@ target_link_libraries(OrbitStudioUi
 target_compile_features(OrbitStudioUi PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitStudioUi)
 
+if(ORBIT_ENABLE_VALIDATION_TOOLS)
+    target_sources(OrbitStudioUi PRIVATE
+        ${PROJECT_SOURCE_DIR}/tools/validation/SceneValidationCommands.cpp
+        ${PROJECT_SOURCE_DIR}/tools/validation/SceneValidationScenarios.cpp)
+    target_link_libraries(OrbitStudioUi PUBLIC OrbitTerrainValidationSupport)
+    target_compile_definitions(OrbitStudioUi PUBLIC ORBIT_ENABLE_VALIDATION_TOOLS=1)
+endif()
+
 if(BUILD_TESTING)
+    # Avoid compiling the same support twice in an optional validation build.
+    if(ORBIT_ENABLE_VALIDATION_TOOLS)
+        add_library(OrbitSceneValidationSupport INTERFACE)
+        target_link_libraries(OrbitSceneValidationSupport INTERFACE Orbit::StudioUi)
+    else()
+        add_library(OrbitSceneValidationSupport STATIC
+            ${PROJECT_SOURCE_DIR}/tools/validation/SceneValidationCommands.cpp
+            ${PROJECT_SOURCE_DIR}/tools/validation/SceneValidationScenarios.cpp)
+        target_include_directories(OrbitSceneValidationSupport PUBLIC
+            ${PROJECT_SOURCE_DIR}/tools/validation/include)
+        target_link_libraries(OrbitSceneValidationSupport PUBLIC Orbit::StudioUi)
+        target_compile_features(OrbitSceneValidationSupport PUBLIC cxx_std_23)
+        orbit_enable_warnings(OrbitSceneValidationSupport)
+    endif()
     add_executable(OrbitStudioTerrainDiagnosticOverlayGeometryTests
         tests/StudioTerrainDiagnosticOverlayGeometryTests.cpp
     )
@@ -380,22 +422,23 @@ if(BUILD_TESTING)
 
     # M43 numerical gates are deterministic CPU/service invariants. GPU image
     # comparisons stay a separate hardware/tolerance gate by design.
-    add_executable(OrbitV007DeterministicValidationTests
-        tests/V007DeterministicValidationTests.cpp
+    add_executable(OrbitSceneDeterministicValidationTests
+        tests/SceneDeterministicValidationTests.cpp
     )
 
-    target_link_libraries(OrbitV007DeterministicValidationTests
+    target_link_libraries(OrbitSceneDeterministicValidationTests
         PRIVATE
+            OrbitSceneValidationSupport
             Orbit::StudioUi
     )
 
     target_compile_features(
-        OrbitV007DeterministicValidationTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitV007DeterministicValidationTests)
+        OrbitSceneDeterministicValidationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitSceneDeterministicValidationTests)
 
     add_test(
-        NAME Orbit.V007DeterministicValidation
-        COMMAND OrbitV007DeterministicValidationTests
+        NAME Orbit.SceneDeterministicValidation
+        COMMAND OrbitSceneDeterministicValidationTests
     )
 
     # M44 pins the durable report schema plus RT/non-RT budget independence and
@@ -405,43 +448,44 @@ if(BUILD_TESTING)
     # real SQLite world checkpoint, material asset, project display settings
     # and .orbitvol cache. Runtime-only radiance state is required to start
     # empty so the reopened scene converges from persisted physical authority.
-    add_executable(OrbitV007ProjectEquivalenceTests
-        tests/V007ProjectEquivalenceTests.cpp
+    add_executable(OrbitProjectPersistenceEquivalenceTests
+        tests/ProjectPersistenceEquivalenceTests.cpp
     )
 
-    target_link_libraries(OrbitV007ProjectEquivalenceTests
+    target_link_libraries(OrbitProjectPersistenceEquivalenceTests
         PRIVATE
             Orbit::StudioUi
     )
 
     target_compile_features(
-        OrbitV007ProjectEquivalenceTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitV007ProjectEquivalenceTests)
+        OrbitProjectPersistenceEquivalenceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitProjectPersistenceEquivalenceTests)
 
     add_test(
-        NAME Orbit.V007ProjectEquivalence
-        COMMAND OrbitV007ProjectEquivalenceTests
+        NAME Orbit.ProjectPersistenceEquivalence
+        COMMAND OrbitProjectPersistenceEquivalenceTests
     )
 
     # M46 is the release-level architectural smoke gate. Detailed subsystem
     # assertions remain in their original tests; this target pins the shared
     # cross-system contracts and is ordered after the major 0.0.7 gates.
-    add_executable(OrbitV007IntegrationGateTests
-        tests/V007IntegrationGateTests.cpp
+    add_executable(OrbitStudioRenderingIntegrationTests
+        tests/StudioRenderingIntegrationTests.cpp
     )
 
-    target_link_libraries(OrbitV007IntegrationGateTests
+    target_link_libraries(OrbitStudioRenderingIntegrationTests
         PRIVATE
+            OrbitSceneValidationSupport
             Orbit::StudioUi
     )
 
     target_compile_features(
-        OrbitV007IntegrationGateTests PRIVATE cxx_std_23)
-    orbit_enable_warnings(OrbitV007IntegrationGateTests)
+        OrbitStudioRenderingIntegrationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioRenderingIntegrationTests)
 
     add_test(
-        NAME Orbit.V007IntegrationGate
-        COMMAND OrbitV007IntegrationGateTests
+        NAME Orbit.StudioRenderingIntegration
+        COMMAND OrbitStudioRenderingIntegrationTests
     )
 
     add_executable(OrbitStudioShellModelTests
@@ -481,8 +525,8 @@ if(BUILD_TESTING)
     )
 
     set_tests_properties(
-        Orbit.V007IntegrationGate
+        Orbit.StudioRenderingIntegration
         PROPERTIES
-            DEPENDS "Orbit.VolumeAuthoringWorkflow;Orbit.StudioLightingOverlayGeometry;Orbit.LightingSelectionInspection;Orbit.RuntimeProfilerSnapshot;Orbit.V007DeterministicValidation;Orbit.V007ProjectEquivalence"
+            DEPENDS "Orbit.VolumeAuthoringWorkflow;Orbit.StudioLightingOverlayGeometry;Orbit.LightingSelectionInspection;Orbit.RuntimeProfilerSnapshot;Orbit.SceneDeterministicValidation;Orbit.ProjectPersistenceEquivalence"
     )
 endif()

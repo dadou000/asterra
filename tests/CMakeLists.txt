@@ -851,11 +851,11 @@ add_test(
     COMMAND OrbitCommandSurfaceTests
 )
 
-add_executable(OrbitV003ScaffoldIntegrationTests
-    V003ScaffoldIntegrationTests.cpp
+add_executable(OrbitEditorServicesIntegrationTests
+    EditorServicesIntegrationTests.cpp
 )
 
-target_link_libraries(OrbitV003ScaffoldIntegrationTests
+target_link_libraries(OrbitEditorServicesIntegrationTests
     PRIVATE
         Orbit::Build
         Orbit::Content
@@ -871,24 +871,24 @@ target_link_libraries(OrbitV003ScaffoldIntegrationTests
         Orbit::Universe
 )
 
-target_compile_features(OrbitV003ScaffoldIntegrationTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV003ScaffoldIntegrationTests)
-add_dependencies(OrbitV003ScaffoldIntegrationTests OrbitPlayer)
-orbit_copy_dxc_runtime(OrbitV003ScaffoldIntegrationTests)
+target_compile_features(OrbitEditorServicesIntegrationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitEditorServicesIntegrationTests)
+add_dependencies(OrbitEditorServicesIntegrationTests OrbitPlayer)
+orbit_copy_dxc_runtime(OrbitEditorServicesIntegrationTests)
 
 add_test(
-    NAME Orbit.V003ScaffoldIntegration
-    COMMAND OrbitV003ScaffoldIntegrationTests $<TARGET_FILE:OrbitPlayer>
+    NAME Orbit.EditorServicesIntegration
+    COMMAND OrbitEditorServicesIntegrationTests $<TARGET_FILE:OrbitPlayer>
 )
 
 # V0.0.4 M30 deterministic cross-system validation suite. Keep the twenty
 # mandatory cases in this single acceptance target so milestone status cannot
 # be inferred from unrelated unit tests.
-add_executable(OrbitV004ValidationTests
-    V004TerrainValidationTests.cpp
+add_executable(OrbitTerrainCrossSystemRegressionTests
+    TerrainCrossSystemRegressionTests.cpp
 )
 
-target_link_libraries(OrbitV004ValidationTests
+target_link_libraries(OrbitTerrainCrossSystemRegressionTests
     PRIVATE
         Orbit::EditorModel
         Orbit::SurfaceAuthoring
@@ -910,75 +910,29 @@ target_link_libraries(OrbitV004ValidationTests
         Orbit::TerrainView
 )
 
-target_compile_definitions(OrbitV004ValidationTests
+target_compile_definitions(OrbitTerrainCrossSystemRegressionTests
     PRIVATE
         ORBIT_TERRAIN_GEOLOGY_REFERENCE_ASSET_DIR="${CMAKE_SOURCE_DIR}/engine/terrain_geology/assets/reference"
 )
 
-target_compile_features(OrbitV004ValidationTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV004ValidationTests)
+target_compile_features(OrbitTerrainCrossSystemRegressionTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainCrossSystemRegressionTests)
 
 add_test(
-    NAME Orbit.V004Validation
-    COMMAND OrbitV004ValidationTests
+    NAME Orbit.TerrainCrossSystemRegression
+    COMMAND OrbitTerrainCrossSystemRegressionTests
 )
 
-# V0.0.4 M31 integration acceptance is compiled continuously but is not
-# registered as an executable CTest until the validated M30 hardware capture
-# opens the final integration gate.
-option(
-    ORBIT_ENABLE_V004_M31_GATE
-    "Register the V0.0.4 M31 final integration acceptance"
-    OFF
-)
-
-add_executable(OrbitV004IntegrationGateTests
-    V004IntegrationGateTests.cpp
-)
-
-target_link_libraries(OrbitV004IntegrationGateTests
-    PRIVATE
-        Orbit::Commands
-        Orbit::Documents
-        Orbit::EditorModel
-        Orbit::Jobs
-        Orbit::Scene
-        Orbit::Schema
-        Orbit::Selection
-        Orbit::SurfaceAuthoring
-        Orbit::SurfaceModel
-        Orbit::Terrain
-        Orbit::TerrainBiome
-        Orbit::TerrainDebug
-        Orbit::TerrainDependency
-        Orbit::TerrainErosion
-        Orbit::TerrainGeology
-        Orbit::TerrainGpu
-        Orbit::TerrainHydrology
-        Orbit::TerrainMacroGeology
-        Orbit::TerrainMaterialColumn
-        Orbit::TerrainRender
-        Orbit::TerrainScatter
-        Orbit::WorldModel
-        SQLiteCpp
-)
-
-target_compile_features(
-    OrbitV004IntegrationGateTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV004IntegrationGateTests)
-
-if(ORBIT_ENABLE_V004_M31_GATE)
-    add_test(
-        NAME Orbit.V004IntegrationGate
-        COMMAND OrbitV004IntegrationGateTests
-    )
+option(ORBIT_BUILD_HISTORICAL_TESTS "Build retired milestone acceptance gates" OFF)
+if(ORBIT_BUILD_HISTORICAL_TESTS)
+    add_subdirectory(historical)
 endif()
 
 # V0.0.5 M17 Studio terrain validation suite. The implementation-specific
 # tests remain owned by their modules; this named gate makes the release
 # contract explicit and runnable as one target without duplicating those
 # production-path scenarios.
-set(ORBIT_V005_VALIDATION_TESTS
+set(ORBIT_STUDIO_TERRAIN_VALIDATION_TESTS
     Orbit.StudioSession
     Orbit.RockyPlanetAuthoring
     Orbit.SurfaceAuthoringModel
@@ -993,17 +947,17 @@ set(ORBIT_V005_VALIDATION_TESTS
     Orbit.StudioViewportNavigation
 )
 
-list(JOIN ORBIT_V005_VALIDATION_TESTS "|" ORBIT_V005_VALIDATION_ALTERNATION)
-set(ORBIT_V005_VALIDATION_REGEX
-    "^(${ORBIT_V005_VALIDATION_ALTERNATION})$"
+list(JOIN ORBIT_STUDIO_TERRAIN_VALIDATION_TESTS "|" ORBIT_STUDIO_TERRAIN_VALIDATION_ALTERNATION)
+set(ORBIT_STUDIO_TERRAIN_VALIDATION_REGEX
+    "^(${ORBIT_STUDIO_TERRAIN_VALIDATION_ALTERNATION})$"
 )
 
-add_custom_target(OrbitV005Validation
+add_custom_target(OrbitStudioTerrainValidation
     COMMAND
         ${CMAKE_CTEST_COMMAND}
         --test-dir ${CMAKE_BINARY_DIR}
         -C $<CONFIG>
-        -R "${ORBIT_V005_VALIDATION_REGEX}"
+        -R "${ORBIT_STUDIO_TERRAIN_VALIDATION_REGEX}"
         --output-on-failure
     DEPENDS
         OrbitStudioSessionTests
@@ -1026,37 +980,38 @@ add_custom_target(OrbitV005Validation
 # viewport remains a workstation check on Vulkan hardware, while this target
 # compiles OrbitStudio and validates the full production session/authoring/
 # physical-page/save-reopen path on hosted CI.
-add_executable(OrbitV005IntegrationGateTests
-    V005IntegrationGateTests.cpp
+add_executable(OrbitStudioTerrainLifecycleIntegrationTests
+    StudioTerrainLifecycleIntegrationTests.cpp
 )
 
-target_link_libraries(OrbitV005IntegrationGateTests
+target_link_libraries(OrbitStudioTerrainLifecycleIntegrationTests
     PRIVATE
+        OrbitTerrainValidationSupport
         Orbit::StudioSession
         Orbit::StudioUi
 )
 
 target_compile_features(
-    OrbitV005IntegrationGateTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitV005IntegrationGateTests)
+    OrbitStudioTerrainLifecycleIntegrationTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitStudioTerrainLifecycleIntegrationTests)
 
 add_test(
-    NAME Orbit.V005IntegrationGate
-    COMMAND OrbitV005IntegrationGateTests
+    NAME Orbit.StudioTerrainLifecycleIntegration
+    COMMAND OrbitStudioTerrainLifecycleIntegrationTests
 )
 
 set_tests_properties(
-    Orbit.V005IntegrationGate
+    Orbit.StudioTerrainLifecycleIntegration
     PROPERTIES
-        LABELS "v005"
+        LABELS "regression;terrain"
 )
 
-add_custom_target(OrbitV005IntegrationGate
+add_custom_target(OrbitStudioTerrainLifecycleIntegration
     COMMAND
         ${CMAKE_CTEST_COMMAND}
         --test-dir ${CMAKE_BINARY_DIR}
         -C $<CONFIG>
-        -R "^(${ORBIT_V005_VALIDATION_ALTERNATION}|Orbit.V005IntegrationGate)$"
+        -R "^(${ORBIT_STUDIO_TERRAIN_VALIDATION_ALTERNATION}|Orbit.StudioTerrainLifecycleIntegration)$"
         --output-on-failure
     DEPENDS
         OrbitStudio
@@ -1072,7 +1027,7 @@ add_custom_target(OrbitV005IntegrationGate
         OrbitStudioTerrainPerformanceDiagnosticsTests
         OrbitStudioSurfacePickingTests
         OrbitStudioViewportNavigationTests
-        OrbitV005IntegrationGateTests
+        OrbitStudioTerrainLifecycleIntegrationTests
     VERBATIM
     USES_TERMINAL
 )
@@ -1081,11 +1036,11 @@ add_custom_target(OrbitV005IntegrationGate
 # Module-owned tests remain authoritative for detailed behavior; this target
 # locks a small set of numerical, representation and scheduler invariants in
 # one release-level contract.
-add_executable(OrbitV006CelestialValidationTests
-    V006CelestialValidationTests.cpp
+add_executable(OrbitCelestialCrossSystemRegressionTests
+    CelestialCrossSystemRegressionTests.cpp
 )
 
-target_link_libraries(OrbitV006CelestialValidationTests
+target_link_libraries(OrbitCelestialCrossSystemRegressionTests
     PRIVATE
         Orbit::CelestialCompactObjects
         Orbit::CelestialGiants
@@ -1096,21 +1051,21 @@ target_link_libraries(OrbitV006CelestialValidationTests
 )
 
 target_compile_features(
-    OrbitV006CelestialValidationTests PRIVATE cxx_std_23)
+    OrbitCelestialCrossSystemRegressionTests PRIVATE cxx_std_23)
 orbit_enable_warnings(
-    OrbitV006CelestialValidationTests)
+    OrbitCelestialCrossSystemRegressionTests)
 
 add_test(
-    NAME Orbit.V006CelestialValidation
-    COMMAND OrbitV006CelestialValidationTests
+    NAME Orbit.CelestialCrossSystemRegression
+    COMMAND OrbitCelestialCrossSystemRegressionTests
 )
 
 # V0.0.6 M35 headless final integration gate. Pixel/device acceptance remains
 # the responsibility of the self-hosted Orbit Studio Real Device Smoke workflow.
-add_custom_target(OrbitV006FinalIntegrationGate
-    COMMAND $<TARGET_FILE:OrbitV006CelestialValidationTests>
+add_custom_target(OrbitCelestialIntegration
+    COMMAND $<TARGET_FILE:OrbitCelestialCrossSystemRegressionTests>
     DEPENDS
-        OrbitV006CelestialValidationTests
+        OrbitCelestialCrossSystemRegressionTests
     USES_TERMINAL
 )
 

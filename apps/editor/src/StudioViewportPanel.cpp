@@ -59,7 +59,6 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
-#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/DebugViewUi.hpp>

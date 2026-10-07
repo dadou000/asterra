@@ -6,6 +6,8 @@
 #include <orbit/studio_ui/ViewportAuthoringState.hpp>
 
 #include <filesystem>
+#include <orbit/studio_ui/CommandPaletteModel.hpp>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -70,6 +72,17 @@ public:
     }
 
 private:
+    void DrawCommandPalettePopup(editor_ui::PanelContext& context, bool openCommandPalette,
+        commands::CommandRegistry& registry,
+        const std::vector<CommandPaletteEntry>& palette);
+    bool DrawQuickCreatePopup(editor_ui::PanelContext& context, bool openQuickCreate,
+        commands::CommandRegistry& registry,
+        const std::vector<CommandPaletteEntry>& palette);
+    void DrawQuickCreateBrowser(editor_ui::PanelContext& context, bool openQuickCreateBrowser,
+        const std::vector<commands::CommandCatalogEntry>& commandCatalog,
+        commands::CommandRegistry& registry,
+        const std::vector<CommandPaletteEntry>& palette);
+
     void DrawNavigationBand(editor_ui::PanelContext& context);
     void DrawViewportBand(editor_ui::PanelContext& context);
     void DrawInspectorExtension(editor_ui::PanelContext& context);

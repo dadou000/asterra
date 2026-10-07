@@ -30,7 +30,6 @@ from typing import Any
 # Directories (relative to the repository root) searched for blocks.
 SCAN_PATTERNS = (
     "docs/**/*.md",
-    "code_change/*.md",
     "engine/*/docs/**/*.md",
     "apps/*/docs/**/*.md",
 )

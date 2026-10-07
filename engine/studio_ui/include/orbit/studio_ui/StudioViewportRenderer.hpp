@@ -80,6 +80,10 @@ class ContentService;
 
 namespace orbit::studio_ui
 {
+namespace viewport_detail { struct ResolvedStudioDirectLight; }
+struct StudioScenePassContext;
+struct StudioLightingPassContext;
+
 struct StudioRenderedView
 {
     std::string id;
@@ -456,6 +460,43 @@ public:
         const StudioComposeCpuTimingRecorder& cpuTimingRecorder = {});
 
 private:
+    void ComposeLightingPasses(StudioLightingPassContext& context);
+    void ComposeAtmospherePasses(StudioLightingPassContext& context);
+
+
+    void ComposeVolumePasses(
+        render_graph::RenderGraph& graph,
+        StudioRenderViewSet& views,
+        studio_session::StudioSession& session,
+        render_view::RenderView* view,
+        const StudioRenderViewInfo& info,
+        const render_view::ImportedTargets& targets,
+        const std::string& prefix,
+        std::optional<world_model::ResolvedVolumeDomain>& selectedVolume,
+        volume_fields::VolumeFieldStorage*& sharedVolumeStorage,
+        std::optional<volume_fields::ImportedVolumeFields>& sharedVolumeFields,
+        u32 frameIndex,
+        render_graph::BufferHandle sharedRadianceCellsHandle,
+        render_graph::BufferHandle sharedRadianceLevelsHandle,
+        u32 sharedRadianceLevelCount,
+        const studio_session::StudioRuntimeSnapshot& snapshot,
+        time::SimulationTime atTime,
+        const viewport_detail::ResolvedStudioDirectLight& studioDirectLight,
+        const std::function<void(std::string_view)>& recordComposeStage);
+
+    void ComposeTerrainPass(StudioScenePassContext& context);
+    void ComposeBodyPreviewPass(StudioScenePassContext& context);
+
+
+    void ComposePostProcess(
+        render_graph::RenderGraph& graph,
+        render_view::RenderView* view,
+        const StudioRenderViewInfo& info,
+        const render_view::ImportedTargets& targets,
+        const std::string& prefix,
+        u32 frameIndex,
+        post_process::AntiAliasingMode antiAliasingMode);
+
     [[nodiscard]] std::vector<StudioRenderedView> ComposeBase(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,

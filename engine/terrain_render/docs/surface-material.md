@@ -18,7 +18,7 @@ sources = [
   "engine/terrain_render/src/SurfaceEffectGpuBinding.cpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffectGpuBinding.hpp",
   "engine/terrain_render/include/orbit/terrain_render/SurfaceEffects.hpp",
-  "engine/studio_ui/src/StudioViewportRenderer.cpp"]
+  "engine/studio_ui/src/StudioViewportTerrainPass.cpp"]
 symbols = [
   "MakePhysicalSurfaceRenderInput",
   "SurfaceEffectGpuStamp",
@@ -51,7 +51,7 @@ verify = [
   "ctest -R Orbit.TerrainSurfaceEffects (CPU falloff, saturation and coating results).",
   "ctest -R Orbit.TerrainSurfaceShader (the effect variant compiles with DXC).",
   "In Studio, toggle surface_effects (orbit_view_terrain_layers_set) with stamps present: the coating must appear and vanish with it."]
-verified = "55d48117"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [routes]
 "terrain has the wrong base colour or biome palette" = "/rendering/terrain/clipmaps/shaders"

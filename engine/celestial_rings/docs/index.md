@@ -15,13 +15,13 @@ invariants = [
   "There is one ring-system authority per body with child Ring Bands and no authoring band-count cap.",
   "Ring geometry is never persisted as celestial authority; near and far products are derived and disposable.",
 ]
-related = ["/celestial", "/legacy/research-v006-ring-system"]
+related = ["/celestial", "/legacy/tree-history-research-v006-ring-system"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts"]
 used_by = ["/editor/studio-ui", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialRings",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

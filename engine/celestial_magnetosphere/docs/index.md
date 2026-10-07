@@ -15,13 +15,13 @@ invariants = [
   "Atmosphere is not the owner of magnetospheric state; the Magnetosphere / Aurora capability owns explicit body-fixed parameters (dipole axis, equatorial field, solar-wind direction and pressure, magnetopause standoff and flaring, auroral oval latitude/width and altitude interval, activity).",
   "This is a presentation seam, not magnetohydrodynamics.",
 ]
-related = ["/celestial/magnetosphere-render", "/legacy/research-v006-magnetosphere-aurora"]
+related = ["/celestial/magnetosphere-render", "/legacy/tree-history-research-v006-magnetosphere-aurora"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
 used_by = ["/celestial/magnetosphere-render", "/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialMagnetosphere",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

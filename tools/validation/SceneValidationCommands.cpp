@@ -1,4 +1,4 @@
-#include <orbit/studio_ui/V007ValidationScenarios.hpp>
+#include <orbit/validation/SceneValidationScenarios.hpp>
 
 #include <orbit/core/Log.hpp>
 #include <orbit/editor_model/CommandSurfaces.hpp>
@@ -16,7 +16,7 @@ constexpr editor_model::CommandSurfaceKind kValidationSurfaceKind =
     editor_model::CommandSurfaceKind::ContextMenu;
 }
 
-V007ValidationCommandRegistration::V007ValidationCommandRegistration(
+SceneValidationCommandRegistration::SceneValidationCommandRegistration(
     studio_session::StudioSession* const session,
     StudioViewportRenderer* const renderer) noexcept
     : session_(session),
@@ -36,13 +36,13 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
     try
     {
         for (std::size_t index = 0U;
-             index < kV007ValidationScenarios.size();
+             index < kSceneValidationScenarios.size();
              ++index)
         {
             const auto& scenario =
-                kV007ValidationScenarios[index];
+                kSceneValidationScenarios[index];
             const auto id =
-                V007ValidationCommandId(
+                SceneValidationCommandId(
                     scenario.id);
 
             // Project/session rebinds may rebuild the UI object while the same
@@ -61,7 +61,7 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
                     "Validate: " +
                     std::string(scenario.name),
                 .category =
-                    "Validation / V0.0.7",
+                    "Validation / Scene Acceptance",
                 .description =
                     std::string(scenario.invariant) +
                     " GPU image acceptance uses the separate visual-tolerance gate.",
@@ -90,7 +90,7 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
                      scenarioId](const commands::CommandArguments&)
                     {
                         const std::string result =
-                            PrepareV007ValidationScenario(
+                            PrepareSceneValidationScenario(
                                 scenarioId,
                                 *session,
                                 *renderer);
@@ -114,7 +114,7 @@ V007ValidationCommandRegistration::V007ValidationCommandRegistration(
     }
 }
 
-V007ValidationCommandRegistration::~V007ValidationCommandRegistration()
+SceneValidationCommandRegistration::~SceneValidationCommandRegistration()
 {
     if (session_ == nullptr ||
         !session_->World().HasWorld())
@@ -127,7 +127,7 @@ V007ValidationCommandRegistration::~V007ValidationCommandRegistration()
     auto& surfaces = world.CommandSurfaces();
 
     for (std::size_t index = 0U;
-         index < kV007ValidationScenarios.size();
+         index < kSceneValidationScenarios.size();
          ++index)
     {
         if (!owned_[index])
@@ -136,8 +136,8 @@ V007ValidationCommandRegistration::~V007ValidationCommandRegistration()
         }
 
         const auto id =
-            V007ValidationCommandId(
-                kV007ValidationScenarios[index].id);
+            SceneValidationCommandId(
+                kSceneValidationScenarios[index].id);
 
         static_cast<void>(
             surfaces.Remove(

@@ -2,9 +2,9 @@ name: Orbit Windows
 
 on:
   push:
-    branches: [orbit]
+    branches: [orbit, pre0.0.9-experimental]
   pull_request:
-    branches: [orbit]
+    branches: [orbit, pre0.0.9-experimental]
   workflow_dispatch:
 
 concurrency:
@@ -14,6 +14,10 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        validation_tools: ['OFF', 'ON']
 
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +56,7 @@ jobs:
         run: python -m py_compile tools/mcp_server/orbit_editor_mcp_server.py tools/mcp_server/orbit_docs_mcp_server.py
 
       - name: Configure
-        run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
+        run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON -DORBIT_ENABLE_VALIDATION_TOOLS=${{ matrix.validation_tools }}
 
       # Every library, test and application. This includes the production
       # executables (OrbitStudio, OrbitPlayer, OrbitBuild) and every GPU test.
@@ -146,6 +150,7 @@ jobs:
           "@ | Set-Content -Encoding UTF8 "$package/README.txt"
 
       - name: Upload Windows build
+        if: matrix.validation_tools == 'OFF'
         uses: actions/upload-artifact@v4
         with:
           name: Orbit-Windows-Release

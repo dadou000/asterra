@@ -3,7 +3,7 @@ name: Orbit Studio Real Device Smoke
 on:
   workflow_dispatch:
   push:
-    branches: [orbit]
+    branches: [orbit, pre0.0.9-experimental]
     paths:
       - '.github/workflows/orbit-studio-real-device.yml'
       - 'engine/celestial_*/**'
@@ -11,7 +11,7 @@ on:
       - 'engine/studio_session/**'
       - 'engine/studio_ui/**'
       - 'engine/lighting/**'
-      - 'tests/V006CelestialValidationTests.cpp'
+      - 'tests/CelestialCrossSystemRegressionTests.cpp'
       - 'docs/V0.0.6_*'
 
 concurrency:
@@ -40,11 +40,11 @@ jobs:
           }
 
       - name: Configure
-        run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
+        run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON -DORBIT_ENABLE_VALIDATION_TOOLS=ON
 
       - name: Build Orbit Studio
         run: cmake --build build --config Release --target OrbitStudio --parallel
 
       - name: Run real-device terrain UI smoke
         shell: cmd
-        run: run_terrain_ui_smoke.bat release nobuild nopause
+        run: tools/validation/run_terrain_ui_smoke.bat release nobuild nopause

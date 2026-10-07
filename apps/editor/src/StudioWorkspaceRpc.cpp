@@ -1,0 +1,636 @@
+#include "StudioWorkspaceRpc.hpp"
+#include <orbit/documents/ProjectManifest.hpp>
+#include <orbit/platform/Paths.hpp>
+#include <orbit/studio_session/ProjectBrowserModel.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/studio_ui/ProjectAuthoringUi.hpp>
+#include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/StudioViewportPanels.hpp>
+#include <algorithm>
+#include <filesystem>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace orbit::editor_app
+{
+void RegisterStudioProjectRpc(rpc::Dispatcher& dispatcher, studio_ui::ProjectAuthoringUi& projectBrowserUi)
+{
+            using orbit::rpc::Value;
+
+            const auto requireString =
+                [](const Value& params,
+                   const std::string_view key)
+            {
+                const Value* value =
+                    params.IsObject()
+                        ? params.Find(key)
+                        : nullptr;
+                if (value == nullptr ||
+                    !value->IsString() ||
+                    value->AsString().empty())
+                {
+                    throw orbit::rpc::Error(
+                        -32602,
+                        std::string(key) +
+                            " must be a non-empty string.");
+                }
+                return value->AsString();
+            };
+
+            const auto switchResult =
+                [](const std::filesystem::path& manifestPath)
+            {
+                const auto manifest =
+                    orbit::documents::LoadProjectManifest(
+                        manifestPath);
+                return Value(
+                    Value::Object{
+                        {"id", manifest.projectId.ToString()},
+                        {"name", manifest.displayName},
+                        {
+                            "root",
+                            manifestPath.parent_path().
+                                generic_string()
+                        },
+                        {
+                            "manifest",
+                            manifestPath.generic_string()
+                        },
+                        {"relaunching", true}
+                    });
+            };
+
+            dispatcher.Register(
+                {
+                    .name = "project.create",
+                    .description =
+                        "Creates a new Orbit project in `root` named `name` and switches Studio to it. Studio relaunches into the new project; reconnect and poll project.info until its id matches.",
+                    .mutating = true
+                },
+                [&projectBrowserUi, requireString, switchResult](
+                    const Value& params)
+                {
+                    const std::string name =
+                        requireString(params, "name");
+                    const std::filesystem::path root =
+                        std::filesystem::absolute(
+                            requireString(params, "root"));
+
+                    try
+                    {
+                        return switchResult(
+                            projectBrowserUi.CreateProject(
+                                root,
+                                name));
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        throw orbit::rpc::Error(
+                            1042,
+                            exception.what());
+                    }
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "project.open",
+                    .description =
+                        "Opens an existing Orbit project directory or Project.orbit.toml and switches Studio to it. Studio relaunches into that project; reconnect and poll project.info until its id matches.",
+                    .mutating = true
+                },
+                [&projectBrowserUi, requireString, switchResult](
+                    const Value& params)
+                {
+                    try
+                    {
+                        return switchResult(
+                            projectBrowserUi.OpenProject(
+                                std::filesystem::absolute(
+                                    requireString(
+                                        params,
+                                        "path"))));
+                    }
+                    catch (const orbit::rpc::Error&)
+                    {
+                        throw;
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        throw orbit::rpc::Error(
+                            1042,
+                            exception.what());
+                    }
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "project.discover",
+                    .description =
+                        "Scans the usual folders (Documents, Desktop, Downloads, Orbit's Projects folder) for Orbit projects and lists them, newest first. Optional roots overrides the folders.",
+                    .mutating = false
+                },
+                [](const Value& params)
+                {
+                    std::vector<std::filesystem::path> roots;
+                    if (params.IsObject())
+                    {
+                        const auto found = params.AsObject().find("roots");
+                        if (found != params.AsObject().end() &&
+                            found->second.IsArray())
+                        {
+                            for (const auto& item : found->second.AsArray())
+                            {
+                                if (item.IsString())
+                                {
+                                    roots.emplace_back(item.AsString());
+                                }
+                            }
+                        }
+                    }
+                    if (roots.empty())
+                    {
+                        roots = orbit::platform::UsualProjectFolders();
+                    }
+
+                    Value::Array items;
+                    for (const auto& project :
+                         orbit::studio_session::ProjectBrowserModel::
+                             DiscoverProjects(roots))
+                    {
+                        items.push_back(
+                            Value(
+                                Value::Object{
+                                    {"manifest",
+                                     [&project]
+                                     {
+                                         const auto text =
+                                             project.manifestPath.
+                                                 generic_u8string();
+                                         return std::string(
+                                             text.begin(),
+                                             text.end());
+                                     }()},
+                                    {"name", project.displayName}
+                                }));
+                    }
+                    return Value(std::move(items));
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "project.recent",
+                    .description =
+                        "Lists recently opened Orbit projects, most recent first.",
+                    .mutating = false
+                },
+                [&projectBrowserUi](const Value&)
+                {
+                    Value::Array items;
+                    for (const auto& item :
+                         projectBrowserUi.RecentProjects())
+                    {
+                        items.push_back(
+                            Value(
+                                Value::Object{
+                                    {
+                                        "manifest",
+                                        item.manifestPath.
+                                            generic_string()
+                                    },
+                                    {"name", item.displayName},
+                                    {
+                                        "id",
+                                        item.projectId.ToString()
+                                    },
+                                    {"available", item.available},
+                                    {"error", item.error}
+                                }));
+                    }
+                    return Value(std::move(items));
+                });
+
+}
+
+void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi& ui, studio_ui::StudioRenderViewSet& studioViews, studio_session::StudioSession& studioSession, studio_ui::StudioViewportPanels& studioViewportPanels)
+{
+            using orbit::rpc::Value;
+
+            const auto panelTitle =
+                [](const Value& params)
+                {
+                    const Value* title =
+                        params.IsObject()
+                            ? params.Find("title")
+                            : nullptr;
+                    if (title == nullptr ||
+                        !title->IsString() ||
+                        title->AsString().empty())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "title must be a non-empty string.");
+                    }
+                    return title->AsString();
+                };
+
+            dispatcher.Register(
+                {
+                    .name = "studio.panel_list",
+                    .description =
+                        "Lists every editor panel (tab) with whether it is open and currently visible.",
+                    .mutating = false
+                },
+                [&ui](const Value&)
+                {
+                    Value::Array panels;
+                    for (const auto& panel : ui.Panels())
+                    {
+                        panels.emplace_back(
+                            Value::Object{
+                                {"title", panel.title},
+                                {"open", panel.open},
+                                {"visible", panel.visible}
+                            });
+                    }
+                    return Value(std::move(panels));
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "studio.panel_focus",
+                    .description =
+                        "Opens a panel by title (case-insensitive) and brings its tab to the front.",
+                    .mutating = true
+                },
+                [&ui, panelTitle](const Value& params)
+                {
+                    const std::string title =
+                        panelTitle(params);
+                    if (!ui.FocusPanelByTitle(title))
+                    {
+                        throw orbit::rpc::Error(
+                            1060,
+                            "No panel is titled '" +
+                                title +
+                                "'. See studio.panel_list.");
+                    }
+                    return Value(
+                        Value::Object{
+                            {"title", title},
+                            {"focused", true}
+                        });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "viewport.navigate",
+                    .description =
+                        "Applies one navigation step to the primary viewport camera, exactly like the right-mouse look/WASD gesture: mouse_dx/mouse_dy in pixels, move_right/move_forward/move_up in -1..1, delta_seconds, boost. Uses terrain navigation when the active body has terrain, and free-fly otherwise.",
+                    .mutating = true
+                },
+                [&studioViews](const Value& params)
+                {
+                    const auto number =
+                        [&params](const char* key)
+                        {
+                            if (!params.IsObject())
+                            {
+                                return 0.0;
+                            }
+                            const auto found =
+                                params.AsObject().find(key);
+                            if (found == params.AsObject().end() ||
+                                !found->second.IsNumber())
+                            {
+                                return 0.0;
+                            }
+                            return found->second.AsNumber();
+                        };
+
+                    orbit::studio_ui::StudioTerrainNavigationInput input{
+                        .deltaSeconds =
+                            std::clamp(
+                                number("delta_seconds"),
+                                0.0,
+                                1.0),
+                        .mouseDeltaX = number("mouse_dx"),
+                        .mouseDeltaY = number("mouse_dy"),
+                        .moveRight =
+                            std::clamp(number("move_right"), -1.0, 1.0),
+                        .moveForward =
+                            std::clamp(number("move_forward"), -1.0, 1.0),
+                        .moveUp =
+                            std::clamp(number("move_up"), -1.0, 1.0),
+                        .boost =
+                            params.IsObject() &&
+                            params.AsObject().find("boost") !=
+                                params.AsObject().end() &&
+                            params.AsObject().at("boost").IsBool() &&
+                            params.AsObject().at("boost").AsBool()
+                    };
+
+                    const bool terrainDriven =
+                        studioViews.HasTerrainNavigation(
+                            "studio.primary");
+                    const bool moved =
+                        studioViews.NavigateTerrain(
+                            "studio.primary",
+                            input);
+                    return Value(
+                        Value::Object{
+                            {"moved", moved},
+                            {"navigation",
+                             std::string(
+                                 terrainDriven
+                                     ? "terrain"
+                                     : "reference_sphere")}
+                        });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "viewport.focus_surface",
+                    .description =
+                        "Moves the viewport camera to a low vantage point over the terrain surface under the viewport position (u, v), each in 0..1 with (0, 0) at the top-left. The same operation as double-clicking the terrain in the viewport. Returns focused=false when that position does not hit terrain. id defaults to studio.primary.",
+                    .mutating = true
+                },
+                [&studioViews](const Value& params)
+                {
+                    if (!params.IsObject())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602, "Params must be an object.");
+                    }
+                    const auto& object = params.AsObject();
+                    const auto numberOf =
+                        [&object](const char* key)
+                        {
+                            const auto found = object.find(key);
+                            if (found == object.end() ||
+                                !found->second.IsNumber())
+                            {
+                                throw orbit::rpc::Error(
+                                    -32602,
+                                    std::string(key) +
+                                        " must be a number in 0..1.");
+                            }
+                            return found->second.AsNumber();
+                        };
+                    const auto idFound = object.find("id");
+                    const std::string id =
+                        idFound != object.end() && idFound->second.IsString()
+                            ? idFound->second.AsString()
+                            : std::string("studio.primary");
+
+                    const bool focused =
+                        studioViews.FocusTerrainSurfacePoint(
+                            id,
+                            static_cast<orbit::f32>(numberOf("u")),
+                            static_cast<orbit::f32>(numberOf("v")));
+                    return Value(
+                        Value::Object{
+                            {"focused", focused}
+                        });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "view.mode_set",
+                    .description =
+                        "Sets a viewport's mode (perspective | body_map | debug | system | flat_map), like the viewport mode selector. id defaults to studio.primary.",
+                    .mutating = true
+                },
+                [&studioSession](const Value& params)
+                {
+                    const auto& object = params.AsObject();
+                    const auto idFound = object.find("id");
+                    const std::string id =
+                        idFound != object.end() && idFound->second.IsString()
+                            ? idFound->second.AsString()
+                            : std::string("studio.primary");
+                    const auto modeFound = object.find("mode");
+                    if (modeFound == object.end() ||
+                        !modeFound->second.IsString())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "mode must be perspective, body_map, debug, system or flat_map.");
+                    }
+
+                    const std::string& mode = modeFound->second.AsString();
+                    orbit::studio_session::ViewportMode parsed{};
+                    if (mode == "perspective")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::Perspective;
+                    }
+                    else if (mode == "body_map")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::BodyMap;
+                    }
+                    else if (mode == "debug")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::Debug;
+                    }
+                    else if (mode == "system")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::System;
+                    }
+                    else if (mode == "flat_map")
+                    {
+                        parsed = orbit::studio_session::ViewportMode::FlatMap;
+                    }
+                    else
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "mode must be perspective, body_map, debug, system or flat_map.");
+                    }
+
+                    studioSession.Viewports().SetMode(id, parsed);
+                    return Value(
+                        Value::Object{
+                            {"id", id},
+                            {"mode", mode}
+                        });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "view.debug_field_set",
+                    .description =
+                        "Chooses which terrain data field a viewport shows in debug mode, by the name listed in the Debug tab (for example 'Drainage', 'Final Biome'). id defaults to studio.primary; call with no field to list names.",
+                    .mutating = true
+                },
+                [&studioViews](const Value& params)
+                {
+                    const auto& object = params.AsObject();
+                    const auto idFound = object.find("id");
+                    const std::string id =
+                        idFound != object.end() && idFound->second.IsString()
+                            ? idFound->second.AsString()
+                            : std::string("studio.primary");
+
+                    Value::Array names;
+                    for (const auto& entry :
+                         orbit::terrain_debug::FieldCatalog())
+                    {
+                        names.emplace_back(std::string(entry.name));
+                    }
+
+                    const auto fieldFound = object.find("field");
+                    if (fieldFound == object.end() ||
+                        !fieldFound->second.IsString())
+                    {
+                        return Value(
+                            Value::Object{{"fields", Value(std::move(names))}});
+                    }
+
+                    for (const auto& entry :
+                         orbit::terrain_debug::FieldCatalog())
+                    {
+                        if (entry.name == fieldFound->second.AsString())
+                        {
+                            studioViews.SetDebugField(id, entry.field);
+                            return Value(
+                                Value::Object{
+                                    {"id", id},
+                                    {"field", std::string(entry.name)}
+                                });
+                        }
+                    }
+
+                    throw orbit::rpc::Error(
+                        -32602,
+                        "Unknown debug field. Call view.debug_field_set without field to list them.");
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "studio.workspace_get",
+                    .description =
+                        "Returns the active workspace mode (Scene, Planet, Celestial, Simulation, Shading).",
+                    .mutating = false
+                },
+                [&studioViewportPanels](const Value&)
+                {
+                    return Value(
+                        Value::Object{
+                            {"mode",
+                             std::string(
+                                 studioViewportPanels.
+                                     WorkspaceModeName())}
+                        });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "studio.workspace_set",
+                    .description =
+                        "Switches the workspace mode (Scene, Planet, Celestial, Simulation, Shading), exactly like the Mode selector.",
+                    .mutating = true
+                },
+                [&studioViewportPanels](const Value& params)
+                {
+                    const auto* mode =
+                        params.IsObject()
+                            ? params.AsObject().find("mode") !=
+                                      params.AsObject().end()
+                                  ? &params.AsObject().at("mode")
+                                  : nullptr
+                            : nullptr;
+                    if (mode == nullptr || !mode->IsString() ||
+                        !studioViewportPanels.SetWorkspaceMode(
+                            mode->AsString()))
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "mode must be one of Scene, Planet, Celestial, Simulation, Shading.");
+                    }
+                    return Value(
+                        Value::Object{
+                            {"mode", mode->AsString()}
+                        });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "studio.bubble_open",
+                    .description =
+                        "Opens the parameter bubble of an object in the active toolbar (Scene: the selected object; Celestial: a body or one of its enabled capabilities).",
+                    .mutating = true
+                },
+                [&studioViewportPanels](const Value& params)
+                {
+                    const auto* id =
+                        params.IsObject()
+                            ? params.AsObject().find("id") !=
+                                      params.AsObject().end()
+                                  ? &params.AsObject().at("id")
+                                  : nullptr
+                            : nullptr;
+                    const auto parsed =
+                        id != nullptr && id->IsString()
+                            ? orbit::scene::ObjectId::Parse(
+                                  id->AsString())
+                            : std::nullopt;
+                    if (!parsed.has_value())
+                    {
+                        throw orbit::rpc::Error(
+                            -32602,
+                            "id must be an object id string.");
+                    }
+                    studioViewportPanels.RequestElementBubble(
+                        *parsed);
+                    return Value(
+                        Value::Object{
+                            {"requested", true}
+                        });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "viewport.frame_selected",
+                    .description =
+                        "Frame the selected object in the controlled perspective viewport, like the Scene toolbar and F shortcut.",
+                    .mutating = true
+                },
+                [&studioViewportPanels](const Value&)
+                {
+                    return Value(Value::Object{
+                        {"framed", studioViewportPanels.FrameSelectedObject()}
+                    });
+                });
+
+            dispatcher.Register(
+                {
+                    .name = "studio.panel_close",
+                    .description =
+                        "Closes a panel by title (case-insensitive); it can be reopened with studio.panel_focus.",
+                    .mutating = true
+                },
+                [&ui, panelTitle](const Value& params)
+                {
+                    const std::string title =
+                        panelTitle(params);
+                    if (!ui.ClosePanelByTitle(title))
+                    {
+                        throw orbit::rpc::Error(
+                            1060,
+                            "No panel is titled '" +
+                                title +
+                                "'. See studio.panel_list.");
+                    }
+                    return Value(
+                        Value::Object{
+                            {"title", title},
+                            {"closed", true}
+                        });
+                });
+
+}
+
+
+} // namespace orbit::editor_app

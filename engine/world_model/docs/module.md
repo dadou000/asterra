@@ -26,7 +26,7 @@ invariants = [
   "A stored property with no provenance record counts as Explicit + Locked, so solvers never overwrite legacy or hand-authored values; solvers return conflicts instead (/rendering/atmosphere/authoring-solver).",
   "The permanent ownership of world semantic IDs lives in Orbit::WorldModel; editor aliases exist only for compatibility.",
 ]
-related = ["/world/universe", "/celestial", "/rendering/atmosphere/authoring-solver", "/editor/model", "/legacy/research-v006-physical-property-solver-v1"]
+related = ["/world/universe", "/celestial", "/rendering/atmosphere/authoring-solver", "/editor/model", "/legacy/tree-history-research-v006-physical-property-solver-v1"]
 depends_on = ["/authoring/commands", "/authoring/documents", "/authoring/scene", "/authoring/schema", "/celestial/compact-objects", "/celestial/giants", "/celestial/gravity", "/celestial/lighting", "/celestial/magnetosphere", "/celestial/ocean", "/celestial/orbits", "/celestial/radiometry", "/celestial/rings", "/celestial/rotation", "/celestial/small-bodies", "/celestial/stellar", "/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time", "/rendering/atmosphere", "/rendering/clouds", "/world/universe"]
 used_by = ["/apps/studio", "/editor/model", "/editor/session", "/editor/studio-session", "/rendering/lighting/radiance-cache", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/representation", "/rendering/volumes/solver", "/world/surface-composition"]
 verify = [
@@ -40,7 +40,7 @@ verify = [
   "ctest -R Orbit.RotationComposition",
   "ctest -R Orbit.GravityComposition",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

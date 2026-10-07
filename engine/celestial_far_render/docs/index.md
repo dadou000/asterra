@@ -15,13 +15,13 @@ invariants = [
   "All far representation products remain derived and disposable; none becomes semantic body authority.",
   "Terrain-capable bodies derive appearance from the planetary appearance product; non-terrain bodies take their reference shape from BodyRegistry and select stellar behaviour from ordinary capabilities such as RadiativeEmitter.",
 ]
-related = ["/celestial/representation", "/celestial/appearance", "/legacy/research-v006-far-celestial-representations"]
+related = ["/celestial/representation", "/celestial/appearance", "/legacy/tree-history-research-v006-far-celestial-representations"]
 depends_on = ["/celestial/appearance", "/celestial/lighting", "/celestial/representation", "/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts", "/world/universe"]
 used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.CelestialFarRender",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

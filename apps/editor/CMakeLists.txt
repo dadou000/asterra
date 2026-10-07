@@ -1,5 +1,7 @@
 add_executable(OrbitStudio
     src/Main.cpp
+    src/StudioApplication.cpp
+    src/StudioWorkspaceRpc.cpp
     src/EditorAppSupport.cpp
     src/StudioBuildHost.cpp
     src/StudioPathNetworkHost.cpp

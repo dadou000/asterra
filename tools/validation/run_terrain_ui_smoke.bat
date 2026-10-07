@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 
-cd /d "%~dp0"
+cd /d "%~dp0..\.."
 
 set "CONFIG=Release"
 set "NO_BUILD=0"
@@ -36,7 +36,7 @@ if /I "%~1"=="nopause" (
 
 echo.
 echo [Orbit] Unknown option: %~1
-echo Usage: run_terrain_ui_smoke.bat [debug^|release] [nobuild] [nopause]
+echo Usage: tools/validation/tools\validation\run_terrain_ui_smoke.bat [debug^|release] [nobuild] [nopause]
 goto fail
 
 :args_done
@@ -64,30 +64,22 @@ if "%NO_BUILD%"=="0" (
         goto fail
     )
 
-    echo [Orbit] Building OrbitStudio...
-    cmake --build build --config %CONFIG% --target OrbitStudio --parallel
+    echo [Orbit] Building and running the Studio smoke target...
+    cmake --build build --config %CONFIG% --target OrbitStudioTerrainUiSmoke --parallel
     if errorlevel 1 (
-        echo [Orbit] ERROR: OrbitStudio build failed.
+        echo [Orbit] ERROR: Studio smoke target failed.
         goto fail
     )
 )
+
+if "%NO_BUILD%"=="0" goto passed
 
 set "STUDIO=build\apps\editor\%CONFIG%\OrbitStudio.exe"
+if not exist "%STUDIO%" set "STUDIO=Orbit.exe"
 if not exist "%STUDIO%" (
-    if exist "OrbitStudio.exe" (
-        set "STUDIO=OrbitStudio.exe"
-    ) else (
-        echo [Orbit] ERROR: OrbitStudio.exe was not found.
-        echo [Orbit] Build it first or omit the nobuild option.
-        goto fail
-    )
+    echo [Orbit] ERROR: Orbit Studio was not found. Build it first.
+    goto fail
 )
-
-echo.
-echo [Orbit] Running live Vulkan / ImGui terrain workflow...
-echo [Orbit] Executable: %STUDIO%
-echo.
-
 "%STUDIO%" --terrain-ui-smoke
 set "SMOKE_EXIT=%ERRORLEVEL%"
 
@@ -97,15 +89,15 @@ if not "%SMOKE_EXIT%"=="0" (
     goto fail
 )
 
+:passed
 echo.
 echo ============================================================
 echo   Terrain UI smoke PASSED
 echo ============================================================
 echo   - active Surface Authoring panel registered
-echo   - active Project Settings validation controls rendered
+echo   - active Project Settings controls rendered
 echo   - real Studio UI draw path exercised
-echo   - production Vulkan terrain viewport rendered and captured
-echo   - M15 end-to-end terrain scenario passed
+echo   - production Vulkan terrain viewport rendered
 echo   - save/reopen terrain round trip passed
 echo ============================================================
 echo.

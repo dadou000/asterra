@@ -35,7 +35,7 @@ verify = [
   "ctest -R Orbit.Lighting (the lighting tests registered in engine/lighting/CMakeLists.txt).",
   "orbit_view_terrain_layers_get lists every bypass_* flag; all must be false in normal use.",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [routes]
 "cache cells, residency, dark slabs, relighting, 96-byte cell" = "radiance-cache"
@@ -45,7 +45,7 @@ verified = "b0a0de7f"
 "shadowed or enclosed areas are black instead of sky-lit" = "sky-cache-fill"
 "exposure, blown highlights, dark interiors lifted to grey" = "eye-adaptation"
 "emissive materials and planetary emission, local lights" = "/legacy/v0-0-7-spec"
-"design baseline for dynamic lighting" = "/legacy/research-v007-dynamic-lighting-baseline"
+"design baseline for dynamic lighting" = "/legacy/tree-history-research-v007-dynamic-lighting-baseline"
 +++
 
 ## Where each concern lives (`engine/lighting`)

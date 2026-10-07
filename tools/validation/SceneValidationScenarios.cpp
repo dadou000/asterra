@@ -1,4 +1,4 @@
-#include <orbit/studio_ui/V007ValidationScenarios.hpp>
+#include <orbit/validation/SceneValidationScenarios.hpp>
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
@@ -185,8 +185,8 @@ void EnableLightingValidationOverlays()
 }
 } // namespace
 
-std::string PrepareV007ValidationScenario(
-    const V007ValidationScenario scenario,
+std::string PrepareSceneValidationScenario(
+    const SceneValidationScenario scenario,
     studio_session::StudioSession& session,
     StudioViewportRenderer& renderer)
 {
@@ -201,12 +201,12 @@ std::string PrepareV007ValidationScenario(
     {
         switch (scenario)
         {
-        case V007ValidationScenario::LedRoom:
+        case SceneValidationScenario::LedRoom:
             EnableLightingValidationOverlays();
             renderer.ResetHumanEyeAdaptation("studio.primary");
             return "LED Room inspection prepared. Use an authored emissive screen/material; M43 deliberately does not replace it with proxy lights.";
 
-        case V007ValidationScenario::CloudGlare:
+        case SceneValidationScenario::CloudGlare:
         {
             auto config = EyeConfig(renderer);
             config.photopicCeilingLog2 = 2.0F;
@@ -217,7 +217,7 @@ std::string PrepareV007ValidationScenario(
             return "Cloud Glare eye-response policy prepared; use the production atmosphere/cloud lighting scene for GPU tolerance capture.";
         }
 
-        case V007ValidationScenario::DarkInteriorToDaylight:
+        case SceneValidationScenario::DarkInteriorToDaylight:
         {
             auto config = EyeConfig(renderer);
             config.darkAdaptSeconds = 18.0F;
@@ -228,20 +228,20 @@ std::string PrepareV007ValidationScenario(
             return "Dark Interior -> Daylight eye-response state reset with production adaptation constants.";
         }
 
-        case V007ValidationScenario::HeadlightBrakeLight:
+        case SceneValidationScenario::HeadlightBrakeLight:
             CreateHeadlightRig(world);
             EnableLightingValidationOverlays();
             return "Undoable production point/spot validation rig created. Emissive material sampling remains a separate authority and is checked numerically.";
 
-        case V007ValidationScenario::CityNightFlight:
+        case SceneValidationScenario::CityNightFlight:
             EnableLightingValidationOverlays();
             return "City Night Flight diagnostics prepared. Existing authored city emission remains the authority; cache/emissive regions are visible.";
 
-        case V007ValidationScenario::GroundToOrbit:
+        case SceneValidationScenario::GroundToOrbit:
             EnableLightingValidationOverlays();
             return "Ground -> Orbit diagnostics prepared on the current production world; representation transitions remain untouched.";
 
-        case V007ValidationScenario::RtAb:
+        case SceneValidationScenario::RtAb:
         {
             auto config = lighting::StudioLightingRuntimeConfig().value_or(
                 lighting::LightingSchedulerConfig{});
@@ -250,7 +250,7 @@ std::string PrepareV007ValidationScenario(
             return "RT A/B prepared at RT-off baseline. Re-enable Hardware Ray Query in Display Diagnostics without changing budgets for the B capture.";
         }
 
-        case V007ValidationScenario::SmokeObstacleAdvection:
+        case SceneValidationScenario::SmokeObstacleAdvection:
         {
             const auto volume = CreateVolumePreset(world, "Smoke");
             if (!volume.has_value()) return "Smoke preset creation did not yield a selected Volume.";
@@ -261,7 +261,7 @@ std::string PrepareV007ValidationScenario(
             return "Smoke Volume + Brush source + Obstacle effector created through production authoring commands.";
         }
 
-        case V007ValidationScenario::SurfaceDustWind:
+        case SceneValidationScenario::SurfaceDustWind:
         {
             const auto volume = CreateVolumePreset(world, "Dust");
             if (!volume.has_value()) return "Dust preset creation did not yield a selected Volume.";
@@ -272,7 +272,7 @@ std::string PrepareV007ValidationScenario(
             return "Dust Volume + Terrain source + Wind effector created through production authoring commands.";
         }
 
-        case V007ValidationScenario::EmissiveFireGi:
+        case SceneValidationScenario::EmissiveFireGi:
         {
             const auto volume = CreateVolumePreset(world, "Fire");
             if (!volume.has_value()) return "Fire preset creation did not yield a selected Volume.";
@@ -284,7 +284,7 @@ std::string PrepareV007ValidationScenario(
             return "Emissive Fire Volume created with production physical emission/GI authority.";
         }
 
-        case V007ValidationScenario::RoamingDomainContinuity:
+        case SceneValidationScenario::RoamingDomainContinuity:
         {
             const auto volume = CreateVolumePreset(world, "Smoke");
             if (!volume.has_value()) return "Smoke preset creation did not yield a selected Volume.";
@@ -294,7 +294,7 @@ std::string PrepareV007ValidationScenario(
             return "Roaming smoke domain created; runtime follow target is Camera while authored center remains unchanged.";
         }
 
-        case V007ValidationScenario::LiveToBakedEquivalence:
+        case SceneValidationScenario::LiveToBakedEquivalence:
         {
             const auto volume = CreateVolumePreset(world, "Fire");
             if (!volume.has_value()) return "Fire preset creation did not yield a selected Volume.";
@@ -316,7 +316,7 @@ std::string PrepareV007ValidationScenario(
             return "Native 16^3 validation cache baked and attached through the production cache pipeline; Volume forced to Baked for comparison.";
         }
 
-        case V007ValidationScenario::NearToFarVolumeLod:
+        case SceneValidationScenario::NearToFarVolumeLod:
         {
             const auto volume = CreateVolumePreset(world, "Smoke");
             if (!volume.has_value()) return "Smoke preset creation did not yield a selected Volume.";

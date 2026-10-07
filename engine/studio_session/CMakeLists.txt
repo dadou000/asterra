@@ -11,7 +11,6 @@ add_library(OrbitStudioSession STATIC
     src/StudioTerrainServiceStatus.cpp
     src/StudioMeshRpc.cpp
     src/StudioTerrainStatusRpc.cpp
-    src/StudioTerrainValidationScenario.cpp
     src/StudioWorkspace.cpp
     src/ProjectBrowserModel.cpp
     src/UniverseBoundPathCache.cpp
@@ -64,6 +63,17 @@ target_link_libraries(OrbitStudioSession
 
 target_compile_features(OrbitStudioSession PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitStudioSession)
+
+if(BUILD_TESTING OR ORBIT_ENABLE_VALIDATION_TOOLS)
+    add_library(OrbitTerrainValidationSupport STATIC
+        ${PROJECT_SOURCE_DIR}/tools/validation/StudioTerrainValidationScenario.cpp)
+    target_include_directories(OrbitTerrainValidationSupport PUBLIC
+        ${PROJECT_SOURCE_DIR}/tools/validation/include)
+    target_link_libraries(OrbitTerrainValidationSupport PUBLIC
+        Orbit::StudioSession Orbit::EditorModel Orbit::WorldModel)
+    target_compile_features(OrbitTerrainValidationSupport PUBLIC cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainValidationSupport)
+endif()
 
 if(BUILD_TESTING)
     add_executable(OrbitStudioSessionTests
@@ -202,6 +212,7 @@ if(BUILD_TESTING)
 
     target_link_libraries(OrbitStudioTerrainValidationScenarioTests
         PRIVATE
+            OrbitTerrainValidationSupport
             Orbit::EditorModel
             Orbit::StudioSession
             Orbit::WorldModel

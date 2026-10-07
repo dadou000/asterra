@@ -1,4 +1,4 @@
-#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
+#include <orbit/validation/StudioTerrainValidationScenario.hpp>
 
 #include <orbit/editor_model/AuthoringCommands.hpp>
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>

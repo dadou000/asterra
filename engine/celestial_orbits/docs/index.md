@@ -21,7 +21,7 @@ invariants = [
   "Imported ephemerides are persistent scene authority (Ephemeris Asset with Ephemeris Sample children bound through the schema Source Object reference), not an opaque runtime cache; they interpolate with cubic Hermite because both position and velocity exist.",
   "N-body promotion is a simulation-LOD layer: it snapshots each member's existing provider at the domain epoch (any provider kind), integrates with fixed-step velocity Verlet and exposes the result through the same provider interface; it creates no new body identity or transform hierarchy.",
 ]
-related = ["/world/universe", "/celestial/rotation", "/celestial/gravity", "/legacy/research-v006-analytic-orbits", "/legacy/research-v006-imported-ephemeris", "/legacy/research-v006-dynamic-nbody"]
+related = ["/world/universe", "/celestial/rotation", "/celestial/gravity", "/legacy/tree-history-research-v006-analytic-orbits", "/legacy/tree-history-research-v006-imported-ephemeris", "/legacy/tree-history-research-v006-dynamic-nbody"]
 depends_on = ["/foundation/core", "/foundation/math", "/foundation/time"]
 used_by = ["/celestial/rotation", "/world/universe", "/world/world-model"]
 verify = [
@@ -29,7 +29,7 @@ verify = [
   "ctest -R Orbit.ImportedEphemeris",
   "ctest -R Orbit.NBodyDomain",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

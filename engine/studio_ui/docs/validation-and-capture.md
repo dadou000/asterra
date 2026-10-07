@@ -1,26 +1,26 @@
 +++
 path = "/editor/studio-ui/validation-and-capture"
-title = "V0.0.7 validation scenarios and viewport capture"
+title = "Optional scene acceptance scenarios and viewport capture"
 kind = "subsystem"
 status = "stable"
-summary = "Thirteen V0.0.7 validation scenarios are registered as Explorer context-menu commands that only prepare a scene; ViewportCaptureService makes single and tiled 16K screenshots over viewport.capture_*. Real-GPU captures, hardware performance records and HDR output smoke tests are still not done."
+summary = "With ORBIT_ENABLE_VALIDATION_TOOLS enabled, thirteen scene acceptance scenarios are registered as Explorer context-menu commands that only prepare a scene; ViewportCaptureService makes single and tiled 16K screenshots over viewport.capture_*. Real-GPU captures, hardware performance records and HDR output smoke tests are still not done."
 owner_module = "OrbitStudioUi"
 keywords = ["v0.0.7", "validation", "m43", "m44", "m46", "scenario", "rt a/b", "viewport capture", "screenshot", "16k", "ultra", "tiled capture", "viewport.capture_start", "hardware evidence", "hdr smoke", "validation commands"]
 sources = [
-  "engine/studio_ui/include/orbit/studio_ui/V007ValidationScenarios.hpp",
-  "engine/studio_ui/src/V007ValidationScenarios.cpp",
-  "engine/studio_ui/src/V007ValidationCommands.cpp",
+  "tools/validation/include/orbit/validation/SceneValidationScenarios.hpp",
+  "tools/validation/SceneValidationScenarios.cpp",
+  "tools/validation/SceneValidationCommands.cpp",
   "engine/studio_ui/include/orbit/studio_ui/ViewportCaptureService.hpp",
   "engine/studio_ui/src/ViewportCaptureService.cpp",
   "engine/studio_ui/include/orbit/studio_ui/VolumeAuthoringUi.hpp",
   "tools/mcp_server/orbit_editor_mcp_server.py",
 ]
-symbols = ["kV007ValidationScenarios", "V007ValidationCommandId", "PrepareV007ValidationScenario", "V007ValidationCommandRegistration", "ViewportCaptureService", "RegisterViewportCaptureRpc", "kMaxSinglePixels", "kTileLongSide", "kUltraLongSide"]
+symbols = ["kSceneValidationScenarios", "SceneValidationCommandId", "PrepareSceneValidationScenario", "SceneValidationCommandRegistration", "ViewportCaptureService", "RegisterViewportCaptureRpc", "kMaxSinglePixels", "kTileLongSide", "kUltraLongSide"]
 invariants = [
-  "The 13 scenarios in kV007ValidationScenarios (LED Room, Cloud Glare, Dark Interior -> Daylight, Headlight / Brake Light, City Night Flight, Ground -> Orbit, RT A/B, Smoke Obstacle / Advection, Surface Dust / Wind, Emissive Fire GI, Roaming Domain Continuity, Live -> Baked Playback, Near -> Far Volume LOD) all have gpuVisualToleranceRequired = true: preparing one is not evidence that the GPU image is correct.",
-  "PrepareV007ValidationScenario only sets a scene up (through production authoring commands, the lighting runtime config, renderer eye and volume settings, and the native cache bake) and returns a description string; it captures nothing and asserts nothing. The command wrapper logs that string with log::Info and does not return it.",
-  "Each scenario is a command named 'Validate: <scenario>' in category 'Validation / V0.0.7', automationVisible = true, on the Explorer context-menu surface, enabled only when a world is open. Its id is V007ValidationCommandId: fixed high word 0x4f524249544d3433, low word 0x56414c0000000001 plus the enum index.",
-  "V007ValidationCommandRegistration registers only when constructed with a session, a renderer and an open world; it skips ids already in the registry and unregisters only the ones it installed. VolumeAuthoringUi owns one instance (validationCommands_), so there is no separate validation app or test-only editor path.",
+  "The 13 scenarios in kSceneValidationScenarios (LED Room, Cloud Glare, Dark Interior -> Daylight, Headlight / Brake Light, City Night Flight, Ground -> Orbit, RT A/B, Smoke Obstacle / Advection, Surface Dust / Wind, Emissive Fire GI, Roaming Domain Continuity, Live -> Baked Playback, Near -> Far Volume LOD) all have gpuVisualToleranceRequired = true: preparing one is not evidence that the GPU image is correct.",
+  "PrepareSceneValidationScenario only sets a scene up (through production authoring commands, the lighting runtime config, renderer eye and volume settings, and the native cache bake) and returns a description string; it captures nothing and asserts nothing. The command wrapper logs that string with log::Info and does not return it.",
+  "Each scenario is a command named 'Validate: <scenario>' in category 'Validation / Scene Acceptance', automationVisible = true, on the Explorer context-menu surface, enabled only when a world is open. Its id is SceneValidationCommandId: fixed high word 0x4f524249544d3433, low word 0x56414c0000000001 plus the enum index.",
+  "SceneValidationCommandRegistration registers only when constructed with a session, a renderer and an open world; it skips ids already in the registry and unregisters only the ones it installed. VolumeAuthoringUi owns one instance (validationCommands_) only when ORBIT_ENABLE_VALIDATION_TOOLS=ON. With the option OFF (the default), the scenario sources and isolated terrain scenario are absent from Studio; BUILD_TESTING still compiles support libraries used by regression tests.",
   "Setup is not neutral: the Headlight / Brake Light rig creates two spot lights and one point light in an undoable transaction (rolled back on failure when this call owns it); the six volume scenarios create Volume objects (Smoke, Dust, Fire presets) and select them; RT A/B turns hardwareRayQueryEnabled off; LED Room, City Night Flight, Ground -> Orbit and the lighting scenarios switch on the global lighting overlays.",
   "ViewportCaptureService renders in one piece up to kMaxSinglePixels (7680 x 4320 pixels); anything larger is tiled with tiles of long side kTileLongSide (3840), neighbours kTileStep (0.875) of a tile apart. While tiling it pauses the simulation and locks exposure, and Finish/ReleaseHolds restore the camera, exposure, clock and view size even after an error; waits are bounded (600 frames each for resize, busy and restore).",
   "The viewport.capture_start RPC and the viewport Screenshot / Ultra buttons call the same ViewportCaptureService::Start; it throws if a capture is already running, and the RPC maps a bad request to -32602 and other failures to 1110. kind is fullscreen (window size), ultra (15360 px long side, viewport aspect, max 16384) or custom (16..16384 each side).",
@@ -29,12 +29,12 @@ related = ["/history/v0-0-7", "/legacy/v0-0-7-m43-validation", "/legacy/v0-0-7-m
 depends_on = ["/rendering/lighting", "/rendering/volumes", "/rendering/render-view", "/editor/model"]
 used_by = ["/editor/studio-ui"]
 verify = [
-  "ctest -R Orbit.V007DeterministicValidation (CPU invariants and the 13-scenario catalog)",
-  "ctest -R Orbit.V007IntegrationGate (depends on the other V0.0.7 gates)",
+  "ctest -R Orbit.SceneDeterministicValidation (CPU invariants and the 13-scenario catalog)",
+  "ctest -R Orbit.StudioRenderingIntegration (depends on the other V0.0.7 gates)",
   "ctest -R Orbit.ViewportCaptureTiling",
   "None of these is GPU evidence. Over MCP: orbit_command_catalog shows the 'Validate: ...' commands; orbit_viewport_capture_start then orbit_viewport_capture_status until state is idle.",
 ]
-verified = "55d48117"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [routes]
 "what V0.0.7 still needs before it can be called validated" = "/history/v0-0-7"
@@ -45,7 +45,7 @@ verified = "55d48117"
 [[diagnose]]
 symptom = "the 'Validate: ...' commands are missing from the Explorer menu or from command.catalog"
 steps = [
-  "The commands exist only if the registration was constructed while a world was open (V007ValidationCommandRegistration returns early otherwise); open a world, then re-check with command.catalog.",
+  "The commands require ORBIT_ENABLE_VALIDATION_TOOLS=ON and exist only if the registration was constructed while a world was open (SceneValidationCommandRegistration returns early otherwise); open a world, then re-check with command.catalog.",
   "Each command is disabled with reason 'Open a world before preparing validation scenarios.' when no world is open.",
   "If the log shows 'M43 validation command registration failed', read the exception text printed with it.",
 ]
@@ -72,7 +72,7 @@ docs = ["/editor/viewport"]
 
 ## Validation scenarios (M43)
 
-`V007ValidationScenarios.cpp` defines what each scenario sets up; `V007ValidationCommands.cpp` exposes them as commands.
+`SceneValidationScenarios.cpp` defines what each scenario sets up; `V007ValidationCommands.cpp` exposes them as commands.
 A scenario is a starting position for a human or an agent to inspect, not a pass/fail check. Examples taken from the
 code: Cloud Glare sets the eye photopic ceiling to 2.0 log2 and shortens ceiling and overload recovery; RT A/B turns
 hardware ray query off (re-enable it in Display Diagnostics for the B capture); Live -> Baked Playback bakes a 16^3
@@ -102,7 +102,7 @@ A simpler one-shot capture, `viewport.screenshot` (MCP `orbit_viewport_screensho
 
 `docs/V0.0.7_PROGRESS.md` and `/history/v0-0-7` state that M00-M46 are implemented but release validation is open. Not done, and not to be claimed:
 
-- Windows/Vulkan build and the full CTest run on the release commit, including `Orbit.V007IntegrationGate`;
+- Windows/Vulkan build and the full CTest run on the release commit, including `Orbit.StudioRenderingIntegration`;
 - Vulkan validation-layer runs over the M43 scenario matrix;
 - representative non-RT and RT-capable hardware performance captures (M44) with identical authored settings, and an RT A/B on identical hardware;
 - M43 GPU image-tolerance captures;
