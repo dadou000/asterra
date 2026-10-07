@@ -21,7 +21,7 @@ invariants = [
   "The pre-M09 regional HydrologyGrid/RiverGraph keep a sampled authoritative surface for erosion and a separate monotonically drainable surface used only for routing; they are compatibility/regional tooling, not the V0.0.4 authority."]
 related = ["/rendering/terrain/erosion", "/rendering/terrain/rivers", "/rendering/terrain/material-column"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts", "/rendering/terrain/material-column", "/world/planet-coordinates"]
-used_by = ["/apps/sandbox", "/editor/studio-session", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/terrain/water"]
+used_by = ["/editor/studio-session", "/rendering/terrain/debug-fields", "/rendering/terrain/erosion", "/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/terrain/water"]
 verify = [
   "ctest -R Orbit.TerrainDrainagePage",
   "ctest -R Orbit.TerrainHydrology"]

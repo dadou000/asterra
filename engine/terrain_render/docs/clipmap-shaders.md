@@ -32,7 +32,7 @@ invariants = [
   "Culling is done with clip distance, not discard: horizonClip < 0 removes the vertex. A cell inside the finer level's hole is culled only once finerFade >= 0.999; before that it is kept and lodFade.y = finerFade dithers it against the finer level.",
   "The pixel stage keeps a fragment when lodFade.y <= noise < lodFade.x (interleaved gradient noise of SV_Position.xy). Adjacent levels use complementary x/y, so a pixel belongs to exactly one level. lodFade is not in the base pixel shader; BuildClipmapBedPixelShader injects it (TEXCOORD13).",
   "The clipmap vertex shader writes spacingMeters = 0 and worldPosition = 0, which turns off the pixel shader's fake detail bump (ApplyDetailNormal fades to nothing at spacing 0); the real normal comes from the sample's fine slope.",
-  "The VSOutput struct is written out in ClipmapVertexShader.hpp, TerrainSurfaceShader.hpp and the UniformPlanetRenderer vertex shader; the water pixel shader instead copies it from the water vertex shader. TEXCOORD locations must stay in step; adding an interpolant means editing every hand-written copy.",
+  "The VSOutput struct is written out in ClipmapVertexShader.hpp, and TerrainSurfaceShader.hpp; the water pixel shader instead copies it from the water vertex shader. TEXCOORD locations must stay in step; adding an interpolant means editing every hand-written copy.",
   "Both shaders are embedded raw-string constants compiled with shader::Compiler (debug = false) inside the TerrainPreviewRenderer constructor (CreatePipeline, CreateWaterPipeline); a DXC failure throws std::runtime_error from that constructor.",
 ]
 related = [

@@ -132,50 +132,18 @@ real render-device check must not silently fall back to a GPU-less hosted runner
 
 Orbit Studio also exposes build operations over its structured JSON-RPC/MCP bridge.
 
-The terrain sandbox remains a developer/test executable and is not a launcher or alternate Studio front end. Normal interactive authoring starts from the root `Orbit.exe`.
+### Driving Studio over MCP
 
-### Sandbox camera controls
-
-The terrain sandbox uses a free camera:
-
-- `W/A/S/D` — move relative to camera heading
-- Mouse — yaw/pitch look
-- `Q/E` — move down/up
-- `Left Shift` — movement boost
-- `F3` — toggle the debug HUD (FPS, altitude, terrain/cache/ocean stats)
-- `Esc` — quit
-
-Mouse capture is released automatically when the window loses focus.
-
-### Testing over MCP
-
-While `OrbitSandbox` is running, it listens on a loopback-only TCP
-dev server at `127.0.0.1:4319` (see `engine/dev_server`) that accepts
-line-based commands: `PING`, `STATS`, `SCREENSHOT <path>`,
-`TELEPORT <dirX> <dirY> <dirZ> <altitudeMeters>`,
-`SLEW <dirX> <dirY> <dirZ> <altitudeMeters> <durationSeconds>`,
-`DEBUG_OVERLAY <ON|OFF>`, `QUIT`.
-
-`TELEPORT` jumps instantly, which is fine for reading stats but
-leaves a stale, not-yet-restreamed frame on screen if you screenshot
-right after -- use `SLEW` instead to fly there smoothly over real
-frames when you actually need to see the clipmap streaming/morphing
-while moving, e.g. across several `SCREENSHOT` calls spaced a second
-or so apart during the flight.
-
-`tools/mcp_server/orbit_mcp_server.py` exposes those as MCP tools so
-an MCP client (Claude Code, Claude Desktop, ...) can drive and
-inspect a running Orbit process for automated testing:
+Orbit Studio listens on a loopback-only JSON-RPC endpoint (`127.0.0.1:4320`) and
+`tools/mcp_server/orbit_editor_mcp_server.py` exposes it as MCP tools, so an MCP client
+(Claude Code, Claude Desktop, ...) can drive and inspect a running Studio:
 
 ```powershell
 pip install -r tools/mcp_server/requirements.txt
-claude mcp add orbit -- python C:\path\to\asterra\tools\mcp_server\orbit_mcp_server.py
+claude mcp add orbit-editor -- python C:\path\to\asterra\tools\mcp_server\orbit_editor_mcp_server.py
 ```
 
-Launch `OrbitSandbox` separately only for this dedicated terrain-test workflow (the bridge only talks to an
-already-running process, it doesn't launch one). Screenshots read
-real desktop pixels, so the dev server briefly raises the Orbit
-window's Z-order before capturing to make sure it isn't occluded.
+See [docs/ORBIT_MCP.md](docs/ORBIT_MCP.md). The bridge only talks to an already-running Studio; it does not launch one.
 
 Read [docs/ORBIT_ARCHITECTURE.md](docs/ORBIT_ARCHITECTURE.md) and [docs/ORBIT_HOT_ITERATION.md](docs/ORBIT_HOT_ITERATION.md) before adding engine systems.
 
@@ -185,8 +153,7 @@ Known issues and their fix status are tracked in [docs/PROBLEMS.md](docs/PROBLEM
 
 The default terrain recipe combines domain-warped ridges, multifractal mountain
 detail, and footprint-filtered hills, with elevations bounded below 8 km above
-sea level. The sandbox starts over a mountain range with terrain-derived camera
-clearance. The implementation, measured CPU costs, and optimization research
+sea level. The implementation, measured CPU costs, and optimization research
 are documented in [the terrain research report](docs/research/TERRAIN_SYNTHESIS_AND_OPTIMIZATION.md).
 
 To run the deterministic height survey and CPU benchmark:
@@ -198,14 +165,8 @@ cmake --build build --config Release --target OrbitTerrainBenchmark
 
 ### Standing water
 
-The sandbox renders oceans and lakes on the terrain clipmap itself, sharing its
+Terrain rendering draws oceans and lakes on the terrain clipmap itself, sharing its
 sample cache, morphing and depth surface. Lake levels use coarse hydrology as
 one authority while fine regions continue to refine rivers and surrounding land.
 See [standing water rendering](docs/STANDING_WATER_RENDERING.md) for validation,
-storage costs and remaining limitations. The HUD reports `WATER TERRAIN`; the
-legacy ocean vertex and lake-cell counts no longer describe the active surface.
-
-F3 also reports committed full-grid rebuilds as `REBASE`: cumulative count,
-reason (`SOURCE`, `LOD`, or `MOVE`), number of levels, and elapsed seconds. `NOW`
-stays visible for two seconds. Source refreshes preserve sampling grid placement;
-coverage changes retain grids shared between the old and new resolutions.
+storage costs and remaining limitations.

@@ -20,7 +20,7 @@ invariants = [
 ]
 related = ["/rendering/terrain/gpu-cache", "/rendering/terrain"]
 depends_on = ["/foundation/core", "/foundation/jobs", "/rendering/terrain/contracts", "/world/planet-coordinates"]
-used_by = ["/apps/sandbox"]
+used_by = []
 verify = [
   "ctest -R Orbit.TerrainCache",
 ]

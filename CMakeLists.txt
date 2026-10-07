@@ -71,7 +71,6 @@ include(OrbitDependencies)
 include(CTest)
 
 add_subdirectory(engine)
-add_subdirectory(apps/sandbox)
 add_subdirectory(apps/player)
 add_subdirectory(apps/editor)
 add_subdirectory(apps/build)

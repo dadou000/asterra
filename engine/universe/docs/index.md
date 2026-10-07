@@ -16,7 +16,7 @@ invariants = [
   "SurfaceCoordinate uses radians for latitude/longitude and metres along the reference ellipsoid normal for offset."]
 related = ["/foundation/frames", "/foundation/time", "/celestial"]
 depends_on = ["/celestial/orbits", "/celestial/rotation", "/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time"]
-used_by = ["/apps/sandbox", "/apps/studio", "/celestial/far-render", "/celestial/globe", "/editor/ui-toolkit", "/rendering/lighting/radiance-cache", "/rendering/terrain/biomes", "/rendering/terrain/water", "/world/fields", "/world/path-geometry", "/world/path-routing", "/world/paths", "/world/surface-composition", "/world/surface-registry", "/world/world-model"]
+used_by = ["/apps/studio", "/celestial/far-render", "/celestial/globe", "/editor/ui-toolkit", "/rendering/lighting/radiance-cache", "/rendering/terrain/biomes", "/rendering/terrain/water", "/world/fields", "/world/path-geometry", "/world/path-routing", "/world/paths", "/world/surface-composition", "/world/surface-registry", "/world/world-model"]
 verify = [
   "ctest -R Orbit.BodyRegistry"]
 verified = "b0a0de7f"

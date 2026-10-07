@@ -20,7 +20,7 @@ related = ["/docs-system"]
 "projects, worlds, scene, commands, undo, assets, plugins" = "/authoring"
 "planet coordinates, universe, fields, paths, procedural graph" = "/world"
 "types, math, jobs, time, frames, platform, window, hot reload core" = "/foundation"
-"executables: Studio, player, sandbox, build CLI" = "/apps"
+"executables: Studio, player, build CLI" = "/apps"
 "dev server, probes, python tooling" = "/tools"
 "hot reload, save-to-reflect, rebuild, restart" = "/rules/hot-iteration"
 "where should this change go, avoiding duplicate systems" = "/rules/placement"
@@ -50,7 +50,7 @@ related = ["/docs-system"]
 | `/authoring` | Documents, schema, semantic scene, commands/undo, selection, plugins, content/assets, cooked projects. |
 | `/world` | Planet coordinates, universe and frames, fields, surfaces, authored constraints, procedural graph, paths. |
 | `/foundation` | Core, math, jobs, time, frames, platform, runtime session, JSON-RPC core, hot reload. |
-| `/apps` | Studio (Orbit.exe), Player, Sandbox, build CLI and BuildService. |
+| `/apps` | Studio (Orbit.exe), Player, build CLI and BuildService. |
 | `/tools` | Dev server, hot-reload probe/module, Python tooling. |
 | `/rules` | Normative rules: architecture, hot iteration, MCP parity, change placement, UI, completion checks. |
 | `/docs-system` | The block format, the docs tools and how to keep blocks fresh. |
@@ -60,7 +60,7 @@ related = ["/docs-system"]
 ## Repository map
 
 ```text
-apps/        editor (Orbit.exe Studio), player, sandbox, build CLI
+apps/        editor (Orbit.exe Studio), player, build CLI
 engine/      one directory per module: include/orbit/<module>, src, tests, docs
 tools/       MCP servers (live Studio + docs), validators, benchmarks
 docs/        long-form specs, research and the docs tree (docs/tree)

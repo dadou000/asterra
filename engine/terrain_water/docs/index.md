@@ -20,9 +20,9 @@ invariants = [
   "The coastal solver is a positivity-clamped finite-volume shallow-water update with hydrostatic reconstruction across changing bed elevation, a CFL-bounded time step, Manning friction and an explicit velocity ceiling; when M08 changes, water depth is resynchronised preserving the free-surface elevation.",
   "Pages are advanced serially and share one solver scratch buffer.",
   "Standing lake water is sampled in O(1) from a dense support field (overlap plus a dry bank); no per-frame cell mesh or visibility budget is needed."]
-related = ["/rendering/water", "/rendering/terrain/erosion", "/rendering/terrain/regions", "/legacy/standing-water-rendering"]
+related = ["/rendering/terrain/erosion", "/rendering/terrain/regions", "/legacy/standing-water-rendering"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/erosion", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/material-column", "/world/planet-coordinates", "/world/universe"]
-used_by = ["/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/water", "/world/surface-composition"]
+used_by = ["/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.TerrainCoastalProcess",
   "ctest -R Orbit.WaterService",

@@ -16,7 +16,7 @@ invariants = [
 ]
 related = ["/foundation/platform", "/rendering/rhi"]
 depends_on = ["/foundation/core", "/foundation/platform", "/rendering/rhi"]
-used_by = ["/apps/player", "/apps/sandbox", "/apps/studio"]
+used_by = ["/apps/player", "/apps/studio"]
 verify = [
   "No test is registered for this module under its own name; changes are exercised through the tests of the modules that use it (see used_by).",
 ]

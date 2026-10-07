@@ -27,7 +27,7 @@ invariants = [
 ]
 related = ["/rules/ui", "/foundation/runtime-session"]
 depends_on = ["/foundation/core", "/foundation/math"]
-used_by = ["/apps/build-cli", "/apps/player", "/apps/sandbox", "/apps/studio", "/editor/model", "/editor/studio-ui", "/editor/ui-toolkit", "/foundation/runtime-session"]
+used_by = ["/apps/build-cli", "/apps/player", "/apps/studio", "/editor/model", "/editor/studio-ui", "/editor/ui-toolkit", "/foundation/runtime-session"]
 verify = [
   "ctest -R Orbit.KeyboardLayout",
 ]

@@ -48,9 +48,6 @@ MCP client -> tools/mcp_server/orbit_editor_mcp_server.py -> JSON-RPC 2.0 @ 127.
            -> Studio RPC dispatcher (engine/editor_rpc, apps/editor Main.cpp) -> commands/services
 ```
 
-(An older loopback text protocol on port 4319, `tools/mcp_server/orbit_mcp_server.py`, serves the sandbox
-dev server; Studio automation uses 4320.)
-
 ## Adding a capability (the four-step checklist)
 
 1. **Extract the operation.** Put the logic behind a callable on the existing owner (see

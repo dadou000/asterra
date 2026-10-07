@@ -20,7 +20,7 @@ invariants = [
 ]
 related = ["/rendering/rhi", "/rendering/render-view", "/legacy/orbit-profiler"]
 depends_on = ["/foundation/core", "/rendering/rhi"]
-used_by = ["/apps/sandbox", "/apps/studio", "/editor/studio-ui", "/rendering/render-view", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver"]
+used_by = ["/apps/studio", "/editor/studio-ui", "/rendering/render-view", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver"]
 verify = [
   "ctest -R Orbit.RenderGraph",
   "ctest -R Orbit.RenderGraphBuffers",

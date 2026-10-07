@@ -1,6 +1,5 @@
 add_library(OrbitTerrainGpu STATIC
     src/GpuDepressionFill.cpp
-    src/GpuElevationQuery.cpp
     src/GpuErosion.cpp
     src/GpuFieldGenerator.cpp
     src/GpuFlowAccumulation.cpp

@@ -14,7 +14,7 @@ invariants = [
   "Material field values are semantic class IDs plus blend weights, not renderer material asset handles."]
 related = []
 depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/world/universe"]
-used_by = ["/apps/sandbox", "/world/path-routing"]
+used_by = ["/world/path-routing"]
 verify = [
   "ctest -R Orbit.FieldRegistry"]
 verified = "b0a0de7f"

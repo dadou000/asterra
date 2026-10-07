@@ -25,7 +25,7 @@ invariants = [
   "Sediment exchange (M14) is the sole mobile-sediment authority: three classes (sand, fines, coarse debris) map to M08 sand, soil and debris (removed regolith is classified as fines while mobile) and move in three media (waterborne, airborne, surface-mobile)."]
 related = ["/rendering/terrain/hydrology", "/rendering/terrain/rivers", "/rendering/terrain/material-column", "/rendering/terrain/water"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/macro-geology", "/rendering/terrain/material-column", "/world/planet-coordinates", "/world/terrain-constraints"]
-used_by = ["/apps/sandbox", "/rendering/terrain/debug-fields", "/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/terrain/water", "/world/surface-composition"]
+used_by = ["/rendering/terrain/debug-fields", "/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/rendering/terrain/water", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.TerrainStreamPower",
   "ctest -R Orbit.TerrainHydraulicErosion",

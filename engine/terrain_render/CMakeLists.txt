@@ -4,7 +4,6 @@ add_library(OrbitTerrainRender STATIC
     src/SurfaceEffectShader.cpp
     src/SurfaceEffects.cpp
     src/TerrainPreviewRenderer.cpp
-    src/UniformPlanetRenderer.cpp
     src/WaterVolumeShader.cpp
 )
 

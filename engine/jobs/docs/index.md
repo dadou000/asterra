@@ -19,7 +19,7 @@ invariants = [
 ]
 related = ["/world/procedural-graph", "/rules/architecture"]
 depends_on = ["/foundation/core"]
-used_by = ["/apps/sandbox", "/apps/studio", "/editor/studio-session", "/rendering/terrain/page-cache", "/rendering/terrain/regions", "/rendering/terrain/streaming", "/world/path-routing", "/world/procedural-graph"]
+used_by = ["/apps/studio", "/editor/studio-session", "/rendering/terrain/page-cache", "/rendering/terrain/regions", "/rendering/terrain/streaming", "/world/path-routing", "/world/procedural-graph"]
 verify = [
   "ctest -R Orbit.JobSystem",
   "ctest -R Orbit.JobSystemTelemetry",

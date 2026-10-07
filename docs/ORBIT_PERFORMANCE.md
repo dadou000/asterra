@@ -62,7 +62,7 @@ builds, picking and sun-visibility marching.
 
 - Worker threads are named, so debuggers, crash dumps and profilers (and `SetThreadDescription` readers) show what a
   thread is: `Orbit.Main`, `Orbit.TerrainPages.<n>`, `Orbit.Routes.<n>`, `Orbit.GlobePatch`, `Orbit.HotIteration`,
-  `Orbit.HotReloadHost`, `Orbit.MapLayers`, `Orbit.ProjectScan`, `Orbit.UniformPlanet`. New pools must pass a name to
+  `Orbit.HotReloadHost`, `Orbit.MapLayers`, `Orbit.ProjectScan`. New pools must pass a name to
   `jobs::JobSystem` and new long-lived threads must call `core::SetCurrentThreadName`.
 - Pools no longer each take every hardware thread. The physical-page pool uses half of them (`jobs::PoolWorkerCount`,
   at least 2) and the route planner uses 2, so on a 16-thread machine the terrain pool (8) + orbital patch builds (6) +

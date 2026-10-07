@@ -17,7 +17,7 @@ invariants = [
 ]
 related = ["/world/universe", "/rendering/terrain"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/contracts", "/world/planet-coordinates", "/world/universe"]
-used_by = ["/apps/sandbox", "/world/path-routing", "/world/surface-composition"]
+used_by = ["/world/path-routing", "/world/surface-composition"]
 verify = [
   "ctest -R Orbit.SurfaceRegistry",
 ]

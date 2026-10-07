@@ -249,32 +249,6 @@ add_test(
     COMMAND OrbitTerrainGpuRegionDeltaTests
 )
 
-add_executable(OrbitTerrainGpuElevationQueryTests
-    TerrainGpuElevationQueryTests.cpp
-)
-
-target_link_libraries(OrbitTerrainGpuElevationQueryTests
-    PRIVATE
-        Orbit::RhiVulkan
-        Orbit::ShaderDxc
-        Orbit::Terrain
-        Orbit::TerrainGpu
-)
-
-target_compile_features(OrbitTerrainGpuElevationQueryTests PRIVATE cxx_std_23)
-orbit_enable_warnings(OrbitTerrainGpuElevationQueryTests)
-
-add_custom_command(TARGET OrbitTerrainGpuElevationQueryTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${ORBIT_DXCOMPILER_DLL}"
-        "$<TARGET_FILE_DIR:OrbitTerrainGpuElevationQueryTests>"
-)
-
-add_test(
-    NAME Orbit.TerrainGpuElevationQuery
-    COMMAND OrbitTerrainGpuElevationQueryTests
-)
-
 add_executable(OrbitHydrologyGpuDepressionFillTests
     HydrologyGpuDepressionFillTests.cpp
 )
@@ -647,7 +621,6 @@ set_tests_properties(
     Orbit.CloudLightVolume
     Orbit.TerrainGpuField
     Orbit.TerrainGpuRegionDelta
-    Orbit.TerrainGpuElevationQuery
     Orbit.HydrologyGpuDepressionFill
     Orbit.HydrologyGpuFlowAccumulation
     Orbit.HydrologyGpuErosion
