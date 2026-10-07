@@ -5,6 +5,7 @@ on:
     branches: [orbit]
   pull_request:
     branches: [orbit]
+  workflow_dispatch:
 
 concurrency:
   group: orbit-windows-${{ github.ref }}
@@ -16,6 +17,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Clean-source acceptance (formerly the V0.0.3 clean workflow): the hosted
+      # runner starts from a fresh checkout, so the build below is a from-scratch
+      # rebuild. The checkout must carry authoritative project data only.
+      - name: Verify checkout has no derived project cache
+        shell: pwsh
+        run: |
+          $derived = Get-ChildItem -Path . -Directory -Recurse -Filter DerivedData -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]\.orbit[\\/]DerivedData$' }
+          if ($derived) {
+            $derived | ForEach-Object { Write-Host $_.FullName }
+            throw "Source checkout unexpectedly contains an Orbit DerivedData cache."
+          }
 
       - name: Install Vulkan SDK
         shell: pwsh
@@ -35,290 +49,46 @@ jobs:
           "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Validate MCP adapters
-        run: python -m py_compile tools/mcp_server/orbit_mcp_server.py tools/mcp_server/orbit_editor_mcp_server.py
+        run: python -m py_compile tools/mcp_server/orbit_editor_mcp_server.py tools/mcp_server/orbit_docs_mcp_server.py
 
       - name: Configure
         run: cmake -S . -B build -DORBIT_WARNINGS_AS_ERRORS=ON
 
-      - name: Build V0.0.3 regression targets
-        run: cmake --build build --config Release --target OrbitTerrainViewTests OrbitTerrainMorphRefreshTests OrbitTerrainRender OrbitPathGeometryTests OrbitPathSourceTests OrbitBuildServiceTests OrbitRuntimeProjectTests OrbitBuildCliTests OrbitPlatformServicesTests OrbitPlatformServicesSteamTests OrbitDocumentsTests OrbitUniverseCompositionTests OrbitSurfaceCompositionTests OrbitTerrainAuthoringCommandTests OrbitRockyPlanetAuthoringTests OrbitEditorRpcTests OrbitBuildPackageRpcTests OrbitProjectWorldRpcTests OrbitEditorWorldSessionTests OrbitTransactionalCompositionTests OrbitWorldDocumentsModelTests OrbitActiveBodyModelTests OrbitWorldScopedFacadesTests OrbitEditorSessionRpcHostTests OrbitStudioSessionTests OrbitStudioRuntimeBindingTests OrbitStudioTerrainRuntimeBridgeTests OrbitStudioTerrainRebuildSchedulerTests OrbitStudioAuthoringBindingTests OrbitBezierHandleEditorTests OrbitStudioWorkspaceTests OrbitProjectBrowserModelTests OrbitProjectSettingsModelTests OrbitUniverseBoundRoutePlannerTests OrbitUniverseBoundPathCacheTests OrbitViewportTargetRegistryTests OrbitViewportTargetRpcTests OrbitStudioWorkspaceRpcHostTests OrbitStudioViewportCameraTests OrbitStudioViewportNavigationTests OrbitStudioViewportPresentationTests OrbitExplorerInspectorTests OrbitV003ScaffoldIntegrationTests
-
-      - name: Test - Terrain view
-        shell: pwsh
-        run: |
-          & "build/tests/Release/OrbitTerrainViewTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitTerrainViewTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Terrain morph refresh
-        shell: pwsh
-        run: |
-          & "build/tests/Release/OrbitTerrainMorphRefreshTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitTerrainMorphRefreshTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Path geometry
-        shell: pwsh
-        run: |
-          & "build/engine/path_geometry/Release/OrbitPathGeometryTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitPathGeometryTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Path source
-        shell: pwsh
-        run: |
-          & "build/engine/path_geometry/Release/OrbitPathSourceTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitPathSourceTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Documents and multi-world catalog
-        shell: pwsh
-        run: |
-          & "build/tests/Release/OrbitDocumentsTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitDocumentsTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Universe composition
-        shell: pwsh
-        run: |
-          & "build/engine/world_model/Release/OrbitUniverseCompositionTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitUniverseCompositionTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Surface composition
-        shell: pwsh
-        run: |
-          & "build/engine/surface_model/Release/OrbitSurfaceCompositionTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitSurfaceCompositionTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Terrain capability authoring
-        shell: pwsh
-        run: |
-          & "build/engine/editor_model/Release/OrbitTerrainAuthoringCommandTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitTerrainAuthoringCommandTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/editor_model/Release/OrbitRockyPlanetAuthoringTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitRockyPlanetAuthoringTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Core editor RPC
-        shell: pwsh
-        run: |
-          & "build/engine/editor_rpc/Release/OrbitEditorRpcTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitEditorRpcTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Build package RPC
-        shell: pwsh
-        run: |
-          & "build/engine/editor_rpc/Release/OrbitBuildPackageRpcTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitBuildPackageRpcTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Project/world/body RPC
-        shell: pwsh
-        run: |
-          & "build/engine/editor_rpc/Release/OrbitProjectWorldRpcTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitProjectWorldRpcTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Editor world session
-        shell: pwsh
-        run: |
-          & "build/engine/editor_session/Release/OrbitEditorWorldSessionTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitEditorWorldSessionTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Transactional composition
-        shell: pwsh
-        run: |
-          & "build/engine/editor_session/Release/OrbitTransactionalCompositionTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitTransactionalCompositionTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - World-scoped authoring models
-        shell: pwsh
-        run: |
-          & "build/engine/editor_session/Release/OrbitWorldDocumentsModelTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitWorldDocumentsModelTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/editor_session/Release/OrbitActiveBodyModelTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitActiveBodyModelTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/editor_session/Release/OrbitWorldScopedFacadesTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitWorldScopedFacadesTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Session-aware RPC host
-        shell: pwsh
-        run: |
-          & "build/engine/editor_rpc/Release/OrbitEditorSessionRpcHostTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitEditorSessionRpcHostTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Studio session and workspace
-        shell: pwsh
-        run: |
-          & "build/engine/studio_session/Release/OrbitStudioSessionTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioSessionTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitStudioRuntimeBindingTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioRuntimeBindingTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitStudioTerrainRuntimeBridgeTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioTerrainRuntimeBridgeTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitStudioTerrainRebuildSchedulerTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioTerrainRebuildSchedulerTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitStudioAuthoringBindingTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioAuthoringBindingTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitBezierHandleEditorTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitUniverseBoundRoutePlannerTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitUniverseBoundRoutePlannerTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitUniverseBoundPathCacheTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitUniverseBoundPathCacheTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitStudioWorkspaceTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioWorkspaceTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitStudioWorkspaceRpcHostTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioWorkspaceRpcHostTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Project browser model
-        shell: pwsh
-        run: |
-          & "build/engine/studio_session/Release/OrbitProjectBrowserModelTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitProjectBrowserModelTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitProjectSettingsModelTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitProjectSettingsModelTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_ui/Release/OrbitStudioViewportCameraTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioViewportCameraTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_ui/Release/OrbitStudioViewportNavigationTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioViewportNavigationTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_ui/Release/OrbitStudioViewportPresentationTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitStudioViewportPresentationTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Multi-viewport targeting
-        shell: pwsh
-        run: |
-          & "build/engine/studio_session/Release/OrbitViewportTargetRegistryTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitViewportTargetRegistryTests failed with exit code $LASTEXITCODE"
-          }
-          & "build/engine/studio_session/Release/OrbitViewportTargetRpcTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitViewportTargetRpcTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Explorer and inspector
-        shell: pwsh
-        run: |
-          & "build/tests/Release/OrbitExplorerInspectorTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitExplorerInspectorTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Build service
-        shell: pwsh
-        run: |
-          & "build/engine/build/Release/OrbitBuildServiceTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitBuildServiceTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Runtime project
-        shell: pwsh
-        run: |
-          & "build/engine/runtime_project/Release/OrbitRuntimeProjectTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitRuntimeProjectTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Build CLI
-        shell: pwsh
-        run: |
-          & "build/apps/build/Release/OrbitBuildCliTests.exe" "build/apps/build/Release/OrbitBuild.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitBuildCliTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Platform services
-        shell: pwsh
-        run: |
-          & "build/engine/platform_services/Release/OrbitPlatformServicesTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitPlatformServicesTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - Steam provider
-        shell: pwsh
-        run: |
-          & "build/engine/platform_services/steam/Release/OrbitPlatformServicesSteamTests.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitPlatformServicesSteamTests failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Test - V0.0.3 scaffold integration
-        shell: pwsh
-        run: |
-          & "build/tests/Release/OrbitV003ScaffoldIntegrationTests.exe" "build/apps/player/Release/OrbitPlayer.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "OrbitV003ScaffoldIntegrationTests failed with exit code $LASTEXITCODE"
-          }
-
+      # Every library, test and application. This includes the production
+      # executables (OrbitStudio, OrbitPlayer, OrbitBuild) and every GPU test.
       - name: Build
         run: cmake --build build --config Release
 
+      # The V0.0.3 acceptance suite (documents, composition, RPC, studio session,
+      # build/package CLI, platform services, scaffold integration, ...) is part
+      # of CTest like every other test, so one invocation covers it.
       - name: Test
         # Hosted GitHub Windows runners expose no Vulkan physical device.
         # GPU tests are still compiled above; execute them on Vulkan-capable
         # developer/self-hosted machines via plain ctest.
         run: ctest --test-dir build -C Release -LE gpu --output-on-failure
+
+      - name: Verify production executables
+        shell: pwsh
+        run: |
+          foreach ($exe in @(
+              "build/apps/editor/Release/OrbitStudio.exe",
+              "build/apps/player/Release/OrbitPlayer.exe",
+              "build/apps/build/Release/OrbitBuild.exe")) {
+            if (-not (Test-Path $exe)) {
+              throw "$exe was not produced by the build."
+            }
+          }
+
+      - name: Verify source checkout remains authoritative-only
+        shell: pwsh
+        run: |
+          $derived = Get-ChildItem -Path . -Directory -Recurse -Filter DerivedData -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]\.orbit[\\/]DerivedData$' }
+          if ($derived) {
+            $derived | ForEach-Object { Write-Host $_.FullName }
+            throw "The test suite leaked derived project authority into the source checkout."
+          }
 
       - name: Package Windows build
         shell: pwsh
@@ -331,42 +101,25 @@ jobs:
           New-Item -ItemType Directory -Force -Path $symbols | Out-Null
           New-Item -ItemType Directory -Force -Path $mcp | Out-Null
 
-          Copy-Item "build/apps/launcher/Release/OrbitLauncher.exe" "$package/OrbitLauncher.exe"
-          Copy-Item "build/apps/sandbox/Release/OrbitSandbox.exe" "$package/OrbitSandbox.exe"
           Copy-Item "build/apps/editor/Release/OrbitStudio.exe" "$package/OrbitStudio.exe"
           Copy-Item "build/apps/build/Release/OrbitBuild.exe" "$package/OrbitBuild.exe"
           Copy-Item "build/apps/player/Release/OrbitPlayer.exe" "$package/OrbitPlayer.exe"
           Copy-Item "build/apps/build/Release/dxcompiler.dll" "$package/dxcompiler.dll"
-          Copy-Item "tools/mcp_server/orbit_mcp_server.py" "$mcp/orbit_mcp_server.py"
           Copy-Item "tools/mcp_server/orbit_editor_mcp_server.py" "$mcp/orbit_editor_mcp_server.py"
           Copy-Item "tools/mcp_server/requirements.txt" "$mcp/requirements.txt"
 
-          if (Test-Path "build/apps/launcher/Release/OrbitLauncher.pdb") {
-            Copy-Item "build/apps/launcher/Release/OrbitLauncher.pdb" "$symbols/OrbitLauncher.pdb"
-          }
-
-          if (Test-Path "build/apps/sandbox/Release/OrbitSandbox.pdb") {
-            Copy-Item "build/apps/sandbox/Release/OrbitSandbox.pdb" "$symbols/OrbitSandbox.pdb"
-          }
-
-          if (Test-Path "build/apps/editor/Release/OrbitStudio.pdb") {
-            Copy-Item "build/apps/editor/Release/OrbitStudio.pdb" "$symbols/OrbitStudio.pdb"
-          }
-
-          if (Test-Path "build/apps/build/Release/OrbitBuild.pdb") {
-            Copy-Item "build/apps/build/Release/OrbitBuild.pdb" "$symbols/OrbitBuild.pdb"
-          }
-
-          if (Test-Path "build/apps/player/Release/OrbitPlayer.pdb") {
-            Copy-Item "build/apps/player/Release/OrbitPlayer.pdb" "$symbols/OrbitPlayer.pdb"
+          foreach ($pdb in @(
+              "build/apps/editor/Release/OrbitStudio.pdb",
+              "build/apps/build/Release/OrbitBuild.pdb",
+              "build/apps/player/Release/OrbitPlayer.pdb")) {
+            if (Test-Path $pdb) {
+              Copy-Item $pdb "$symbols/$(Split-Path $pdb -Leaf)"
+            }
           }
 
           @"
           Orbit Windows Release
           =====================
-
-          Start the terrain/runtime sandbox with:
-              OrbitLauncher.exe
 
           Start the authoring environment with:
               OrbitStudio.exe [project-directory-or-Project.orbit.toml]
@@ -384,9 +137,6 @@ jobs:
           Orbit Studio structured automation:
               JSON-RPC 2.0: 127.0.0.1:4320
               MCP adapter: tools/mcp_server/orbit_editor_mcp_server.py
-
-          The launcher starts OrbitSandbox.exe and writes runtime logs to:
-              logs/
 
           On an unhandled crash, Orbit writes:
               *-crash-*.log

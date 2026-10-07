@@ -48,7 +48,6 @@ jobs:
           OrbitStudioTerrainRuntimeBridgeTests
           OrbitStudioTerrainRebuildSchedulerTests
           OrbitStudioTerrainPhysicalPageServiceTests
-          OrbitBezierHandleEditorTests
           OrbitStudioTerrainDiagnosticOverlayGeometryTests
           OrbitStudioViewportCameraTests
           OrbitStudioViewportNavigationTests
@@ -71,9 +70,6 @@ jobs:
 
       - name: Test terrain physical pages
         run: build-studio-smoke/engine/studio_session/Release/OrbitStudioTerrainPhysicalPageServiceTests.exe
-
-      - name: Test Bezier handle editor
-        run: build-studio-smoke/engine/studio_session/Release/OrbitBezierHandleEditorTests.exe
 
       - name: Test terrain diagnostic overlay geometry
         run: build-studio-smoke/engine/studio_ui/Release/OrbitStudioTerrainDiagnosticOverlayGeometryTests.exe
