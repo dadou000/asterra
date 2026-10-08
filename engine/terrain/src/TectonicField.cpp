@@ -129,6 +129,7 @@ TectonicField::TectonicField(
         plate.crustAge = plate.isContinental
             ? 0.55 + 0.45 * ageRoll
             : 0.05 + 0.55 * ageRoll;
+        plate.continentalBase = plate.isContinental ? 0.78 : 0.22;
     }
 
     for (u32 h = 0; h < hotspotCount_; ++h)
@@ -436,11 +437,13 @@ TectonicStructureSample TectonicField::SampleStructure(
     f64 weightSum = 0.0;
     f64 thicknessSum = 0.0;
     f64 ageSum = 0.0;
+    f64 baseFractionSum = 0.0;
     for (u32 i = 0; i < plateCount_; ++i)
     {
         const f64 g = Smooth(0.5 + 0.5 * (claim[i] - dTop) / blendWidth);
         const f64 u = g / (1.0 - g);
         weightSum += u;
+        baseFractionSum += u * plates_[i].continentalBase;
         thicknessSum += u * plates_[i].crustThicknessKm;
         ageSum += u * plates_[i].crustAge;
     }
@@ -448,6 +451,23 @@ TectonicStructureSample TectonicField::SampleStructure(
         ? thicknessSum / weightSum : plate.crustThicknessKm;
     f64 age = weightSum > 0.0
         ? ageSum / weightSum : plate.crustAge;
+
+    // Continental crust is its own field: the plate-wide tendency plus warped
+    // low-frequency noise, so continents have their own outlines inside (and
+    // across) plates. Thickness and age follow it rather than the plate flag.
+    const f64 baseFraction = weightSum > 0.0
+        ? baseFractionSum / weightSum : plate.continentalBase;
+    const u64 crustSeed = desc_.seed ^ 0x43525553544655ULL;
+    const math::Double3 warped = direction * 1.4 +
+        VectorNoise3D(direction * 1.7, crustSeed ^ 0x57415250ULL) * 0.55;
+    const f64 outline =
+        0.65 * ValueNoise3D(warped * 1.6, crustSeed) +
+        0.35 * ValueNoise3D(warped * 4.1, crustSeed ^ 0x32ULL);
+    const f64 fraction = Smooth(std::clamp(
+        0.5 + (baseFraction - 0.5) * 1.1 + outline * 0.5, 0.0, 1.0));
+    out.continentalCrustFraction = fraction;
+    thickness = Lerp(7.5, 39.0, fraction) + (thickness - Lerp(7.5, 39.0, baseFraction));
+    age = Lerp(std::min(age, 0.5), std::max(age, 0.55), fraction);
 
     // Collision type comes from the continuous per-class masks, not from the
     // runner-up plate's flags (which switch abruptly).

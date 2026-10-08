@@ -34,6 +34,9 @@ enum class BakedTectonicLayer : u8
     // sample time.
     VolcanismArc,
     PlateSpeedMeters,
+    // 0 = oceanic, 1 = continental crust. Continuous and independent of plate
+    // ids: one plate can carry both an ocean basin and a continent.
+    ContinentalCrustFraction,
     Count
 };
 
@@ -69,7 +72,7 @@ struct BakedTectonicTexel
 class BakedTectonicRasters
 {
 public:
-    static constexpr u32 kFormatVersion = 1;
+    static constexpr u32 kFormatVersion = 2;
 
     // Quantizes float layers. `layers[i]` holds 6 * (resolution + 2)^2 values
     // for layer i in face-major, row-major order with the gutter included;

@@ -95,6 +95,9 @@ private:
         // Interior crust properties used only by SampleStructure.
         f64 crustThicknessKm{0.0};
         f64 crustAge{0.0};
+        // Plate-wide mean continental fraction; the per-point fraction adds
+        // intra-plate continent geometry on top (SampleStructure).
+        f64 continentalBase{0.0};
     };
 
     struct Hotspot

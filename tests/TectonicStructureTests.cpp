@@ -58,8 +58,9 @@ bool StructureIsBoundedAndDeterministic()
         {
             ++none;
             ok &= Check(s.boundaryType == terrain::TectonicBoundaryType::None, "interior has no boundary");
-            if (s.continental) continentalMin = std::min(continentalMin, s.crustThicknessKm);
-            else oceanicMax = std::max(oceanicMax, s.crustThicknessKm);
+            // Crust type is its own field now, not the plate flag.
+            if (s.continentalCrustFraction > 0.8) continentalMin = std::min(continentalMin, s.crustThicknessKm);
+            else if (s.continentalCrustFraction < 0.2) oceanicMax = std::max(oceanicMax, s.crustThicknessKm);
         }
         switch (s.boundaryType)
         {

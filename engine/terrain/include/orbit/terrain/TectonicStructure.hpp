@@ -51,6 +51,9 @@ struct TectonicStructureSample
     // angular speed).
     f64 plateSpeedMetersPerUnit{0.0};
 
+    // 0..1, 0 = oceanic and 1 = continental crust; continuous and independent
+    // of plate ids (a plate can carry both). Thickness is derived from it.
+    f64 continentalCrustFraction{0.0};
     f64 crustThicknessKm{0.0};
     // 0 = newly formed crust, 1 = ancient craton.
     f64 crustAge{0.0};

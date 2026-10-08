@@ -429,6 +429,8 @@ TectonicStructureSample GlobalTerrainFields::SampleTectonicStructure(
                        : TectonicBoundaryType::Transform);
     }
 
+    out.continentalCrustFraction =
+        unit01(layer(BakedTectonicLayer::ContinentalCrustFraction));
     out.crustThicknessKm = std::max(3.0, layer(BakedTectonicLayer::CrustThicknessKm));
     out.crustAge = unit01(layer(BakedTectonicLayer::CrustAge));
     out.geologicalAge = unit01(layer(BakedTectonicLayer::GeologicalAge));
@@ -479,6 +481,8 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
     texel.Set(BakedTectonicLayer::VolcanismArc, static_cast<f32>(structure.volcanism));
     texel.Set(BakedTectonicLayer::PlateSpeedMeters,
         static_cast<f32>(structure.plateSpeedMetersPerUnit));
+    texel.Set(BakedTectonicLayer::ContinentalCrustFraction,
+        static_cast<f32>(structure.continentalCrustFraction));
     texel.plate = static_cast<u8>(sample.nearestPlate);
     texel.neighbour = static_cast<u8>(sample.secondPlate);
     return texel;

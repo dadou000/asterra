@@ -195,17 +195,20 @@ void BakedTectonicRasters::Finalize()
     {
         hash = StableCombine64(hash, std::bit_cast<u32>(rangeMinimum_[layer]));
         hash = StableCombine64(hash, std::bit_cast<u32>(rangeMaximum_[layer]));
-        // Sampling every 61st value keeps hashing cheap for large rasters
-        // while still reflecting any real change in the data.
-        const auto& values = layers_[layer];
-        for (std::size_t i = 0; i < values.size(); i += 61U)
+        // Every texel: this hash is the terrain cache identity, so it must
+        // change whenever any baked value does.
+        for (const u16 value : layers_[layer])
         {
-            hash = StableCombine64(hash, values[i]);
+            hash = StableCombine64(hash, value);
         }
     }
-    for (std::size_t i = 0; i < plate_.size(); i += 61U)
+    for (const u8 value : plate_)
     {
-        hash = StableCombine64(hash, plate_[i]);
+        hash = StableCombine64(hash, value);
+    }
+    for (const u8 value : neighbour_)
+    {
+        hash = StableCombine64(hash, value);
     }
     contentHash_ = hash == 0U ? 1U : hash;
 }

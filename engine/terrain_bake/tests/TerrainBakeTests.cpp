@@ -5,6 +5,7 @@
 #include <orbit/terrain_bake/TerrainBakeService.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -440,3 +441,60 @@ int main()
     ok &= ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure();
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
+bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
+{
+    const auto planet = MakePlanet();
+    const auto bake = terrain_bake::BakeTectonics(planet, MakeDesc(), {.resolution = 48});
+    if (!Check(bake != nullptr, "bake must complete")) return false;
+
+    // At least one plate must carry both oceanic and continental crust.
+    std::array<f32, terrain::kBakedTectonicMaxPlates> low;
+    std::array<f32, terrain::kBakedTectonicMaxPlates> high;
+    low.fill(1.0F);
+    high.fill(0.0F);
+    bool inRange = true;
+    f64 thicknessLow = 0.0, thicknessHigh = 0.0;
+    u32 nLow = 0, nHigh = 0;
+    for (u32 i = 0; i < 6000; ++i)
+    {
+        const auto t = bake->Sample(Fibonacci(i, 6000U));
+        const f32 f = t.Get(terrain::BakedTectonicLayer::ContinentalCrustFraction);
+        inRange &= f >= -0.001F && f <= 1.001F;
+        low[t.plate] = std::min(low[t.plate], f);
+        high[t.plate] = std::max(high[t.plate], f);
+        const f64 th = t.Get(terrain::BakedTectonicLayer::CrustThicknessKm);
+        if (f < 0.25F) { thicknessLow += th; ++nLow; }
+        else if (f > 0.75F) { thicknessHigh += th; ++nHigh; }
+    }
+    bool mixedPlate = false;
+    for (u32 p = 0; p < bake->PlateCount(); ++p)
+    {
+        mixedPlate |= low[p] < 0.3F && high[p] > 0.7F;
+    }
+    bool ok = Check(inRange, "continental crust fraction must stay within 0..1");
+    ok &= Check(mixedPlate, "one plate must be able to carry oceanic and continental crust");
+    ok &= Check(nLow > 0U && nHigh > 0U &&
+            thicknessHigh / nHigh > thicknessLow / nLow + 15.0,
+        "continental crust must be much thicker than oceanic crust");
+
+    // Changing a single texel anywhere must change the content hash.
+    auto layers = std::array<std::vector<u16>, terrain::kBakedTectonicLayerCount>{};
+    std::array<f32, terrain::kBakedTectonicLayerCount> minimum{}, maximum{};
+    for (u32 l = 0; l < terrain::kBakedTectonicLayerCount; ++l)
+    {
+        const auto id = static_cast<terrain::BakedTectonicLayer>(l);
+        layers[l] = bake->QuantizedLayer(id);
+        minimum[l] = bake->RangeMinimum(id);
+        maximum[l] = bake->RangeMaximum(id);
+    }
+    layers[3][layers[3].size() / 2U + 1U] ^= 1U;
+    const auto altered = terrain::BakedTectonicRasters::FromQuantized(
+        bake->Resolution(), bake->RecipeHash(), std::move(layers), minimum, maximum,
+        bake->PlateIds(), bake->NeighbourIds(), bake->PlateContinentalFlags(),
+        bake->PlateCount());
+    ok &= Check(altered.ContentHash() != bake->ContentHash(),
+        "a single changed texel must change the content hash");
+    return ok;
+}
+
+    ok &= CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel();
