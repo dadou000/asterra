@@ -203,14 +203,17 @@ void StudioExpansionShell::DrawViewportBand(
             case studio_session::ViewportMode::FlatMap:
             {
                 context.SameLine();
-                static constexpr std::array<std::string_view, 6>
+                static constexpr std::array<std::string_view, 9>
                     kMapLayers{
                         "Elevation",
                         "Biomes",
                         "Temperature",
                         "Precipitation",
                         "Water depth",
-                        "Tectonic plates"
+                        "Tectonic plates",
+                        "Plate ID",
+                        "Boundary motion",
+                        "Crustal deformation"
                     };
                 i32 layer = static_cast<i32>(
                     owner_->views_->FlatMapLayerOf(id));
@@ -219,7 +222,7 @@ void StudioExpansionShell::DrawViewportBand(
                         kMapLayers,
                         layer))
                 {
-                    layer = std::clamp(layer, 0, 5);
+                    layer = std::clamp(layer, 0, 8);
                     owner_->views_->SetFlatMapLayer(
                         id,
                         static_cast<FlatMapLayer>(layer));

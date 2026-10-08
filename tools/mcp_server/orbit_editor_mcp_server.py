@@ -1714,8 +1714,11 @@ def orbit_map_status(view_id: str = "studio.primary") -> dict[str, Any]:
 @mcp.tool()
 def orbit_map_layer_set(layer: str, view_id: str = "studio.primary") -> dict[str, Any]:
     """Choose what the flat map colours the planet by: elevation, biomes,
-    temperature, precipitation, water_depth or tectonics (plate identity and
-    boundary influence). Switching never re-samples."""
+    temperature, precipitation, water_depth, tectonics (plate identity and
+    boundary influence together), plate_id (plate identity and outlines only),
+    boundary_motion (convergence / divergence / shear only) or
+    crustal_deformation (stress and the fault network). Switching never
+    re-samples."""
     return _rpc("map.layer_set", {"id": view_id, "layer": layer})
 
 
