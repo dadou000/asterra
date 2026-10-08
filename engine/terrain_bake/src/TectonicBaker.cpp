@@ -40,6 +40,21 @@ std::shared_ptr<const terrain::BakedTectonicRasters> BakeTectonics(
     std::vector<u8> plate(plateTexels, 0U);
     std::vector<u8> neighbour(plateTexels, 0U);
 
+    u32 workers = options.workerThreads;
+    if (workers == 0U)
+    {
+        workers = std::max(1U, std::thread::hardware_concurrency());
+    }
+
+    // Plate ownership by noise-metric growth over the raster: the structure
+    // below is evaluated from these claims and boundary normals.
+    const auto growth = fields.BuildTectonicGrowth(
+        resolution, control != nullptr ? &control->cancel : nullptr, workers);
+    if (growth == nullptr)
+    {
+        return nullptr;
+    }
+
     const u32 rowsTotal = terrain::kBakedTectonicFaces * stride;
     if (control != nullptr)
     {
@@ -68,10 +83,8 @@ std::shared_ptr<const terrain::BakedTectonicRasters> BakeTectonics(
             const i32 y = static_cast<i32>(row % stride) - 1;
             for (i32 x = -1; x <= static_cast<i32>(resolution); ++x)
             {
-                const math::Double3 direction =
-                    terrain::BakedTectonicTexelDirection(face, x, y, resolution);
                 const terrain::BakedTectonicTexel texel =
-                    fields.EvaluateTectonicTexel(direction);
+                    fields.EvaluateTectonicTexel(*growth, face, x, y);
 
                 const std::size_t index =
                     (static_cast<std::size_t>(face) * stride +
@@ -102,11 +115,6 @@ std::shared_ptr<const terrain::BakedTectonicRasters> BakeTectonics(
         }
     };
 
-    u32 workers = options.workerThreads;
-    if (workers == 0U)
-    {
-        workers = std::max(1U, std::thread::hardware_concurrency());
-    }
     workers = std::min(workers, rowsTotal);
 
     std::vector<std::thread> threads;

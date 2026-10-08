@@ -203,14 +203,27 @@ TectonicField::TectonicField(
             std::cos(std::min(maxAngularSpan + 0.01, std::numbers::pi));
     }
 
-    BuildBoundaryArcs();
 }
 
 TectonicSample TectonicField::Sample(
-    const math::Double3& direction,
-    const f64 obliquity) const noexcept
+    const math::Double3& direction) const noexcept
 {
-    std::array<f64, kMaxTectonicPlates> d{};
+    ClaimArray claims{};
+    for (u32 i = 0; i < plateCount_; ++i)
+    {
+        claims[i] =
+            math::Dot(direction, plates_[i].seedDirection) +
+            plates_[i].sizeBiasDot;
+    }
+    return SampleWithClaims(direction, claims, nullptr);
+}
+
+TectonicSample TectonicField::SampleWithClaims(
+    const math::Double3& direction,
+    const ClaimArray& claims,
+    const BoundaryNormalFn* const normalFn) const noexcept
+{
+    const ClaimArray& d = claims;
     u32 nearest = 0;
     u32 second = 0;
     f64 d0 = -2.0;
@@ -218,9 +231,6 @@ TectonicSample TectonicField::Sample(
 
     for (u32 i = 0; i < plateCount_; ++i)
     {
-        d[i] =
-            math::Dot(direction, plates_[i].seedDirection) +
-            plates_[i].sizeBiasDot;
         if (d[i] > d0)
         {
             second = nearest;
@@ -300,22 +310,24 @@ TectonicSample TectonicField::Sample(
                 continue;
             }
 
-            const math::Double3 towardJ =
-                plates_[j].seedDirection - plates_[i].seedDirection;
-            const math::Double3 tangentToward =
-                towardJ - direction * math::Dot(towardJ, direction);
-            math::Double3 normal = math::Normalize(tangentToward);
+            math::Double3 normal{};
+            if (normalFn != nullptr)
+            {
+                const math::Double3 raw = (*normalFn)(i, j);
+                const math::Double3 tangent = raw - direction * math::Dot(raw, direction);
+                normal = math::Normalize(tangent);
+            }
+            else
+            {
+                const math::Double3 towardJ =
+                    plates_[j].seedDirection - plates_[i].seedDirection;
+                const math::Double3 tangentToward =
+                    towardJ - direction * math::Dot(towardJ, direction);
+                normal = math::Normalize(tangentToward);
+            }
             if (!(math::LengthSquared(normal) > 0.0))
             {
                 continue;
-            }
-            if (obliquity != 0.0)
-            {
-                // Rotating the normal by the same angle for either ordering of
-                // the pair keeps every term below symmetric in (i, j).
-                normal = math::Normalize(
-                    normal * std::cos(obliquity) +
-                    math::Cross(direction, normal) * std::sin(obliquity));
             }
 
             const math::Double3 relative =
@@ -432,10 +444,25 @@ TectonicSample TectonicField::Sample(
 
 TectonicStructureSample TectonicField::SampleStructure(
     const math::Double3& direction,
-    const bool includeHotspot,
-    const f64 obliquity) const noexcept
+    const bool includeHotspot) const noexcept
 {
-    const TectonicSample base = Sample(direction, obliquity);
+    ClaimArray claims{};
+    for (u32 i = 0; i < plateCount_; ++i)
+    {
+        claims[i] =
+            math::Dot(direction, plates_[i].seedDirection) +
+            plates_[i].sizeBiasDot;
+    }
+    return SampleStructureWithClaims(direction, includeHotspot, claims, nullptr);
+}
+
+TectonicStructureSample TectonicField::SampleStructureWithClaims(
+    const math::Double3& direction,
+    const bool includeHotspot,
+    const ClaimArray& claims,
+    const BoundaryNormalFn* const normalFn) const noexcept
+{
+    const TectonicSample base = SampleWithClaims(direction, claims, normalFn);
     const Plate& plate = plates_[base.nearestPlate];
 
     TectonicStructureSample out{};
@@ -466,12 +493,9 @@ TectonicStructureSample TectonicField::SampleStructure(
     // weights as the plate bias (see Sample), so thickness and age stay
     // continuous where the nearest or the runner-up plate changes.
     f64 dTop = -2.0;
-    std::array<f64, kMaxTectonicPlates> claim{};
+    const ClaimArray& claim = claims;
     for (u32 i = 0; i < plateCount_; ++i)
     {
-        claim[i] =
-            math::Dot(direction, plates_[i].seedDirection) +
-            plates_[i].sizeBiasDot;
         dTop = std::max(dTop, claim[i]);
     }
     const f64 blendWidth = std::max(desc_.boundaryWidthDot, 1.0e-9);
@@ -574,259 +598,6 @@ TectonicStructureSample TectonicField::SampleStructure(
                   std::clamp(hotspot / hotspotRelief, 0.0, 1.0)}),
         0.0, 1.0);
     return out;
-}
-
-namespace
-{
-// Half-width (radians) of the strip around a boundary that its displacement
-// shapes, and the largest sideways shift. Keeping the shift below ~0.6 of the
-// strip bounds the warp's slope across the boundary under 1, so the warp
-// stays one-to-one: boundaries bend and jog but plates never split or fold.
-constexpr f64 kCorridorHalfWidth = 0.30;
-constexpr f64 kMaxDisplacement = 0.16;
-} // namespace
-
-void TectonicField::BuildBoundaryArcs()
-{
-    arcs_.clear();
-    const u64 seed = desc_.seed ^ 0x4445464F524DULL;
-
-    for (u32 i = 0; i < plateCount_; ++i)
-    {
-        for (u32 j = i + 1; j < plateCount_; ++j)
-        {
-            const math::Double3 delta =
-                plates_[i].seedDirection - plates_[j].seedDirection;
-            const f64 length = std::sqrt(math::LengthSquared(delta));
-            if (!(length > 1.0e-6))
-            {
-                continue;
-            }
-            BoundaryArc arc;
-            arc.plateA = i;
-            arc.plateB = j;
-            arc.axis = delta * (1.0 / length);
-            // d_i == d_j  <=>  p . (s_i - s_j) == b_j - b_i.
-            arc.offset = (plates_[j].sizeBiasDot - plates_[i].sizeBiasDot) / length;
-            if (!(std::abs(arc.offset) < 0.999))
-            {
-                continue;
-            }
-            arc.radius = std::sqrt(1.0 - arc.offset * arc.offset);
-            const math::Double3 helper = std::abs(arc.axis.y) < 0.9
-                ? math::Double3{0.0, 1.0, 0.0} : math::Double3{1.0, 0.0, 0.0};
-            arc.basisU = math::Normalize(math::Cross(arc.axis, helper));
-            arc.basisV = math::Cross(arc.axis, arc.basisU);
-
-            // Where along the circle the pair really are the top two plates.
-            std::array<bool, kArcBins> valid{};
-            u32 validCount = 0;
-            for (u32 k = 0; k < kArcBins; ++k)
-            {
-                const f64 t = 2.0 * std::numbers::pi * (static_cast<f64>(k) + 0.5) / kArcBins;
-                const math::Double3 x = arc.axis * arc.offset +
-                    (arc.basisU * std::cos(t) + arc.basisV * std::sin(t)) * arc.radius;
-                const f64 di = math::Dot(x, plates_[i].seedDirection) + plates_[i].sizeBiasDot;
-                bool top = true;
-                for (u32 m = 0; m < plateCount_ && top; ++m)
-                {
-                    if (m == i || m == j) continue;
-                    top = di >= math::Dot(x, plates_[m].seedDirection) + plates_[m].sizeBiasDot;
-                }
-                valid[k] = top;
-                validCount += top ? 1U : 0U;
-            }
-            if (validCount == 0U)
-            {
-                continue;
-            }
-
-            // Distance (in bins) to the nearest invalid bin -> taper, so the
-            // displacement fades to zero at a triple junction and the three
-            // boundaries meeting there stay joined.
-            constexpr f64 kTaperBins = 56.0;
-            std::array<f32, kArcBins> raw{};
-            const u64 arcSeed = Mix64(seed ^ (static_cast<u64>(i) << 32) ^ j);
-            for (u32 k = 0; k < kArcBins; ++k)
-            {
-                f64 nearestInvalid = static_cast<f64>(kArcBins);
-                if (validCount < kArcBins)
-                {
-                    for (u32 d = 0; d < kArcBins / 2U; ++d)
-                    {
-                        if (!valid[(k + d) % kArcBins] || !valid[(k + kArcBins - d) % kArcBins])
-                        {
-                            nearestInvalid = static_cast<f64>(d);
-                            break;
-                        }
-                    }
-                }
-                arc.weight[k] = valid[k]
-                    ? static_cast<f32>(Smooth(std::min(nearestInvalid / kTaperBins, 1.0)))
-                    : 0.0F;
-
-                const f64 t = 2.0 * std::numbers::pi * (static_cast<f64>(k) + 0.5) / kArcBins;
-                const math::Double3 x = arc.axis * arc.offset +
-                    (arc.basisU * std::cos(t) + arc.basisV * std::sin(t)) * arc.radius;
-                // Plate-scale bends, regional segmentation, local splays, and
-                // sharpened step-overs (jogs): one displacement per boundary,
-                // coherent along strike.
-                const f64 sum =
-                    0.55 * ValueNoise3D(x * 2.6, arcSeed ^ 0x51ULL) +
-                    0.30 * ValueNoise3D(x * 8.0, arcSeed ^ 0x52ULL) +
-                    0.15 * ValueNoise3D(x * 24.0, arcSeed ^ 0x53ULL) +
-                    0.25 * std::tanh(2.5 * ValueNoise3D(x * 5.0, arcSeed ^ 0x54ULL));
-                raw[k] = static_cast<f32>(
-                    kMaxDisplacement * std::clamp(sum, -1.0, 1.0));
-            }
-            for (u32 k = 0; k < kArcBins; ++k)
-            {
-                arc.displacement[k] = raw[k] * arc.weight[k];
-            }
-            // Strike change implied by the displacement slope along the arc.
-            const f64 binLength = 2.0 * std::numbers::pi * arc.radius / kArcBins;
-            for (u32 k = 0; k < kArcBins; ++k)
-            {
-                const f64 slope =
-                    (static_cast<f64>(arc.displacement[(k + 1U) % kArcBins]) -
-                     static_cast<f64>(arc.displacement[(k + kArcBins - 1U) % kArcBins])) /
-                    (2.0 * binLength);
-                arc.strike[k] = static_cast<f32>(std::atan(slope));
-            }
-            // Strike is the regional bend, not every bump: smooth it so the
-            // obliquity (which rotates the relative-motion projection) varies
-            // over tens of kilometres, not texels.
-            for (u32 pass = 0; pass < 3U; ++pass)
-            {
-                std::array<f32, kArcBins> blurred{};
-                constexpr i32 kRadius = 28;
-                for (u32 k = 0; k < kArcBins; ++k)
-                {
-                    f64 sum = 0.0;
-                    for (i32 d = -kRadius; d <= kRadius; ++d)
-                    {
-                        sum += arc.strike[(k + kArcBins + static_cast<u32>(d + kArcBins)) % kArcBins];
-                    }
-                    blurred[k] = static_cast<f32>(sum / (2 * kRadius + 1));
-                }
-                arc.strike = blurred;
-            }
-            arcs_.push_back(arc);
-        }
-    }
-}
-
-TectonicField::DeformedGeometry TectonicField::Deform(
-    const math::Double3& direction) const noexcept
-{
-    const u64 seed = desc_.seed ^ 0x4445464F524DULL;
-
-    math::Double3 shift{};
-    f64 strikeSum = 0.0;
-    f64 strikeWeight = 0.0;
-    f64 dominantWeight = 0.0;
-    f64 dominantAlong = 0.0;
-    f64 dominantAcross = 0.0;
-
-    for (const BoundaryArc& arc : arcs_)
-    {
-        const f64 along = math::Dot(direction, arc.axis);
-        const f64 across = (along - arc.offset) / arc.radius;
-        if (std::abs(across) >= kCorridorHalfWidth)
-        {
-            continue;
-        }
-        const math::Double3 perp = direction - arc.axis * along;
-        const f64 perpU = math::Dot(perp, arc.basisU);
-        const f64 perpV = math::Dot(perp, arc.basisV);
-        if (perpU * perpU + perpV * perpV < 1.0e-12)
-        {
-            continue;
-        }
-        f64 angle = std::atan2(perpV, perpU);
-        if (angle < 0.0)
-        {
-            angle += 2.0 * std::numbers::pi;
-        }
-        const f64 position = angle / (2.0 * std::numbers::pi) * kArcBins - 0.5;
-        const f64 floorBin = std::floor(position);
-        const f64 frac = position - floorBin;
-        const u32 b0 = static_cast<u32>(static_cast<i64>(floorBin) + kArcBins) % kArcBins;
-        const u32 b1 = (b0 + 1U) % kArcBins;
-        const f64 weight =
-            arc.weight[b0] + (arc.weight[b1] - arc.weight[b0]) * frac;
-        if (weight <= 0.0)
-        {
-            continue;
-        }
-        const f64 displacement =
-            arc.displacement[b0] + (arc.displacement[b1] - arc.displacement[b0]) * frac;
-        const f64 strike =
-            arc.strike[b0] + (arc.strike[b1] - arc.strike[b0]) * frac;
-
-        const f64 g = 1.0 - std::abs(across) / kCorridorHalfWidth;
-        const f64 falloff = g * g * (3.0 - 2.0 * g);
-
-        // Nearest point on the boundary circle and the across-boundary
-        // direction there (towards plate A).
-        const math::Double3 nearest = arc.axis * arc.offset +
-            math::Normalize(perp) * arc.radius;
-        const math::Double3 normal = (arc.axis - nearest * arc.offset) * (1.0 / arc.radius);
-        shift = shift - normal * (displacement * falloff);
-
-        strikeSum += strike * falloff * weight;
-        strikeWeight += falloff * weight;
-        if (falloff * weight > dominantWeight)
-        {
-            dominantWeight = falloff * weight;
-            dominantAlong = angle * arc.radius;
-            dominantAcross = across;
-        }
-    }
-
-    shift = shift - direction * math::Dot(shift, direction);
-    const f64 shiftLength = std::sqrt(math::LengthSquared(shift));
-    if (shiftLength > kMaxDisplacement)
-    {
-        shift = shift * (kMaxDisplacement / shiftLength);
-    }
-    math::Double3 deformed = math::Normalize(direction + shift);
-    if (!(math::LengthSquared(deformed) > 0.0))
-    {
-        deformed = direction;
-    }
-    // Unnormalised, so it fades to zero with the corridor instead of jumping.
-    const f64 obliquity = std::clamp(strikeSum, -1.2, 1.2);
-    (void)strikeWeight;
-
-    // Fracture network in the corridor, in boundary coordinates: bands
-    // parallel to strike plus a rotated set (en-echelon splays), so faults
-    // follow the boundary instead of being isotropic speckle.
-    f64 fracture = 0.0;
-    if (dominantWeight > 0.0)
-    {
-        const f64 L = dominantAlong;
-        const f64 c = dominantAcross;
-        constexpr f64 kSplay = 0.45;
-        const f64 ridgeA = 1.0 - std::abs(ValueNoise3D(
-            math::Double3{L * 9.0, c * 34.0, 0.5}, seed ^ 0x38ULL));
-        const f64 ridgeB = 1.0 - std::abs(ValueNoise3D(
-            math::Double3{(L * std::cos(kSplay) - c * std::sin(kSplay)) * 8.0,
-                          (L * std::sin(kSplay) + c * std::cos(kSplay)) * 30.0, 1.5},
-            seed ^ 0x39ULL));
-        const f64 bands = std::max(ridgeA * ridgeA * ridgeA, 0.8 * ridgeB * ridgeB * ridgeB);
-        const f64 g = 1.0 - std::abs(c) / kCorridorHalfWidth;
-        fracture = dominantWeight * g * g * (3.0 - 2.0 * g) * (0.25 + 0.75 * bands);
-        fracture = std::sqrt(std::clamp(fracture, 0.0, 1.0));
-        // Faults belong to the active boundary, not the whole corridor.
-        const TectonicSample active = Sample(deformed, obliquity);
-        const f64 activity = std::max(
-            {active.convergenceMask, active.divergenceMask, active.transformMask});
-        fracture *= Smooth(std::clamp(activity * 3.0, 0.0, 1.0));
-    }
-
-    return {.direction = deformed, .obliquity = obliquity,
-            .fractureDensity = std::clamp(fracture, 0.0, 1.0)};
 }
 
 f64 TectonicField::HotspotElevationMeters(

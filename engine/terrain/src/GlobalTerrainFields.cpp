@@ -2,6 +2,7 @@
 
 #include "ProceduralNoise.hpp"
 #include "TectonicField.hpp"
+#include "TectonicGrowth.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -459,26 +460,53 @@ TectonicStructureSample GlobalTerrainFields::SampleTectonicStructure(
     return out;
 }
 
-BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
-    const math::Double3& direction) const noexcept
+std::shared_ptr<const TectonicGrowth> GlobalTerrainFields::BuildTectonicGrowth(
+    const u32 resolution,
+    const std::atomic<bool>* const cancel,
+    const u32 workers) const
 {
-    const math::Double3 unit = math::Normalize(direction);
-    const math::Double3 safe =
-        math::LengthSquared(unit) > 0.0 ? unit : math::Double3{0.0, 1.0, 0.0};
+    return TectonicGrowth::Build(
+        *tectonicField_, resolution, desc_.tectonic.seed != 0U ? desc_.tectonic.seed : desc_.seed,
+        cancel, workers);
+}
 
-    // The bake evaluates the naturalised boundary structure (warped, with a
-    // varying obliquity); the runtime plate model stays the clean one.
-    const detail::TectonicField::DeformedGeometry geometry =
-        tectonicField_->Deform(safe);
+BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
+    const TectonicGrowth& growth,
+    const u32 face,
+    const i32 x,
+    const i32 y) const noexcept
+{
+    const u32 resolution = growth.Resolution();
+    const math::Double3 safe = BakedTectonicTexelDirection(face, x, y, resolution);
+
+    detail::ClaimArray claims{};
+    growth.Claims(face, x, y, claims);
+    const detail::BoundaryNormalFn normalFn =
+        [&](const u32 i, const u32 j) { return growth.BoundaryNormal(face, x, y, i, j); };
     const detail::TectonicSample sample =
-        tectonicField_->Sample(geometry.direction, geometry.obliquity);
-    TectonicStructureSample structure = tectonicField_->SampleStructure(
-        geometry.direction, false, geometry.obliquity);
-    structure.fractureDensity = geometry.fractureDensity;
+        tectonicField_->SampleWithClaims(safe, claims, &normalFn);
+    TectonicStructureSample structure =
+        tectonicField_->SampleStructureWithClaims(safe, false, claims, &normalFn);
+
+    // Faults: bands parallel to the boundary (constant claim difference, so
+    // they follow its every bend), phase-jittered so they are not a regular
+    // comb, strongest where the boundary is active.
+    {
+        const f64 activity = std::clamp(
+            std::max({sample.convergenceMask, sample.divergenceMask, sample.transformMask}),
+            0.0, 1.0);
+        const f64 offset = std::abs(
+            claims[sample.nearestPlate] - claims[sample.secondPlate]);
+        const f64 phase = 3.2 * offset / std::max(desc_.tectonic.boundaryWidthDot, 1.0e-9) +
+            1.7 * detail::ValueNoise3D(safe * 14.0, desc_.seed ^ 0x4641554C54ULL);
+        const f64 band = 0.5 + 0.5 * std::cos(2.0 * 3.14159265358979323846 * phase);
+        structure.fractureDensity = std::clamp(
+            std::pow(activity, 0.7) * (0.2 + 0.8 * band * band), 0.0, 1.0);
+    }
     // Strike-slip zones carry fault valleys.
     structure.structuralElevationMeters -= 0.1 *
         desc_.tectonic.convergenceUpliftMeters * sample.transformMask *
-        geometry.fractureDensity;
+        structure.fractureDensity;
 
     BakedTectonicTexel texel;
     texel.Set(BakedTectonicLayer::Convergence, static_cast<f32>(sample.convergenceMask));

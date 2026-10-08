@@ -10,6 +10,7 @@
 #include <orbit/world/Planet.hpp>
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -24,6 +25,8 @@ namespace detail
 class TectonicField;
 struct TectonicSample;
 } // namespace detail
+
+class TectonicGrowth;
 
 // Exported copies of TectonicField's private per-plate/per-hotspot state,
 // for a GPU field generator to upload verbatim -- the GPU and CPU
@@ -140,11 +143,22 @@ public:
     [[nodiscard]] TectonicStructureSample SampleTectonicStructure(
         const math::Double3& direction) const noexcept;
 
-    // Evaluates the plate model itself, ignoring any attached bake, and
-    // returns every baked layer for a direction. This is what the baker
-    // rasterizes; it is not for use while generating terrain.
+    // Bake-time plate ownership by noise-metric growth over a cube-sphere
+    // raster (see TectonicGrowth). Returns null if `cancel` was raised.
+    [[nodiscard]] std::shared_ptr<const TectonicGrowth> BuildTectonicGrowth(
+        u32 resolution,
+        const std::atomic<bool>* cancel,
+        u32 workers) const;
+
+    // Every baked layer at raster texel (face, x, y), x and y in
+    // [-1, resolution], evaluated from the grown plate claims and boundary
+    // normals. This is what the baker rasterizes; it ignores any attached
+    // bake and is not for use while generating terrain.
     [[nodiscard]] BakedTectonicTexel EvaluateTectonicTexel(
-        const math::Double3& direction) const noexcept;
+        const TectonicGrowth& growth,
+        u32 face,
+        i32 x,
+        i32 y) const noexcept;
 
     [[nodiscard]] u32 TectonicPlateCount() const noexcept;
     [[nodiscard]] bool TectonicPlateIsContinental(u32 plate) const noexcept;

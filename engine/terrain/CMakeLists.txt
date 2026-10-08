@@ -4,6 +4,7 @@ add_library(OrbitTerrain STATIC
     src/BakedTectonics.cpp
     src/GlobalTerrainFields.cpp
     src/TectonicField.cpp
+    src/TectonicGrowth.cpp
     src/TerrainFields.cpp
 )
 

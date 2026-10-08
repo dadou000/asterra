@@ -60,87 +60,79 @@ std::filesystem::path TempDirectory(const char* name)
     return path;
 }
 
-bool BakeReproducesThePlateModel()
+bool BakeIsDeterministicAndResolutionConsistent()
 {
+    // Plate ownership comes from noise-metric growth over the raster, so there
+    // is no closed-form truth to compare with. The bake must be deterministic,
+    // and a finer raster must describe the same planet: the layers agree away
+    // from the resolution-limited fine detail, and plate identity agrees
+    // almost everywhere.
     const auto planet = MakePlanet();
     const auto desc = MakeDesc();
-    const auto bake = terrain_bake::BakeTectonics(planet, desc, {.resolution = 256});
-    bool ok = Check(bake != nullptr, "bake must complete");
+    const auto coarse = terrain_bake::BakeTectonics(planet, desc, {.resolution = 96});
+    const auto again = terrain_bake::BakeTectonics(planet, desc, {.resolution = 96});
+    const auto fine = terrain_bake::BakeTectonics(planet, desc, {.resolution = 192});
+    bool ok = Check(coarse && again && fine, "bakes must complete");
     if (!ok) return false;
+    ok &= Check(coarse->ContentHash() == again->ContentHash(), "the bake must be deterministic");
 
-    const terrain::AnalyticTerrainSource model(planet, desc);
-    f64 worstConvergence = 0.0;
-    f64 worstBias = 0.0;
-    f64 worstThickness = 0.0;
-    f64 worstAge = 0.0;
+    f64 sumConvergence = 0.0;
+    f64 sumAge = 0.0;
     u32 plateMismatches = 0;
+    std::vector<f64> convergenceErrors;
     constexpr u32 count = 20000;
     for (u32 i = 0; i < count; ++i)
     {
         const auto d = Fibonacci(i, count);
-        const auto texel = bake->Sample(d);
-        const auto truth = model.GlobalFields().EvaluateTectonicTexel(d);
-        worstConvergence = std::max(worstConvergence, std::abs(
-            static_cast<f64>(texel.Get(terrain::BakedTectonicLayer::Convergence) -
-                             truth.Get(terrain::BakedTectonicLayer::Convergence))));
-        worstBias = std::max(worstBias, std::abs(
-            static_cast<f64>(texel.Get(terrain::BakedTectonicLayer::PlateBiasMeters) -
-                             truth.Get(terrain::BakedTectonicLayer::PlateBiasMeters))));
-        worstThickness = std::max(worstThickness, std::abs(
-            static_cast<f64>(texel.Get(terrain::BakedTectonicLayer::CrustThicknessKm) -
-                             truth.Get(terrain::BakedTectonicLayer::CrustThicknessKm))));
-        worstAge = std::max(worstAge, std::abs(
-            static_cast<f64>(texel.Get(terrain::BakedTectonicLayer::CrustAge) -
-                             truth.Get(terrain::BakedTectonicLayer::CrustAge))));
-        if (texel.plate != truth.plate) ++plateMismatches;
+        const auto a = coarse->Sample(d);
+        const auto b = fine->Sample(d);
+        const f64 e = std::abs(static_cast<f64>(
+            a.Get(terrain::BakedTectonicLayer::Convergence) - b.Get(terrain::BakedTectonicLayer::Convergence)));
+        sumConvergence += e;
+        convergenceErrors.push_back(e);
+        sumAge += std::abs(static_cast<f64>(
+            a.Get(terrain::BakedTectonicLayer::CrustAge) - b.Get(terrain::BakedTectonicLayer::CrustAge)));
+        plateMismatches += a.plate != b.plate ? 1U : 0U;
     }
-    std::cout << "bake fidelity @256: convergence " << worstConvergence
-              << ", bias " << worstBias << " m, thickness " << worstThickness
-              << " km, age " << worstAge << ", plate id mismatches "
-              << plateMismatches << " of " << count << '\n';
-    ok &= Check(worstConvergence < 0.12, "baked convergence must track the plate model");
-    ok &= Check(worstBias < 600.0, "baked plate bias must track the plate model");
-    ok &= Check(worstThickness < 6.0, "baked crust thickness must track the plate model");
-    ok &= Check(worstAge < 0.12, "baked crust age must track the plate model");
-    ok &= Check(plateMismatches < count / 60U, "plate identity may differ only at boundaries");
+    std::sort(convergenceErrors.begin(), convergenceErrors.end());
+    std::cout << "bake @96 vs @192: mean convergence diff " << sumConvergence / count
+              << ", p99 " << convergenceErrors[count * 99 / 100] << ", mean age diff "
+              << sumAge / count << ", plate id mismatches " << plateMismatches << " of " << count
+              << std::endl;
+    ok &= Check(sumConvergence / count < 0.03, "bake layers must agree across resolutions on average");
+    ok &= Check(convergenceErrors[count * 99 / 100] < 0.45, "bake layers must not differ wildly across resolutions");
+    ok &= Check(plateMismatches < count / 25U, "plate identity must agree across resolutions");
     return ok;
 }
 
-bool BakedFieldsAreAccurateAtCubeEdges()
+bool BakedFieldsAreContinuousAcrossCubeEdges()
 {
-    // Texels near a cube edge interpolate through the gutter, which is
-    // evaluated on the neighbouring face's geometry. Their error against the
-    // plate model must be no worse than anywhere else on the planet.
+    // Texels near a cube edge interpolate through the gutter. Their local
+    // variation must be no worse than anywhere else on the planet: no seam.
     const auto planet = MakePlanet();
     const auto desc = MakeDesc();
-    const auto bake = terrain_bake::BakeTectonics(planet, desc, {.resolution = 64});
+    const auto bake = terrain_bake::BakeTectonics(planet, desc, {.resolution = 96});
     if (!Check(bake != nullptr, "bake must complete")) return false;
-    const terrain::AnalyticTerrainSource model(planet, desc);
 
-    const auto worstError = [&](const auto& pointAt)
+    const auto worstJump = [&](const auto& pointAt)
     {
         f64 worst = 0.0;
-        u32 worstLayer = 0;
         for (u32 i = 0; i < 6000; ++i)
         {
             const math::Double3 d = pointAt(static_cast<f64>(i) / 6000.0, i);
-            const auto texel = bake->Sample(d);
-            const auto truth = model.GlobalFields().EvaluateTectonicTexel(d);
-            for (u32 layer = 0; layer < terrain::kBakedTectonicLayerCount; ++layer)
+            const math::Double3 e = math::Normalize(d + math::Double3{1.5e-3, 0.7e-3, -1.1e-3});
+            const auto a = bake->Sample(d);
+            const auto b = bake->Sample(e);
+            for (const auto layer : {terrain::BakedTectonicLayer::Convergence,
+                     terrain::BakedTectonicLayer::Divergence,
+                     terrain::BakedTectonicLayer::Transform,
+                     terrain::BakedTectonicLayer::ContinentalCrustFraction})
             {
-                const auto id = static_cast<terrain::BakedTectonicLayer>(layer);
-                const f64 range = static_cast<f64>(bake->RangeMaximum(id) - bake->RangeMinimum(id));
-                const f64 error = std::abs(static_cast<f64>(texel.values[layer] - truth.values[layer])) / range;
-                if (error > worst)
-                {
-                    worst = error;
-                    worstLayer = layer;
-                }
+                worst = std::max(worst, std::abs(static_cast<f64>(a.Get(layer) - b.Get(layer))));
             }
         }
-        return std::pair<f64, u32>{worst, worstLayer};
+        return worst;
     };
-
     // Points within a fraction of a texel of the +X/+Z and +Y/-Z cube edges.
     const auto edgePoints = [](const f64 t, const u32 i)
     {
@@ -155,18 +147,11 @@ bool BakedFieldsAreAccurateAtCubeEdges()
         const f64 e = std::sqrt((1.0 - x * x) * 0.5);
         return math::Normalize(math::Double3{x, e + jitter, -(e - jitter)});
     };
-    const auto anywherePoints = [](const f64, const u32 i)
-    {
-        return Fibonacci(i, 6000U);
-    };
-
-    const auto edge = worstError(edgePoints);
-    const auto anywhere = worstError(anywherePoints);
-    std::cout << "worst normalized error vs plate model: near cube edges " << edge.first
-              << " (layer " << edge.second << "), anywhere " << anywhere.first
-              << " (layer " << anywhere.second << ")\n";
-    return Check(edge.first <= anywhere.first * 1.5 + 0.005,
-        "baked layers must be as accurate across cube-face edges as inside a face");
+    const f64 edge = worstJump(edgePoints);
+    const f64 anywhere = worstJump([](const f64, const u32 i) { return Fibonacci(i, 6000U); });
+    std::cout << "worst local jump: near cube edges " << edge << ", anywhere " << anywhere << std::endl;
+    return Check(edge <= anywhere * 1.5 + 0.05,
+        "baked layers must be as smooth across cube-face edges as inside a face");
 }
 
 bool FileRoundTripIsExactAndCorruptionIsRejected()
@@ -523,8 +508,8 @@ bool BoundariesAreNaturalisedAtBakeTime()
 int main()
 {
     bool ok = true;
-    ok &= BakeReproducesThePlateModel();
-    ok &= BakedFieldsAreAccurateAtCubeEdges();
+    ok &= BakeIsDeterministicAndResolutionConsistent();
+    ok &= BakedFieldsAreContinuousAcrossCubeEdges();
     ok &= FileRoundTripIsExactAndCorruptionIsRejected();
     ok &= BakedTerrainTracksTheProceduralTerrain();
     ok &= RecipeHashTracksOnlyBakedInputs();

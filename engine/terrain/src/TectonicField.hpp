@@ -7,6 +7,7 @@
 #include <orbit/terrain/TectonicStructure.hpp>
 
 #include <array>
+#include <functional>
 #include <vector>
 
 namespace orbit::terrain::detail
@@ -15,6 +16,10 @@ namespace orbit::terrain::detail
 // tectonic plates. Everything here is a pure function of `direction` only
 // (never `footprintMeters`), so it can be multiplied into elevation masks
 // without introducing footprint-dependent discontinuities.
+using ClaimArray = std::array<f64, kMaxTectonicPlates>;
+// Unit tangent at the sample point from plate i towards plate j.
+using BoundaryNormalFn = std::function<math::Double3(u32, u32)>;
+
 struct TectonicSample
 {
     u32 nearestPlate{0};
@@ -71,40 +76,43 @@ public:
         const TectonicFieldDesc& desc);
 
     [[nodiscard]] TectonicSample Sample(
-        const math::Double3& direction) const noexcept
-    {
-        return Sample(direction, 0.0);
-    }
-
-    // `obliquity` (radians) rotates the boundary normal within the tangent
-    // plane, so a nominally head-on boundary segment reads as transpression
-    // or transtension. 0 is exactly the unrotated model (the GPU mirror).
-    [[nodiscard]] TectonicSample Sample(
-        const math::Double3& direction,
-        f64 obliquity) const noexcept;
-
-    // Bake-time naturalisation of the plate-boundary geometry. The plate
-    // topology (which plate owns where) stays the Voronoi-style claim field;
-    // the boundary *structure* is evaluated on a multi-scale warped copy of
-    // the sphere with a spatially varying obliquity, so fronts bend, step and
-    // change character along strike instead of tracing clean arcs.
-    struct DeformedGeometry
-    {
-        math::Double3 direction{};
-        f64 obliquity{0.0};
-        // 0..1 fracture/fault intensity within the deformation corridor.
-        f64 fractureDensity{0.0};
-    };
-    [[nodiscard]] DeformedGeometry Deform(
         const math::Double3& direction) const noexcept;
+
+    // Same evaluation from caller-supplied per-plate claims (larger = closer
+    // to that plate) instead of the seed-distance ones, and optionally a
+    // boundary normal provider (unit tangent from plate i towards plate j).
+    // The baker uses this with claims from noise-metric plate growth
+    // (TectonicGrowth); without a provider the seed directions give the
+    // normal.
+    [[nodiscard]] TectonicSample SampleWithClaims(
+        const math::Double3& direction,
+        const ClaimArray& claims,
+        const BoundaryNormalFn* normal) const noexcept;
+
+    // Plate seeds and the claim-width constant, for plate growth.
+    [[nodiscard]] u32 PlateCount() const noexcept { return plateCount_; }
+    [[nodiscard]] math::Double3 PlateSeed(u32 plate) const noexcept
+    {
+        return plates_[plate].seedDirection;
+    }
+    [[nodiscard]] f64 PlateSizeBias(u32 plate) const noexcept
+    {
+        return plates_[plate].sizeBiasDot;
+    }
+    [[nodiscard]] f64 BoundaryWidth() const noexcept { return desc_.boundaryWidthDot; }
 
     // includeHotspot = false leaves hotspot chains out of uplift and volcanism
     // (the baker stores only the plate-driven part; hotspots are closed form
     // and added at sample time).
     [[nodiscard]] TectonicStructureSample SampleStructure(
         const math::Double3& direction,
-        bool includeHotspot = true,
-        f64 obliquity = 0.0) const noexcept;
+        bool includeHotspot = true) const noexcept;
+
+    [[nodiscard]] TectonicStructureSample SampleStructureWithClaims(
+        const math::Double3& direction,
+        bool includeHotspot,
+        const ClaimArray& claims,
+        const BoundaryNormalFn* normal) const noexcept;
 
     [[nodiscard]] f64 HotspotElevationMeters(
         const math::Double3& direction) const noexcept;
@@ -146,29 +154,6 @@ private:
         f64 boundingCosine{-1.0};
     };
 
-    // One plate-pair boundary: the small circle where the two claims are
-    // equal (p . a == h), restricted to the stretch where the pair really are
-    // the top two plates. The tables hold, per angle t around the circle, the
-    // generated sideways displacement of the structure (radians), how fully
-    // it applies (tapering to nothing at the ends, i.e. triple junctions) and
-    // the strike change that displacement implies (radians).
-    static constexpr u32 kArcBins = 1024;
-    struct BoundaryArc
-    {
-        u32 plateA{0};
-        u32 plateB{0};
-        math::Double3 axis{};
-        f64 offset{0.0};
-        f64 radius{0.0};
-        math::Double3 basisU{};
-        math::Double3 basisV{};
-        std::array<f32, kArcBins> displacement{};
-        std::array<f32, kArcBins> weight{};
-        std::array<f32, kArcBins> strike{};
-    };
-    void BuildBoundaryArcs();
-
-    std::vector<BoundaryArc> arcs_;
     TectonicFieldDesc desc_;
     f64 planetRadiusMeters_{1.0};
     std::array<Plate, kMaxTectonicPlates> plates_{};
