@@ -41,6 +41,10 @@ enum class BakedTectonicLayer : u8
     // on the overriding plate's side (0..1).
     SubductionTrench,
     VolcanicArc,
+    // Signed elevation (m) from tectonic structure alone: oceanic ridge swell
+    // and age-depth subsidence, rift valley and shoulders, trench and arc.
+    // The orogenic belt is not in it (convergence drives that separately).
+    StructuralElevationMeters,
     Count
 };
 
@@ -76,7 +80,7 @@ struct BakedTectonicTexel
 class BakedTectonicRasters
 {
 public:
-    static constexpr u32 kFormatVersion = 3;
+    static constexpr u32 kFormatVersion = 4;
 
     // Quantizes float layers. `layers[i]` holds 6 * (resolution + 2)^2 values
     // for layer i in face-major, row-major order with the gutter included;
@@ -120,11 +124,12 @@ public:
     {
         f32 convergence{0.0F};
         f32 plateBiasMeters{0.0F};
+        f32 structuralElevationMeters{0.0F};
     };
     [[nodiscard]] ConvergenceAndBias SampleConvergenceAndBias(
         const math::Double3& direction) const noexcept;
 
-    // Interleaved {convergence, bias} floats, 6 * (resolution + 2)^2 texels
+    // Interleaved {convergence, bias, structural elevation} floats, 6 * (resolution + 2)^2 texels
     // with the gutter, for the GPU field generator.
     [[nodiscard]] std::vector<f32> BuildGpuConvergenceAndBias() const;
 

@@ -72,5 +72,10 @@ struct TectonicStructureSample
     // overriding plate's side. Zero away from subduction zones.
     f64 subductionTrench{0.0};
     f64 volcanicArc{0.0};
+    // Signed elevation (m) the structure alone implies, without the orogenic
+    // belt (which convergence drives) and without hotspots: spreading-ridge
+    // swell and the age-depth deepening of ocean floor away from it, rift
+    // valley and shoulders, trench and volcanic arc.
+    f64 structuralElevationMeters{0.0};
 };
 } // namespace orbit::terrain

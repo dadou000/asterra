@@ -537,6 +537,23 @@ TectonicStructureSample TectonicField::SampleStructure(
     out.subsidenceMeters = trench * desc_.convergenceUpliftMeters +
         base.divergenceMask * 0.25 * desc_.convergenceUpliftMeters;
 
+    {
+        // Structural elevation: what the structure implies before noise.
+        const f64 unitMeters = desc_.convergenceUpliftMeters;
+        const f64 divergence = std::clamp(base.divergenceMask, 0.0, 1.0);
+        const f64 oceanic = 1.0 - fraction;
+        // Spreading ridge swell, and ocean floor deepening with age away from it.
+        const f64 ridge = divergence * oceanic * 0.65;
+        const f64 ageDepth = -oceanic * out.crustAge * 0.4;
+        // Continental rift: floor drops, flanks (partial divergence) rise.
+        const f64 riftFloor = -divergence * fraction * 0.35;
+        const f64 riftShoulder = 4.0 * divergence * (1.0 - divergence) * fraction * 0.25;
+        const f64 trenchDepth = -base.subductionTrench * 1.2;
+        const f64 arcRise = base.subductionArc * 0.45;
+        out.structuralElevationMeters = unitMeters *
+            (ridge + ageDepth + riftFloor + riftShoulder + trenchDepth + arcRise);
+    }
+
     out.stress = std::clamp(
         std::max(base.convergenceMask, base.transformMask * 0.8), 0.0, 1.0);
     const f64 arc = base.subductionArc * 0.9;

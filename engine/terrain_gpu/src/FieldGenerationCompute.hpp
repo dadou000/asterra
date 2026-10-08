@@ -382,16 +382,17 @@ void OctaveBand(
 // plateBiasMeters -- divergence/transform/collision-class outputs exist
 // only for the CPU side (2D map, macro geology), unused here) ===
 )" R"(
-// Baked tectonic rasters: interleaved {convergence, plate bias} per texel of six
+// Baked tectonic rasters: interleaved {convergence, plate bias, structural
+// elevation} per texel of six
 // cube faces, each with a one-texel gutter (mirrors BakedTectonicRasters).
-float2 BakedTectonicTexel(uint face, int x, int y, uint resolution)
+float3 BakedTectonicTexel(uint face, int x, int y, uint resolution)
 {
     uint stride = resolution + 2u;
     uint index = (face * stride + uint(y + 1)) * stride + uint(x + 1);
-    return asfloat(g_bakedTectonics.Load2(index * 8u));
+    return asfloat(g_bakedTectonics.Load3(index * 12u));
 }
 
-float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters)
+float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters)
 {
     uint resolution = ParamUint(kParamBakedTectonicResolution);
     float3 a = abs(direction);
@@ -424,22 +425,26 @@ float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters)
     float tx = saturate(fx - float(x0));
     float ty = saturate(fy - float(y0));
 
-    float2 t00 = BakedTectonicTexel(face, x0, y0, resolution);
-    float2 t10 = BakedTectonicTexel(face, x0 + 1, y0, resolution);
-    float2 t01 = BakedTectonicTexel(face, x0, y0 + 1, resolution);
-    float2 t11 = BakedTectonicTexel(face, x0 + 1, y0 + 1, resolution);
-    float2 blended = lerp(lerp(t00, t10, tx), lerp(t01, t11, tx), ty);
+    float3 t00 = BakedTectonicTexel(face, x0, y0, resolution);
+    float3 t10 = BakedTectonicTexel(face, x0 + 1, y0, resolution);
+    float3 t01 = BakedTectonicTexel(face, x0, y0 + 1, resolution);
+    float3 t11 = BakedTectonicTexel(face, x0 + 1, y0 + 1, resolution);
+    float3 blended = lerp(lerp(t00, t10, tx), lerp(t01, t11, tx), ty);
     plateBiasMeters = blended.y;
     return blended.x;
+    structuralMeters = blended.z;
 }
 
-float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters)
+// structuralMeters is baked only (the plate model has no structural elevation),
+// so it is zero on the unbaked path -- same as the CPU.
+float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters)
 {
     if (ParamUint(kParamBakedTectonicResolution) != 0u)
     {
-        return SampleBakedConvergenceAndBias(direction, plateBiasMeters);
+        return SampleBakedConvergenceAndBias(direction, plateBiasMeters, structuralMeters);
     }
 
+    structuralMeters = 0.0;
     uint plateCount = ParamUint(kParamPlateCount);
     uint nearest = 0u;
     float dTop = -2.0;
@@ -576,7 +581,8 @@ float ContinentalSignal(float3 direction)
 float PlateElevationEstimateMeters(float3 direction)
 {
     float plateBiasMeters;
-    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters);
+    float structuralMeters;
+    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters);
 
     float continentalAmplitudeSafe = max(ParamFloat(kParamContinentalAmplitudeMeters), 1.0e-9);
     float blendedSignal = ContinentalSignal(direction) +
@@ -588,7 +594,7 @@ float PlateElevationEstimateMeters(float3 direction)
     float convergenceBump = convergenceMask * ParamFloat(kParamConvergenceUpliftMeters);
     float hotspotBump = HotspotElevationMeters(direction);
 
-    return continentalElevation + convergenceBump + hotspotBump;
+    return continentalElevation + structuralMeters + convergenceBump + hotspotBump;
 }
 
 struct GlobalSample
@@ -611,7 +617,8 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
     float mountainWeight = DetailWeight(ParamFloat(kParamGlobalMountainWavelengthMeters), footprintMeters);
 
     float plateBiasMeters;
-    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters);
+    float structuralMeters;
+    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters);
 
     float continentSignal = ContinentalSignal(direction);
     float continentalAmplitudeSafe = max(ParamFloat(kParamContinentalAmplitudeMeters), 1.0e-9);
@@ -641,10 +648,12 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
                 globalSeed ^ MakeU64(0x94D049BBu, 0x133111EBu)) * 0.5 + 0.5);
     }
 
-    float mountainElevation = mountainRidges * mountainModulation * landMask * convergenceMask *
+    // The orogenic belt itself comes from the plate boundary and survives zero
+    // noise; ridged noise only sculpts it (mirrors GlobalTerrainFields).
+    float mountainElevation = (0.65 + 0.35 * mountainRidges * mountainModulation) * landMask * convergenceMask *
         globalMountainAmplitude * mountainWeight;
 
-    float coarseElevation = continentalElevation + mountainElevation;
+    float coarseElevation = continentalElevation + mountainElevation + structuralMeters * continentalWeight;
 
     float latitude = saturate(abs(direction.y));
     float climateNoise = SampleBand(direction, radius, ParamFloat(kParamClimateWavelengthMeters),

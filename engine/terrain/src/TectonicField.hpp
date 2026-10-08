@@ -53,6 +53,9 @@ struct TectonicSample
     // field.
     f64 subductionTrench{0.0};
     f64 subductionArc{0.0};
+    // Baked structural elevation (m); zero from the plate model itself, which
+    // only the baker's structure evaluation produces.
+    f64 structuralElevationMeters{0.0};
     bool nearestIsContinental{false};
     bool secondIsContinental{false};
 };

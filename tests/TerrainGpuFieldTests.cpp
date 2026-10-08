@@ -57,8 +57,30 @@ int RunCase(const int mode, f64* const maxDeltaOut)
             return 1;
         }
     }
-    const world::SurfaceFrame frame = world::MakeSurfaceFrame(
-        math::Normalize(math::Double3{0.365111510558, 0.187057495117, -0.911977564625}));
+    // A surveyed lowland (not a hard-coded spot): the carve only cuts land, and
+    // where land sits depends on the tectonic geography.
+    const world::SurfaceFrame frame = world::MakeSurfaceFrame([&]
+    {
+        const terrain::AnalyticTerrainSource survey(planet, desc);
+        math::Double3 best{0.365111510558, 0.187057495117, -0.911977564625};
+        f64 bestScore = 1.0e30;
+        constexpr u32 count = 6000;
+        for (u32 i = 0; i < count; ++i)
+        {
+            const f64 y = 1.0 - 2.0 * (static_cast<f64>(i) + 0.5) / count;
+            const f64 r = std::sqrt(std::max(0.0, 1.0 - y * y));
+            const f64 a = 2.399963229728653 * static_cast<f64>(i);
+            const math::Double3 d{r * std::cos(a), y, r * std::sin(a)};
+            const f64 e = survey.Sample({.unitDirection = d, .footprintMeters = 50.0}).elevationMeters;
+            const f64 score = std::abs(e - 900.0);
+            if (score < bestScore)
+            {
+                bestScore = score;
+                best = d;
+            }
+        }
+        return math::Normalize(best);
+    }());
     f64 riverCentreCarve = 0.0;
     if (mode == 2)
     {

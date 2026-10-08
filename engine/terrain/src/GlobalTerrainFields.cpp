@@ -153,9 +153,10 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
     // Coarse ranges now cohere with plate boundaries instead of "wherever
     // this modulation noise happens to be high" -- convergenceMask carries
     // that structure (see TectonicField::Sample).
+    // The belt is the plate boundary's own orogenic envelope and exists at
+    // zero noise; ridged noise only sculpts it (0.65 + 0.35 * ridges).
     const f64 mountainElevation =
-        mountainRidges *
-        mountainModulation *
+        (0.65 + 0.35 * mountainRidges * mountainModulation) *
         landMask *
         tectonic.convergenceMask *
         desc_.
@@ -164,7 +165,8 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
 
     const f64 coarseElevation =
         continentalElevation +
-        mountainElevation;
+        mountainElevation +
+        tectonic.structuralElevationMeters * continentalWeight;
 
     const f64 latitude =
         std::clamp(
@@ -332,11 +334,13 @@ f64 GlobalTerrainFields::PlateElevationEstimateMeters(
 {
     f64 plateBiasMeters = 0.0;
     f64 convergenceMask = 0.0;
+    f64 structuralMeters = 0.0;
     if (desc_.bakedTectonics != nullptr)
     {
         const auto baked =
             desc_.bakedTectonics->SampleConvergenceAndBias(direction);
         plateBiasMeters = static_cast<f64>(baked.plateBiasMeters);
+        structuralMeters = static_cast<f64>(baked.structuralElevationMeters);
         convergenceMask = std::clamp(static_cast<f64>(baked.convergence), 0.0, 1.0);
     }
     else
@@ -369,7 +373,7 @@ f64 GlobalTerrainFields::PlateElevationEstimateMeters(
     const f64 hotspotBump =
         tectonicField_->HotspotElevationMeters(direction);
 
-    return continentalElevation + convergenceBump + hotspotBump;
+    return continentalElevation + structuralMeters + convergenceBump + hotspotBump;
 }
 
 const GlobalTerrainFieldDesc&
@@ -433,6 +437,8 @@ TectonicStructureSample GlobalTerrainFields::SampleTectonicStructure(
         unit01(layer(BakedTectonicLayer::ContinentalCrustFraction));
     out.subductionTrench = unit01(layer(BakedTectonicLayer::SubductionTrench));
     out.volcanicArc = unit01(layer(BakedTectonicLayer::VolcanicArc));
+    out.structuralElevationMeters =
+        layer(BakedTectonicLayer::StructuralElevationMeters);
     out.crustThicknessKm = std::max(3.0, layer(BakedTectonicLayer::CrustThicknessKm));
     out.crustAge = unit01(layer(BakedTectonicLayer::CrustAge));
     out.geologicalAge = unit01(layer(BakedTectonicLayer::GeologicalAge));
@@ -489,6 +495,14 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
         static_cast<f32>(structure.subductionTrench));
     texel.Set(BakedTectonicLayer::VolcanicArc,
         static_cast<f32>(structure.volcanicArc));
+    texel.Set(BakedTectonicLayer::StructuralElevationMeters,
+        static_cast<f32>(structure.structuralElevationMeters));
+    // Geography follows the continuous crust type, not the plate flag.
+    texel.Set(BakedTectonicLayer::PlateBiasMeters,
+        static_cast<f32>(detail::Lerp(
+            desc_.tectonic.oceanicPlateBiasMeters,
+            desc_.tectonic.continentalPlateBiasMeters,
+            structure.continentalCrustFraction)));
     texel.plate = static_cast<u8>(sample.nearestPlate);
     texel.neighbour = static_cast<u8>(sample.secondPlate);
     return texel;
@@ -523,6 +537,8 @@ detail::TectonicSample GlobalTerrainFields::TectonicAt(
     detail::TectonicSample sample{};
     sample.nearestPlate = texel.plate;
     sample.secondPlate = texel.neighbour;
+    sample.structuralElevationMeters =
+        static_cast<f64>(texel.Get(BakedTectonicLayer::StructuralElevationMeters));
     sample.convergenceMask = mask(BakedTectonicLayer::Convergence);
     sample.divergenceMask = mask(BakedTectonicLayer::Divergence);
     sample.transformMask = mask(BakedTectonicLayer::Transform);

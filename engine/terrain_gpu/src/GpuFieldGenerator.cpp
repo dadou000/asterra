@@ -306,7 +306,7 @@ GpuFieldGenerator::GpuFieldGenerator(
     const std::vector<f32> craterFloats =
         BuildCratersBuffer(source.CratersForGpu());
 
-    // Interleaved {convergence, plate bias} per gutter texel. Always bound
+    // Interleaved {convergence, plate bias, structural elevation} per gutter texel. Always bound
     // (a one-texel placeholder when no bake is attached) so the pipeline
     // layout stays fixed; the shader only reads it when the baked resolution
     // parameter is non-zero.
@@ -317,7 +317,7 @@ GpuFieldGenerator::GpuFieldGenerator(
     }
     else
     {
-        bakedFloats.assign(2U, 0.0F);
+        bakedFloats.assign(3U, 0.0F);
     }
 
     // Bucket ranges, segment index list, then segments: the layout

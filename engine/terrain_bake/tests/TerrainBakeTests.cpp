@@ -246,8 +246,37 @@ bool BakedTerrainTracksTheProceduralTerrain()
     }
     std::cout << "baked vs procedural elevation: mean |diff| " << sumAbs / count
               << " m, worst " << worst << " m\n";
-    ok &= Check(sumAbs / count < 25.0, "baked terrain must stay close to the procedural terrain on average");
-    ok &= Check(worst < 900.0, "baked terrain must not deviate wildly anywhere");
+    // The bake carries structure the unbaked plate model does not: crust-type
+    // driven geography, orogenic belts that exist at zero noise, and the
+    // structural elevation (trench, arc, ridge, rift). So the two agree in
+    // scale, not exactly, and the baked difference has the right sign where
+    // the structure says so.
+    ok &= Check(sumAbs / count < 1200.0, "baked terrain must stay at the procedural terrain's scale");
+    ok &= Check(worst < 9000.0, "baked terrain must not deviate wildly anywhere");
+
+    f64 trenchSum = 0.0, arcSum = 0.0;
+    u32 trenchCount = 0, arcCount = 0;
+    for (u32 i = 0; i < 60'000; ++i)
+    {
+        const math::Double3 direction = Fibonacci(i, 60'000);
+        const auto structure = baked.GlobalFields().SampleTectonicStructure(direction);
+        const bool trench = structure.subductionTrench > 0.6;
+        const bool arc = structure.volcanicArc > 0.6;
+        if (!trench && !arc) continue;
+        const terrain::TerrainQuery query{
+            .unitDirection = direction, .footprintMeters = 20'000.0,
+            .planet = planet.id, .radialOffsetMeters = 0.0};
+        const f64 delta = baked.Sample(query).elevationMeters - procedural.Sample(query).elevationMeters;
+        if (trench) { trenchSum += delta; ++trenchCount; }
+        else { arcSum += delta; ++arcCount; }
+    }
+    std::cout << "baked - procedural: trench " << (trenchCount ? trenchSum / trenchCount : 0.0)
+              << " m (" << trenchCount << "), arc " << (arcCount ? arcSum / arcCount : 0.0)
+              << " m (" << arcCount << ")\n";
+    ok &= Check(trenchCount > 0U && trenchSum / trenchCount < -800.0,
+        "trenches must reach the baked terrain as depressions");
+    ok &= Check(arcCount > 0U && arcSum / arcCount > 0.0,
+        "volcanic arcs must reach the baked terrain as uplift");
 
     // The structural layer is served from the bake too.
     const auto structure = baked.GlobalFields().SampleTectonicStructure(Fibonacci(7, 100));
