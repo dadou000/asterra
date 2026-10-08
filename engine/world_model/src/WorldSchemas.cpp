@@ -327,6 +327,9 @@ void RegisterSchemas(
             {.id=kProcessStreamPowerAgeUpliftDecay,.name="Age Uplift Decay",.kind=schema::PropertyKind::Float,.defaultValue=0.35,.range={.minimum=0.0,.maximum=1.0}},
             {.id=kProcessTectonicDrainageGuidance,.name="Tectonic Drainage Guidance",.kind=schema::PropertyKind::Float,.defaultValue=0.5,.range={.minimum=0.0,.maximum=1.0}},
 
+            {.id=kProcessBakeResolution,.name="Planet Bake Resolution",.kind=schema::PropertyKind::Integer,.defaultValue=i64{256},.range={.minimum=16.0,.maximum=2048.0}},
+            {.id=kProcessBakeAutoRebake,.name="Planet Bake Auto Rebake",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+
             {.id=kProcessHydraulicEnabled,.name="Hydraulic Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
             {.id=kProcessHydraulicIterations,.name="Hydraulic Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=1.0}},
             {.id=kProcessHydraulicRainfall,.name="Hydraulic Rainfall",.kind=schema::PropertyKind::Float,.unit="m/s",.defaultValue=0.0002,.range={.minimum=0.0}},

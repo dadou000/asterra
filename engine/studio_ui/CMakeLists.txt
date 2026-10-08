@@ -98,6 +98,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::Shading
         Orbit::StudioReports
         Orbit::StudioSession
+        Orbit::TerrainBake
         Orbit::TerrainDebug
         Orbit::TerrainGpu
         Orbit::TerrainRender

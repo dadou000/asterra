@@ -390,7 +390,8 @@ TectonicSample TectonicField::Sample(
 }
 
 TectonicStructureSample TectonicField::SampleStructure(
-    const math::Double3& direction) const noexcept
+    const math::Double3& direction,
+    const bool includeHotspot) const noexcept
 {
     const TectonicSample base = Sample(direction);
     const Plate& plate = plates_[base.nearestPlate];
@@ -468,7 +469,8 @@ TectonicStructureSample TectonicField::SampleStructure(
         Lerp(out.crustAge, 0.12, std::max(base.convergenceMask, base.divergenceMask) * 0.8),
         0.0, 1.0);
 
-    const f64 hotspot = HotspotElevationMeters(direction);
+    const f64 hotspot =
+        includeHotspot ? HotspotElevationMeters(direction) : 0.0;
     const f64 hotspotRelief = std::max(desc_.hotspotBaseReliefMeters, 1.0);
 
     // Uplift and subsidence mirror what the terrain stack already applies so

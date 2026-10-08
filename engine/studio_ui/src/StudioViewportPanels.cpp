@@ -13,6 +13,7 @@
 #include <orbit/world/PlanetTileNeighborhood.hpp>
 #include <orbit/terrain_erosion/RiverNetwork.hpp>
 #include <orbit/studio_session/StudioTerrainTectonicsProbe.hpp>
+#include <orbit/terrain_bake/TerrainBakeService.hpp>
 
 #include <algorithm>
 #include <array>
@@ -759,12 +760,20 @@ void StudioViewportPanels::DrawViewBase(
     }
 
     const auto available = context.ContentAvailable();
-    const u32 width =
+    const u32 panelWidth =
         static_cast<u32>(
             std::max(available.width, 1.0F));
-    const u32 height =
+    const u32 panelHeight =
         static_cast<u32>(
             std::max(available.height, 1.0F));
+    const bool captureSize =
+        id == "studio.primary" && viewportCaptureResolution_.has_value();
+    const u32 width = captureSize
+        ? viewportCaptureResolution_->first
+        : panelWidth;
+    const u32 height = captureSize
+        ? viewportCaptureResolution_->second
+        : panelHeight;
 
     if (renderView->Width() != width ||
         renderView->Height() != height)
@@ -773,15 +782,18 @@ void StudioViewportPanels::DrawViewBase(
         renderView = views_->Find(id);
     }
 
-    const auto imageInteraction =
-        context.Image(
-            renderView->DisplayColor(),
-            {
-                .width = static_cast<f32>(
-                    renderView->Width()),
-                .height = static_cast<f32>(
-                    renderView->Height())
-            });
+    const auto imageInteraction = captureSize
+        ? context.ImageFit(
+              renderView->DisplayColor(),
+              available,
+              {
+                  .width = static_cast<f32>(renderView->Width()),
+                  .height = static_cast<f32>(renderView->Height())})
+        : context.Image(
+              renderView->DisplayColor(),
+              {
+                  .width = static_cast<f32>(renderView->Width()),
+                  .height = static_cast<f32>(renderView->Height())});
 
     textHud_.Draw(context, *views_, id, imageInteraction);
 
@@ -2874,6 +2886,76 @@ void StudioViewportPanels::DrawPlanetToolbar(
                     }
                 }
                 context.MutedText("Old crust erodes to lower, rounder relief; belts act as divides that steer routing toward basins. Routing never climbs uphill.");
+
+                context.Separator();
+                context.Heading("Planet Bake");
+                context.MutedText("Terrain samples a baked planet structure and never evaluates plates while it generates. Editing the recipe rebakes in the background; the old bake keeps rendering until the new one is ready.");
+                if (const auto bake = session_->TerrainBake().Status(terrainId); bake.has_value())
+                {
+                    std::string line = std::format(
+                        "{} · {}x{} texels per face · {:.1f} MB",
+                        terrain_bake::BakeStateName(bake->state),
+                        bake->activeResolution, bake->activeResolution,
+                        static_cast<f64>(bake->activeBytes) / (1024.0 * 1024.0));
+                    if (bake->state == terrain_bake::BakeState::Baking)
+                        line = std::format("baking {:.0f}% · {}", static_cast<f64>(bake->progress) * 100.0, line);
+                    else if (bake->lastBakeSeconds > 0.0)
+                        line += std::format(" · last bake {:.1f} s", bake->lastBakeSeconds);
+                    context.MutedText(line);
+                    context.MutedText(bake->riversActive
+                        ? std::format("Rivers: {} reaches, {} nodes, {:.1f} MB", bake->riverSegments, bake->riverNodes,
+                              static_cast<f64>(bake->riverBytes) / (1024.0 * 1024.0))
+                        : std::string("Rivers: not baked yet"));
+                    if (bake->state == terrain_bake::BakeState::Stale)
+                        context.MutedText("The tectonics recipe changed since this bake; it is rebaking or waiting for Bake Now.");
+                    if (!bake->error.empty())
+                        context.MutedText(bake->error);
+
+                    auto bakePolicy = terrainAuthoring.ProcessSettings(terrainId);
+                    static constexpr std::array<u32, 4> kBakeResolutions{128U, 256U, 512U, 1024U};
+                    static constexpr std::array<std::string_view, 4> kBakeResolutionLabels{
+                        "128 (fast, ~80 km texels)", "256 (default, ~40 km)", "512 (~20 km)", "1024 (~10 km, 190 MB)"};
+                    int resolutionIndex = 1;
+                    for (std::size_t i = 0; i < kBakeResolutions.size(); ++i)
+                        if (kBakeResolutions[i] <= bakePolicy.bake.resolution)
+                            resolutionIndex = static_cast<int>(i);
+                    bool bakePolicyChanged = context.Combo(
+                        "Resolution##planet-bake-resolution", kBakeResolutionLabels, resolutionIndex);
+                    if (bakePolicyChanged)
+                        bakePolicy.bake.resolution = kBakeResolutions[static_cast<std::size_t>(resolutionIndex)];
+                    bakePolicyChanged |= context.Checkbox(
+                        "Rebake Automatically##planet-bake-auto", bakePolicy.bake.autoRebake);
+                    if (bakePolicyChanged)
+                    {
+                        try
+                        {
+                            terrainAuthoring.SetProcessSettings(terrainId, bakePolicy);
+                            status_ = "Planet bake policy updated.";
+                        }
+                        catch (const std::exception& exception) { status_ = exception.what(); }
+                    }
+
+                    if (context.PrimaryButton("Bake Now##planet-bake-start"))
+                    {
+                        status_ = session_->TerrainBake().StartBake(terrainId)
+                            ? "Planet bake started; terrain keeps using the current bake until it finishes."
+                            : "The planet bake could not be started.";
+                    }
+                    if (bake->state == terrain_bake::BakeState::Baking)
+                    {
+                        context.SameLine();
+                        if (context.Button("Cancel##planet-bake-cancel"))
+                        {
+                            session_->TerrainBake().Cancel(terrainId);
+                            status_ = "Planet bake cancelled; the active bake is untouched.";
+                        }
+                    }
+                }
+                else
+                {
+                    context.MutedText("No bake yet: the planet bakes when its terrain is composed.");
+                }
+                context.MutedText("Same operations as terrain.bake_status / bake_start / bake_cancel / bake_set.");
 
                 context.Separator();
                 context.Heading("Structural Sample");

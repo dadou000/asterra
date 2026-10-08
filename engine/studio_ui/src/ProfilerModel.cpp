@@ -345,6 +345,23 @@ void ProfilerModel::SetOptions(const ProfilerOptions& options)
     options_ = options;
     options_.windowMs = std::clamp(options_.windowMs, 500.0, 60000.0);
     options_.minSliceMs = std::max(options_.minSliceMs, 0.0);
+    options_.viewportCaptureDurationMs =
+        std::clamp(options_.viewportCaptureDurationMs, 1000.0, 30000.0);
+    if (options_.viewportCaptureResolution != "720p" &&
+        options_.viewportCaptureResolution != "1080p" &&
+        options_.viewportCaptureResolution != "1440p" &&
+        options_.viewportCaptureResolution != "2160p")
+    {
+        options_.viewportCaptureResolution = "1440p";
+    }
+    if (options_.viewportCaptureScenario != "static" &&
+        options_.viewportCaptureScenario != "walk_1_94_mps" &&
+        options_.viewportCaptureScenario != "surface_200_kmh" &&
+        options_.viewportCaptureScenario != "flight_2000_mps_5000m" &&
+        options_.viewportCaptureScenario != "ground_to_orbit_20s")
+    {
+        options_.viewportCaptureScenario = "static";
+    }
     if (regroup)
     {
         RebuildRows();

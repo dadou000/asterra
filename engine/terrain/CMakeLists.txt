@@ -1,5 +1,7 @@
 add_library(OrbitTerrain STATIC
     src/AnalyticTerrainSource.cpp
+    src/BakedRivers.cpp
+    src/BakedTectonics.cpp
     src/GlobalTerrainFields.cpp
     src/TectonicField.cpp
     src/TerrainFields.cpp

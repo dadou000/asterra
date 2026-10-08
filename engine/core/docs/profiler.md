@@ -7,7 +7,7 @@ owner_module = "OrbitCore"
 summary = """
 Always-on lock-free scope profiler for the Studio process: per-thread ring buffers, a CPU-core view, automatic hitch \
 captures (the last few seconds written as a Perfetto/Chrome trace when a frame exceeds the threshold), a watchdog that \
-samples the stalled main thread's stack, GPU per-render-graph-pass timing, the Profiler panel and six RPC/MCP methods. \
+samples the stalled main thread's stack, GPU per-render-graph-pass timing, the Profiler panel and eight RPC/MCP methods. \
 Start with orbit_profiler_status after any freeze."""
 keywords = ["profiler", "hitch", "freeze", "stall", "perfetto", "trace", "scope", "watchdog", "stack sample", "gpu passes", "calibrated timestamps", "frame time", "profile scope", "chrome tracing"]
 sources = [
@@ -16,7 +16,10 @@ sources = [
   "engine/core/src/Profiler.cpp",
   "engine/editor_rpc/src/ProfilerRpc.cpp",
   "engine/studio_ui/src/ProfilerPanelRpc.cpp",
+  "engine/studio_ui/src/ProfilerModel.cpp",
   "engine/studio_ui/src/ProfilerUi.cpp",
+  "engine/editor_ui/src/EditorUi.cpp",
+  "apps/editor/src/StudioApplication.cpp",
   "engine/render_graph/src/GpuPassTimer.cpp",
 ]
 symbols = ["ORBIT_PROFILE_SCOPE", "Intern", "StartWatchdog", "BeginFrame", "EndFrame", "CancelFrame", "GpuPassTimer", "ProfilerModel"]
@@ -31,7 +34,7 @@ invariants = [
   "GPU spans are bottom-of-pipe timestamps written after each render-graph pass (RenderGraph::Execute(commands, &gpuPassTimer)); the gap between neighbours is the time the GPU took to finish that pass, including time stuck behind earlier work. They are read after the frame slot's fence completes, so they appear two to three frames later. Passes under 50 us stay off the timeline (GpuPassTimer::LastFrame keeps every pass); the core view omits slices under 30 us.",
   "GPU work submitted outside the render graph (the lighting and surface-volume recorders keep their own timings) is folded into whichever pass it runs next to; do not read a pass time as exclusive of that.",
   "With VK_KHR_calibrated_timestamps GPU spans line up exactly with CPU lanes; without it they keep their durations but are anchored to when the frame was resolved (GpuPassTimer::Calibrated() tells which).",
-  "The Profiler panel does work only while it is open; every control also exists over RPC (profiler.panel_get / panel_set / snapshot).",
+  "The ProfilerModel owns viewport-only capture defaults (4 seconds and 1440p); its duration and resolution preset controls are shared with profiler.panel_get/set and MCP. Capture viewport only invokes the same StudioApplication-owned timed action as profiler.viewport_capture, skips non-viewport panels during the sample, keeps the primary viewport live at the selected target size, writes a trace and restores the shell and ordinary target size. profiler.viewport_capture_status returns progress, preset dimensions and the resulting path.",
   "Profiler code lives in OrbitCore: editing it takes the ordinary automatic generation handoff and a failed hot build leaves the running ring buffers and watchdog untouched (/rules/hot-iteration).",
 ]
 related = ["/editor/studio-ui", "/foundation/core", "/rendering/terrain/clipmaps/rebuild-hitches", "/legacy/orbit-profiler"]

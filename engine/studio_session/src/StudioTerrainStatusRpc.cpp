@@ -3,6 +3,7 @@
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/terrain_bake/TerrainBakeService.hpp>
 #include <orbit/studio_session/StudioTerrainAuthoringInvalidation.hpp>
 #include <orbit/studio_session/StudioTerrainServiceStatus.hpp>
 #include <orbit/studio_session/StudioTerrainTectonicsProbe.hpp>
@@ -221,6 +222,45 @@ void ReadTectonicsPatch(
         {"age_erodibility_gain", config.ageErodibilityGain},
         {"age_uplift_decay", config.ageUpliftDecay},
         {"tectonic_drainage_guidance", config.tectonicDrainageGuidance}});
+}
+
+[[nodiscard]] std::string HashText(const u64 value)
+{
+    return std::format("{:016x}", value);
+}
+
+[[nodiscard]] rpc::Value BakeStatusToRpc(
+    const scene::ObjectId terrain,
+    const terrain_bake::BakeStatus& status)
+{
+    return rpc::Value(rpc::Value::Object{
+        {"terrain", terrain.ToString()},
+        {"state", std::string(terrain_bake::BakeStateName(status.state))},
+        {"progress", static_cast<f64>(status.progress)},
+        {"stale", status.state == terrain_bake::BakeState::Stale},
+        {"resolution", static_cast<i64>(status.settings.resolution)},
+        {"auto_rebake", status.settings.autoRebake},
+        {"active_resolution", static_cast<i64>(status.activeResolution)},
+        {"active_bytes", static_cast<i64>(status.activeBytes)},
+        {"rivers_active", status.riversActive},
+        {"river_nodes", static_cast<i64>(status.riverNodes)},
+        {"river_segments", static_cast<i64>(status.riverSegments)},
+        {"river_bytes", static_cast<i64>(status.riverBytes)},
+        {"current_river_hash", HashText(status.currentRiverHash)},
+        {"active_river_hash", HashText(status.activeRiverHash)},
+        {"current_recipe_hash", HashText(status.currentRecipeHash)},
+        {"active_recipe_hash", HashText(status.activeRecipeHash)},
+        {"last_bake_seconds", status.lastBakeSeconds},
+        {"error", status.error},
+        {"path", status.path.generic_string()}});
+}
+
+[[nodiscard]] scene::ObjectId RequireTerrainObject(const rpc::Value::Object& values)
+{
+    const auto terrain = scene::ObjectId::Parse(RequireString(values, "terrain"));
+    if (!terrain.has_value())
+        throw rpc::Error(-32602, "terrain must be a terrain object id.");
+    return *terrain;
 }
 
 [[nodiscard]] editor_model::SurfaceAuthoringModel SurfaceModel(
@@ -624,6 +664,139 @@ void RegisterStudioTerrainStatusRpc(
                 auto result = CouplingToRpc(model.ProcessSettings(*terrain).streamPower);
                 result.AsObject().emplace("terrain", terrain->ToString());
                 return result;
+            }
+            catch (const rpc::Error&) { throw; }
+            catch (const std::invalid_argument& exception) { throw rpc::Error(-32602, exception.what()); }
+            catch (const std::exception& exception) { throw rpc::Error(1004, exception.what()); }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.bake_status",
+            .description =
+                "Planet bake state for a terrain surface: state (none, baking, ready, stale, failed), "
+                "progress, resolution, active bake size, recipe hashes (stale means the recipe changed "
+                "since the active bake), the bake file path and any error. Terrain generation samples the "
+                "bake; it never evaluates the plate model itself.",
+            .mutating = false
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto terrain = RequireTerrainObject(RequireObject(params));
+            const auto status = session.TerrainBake().Status(terrain);
+            if (!status.has_value())
+                throw rpc::Error(1004, "The terrain surface has no bake service (is the world open and the body composed?).");
+            return BakeStatusToRpc(terrain, *status);
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.bake_start",
+            .description =
+                "Starts a background planet bake for the terrain surface now (cancels one in flight). "
+                "Optional resolution is texels per cube-face edge, 16-2048. The running bake keeps driving "
+                "terrain until the new one finishes and validates; a failed bake leaves it untouched.",
+            .mutating = true
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto terrain = RequireTerrainObject(values);
+            std::optional<u32> resolution;
+            if (const auto found = values.find("resolution"); found != values.end())
+            {
+                if (!found->second.IsInteger() || found->second.AsInteger() < 16 ||
+                    found->second.AsInteger() > 2048)
+                    throw rpc::Error(-32602, "resolution must be an integer from 16 to 2048.");
+                resolution = static_cast<u32>(found->second.AsInteger());
+            }
+            // The resolution belongs to the persisted policy; applying it first
+            // keeps the next tick from re-applying the old one and rebaking.
+            if (resolution.has_value())
+            {
+                try
+                {
+                    auto model = SurfaceModel(session);
+                    auto settings = model.ProcessSettings(terrain);
+                    if (settings.bake.resolution != *resolution)
+                    {
+                        settings.bake.resolution = *resolution;
+                        model.SetProcessSettings(terrain, settings);
+                    }
+                }
+                catch (const std::exception& exception)
+                {
+                    throw rpc::Error(1004, exception.what());
+                }
+            }
+            if (!session.TerrainBake().StartBake(terrain, resolution))
+                throw rpc::Error(1004, "The bake could not be started for this terrain surface.");
+            return BakeStatusToRpc(terrain, *session.TerrainBake().Status(terrain));
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.bake_cancel",
+            .description = "Cancels a running planet bake. The active bake is untouched and no automatic rebake starts until the recipe changes or terrain.bake_start is called.",
+            .mutating = true
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto terrain = RequireTerrainObject(RequireObject(params));
+            session.TerrainBake().Cancel(terrain);
+            const auto status = session.TerrainBake().Status(terrain);
+            if (!status.has_value())
+                throw rpc::Error(1004, "The terrain surface has no bake service.");
+            return BakeStatusToRpc(terrain, *status);
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.bake_set",
+            .description =
+                "Updates the persisted planet bake policy (resolution 16-2048 and auto_rebake) as one "
+                "undoable edit through SurfaceAuthoringModel, the same operation as the Planet Tectonics "
+                "menu's Planet Bake section. A resolution change makes the bake stale; it rebakes when "
+                "auto_rebake is on or terrain.bake_start is called.",
+            .mutating = true
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto terrain = RequireTerrainObject(values);
+            for (const auto& [key, value] : values)
+            {
+                static_cast<void>(value);
+                if (key != "terrain" && key != "resolution" && key != "auto_rebake")
+                    throw rpc::Error(-32602, "Unknown bake setting: " + key + ".");
+            }
+            try
+            {
+                auto model = SurfaceModel(session);
+                auto settings = model.ProcessSettings(terrain);
+                if (const auto found = values.find("resolution"); found != values.end())
+                {
+                    if (!found->second.IsInteger())
+                        throw rpc::Error(-32602, "resolution must be an integer.");
+                    const i64 resolution = found->second.AsInteger();
+                    if (resolution < 16 || resolution > 2048)
+                        throw rpc::Error(-32602, "resolution must be from 16 to 2048.");
+                    settings.bake.resolution = static_cast<u32>(resolution);
+                }
+                if (const auto found = values.find("auto_rebake"); found != values.end())
+                {
+                    if (!found->second.IsBool())
+                        throw rpc::Error(-32602, "auto_rebake must be a boolean.");
+                    settings.bake.autoRebake = found->second.AsBool();
+                }
+                model.SetProcessSettings(terrain, settings);
+                const auto status = session.TerrainBake().Status(terrain);
+                if (status.has_value())
+                    return BakeStatusToRpc(terrain, *status);
+                return rpc::Value(rpc::Value::Object{
+                    {"terrain", terrain.ToString()},
+                    {"resolution", static_cast<i64>(settings.bake.resolution)},
+                    {"auto_rebake", settings.bake.autoRebake}});
             }
             catch (const rpc::Error&) { throw; }
             catch (const std::invalid_argument& exception) { throw rpc::Error(-32602, exception.what()); }

@@ -91,6 +91,9 @@ static const uint kParamCraterCumulativeExponent = 50;
 static const uint kParamLocalCraterLevels = 51;
 static const uint kParamLocalCraterBaseSpacingMeters = 52;
 static const uint kParamLocalCraterDensity = 53;
+static const uint kParamBakedTectonicResolution = 54;
+static const uint kParamRiverIndexCount = 55;
+static const uint kParamRiverSegmentCount = 56;
 
 static const uint kMaxHotspotAgeSteps = 6u;
 static const uint kPlateStrideBytes = 36u;
@@ -108,6 +111,10 @@ ByteAddressBuffer g_hotspots : register(t2);
 RWByteAddressBuffer g_output : register(u3);
 [[vk::binding(4, 0)]]
 ByteAddressBuffer g_craters : register(t4);
+[[vk::binding(5, 0)]]
+ByteAddressBuffer g_bakedTectonics : register(t5);
+[[vk::binding(6, 0)]]
+ByteAddressBuffer g_rivers : register(t6);
 
 // float4, not float3, for every basis vector below: HLSL/DXC pads a
 // bare float3 push-constant member out to a 16-byte slot anyway (the
@@ -375,8 +382,64 @@ void OctaveBand(
 // plateBiasMeters -- divergence/transform/collision-class outputs exist
 // only for the CPU side (2D map, macro geology), unused here) ===
 )" R"(
+// Baked tectonic rasters: interleaved {convergence, plate bias} per texel of six
+// cube faces, each with a one-texel gutter (mirrors BakedTectonicRasters).
+float2 BakedTectonicTexel(uint face, int x, int y, uint resolution)
+{
+    uint stride = resolution + 2u;
+    uint index = (face * stride + uint(y + 1)) * stride + uint(x + 1);
+    return asfloat(g_bakedTectonics.Load2(index * 8u));
+}
+
+float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters)
+{
+    uint resolution = ParamUint(kParamBakedTectonicResolution);
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    // Same face selection and orientation as world::UnitDirectionToCube.
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+
+    float r = float(resolution);
+    float fx = (uv.x + 1.0) * 0.5 * r - 0.5;
+    float fy = (uv.y + 1.0) * 0.5 * r - 0.5;
+    int last = int(resolution) - 1;
+    int x0 = clamp(int(floor(fx)), -1, last);
+    int y0 = clamp(int(floor(fy)), -1, last);
+    float tx = saturate(fx - float(x0));
+    float ty = saturate(fy - float(y0));
+
+    float2 t00 = BakedTectonicTexel(face, x0, y0, resolution);
+    float2 t10 = BakedTectonicTexel(face, x0 + 1, y0, resolution);
+    float2 t01 = BakedTectonicTexel(face, x0, y0 + 1, resolution);
+    float2 t11 = BakedTectonicTexel(face, x0 + 1, y0 + 1, resolution);
+    float2 blended = lerp(lerp(t00, t10, tx), lerp(t01, t11, tx), ty);
+    plateBiasMeters = blended.y;
+    return blended.x;
+}
+
 float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters)
 {
+    if (ParamUint(kParamBakedTectonicResolution) != 0u)
+    {
+        return SampleBakedConvergenceAndBias(direction, plateBiasMeters);
+    }
+
     uint plateCount = ParamUint(kParamPlateCount);
     uint nearest = 0u;
     float dTop = -2.0;
@@ -1010,6 +1073,76 @@ float LocalCraterHeight(float3 direction, float footprintMeters)
     return result;
 }
 )" R"(
+// Baked river network (mirrors BakedRiverNetwork::Sample): per cube-face bucket
+// {offset, count} into a segment index list, then the segments themselves as
+// {a.xyz, b.xyz, widthA, widthB, depthA, depthB}.
+static const uint kRiverBucketsPerFaceEdge = 64u;
+static const uint kRiverRangeBytes = 6u * 64u * 64u * 8u;
+static const uint kRiverSegmentBytes = 40u;
+static const float kRiverInfluenceHalfWidths = 2.0;
+
+float RiverCarveDepth(float3 direction, float footprintMeters)
+{
+    if (ParamUint(kParamRiverSegmentCount) == 0u) return 0.0;
+
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+    uint bx = min(uint((uv.x + 1.0) * 0.5 * float(kRiverBucketsPerFaceEdge)), kRiverBucketsPerFaceEdge - 1u);
+    uint by = min(uint((uv.y + 1.0) * 0.5 * float(kRiverBucketsPerFaceEdge)), kRiverBucketsPerFaceEdge - 1u);
+    uint bucket = (face * kRiverBucketsPerFaceEdge + by) * kRiverBucketsPerFaceEdge + bx;
+
+    uint2 range = g_rivers.Load2(bucket * 8u);
+    uint segmentsBase = kRiverRangeBytes + ParamUint(kParamRiverIndexCount) * 4u;
+    float radius = ParamFloat(kParamPlanetRadiusMeters);
+    float footprint = max(footprintMeters, 1.0);
+    float best = 0.0;
+
+    [loop]
+    for (uint i = 0u; i < range.y; ++i)
+    {
+        uint segment = g_rivers.Load(kRiverRangeBytes + (range.x + i) * 4u);
+        uint o = segmentsBase + segment * kRiverSegmentBytes;
+        float4 s0 = asfloat(g_rivers.Load4(o));
+        float4 s1 = asfloat(g_rivers.Load4(o + 16u));
+        float2 s2 = asfloat(g_rivers.Load2(o + 32u));
+
+        float3 pa = s0.xyz;
+        float3 pb = float3(s0.w, s1.x, s1.y);
+        float3 ab = pb - pa;
+        float lengthSquared = dot(ab, ab);
+        float t = lengthSquared > 0.0 ? clamp(dot(direction - pa, ab) / lengthSquared, 0.0, 1.0) : 0.0;
+        float3 q = normalize(pa + ab * t);
+        float distanceMeters = length(direction - q) * radius;
+
+        float width = lerp(s1.z, s1.w, t);
+        float depth = lerp(s2.x, s2.y, t);
+        if (width * 20.0 < footprint) continue;
+
+        float halfWidth = max(0.5 * width, 0.5 * footprint);
+        float amplitude = depth * min(1.0, width / max(width, footprint));
+        float profile = SmoothStepCubic(0.0, 1.0, 1.0 - distanceMeters / (kRiverInfluenceHalfWidths * halfWidth));
+        best = max(best, amplitude * profile);
+    }
+    return best;
+}
+)" R"(
 struct FullSample
 {
     float elevationMeters;
@@ -1087,6 +1220,16 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
 
             elevation += ValueNoise3D(direction * (radius / bandWavelength), bandSeed) *
                 bandAmplitude * weight * detailGain * landformWeight;
+        }
+    }
+
+    // Baked river channels: cut into land only, never below the water level.
+    if (elevation > seaLevel)
+    {
+        float carve = RiverCarveDepth(direction, footprintMeters);
+        if (carve > 0.0)
+        {
+            elevation = max(elevation - carve, min(elevation, seaLevel));
         }
     }
 

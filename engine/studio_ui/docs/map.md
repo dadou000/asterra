@@ -32,6 +32,9 @@ sources = [
   "engine/studio_ui/include/orbit/studio_ui/StudioFlatMap.hpp",
   "engine/studio_ui/include/orbit/studio_ui/ProfilerUi.hpp",
   "engine/studio_ui/include/orbit/studio_ui/ProfilerModel.hpp",
+  "engine/studio_ui/src/ProfilerUi.cpp",
+  "engine/studio_ui/src/ProfilerPanelRpc.cpp",
+  "engine/studio_ui/src/ProfilerModel.cpp",
 ]
 symbols = ["StudioExpansionShell", "StudioInspectorProviderRegistration", "StudioViewContinuity", "ViewportCaptureService", "ProfilerUi", "StudioTerrainNavigationConfig"]
 invariants = [
@@ -51,6 +54,7 @@ invariants = [
   "High-resolution capture of the primary viewport: up to 8K the view is resized to the capture size and given a few frames to settle (temporal filtering, terrain streaming, lighting caches); larger shots (16K) do not fit in GPU memory as one render, so the camera is turned onto a grid of tiles with a narrower field of view and each tile is rendered at 4K.",
   "The flat planet map generates every layer from the same terrain samples (switching layers never re-samples the planet); its tectonics layer is populated from the same deterministic GlobalTerrainFields plate field and overlays convergence red, divergence cyan and transform yellow. It shares the HUD's convention: latitude = asin(direction.y) with +Y the spin pole, longitude = atan2(direction.z, direction.x), in degrees, on a 2:1 equirectangular image.",
   "Every profiler panel control has a profiler.panel_* RPC/MCP equivalent driving the same ProfilerModel (MCP parity).",
+  "ProfilerModel owns viewport-only capture defaults (4 seconds, 1440p and static scenario); its panel controls and profiler.panel_get/set RPC/MCP share those options. Capture viewport only exposes a 1–30 second duration, 720p/1080p/1440p/2160p presets and repeatable static/walk/fast-surface/low-flight/ground-to-orbit camera scenarios. Its profiler.viewport_capture action shares the StudioApplication-owned lifecycle; EditorUi draws only the fullscreen primary viewport at the selected target size, applies camera-only motion through StudioRenderViewSet and restores the original pose, target size and shell when complete or canceled, then reports the path or error.",
   "The Explorer's protected Viewport Camera is a virtual view-owned item, never a world object; lens FOV/focal-length settings update StudioRenderViewSet's canonical per-view zoom, and its Eye Adaptation child edits StudioViewportRenderer's existing per-view config as an artistic camera control. Properties selections call those owners directly; view.camera_* RPC/MCP expose lens state and display.eye_* RPC/MCP expose eye settings.",
   "The authored world object (for example, GI Room World) is the visible Explorer root; protected Viewport Camera and Lighting items are nested beneath it, and there is no synthetic World Root row. Properties shows the selected object schema and only relevant type-specific providers; global workflow/navigation/preset/property utility controls do not appear as stale object properties.",
   "The Explorer's protected Lighting item groups renderer contributions into Global Illumination, Direct Lighting & Shadows, Reflections, Atmosphere, Clouds, Ocean & Surface, Anti-Aliasing and Renderer Diagnostics. Contribution controls edit StudioRenderViewSet layer options exposed by view.terrain_layers_* RPC/MCP; diagnostics reuse DisplayDiagnosticsUi. Eye Adaptation remains a Camera child and is omitted from the Lighting renderer body.",

@@ -293,6 +293,10 @@ public:
     void SetNextTreeItemOpen(bool open);
     void TreePop();
     [[nodiscard]] ImageInteraction Image(rhi::Texture& texture, UiSize size);
+    [[nodiscard]] ImageInteraction ImageFit(
+        rhi::Texture& texture,
+        UiSize available,
+        UiSize sourceSize);
     // An image that captures drags and the mouse wheel (for orbiting a
     // preview). `id` must be unique in the panel.
     [[nodiscard]] ImageInteraction InteractiveImage(
@@ -654,6 +658,10 @@ public:
 
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
     void DrawStudioShell();
+    // Draw only the requested panel as a borderless, full-window surface.
+    // Used while capturing viewport performance so the rest of the shell and
+    // its panels do not run, while the viewport's normal draw callback stays live.
+    [[nodiscard]] bool DrawPanelFullscreen(PanelId panel);
     void Render(rhi::CommandList& commands, rhi::Texture& target, u32 targetWidth, u32 targetHeight);
     [[nodiscard]] bool WantsMouse() const noexcept;
     [[nodiscard]] bool WantsKeyboard() const noexcept;

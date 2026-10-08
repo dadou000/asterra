@@ -84,6 +84,86 @@ ResolveGlobalDesc(
 }
 } // namespace
 
+namespace
+{
+// Immutable recipe fingerprint, including the generator algorithm version.
+// With includeRivers = false the baked river network is left out, which is the
+// identity a river bake itself must match (the network is its output).
+[[nodiscard]] u64 ComputeSourceRevision(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc,
+    const bool includeRivers)
+{
+    u64 revision = detail::Mix64(desc.seed ^ 0x4153544552524103ULL);
+    const auto mix = [&](const u64 value) { revision = detail::Mix64(revision ^ value); };
+    mix(desc.global.seed);
+    mix(desc.detailOctaves);
+    mix(desc.mountains.octaves);
+    mix(desc.global.tectonic.seed);
+    if (includeRivers)
+    {
+        mix(desc.bakedRivers != nullptr ? desc.bakedRivers->ContentHash() : 0U);
+    }
+    // A baked tectonic raster is part of the recipe: swapping it changes the
+    // terrain, so it must change the revision and invalidate caches.
+    mix(desc.global.bakedTectonics != nullptr
+            ? desc.global.bakedTectonics->ContentHash()
+            : 0U);
+    mix(desc.global.tectonic.plateCount);
+    mix(desc.global.tectonic.hotspotCount);
+    mix(desc.global.tectonic.hotspotAgeSteps);
+    mix(desc.global.tectonic.rainShadowSteps);
+    mix(desc.craters.enabled ? 1U : 0U);
+    mix(desc.craters.count);
+    mix(desc.craters.localLevels);
+    for (const f64 value : {planet.radiusMeters, desc.macroAmplitudeMeters,
+             desc.macroWavelengthMeters, desc.detailAmplitudeMeters, desc.detailWavelengthMeters,
+             desc.mountains.reliefMeters, desc.mountains.wavelengthMeters,
+             desc.mountains.warpWavelengthMeters, desc.mountains.warpAmplitudeMeters,
+             desc.maximumElevationAboveSeaLevelMeters, desc.global.seaLevelMeters,
+             desc.global.continentalAmplitudeMeters, desc.global.continentalWavelengthMeters,
+             desc.global.continentalBiasMeters, desc.global.mountainAmplitudeMeters,
+             desc.global.mountainWavelengthMeters, desc.global.climateWavelengthMeters,
+             desc.global.equatorTemperatureC, desc.global.poleTemperatureC,
+             desc.global.temperatureVariationC, desc.global.lapseRateCPerKilometer,
+             desc.global.tectonic.plateIrregularity, desc.global.tectonic.continentalPlateFraction,
+             desc.global.tectonic.continentalPlateBiasMeters, desc.global.tectonic.oceanicPlateBiasMeters,
+             desc.global.tectonic.tectonicContinentInfluence, desc.global.tectonic.boundaryWidthDot,
+             desc.global.tectonic.minPlateAngularSpeed, desc.global.tectonic.maxPlateAngularSpeed,
+             desc.global.tectonic.convergenceReferenceSpeed, desc.global.tectonic.oceanicConvergenceScale,
+             desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
+             desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
+             desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
+             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
+             desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowThresholdMeters,
+             desc.global.tectonic.rainShadowRangeMeters, desc.global.tectonic.windBandTransitionDegrees})
+    {
+        if (!std::isfinite(value))
+        {
+            throw std::invalid_argument("Orbit terrain recipe must contain finite values.");
+        }
+        mix(std::bit_cast<u64>(value));
+    }
+    for (const f64 value : {desc.craters.minimumRadiusMeters,
+             desc.craters.maximumRadiusMeters, desc.craters.cumulativeExponent,
+             desc.craters.complexTransitionRadiusMeters,
+             desc.craters.maximumEjectaExtentRadii,
+             desc.craters.localBaseSpacingMeters,
+             desc.craters.localDensity})
+    {
+        mix(std::bit_cast<u64>(value));
+    }
+    return revision;
+}
+} // namespace
+
+u64 TerrainRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc)
+{
+    return ComputeSourceRevision(planet, desc, false);
+}
+
 AnalyticTerrainSource::AnalyticTerrainSource(
     const world::PlanetDefinition planet,
     const AnalyticTerrainDesc desc)
@@ -231,57 +311,7 @@ AnalyticTerrainSource::AnalyticTerrainSource(
     warpFootprintScale_ = 1.0 + 11.25 * desc.mountains.warpAmplitudeMeters /
         desc.mountains.warpWavelengthMeters;
 
-    // Immutable recipe fingerprint, including the generator algorithm version.
-    revision_ = detail::Mix64(desc.seed ^ 0x4153544552524103ULL);
-    const auto mix = [&](const u64 value) { revision_ = detail::Mix64(revision_ ^ value); };
-    mix(desc.global.seed);
-    mix(desc.detailOctaves);
-    mix(desc.mountains.octaves);
-    mix(desc.global.tectonic.seed);
-    mix(desc.global.tectonic.plateCount);
-    mix(desc.global.tectonic.hotspotCount);
-    mix(desc.global.tectonic.hotspotAgeSteps);
-    mix(desc.global.tectonic.rainShadowSteps);
-    mix(desc.craters.enabled ? 1U : 0U);
-    mix(desc.craters.count);
-    mix(desc.craters.localLevels);
-    for (const f64 value : {planet.radiusMeters, desc.macroAmplitudeMeters,
-             desc.macroWavelengthMeters, desc.detailAmplitudeMeters, desc.detailWavelengthMeters,
-             desc.mountains.reliefMeters, desc.mountains.wavelengthMeters,
-             desc.mountains.warpWavelengthMeters, desc.mountains.warpAmplitudeMeters,
-             desc.maximumElevationAboveSeaLevelMeters, desc.global.seaLevelMeters,
-             desc.global.continentalAmplitudeMeters, desc.global.continentalWavelengthMeters,
-             desc.global.continentalBiasMeters, desc.global.mountainAmplitudeMeters,
-             desc.global.mountainWavelengthMeters, desc.global.climateWavelengthMeters,
-             desc.global.equatorTemperatureC, desc.global.poleTemperatureC,
-             desc.global.temperatureVariationC, desc.global.lapseRateCPerKilometer,
-             desc.global.tectonic.plateIrregularity, desc.global.tectonic.continentalPlateFraction,
-             desc.global.tectonic.continentalPlateBiasMeters, desc.global.tectonic.oceanicPlateBiasMeters,
-             desc.global.tectonic.tectonicContinentInfluence, desc.global.tectonic.boundaryWidthDot,
-             desc.global.tectonic.minPlateAngularSpeed, desc.global.tectonic.maxPlateAngularSpeed,
-             desc.global.tectonic.convergenceReferenceSpeed, desc.global.tectonic.oceanicConvergenceScale,
-             desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
-             desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
-             desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
-             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
-             desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowThresholdMeters,
-             desc.global.tectonic.rainShadowRangeMeters, desc.global.tectonic.windBandTransitionDegrees})
-    {
-        if (!std::isfinite(value))
-        {
-            throw std::invalid_argument("Orbit terrain recipe must contain finite values.");
-        }
-        mix(std::bit_cast<u64>(value));
-    }
-    for (const f64 value : {desc.craters.minimumRadiusMeters,
-             desc.craters.maximumRadiusMeters, desc.craters.cumulativeExponent,
-             desc.craters.complexTransitionRadiusMeters,
-             desc.craters.maximumEjectaExtentRadii,
-             desc.craters.localBaseSpacingMeters,
-             desc.craters.localDensity})
-    {
-        mix(std::bit_cast<u64>(value));
-    }
+    revision_ = ComputeSourceRevision(planet, desc, true);
 }
 
 f64 AnalyticTerrainSource::LocalCraterHeightDelta(
@@ -582,6 +612,19 @@ TerrainSample AnalyticTerrainSource::Sample(
         elevation += detail::ValueNoise3D(direction * band.frequency, band.seed) *
             band.amplitude * weight * detailGain * landformWeight;
     }
+    // Baked river channels: a lookup of the stored centerlines, cut into land
+    // only and never below the water it drains to.
+    if (desc_.bakedRivers != nullptr && elevation > desc_.global.seaLevelMeters)
+    {
+        const BakedRiverCarve carve = desc_.bakedRivers->Sample(direction, query.footprintMeters);
+        if (carve.depthMeters > 0.0F)
+        {
+            elevation = std::max(
+                elevation - static_cast<f64>(carve.depthMeters),
+                std::min(elevation, desc_.global.seaLevelMeters));
+        }
+    }
+
     TerrainClimate climate = global.climate;
     // Global climate used only the broad elevation. Apply the remaining lapse
     // once so high mountains are actually cold and classify consistently.
@@ -641,6 +684,31 @@ TerrainSample AnalyticTerrainSource::Sample(
         .biomes = ClassifyBiomeWeights(climate, elevation, desc_.global.seaLevelMeters),
         .standingWaterDepthMeters = std::max(desc_.global.seaLevelMeters - elevation, 0.0)
     };
+}
+
+u64 TectonicBakeRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc) noexcept
+{
+    // Bump when the baked layer set or how it is computed changes.
+    constexpr u64 kBakeAlgorithmVersion = 1;
+
+    const TectonicFieldDesc& t = desc.global.tectonic;
+    u64 hash = StableCombine64(0x54454354424B4531ULL, kBakeAlgorithmVersion);
+    hash = StableCombine64(hash, desc.seed);
+    hash = StableCombine64(hash, desc.global.seed);
+    hash = StableCombine64(hash, t.seed);
+    hash = StableCombine64(hash, t.plateCount);
+    for (const f64 value : {planet.radiusMeters, t.plateIrregularity,
+             t.plateSizeVarianceDot, t.continentalPlateFraction,
+             t.continentalPlateBiasMeters, t.oceanicPlateBiasMeters,
+             t.boundaryWidthDot, t.minPlateAngularSpeed, t.maxPlateAngularSpeed,
+             t.convergenceReferenceSpeed, t.transformReferenceSpeed,
+             t.oceanicConvergenceScale, t.convergenceUpliftMeters})
+    {
+        hash = StableCombine64(hash, std::bit_cast<u64>(value));
+    }
+    return hash == 0U ? 1U : hash;
 }
 
 u64 AnalyticTerrainSource::Revision() const noexcept

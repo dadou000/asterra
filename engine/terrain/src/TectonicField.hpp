@@ -62,8 +62,12 @@ public:
     [[nodiscard]] TectonicSample Sample(
         const math::Double3& direction) const noexcept;
 
+    // includeHotspot = false leaves hotspot chains out of uplift and volcanism
+    // (the baker stores only the plate-driven part; hotspots are closed form
+    // and added at sample time).
     [[nodiscard]] TectonicStructureSample SampleStructure(
-        const math::Double3& direction) const noexcept;
+        const math::Double3& direction,
+        bool includeHotspot = true) const noexcept;
 
     [[nodiscard]] f64 HotspotElevationMeters(
         const math::Double3& direction) const noexcept;

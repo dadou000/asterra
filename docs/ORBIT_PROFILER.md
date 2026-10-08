@@ -47,6 +47,8 @@ leaving Studio:
 - **Recorded hitches**: each hitch file with an **Inspect** button that loads it into the panel (paused, read from
   disk on a worker thread).
 - **Write trace file** saves the current history for Perfetto.
+- **Capture viewport only** runs for the configured duration (1–30 s in the panel; the RPC uses the configured profiler window by default) and renders at a selectable 720p, 1080p, 1440p or 2160p target, defaulting to 1440p. It skips every other panel and shell surface, keeps the primary viewport rendering, writes a Perfetto trace, and restores the normal viewport resolution and shell automatically. The trace path or any error appears as a Studio notification. The same action is available through `profiler.viewport_capture` / `orbit_profiler_viewport_capture`; poll with `profiler.viewport_capture_status` or MCP `action='status'`, or cancel with `action='cancel'`.
+- Capture workload scenarios are selectable in the Profiler and RPC/MCP: static; walking at 1.94 m/s; surface travel at 200 km/h; flight at 2,000 m/s at 5,000 m altitude; and a ground-to-500 km climb over 20 seconds. Motion is camera-only and deterministic from capture start; the original camera pose is restored on completion or cancellation.
 
 The panel only does work while it is open. The same controls exist over RPC/MCP: `profiler.panel_get`,
 `profiler.panel_set` and `profiler.snapshot`.
@@ -121,6 +123,21 @@ automatic native/Studio-generation handoff described in `ORBIT_HOT_ITERATION.md`
 `profiler.configure` changes thresholds live. A failed hot build leaves the running generation (and its ring buffers
 and watchdog) untouched.
 Changing `ORBIT_PROFILER_SYMBOLS` re-configures CMake and rebuilds every object once.
+
+## Vulkan validation and performance captures
+
+Debug builds enable `VK_LAYER_KHRONOS_validation` by default, which can add
+substantial CPU overhead to command recording and draw validation. Set
+`ORBIT_VK_VALIDATION=0` before launching Studio to measure without that layer;
+the override takes effect when the runtime device is created. The explicit
+`ORBIT_VK_BEST_PRACTICES`, `ORBIT_VK_SYNC_VALIDATION`, and
+`ORBIT_VK_GPU_ASSISTED` flags still request validation and override this opt-out.
+Validation remains enabled by default in debug builds when no override is set.
+
+Terrain physical-page jobs use at most one quarter of hardware threads by
+default, with a minimum of two workers. Set `ORBIT_TERRAIN_WORKERS` to a
+positive integer before starting Studio to tune the tradeoff between terrain
+build throughput and foreground responsiveness.
 
 ## RPC / MCP
 

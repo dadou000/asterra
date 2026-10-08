@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/terrain/BakedRivers.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/world/Planet.hpp>
@@ -65,7 +66,28 @@ struct AnalyticTerrainDesc
     ProceduralCraterTerrainDesc craters{};
     // Mountain relief and local detail share the available elevation headroom.
     f64 maximumElevationAboveSeaLevelMeters{8'000.0};
+
+    // Baked global river network. When set, channels are cut into the terrain
+    // from the stored centerlines; no drainage is computed while generating.
+    // Immutable and shared; swapping it means composing a new source.
+    std::shared_ptr<const BakedRiverNetwork> bakedRivers{};
 };
+
+// Identity of everything the baked tectonic rasters depend on: the plate model
+// recipe (seeds, plate count and shape, crust biases, plate motion, boundary
+// width, reference speeds, convergence uplift and oceanic scale) and the planet
+// radius, plus the baker's algorithm version. Hotspot chains and rain-shadow
+// settings are not baked, so editing them never makes a bake stale.
+[[nodiscard]] u64 TectonicBakeRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc) noexcept;
+
+// Fingerprint of everything that shapes the terrain except the baked river
+// network, which is a product of this recipe. A river bake is stale when this
+// (or its own options) changed. Includes the baked tectonic raster identity.
+[[nodiscard]] u64 TerrainRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc);
 
 class AnalyticTerrainSource final : public TerrainSource
 {

@@ -17,7 +17,7 @@ namespace orbit::terrain_gpu
 namespace
 {
 // Must match FieldGenerationCompute.hpp's kParam* indices exactly.
-constexpr u32 kParamCount = 54;
+constexpr u32 kParamCount = 57;
 
 constexpr u32 kPlateStrideFloats = 9;
 constexpr u32 kHotspotStrideFloats = 34;
@@ -105,6 +105,16 @@ constexpr u32 kPushConstantDwords = 40;
     storeUint(51, desc.craters.enabled ? desc.craters.localLevels : 0U);
     storeFloat(52, desc.craters.localBaseSpacingMeters);
     storeFloat(53, desc.craters.localDensity);
+    // 0 selects the plate model; otherwise the baked raster resolution.
+    storeUint(54, desc.global.bakedTectonics != nullptr
+        ? desc.global.bakedTectonics->Resolution()
+        : 0U);
+    storeUint(55, desc.bakedRivers != nullptr
+        ? static_cast<u32>(desc.bakedRivers->BucketSegments().size())
+        : 0U);
+    storeUint(56, desc.bakedRivers != nullptr
+        ? static_cast<u32>(desc.bakedRivers->Segments().size())
+        : 0U);
 
     return result;
 }
@@ -246,7 +256,7 @@ GpuFieldGenerator::GpuFieldGenerator(
             .size = compute.bytecode.size()
         },
         .pushConstantDwords = kPushConstantDwords,
-        .shaderResourceBuffers = 5
+        .shaderResourceBuffers = 7
     });
 
     const terrain::AnalyticTerrainDesc& desc = source.Description();
@@ -296,8 +306,63 @@ GpuFieldGenerator::GpuFieldGenerator(
     const std::vector<f32> craterFloats =
         BuildCratersBuffer(source.CratersForGpu());
 
+    // Interleaved {convergence, plate bias} per gutter texel. Always bound
+    // (a one-texel placeholder when no bake is attached) so the pipeline
+    // layout stays fixed; the shader only reads it when the baked resolution
+    // parameter is non-zero.
+    std::vector<f32> bakedFloats;
+    if (desc.global.bakedTectonics != nullptr)
+    {
+        bakedFloats = desc.global.bakedTectonics->BuildGpuConvergenceAndBias();
+    }
+    else
+    {
+        bakedFloats.assign(2U, 0.0F);
+    }
+
+    // Bucket ranges, segment index list, then segments: the layout
+    // FieldGenerationCompute.hpp's RiverCarveDepth reads. A placeholder when
+    // there is no network (the shader skips it on a zero segment count).
+    std::vector<u32> riverWords;
+    if (desc.bakedRivers != nullptr && !desc.bakedRivers->Empty())
+    {
+        const terrain::BakedRiverNetwork& rivers = *desc.bakedRivers;
+        riverWords = rivers.BucketRanges();
+        riverWords.insert(
+            riverWords.end(),
+            rivers.BucketSegments().begin(),
+            rivers.BucketSegments().end());
+        const auto push = [&riverWords](const f32 value)
+        {
+            riverWords.push_back(std::bit_cast<u32>(value));
+        };
+        for (const terrain::BakedRiverSegment& segment : rivers.Segments())
+        {
+            const terrain::BakedRiverNode& a = rivers.Nodes()[segment.upstream];
+            const terrain::BakedRiverNode& b = rivers.Nodes()[segment.downstream];
+            push(static_cast<f32>(a.direction.x));
+            push(static_cast<f32>(a.direction.y));
+            push(static_cast<f32>(a.direction.z));
+            push(static_cast<f32>(b.direction.x));
+            push(static_cast<f32>(b.direction.y));
+            push(static_cast<f32>(b.direction.z));
+            push(a.widthMeters);
+            push(b.widthMeters);
+            push(a.depthMeters);
+            push(b.depthMeters);
+        }
+    }
+    else
+    {
+        riverWords.assign(4U, 0U);
+    }
+
     paramsBuffer_ = CreateStaticBuffer(
         device, params.data(), params.size() * sizeof(u32));
+    bakedTectonicsBuffer_ = CreateStaticBuffer(
+        device, bakedFloats.data(), bakedFloats.size() * sizeof(f32));
+    riversBuffer_ = CreateStaticBuffer(
+        device, riverWords.data(), riverWords.size() * sizeof(u32));
     platesBuffer_ = CreateStaticBuffer(
         device, plateFloats.data(), plateFloats.size() * sizeof(f32));
     hotspotsBuffer_ = CreateStaticBuffer(
@@ -370,6 +435,8 @@ void GpuFieldGenerator::Dispatch(
     commandList.SetComputeBuffer(2, *hotspotsBuffer_);
     commandList.SetComputeBuffer(3, outputSamples);
     commandList.SetComputeBuffer(4, *cratersBuffer_);
+    commandList.SetComputeBuffer(5, *bakedTectonicsBuffer_);
+    commandList.SetComputeBuffer(6, *riversBuffer_);
     commandList.SetComputeConstants(pushConstants);
 
     constexpr u32 kThreadGroupSize = 8;

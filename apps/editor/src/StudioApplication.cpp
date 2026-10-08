@@ -88,6 +88,7 @@
 #include <orbit/world_model/MaterialAssignmentBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
+#include <orbit/world/Planet.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
 #include "EditorAppSupport.hpp"
@@ -99,6 +100,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <charconv>
 #include <cstddef>
 #include <cstring>
@@ -1042,9 +1044,250 @@ int orbit::editor_app::StudioApplication::Run(
                 studioViews);
         debugViewUi.Register(ui);
 
+        struct ViewportOnlyCapture
+        {
+            bool active{false};
+            std::chrono::steady_clock::time_point deadline{};
+            orbit::f64 windowMs{4000.0};
+            std::string resolutionPreset{"1440p"};
+            std::string scenario{"static"};
+            std::chrono::steady_clock::time_point started{};
+            std::optional<orbit::studio_ui::StudioViewPose> originalPose;
+            orbit::world::PlanetDefinition planet{};
+            orbit::f64 groundElevationMeters{0.0};
+            orbit::u32 width{2560U};
+            orbit::u32 height{1440U};
+            std::string path;
+            std::string error;
+        } viewportOnlyCapture;
+        orbit::studio_ui::ProfilerModel* profilerCaptureOptions = nullptr;
+        const auto startViewportOnlyCapture =
+            [&viewportOnlyCapture, &studioViewportPanels, &studioViews,
+             &studioSession](
+                const orbit::f64 windowMs,
+                const std::string_view resolution,
+                const std::string_view scenario)
+            {
+                if (viewportOnlyCapture.active ||
+                    !std::isfinite(windowMs) ||
+                    windowMs <= 0.0)
+                {
+                    return false;
+                }
+                std::pair<orbit::u32, orbit::u32> size{};
+                if (resolution == "720p")
+                {
+                    size = {1280U, 720U};
+                }
+                else if (resolution == "1080p")
+                {
+                    size = {1920U, 1080U};
+                }
+                else if (resolution == "1440p")
+                {
+                    size = {2560U, 1440U};
+                }
+                else if (resolution == "2160p")
+                {
+                    size = {3840U, 2160U};
+                }
+                else
+                {
+                    return false;
+                }
+                if (scenario != "static" &&
+                    scenario != "walk_1_94_mps" &&
+                    scenario != "surface_200_kmh" &&
+                    scenario != "flight_2000_mps_5000m" &&
+                    scenario != "ground_to_orbit_20s")
+                {
+                    return false;
+                }
+                viewportOnlyCapture.active = true;
+                viewportOnlyCapture.windowMs =
+                    std::clamp(windowMs, 250.0, 30000.0);
+                viewportOnlyCapture.resolutionPreset = resolution;
+                viewportOnlyCapture.width = size.first;
+                viewportOnlyCapture.height = size.second;
+                viewportOnlyCapture.scenario = scenario;
+                viewportOnlyCapture.started = std::chrono::steady_clock::now();
+                viewportOnlyCapture.originalPose =
+                    studioViews.ViewPose("studio.primary");
+                if (scenario != "static" &&
+                    (!viewportOnlyCapture.originalPose.has_value() ||
+                     !viewportOnlyCapture.originalPose->hasCamera))
+                {
+                    viewportOnlyCapture.originalPose.reset();
+                    viewportOnlyCapture.active = false;
+                    return false;
+                }
+                if (const auto terrain = studioSession.TerrainRuntime().Capture("studio.primary");
+                    terrain.has_value())
+                {
+                    viewportOnlyCapture.planet = terrain->planet;
+                    const auto& source = studioSession.TerrainRuntime().TerrainSource(*terrain);
+                    viewportOnlyCapture.groundElevationMeters = source.Sample({
+                        .unitDirection = viewportOnlyCapture.originalPose.has_value()
+                            ? viewportOnlyCapture.originalPose->surfaceFrame.up
+                            : orbit::math::Double3{0.0, 1.0, 0.0},
+                        .footprintMeters = 2.0,
+                        .planet = terrain->planet.id
+                    }).elevationMeters;
+                }
+                else if (viewportOnlyCapture.originalPose.has_value())
+                {
+                    viewportOnlyCapture.planet.radiusMeters = std::max(
+                        1.0,
+                        orbit::math::Length(viewportOnlyCapture.originalPose->observerMeters));
+                    viewportOnlyCapture.groundElevationMeters = 0.0;
+                }
+                studioViewportPanels.SetViewportCaptureResolution(size);
+                viewportOnlyCapture.deadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<double, std::milli>(
+                            viewportOnlyCapture.windowMs));
+                viewportOnlyCapture.path.clear();
+                viewportOnlyCapture.error.clear();
+                return true;
+            };
+        const auto viewportOnlyCaptureStatus =
+            [&viewportOnlyCapture]()
+            {
+                const auto remaining = viewportOnlyCapture.active
+                    ? std::max(0.0, std::chrono::duration<double, std::milli>(
+                        viewportOnlyCapture.deadline - std::chrono::steady_clock::now()).count())
+                    : 0.0;
+                return orbit::rpc::Value(orbit::rpc::Value::Object{
+                    {"active", viewportOnlyCapture.active},
+                    {"remaining_ms", remaining},
+                    {"window_ms", viewportOnlyCapture.windowMs},
+                    {"duration_ms", viewportOnlyCapture.windowMs},
+                    {"resolution", viewportOnlyCapture.resolutionPreset},
+                    {"scenario", viewportOnlyCapture.scenario},
+                    {"width", static_cast<orbit::i64>(viewportOnlyCapture.width)},
+                    {"height", static_cast<orbit::i64>(viewportOnlyCapture.height)},
+                    {"path", viewportOnlyCapture.path},
+                    {"error", viewportOnlyCapture.error}});
+            };
+        rpcHost.Dispatcher().Register(
+            {
+                .name = "profiler.viewport_capture",
+                .description =
+                    "Start or cancel a timed viewport-only profiler capture. "
+                    "During capture Studio draws only the primary viewport, then writes a Perfetto trace.",
+                .mutating = true
+            },
+            [&startViewportOnlyCapture, &viewportOnlyCapture, &studioViews,
+             &studioViewportPanels,
+             &profilerCaptureOptions,
+             &viewportOnlyCaptureStatus](const orbit::rpc::Value& params)
+            {
+                std::string action = "start";
+                orbit::f64 windowMs = profilerCaptureOptions != nullptr
+                    ? profilerCaptureOptions->Options().viewportCaptureDurationMs
+                    : orbit::profiler::CurrentConfig().captureWindowMs;
+                std::string resolution = profilerCaptureOptions != nullptr
+                    ? profilerCaptureOptions->Options().viewportCaptureResolution
+                    : "1440p";
+                std::string scenario = profilerCaptureOptions != nullptr
+                    ? profilerCaptureOptions->Options().viewportCaptureScenario
+                    : "static";
+                if (params.IsObject())
+                {
+                    const auto& values = params.AsObject();
+                    if (const auto found = values.find("action"); found != values.end())
+                    {
+                        if (!found->second.IsString())
+                        {
+                            throw orbit::rpc::Error(
+                                -32602, "action must be start or cancel.");
+                        }
+                        action = found->second.AsString();
+                    }
+                    if (const auto found = values.find("window_ms");
+                        found != values.end())
+                    {
+                        if (!found->second.IsNumber())
+                        {
+                            throw orbit::rpc::Error(-32602, "window_ms must be a number.");
+                        }
+                        windowMs = found->second.AsNumber();
+                    }
+                    if (const auto found = values.find("duration_ms");
+                        found != values.end())
+                    {
+                        if (!found->second.IsNumber())
+                        {
+                            throw orbit::rpc::Error(-32602, "duration_ms must be a number.");
+                        }
+                        windowMs = found->second.AsNumber();
+                    }
+                    if (const auto found = values.find("resolution");
+                        found != values.end())
+                    {
+                        if (!found->second.IsString())
+                        {
+                            throw orbit::rpc::Error(
+                                -32602,
+                                "resolution must be a preset: 720p, 1080p, 1440p, or 2160p.");
+                        }
+                        resolution = found->second.AsString();
+                    }
+                    if (const auto found = values.find("scenario");
+                        found != values.end())
+                    {
+                        if (!found->second.IsString())
+                        {
+                            throw orbit::rpc::Error(-32602, "scenario must be a supported capture scenario.");
+                        }
+                        scenario = found->second.AsString();
+                    }
+                }
+                if (action == "start")
+                {
+                    if (!startViewportOnlyCapture(windowMs, resolution, scenario))
+                    {
+                        throw orbit::rpc::Error(
+                            1090,
+                            "A viewport-only capture is already running, capture settings are invalid, or the moving scenario needs a targeted camera.");
+                    }
+                }
+                else if (action == "cancel")
+                {
+                    viewportOnlyCapture.active = false;
+                    if (viewportOnlyCapture.originalPose.has_value())
+                    {
+                        static_cast<void>(studioViews.RestoreViewPose(
+                            "studio.primary", *viewportOnlyCapture.originalPose));
+                    }
+                    viewportOnlyCapture.originalPose.reset();
+                    studioViewportPanels.SetViewportCaptureResolution(std::nullopt);
+                }
+                else
+                {
+                    throw orbit::rpc::Error(
+                        -32602, "action must be start or cancel.");
+                }
+                return viewportOnlyCaptureStatus();
+            });
+        rpcHost.Dispatcher().Register(
+            {
+                .name = "profiler.viewport_capture_status",
+                .description =
+                    "Read the active or most recent viewport-only profiler capture state and trace path.",
+                .mutating = false
+            },
+            [&viewportOnlyCaptureStatus](const orbit::rpc::Value&)
+            {
+                return viewportOnlyCaptureStatus();
+            });
+
         // CPU profiler panel + profiler.panel_* / profiler.snapshot RPC, both
         // driving one model (docs/ORBIT_PROFILER.md).
         orbit::studio_ui::ProfilerUi profilerUi;
+        profilerCaptureOptions = &profilerUi.Model();
+        profilerUi.SetViewportOnlyCaptureAction(startViewportOnlyCapture);
         profilerUi.Register(ui);
         orbit::studio_ui::RegisterProfilerPanelRpc(
             rpcHost.Dispatcher(),
@@ -2241,6 +2484,93 @@ int orbit::editor_app::StudioApplication::Run(
 
             rpcServer.Poll();
 
+            if (viewportOnlyCapture.active &&
+                viewportOnlyCapture.scenario != "static" &&
+                viewportOnlyCapture.originalPose.has_value() &&
+                viewportOnlyCapture.originalPose->hasCamera)
+            {
+                using Clock = std::chrono::steady_clock;
+                const orbit::f64 elapsedSeconds = std::max(
+                    0.0,
+                    std::chrono::duration<orbit::f64>(
+                        Clock::now() - viewportOnlyCapture.started).count());
+                auto pose = *viewportOnlyCapture.originalPose;
+                orbit::f64 altitudeMeters =
+                    viewportOnlyCapture.groundElevationMeters + 1.7;
+                orbit::f64 distanceMeters = 0.0;
+                if (viewportOnlyCapture.scenario == "walk_1_94_mps")
+                {
+                    distanceMeters = elapsedSeconds * 1.94;
+                }
+                else if (viewportOnlyCapture.scenario == "surface_200_kmh")
+                {
+                    distanceMeters = elapsedSeconds * (200.0 / 3.6);
+                }
+                else if (viewportOnlyCapture.scenario == "flight_2000_mps_5000m")
+                {
+                    altitudeMeters =
+                        viewportOnlyCapture.groundElevationMeters + 5'000.0;
+                    distanceMeters = elapsedSeconds * 2'000.0;
+                }
+                else if (viewportOnlyCapture.scenario == "ground_to_orbit_20s")
+                {
+                    altitudeMeters = viewportOnlyCapture.groundElevationMeters + 1.7 +
+                        499'998.3 *
+                        std::clamp(elapsedSeconds / 20.0, 0.0, 1.0);
+                }
+                const orbit::math::Double2 offset{
+                    0.0,
+                    distanceMeters};
+                pose.surfaceFrame = orbit::world::SurfaceFrameAtOffset(
+                    viewportOnlyCapture.planet,
+                    viewportOnlyCapture.originalPose->surfaceFrame,
+                    offset);
+                const orbit::math::Double3 direction =
+                    orbit::world::DirectionAtSurfaceOffset(
+                        viewportOnlyCapture.planet,
+                        viewportOnlyCapture.originalPose->surfaceFrame,
+                        offset);
+                pose.observerMeters = direction *
+                    (viewportOnlyCapture.planet.radiusMeters + altitudeMeters);
+                static_cast<void>(studioViews.RestoreViewPose(
+                    "studio.primary", pose));
+            }
+
+            if (viewportOnlyCapture.active &&
+                std::chrono::steady_clock::now() >= viewportOnlyCapture.deadline)
+            {
+                try
+                {
+                    const auto path = orbit::profiler::DefaultCapturePath();
+                    static_cast<void>(orbit::profiler::Capture(
+                        path, viewportOnlyCapture.windowMs));
+                    viewportOnlyCapture.path = path.generic_string();
+                    viewportOnlyCapture.error.clear();
+                }
+                catch (const std::exception& exception)
+                {
+                    viewportOnlyCapture.error = exception.what();
+                }
+                viewportOnlyCapture.active = false;
+                if (viewportOnlyCapture.originalPose.has_value())
+                {
+                    static_cast<void>(studioViews.RestoreViewPose(
+                        "studio.primary", *viewportOnlyCapture.originalPose));
+                }
+                viewportOnlyCapture.originalPose.reset();
+                studioViewportPanels.SetViewportCaptureResolution(std::nullopt);
+                pendingRpcNotifications.push_back({
+                    .title = viewportOnlyCapture.error.empty()
+                        ? "Viewport capture complete"
+                        : "Viewport capture failed",
+                    .detail = viewportOnlyCapture.error.empty()
+                        ? viewportOnlyCapture.path
+                        : viewportOnlyCapture.error,
+                    .severity = viewportOnlyCapture.error.empty()
+                        ? orbit::editor_ui::EditorUi::NotificationSeverity::Info
+                        : orbit::editor_ui::EditorUi::NotificationSeverity::Error});
+            }
+
             studioSession.Clock().Advance(
                 deltaSeconds);
             reportsController.Tick();
@@ -2546,11 +2876,12 @@ int orbit::editor_app::StudioApplication::Run(
                 window,
                 deltaSeconds);
 
-            if (ui.ConsumeSlashRequest())
+            if (!viewportOnlyCapture.active && ui.ConsumeSlashRequest())
             {
                 studioViewportPanels.RequestCommandPaletteOpen();
             }
 
+            if (!viewportOnlyCapture.active)
             {
                 // Which project/world am I in? Refreshed a few times a
                 // second; the catalog scan is not free and the values change
@@ -2601,21 +2932,29 @@ int orbit::editor_app::StudioApplication::Run(
                     manifest.displayName,
                     project.ManifestPath(),
                     indicatorWorld);
+
+                if (!pendingRpcNotifications.empty())
+                for (auto& notification : pendingRpcNotifications)
+                {
+                    ui.PushNotification(std::move(notification));
+                }
+                pendingRpcNotifications.clear();
             }
 
-            if (!pendingRpcNotifications.empty())
-            for (auto& notification : pendingRpcNotifications)
+            if (viewportOnlyCapture.active)
             {
-                ui.PushNotification(
-                    std::move(notification));
+                static_cast<void>(ui.DrawPanelFullscreen(
+                    orbit::studio_ui::kPrimaryViewportPanel));
+                studioViews.SetCompositionEnabled("studio.map", false);
             }
-            pendingRpcNotifications.clear();
-
-            ui.DrawStudioShell();
-            studioViews.SetCompositionEnabled(
-                "studio.map",
-                ui.PanelVisible(
-                    orbit::studio_ui::kSecondaryViewportPanel));
+            else
+            {
+                ui.DrawStudioShell();
+                studioViews.SetCompositionEnabled(
+                    "studio.map",
+                    ui.PanelVisible(
+                        orbit::studio_ui::kSecondaryViewportPanel));
+            }
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::Ui,
                 std::chrono::duration<double, std::milli>(

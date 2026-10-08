@@ -114,6 +114,7 @@ StudioSession::StudioSession(
       pathNetwork_(world_),
       pathRouting_(world_),
       pathProducts_(world_),
+      terrainBake_(world_),
       terrainPhysicalPages_(
           world_,
           terrainDebugPages_),
@@ -454,6 +455,16 @@ StudioSession::Rpc() const noexcept
     return rpc_;
 }
 
+StudioTerrainBakeController& StudioSession::TerrainBake() noexcept
+{
+    return terrainBake_;
+}
+
+const StudioTerrainBakeController& StudioSession::TerrainBake() const noexcept
+{
+    return terrainBake_;
+}
+
 StudioTickResult StudioSession::Tick(
     const bool pollPlugins)
 {
@@ -479,6 +490,7 @@ StudioTickResult StudioSession::Tick(
         RefreshTerrainDebugGeneration();
         result.terrainRuntimeChanged =
             terrainRuntime_.Refresh();
+        terrainBake_.Clear();
         terrainPhysicalPages_.Clear();
         pendingTerrainInvalidations_.clear();
         ResetVolumeOutputRuntime();
@@ -497,6 +509,14 @@ StudioTickResult StudioSession::Tick(
 
     result.compositionChanged =
         world_.RefreshUniverseIfChanged();
+
+    // Bake before anything reads the terrain: the first bake of a planet is
+    // blocking, so no page is generated from the plate model, and a finished
+    // rebake swaps in here by recomposing the terrain source.
+    if (terrainBake_.Tick())
+    {
+        result.compositionChanged = true;
+    }
 
     result.activeBodyChanged =
         activeBody_.Refresh();

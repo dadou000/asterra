@@ -1695,6 +1695,30 @@ ImageInteraction PanelContext::Image(
     };
 }
 
+ImageInteraction PanelContext::ImageFit(
+    rhi::Texture& texture,
+    const UiSize available,
+    const UiSize sourceSize)
+{
+    if (available.width <= 0.0F || available.height <= 0.0F ||
+        sourceSize.width <= 0.0F || sourceSize.height <= 0.0F)
+    {
+        return Image(texture, {});
+    }
+
+    const f32 scale = std::min(
+        available.width / sourceSize.width,
+        available.height / sourceSize.height);
+    const UiSize fitted{
+        .width = sourceSize.width * scale,
+        .height = sourceSize.height * scale};
+    const ImVec2 cursor = ImGui::GetCursorPos();
+    ImGui::SetCursorPos({
+        cursor.x + (available.width - fitted.width) * 0.5F,
+        cursor.y + (available.height - fitted.height) * 0.5F});
+    return Image(texture, fitted);
+}
+
 CanvasInteraction PanelContext::Canvas(
     const std::string_view id,
     const UiSize size)
@@ -3554,6 +3578,50 @@ void EditorUi::DrawStudioShell()
     impl_->DrawNotifications(
         *mainViewport,
         ImGui::GetIO().DeltaTime);
+}
+
+bool EditorUi::DrawPanelFullscreen(const PanelId id)
+{
+    if (!impl_->frameBegun)
+    {
+        throw std::logic_error(
+            "Editor UI panel drawn outside a frame.");
+    }
+
+    ImGui::SetCurrentContext(impl_->context);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    PanelContext context(
+        impl_->automationExpandTrees,
+        impl_->automationTraceWidgets ? &impl_->automationTrace : nullptr);
+
+    std::fill(impl_->panelVisible.begin(), impl_->panelVisible.end(), u8{0});
+    for (std::size_t index = 0; index < impl_->panels.size(); ++index)
+    {
+        PanelDefinition& panel = impl_->panels[index];
+        if (panel.id != id)
+        {
+            continue;
+        }
+
+        ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(viewport->Size, ImGuiCond_Always);
+        ImGui::SetNextWindowViewport(viewport->ID);
+        constexpr ImGuiWindowFlags flags =
+            ImGuiWindowFlags_NoDecoration |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoBringToFrontOnFocus;
+        const bool visible = ImGui::Begin("##orbit-viewport-capture", nullptr, flags);
+        impl_->panelVisible[index] = visible ? 1U : 0U;
+        if (visible)
+        {
+            panel.draw(context);
+        }
+        ImGui::End();
+        return true;
+    }
+    return false;
 }
 
 void EditorUi::Render(

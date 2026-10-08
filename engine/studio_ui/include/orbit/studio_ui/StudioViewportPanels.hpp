@@ -150,6 +150,13 @@ public:
         gizmoRelativeMouseDelta_ = delta;
     }
     [[nodiscard]] bool GizmoDragging() const noexcept;
+    // Temporary render-target size used only by Profiler's viewport-only capture.
+    // Passing nullopt restores the primary view to its panel's normal size.
+    void SetViewportCaptureResolution(
+        std::optional<std::pair<u32, u32>> size) noexcept
+    {
+        viewportCaptureResolution_ = size;
+    }
 
 private:
     friend class StudioExpansionShell;
@@ -158,6 +165,7 @@ private:
     math::Float2 gizmoRelativeMouseDelta_{};
     std::function<bool()> ecoModeGetter_;
     std::function<void(bool)> ecoModeSetter_;
+    std::optional<std::pair<u32, u32>> viewportCaptureResolution_;
 
     void RegisterBase(editor_ui::EditorUi& ui);
     void RegisterSecondaryBase(editor_ui::EditorUi& ui);

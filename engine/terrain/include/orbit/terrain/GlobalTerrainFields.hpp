@@ -3,6 +3,7 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain/TectonicFieldDesc.hpp>
+#include <orbit/terrain/BakedTectonics.hpp>
 #include <orbit/terrain/TectonicStructure.hpp>
 #include <orbit/terrain/TerrainFields.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
@@ -21,6 +22,7 @@ namespace detail
 // GlobalTerrainFields.cpp for the definition of GlobalTerrainFields'
 // pimpl-held instance.
 class TectonicField;
+struct TectonicSample;
 } // namespace detail
 
 // Exported copies of TectonicField's private per-plate/per-hotspot state,
@@ -69,6 +71,13 @@ struct GlobalTerrainFieldDesc
     f64 lapseRateCPerKilometer{6.2};
 
     TectonicFieldDesc tectonic{};
+
+    // When set, plate-driven fields (boundary masks, plate bias, structural
+    // layer) are sampled from these baked rasters instead of being evaluated
+    // from the plate model, so no plate math runs while generating terrain.
+    // The pointer is shared and immutable; swapping a bake means building a
+    // new source, which is how terrain revisions and caches invalidate.
+    std::shared_ptr<const BakedTectonicRasters> bakedTectonics{};
 };
 
 struct GlobalTerrainFieldSample
@@ -131,6 +140,15 @@ public:
     [[nodiscard]] TectonicStructureSample SampleTectonicStructure(
         const math::Double3& direction) const noexcept;
 
+    // Evaluates the plate model itself, ignoring any attached bake, and
+    // returns every baked layer for a direction. This is what the baker
+    // rasterizes; it is not for use while generating terrain.
+    [[nodiscard]] BakedTectonicTexel EvaluateTectonicTexel(
+        const math::Double3& direction) const noexcept;
+
+    [[nodiscard]] u32 TectonicPlateCount() const noexcept;
+    [[nodiscard]] bool TectonicPlateIsContinental(u32 plate) const noexcept;
+
     // Exports the exact plates/hotspots this instance generated, for a
     // GPU field generator to upload -- see GpuTectonicPlate's comment for
     // why this must be exported rather than regenerated GPU-side.
@@ -158,6 +176,11 @@ private:
         bool includeBiomes) const noexcept;
 
     [[nodiscard]] f64 ContinentalSignal(
+        const math::Double3& direction) const noexcept;
+
+    // Plate-driven fields at a direction: from the baked rasters when
+    // attached, otherwise from the plate model.
+    [[nodiscard]] detail::TectonicSample TectonicAt(
         const math::Double3& direction) const noexcept;
 
     world::PlanetDefinition planet_;

@@ -11,6 +11,7 @@
 #include <orbit/terrain_erosion/GlacialErosion.hpp>
 #include <orbit/terrain_erosion/HydraulicErosion.hpp>
 #include <orbit/terrain_erosion/RiverNetwork.hpp>
+#include "BakedRiverPage.hpp"
 #include <orbit/terrain_erosion/SedimentExchange.hpp>
 #include <orbit/terrain_erosion/StreamPowerErosion.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
@@ -274,11 +275,6 @@ struct BodyBuildInputs
 
 struct SharedBodyInputs
 {
-    using DrainagePageMap = std::unordered_map<
-        terrain::PhysicalTerrainPageAddress,
-        std::shared_ptr<const terrain_hydrology::DrainagePage>,
-        AddressHash>;
-
     [[nodiscard]] std::shared_ptr<
         const BodyBuildInputs>
     Capture() const
@@ -295,7 +291,6 @@ struct SharedBodyInputs
         current =
             std::move(value);
         pending.reset();
-        drainagePages.clear();
     }
 
     void Stage(
@@ -315,32 +310,7 @@ struct SharedBodyInputs
         {
             current =
                 std::move(pending);
-            drainagePages.clear();
         }
-    }
-
-    void PublishDrainage(
-        const terrain::PhysicalTerrainPageAddress& address,
-        std::shared_ptr<const terrain_hydrology::DrainagePage> page)
-    {
-        std::scoped_lock lock(mutex);
-        if (page == nullptr)
-            drainagePages.erase(address);
-        else
-            drainagePages.insert_or_assign(address, std::move(page));
-    }
-
-    void EraseDrainage(
-        const terrain::PhysicalTerrainPageAddress& address)
-    {
-        std::scoped_lock lock(mutex);
-        drainagePages.erase(address);
-    }
-
-    [[nodiscard]] DrainagePageMap CaptureDrainagePages() const
-    {
-        std::scoped_lock lock(mutex);
-        return drainagePages;
     }
 
     mutable std::mutex mutex;
@@ -348,7 +318,6 @@ struct SharedBodyInputs
         const BodyBuildInputs> current;
     std::shared_ptr<
         const BodyBuildInputs> pending;
-    DrainagePageMap drainagePages;
 };
 
 struct PhysicalBundle
@@ -525,9 +494,11 @@ BuildDrainageHalo(
     const terrain::PhysicalTerrainPageAddress& address,
     const u32 resolution,
     const f64 spacingMeters,
-    const u64 revision,
-    const SharedBodyInputs::DrainagePageMap& publishedPages)
+    const u64 revision)
 {
+    // Pages are independent: the halo is the terrain source sampled just
+    // outside the page (which already carries the baked river channels), never
+    // a neighbouring page's solved drainage.
     terrain_hydrology::DrainagePageHalo halo{};
     halo.revision = revision;
     u64 boundaryFingerprint = revision;
@@ -617,22 +588,11 @@ BuildDrainageHalo(
         const terrain::PhysicalTerrainPageAddress neighborAddress{
             .planet = address.planet,
             .tile = mapping.tile};
-        const auto neighborPage =
-            publishedPages.find(neighborAddress);
-        const bool neighborResident =
-            neighborPage != publishedPages.end() &&
-            neighborPage->second != nullptr;
-
-        const auto reverseMapping =
-            world::NeighborAcrossTileEdge(
-                mapping.tile,
-                mapping.edge);
-
         // The neighbour's page-local cell (x, y), in this page's frame.
         const auto neighborCell =
             [&](const u32 x, const u32 y)
         {
-            auto boundary = BoundarySample(
+            return BoundarySample(
                 inputs,
                 macro,
                 PagePosition(
@@ -641,18 +601,6 @@ BuildDrainageHalo(
                     x,
                     y),
                 spacingMeters);
-
-            if (neighborResident)
-            {
-                boundary = neighborPage->second->CellAsBoundary(x, y);
-                const auto flow = world::TransformFlowAcrossTileEdge(
-                    mapping.edge,
-                    reverseMapping,
-                    {boundary.flowDx, boundary.flowDy});
-                boundary.flowDx = flow.dx;
-                boundary.flowDy = flow.dy;
-            }
-            return boundary;
         };
 
         for (u32 sampleIndex = 0U;
@@ -747,45 +695,6 @@ BuildDrainageHalo(
 
     halo.revision = boundaryFingerprint;
     return halo;
-}
-
-[[nodiscard]] u64 DrainageBoundaryFingerprint(
-    const terrain_hydrology::DrainagePage& page)
-{
-    u64 fingerprint = 0x445241494e424e44ULL;
-    constexpr std::array<terrain_hydrology::DrainageBoundarySide, 4U>
-        sides{
-            terrain_hydrology::DrainageBoundarySide::North,
-            terrain_hydrology::DrainageBoundarySide::East,
-            terrain_hydrology::DrainageBoundarySide::South,
-            terrain_hydrology::DrainageBoundarySide::West};
-
-    for (const auto side : sides)
-    {
-        for (u32 index = 0U; index < page.Resolution(); ++index)
-        {
-            const auto cell = page.BoundaryCell(side, index);
-            fingerprint = terrain::StableCombine64(
-                fingerprint,
-                std::bit_cast<u32>(cell.conditionedHeightMeters));
-            fingerprint = terrain::StableCombine64(
-                fingerprint,
-                std::bit_cast<u64>(cell.drainageAreaSquareMeters));
-            fingerprint = terrain::StableCombine64(
-                fingerprint,
-                std::bit_cast<u64>(cell.dischargeCubicMetersPerSecond));
-            fingerprint = terrain::StableCombine64(
-                fingerprint,
-                static_cast<u64>(static_cast<u8>(cell.flowDx)) << 24U |
-                    static_cast<u64>(static_cast<u8>(cell.flowDy)) << 16U |
-                    static_cast<u64>(cell.outlet) << 8U);
-            fingerprint = terrain::StableCombine64(
-                fingerprint,
-                cell.basinTerminalFingerprint);
-        }
-    }
-
-    return fingerprint;
 }
 
 [[nodiscard]] BundlePtr BuildGeology(
@@ -920,8 +829,7 @@ BuildDrainageHalo(
 [[nodiscard]] BundlePtr BuildDrainage(
     const BodyBuildInputs& inputs,
     const terrain::TerrainGenerationRevisions& revisions,
-    const procedural_graph::BuildContext& context,
-    const SharedBodyInputs::DrainagePageMap& publishedPages)
+    const procedural_graph::BuildContext& context)
 {
     const BundlePtr upstream =
         DependencyBundle(
@@ -995,23 +903,26 @@ BuildDrainageHalo(
             result->key.address,
             resolution,
             result->spacingMeters,
-            context.inputRevisionHash,
-            publishedPages);
+            context.inputRevisionHash);
+
+    terrain_hydrology::DrainagePage page =
+        terrain_hydrology::BuildDrainagePage(
+            *result->material,
+            result->key,
+            result->drainageInputs,
+            result->drainageHalo,
+            inputs.processes.streamPower.drainage);
+
+    // Basin-scale discharge comes from the bake, not from this page's catchment.
+    if (const auto& baked = inputs.source->Description().bakedRivers;
+        baked != nullptr)
+    {
+        ApplyBakedRiverDischarge(page, *baked, result->drainageInputs);
+    }
 
     result->drainage =
-        std::make_shared<
-            terrain_hydrology::DrainagePage>(
-                terrain_hydrology::
-                    BuildDrainagePage(
-                        *result->material,
-                        result->key,
-                        result->
-                            drainageInputs,
-                        result->
-                            drainageHalo,
-                        inputs.processes.
-                            streamPower.
-                            drainage));
+        std::make_shared<const terrain_hydrology::DrainagePage>(
+            std::move(page));
 
     return result;
 }
@@ -1372,20 +1283,37 @@ void MergeSediment(
             if (authored.page == result->key.address)
                 pageConstraints.push_back(authored.constraint);
         }
-        result->rivers = std::make_shared<terrain_erosion::RiverNetwork>(
-            terrain_erosion::BuildRiverNetwork(
-                *result->drainage,
-                pageConstraints,
-                inputs.processes.rivers,
-                sediment.has_value() ? &*sediment : nullptr));
+        const auto& bakedRivers = inputs.source->Description().bakedRivers;
+        if (bakedRivers != nullptr && pageConstraints.empty())
+        {
+            // The graph was solved once at bake time and the channels are
+            // already cut into the terrain: clip it to the page, no routing,
+            // meandering or incision at run time.
+            result->rivers = std::make_shared<terrain_erosion::RiverNetwork>(
+                BuildBakedPageRiverNetwork(
+                    *bakedRivers,
+                    *result->drainage,
+                    inputs.processes.rivers.maximumNodeSpacingMeters));
+        }
+        else
+        {
+            // Authored river constraints steer the local route, which the baked
+            // graph does not model: those pages keep the local solve.
+            result->rivers = std::make_shared<terrain_erosion::RiverNetwork>(
+                terrain_erosion::BuildRiverNetwork(
+                    *result->drainage,
+                    pageConstraints,
+                    inputs.processes.rivers,
+                    sediment.has_value() ? &*sediment : nullptr));
 
-        static_cast<void>(
-            terrain_erosion::
-                ApplyRiverNetworkIncision(
-                    *material,
-                    inputs.geology,
-                    *sediment,
-                    *result->rivers));
+            static_cast<void>(
+                terrain_erosion::
+                    ApplyRiverNetworkIncision(
+                        *material,
+                        inputs.geology,
+                        *sediment,
+                        *result->rivers));
+        }
     }
 
     if (inputs.processes.
@@ -2062,8 +1990,7 @@ void MergeSediment(
             BuildDrainage(
                 *inputs,
                 revisions,
-                context,
-                shared->CaptureDrainagePages()));
+                context));
     case Product::TerrainProcesses:
         return std::any(
             BuildProcesses(
@@ -2400,73 +2327,8 @@ public:
             AddressHash>
             publications;
 
-        std::unordered_map<
-            terrain::PhysicalTerrainPageAddress,
-            u64,
-            AddressHash>
-            drainageBoundaryFingerprints;
     };
 
-    // True while an edge neighbour of `address` still has a build in flight,
-    // or has finished one whose drainage has not been published yet. A page
-    // that started now would read that neighbour's previous boundary.
-    [[nodiscard]] static bool NeighborBusy(
-        const BodyRuntime& body,
-        const terrain::PhysicalTerrainPageAddress& address)
-    {
-        constexpr std::array<world::TileEdge, 4U> edges{
-            world::TileEdge::North,
-            world::TileEdge::East,
-            world::TileEdge::South,
-            world::TileEdge::West};
-
-        for (const auto edge : edges)
-        {
-            const auto neighbor =
-                world::NeighborAcrossTileEdge(address.tile, edge);
-            const terrain::PhysicalTerrainPageAddress other{
-                .planet = address.planet,
-                .tile = neighbor.tile};
-            if (other == address ||
-                !body.scheduler.ContainsPage(other))
-            {
-                continue;
-            }
-
-            const auto status = body.scheduler.PageStatus(other);
-            if (!status.has_value())
-            {
-                continue;
-            }
-
-            switch (status->state)
-            {
-            case TerrainRebuildState::Queued:
-            case TerrainRebuildState::BuildingCpu:
-            case TerrainRebuildState::BuildingGpu:
-                return true;
-            case TerrainRebuildState::Ready:
-            {
-                if (status->revisionFingerprint == 0U)
-                {
-                    break;
-                }
-                const auto found = body.publications.find(other);
-                if (found == body.publications.end() ||
-                    found->second.revisionFingerprint !=
-                        status->revisionFingerprint)
-                {
-                    return true;
-                }
-                break;
-            }
-            default:
-                break;
-            }
-        }
-
-        return false;
-    }
 
     Impl(
         editor_session::EditorWorldSession& worldIn,
@@ -2832,54 +2694,6 @@ public:
                 std::move(
                     snapshot);
 
-            body.shared->PublishDrainage(
-                status.address,
-                bundle->drainage);
-
-            if (bundle->drainage != nullptr)
-            {
-                const u64 boundaryFingerprint =
-                    DrainageBoundaryFingerprint(*bundle->drainage);
-                const auto previous =
-                    body.drainageBoundaryFingerprints.find(status.address);
-                const bool boundaryChanged =
-                    previous == body.drainageBoundaryFingerprints.end() ||
-                    previous->second != boundaryFingerprint;
-                body.drainageBoundaryFingerprints.insert_or_assign(
-                    status.address,
-                    boundaryFingerprint);
-
-                if (boundaryChanged)
-                {
-                    constexpr std::array<world::TileEdge, 4U> edges{
-                        world::TileEdge::North,
-                        world::TileEdge::East,
-                        world::TileEdge::South,
-                        world::TileEdge::West};
-                    for (const auto edge : edges)
-                    {
-                        const auto neighbor =
-                            world::NeighborAcrossTileEdge(
-                                status.address.tile,
-                                edge);
-                        const terrain::PhysicalTerrainPageAddress neighborAddress{
-                            .planet = status.address.planet,
-                            .tile = neighbor.tile};
-                        if (!body.scheduler.ContainsPage(neighborAddress))
-                            continue;
-
-                        body.scheduler.QueueChange({
-                            .kind = terrain_dependency::TerrainChangeKind::DrainageBoundary,
-                            .scope = {
-                                .planet = status.address.planet,
-                                .global = false,
-                                .center = neighbor.tile,
-                                .radiusTiles = 0U,
-                                .downstreamRadiusTiles = 0U}});
-                    }
-                }
-            }
-
             body.publications.
                 insert_or_assign(
                     status.address,
@@ -2895,11 +2709,11 @@ public:
     StudioTerrainPhysicalPageConfig
         config{};
 
-    // Half the hardware threads, so terrain page builds leave room for the
-    // render thread, orbital patch builds and the OS. ORBIT_TERRAIN_WORKERS
-    // overrides it.
+    // Keep terrain generation to a quarter of hardware threads so it yields
+    // more CPU to Studio's render/UI work and the other background pools.
+    // ORBIT_TERRAIN_WORKERS overrides this for throughput-focused runs.
     jobs::JobSystem jobs{
-        jobs::PoolWorkerCount("ORBIT_TERRAIN_WORKERS", 2U),
+        jobs::PoolWorkerCount("ORBIT_TERRAIN_WORKERS", 4U),
         "TerrainPages"};
 
     std::unordered_map<
@@ -3048,19 +2862,6 @@ void StudioTerrainPhysicalPageService::Sync(
             body->scheduler.
                 SetPaused(
                     impl_->paused);
-
-            // Neighbouring pages exchange drainage boundaries, and two adjacent
-            // pages rebuilt from the same stale snapshot can swap states
-            // forever. Edge neighbours are therefore built one after another
-            // (each from its neighbour's latest published result) while
-            // non-adjacent pages still build in parallel.
-            body->scheduler.
-                SetPageGate(
-                    [&runtimeBody = *body](
-                        const terrain::PhysicalTerrainPageAddress& address)
-                    {
-                        return !Impl::NeighborBusy(runtimeBody, address);
-                    });
 
             body->scheduler.
                 SetAppliedChangeCallback(
@@ -3227,10 +3028,6 @@ void StudioTerrainPhysicalPageService::Sync(
             }
 
             body->publications.erase(
-                status.address);
-            body->shared->EraseDrainage(
-                status.address);
-            body->drainageBoundaryFingerprints.erase(
                 status.address);
 
             if (impl_->debugPages !=

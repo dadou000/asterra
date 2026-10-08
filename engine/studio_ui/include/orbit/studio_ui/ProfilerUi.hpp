@@ -5,7 +5,10 @@
 #include <orbit/studio_ui/ProfilerModel.hpp>
 
 #include <optional>
+#include <functional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace orbit::studio_ui
 {
@@ -21,6 +24,11 @@ public:
     ProfilerUi();
 
     void Register(editor_ui::EditorUi& ui);
+    void SetViewportOnlyCaptureAction(
+        std::function<bool(f64, std::string_view, std::string_view)> action)
+    {
+        viewportOnlyCaptureAction_ = std::move(action);
+    }
 
     [[nodiscard]] ProfilerModel& Model() noexcept { return model_; }
 
@@ -46,6 +54,7 @@ private:
     f32 pressTravelPixels_{0.0F};
     std::string lastCapturePath_;
     std::string captureError_;
+    std::function<bool(f64, std::string_view, std::string_view)> viewportOnlyCaptureAction_;
 };
 
 // profiler.panel_get / profiler.panel_set / profiler.snapshot: the RPC face of

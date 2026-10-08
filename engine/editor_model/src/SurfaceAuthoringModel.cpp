@@ -72,6 +72,13 @@ ReadProcessSettings(
 {
     surface_model::TerrainProcessService result{};
 
+    result.bake.resolution = U32PropertyOr(
+        objects, object, world_model::kProcessBakeResolution,
+        result.bake.resolution);
+    result.bake.autoRebake = PropertyOr<bool>(
+        objects, object, world_model::kProcessBakeAutoRebake,
+        result.bake.autoRebake);
+
     result.streamPowerEnabled =
         PropertyOr<bool>(
             objects,
@@ -299,6 +306,14 @@ void WriteProcessSettings(
     const scene::ObjectId object,
     const surface_model::TerrainProcessService& settings)
 {
+    commands.SetProperty(
+        object,
+        world_model::kProcessBakeResolution,
+        static_cast<i64>(settings.bake.resolution));
+    commands.SetProperty(
+        object,
+        world_model::kProcessBakeAutoRebake,
+        settings.bake.autoRebake);
     commands.SetProperty(
         object,
         world_model::kProcessStreamPowerEnabled,

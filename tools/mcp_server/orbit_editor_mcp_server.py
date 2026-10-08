@@ -651,6 +651,35 @@ def orbit_profiler_status() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_profiler_viewport_capture(
+    action: str = "start",
+    duration_ms: float | None = None,
+    resolution: str | None = None,
+    window_ms: float | None = None,
+    scenario: str | None = None,
+) -> dict[str, Any]:
+    """Start/cancel/query a viewport-only Perfetto capture. Start defaults to
+    the ProfilerModel duration and resolution (initially 4 seconds and 1440p);
+    presets are 720p, 1080p, 1440p and 2160p. scenario may be static,
+    walk_1_94_mps, surface_200_kmh, flight_2000_mps_5000m, or
+    ground_to_orbit_20s. window_ms remains an alias for duration_ms. Studio
+    pauses non-viewport panels, keeps the primary viewport live, then restores
+    the shell. Poll with action='status' for progress and the trace path."""
+    params: dict[str, Any] = {"action": action}
+    if duration_ms is not None:
+        params["duration_ms"] = duration_ms
+    elif window_ms is not None:
+        params["window_ms"] = window_ms
+    if resolution is not None:
+        params["resolution"] = resolution
+    if scenario is not None:
+        params["scenario"] = scenario
+    if action == "status":
+        return _rpc("profiler.viewport_capture_status")
+    return _rpc("profiler.viewport_capture", params)
+
+
+@mcp.tool()
 def orbit_mesh_status() -> dict[str, Any]:
     """Imported Static Mesh (glTF/GLB) status: for every mesh the renderer
     requested, its load state (loading | ready | failed), error, triangle /
@@ -778,6 +807,8 @@ def orbit_profiler_panel_set(
     grouping: str | None = None,
     freeze_on_hitch: bool | None = None,
     min_slice_ms: float | None = None,
+    viewport_capture_duration_ms: float | None = None,
+    viewport_capture_resolution: str | None = None,
     filter: str | None = None,
     reset_view: bool | None = None,
     view_begin_ms: float | None = None,
@@ -788,9 +819,13 @@ def orbit_profiler_panel_set(
     clear_selection: bool | None = None,
     zoom_to_selection: bool | None = None,
     load_trace: str | None = None,
+    viewport_capture_scenario: str | None = None,
 ) -> dict[str, Any]:
     """Drive the Profiler panel like its controls. paused pauses/resumes the live
-    capture; grouping is 'threads' or 'cores'; view_begin_ms/view_span_ms are
+    capture; viewport_capture_duration_ms, viewport_capture_resolution and
+    viewport_capture_scenario set
+    the shared viewport-only capture defaults (4 seconds and 1440p initially);
+    grouping is 'threads' or 'cores'; view_begin_ms/view_span_ms are
     relative to the snapshot start; zoom_frame picks a frame (-1 = longest);
     select_thread + select_time_ms selects the slice there; load_trace opens a
     hitch or capture file (paused). Returns the new panel state."""
@@ -802,6 +837,9 @@ def orbit_profiler_panel_set(
             "grouping": grouping,
             "freeze_on_hitch": freeze_on_hitch,
             "min_slice_ms": min_slice_ms,
+            "viewport_capture_duration_ms": viewport_capture_duration_ms,
+            "viewport_capture_resolution": viewport_capture_resolution,
+            "viewport_capture_scenario": viewport_capture_scenario,
             "filter": filter,
             "reset_view": reset_view,
             "view_begin_ms": view_begin_ms,
@@ -1130,6 +1168,55 @@ def orbit_terrain_erosion_coupling_set(
     values. Keys: age_erodibility_gain (0-8), age_uplift_decay (0-1),
     tectonic_drainage_guidance (0-1)."""
     return _rpc("terrain.erosion_coupling_set", {"terrain": terrain_id, **settings})
+
+
+@mcp.tool()
+def orbit_terrain_bake_status(terrain_id: str) -> dict[str, Any]:
+    """Planet bake state for a terrain surface: state (none, baking, ready,
+    stale, failed), progress, resolution, active bake size, recipe hashes
+    (stale means the tectonics recipe changed since the active bake), the bake
+    file path and any error. Terrain samples this bake; it never evaluates the
+    plate model while generating."""
+    return _rpc("terrain.bake_status", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_bake_start(
+    terrain_id: str,
+    resolution: int | None = None,
+) -> dict[str, Any]:
+    """Start a background planet bake now (cancels one in flight). resolution is
+    texels per cube-face edge, 16-2048. The running bake keeps driving terrain
+    until the new one finishes and validates; a failed bake leaves it
+    untouched. Poll orbit_terrain_bake_status."""
+    arguments: dict[str, Any] = {"terrain": terrain_id}
+    if resolution is not None:
+        arguments["resolution"] = resolution
+    return _rpc("terrain.bake_start", arguments)
+
+
+@mcp.tool()
+def orbit_terrain_bake_cancel(terrain_id: str) -> dict[str, Any]:
+    """Cancel a running planet bake. The active bake is untouched and no
+    automatic rebake starts until the recipe changes or a bake is started."""
+    return _rpc("terrain.bake_cancel", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_bake_set(
+    terrain_id: str,
+    resolution: int | None = None,
+    auto_rebake: bool | None = None,
+) -> dict[str, Any]:
+    """Update the persisted planet bake policy (resolution 16-2048, auto_rebake)
+    as one undoable edit, like the Planet Tectonics menu's Planet Bake
+    section. A resolution change makes the bake stale."""
+    arguments: dict[str, Any] = {"terrain": terrain_id}
+    if resolution is not None:
+        arguments["resolution"] = resolution
+    if auto_rebake is not None:
+        arguments["auto_rebake"] = auto_rebake
+    return _rpc("terrain.bake_set", arguments)
 
 
 @mcp.tool()

@@ -413,6 +413,11 @@ inline constexpr schema::PropertyId kProcessStreamPowerAgeUpliftDecay{
 inline constexpr schema::PropertyId kProcessTectonicDrainageGuidance{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000106ULL};
 
+inline constexpr schema::PropertyId kProcessBakeResolution{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000f01ULL};
+inline constexpr schema::PropertyId kProcessBakeAutoRebake{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000f02ULL};
+
 inline constexpr schema::PropertyId kProcessHydraulicEnabled{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000201ULL};
 inline constexpr schema::PropertyId kProcessHydraulicIterations{

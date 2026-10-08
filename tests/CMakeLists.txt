@@ -211,6 +211,7 @@ target_link_libraries(OrbitTerrainGpuFieldTests
         Orbit::RhiVulkan
         Orbit::ShaderDxc
         Orbit::Terrain
+        Orbit::TerrainBake
         Orbit::TerrainGpu
 )
 

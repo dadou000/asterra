@@ -8,6 +8,7 @@ namespace orbit::surface_model
 bool TerrainProcessService::IsValid() const noexcept
 {
     return
+        bake.IsValid() &&
         streamPower.IsValid() &&
         hydraulic.IsValid() &&
         thermal.IsValid() &&
@@ -135,6 +136,41 @@ const terrain_gpu::PersistentGpuTerrainCache&
 TerrainBodyServices::Cache() const noexcept
 {
     return cache_;
+}
+
+const std::optional<TerrainBodyServices::BakeRecipe>&
+TerrainBodyServices::Recipe() const noexcept
+{
+    return recipe_;
+}
+
+void TerrainBodyServices::SetRecipe(BakeRecipe recipe)
+{
+    recipe_ = std::move(recipe);
+}
+
+const std::shared_ptr<const terrain::BakedTectonicRasters>&
+TerrainBodyServices::TectonicBake() const noexcept
+{
+    return tectonicBake_;
+}
+
+void TerrainBodyServices::SetTectonicBake(
+    std::shared_ptr<const terrain::BakedTectonicRasters> bake) noexcept
+{
+    tectonicBake_ = std::move(bake);
+}
+
+const std::shared_ptr<const terrain::BakedRiverNetwork>&
+TerrainBodyServices::RiverBake() const noexcept
+{
+    return riverBake_;
+}
+
+void TerrainBodyServices::SetRiverBake(
+    std::shared_ptr<const terrain::BakedRiverNetwork> bake) noexcept
+{
+    riverBake_ = std::move(bake);
 }
 
 bool TerrainBodyServices::IsValid() const noexcept

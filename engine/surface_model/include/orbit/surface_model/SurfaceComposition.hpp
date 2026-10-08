@@ -52,6 +52,9 @@ public:
     [[nodiscard]] std::optional<terrain_biome::BiomeId>
     BiomeForObject(scene::ObjectId object) const noexcept;
 
+    // Every body that owns a terrain surface.
+    [[nodiscard]] std::vector<universe::BodyId> TerrainBodies() const;
+
     [[nodiscard]] TerrainBodyServices* ServicesForBody(
         universe::BodyId body) noexcept;
     [[nodiscard]] const TerrainBodyServices* ServicesForBody(

@@ -73,6 +73,13 @@ template <typename Value>
 {
     TerrainProcessService result{};
 
+    result.bake.resolution = U32ProcessPropertyOr(
+        objects, object, world_model::kProcessBakeResolution,
+        result.bake.resolution);
+    result.bake.autoRebake = PropertyOr<bool>(
+        objects, object, world_model::kProcessBakeAutoRebake,
+        result.bake.autoRebake);
+
     result.streamPowerEnabled =
         PropertyOr<bool>(
             objects, object,
@@ -1400,10 +1407,31 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
                 "Analytic terrain currently requires a spherical Celestial Body; ellipsoid terrain must use a future ellipsoid-aware terrain source.");
         }
 
+        // The recipe is what the baked structure must match; the source is
+        // composed from the installed bake (possibly stale) so terrain never
+        // regenerates plate fields while a rebake is pending.
+        terrain::AnalyticTerrainDesc terrainDesc =
+            TerrainDescription(objects, object.id);
+        terrainDesc.global.bakedTectonics.reset();
+        terrainDesc.bakedRivers.reset();
+        TerrainBodyServices::BakeRecipe bakeRecipe{
+            .planet = *planet,
+            .desc = terrainDesc};
+        std::shared_ptr<const terrain::BakedTectonicRasters> tectonicBake;
+        std::shared_ptr<const terrain::BakedRiverNetwork> riverBake;
+        if (const auto previous = previousServices.find(*bodyId);
+            previous != previousServices.end())
+        {
+            tectonicBake = previous->second->TectonicBake();
+            riverBake = previous->second->RiverBake();
+        }
+        terrainDesc.global.bakedTectonics = tectonicBake;
+        terrainDesc.bakedRivers = riverBake;
+
         auto source =
             std::make_shared<terrain::AnalyticTerrainSource>(
                 *planet,
-                TerrainDescription(objects, object.id));
+                std::move(terrainDesc));
 
         candidate->AttachTerrain(*bodyId, std::move(source));
         candidateBodyByObject.emplace(object.id, *bodyId);
@@ -1431,6 +1459,10 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
                     TerrainBodyServices>(
                         *bodyId);
         }
+
+        services->SetRecipe(std::move(bakeRecipe));
+        services->SetTectonicBake(std::move(tectonicBake));
+        services->SetRiverBake(std::move(riverBake));
 
         // Semantic policy is reconstructed from ObjectStore authority while
         // runtime-only cache/water state remains owned by the stable service.
@@ -1594,6 +1626,17 @@ SurfaceComposition::BiomeForObject(
         ? std::optional<terrain_biome::BiomeId>(
               found->second)
         : std::nullopt;
+}
+
+std::vector<universe::BodyId> SurfaceComposition::TerrainBodies() const
+{
+    std::vector<universe::BodyId> bodies;
+    bodies.reserve(servicesByBody_.size());
+    for (const auto& entry : servicesByBody_)
+    {
+        bodies.push_back(entry.first);
+    }
+    return bodies;
 }
 
 TerrainBodyServices*
