@@ -525,8 +525,23 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
         safe, claims, &normalFn, structureWidth, &limits, &scales);
     const detail::TectonicSample wide = tectonicField_->SampleWithClaims(
         safe, claims, &normalFn, tectonicField_->BoundaryWidth(), nullptr, &scales);
+    const detail::TectonicSample envelope = tectonicField_->SampleWithClaims(
+        safe, claims, &normalFn, tectonicField_->EnvelopeWidth(), nullptr, &scales);
     TectonicStructureSample structure = tectonicField_->SampleStructureWithClaims(
         safe, false, claims, &normalFn, structureWidth, &limits, &scales);
+
+    // Broad flanks. The narrow structure band alone makes trenches and ridge
+    // crests hair-thin; a real trench has a wide flexural flank on the
+    // descending plate and a mid-ocean ridge a broad thermal swell. Part of
+    // each amplitude moves from the narrow band to the wide one.
+    {
+        const f64 unit = desc_.tectonic.convergenceUpliftMeters;
+        const f64 oceanic = 1.0 - structure.continentalCrustFraction;
+        structure.structuralElevationMeters +=
+            0.35 * unit * structure.subductionTrench - 0.35 * unit * wide.subductionTrench;
+        structure.structuralElevationMeters +=
+            0.45 * unit * oceanic * (wide.divergenceMask - std::clamp(sample.divergenceMask, 0.0, 1.0));
+    }
 
     // Distributed deformation: stress depends on how fast the plates move
     // past each other (the masks saturate, so on their own they paint every
@@ -592,7 +607,7 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
             structure.continentalCrustFraction)));
     texel.Set(BakedTectonicLayer::FractureDensity,
         static_cast<f32>(structure.fractureDensity));
-    texel.Set(BakedTectonicLayer::OrogenEnvelope, static_cast<f32>(wide.convergenceMask));
+    texel.Set(BakedTectonicLayer::OrogenEnvelope, static_cast<f32>(envelope.convergenceMask));
     texel.plate = static_cast<u8>(sample.nearestPlate);
     texel.neighbour = static_cast<u8>(sample.secondPlate);
     return texel;

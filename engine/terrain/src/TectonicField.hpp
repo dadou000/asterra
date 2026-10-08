@@ -115,6 +115,10 @@ public:
     // Width of the boundary structure in a bake: real boundaries are narrow,
     // while the recipe width also shapes mountain belts (see orogenEnvelope).
     [[nodiscard]] f64 StructureWidth() const noexcept { return desc_.boundaryWidthDot * 0.22; }
+    // Width of the orogen envelope in a bake: mountain belts take their width
+    // from the recipe's boundaryWidthDot, but the full width makes belts and
+    // plateaus far wider than a mountain range.
+    [[nodiscard]] f64 EnvelopeWidth() const noexcept { return desc_.boundaryWidthDot * 0.55; }
 
     // includeHotspot = false leaves hotspot chains out of uplift and volcanism
     // (the baker stores only the plate-driven part; hotspots are closed form
