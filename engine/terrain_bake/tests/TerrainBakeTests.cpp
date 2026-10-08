@@ -618,6 +618,46 @@ bool EveryPlateOwnsTerritoryAndKeepsAnInterior()
     return ok;
 }
 
+bool BeltHeightDoesNotDependOnTheSampleFootprint()
+{
+    // Pages of different level sample the same place with different
+    // footprints, so anything that changes with the footprint is a seam where
+    // they meet. The orogenic belt comes from a smooth baked envelope, so its
+    // height must not fade with the footprint (only the noise that sculpts it
+    // may). It once did: belts were ~6 km high on fine pages and ~1.5-4 km on
+    // coarse ones.
+    const auto planet = MakePlanet();
+    auto desc = MakeDesc();
+    desc.global.bakedTectonics = terrain_bake::BakeTectonics(planet, desc, {.resolution = 128});
+    if (!Check(desc.global.bakedTectonics != nullptr, "bake must complete")) return false;
+    const terrain::AnalyticTerrainSource source(planet, desc);
+
+    f64 worstSpread = 0.0;
+    u32 points = 0;
+    for (u32 i = 0; i < 200'000 && points < 24; ++i)
+    {
+        if (i % 11U != 0U) continue;
+        const math::Double3 d = Fibonacci(i, 200'000);
+        const auto g = source.GlobalFields().Sample({d, 1000.0});
+        if (g.orogenEnvelope < 0.9 || g.landMask < 0.95) continue;
+        ++points;
+        f64 lowest = 1.0e30, highest = -1.0e30;
+        for (const f64 footprint : {20'000.0, 100'000.0, 250'000.0, 375'000.0, 500'000.0, 650'000.0, 800'000.0})
+        {
+            const terrain::TerrainQuery q{.unitDirection = d, .footprintMeters = footprint,
+                .planet = planet.id, .radialOffsetMeters = 0.0};
+            const f64 elevation = source.Sample(q).elevationMeters;
+            lowest = std::min(lowest, elevation);
+            highest = std::max(highest, elevation);
+        }
+        worstSpread = std::max(worstSpread, highest - lowest);
+    }
+    std::cout << "belt elevation spread across footprints 20-800 km: worst " << worstSpread << " m over "
+              << points << " points" << std::endl;
+    return Check(points >= 12U, "belt points must exist") &&
+           Check(worstSpread < 600.0, "belt height must not depend on the sample footprint (page seams)");
+}
+
 int main()
 {
     bool ok = true;
@@ -690,3 +730,4 @@ bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
     ok &= BoundariesAreNaturalisedAtBakeTime();
     ok &= FaultsAreLinearNotWhorls();
     ok &= EveryPlateOwnsTerritoryAndKeepsAnInterior();
+    ok &= BeltHeightDoesNotDependOnTheSampleFootprint();

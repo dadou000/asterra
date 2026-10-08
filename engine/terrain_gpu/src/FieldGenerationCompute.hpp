@@ -649,11 +649,13 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
     }
 
     // The orogenic belt itself comes from the plate boundary and survives zero
-    // noise; ridged noise only sculpts it (mirrors GlobalTerrainFields).
-    float mountainElevation = (0.65 + 0.35 * mountainRidges * mountainModulation) * landMask * convergenceMask *
-        globalMountainAmplitude * mountainWeight;
+    // noise; ridged noise only sculpts it. The envelope is a smooth raster, so
+    // it does not fade with the footprint -- only the noise sculpting does
+    // (mirrors GlobalTerrainFields).
+    float mountainElevation = (0.65 + 0.35 * mountainRidges * mountainModulation * mountainWeight) *
+        landMask * convergenceMask * globalMountainAmplitude;
 
-    float coarseElevation = continentalElevation + mountainElevation + structuralMeters * continentalWeight;
+    float coarseElevation = continentalElevation + mountainElevation + structuralMeters;
 
     float latitude = saturate(abs(direction.y));
     float climateNoise = SampleBand(direction, radius, ParamFloat(kParamClimateWavelengthMeters),

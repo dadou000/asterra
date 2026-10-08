@@ -155,19 +155,22 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
     // this modulation noise happens to be high" -- convergenceMask carries
     // that structure (see TectonicField::Sample).
     // The belt is the plate boundary's own orogenic envelope and exists at
-    // zero noise; ridged noise only sculpts it (0.65 + 0.35 * ridges).
+    // zero noise; ridged noise only sculpts it. The envelope comes from a
+    // smooth raster, so it does not alias and must not fade with the sample
+    // footprint -- only the noise sculpting does. Multiplying the whole belt by
+    // mountainWeight made it vanish on coarse pages and reappear on fine ones,
+    // a hard step of several kilometres wherever two levels meet.
     const f64 mountainElevation =
-        (0.65 + 0.35 * mountainRidges * mountainModulation) *
+        (0.65 + 0.35 * mountainRidges * mountainModulation * mountainWeight) *
         landMask *
         tectonic.orogenEnvelope *
         desc_.
-            mountainAmplitudeMeters *
-        mountainWeight;
+            mountainAmplitudeMeters;
 
     const f64 coarseElevation =
         continentalElevation +
         mountainElevation +
-        tectonic.structuralElevationMeters * continentalWeight;
+        tectonic.structuralElevationMeters;
 
     const f64 latitude =
         std::clamp(
