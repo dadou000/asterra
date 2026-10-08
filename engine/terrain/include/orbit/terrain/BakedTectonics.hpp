@@ -37,6 +37,10 @@ enum class BakedTectonicLayer : u8
     // 0 = oceanic, 1 = continental crust. Continuous and independent of plate
     // ids: one plate can carry both an ocean basin and a continent.
     ContinentalCrustFraction,
+    // Subduction polarity: trench on the descending plate's side, arc inland
+    // on the overriding plate's side (0..1).
+    SubductionTrench,
+    VolcanicArc,
     Count
 };
 
@@ -72,7 +76,7 @@ struct BakedTectonicTexel
 class BakedTectonicRasters
 {
 public:
-    static constexpr u32 kFormatVersion = 2;
+    static constexpr u32 kFormatVersion = 3;
 
     // Quantizes float layers. `layers[i]` holds 6 * (resolution + 2)^2 values
     // for layer i in face-major, row-major order with the gutter included;

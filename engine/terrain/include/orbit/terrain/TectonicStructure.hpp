@@ -67,5 +67,10 @@ struct TectonicStructureSample
     f64 stress{0.0};
     // 0..1, subduction arcs, rift volcanism and hotspot chains.
     f64 volcanism{0.0};
+    // 0..1 subduction polarity fields: the trench lies on the descending
+    // plate's side of the boundary, the volcanic arc inland on the
+    // overriding plate's side. Zero away from subduction zones.
+    f64 subductionTrench{0.0};
+    f64 volcanicArc{0.0};
 };
 } // namespace orbit::terrain

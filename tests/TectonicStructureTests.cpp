@@ -146,9 +146,46 @@ bool BoundaryMasksAreContinuous()
 }
 } // namespace
 
+bool SubductionHasPolarity()
+{
+    // In an ocean-continent collision the trench lies on the oceanic
+    // (descending) plate and the volcanic arc inland on the continental
+    // (overriding) one. The old symmetric mask put both on both sides.
+    const world::PlanetDefinition planet{.radiusMeters = 6'000'000.0};
+    terrain::AnalyticTerrainDesc desc{.seed = 4242};
+    const terrain::AnalyticTerrainSource source(planet, desc);
+    u32 trench = 0, trenchOnOcean = 0, arc = 0, arcOnContinent = 0, anyArc = 0;
+    for (u32 i = 0; i < 60'000; ++i)
+    {
+        const auto s = source.GlobalFields().SampleTectonicStructure(Fibonacci(i, 60'000));
+        if (s.subductionTrench < 0.0 || s.subductionTrench > 1.0 ||
+            s.volcanicArc < 0.0 || s.volcanicArc > 1.0)
+            return Check(false, "subduction fields within 0..1");
+        if (s.continental == s.neighbourContinental)
+            continue;
+        if (s.subductionTrench > 0.5)
+        {
+            ++trench;
+            trenchOnOcean += s.continental ? 0U : 1U;
+        }
+        if (s.volcanicArc > 0.5)
+        {
+            ++arc;
+            arcOnContinent += s.continental ? 1U : 0U;
+        }
+        anyArc += s.volcanicArc > 0.0 ? 1U : 0U;
+    }
+    std::cout << "trench " << trenchOnOcean << "/" << trench << " arc " << arcOnContinent << "/" << arc << '\n';
+    bool ok = Check(trench > 20U && arc > 20U, "mixed boundaries produce a trench and an arc");
+    ok &= Check(trenchOnOcean * 100U >= trench * 85U, "trench lies on the descending oceanic side");
+    ok &= Check(arcOnContinent * 100U >= arc * 90U, "arc lies on the overriding continental side");
+    return ok;
+}
+
 int main()
 {
     const bool structure = StructureIsBoundedAndDeterministic();
     const bool continuous = BoundaryMasksAreContinuous();
-    return structure && continuous ? 0 : 1;
+    const bool polarity = SubductionHasPolarity();
+    return structure && continuous && polarity ? 0 : 1;
 }

@@ -45,6 +45,14 @@ struct TectonicSample
     // Plate-type identity of the two nearest plates, for classifying a
     // boundary's geological subtype (e.g. orogeny needs both continental,
     // subduction needs at least one oceanic) without a second plate lookup.
+    // Subduction with polarity (zero away from a subduction pair): the trench
+    // sits on the descending plate's side of the boundary, the volcanic arc
+    // inland on the overriding plate's side. Each pair decides which plate
+    // descends (the more oceanic one, else the older), so both are continuous
+    // within a pair and the max over pairs keeps them continuous across the
+    // field.
+    f64 subductionTrench{0.0};
+    f64 subductionArc{0.0};
     bool nearestIsContinental{false};
     bool secondIsContinental{false};
 };

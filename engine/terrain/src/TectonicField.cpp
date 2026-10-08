@@ -275,6 +275,8 @@ TectonicSample TectonicField::Sample(
     f64 convergenceContinental = 0.0;
     f64 convergenceMixed = 0.0;
     f64 convergenceOceanic = 0.0;
+    f64 subductionTrench = 0.0;
+    f64 subductionArc = 0.0;
 
     for (u32 a = 0; a < candidateCount; ++a)
     {
@@ -338,6 +340,31 @@ TectonicSample TectonicField::Sample(
             transformMask = std::max(
                 transformMask, weight * Smooth(shear / transformReferenceSpeed));
 
+            // Subduction polarity. The more oceanic plate descends; between
+            // equally oceanic plates the older (denser) one does. Continent-
+            // continent pairs collide without a trench or arc.
+            const f64 baseI = plates_[i].continentalBase;
+            const f64 baseJ = plates_[j].continentalBase;
+            if (std::min(baseI, baseJ) < 0.5)
+            {
+                bool iDescends = baseI < baseJ;
+                if (std::abs(baseI - baseJ) < 1.0e-6)
+                {
+                    iDescends = plates_[i].crustAge > plates_[j].crustAge;
+                }
+                const u32 descending = iDescends ? i : j;
+                const u32 overriding = iDescends ? j : i;
+                // -1..1 across the boundary, positive on the overriding side.
+                const f64 side = (d[overriding] - d[descending]) / width;
+                const f64 pairTerm = convergenceTerm * collisionScale;
+                const f64 trenchOffset = (side + 0.35) / 0.25;
+                const f64 arcOffset = (side - 0.5) / 0.3;
+                subductionTrench = std::max(
+                    subductionTrench, pairTerm * std::exp(-trenchOffset * trenchOffset));
+                subductionArc = std::max(
+                    subductionArc, pairTerm * std::exp(-arcOffset * arcOffset));
+            }
+
             if (continentalI && continentalJ)
             {
                 convergenceContinental =
@@ -385,6 +412,8 @@ TectonicSample TectonicField::Sample(
         .convergenceContinental = convergenceContinental,
         .convergenceMixed = convergenceMixed,
         .convergenceOceanic = convergenceOceanic,
+        .subductionTrench = subductionTrench,
+        .subductionArc = subductionArc,
         .nearestIsContinental = plates_[nearest].isContinental,
         .secondIsContinental = plates_[second].isContinental
     };
@@ -499,13 +528,18 @@ TectonicStructureSample TectonicField::SampleStructure(
         std::max(hotspot, 0.0);
     // Trench on the oceanic side of a subduction zone, rift floor on
     // divergence, and passive-margin sag where oceanic crust is old.
-    const f64 trench = arcMask * 0.45;
+    // The trench is one-sided now (descending plate), and the arc lifts the
+    // overriding plate inland of it.
+    const f64 trench = base.subductionTrench * 0.55;
+    out.upliftMeters += base.subductionArc * 0.3 * desc_.convergenceUpliftMeters;
+    out.subductionTrench = base.subductionTrench;
+    out.volcanicArc = base.subductionArc;
     out.subsidenceMeters = trench * desc_.convergenceUpliftMeters +
         base.divergenceMask * 0.25 * desc_.convergenceUpliftMeters;
 
     out.stress = std::clamp(
         std::max(base.convergenceMask, base.transformMask * 0.8), 0.0, 1.0);
-    const f64 arc = arcMask * 0.9;
+    const f64 arc = base.subductionArc * 0.9;
     out.volcanism = std::clamp(
         std::max({arc, base.divergenceMask * 0.6,
                   std::clamp(hotspot / hotspotRelief, 0.0, 1.0)}),
