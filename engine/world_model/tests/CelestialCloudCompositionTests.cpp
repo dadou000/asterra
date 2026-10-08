@@ -155,6 +155,17 @@ int main()
             return 1;
         }
 
+        // A layer whose top is at or below its base (bad project data) is
+        // dropped instead of throwing later, when the viewport builds the field.
+        commands.SetProperty(cloud, kCloudBaseAltitudeMeters, 2000.0);
+        commands.SetProperty(cloud, kCloudTopAltitudeMeters, 8.0);
+        if (!ResolveCloudLayers(objects, planet).empty())
+        {
+            return 20;
+        }
+        commands.SetProperty(cloud, kCloudBaseAltitudeMeters, 1500.0);
+        commands.SetProperty(cloud, kCloudTopAltitudeMeters, 6500.0);
+
         const auto field =
             celestial_clouds::
                 BuildCloudField(
