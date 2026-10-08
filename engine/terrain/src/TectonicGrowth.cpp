@@ -337,7 +337,11 @@ math::Double3 TectonicGrowth::BoundaryNormal(
 {
     // Gradient of F = claim_j - claim_i on the sphere from the four axis
     // neighbours: solve g . a = dFa, g . b = dFb in the tangent plane spanned
-    // by the neighbour baselines a and b (not orthogonal near cube edges).
+    // by the neighbour baselines a and b (not orthogonal near cube edges). The
+    // baseline is several texels wide: the grown boundaries are stair-stepped
+    // at texel scale, and a one-texel difference would turn that into normal
+    // noise (and so speckled compression/shear classification).
+    constexpr i32 kSpan = 5;
     const std::size_t centre = NodeAt(face, x, y);
     const f64 fc = ClaimAt(j, centre) - ClaimAt(i, centre);
     const auto value = [&](const i32 dx, const i32 dy)
@@ -352,10 +356,10 @@ math::Double3 TectonicGrowth::BoundaryNormal(
     {
         return BakedTectonicTexelDirection(face, x + dx, y + dy, resolution_);
     };
-    const math::Double3 a = direction(1, 0) - direction(-1, 0);
-    const math::Double3 b = direction(0, 1) - direction(0, -1);
-    const f64 fa = value(1, 0) - value(-1, 0);
-    const f64 fb = value(0, 1) - value(0, -1);
+    const math::Double3 a = direction(kSpan, 0) - direction(-kSpan, 0);
+    const math::Double3 b = direction(0, kSpan) - direction(0, -kSpan);
+    const f64 fa = value(kSpan, 0) - value(-kSpan, 0);
+    const f64 fb = value(0, kSpan) - value(0, -kSpan);
     const f64 aa = math::Dot(a, a);
     const f64 ab = math::Dot(a, b);
     const f64 bb = math::Dot(b, b);

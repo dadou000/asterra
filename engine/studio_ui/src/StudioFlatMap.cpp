@@ -184,10 +184,21 @@ struct Rgb
     const f64 strongest = std::max({sample.convergenceMask, sample.divergenceMask, sample.transformMask});
     if (strongest > 0.08)
     {
-        const Rgb boundary = sample.convergenceMask >= sample.divergenceMask && sample.convergenceMask >= sample.transformMask
-            ? Rgb{0.98F,0.22F,0.16F}
-            : (sample.divergenceMask >= sample.transformMask
-                ? Rgb{0.10F,0.84F,0.96F} : Rgb{1.0F,0.88F,0.20F});
+        // Mixed boundaries (transpression: compression and shear both high) are
+        // common; colour them by the blend of their masks. Picking the single
+        // largest mask would flip between two colours wherever they are nearly
+        // tied and paint sharp-edged patches over smooth data.
+        const f64 total = sample.convergenceMask + sample.divergenceMask + sample.transformMask;
+        constexpr Rgb kConvergent{0.98F, 0.22F, 0.16F};
+        constexpr Rgb kDivergent{0.10F, 0.84F, 0.96F};
+        constexpr Rgb kTransform{1.0F, 0.88F, 0.20F};
+        const f32 wc = static_cast<f32>(sample.convergenceMask / total);
+        const f32 wd = static_cast<f32>(sample.divergenceMask / total);
+        const f32 wt = static_cast<f32>(sample.transformMask / total);
+        const Rgb boundary{
+            kConvergent.r * wc + kDivergent.r * wd + kTransform.r * wt,
+            kConvergent.g * wc + kDivergent.g * wd + kTransform.g * wt,
+            kConvergent.b * wc + kDivergent.b * wd + kTransform.b * wt};
         color = LerpRgb(color, boundary, static_cast<f32>(std::clamp(strongest * 0.95, 0.0, 0.95)));
     }
     return PackRgba(color);
