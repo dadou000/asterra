@@ -45,6 +45,14 @@ public:
         i32 y,
         detail::ClaimArray& claims) const noexcept;
 
+    // Largest boundary-structure width (claim units) a plate can carry: about
+    // 0.4 of how far it reaches from its seed, so small plates keep an interior.
+    [[nodiscard]] const detail::ClaimArray& WidthLimits() const noexcept { return widthLimit_; }
+    // Per-plate inverse growth rate: a plate's claims change with distance
+    // inversely to its growth rate, so a boundary of fixed physical width is
+    // a claim-difference width proportional to the mean of the two plates'.
+    [[nodiscard]] const detail::ClaimArray& WidthScales() const noexcept { return widthScale_; }
+
     // Unit tangent at the texel pointing from plate `i` towards plate `j`,
     // from the gradient of the claim difference; zero if undefined.
     [[nodiscard]] math::Double3 BoundaryNormal(
@@ -70,5 +78,7 @@ private:
     // plateCount_ * (6 * resolution^2) arrival costs, blurred; a plate carries
     // its band-edge value outside its band.
     std::vector<f32> cost_;
+    detail::ClaimArray widthLimit_{};
+    detail::ClaimArray widthScale_{};
 };
 } // namespace orbit::terrain

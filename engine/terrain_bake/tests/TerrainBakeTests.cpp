@@ -539,6 +539,50 @@ bool FaultsAreLinearNotWhorls()
         "faults must vary far less along strike than across it (stripes, not whorls)");
 }
 
+bool EveryPlateOwnsTerritoryAndKeepsAnInterior()
+{
+    // A plate must own territory (growth rates, not head starts, so no seed is
+    // swallowed), small plates must keep an interior (the boundary structure is
+    // limited by plate size instead of painting a small plate entirely as
+    // boundary), and stress must not saturate along every boundary.
+    const auto planet = MakePlanet();
+    bool ok = true;
+    for (const u64 seed : {4242ULL, 7ULL, 99ULL})
+    {
+        const auto bake = terrain_bake::BakeTectonics(planet, MakeDesc(seed), {.resolution = 96});
+        if (!Check(bake != nullptr, "bake must complete")) return false;
+        constexpr u32 n = 60000;
+        std::vector<u32> count(32, 0U), interior(32, 0U);
+        u32 boundary = 0, saturated = 0;
+        for (u32 i = 0; i < n; ++i)
+        {
+            const auto t = bake->Sample(Fibonacci(i, n));
+            ++count[t.plate];
+            const f32 strength = std::max({t.Get(terrain::BakedTectonicLayer::Convergence),
+                t.Get(terrain::BakedTectonicLayer::Divergence), t.Get(terrain::BakedTectonicLayer::Transform)});
+            if (strength < 0.3F) ++interior[t.plate];
+            else
+            {
+                ++boundary;
+                saturated += t.Get(terrain::BakedTectonicLayer::Stress) > 0.95F ? 1U : 0U;
+            }
+        }
+        u32 lost = 0, hollow = 0;
+        for (u32 p = 0; p < bake->PlateCount(); ++p)
+        {
+            if (count[p] == 0U) { ++lost; continue; }
+            if (count[p] >= n / 250U && interior[p] * 4U < count[p]) ++hollow;
+        }
+        std::cout << "seed " << seed << ": plates without territory " << lost << ", hollow plates " << hollow
+                  << ", saturated stress share of boundary " << 100.0 * saturated / std::max(boundary, 1U)
+                  << "%" << std::endl;
+        ok &= Check(lost == 0U, "every plate must own territory");
+        ok &= Check(hollow == 0U, "plates large enough to see must keep an interior outside the boundary structure");
+        ok &= Check(saturated * 100U < boundary * 35U, "stress must not saturate along every boundary");
+    }
+    return ok;
+}
+
 int main()
 {
     bool ok = true;
@@ -610,3 +654,4 @@ bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
     ok &= CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel();
     ok &= BoundariesAreNaturalisedAtBakeTime();
     ok &= FaultsAreLinearNotWhorls();
+    ok &= EveryPlateOwnsTerritoryAndKeepsAnInterior();

@@ -488,8 +488,13 @@ f64 GlobalTerrainFields::FaultIntensity(
         return detail::Smooth(std::clamp((n - 0.30) / 0.30, 0.0, 1.0));
     };
     constexpr f64 kPi = 3.14159265358979323846;
-    const f64 phaseA = 2.0 * across + 0.7 * detail::ValueNoise3D(direction * 3.0, faultSeed ^ 0xAULL);
-    const f64 phaseB = 4.5 * across + 1.1 * detail::ValueNoise3D(direction * 3.7, faultSeed ^ 0xBULL);
+    // Spacing varies along strike and across (denser towards the boundary), so
+    // the stripes are not an evenly spaced comb.
+    const f64 u = std::pow(std::max(across, 0.0), 1.3);
+    const f64 rateA = 2.2 + 0.9 * detail::ValueNoise3D(direction * 2.2, faultSeed ^ 0xCULL);
+    const f64 rateB = 4.8 + 1.6 * detail::ValueNoise3D(direction * 2.7, faultSeed ^ 0xDULL);
+    const f64 phaseA = rateA * u + 0.7 * detail::ValueNoise3D(direction * 3.0, faultSeed ^ 0xAULL);
+    const f64 phaseB = rateB * u + 1.1 * detail::ValueNoise3D(direction * 3.7, faultSeed ^ 0xBULL);
     const f64 ridgeA = std::pow(1.0 - std::abs(std::sin(kPi * phaseA)), 3.0);
     const f64 ridgeB = std::pow(1.0 - std::abs(std::sin(kPi * phaseB)), 4.0);
     const f64 faults = std::max(
@@ -514,12 +519,29 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
     // narrow structure width; the wide envelope terrain relief is built from is
     // stored separately.
     const f64 structureWidth = tectonicField_->StructureWidth();
-    const detail::TectonicSample sample =
-        tectonicField_->SampleWithClaims(safe, claims, &normalFn, structureWidth);
+    const detail::ClaimArray& limits = growth.WidthLimits();
+    const detail::ClaimArray& scales = growth.WidthScales();
+    const detail::TectonicSample sample = tectonicField_->SampleWithClaims(
+        safe, claims, &normalFn, structureWidth, &limits, &scales);
     const detail::TectonicSample wide = tectonicField_->SampleWithClaims(
-        safe, claims, &normalFn, tectonicField_->BoundaryWidth());
+        safe, claims, &normalFn, tectonicField_->BoundaryWidth(), nullptr, &scales);
     TectonicStructureSample structure = tectonicField_->SampleStructureWithClaims(
-        safe, false, claims, &normalFn, structureWidth);
+        safe, false, claims, &normalFn, structureWidth, &limits, &scales);
+
+    // Distributed deformation: stress depends on how fast the plates move
+    // past each other (the masks saturate, so on their own they paint every
+    // boundary the same) and is the narrow core plus a broad halo that decays
+    // away from the boundary.
+    {
+        const auto activity = [](const detail::TectonicSample& s)
+        {
+            return std::max(s.convergenceMask, 0.8 * s.transformMask);
+        };
+        const f64 speed = std::clamp(sample.relativeSpeed / 1.4, 0.0, 1.0);
+        const f64 rate = 0.35 + 0.65 * speed;
+        structure.stress = std::clamp(
+            rate * (0.6 * activity(sample) + 0.4 * std::pow(activity(wide), 1.6)), 0.0, 1.0);
+    }
 
     {
         const f64 activity = std::clamp(

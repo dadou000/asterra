@@ -32,6 +32,10 @@ struct TectonicSample
     // from the plate model; a bake evaluates the structure masks at a narrower
     // width and stores this one separately.
     f64 orogenEnvelope{0.0};
+    // Largest closeness-weighted relative plate speed over the boundary pairs
+    // at this point (planet-radius units per unit angular speed). Unlike the
+    // masks it does not saturate, so it separates fast boundaries from slow.
+    f64 relativeSpeed{0.0};
     // 0..1, strongest where the two plates are actively separating (mid-ocean
     // ridge / continental rift), zero away from any boundary. Unlike
     // convergenceMask, not weighted down for an ocean-ocean pairing --
@@ -93,7 +97,9 @@ public:
         const math::Double3& direction,
         const ClaimArray& claims,
         const BoundaryNormalFn* normal,
-        f64 boundaryWidth) const noexcept;
+        f64 boundaryWidth,
+        const ClaimArray* widthLimit = nullptr,
+        const ClaimArray* widthScale = nullptr) const noexcept;
 
     // Plate seeds and the claim-width constant, for plate growth.
     [[nodiscard]] u32 PlateCount() const noexcept { return plateCount_; }
@@ -108,7 +114,7 @@ public:
     [[nodiscard]] f64 BoundaryWidth() const noexcept { return desc_.boundaryWidthDot; }
     // Width of the boundary structure in a bake: real boundaries are narrow,
     // while the recipe width also shapes mountain belts (see orogenEnvelope).
-    [[nodiscard]] f64 StructureWidth() const noexcept { return desc_.boundaryWidthDot * 0.32; }
+    [[nodiscard]] f64 StructureWidth() const noexcept { return desc_.boundaryWidthDot * 0.22; }
 
     // includeHotspot = false leaves hotspot chains out of uplift and volcanism
     // (the baker stores only the plate-driven part; hotspots are closed form
@@ -125,7 +131,9 @@ public:
         bool includeHotspot,
         const ClaimArray& claims,
         const BoundaryNormalFn* normal,
-        f64 boundaryWidth) const noexcept;
+        f64 boundaryWidth,
+        const ClaimArray* widthLimit = nullptr,
+        const ClaimArray* widthScale = nullptr) const noexcept;
 
     [[nodiscard]] f64 HotspotElevationMeters(
         const math::Double3& direction) const noexcept;

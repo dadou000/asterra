@@ -222,7 +222,9 @@ TectonicSample TectonicField::SampleWithClaims(
     const math::Double3& direction,
     const ClaimArray& claims,
     const BoundaryNormalFn* const normalFn,
-    const f64 boundaryWidth) const noexcept
+    const f64 boundaryWidth,
+    const ClaimArray* const widthLimit,
+    const ClaimArray* const widthScale) const noexcept
 {
     const ClaimArray& d = claims;
     u32 nearest = 0;
@@ -293,6 +295,7 @@ TectonicSample TectonicField::SampleWithClaims(
     f64 convergenceOceanic = 0.0;
     f64 subductionTrench = 0.0;
     f64 subductionArc = 0.0;
+    f64 relativeSpeed = 0.0;
 
     for (u32 a = 0; a < candidateCount; ++a)
     {
@@ -304,10 +307,21 @@ TectonicSample TectonicField::SampleWithClaims(
             // Closeness of each plate to the top, and of the pair to each
             // other. For the top two plates this reduces exactly to the
             // original (d0 - d1) boundary mask.
+            // Small plates narrow the boundary around them (see widthLimit).
+            f64 pairWidth = width;
+            if (widthScale != nullptr)
+            {
+                pairWidth *= 0.5 * ((*widthScale)[i] + (*widthScale)[j]);
+            }
+            if (widthLimit != nullptr)
+            {
+                pairWidth = std::min({pairWidth, (*widthLimit)[i], (*widthLimit)[j]});
+            }
+            pairWidth = std::max(pairWidth, 1.0e-9);
             const f64 weight = std::min(
-                {Smooth(1.0 - (d0 - d[i]) / width),
-                 Smooth(1.0 - (d0 - d[j]) / width),
-                 Smooth(1.0 - std::abs(d[i] - d[j]) / width)});
+                {Smooth(1.0 - (d0 - d[i]) / pairWidth),
+                 Smooth(1.0 - (d0 - d[j]) / pairWidth),
+                 Smooth(1.0 - std::abs(d[i] - d[j]) / pairWidth)});
             if (weight <= 0.0)
             {
                 continue;
@@ -346,6 +360,7 @@ TectonicSample TectonicField::SampleWithClaims(
             const f64 normalSpeed = math::Dot(relative, normal);
             const f64 shearSpeed = math::Dot(relative, alongBoundary);
 
+            relativeSpeed = std::max(relativeSpeed, weight * std::sqrt(math::LengthSquared(relative)));
             const f64 convergence = std::max(0.0, -normalSpeed);
             const f64 divergence = std::max(0.0, normalSpeed);
             const f64 shear = std::abs(shearSpeed);
@@ -433,6 +448,7 @@ TectonicSample TectonicField::SampleWithClaims(
         .secondPlate = second,
         .convergenceMask = convergenceMask,
         .orogenEnvelope = convergenceMask,
+        .relativeSpeed = relativeSpeed,
         .divergenceMask = divergenceMask,
         .transformMask = transformMask,
         .plateBiasMeters = plateBiasMeters,
@@ -466,9 +482,12 @@ TectonicStructureSample TectonicField::SampleStructureWithClaims(
     const bool includeHotspot,
     const ClaimArray& claims,
     const BoundaryNormalFn* const normalFn,
-    const f64 boundaryWidth) const noexcept
+    const f64 boundaryWidth,
+    const ClaimArray* const widthLimit,
+    const ClaimArray* const widthScale) const noexcept
 {
-    const TectonicSample base = SampleWithClaims(direction, claims, normalFn, boundaryWidth);
+    const TectonicSample base = SampleWithClaims(
+        direction, claims, normalFn, boundaryWidth, widthLimit, widthScale);
     const Plate& plate = plates_[base.nearestPlate];
 
     TectonicStructureSample out{};

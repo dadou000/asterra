@@ -19,6 +19,8 @@ namespace
 constexpr f64 kClaimScale = 0.75;
 constexpr f32 kInfinity = std::numeric_limits<f32>::infinity();
 constexpr f64 kFarClaim = -1.0e6;
+// Largest head start (cost units) a plate can have; see Build().
+constexpr f64 kMaxHeadStart = 0.14;
 // Box-blur radius (texels) of the arrival costs; see Blur().
 constexpr i32 kBlurRadius = 4;
 
@@ -33,6 +35,7 @@ struct Item
 {
     f32 cost;
     u32 node;
+    u32 owner{0U};
     bool operator>(const Item& other) const noexcept { return cost > other.cost; }
 };
 using Queue = std::priority_queue<Item, std::vector<Item>, std::greater<Item>>;
@@ -87,7 +90,8 @@ void Grow(
     const f32 sourceCost,
     const std::vector<f32>* limit,
     std::vector<f32>& cost,
-    const std::atomic<bool>* cancel)
+    const std::atomic<bool>* cancel,
+    const f32 inverseRate)
 {
     const i32 r = static_cast<i32>(grid.resolution);
     Queue queue;
@@ -126,7 +130,7 @@ void Grow(
                 continue;
             }
             const f32 candidate = item.cost + grid.Length(n, m) * 0.5F *
-                (grid.multiplier[n] + grid.multiplier[m]);
+                (grid.multiplier[n] + grid.multiplier[m]) * inverseRate;
             if (candidate < cost[m])
             {
                 cost[m] = candidate;
@@ -209,7 +213,11 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
         }
     }
 
-    // Seeds and head starts (larger plates start closer, like the claim bias).
+    // Seeds, head starts and growth rates. Larger plates start closer and grow
+    // a little faster. Both are bounded: an uncapped head start let a plate
+    // whose seed lay near a stronger neighbour's reach be swallowed (it owned
+    // nothing), and a large rate ratio makes slow plates enclosed discs inside
+    // fast ones instead of a mosaic with triple junctions.
     f64 maxBias = -1.0e9;
     for (u32 i = 0; i < plateCount; ++i)
     {
@@ -217,6 +225,7 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
     }
     std::vector<std::size_t> seeds(plateCount);
     std::vector<f32> startCost(plateCount);
+    std::vector<f32> inverseRate(plateCount);
     for (u32 i = 0; i < plateCount; ++i)
     {
         const world::CubeCoordinate cube = world::UnitDirectionToCube(field.PlateSeed(i));
@@ -224,11 +233,16 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
         const i32 x = std::clamp(static_cast<i32>(std::floor((cube.uv.x + 1.0) * 0.5 * resolution)), 0, r - 1);
         const i32 y = std::clamp(static_cast<i32>(std::floor((cube.uv.y + 1.0) * 0.5 * resolution)), 0, r - 1);
         seeds[i] = grid.Index(static_cast<u32>(cube.face), x, y);
-        startCost[i] = static_cast<f32>((maxBias - field.PlateSizeBias(i)) / kClaimScale);
+        startCost[i] = static_cast<f32>(std::min(
+            (maxBias - field.PlateSizeBias(i)) / kClaimScale, kMaxHeadStart));
+        inverseRate[i] = static_cast<f32>(std::exp(-1.8 * field.PlateSizeBias(i)));
     }
 
-    // Pass 1: the winning arrival cost everywhere.
+    // Pass 1: the winning arrival cost (and owner) everywhere. Each plate
+    // propagates in its own metric, so a node's winner is the plate with the
+    // cheapest path in its own metric.
     std::vector<f32> best(grid.nodes, kInfinity);
+    std::vector<u32> owner(grid.nodes, 0U);
     {
         Queue queue;
         for (u32 i = 0; i < plateCount; ++i)
@@ -236,7 +250,8 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
             if (startCost[i] < best[seeds[i]])
             {
                 best[seeds[i]] = startCost[i];
-                queue.push({startCost[i], static_cast<u32>(seeds[i])});
+                owner[seeds[i]] = i;
+                queue.push({startCost[i], static_cast<u32>(seeds[i]), i});
             }
         }
         const i32 r = static_cast<i32>(resolution);
@@ -246,7 +261,7 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
             const Item item = queue.top();
             queue.pop();
             const std::size_t n = item.node;
-            if (item.cost > best[n])
+            if (item.cost > best[n] || item.owner != owner[n])
             {
                 continue;
             }
@@ -267,13 +282,30 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
                     continue;
                 }
                 const f32 candidate = item.cost + grid.Length(n, m) * 0.5F *
-                    (grid.multiplier[n] + grid.multiplier[m]);
+                    (grid.multiplier[n] + grid.multiplier[m]) * inverseRate[item.owner];
                 if (candidate < best[m])
                 {
                     best[m] = candidate;
-                    queue.push({candidate, static_cast<u32>(m)});
+                    owner[m] = item.owner;
+                    queue.push({candidate, static_cast<u32>(m), item.owner});
                 }
             }
+        }
+    }
+
+    // How far each plate reaches from its seed (in cost units): small plates
+    // limit the width of the boundary structure around them, so a plate
+    // narrower than the structure width is not painted entirely as boundary.
+    {
+        std::vector<f32> reach(plateCount, 0.0F);
+        for (std::size_t n = 0; n < grid.nodes; ++n)
+        {
+            reach[owner[n]] = std::max(reach[owner[n]], best[n]);
+        }
+        for (u32 i = 0; i < plateCount; ++i)
+        {
+            result->widthLimit_[i] = 0.4 * kClaimScale * static_cast<f64>(reach[i]);
+            result->widthScale_[i] = static_cast<f64>(inverseRate[i]);
         }
     }
 
@@ -300,7 +332,7 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
                 return;
             }
             std::vector<f32> cost(grid.nodes, kInfinity);
-            Grow(grid, seeds[plate], startCost[plate], &limit, cost, cancel);
+            Grow(grid, seeds[plate], startCost[plate], &limit, cost, cancel, inverseRate[plate]);
             // Outside its band a plate carries the band edge value instead of
             // infinity: the field stays continuous (so the blur and the
             // gradient are well defined) and the plate still sits just outside
