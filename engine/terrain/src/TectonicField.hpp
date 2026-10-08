@@ -146,6 +146,29 @@ private:
         f64 boundingCosine{-1.0};
     };
 
+    // One plate-pair boundary: the small circle where the two claims are
+    // equal (p . a == h), restricted to the stretch where the pair really are
+    // the top two plates. The tables hold, per angle t around the circle, the
+    // generated sideways displacement of the structure (radians), how fully
+    // it applies (tapering to nothing at the ends, i.e. triple junctions) and
+    // the strike change that displacement implies (radians).
+    static constexpr u32 kArcBins = 1024;
+    struct BoundaryArc
+    {
+        u32 plateA{0};
+        u32 plateB{0};
+        math::Double3 axis{};
+        f64 offset{0.0};
+        f64 radius{0.0};
+        math::Double3 basisU{};
+        math::Double3 basisV{};
+        std::array<f32, kArcBins> displacement{};
+        std::array<f32, kArcBins> weight{};
+        std::array<f32, kArcBins> strike{};
+    };
+    void BuildBoundaryArcs();
+
+    std::vector<BoundaryArc> arcs_;
     TectonicFieldDesc desc_;
     f64 planetRadiusMeters_{1.0};
     std::array<Plate, kMaxTectonicPlates> plates_{};
