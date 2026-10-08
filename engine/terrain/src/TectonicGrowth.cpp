@@ -19,6 +19,8 @@ namespace
 constexpr f64 kClaimScale = 0.75;
 constexpr f32 kInfinity = std::numeric_limits<f32>::infinity();
 constexpr f64 kFarClaim = -1.0e6;
+// Box-blur radius (texels) of the arrival costs; see Blur().
+constexpr i32 kBlurRadius = 4;
 
 // Stencil: the 8-neighbourhood plus knight moves. Plain 8-neighbour Dijkstra
 // has up to ~8% direction-dependent length error, which would imprint an
@@ -131,6 +133,37 @@ void Grow(
                 queue.push({candidate, static_cast<u32>(m)});
             }
         }
+    }
+}
+// Separable box blur on the cube-sphere grid (taps cross cube edges through
+// Resolve), applied twice for a near-Gaussian of sigma ~ sqrt(2 r (r + 1) / 3)
+// texels. The arrival costs are distance-like and have kinks along their cut
+// loci (where shortest paths switch); the boundary normals are gradients, so a
+// kink would be a straight-edged jump in the compression/shear balance.
+void Blur(const Grid& grid, std::vector<f32>& values, const i32 radius)
+{
+    const i32 r = static_cast<i32>(grid.resolution);
+    std::vector<f32> scratch(values.size());
+    const f32 weight = 1.0F / static_cast<f32>(2 * radius + 1);
+    for (u32 pass = 0U; pass < 4U; ++pass)
+    {
+        const bool alongX = (pass % 2U) == 0U;
+        for (u32 face = 0U; face < kBakedTectonicFaces; ++face)
+        {
+            for (i32 y = 0; y < r; ++y)
+            {
+                for (i32 x = 0; x < r; ++x)
+                {
+                    f32 sum = 0.0F;
+                    for (i32 k = -radius; k <= radius; ++k)
+                    {
+                        sum += values[grid.Resolve(face, alongX ? x + k : x, alongX ? y : y + k)];
+                    }
+                    scratch[grid.Index(face, x, y)] = sum * weight;
+                }
+            }
+        }
+        values.swap(scratch);
     }
 }
 } // namespace
@@ -268,6 +301,16 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
             }
             std::vector<f32> cost(grid.nodes, kInfinity);
             Grow(grid, seeds[plate], startCost[plate], &limit, cost, cancel);
+            // Outside its band a plate carries the band edge value instead of
+            // infinity: the field stays continuous (so the blur and the
+            // gradient are well defined) and the plate still sits just outside
+            // the candidate range of the winner.
+            for (std::size_t n = 0; n < grid.nodes; ++n)
+            {
+                const f32 edge = limit[n] + 0.04F;
+                cost[n] = std::isfinite(cost[n]) ? std::min(cost[n], edge) : edge;
+            }
+            Blur(grid, cost, kBlurRadius);
             std::copy(cost.begin(), cost.end(),
                 result->cost_.begin() + static_cast<std::ptrdiff_t>(plate * grid.nodes));
         }
@@ -315,16 +358,46 @@ f64 TectonicGrowth::ClaimAt(const u32 plate, const std::size_t node) const noexc
     return std::isfinite(cost) ? claimBase_ - kClaimScale * static_cast<f64>(cost) : kFarClaim;
 }
 
+f64 TectonicGrowth::ClaimInterpolated(
+    const u32 plate,
+    const u32 face,
+    const i32 x,
+    const i32 y) const noexcept
+{
+    const i32 r = static_cast<i32>(resolution_);
+    if (x >= 0 && y >= 0 && x < r && y < r)
+    {
+        return ClaimAt(plate, NodeAt(face, x, y));
+    }
+    const world::CubeCoordinate cube = world::UnitDirectionToCube(
+        BakedTectonicTexelDirection(face, x, y, resolution_));
+    const f64 fx = std::clamp((cube.uv.x + 1.0) * 0.5 * resolution_ - 0.5, 0.0, static_cast<f64>(r - 1));
+    const f64 fy = std::clamp((cube.uv.y + 1.0) * 0.5 * resolution_ - 0.5, 0.0, static_cast<f64>(r - 1));
+    const i32 x0 = std::min(static_cast<i32>(fx), r - 2);
+    const i32 y0 = std::min(static_cast<i32>(fy), r - 2);
+    const f64 tx = fx - x0;
+    const f64 ty = fy - y0;
+    const u32 f = static_cast<u32>(cube.face);
+    const auto at = [&](const i32 px, const i32 py)
+    {
+        return ClaimAt(plate, NodeAt(f, px, py));
+    };
+    const f64 a = at(x0, y0);
+    const f64 b = at(x0 + 1, y0);
+    const f64 c = at(x0, y0 + 1);
+    const f64 d = at(x0 + 1, y0 + 1);
+    return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty;
+}
+
 void TectonicGrowth::Claims(
     const u32 face,
     const i32 x,
     const i32 y,
     detail::ClaimArray& claims) const noexcept
 {
-    const std::size_t node = NodeAt(face, x, y);
     for (u32 i = 0; i < plateCount_; ++i)
     {
-        claims[i] = ClaimAt(i, node);
+        claims[i] = ClaimInterpolated(i, face, x, y);
     }
 }
 
@@ -341,16 +414,10 @@ math::Double3 TectonicGrowth::BoundaryNormal(
     // baseline is several texels wide: the grown boundaries are stair-stepped
     // at texel scale, and a one-texel difference would turn that into normal
     // noise (and so speckled compression/shear classification).
-    constexpr i32 kSpan = 5;
-    const std::size_t centre = NodeAt(face, x, y);
-    const f64 fc = ClaimAt(j, centre) - ClaimAt(i, centre);
+    constexpr i32 kSpan = 3;
     const auto value = [&](const i32 dx, const i32 dy)
     {
-        const std::size_t n = NodeAt(face, x + dx, y + dy);
-        const f64 ci = ClaimAt(i, n);
-        const f64 cj = ClaimAt(j, n);
-        // A neighbour outside the band carries no information: treat as flat.
-        return (ci <= kFarClaim || cj <= kFarClaim) ? fc : cj - ci;
+        return ClaimInterpolated(j, face, x + dx, y + dy) - ClaimInterpolated(i, face, x + dx, y + dy);
     };
     const auto direction = [&](const i32 dx, const i32 dy)
     {

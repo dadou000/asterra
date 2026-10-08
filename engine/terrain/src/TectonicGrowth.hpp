@@ -59,12 +59,16 @@ private:
 
     [[nodiscard]] std::size_t NodeAt(u32 face, i32 x, i32 y) const noexcept;
     [[nodiscard]] f64 ClaimAt(u32 plate, std::size_t node) const noexcept;
+    // Claim at a raster position that may lie outside the face: inside it is
+    // the texel, outside it is interpolated bilinearly on the face that owns
+    // that direction (so the gutter is continuous across the cube edge).
+    [[nodiscard]] f64 ClaimInterpolated(u32 plate, u32 face, i32 x, i32 y) const noexcept;
 
     u32 resolution_{0};
     u32 plateCount_{0};
     f64 claimBase_{1.0};
-    // plateCount_ * (6 * resolution^2) arrival costs; infinity outside a
-    // plate's band.
+    // plateCount_ * (6 * resolution^2) arrival costs, blurred; a plate carries
+    // its band-edge value outside its band.
     std::vector<f32> cost_;
 };
 } // namespace orbit::terrain
