@@ -1426,3 +1426,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 }
 )";
 } // namespace orbit::terrain_gpu::detail
+            // The slope the coarse ring itself computes at this point: its own
+            // footprint and spacing (see fineNormalFootprintMeters / Epsilon in
+            // the request). Using the fine ring's footprint here left the fine
+            // ring's normals lumpy at the ring boundary while the coarse ring's
+            // are smooth: a hard shading edge even where the heights agree.
