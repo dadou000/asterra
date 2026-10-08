@@ -77,5 +77,8 @@ struct TectonicStructureSample
     // swell and the age-depth deepening of ocean floor away from it, rift
     // valley and shoulders, trench and volcanic arc.
     f64 structuralElevationMeters{0.0};
+    // 0..1 fault/fracture intensity (bake-time deformation corridor only;
+    // zero from the undeformed plate model).
+    f64 fractureDensity{0.0};
 };
 } // namespace orbit::terrain

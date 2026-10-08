@@ -205,7 +205,8 @@ TectonicField::TectonicField(
 }
 
 TectonicSample TectonicField::Sample(
-    const math::Double3& direction) const noexcept
+    const math::Double3& direction,
+    const f64 obliquity) const noexcept
 {
     std::array<f64, kMaxTectonicPlates> d{};
     u32 nearest = 0;
@@ -301,10 +302,18 @@ TectonicSample TectonicField::Sample(
                 plates_[j].seedDirection - plates_[i].seedDirection;
             const math::Double3 tangentToward =
                 towardJ - direction * math::Dot(towardJ, direction);
-            const math::Double3 normal = math::Normalize(tangentToward);
+            math::Double3 normal = math::Normalize(tangentToward);
             if (!(math::LengthSquared(normal) > 0.0))
             {
                 continue;
+            }
+            if (obliquity != 0.0)
+            {
+                // Rotating the normal by the same angle for either ordering of
+                // the pair keeps every term below symmetric in (i, j).
+                normal = math::Normalize(
+                    normal * std::cos(obliquity) +
+                    math::Cross(direction, normal) * std::sin(obliquity));
             }
 
             const math::Double3 relative =
@@ -421,9 +430,10 @@ TectonicSample TectonicField::Sample(
 
 TectonicStructureSample TectonicField::SampleStructure(
     const math::Double3& direction,
-    const bool includeHotspot) const noexcept
+    const bool includeHotspot,
+    const f64 obliquity) const noexcept
 {
-    const TectonicSample base = Sample(direction);
+    const TectonicSample base = Sample(direction, obliquity);
     const Plate& plate = plates_[base.nearestPlate];
 
     TectonicStructureSample out{};
@@ -562,6 +572,51 @@ TectonicStructureSample TectonicField::SampleStructure(
                   std::clamp(hotspot / hotspotRelief, 0.0, 1.0)}),
         0.0, 1.0);
     return out;
+}
+
+TectonicField::DeformedGeometry TectonicField::Deform(
+    const math::Double3& direction) const noexcept
+{
+    const u64 seed = desc_.seed ^ 0x4445464F524DULL;
+
+    // Three structural scales -- plate-scale bends, regional segmentation,
+    // local splays -- each a smooth vector field, so the warp is continuous
+    // and identical on both sides of a cube-face edge.
+    math::Double3 warp =
+        VectorNoise3D(direction * 2.2, seed ^ 0x31ULL) * 0.22 +
+        VectorNoise3D(direction * 7.0, seed ^ 0x32ULL) * 0.08 +
+        VectorNoise3D(direction * 22.0, seed ^ 0x33ULL) * 0.025;
+
+    // Step-overs: a sharpened regional field slides the structure along a
+    // slowly varying strike, so a front jogs sideways instead of bending.
+    const f64 step = std::tanh(4.0 * ValueNoise3D(direction * 9.0, seed ^ 0x34ULL));
+    warp = warp + VectorNoise3D(direction * 1.3, seed ^ 0x35ULL) * (0.07 * step);
+
+    warp = warp - direction * math::Dot(warp, direction);
+    math::Double3 deformed = math::Normalize(direction + warp);
+    if (!(math::LengthSquared(deformed) > 0.0))
+    {
+        deformed = direction;
+    }
+
+    // Strike changes along a boundary: head-on collision becomes oblique
+    // (transpression) in places, a transform bends into transtension.
+    const f64 obliquity =
+        0.9 * ValueNoise3D(direction * 5.0, seed ^ 0x36ULL) +
+        0.5 * ValueNoise3D(direction * 13.0, seed ^ 0x37ULL);
+
+    // Fracture intensity: a ridged network confined to the corridor around
+    // the deformed boundary (wider than the boundary band itself).
+    const TectonicSample corridor = Sample(deformed, obliquity);
+    const f64 activity = std::clamp(
+        std::max({corridor.convergenceMask, corridor.divergenceMask,
+                  corridor.transformMask}),
+        0.0, 1.0);
+    const f64 ridge = 1.0 - std::abs(ValueNoise3D(deformed * 35.0, seed ^ 0x38ULL));
+    const f64 fracture = std::pow(activity, 0.6) * (0.3 + 0.7 * ridge * ridge * ridge);
+
+    return {.direction = deformed, .obliquity = obliquity,
+            .fractureDensity = std::clamp(fracture, 0.0, 1.0)};
 }
 
 f64 TectonicField::HotspotElevationMeters(

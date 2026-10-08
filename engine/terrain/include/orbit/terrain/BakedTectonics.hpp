@@ -45,6 +45,8 @@ enum class BakedTectonicLayer : u8
     // and age-depth subsidence, rift valley and shoulders, trench and arc.
     // The orogenic belt is not in it (convergence drives that separately).
     StructuralElevationMeters,
+    // 0..1 fault/fracture intensity inside the deformation corridor.
+    FractureDensity,
     Count
 };
 
@@ -80,7 +82,7 @@ struct BakedTectonicTexel
 class BakedTectonicRasters
 {
 public:
-    static constexpr u32 kFormatVersion = 4;
+    static constexpr u32 kFormatVersion = 5;
 
     // Quantizes float layers. `layers[i]` holds 6 * (resolution + 2)^2 values
     // for layer i in face-major, row-major order with the gutter included;

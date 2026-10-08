@@ -439,6 +439,7 @@ TectonicStructureSample GlobalTerrainFields::SampleTectonicStructure(
     out.volcanicArc = unit01(layer(BakedTectonicLayer::VolcanicArc));
     out.structuralElevationMeters =
         layer(BakedTectonicLayer::StructuralElevationMeters);
+    out.fractureDensity = unit01(layer(BakedTectonicLayer::FractureDensity));
     out.crustThicknessKm = std::max(3.0, layer(BakedTectonicLayer::CrustThicknessKm));
     out.crustAge = unit01(layer(BakedTectonicLayer::CrustAge));
     out.geologicalAge = unit01(layer(BakedTectonicLayer::GeologicalAge));
@@ -465,9 +466,19 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
     const math::Double3 safe =
         math::LengthSquared(unit) > 0.0 ? unit : math::Double3{0.0, 1.0, 0.0};
 
-    const detail::TectonicSample sample = tectonicField_->Sample(safe);
-    const TectonicStructureSample structure =
-        tectonicField_->SampleStructure(safe, false);
+    // The bake evaluates the naturalised boundary structure (warped, with a
+    // varying obliquity); the runtime plate model stays the clean one.
+    const detail::TectonicField::DeformedGeometry geometry =
+        tectonicField_->Deform(safe);
+    const detail::TectonicSample sample =
+        tectonicField_->Sample(geometry.direction, geometry.obliquity);
+    TectonicStructureSample structure = tectonicField_->SampleStructure(
+        geometry.direction, false, geometry.obliquity);
+    structure.fractureDensity = geometry.fractureDensity;
+    // Strike-slip zones carry fault valleys.
+    structure.structuralElevationMeters -= 0.1 *
+        desc_.tectonic.convergenceUpliftMeters * sample.transformMask *
+        geometry.fractureDensity;
 
     BakedTectonicTexel texel;
     texel.Set(BakedTectonicLayer::Convergence, static_cast<f32>(sample.convergenceMask));
@@ -503,6 +514,8 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
             desc_.tectonic.oceanicPlateBiasMeters,
             desc_.tectonic.continentalPlateBiasMeters,
             structure.continentalCrustFraction)));
+    texel.Set(BakedTectonicLayer::FractureDensity,
+        static_cast<f32>(structure.fractureDensity));
     texel.plate = static_cast<u8>(sample.nearestPlate);
     texel.neighbour = static_cast<u8>(sample.secondPlate);
     return texel;

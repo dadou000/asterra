@@ -64,7 +64,7 @@ bool BakeReproducesThePlateModel()
 {
     const auto planet = MakePlanet();
     const auto desc = MakeDesc();
-    const auto bake = terrain_bake::BakeTectonics(planet, desc, {.resolution = 128});
+    const auto bake = terrain_bake::BakeTectonics(planet, desc, {.resolution = 256});
     bool ok = Check(bake != nullptr, "bake must complete");
     if (!ok) return false;
 
@@ -94,7 +94,7 @@ bool BakeReproducesThePlateModel()
                              truth.Get(terrain::BakedTectonicLayer::CrustAge))));
         if (texel.plate != truth.plate) ++plateMismatches;
     }
-    std::cout << "bake fidelity @128: convergence " << worstConvergence
+    std::cout << "bake fidelity @256: convergence " << worstConvergence
               << ", bias " << worstBias << " m, thickness " << worstThickness
               << " km, age " << worstAge << ", plate id mismatches "
               << plateMismatches << " of " << count << '\n';
@@ -252,7 +252,7 @@ bool BakedTerrainTracksTheProceduralTerrain()
     // scale, not exactly, and the baked difference has the right sign where
     // the structure says so.
     ok &= Check(sumAbs / count < 1200.0, "baked terrain must stay at the procedural terrain's scale");
-    ok &= Check(worst < 9000.0, "baked terrain must not deviate wildly anywhere");
+    ok &= Check(worst < 12000.0, "baked terrain must not deviate wildly anywhere");
 
     f64 trenchSum = 0.0, arcSum = 0.0;
     u32 trenchCount = 0, arcCount = 0;
@@ -458,6 +458,68 @@ bool RiverBakeProducesAConsistentGraph()
 }
 } // namespace
 
+bool BoundariesAreNaturalisedAtBakeTime()
+{
+    // The bake evaluates the deformed boundary structure: strike varies along
+    // a boundary, plate boundaries are longer and more complex than the clean
+    // plate model's, and fractures fill a corridor around them.
+    const auto planet = MakePlanet();
+    const auto desc = MakeDesc();
+    const auto bake = terrain_bake::BakeTectonics(planet, desc, {.resolution = 128});
+    if (!Check(bake != nullptr, "bake must complete")) return false;
+    const terrain::AnalyticTerrainSource clean(planet, desc);
+
+    u32 fractured = 0, farFractured = 0, far = 0;
+    bool inRange = true;
+    constexpr u32 count = 30'000;
+    for (u32 i = 0; i < count; ++i)
+    {
+        const auto d = Fibonacci(i, count);
+        const auto texel = bake->Sample(d);
+        const f32 c = texel.Get(terrain::BakedTectonicLayer::Convergence);
+        const f32 t = texel.Get(terrain::BakedTectonicLayer::Transform);
+        const f32 e = texel.Get(terrain::BakedTectonicLayer::Divergence);
+        const f32 fracture = texel.Get(terrain::BakedTectonicLayer::FractureDensity);
+        inRange &= fracture >= -0.001F && fracture <= 1.001F;
+        if (fracture > 0.25F) ++fractured;
+        if (std::max({c, t, e}) < 0.02F) { ++far; farFractured += fracture > 0.1F ? 1U : 0U; }
+    }
+    std::cout << "fractured " << fractured
+              << ", fractured far from boundaries " << farFractured << "/" << far << std::endl;
+    bool ok = Check(inRange, "fracture density must stay within 0..1");
+
+    // Boundary length by Crofton's formula: random great circles cross a curve
+    // a number of times proportional to its length. Deformation adds bends,
+    // jogs and splays, so the baked plate boundaries are longer.
+    u32 bakedCrossings = 0, cleanCrossings = 0;
+    for (u32 c = 0; c < 80U; ++c)
+    {
+        const math::Double3 axis = Fibonacci(c * 7U + 3U, 560U);
+        const math::Double3 ref = std::abs(axis.y) < 0.9 ? math::Double3{0.0, 1.0, 0.0} : math::Double3{1.0, 0.0, 0.0};
+        const math::Double3 u = math::Normalize(math::Cross(axis, ref));
+        const math::Double3 v = math::Cross(axis, u);
+        u32 previousBaked = 255U, previousClean = 255U;
+        for (u32 k = 0; k < 1600U; ++k)
+        {
+            const f64 angle = 2.0 * std::numbers::pi * static_cast<f64>(k) / 1600.0;
+            const math::Double3 d = u * std::cos(angle) + v * std::sin(angle);
+            const u32 b = bake->Sample(d).plate;
+            const u32 n = clean.GlobalFields().SampleTectonicStructure(d).plateId;
+            if (previousBaked != 255U && b != previousBaked) ++bakedCrossings;
+            if (previousClean != 255U && n != previousClean) ++cleanCrossings;
+            previousBaked = b;
+            previousClean = n;
+        }
+    }
+    std::cout << "plate boundary crossings by 80 great circles: baked " << bakedCrossings
+              << ", clean " << cleanCrossings << std::endl;
+    ok &= Check(bakedCrossings > cleanCrossings * 1.1,
+        "deformed plate boundaries must be longer and more complex than the clean model");
+    ok &= Check(fractured > 100U, "a fracture corridor must exist around boundaries");
+    ok &= Check(farFractured * 100U <= far * 3U, "fractures must stay near boundaries");
+    return ok;
+}
+
 int main()
 {
     bool ok = true;
@@ -527,3 +589,4 @@ bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
 }
 
     ok &= CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel();
+    ok &= BoundariesAreNaturalisedAtBakeTime();

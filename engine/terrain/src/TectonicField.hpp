@@ -71,6 +71,31 @@ public:
         const TectonicFieldDesc& desc);
 
     [[nodiscard]] TectonicSample Sample(
+        const math::Double3& direction) const noexcept
+    {
+        return Sample(direction, 0.0);
+    }
+
+    // `obliquity` (radians) rotates the boundary normal within the tangent
+    // plane, so a nominally head-on boundary segment reads as transpression
+    // or transtension. 0 is exactly the unrotated model (the GPU mirror).
+    [[nodiscard]] TectonicSample Sample(
+        const math::Double3& direction,
+        f64 obliquity) const noexcept;
+
+    // Bake-time naturalisation of the plate-boundary geometry. The plate
+    // topology (which plate owns where) stays the Voronoi-style claim field;
+    // the boundary *structure* is evaluated on a multi-scale warped copy of
+    // the sphere with a spatially varying obliquity, so fronts bend, step and
+    // change character along strike instead of tracing clean arcs.
+    struct DeformedGeometry
+    {
+        math::Double3 direction{};
+        f64 obliquity{0.0};
+        // 0..1 fracture/fault intensity within the deformation corridor.
+        f64 fractureDensity{0.0};
+    };
+    [[nodiscard]] DeformedGeometry Deform(
         const math::Double3& direction) const noexcept;
 
     // includeHotspot = false leaves hotspot chains out of uplift and volcanism
@@ -78,7 +103,8 @@ public:
     // and added at sample time).
     [[nodiscard]] TectonicStructureSample SampleStructure(
         const math::Double3& direction,
-        bool includeHotspot = true) const noexcept;
+        bool includeHotspot = true,
+        f64 obliquity = 0.0) const noexcept;
 
     [[nodiscard]] f64 HotspotElevationMeters(
         const math::Double3& direction) const noexcept;
