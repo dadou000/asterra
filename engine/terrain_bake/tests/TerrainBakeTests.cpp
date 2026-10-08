@@ -230,38 +230,61 @@ bool BakedTerrainTracksTheProceduralTerrain()
         worst = std::max(worst, std::abs(a - b));
     }
     std::cout << "baked vs procedural elevation: mean |diff| " << sumAbs / count
-              << " m, worst " << worst << " m\n";
-    // The bake carries structure the unbaked plate model does not: crust-type
-    // driven geography, orogenic belts that exist at zero noise, and the
-    // structural elevation (trench, arc, ridge, rift). So the two agree in
-    // scale, not exactly, and the baked difference has the right sign where
-    // the structure says so.
-    ok &= Check(sumAbs / count < 1200.0, "baked terrain must stay at the procedural terrain's scale");
+              << " m, worst " << worst << " m" << std::endl;
+    // The bake has its own geography (grown plates, crust-type driven bias),
+    // orogenic belts that exist at zero noise and the structural elevation, so
+    // it agrees with the unbaked plate model in scale, not point by point.
+    ok &= Check(sumAbs / count < 2000.0, "baked terrain must stay at the procedural terrain's scale");
     ok &= Check(worst < 12000.0, "baked terrain must not deviate wildly anywhere");
 
-    f64 trenchSum = 0.0, arcSum = 0.0;
-    u32 trenchCount = 0, arcCount = 0;
-    for (u32 i = 0; i < 60'000; ++i)
+    // The structure reaches the terrain: the same bake with its structural
+    // elevation layer zeroed is the control. Trenches must be lower with the
+    // structure than without, and volcanic arcs higher.
     {
-        const math::Double3 direction = Fibonacci(i, 60'000);
-        const auto structure = baked.GlobalFields().SampleTectonicStructure(direction);
-        const bool trench = structure.subductionTrench > 0.6;
-        const bool arc = structure.volcanicArc > 0.6;
-        if (!trench && !arc) continue;
-        const terrain::TerrainQuery query{
-            .unitDirection = direction, .footprintMeters = 20'000.0,
-            .planet = planet.id, .radialOffsetMeters = 0.0};
-        const f64 delta = baked.Sample(query).elevationMeters - procedural.Sample(query).elevationMeters;
-        if (trench) { trenchSum += delta; ++trenchCount; }
-        else { arcSum += delta; ++arcCount; }
+        std::array<std::vector<u16>, terrain::kBakedTectonicLayerCount> layers;
+        std::array<f32, terrain::kBakedTectonicLayerCount> minimum{}, maximum{};
+        for (u32 l = 0; l < terrain::kBakedTectonicLayerCount; ++l)
+        {
+            const auto id = static_cast<terrain::BakedTectonicLayer>(l);
+            layers[l] = bake->QuantizedLayer(id);
+            minimum[l] = bake->RangeMinimum(id);
+            maximum[l] = bake->RangeMaximum(id);
+        }
+        const auto structural = static_cast<std::size_t>(terrain::BakedTectonicLayer::StructuralElevationMeters);
+        const f64 zeroCode = (0.0 - minimum[structural]) / (static_cast<f64>(maximum[structural]) - minimum[structural]) * 65535.0;
+        std::fill(layers[structural].begin(), layers[structural].end(), static_cast<u16>(std::clamp(zeroCode + 0.5, 0.0, 65535.0)));
+        auto flatDesc = desc;
+        flatDesc.global.bakedTectonics = std::make_shared<const terrain::BakedTectonicRasters>(
+            terrain::BakedTectonicRasters::FromQuantized(
+                bake->Resolution(), bake->RecipeHash(), std::move(layers), minimum, maximum,
+                bake->PlateIds(), bake->NeighbourIds(), bake->PlateContinentalFlags(), bake->PlateCount()));
+        const terrain::AnalyticTerrainSource control(planet, flatDesc);
+
+        f64 trenchSum = 0.0, arcSum = 0.0;
+        u32 trenchCount = 0, arcCount = 0;
+        for (u32 i = 0; i < 80'000; ++i)
+        {
+            const math::Double3 direction = Fibonacci(i, 80'000);
+            const auto structure = baked.GlobalFields().SampleTectonicStructure(direction);
+            const bool trench = structure.subductionTrench > 0.6;
+            const bool arc = structure.volcanicArc > 0.6;
+            if (!trench && !arc) continue;
+            const terrain::TerrainQuery query{
+                .unitDirection = direction, .footprintMeters = 20'000.0,
+                .planet = planet.id, .radialOffsetMeters = 0.0};
+            const f64 delta = baked.Sample(query).elevationMeters - control.Sample(query).elevationMeters;
+            if (trench) { trenchSum += delta; ++trenchCount; }
+            else { arcSum += delta; ++arcCount; }
+        }
+        const f64 trenchMean = trenchCount ? trenchSum / trenchCount : 0.0;
+        const f64 arcMean = arcCount ? arcSum / arcCount : 0.0;
+        std::cout << "structure vs zeroed-structure control: trench " << trenchMean << " m (" << trenchCount
+                  << "), arc " << arcMean << " m (" << arcCount << ")" << std::endl;
+        ok &= Check(trenchCount > 20U && trenchMean < -800.0,
+            "trenches must reach the baked terrain as depressions");
+        ok &= Check(arcCount > 5U && arcMean > 100.0,
+            "volcanic arcs must reach the baked terrain as uplift");
     }
-    std::cout << "baked - procedural: trench " << (trenchCount ? trenchSum / trenchCount : 0.0)
-              << " m (" << trenchCount << "), arc " << (arcCount ? arcSum / arcCount : 0.0)
-              << " m (" << arcCount << ")\n";
-    ok &= Check(trenchCount > 0U && trenchSum / trenchCount < -800.0,
-        "trenches must reach the baked terrain as depressions");
-    ok &= Check(arcCount > 0U && arcSum / arcCount > 0.0,
-        "volcanic arcs must reach the baked terrain as uplift");
 
     // The structural layer is served from the bake too.
     const auto structure = baked.GlobalFields().SampleTectonicStructure(Fibonacci(7, 100));
@@ -541,8 +564,10 @@ bool FaultsAreLinearNotWhorls()
 
 bool EveryPlateOwnsTerritoryAndKeepsAnInterior()
 {
-    // A plate must own territory (growth rates, not head starts, so no seed is
-    // swallowed), small plates must keep an interior (the boundary structure is
+    // A plate must own territory (bounded head starts, so no seed is
+    // swallowed), no plate may be an isolated disc enclosed by a single other
+    // plate (extra cells are merged into plates instead of unequal growth
+    // rates), small plates must keep an interior (the boundary structure is
     // limited by plate size instead of painting a small plate entirely as
     // boundary), and stress must not saturate along every boundary.
     const auto planet = MakePlanet();
@@ -553,6 +578,7 @@ bool EveryPlateOwnsTerritoryAndKeepsAnInterior()
         if (!Check(bake != nullptr, "bake must complete")) return false;
         constexpr u32 n = 60000;
         std::vector<u32> count(32, 0U), interior(32, 0U);
+        std::array<std::array<u32, 32>, 32> contact{};
         u32 boundary = 0, saturated = 0;
         for (u32 i = 0; i < n; ++i)
         {
@@ -560,6 +586,7 @@ bool EveryPlateOwnsTerritoryAndKeepsAnInterior()
             ++count[t.plate];
             const f32 strength = std::max({t.Get(terrain::BakedTectonicLayer::Convergence),
                 t.Get(terrain::BakedTectonicLayer::Divergence), t.Get(terrain::BakedTectonicLayer::Transform)});
+            if (strength > 0.1F && t.neighbour != t.plate) ++contact[t.plate][t.neighbour];
             if (strength < 0.3F) ++interior[t.plate];
             else
             {
@@ -567,16 +594,24 @@ bool EveryPlateOwnsTerritoryAndKeepsAnInterior()
                 saturated += t.Get(terrain::BakedTectonicLayer::Stress) > 0.95F ? 1U : 0U;
             }
         }
-        u32 lost = 0, hollow = 0;
+        u32 lost = 0, hollow = 0, enclosed = 0;
         for (u32 p = 0; p < bake->PlateCount(); ++p)
         {
             if (count[p] == 0U) { ++lost; continue; }
+            u32 contactTotal = 0, contactTop = 0;
+            for (u32 q = 0; q < bake->PlateCount(); ++q)
+            {
+                contactTotal += contact[p][q];
+                contactTop = std::max(contactTop, contact[p][q]);
+            }
+            if (contactTotal > 20U && contactTop * 10U >= contactTotal * 9U) ++enclosed;
             if (count[p] >= n / 250U && interior[p] * 4U < count[p]) ++hollow;
         }
-        std::cout << "seed " << seed << ": plates without territory " << lost << ", hollow plates " << hollow
+        std::cout << "seed " << seed << ": plates without territory " << lost << ", enclosed plates " << enclosed << ", hollow plates " << hollow
                   << ", saturated stress share of boundary " << 100.0 * saturated / std::max(boundary, 1U)
                   << "%" << std::endl;
         ok &= Check(lost == 0U, "every plate must own territory");
+        ok &= Check(enclosed == 0U, "no plate may be a disc enclosed by a single other plate");
         ok &= Check(hollow == 0U, "plates large enough to see must keep an interior outside the boundary structure");
         ok &= Check(saturated * 100U < boundary * 35U, "stress must not saturate along every boundary");
     }

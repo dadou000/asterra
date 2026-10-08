@@ -20,7 +20,9 @@ constexpr f64 kClaimScale = 0.75;
 constexpr f32 kInfinity = std::numeric_limits<f32>::infinity();
 constexpr f64 kFarClaim = -1.0e6;
 // Largest head start (cost units) a plate can have; see Build().
-constexpr f64 kMaxHeadStart = 0.14;
+constexpr f64 kMaxHeadStart = 0.10;
+// How strongly size bias attracts extra cells to a plate; see Build().
+constexpr f64 kExtraBias = 2.0;
 // Box-blur radius (texels) of the arrival costs; see Blur().
 constexpr i32 kBlurRadius = 4;
 
@@ -86,7 +88,7 @@ struct Grid
 // only while its cost stays within limit[node].
 void Grow(
     const Grid& grid,
-    const std::size_t source,
+    const std::vector<std::size_t>& sources,
     const f32 sourceCost,
     const std::vector<f32>* limit,
     std::vector<f32>& cost,
@@ -95,8 +97,11 @@ void Grow(
 {
     const i32 r = static_cast<i32>(grid.resolution);
     Queue queue;
-    cost[source] = sourceCost;
-    queue.push({sourceCost, static_cast<u32>(source)});
+    for (const std::size_t source : sources)
+    {
+        cost[source] = sourceCost;
+        queue.push({sourceCost, static_cast<u32>(source)});
+    }
     u32 counter = 0;
     while (!queue.empty())
     {
@@ -214,28 +219,90 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
     }
 
     // Seeds, head starts and growth rates. Larger plates start closer and grow
-    // a little faster. Both are bounded: an uncapped head start let a plate
+    // a little faster, both kept small: an uncapped head start let a plate
     // whose seed lay near a stronger neighbour's reach be swallowed (it owned
     // nothing), and a large rate ratio makes slow plates enclosed discs inside
-    // fast ones instead of a mosaic with triple junctions.
+    // fast ones. The spread of plate sizes comes from merging extra cells.
     f64 maxBias = -1.0e9;
     for (u32 i = 0; i < plateCount; ++i)
     {
         maxBias = std::max(maxBias, field.PlateSizeBias(i));
     }
-    std::vector<std::size_t> seeds(plateCount);
+    std::vector<std::vector<std::size_t>> sources(plateCount);
     std::vector<f32> startCost(plateCount);
     std::vector<f32> inverseRate(plateCount);
-    for (u32 i = 0; i < plateCount; ++i)
+    const auto nodeOf = [&](const math::Double3& direction)
     {
-        const world::CubeCoordinate cube = world::UnitDirectionToCube(field.PlateSeed(i));
+        const world::CubeCoordinate cube = world::UnitDirectionToCube(direction);
         const i32 r = static_cast<i32>(resolution);
         const i32 x = std::clamp(static_cast<i32>(std::floor((cube.uv.x + 1.0) * 0.5 * resolution)), 0, r - 1);
         const i32 y = std::clamp(static_cast<i32>(std::floor((cube.uv.y + 1.0) * 0.5 * resolution)), 0, r - 1);
-        seeds[i] = grid.Index(static_cast<u32>(cube.face), x, y);
+        return grid.Index(static_cast<u32>(cube.face), x, y);
+    };
+    for (u32 i = 0; i < plateCount; ++i)
+    {
+        sources[i].push_back(nodeOf(field.PlateSeed(i)));
         startCost[i] = static_cast<f32>(std::min(
             (maxBias - field.PlateSizeBias(i)) / kClaimScale, kMaxHeadStart));
-        inverseRate[i] = static_cast<f32>(std::exp(-1.8 * field.PlateSizeBias(i)));
+        inverseRate[i] = static_cast<f32>(std::exp(-0.3 * field.PlateSizeBias(i)));
+    }
+
+    // Extra cells. Growing exactly one cell per plate gives similar-sized
+    // plates, and unequal growth rates to vary them make slow plates enclosed
+    // discs. Instead extra seeds are placed evenly in the gaps between the
+    // plate seeds and each is merged into a nearby plate, so a plate is the
+    // union of one to several adjacent cells: larger, non-convex plates and a
+    // real spread of sizes from a mosaic with triple junctions. Which plate
+    // takes an extra cell favours larger plates (size bias).
+    {
+        std::vector<math::Double3> cells;
+        for (u32 i = 0; i < plateCount; ++i)
+        {
+            cells.push_back(field.PlateSeed(i));
+        }
+        const u64 cellSeed = seed ^ 0x43454C4C53ULL;
+        constexpr u32 kCandidates = 3000;
+        std::vector<math::Double3> candidates(kCandidates);
+        for (u32 c = 0; c < kCandidates; ++c)
+        {
+            candidates[c] = math::Normalize(math::Double3{
+                detail::HashValue(c, 1, 0, cellSeed), detail::HashValue(c, 2, 0, cellSeed),
+                detail::HashValue(c, 3, 0, cellSeed)});
+        }
+        for (u32 e = 0; e < plateCount; ++e)
+        {
+            // Farthest-point sampling: the candidate farthest from every cell.
+            f64 bestGap = -1.0;
+            math::Double3 chosen = candidates[0];
+            for (const math::Double3& candidate : candidates)
+            {
+                f64 nearest = -2.0;
+                for (const math::Double3& cell : cells)
+                {
+                    nearest = std::max(nearest, math::Dot(candidate, cell));
+                }
+                const f64 gap = -nearest;
+                if (gap > bestGap)
+                {
+                    bestGap = gap;
+                    chosen = candidate;
+                }
+            }
+            cells.push_back(chosen);
+            u32 owner = 0;
+            f64 bestScore = 1.0e30;
+            for (u32 i = 0; i < plateCount; ++i)
+            {
+                const f64 angle = std::acos(std::clamp(math::Dot(chosen, field.PlateSeed(i)), -1.0, 1.0));
+                const f64 score = angle * std::exp(-kExtraBias * field.PlateSizeBias(i));
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    owner = i;
+                }
+            }
+            sources[owner].push_back(nodeOf(chosen));
+        }
     }
 
     // Pass 1: the winning arrival cost (and owner) everywhere. Each plate
@@ -247,11 +314,14 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
         Queue queue;
         for (u32 i = 0; i < plateCount; ++i)
         {
-            if (startCost[i] < best[seeds[i]])
+            for (const std::size_t source : sources[i])
             {
-                best[seeds[i]] = startCost[i];
-                owner[seeds[i]] = i;
-                queue.push({startCost[i], static_cast<u32>(seeds[i]), i});
+                if (startCost[i] < best[source])
+                {
+                    best[source] = startCost[i];
+                    owner[source] = i;
+                    queue.push({startCost[i], static_cast<u32>(source), i});
+                }
             }
         }
         const i32 r = static_cast<i32>(resolution);
@@ -332,7 +402,7 @@ std::shared_ptr<const TectonicGrowth> TectonicGrowth::Build(
                 return;
             }
             std::vector<f32> cost(grid.nodes, kInfinity);
-            Grow(grid, seeds[plate], startCost[plate], &limit, cost, cancel, inverseRate[plate]);
+            Grow(grid, sources[plate], startCost[plate], &limit, cost, cancel, inverseRate[plate]);
             // Outside its band a plate carries the band edge value instead of
             // infinity: the field stays continuous (so the blur and the
             // gradient are well defined) and the plate still sits just outside
