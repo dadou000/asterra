@@ -4,6 +4,7 @@
 
 #include <array>
 #include <algorithm>
+#include <string_view>
 
 namespace orbit::studio_ui
 {
@@ -36,6 +37,36 @@ enum class GizmoPivot : u8
     Individual
 };
 
+enum class SnapLengthUnit : u8 { Millimeters, Centimeters, Meters, Kilometers, Inches, Feet };
+
+[[nodiscard]] constexpr std::string_view SnapUnitSymbol(SnapLengthUnit unit) noexcept
+{
+    switch (unit)
+    {
+    case SnapLengthUnit::Millimeters: return "mm";
+    case SnapLengthUnit::Centimeters: return "cm";
+    case SnapLengthUnit::Meters: return "m";
+    case SnapLengthUnit::Kilometers: return "km";
+    case SnapLengthUnit::Inches: return "in";
+    case SnapLengthUnit::Feet: return "ft";
+    }
+    return "m";
+}
+
+[[nodiscard]] constexpr f64 SnapUnitMeters(SnapLengthUnit unit) noexcept
+{
+    switch (unit)
+    {
+    case SnapLengthUnit::Millimeters: return 0.001;
+    case SnapLengthUnit::Centimeters: return 0.01;
+    case SnapLengthUnit::Meters: return 1.0;
+    case SnapLengthUnit::Kilometers: return 1000.0;
+    case SnapLengthUnit::Inches: return 0.0254;
+    case SnapLengthUnit::Feet: return 0.3048;
+    }
+    return 1.0;
+}
+
 struct GizmoSettings
 {
     GizmoTool tool{GizmoTool::Select};
@@ -48,6 +79,7 @@ struct GizmoSettings
     bool scaleSnap{false};
     f64 scaleSnapStep{0.1};
     bool surfaceSnap{false};
+    SnapLengthUnit translationSnapUnit{SnapLengthUnit::Meters};
 };
 
 struct ViewportAuthoringState

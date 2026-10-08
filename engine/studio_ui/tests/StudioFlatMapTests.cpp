@@ -33,7 +33,8 @@ int main()
         const auto parsed = ParseFlatMapLayer(FlatMapLayerName(layer));
         Check(parsed.has_value() && *parsed == layer, "layer name round trip");
     }
-    Check(!ParseFlatMapLayer("tectonics").has_value(), "unknown layer rejected");
+    Check(ParseFlatMapLayer("tectonics") == FlatMapLayer::Tectonics,
+          "tectonics layer is available");
 
     // Same convention as the text HUD: latitude = asin(y), longitude = atan2(z, x).
     {

@@ -11,6 +11,11 @@ namespace orbit::terrain::detail
 {
 namespace
 {
+// Plates within one boundary width of the top that take part in the boundary
+// structure at a point; more than this only occurs at pathological junctions.
+// Mirrored by the GPU field generator.
+constexpr u32 kMaxBoundaryCandidates = 8;
+
 constexpr f64 kGoldenAngle =
     std::numbers::pi * (3.0 - 2.2360679774997896964);
 
@@ -111,6 +116,19 @@ TectonicField::TectonicField(
         plate.sizeBiasDot =
             HashValue(i, 500, 0, seed ^ 0x53495A45ULL) *
             desc.plateSizeVarianceDot;
+
+        const f64 thicknessRoll =
+            HashValue(i, 700, 0, seed ^ 0x5448494BULL);
+        const f64 ageRoll =
+            HashValue(i, 710, 0, seed ^ 0x41474521ULL) * 0.5 + 0.5;
+        // Continental crust: thick, buoyant and old. Oceanic: thin, dense
+        // and young.
+        plate.crustThicknessKm = plate.isContinental
+            ? 35.0 + 8.0 * thicknessRoll
+            : 7.0 + 1.5 * thicknessRoll;
+        plate.crustAge = plate.isContinental
+            ? 0.55 + 0.45 * ageRoll
+            : 0.05 + 0.55 * ageRoll;
     }
 
     for (u32 h = 0; h < hotspotCount_; ++h)
@@ -188,6 +206,7 @@ TectonicField::TectonicField(
 TectonicSample TectonicField::Sample(
     const math::Double3& direction) const noexcept
 {
+    std::array<f64, kMaxTectonicPlates> d{};
     u32 nearest = 0;
     u32 second = 0;
     f64 d0 = -2.0;
@@ -195,20 +214,20 @@ TectonicSample TectonicField::Sample(
 
     for (u32 i = 0; i < plateCount_; ++i)
     {
-        const f64 d =
+        d[i] =
             math::Dot(direction, plates_[i].seedDirection) +
             plates_[i].sizeBiasDot;
-        if (d > d0)
+        if (d[i] > d0)
         {
             second = nearest;
             d1 = d0;
             nearest = i;
-            d0 = d;
+            d0 = d[i];
         }
-        else if (d > d1)
+        else if (d[i] > d1)
         {
             second = i;
-            d1 = d;
+            d1 = d[i];
         }
     }
 
@@ -226,35 +245,75 @@ TectonicSample TectonicField::Sample(
         };
     }
 
-    const f64 boundaryMask =
-        Smooth(1.0 - (d0 - d1) / std::max(desc_.boundaryWidthDot, 1.0e-9));
+    const f64 width = std::max(desc_.boundaryWidthDot, 1.0e-9);
+
+    // Every plate whose claim is within one boundary width of the top is part
+    // of the local boundary structure. Evaluating all pairs among them, rather
+    // than only (nearest, runner-up), keeps every mask continuous: with a
+    // single runner-up pair the boundary normal and relative velocity jump
+    // along the line where the runner-up plate changes identity, cutting
+    // mountain belts with straight edges that start at triple junctions.
+    std::array<u32, kMaxBoundaryCandidates> candidates{};
+    u32 candidateCount = 0;
+    for (u32 i = 0; i < plateCount_ && candidateCount < kMaxBoundaryCandidates; ++i)
+    {
+        if (d0 - d[i] < width)
+        {
+            candidates[candidateCount++] = i;
+        }
+    }
+
+    const f64 referenceSpeed =
+        std::max(desc_.convergenceReferenceSpeed, 1.0e-9);
+    const f64 transformReferenceSpeed =
+        std::max(desc_.transformReferenceSpeed, 1.0e-9);
 
     f64 convergenceMask = 0.0;
     f64 divergenceMask = 0.0;
     f64 transformMask = 0.0;
-    if (boundaryMask > 0.0)
+    f64 convergenceContinental = 0.0;
+    f64 convergenceMixed = 0.0;
+    f64 convergenceOceanic = 0.0;
+
+    for (u32 a = 0; a < candidateCount; ++a)
     {
-        const math::Double3 towardSecond =
-            plates_[second].seedDirection - plates_[nearest].seedDirection;
-        const math::Double3 tangentToward =
-            towardSecond - direction * math::Dot(towardSecond, direction);
-        const math::Double3 normal = math::Normalize(tangentToward);
-
-        if (math::LengthSquared(normal) > 0.0)
+        for (u32 b = a + 1; b < candidateCount; ++b)
         {
-            const math::Double3 vNearest =
-                math::Cross(plates_[nearest].eulerVector, direction);
-            const math::Double3 vSecond =
-                math::Cross(plates_[second].eulerVector, direction);
-            const math::Double3 relative = vNearest - vSecond;
+            const u32 i = candidates[a];
+            const u32 j = candidates[b];
 
-            // Motion perpendicular to the boundary line (along `normal`)
-            // is convergence/divergence; motion along the boundary line
-            // itself (perpendicular to `normal`, within the tangent
-            // plane) is lateral shear -- a transform fault.
+            // Closeness of each plate to the top, and of the pair to each
+            // other. For the top two plates this reduces exactly to the
+            // original (d0 - d1) boundary mask.
+            const f64 weight = std::min(
+                {Smooth(1.0 - (d0 - d[i]) / width),
+                 Smooth(1.0 - (d0 - d[j]) / width),
+                 Smooth(1.0 - std::abs(d[i] - d[j]) / width)});
+            if (weight <= 0.0)
+            {
+                continue;
+            }
+
+            const math::Double3 towardJ =
+                plates_[j].seedDirection - plates_[i].seedDirection;
+            const math::Double3 tangentToward =
+                towardJ - direction * math::Dot(towardJ, direction);
+            const math::Double3 normal = math::Normalize(tangentToward);
+            if (!(math::LengthSquared(normal) > 0.0))
+            {
+                continue;
+            }
+
+            const math::Double3 relative =
+                math::Cross(plates_[i].eulerVector, direction) -
+                math::Cross(plates_[j].eulerVector, direction);
+
+            // Motion perpendicular to the boundary line is convergence or
+            // divergence; motion along it is lateral shear. Swapping i and j
+            // flips both the normal and the relative velocity, so every term
+            // below is symmetric in the pair.
             const math::Double3 alongBoundary =
                 math::Cross(direction, normal);
-
             const f64 normalSpeed = math::Dot(relative, normal);
             const f64 shearSpeed = math::Dot(relative, alongBoundary);
 
@@ -262,32 +321,58 @@ TectonicSample TectonicField::Sample(
             const f64 divergence = std::max(0.0, normalSpeed);
             const f64 shear = std::abs(shearSpeed);
 
-            const bool eitherContinental =
-                plates_[nearest].isContinental || plates_[second].isContinental;
+            const bool continentalI = plates_[i].isContinental;
+            const bool continentalJ = plates_[j].isContinental;
             const f64 collisionScale =
-                eitherContinental ? 1.0 : desc_.oceanicConvergenceScale;
+                (continentalI || continentalJ)
+                    ? 1.0
+                    : desc_.oceanicConvergenceScale;
 
-            const f64 referenceSpeed =
-                std::max(desc_.convergenceReferenceSpeed, 1.0e-9);
-            const f64 transformReferenceSpeed =
-                std::max(desc_.transformReferenceSpeed, 1.0e-9);
+            const f64 convergenceTerm =
+                weight * Smooth(convergence / referenceSpeed);
+            convergenceMask = std::max(
+                convergenceMask, convergenceTerm * collisionScale);
+            divergenceMask = std::max(
+                divergenceMask, weight * Smooth(divergence / referenceSpeed));
+            transformMask = std::max(
+                transformMask, weight * Smooth(shear / transformReferenceSpeed));
 
-            convergenceMask = boundaryMask *
-                Smooth(convergence / referenceSpeed) *
-                collisionScale;
-            divergenceMask = boundaryMask *
-                Smooth(divergence / referenceSpeed);
-            transformMask = boundaryMask *
-                Smooth(shear / transformReferenceSpeed);
+            if (continentalI && continentalJ)
+            {
+                convergenceContinental =
+                    std::max(convergenceContinental, convergenceTerm);
+            }
+            else if (continentalI || continentalJ)
+            {
+                convergenceMixed =
+                    std::max(convergenceMixed, convergenceTerm);
+            }
+            else
+            {
+                convergenceOceanic =
+                    std::max(convergenceOceanic, convergenceTerm);
+            }
         }
     }
 
-    const f64 crossBlend = Smooth(
-        0.5 + 0.5 * (d1 - d0) / std::max(desc_.boundaryWidthDot, 1.0e-9));
-    const f64 plateBiasMeters = Lerp(
-        plates_[nearest].continentalBiasMeters,
-        plates_[second].continentalBiasMeters,
-        crossBlend);
+    // Continental/oceanic bias: a blend over every plate near the top. Each
+    // plate's weight depends only on its own claim relative to the top, so the
+    // blend is symmetric and continuous where the nearest or the runner-up
+    // plate changes. With g the original cross-blend factor (0.5 for the top
+    // plate, falling to 0 a boundary width away), weights g / (1 - g) make the
+    // two-plate case reproduce the original lerp(nearest, second, g) exactly.
+    f64 biasWeightSum = 0.0;
+    f64 biasSum = 0.0;
+    for (u32 i = 0; i < plateCount_; ++i)
+    {
+        const f64 g = Smooth(0.5 + 0.5 * (d[i] - d0) / width);
+        const f64 u = g / (1.0 - g);
+        biasWeightSum += u;
+        biasSum += u * plates_[i].continentalBiasMeters;
+    }
+    const f64 plateBiasMeters = biasWeightSum > 0.0
+        ? biasSum / biasWeightSum
+        : plates_[nearest].continentalBiasMeters;
 
     return {
         .nearestPlate = nearest,
@@ -296,9 +381,114 @@ TectonicSample TectonicField::Sample(
         .divergenceMask = divergenceMask,
         .transformMask = transformMask,
         .plateBiasMeters = plateBiasMeters,
+        .convergenceContinental = convergenceContinental,
+        .convergenceMixed = convergenceMixed,
+        .convergenceOceanic = convergenceOceanic,
         .nearestIsContinental = plates_[nearest].isContinental,
         .secondIsContinental = plates_[second].isContinental
     };
+}
+
+TectonicStructureSample TectonicField::SampleStructure(
+    const math::Double3& direction) const noexcept
+{
+    const TectonicSample base = Sample(direction);
+    const Plate& plate = plates_[base.nearestPlate];
+
+    TectonicStructureSample out{};
+    out.plateId = base.nearestPlate;
+    out.neighbourPlateId = base.secondPlate;
+    out.continental = base.nearestIsContinental;
+    out.neighbourContinental = base.secondIsContinental;
+    out.convergence = base.convergenceMask;
+    out.divergence = base.divergenceMask;
+    out.transform = base.transformMask;
+    out.plateSpeedMetersPerUnit = planetRadiusMeters_ *
+        std::sqrt(math::LengthSquared(math::Cross(plate.eulerVector, direction)));
+
+    const f64 strongest = std::max(
+        {base.convergenceMask, base.divergenceMask, base.transformMask});
+    out.boundaryStrength = strongest;
+    if (strongest > 0.05)
+    {
+        out.boundaryType = base.convergenceMask >= base.divergenceMask &&
+                base.convergenceMask >= base.transformMask
+            ? TectonicBoundaryType::Convergent
+            : (base.divergenceMask >= base.transformMask
+                ? TectonicBoundaryType::Divergent
+                : TectonicBoundaryType::Transform);
+    }
+
+    // Interior crust blends across the boundary band with the same symmetric
+    // weights as the plate bias (see Sample), so thickness and age stay
+    // continuous where the nearest or the runner-up plate changes.
+    f64 dTop = -2.0;
+    std::array<f64, kMaxTectonicPlates> claim{};
+    for (u32 i = 0; i < plateCount_; ++i)
+    {
+        claim[i] =
+            math::Dot(direction, plates_[i].seedDirection) +
+            plates_[i].sizeBiasDot;
+        dTop = std::max(dTop, claim[i]);
+    }
+    const f64 blendWidth = std::max(desc_.boundaryWidthDot, 1.0e-9);
+    f64 weightSum = 0.0;
+    f64 thicknessSum = 0.0;
+    f64 ageSum = 0.0;
+    for (u32 i = 0; i < plateCount_; ++i)
+    {
+        const f64 g = Smooth(0.5 + 0.5 * (claim[i] - dTop) / blendWidth);
+        const f64 u = g / (1.0 - g);
+        weightSum += u;
+        thicknessSum += u * plates_[i].crustThicknessKm;
+        ageSum += u * plates_[i].crustAge;
+    }
+    f64 thickness = weightSum > 0.0
+        ? thicknessSum / weightSum : plate.crustThicknessKm;
+    f64 age = weightSum > 0.0
+        ? ageSum / weightSum : plate.crustAge;
+
+    // Collision type comes from the continuous per-class masks, not from the
+    // runner-up plate's flags (which switch abruptly).
+    const f64 arcMask =
+        std::max(base.convergenceMixed, base.convergenceOceanic);
+
+    // Collision thickens crust (roots of an orogen); spreading thins it and
+    // resets its age to newly formed.
+    thickness += std::max(
+        {base.convergenceContinental * 28.0, arcMask * 12.0});
+    thickness -= base.divergenceMask * 0.45 * thickness;
+    age = Lerp(age, 0.02, base.divergenceMask);
+    out.crustThicknessKm = std::max(thickness, 3.0);
+    out.crustAge = std::clamp(age, 0.0, 1.0);
+
+    // Geological age drives morphology: active orogens read young even when
+    // the underlying plate is old.
+    out.geologicalAge = std::clamp(
+        Lerp(out.crustAge, 0.12, std::max(base.convergenceMask, base.divergenceMask) * 0.8),
+        0.0, 1.0);
+
+    const f64 hotspot = HotspotElevationMeters(direction);
+    const f64 hotspotRelief = std::max(desc_.hotspotBaseReliefMeters, 1.0);
+
+    // Uplift and subsidence mirror what the terrain stack already applies so
+    // consumers see the same structure, but are exposed as separate fields.
+    out.upliftMeters = base.convergenceMask * desc_.convergenceUpliftMeters +
+        std::max(hotspot, 0.0);
+    // Trench on the oceanic side of a subduction zone, rift floor on
+    // divergence, and passive-margin sag where oceanic crust is old.
+    const f64 trench = arcMask * 0.45;
+    out.subsidenceMeters = trench * desc_.convergenceUpliftMeters +
+        base.divergenceMask * 0.25 * desc_.convergenceUpliftMeters;
+
+    out.stress = std::clamp(
+        std::max(base.convergenceMask, base.transformMask * 0.8), 0.0, 1.0);
+    const f64 arc = arcMask * 0.9;
+    out.volcanism = std::clamp(
+        std::max({arc, base.divergenceMask * 0.6,
+                  std::clamp(hotspot / hotspotRelief, 0.0, 1.0)}),
+        0.0, 1.0);
+    return out;
 }
 
 f64 TectonicField::HotspotElevationMeters(

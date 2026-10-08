@@ -92,7 +92,6 @@ DrivePageReady(
     const auto deadline =
         std::chrono::steady_clock::now() +
         kReadyTimeout;
-
     do
     {
         static_cast<void>(

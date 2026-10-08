@@ -126,7 +126,8 @@ void StudioExpansionShell::DrawViewportBand(
             if (context.Combo(
                     "##viewport-mode-compact",
                     kViewportModes,
-                    viewportMode))
+                    viewportMode,
+                    170.0F * editor_ui::CurrentUiScale()))
             {
                 viewportMode = std::clamp(viewportMode, 0, 4);
                 try
@@ -153,7 +154,8 @@ void StudioExpansionShell::DrawViewportBand(
                 if (context.Combo(
                         "##surface-debug-mode",
                         kSurfaceViews,
-                        surface))
+                        surface,
+                        110.0F * editor_ui::CurrentUiScale()))
                 {
                     surface = std::clamp(surface, 0, 3);
                     owner_->views_->SetSurfaceDebugMode(
@@ -201,13 +203,14 @@ void StudioExpansionShell::DrawViewportBand(
             case studio_session::ViewportMode::FlatMap:
             {
                 context.SameLine();
-                static constexpr std::array<std::string_view, 5>
+                static constexpr std::array<std::string_view, 6>
                     kMapLayers{
                         "Elevation",
                         "Biomes",
                         "Temperature",
                         "Precipitation",
-                        "Water depth"
+                        "Water depth",
+                        "Tectonic plates"
                     };
                 i32 layer = static_cast<i32>(
                     owner_->views_->FlatMapLayerOf(id));
@@ -216,7 +219,7 @@ void StudioExpansionShell::DrawViewportBand(
                         kMapLayers,
                         layer))
                 {
-                    layer = std::clamp(layer, 0, 4);
+                    layer = std::clamp(layer, 0, 5);
                     owner_->views_->SetFlatMapLayer(
                         id,
                         static_cast<FlatMapLayer>(layer));
@@ -231,78 +234,38 @@ void StudioExpansionShell::DrawViewportBand(
         }
     }
 
-    context.SameLine();
-
-    static constexpr std::array<std::string_view, 4>
-        kTools{"Select", "Move", "Rotate", "Scale"};
-    i32 tool = static_cast<i32>(viewportState_.gizmo.tool);
-    if (context.SegmentedControl(
-            "viewport-gizmo-tool",
-            kTools,
-            tool))
-    {
-        viewportState_.gizmo.tool =
-            static_cast<GizmoTool>(tool);
-    }
-
-    switch (viewportState_.gizmo.tool)
-    {
-    case GizmoTool::Select:
-        break;
-
-    case GizmoTool::Translate:
+    // Build owns these controls in its tool band; other viewport workspaces
+    // expose them here so each workspace has a single transform selector.
+    if (owner_ != nullptr && owner_->ShowViewportQuickCreate() &&
+        owner_->WorkspaceModeName() != "Build")
     {
         context.SameLine();
-        static constexpr std::array<std::string_view, 4>
-            kTranslationSnapModes{"Off", "Grid", "Surface", "Both"};
-        i32 snapMode =
-            (viewportState_.gizmo.translationSnap ? 1 : 0) |
-            (viewportState_.gizmo.surfaceSnap ? 2 : 0);
-        if (context.Combo(
-                "##gizmo-translation-snap-mode",
-                kTranslationSnapModes,
-                snapMode))
+
+        using editor_ui::ToolbarIcon;
+        static constexpr std::array<editor_ui::ToolbarChoice, 4> kTools{{
+            {"Select", ToolbarIcon::Select}, {"Move", ToolbarIcon::Move},
+            {"Rotate", ToolbarIcon::Rotate}, {"Scale", ToolbarIcon::Scale}}};
+        i32 tool = static_cast<i32>(viewportState_.gizmo.tool);
+        if (context.ToolbarChoices(
+                "viewport-gizmo-tool",
+                kTools,
+                tool, true))
         {
-            viewportState_.gizmo.translationSnap =
-                (snapMode & 1) != 0;
-            viewportState_.gizmo.surfaceSnap =
-                (snapMode & 2) != 0;
+            viewportState_.gizmo.tool =
+                static_cast<GizmoTool>(tool);
         }
-        break;
+
+        context.SameLine();
+        owner_->DrawSnappingControls(context, true);
     }
 
-    case GizmoTool::Rotate:
+    if (owner_ != nullptr && owner_->WorkspaceModeName() != "Build" && owner_->WorkspaceModeName() != "Universe")
     {
         context.SameLine();
-        static constexpr std::array<std::string_view, 2>
-            kRotationSnapModes{"Off", "Angle"};
-        i32 snapMode = viewportState_.gizmo.rotationSnap ? 1 : 0;
-        if (context.Combo(
-                "##gizmo-rotation-snap-mode",
-                kRotationSnapModes,
-                snapMode))
-        {
-            viewportState_.gizmo.rotationSnap = snapMode != 0;
-        }
-        break;
+        if (context.ToolbarButton("Commands /##context-commands", editor_ui::ToolbarIcon::More, false, true, true))
+            RequestCommandPaletteOpen();
     }
-
-    case GizmoTool::Scale:
-    {
-        context.SameLine();
-        static constexpr std::array<std::string_view, 2>
-            kScaleSnapModes{"Off", "Step"};
-        i32 snapMode = viewportState_.gizmo.scaleSnap ? 1 : 0;
-        if (context.Combo(
-                "##gizmo-scale-snap-mode",
-                kScaleSnapModes,
-                snapMode))
-        {
-            viewportState_.gizmo.scaleSnap = snapMode != 0;
-        }
-        break;
-    }
-    }
+    DrawNavigationBand(context);
 
     static_cast<void>(DrawContributions(
         context,

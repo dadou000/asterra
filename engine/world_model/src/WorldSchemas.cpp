@@ -214,6 +214,28 @@ void RegisterSchemas(
                     .minimum = 1.0
                 }
             },
+            schema::PropertySchema{.id=kTerrainTectonicSeed,.name="Tectonic Seed (0 = terrain seed)",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicPlateCount,.name="Tectonic Plate Count",.kind=schema::PropertyKind::Integer,.defaultValue=i64{14},.range={.minimum=1.0,.maximum=24.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicIrregularity,.name="Plate Seed Irregularity",.kind=schema::PropertyKind::Float,.defaultValue=0.35,.range={.minimum=0.0,.maximum=1.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicContinentalFraction,.name="Continental Plate Fraction",.kind=schema::PropertyKind::Float,.defaultValue=0.4,.range={.minimum=0.0,.maximum=1.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicContinentInfluence,.name="Plate Control of Continents",.kind=schema::PropertyKind::Float,.defaultValue=0.7,.range={.minimum=0.0,.maximum=1.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicBoundaryWidth,.name="Boundary Influence Width",.kind=schema::PropertyKind::Float,.defaultValue=0.25,.range={.minimum=0.01,.maximum=1.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicMinSpeed,.name="Minimum Plate Angular Speed",.kind=schema::PropertyKind::Float,.defaultValue=0.15,.range={.minimum=0.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicMaxSpeed,.name="Maximum Plate Angular Speed",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicConvergenceUplift,.name="Convergent Boundary Uplift",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=2'200.0,.range={.minimum=0.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicOceanicScale,.name="Oceanic Collision Relief Scale",.kind=schema::PropertyKind::Float,.defaultValue=0.85,.range={.minimum=0.0,.maximum=2.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicHotspotCount,.name="Mantle Hotspot Count",.kind=schema::PropertyKind::Integer,.defaultValue=i64{5},.range={.minimum=0.0,.maximum=8.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicHotspotAgeSteps,.name="Hotspot Chain Age Steps",.kind=schema::PropertyKind::Integer,.defaultValue=i64{4},.range={.minimum=0.0,.maximum=6.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicHotspotRelief,.name="Hotspot Relief",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=6'000.0,.range={.minimum=0.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicHotspotDecay,.name="Hotspot Age Decay",.kind=schema::PropertyKind::Float,.defaultValue=0.55,.range={.minimum=0.0,.maximum=1.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicHotspotSpacing,.name="Hotspot Chain Spacing",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=180'000.0,.range={.minimum=0.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicHotspotRadius,.name="Hotspot Core Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=45'000.0,.range={.minimum=0.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicPlateSizeVariance,.name="Plate Size Variance",.kind=schema::PropertyKind::Float,.defaultValue=0.12,.range={.minimum=0.0,.maximum=1.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicContinentalBias,.name="Continental Crust Bias",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=1'800.0,.range={.minimum=-1.0e7,.maximum=1.0e7},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicOceanicBias,.name="Oceanic Crust Bias",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=-2'600.0,.range={.minimum=-1.0e7,.maximum=1.0e7},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicConvergenceReferenceSpeed,.name="Convergence Reference Speed",.kind=schema::PropertyKind::Float,.defaultValue=0.4,.range={.minimum=1.0e-5,.maximum=100.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicTransformReferenceSpeed,.name="Transform Reference Speed",.kind=schema::PropertyKind::Float,.defaultValue=0.7,.range={.minimum=1.0e-5,.maximum=100.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicHotspotRadiusGrowth,.name="Hotspot Radius Growth per Age",.kind=schema::PropertyKind::Float,.defaultValue=0.4,.range={.minimum=0.0,.maximum=10.0},.advanced=true},
             schema::PropertySchema{
                 .id = kTerrainCratersEnabled,
                 .name = "Procedural Craters",
@@ -301,11 +323,20 @@ void RegisterSchemas(
             {.id=kProcessStreamPowerEnabled,.name="Stream Power Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
             {.id=kProcessStreamPowerIterations,.name="Stream Power Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{32},.range={.minimum=1.0}},
             {.id=kProcessStreamPowerIncision,.name="Stream Incision Coefficient",.kind=schema::PropertyKind::Float,.unit="m/iteration",.defaultValue=0.25,.range={.minimum=0.0},.advanced=true},
+            {.id=kProcessStreamPowerAgeErodibility,.name="Age Erodibility Gain",.kind=schema::PropertyKind::Float,.defaultValue=0.6,.range={.minimum=0.0,.maximum=8.0}},
+            {.id=kProcessStreamPowerAgeUpliftDecay,.name="Age Uplift Decay",.kind=schema::PropertyKind::Float,.defaultValue=0.35,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kProcessTectonicDrainageGuidance,.name="Tectonic Drainage Guidance",.kind=schema::PropertyKind::Float,.defaultValue=0.5,.range={.minimum=0.0,.maximum=1.0}},
 
             {.id=kProcessHydraulicEnabled,.name="Hydraulic Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
             {.id=kProcessHydraulicIterations,.name="Hydraulic Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{64},.range={.minimum=1.0}},
             {.id=kProcessHydraulicRainfall,.name="Hydraulic Rainfall",.kind=schema::PropertyKind::Float,.unit="m/s",.defaultValue=0.0002,.range={.minimum=0.0}},
             {.id=kProcessHydraulicTimeStep,.name="Hydraulic Time Step",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=0.25,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessHydraulicSeasonalAmplitude,.name="Seasonal Rainfall Amplitude",.kind=schema::PropertyKind::Float,.defaultValue=0.0,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kProcessHydraulicSeasonalPeriod,.name="Seasonal Rainfall Period",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=31'557'600.0,.range={.minimum=1.0}},
+            {.id=kProcessHydraulicSeasonalPhase,.name="Seasonal Rainfall Phase",.kind=schema::PropertyKind::Float,.unit="rad",.defaultValue=0.0},
+            {.id=kProcessHydraulicInfiltration,.name="Infiltration Rate",.kind=schema::PropertyKind::Float,.unit="m/s",.defaultValue=0.00005,.range={.minimum=0.0}},
+            {.id=kProcessHydraulicMoistureCapacity,.name="Soil Moisture Capacity",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.20,.range={.minimum=0.000001}},
+            {.id=kProcessHydraulicEvaporation,.name="Evaporation Rate",.kind=schema::PropertyKind::Float,.unit="1/s",.defaultValue=0.015,.range={.minimum=0.0}},
 
             {.id=kProcessThermalEnabled,.name="Thermal / Gravity Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
             {.id=kProcessThermalIterations,.name="Thermal Maximum Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{96},.range={.minimum=1.0}},
@@ -326,6 +357,23 @@ void RegisterSchemas(
             {.id=kProcessRiverMeanderIterations,.name="Meander Iterations",.kind=schema::PropertyKind::Integer,.defaultValue=i64{8},.range={.minimum=1.0}},
             {.id=kProcessRiverCutoffsEnabled,.name="River Cutoffs Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
             {.id=kProcessRiverMinimumDrainageArea,.name="Minimum River Drainage Area",.kind=schema::PropertyKind::Float,.unit="m2",.defaultValue=25'000.0,.range={.minimum=0.0},.advanced=true},
+            {.id=kProcessRiverMinimumDischarge,.name="Minimum River Discharge",.kind=schema::PropertyKind::Float,.unit="m3/s",.defaultValue=0.05,.range={.minimum=0.0},.advanced=true},
+            {.id=kProcessRiverReferenceDischarge,.name="Reference River Discharge",.kind=schema::PropertyKind::Float,.unit="m3/s",.defaultValue=10.0,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverBaseWidth,.name="Base Channel Width",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=4.0,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverMinimumWidth,.name="Minimum Channel Width",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=1.0,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverMaximumWidth,.name="Maximum Channel Width",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=180.0,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverWidthExponent,.name="Width Discharge Exponent",.kind=schema::PropertyKind::Float,.defaultValue=0.45,.range={.minimum=0.0},.advanced=true},
+            {.id=kProcessRiverBaseDepth,.name="Base Channel Depth",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=1.5,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverMinimumDepth,.name="Minimum Channel Depth",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=0.25,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverMaximumDepth,.name="Maximum Channel Depth",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=35.0,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverDepthExponent,.name="Depth Discharge Exponent",.kind=schema::PropertyKind::Float,.defaultValue=0.30,.range={.minimum=0.0},.advanced=true},
+            {.id=kProcessRiverMeanderTimeStep,.name="Meander Time Step",.kind=schema::PropertyKind::Float,.unit="s",.defaultValue=1.0,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverCurvatureMigrationRate,.name="Curvature Migration Rate",.kind=schema::PropertyKind::Float,.defaultValue=0.35,.range={.minimum=0.0},.advanced=true},
+            {.id=kProcessRiverSeedMigrationRate,.name="Seed Migration Rate",.kind=schema::PropertyKind::Float,.defaultValue=0.10,.range={.minimum=0.0},.advanced=true},
+            {.id=kProcessRiverMaximumCenterlineOffset,.name="Maximum Centerline Offset",.kind=schema::PropertyKind::Float,.unit="channel widths",.defaultValue=3.0,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverMinimumCutoffPathNodes,.name="Minimum Cutoff Path Nodes",.kind=schema::PropertyKind::Integer,.defaultValue=i64{4},.range={.minimum=2.0},.advanced=true},
+            {.id=kProcessRiverCutoffDistanceWidths,.name="Cutoff Distance",.kind=schema::PropertyKind::Float,.unit="channel widths",.defaultValue=1.5,.range={.minimum=0.000001},.advanced=true},
+            {.id=kProcessRiverMaximumNodeSpacing,.name="Maximum River Graph Node Spacing",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=500.0,.range={.minimum=1.0}},
 
             {.id=kProcessCoastalEnabled,.name="Coastal Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
             {.id=kProcessCoastalHydrodynamicSteps,.name="Coastal Hydrodynamic Steps",.kind=schema::PropertyKind::Integer,.defaultValue=i64{160},.range={.minimum=1.0}},
@@ -867,6 +915,25 @@ void RegisterSchemas(
         .category = "World / Surface / Authored Terrain",
         .properties = {
             {.id=kTerrainConstraintPointDirection,.name="Unit Direction",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{0.0,1.0,0.0}}
+        }
+    });
+
+    schemas.RegisterType({
+        .id = kRiverBasinConstraintType,
+        .displayName = "River Basin Constraint",
+        .category = "World / Surface / Hydrology",
+        .properties = {
+            {.id=kRiverConstraintBasin,.name="Target Basin ID",.kind=schema::PropertyKind::String,.defaultValue=std::string{}},
+            {.id=kRiverConstraintKind,.name="Constraint Kind",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=2.0}},
+            {.id=kRiverConstraintCenterMeters,.name="Center (page local meters)",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
+            {.id=kRiverConstraintDirection,.name="Trajectory Direction",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{1.0,0.0,0.0}},
+            {.id=kRiverConstraintRadiusMeters,.name="Influence Radius",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=500.0,.range={.minimum=0.001}},
+            {.id=kRiverConstraintStrength,.name="Strength",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kRiverConstraintEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kRiverConstraintPageFace,.name="Physical Page Face",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=5.0}},
+            {.id=kRiverConstraintPageLevel,.name="Physical Page Level",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=30.0}},
+            {.id=kRiverConstraintPageX,.name="Physical Page X",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0}},
+            {.id=kRiverConstraintPageY,.name="Physical Page Y",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0}}
         }
     });
 

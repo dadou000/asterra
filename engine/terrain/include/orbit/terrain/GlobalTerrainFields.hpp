@@ -3,6 +3,7 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain/TectonicFieldDesc.hpp>
+#include <orbit/terrain/TectonicStructure.hpp>
 #include <orbit/terrain/TerrainFields.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/world/Planet.hpp>
@@ -72,6 +73,8 @@ struct GlobalTerrainFieldDesc
 
 struct GlobalTerrainFieldSample
 {
+    u32 nearestPlate{0};
+    u32 secondPlate{0};
     f64 coarseElevationMeters{0.0};
     f64 landMask{0.0};
     TerrainClimate climate{};
@@ -86,6 +89,13 @@ struct GlobalTerrainFieldSample
     // 0..1, strongest where the two nearest plates slide laterally past
     // each other (transform/strike-slip fault). See TectonicSample.
     f64 transformMask{0.0};
+    // convergenceMask split by the crust types of the colliding pair, each
+    // unscaled and continuous. Weight anything by collision type with these:
+    // the nearest/second plate flags below switch abruptly where the runner-up
+    // plate changes.
+    f64 convergenceContinental{0.0};
+    f64 convergenceMixed{0.0};
+    f64 convergenceOceanic{0.0};
     // Plate-type identity of the two nearest plates -- lets a caller tell
     // a continental collision (orogeny) apart from a subduction zone, or
     // an oceanic spreading ridge apart from a continental rift, from the
@@ -114,6 +124,12 @@ public:
 
     [[nodiscard]] const GlobalTerrainFieldDesc&
     Description() const noexcept;
+
+    // Planet structural layer (plate, boundary, crust thickness/age, uplift,
+    // subsidence, stress, volcanism) at a unit direction. Pure and
+    // thread-safe; consumed by hydrology, biomes, UI and RPC.
+    [[nodiscard]] TectonicStructureSample SampleTectonicStructure(
+        const math::Double3& direction) const noexcept;
 
     // Exports the exact plates/hotspots this instance generated, for a
     // GPU field generator to upload -- see GpuTectonicPlate's comment for

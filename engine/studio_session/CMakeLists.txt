@@ -11,6 +11,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioTerrainServiceStatus.cpp
     src/StudioMeshRpc.cpp
     src/StudioTerrainStatusRpc.cpp
+    src/StudioTerrainTectonicsProbe.cpp
     src/StudioWorkspace.cpp
     src/ProjectBrowserModel.cpp
     src/UniverseBoundPathCache.cpp
@@ -38,6 +39,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::CelestialRepresentation
         Orbit::CelestialSmallBodies
         Orbit::Documents
+        Orbit::EditorModel
         Orbit::EditorRpc
         Orbit::EditorSession
         Orbit::Jobs
@@ -57,6 +59,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::TerrainScatter
         Orbit::TerrainStream
         Orbit::TerrainView
+        Orbit::TerrainWater
         Orbit::VolumeRepresentation
         Orbit::World
 )

@@ -1340,6 +1340,14 @@ bool PanelContext::InputText(
     const std::string_view label,
     std::string& value)
 {
+    return InputText(label, value, 0.0F);
+}
+
+bool PanelContext::InputText(
+    const std::string_view label,
+    std::string& value,
+    const f32 extraVerticalPadding)
+{
     TraceWidget(label);
     const std::string ownedLabel(
         label);
@@ -1358,13 +1366,16 @@ bool PanelContext::InputText(
         value.data(),
         value.size());
 
-    if (!ImGui::InputText(
+    const ImVec2 padding = ImGui::GetStyle().FramePadding;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+        ImVec2(padding.x, padding.y + extraVerticalPadding * CurrentUiScale()));
+    const bool changed = ImGui::InputText(
             ownedLabel.c_str(),
             buffer.data(),
-            buffer.size()))
-    {
+            buffer.size());
+    ImGui::PopStyleVar();
+    if (!changed)
         return false;
-    }
 
     value.assign(
         buffer.data());

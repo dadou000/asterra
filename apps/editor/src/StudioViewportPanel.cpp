@@ -316,6 +316,10 @@ void StudioViewportPanel::Register()
                     }
                 }
 
+                // End the toolbar row before measuring the viewport. Without
+                // this, ImGui reports only the unused width after the Zoom
+                // input, shrinking both the rendered image and its hit area.
+                context.Separator();
                 const auto available =
                     context.ContentAvailable();
 
@@ -328,8 +332,7 @@ void StudioViewportPanel::Register()
                 const orbit::u32 height =
                     static_cast<orbit::u32>(
                         std::max(
-                            available.height -
-                                22.0F,
+                            available.height,
                             1.0F));
 
                 if (!viewportCapture.Active() &&

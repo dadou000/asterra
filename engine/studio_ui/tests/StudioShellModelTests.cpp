@@ -32,9 +32,9 @@ void WorkspacesChooseTheExpectedBrowserSurface()
     Check(DefaultBrowserMode(StudioWorkspaceMode::Simulation) == StudioBrowserMode::World, "Simulation starts on World");
     Check(DefaultBrowserMode(StudioWorkspaceMode::Shading) == StudioBrowserMode::Assets, "Shading starts on Assets");
 
-    Check(BrowserSourcePanelTitle(StudioBrowserMode::World) == std::string_view{"Explorer"}, "World maps to Explorer");
+    Check(BrowserSourcePanelTitle(StudioBrowserMode::World) == std::string_view{"Explorer Source"}, "World maps to the internal Explorer source panel");
     Check(BrowserSourcePanelTitle(StudioBrowserMode::Assets) == std::string_view{"Material Service"}, "Assets map to Material Service");
-    Check(StudioWorkspaceName(StudioWorkspaceMode::Scene) == "Scene", "Scene name stable");
+    Check(StudioWorkspaceName(StudioWorkspaceMode::Scene) == "Build", "Build workspace label stable");
     Check(StudioWorkspaceName(StudioWorkspaceMode::Shading) == "Shading", "Shading name stable");
 }
 

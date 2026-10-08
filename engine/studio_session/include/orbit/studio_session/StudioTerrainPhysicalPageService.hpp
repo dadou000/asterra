@@ -5,8 +5,12 @@
 #include <orbit/studio_session/StudioTerrainRebuildScheduler.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
+#include <orbit/terrain_erosion/RiverNetwork.hpp>
+#include <orbit/terrain_hydrology/DrainagePage.hpp>
 #include <orbit/terrain_debug/TerrainDebugPageData.hpp>
 #include <orbit/terrain_material_column/MaterialColumnPage.hpp>
+#include <orbit/terrain_water/LakeWater.hpp>
+#include <orbit/time/SimulationTime.hpp>
 
 #include <memory>
 #include <optional>
@@ -28,6 +32,10 @@ struct StudioTerrainPhysicalPageSnapshot
     std::shared_ptr<
         const terrain_material_column::MaterialColumnPage>
         material;
+
+    std::shared_ptr<const terrain_erosion::RiverNetwork> rivers;
+    std::shared_ptr<const terrain_hydrology::DrainagePage> drainage;
+    std::shared_ptr<const terrain_water::LakeWaterField> lakes;
 
     std::shared_ptr<
         const terrain_debug::TerrainDebugPageData>
@@ -65,7 +73,8 @@ public:
     // Reconciles body/page interest against the current M03 viewport runtime.
     // The center physical page plus its four seam neighbors are kept live.
     void Sync(
-        std::span<const StudioTerrainViewportRuntimeSnapshot> runtimes);
+        std::span<const StudioTerrainViewportRuntimeSnapshot> runtimes,
+        time::SimulationTime atTime = {});
 
     void QueueChange(
         const terrain_dependency::TerrainInvalidationRequest& request);

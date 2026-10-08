@@ -16,6 +16,12 @@ target_compile_features(OrbitTerrainMountainTests PRIVATE cxx_std_23)
 orbit_enable_warnings(OrbitTerrainMountainTests)
 add_test(NAME Orbit.TerrainMountains COMMAND OrbitTerrainMountainTests)
 
+add_executable(OrbitTectonicStructureTests TectonicStructureTests.cpp)
+target_link_libraries(OrbitTectonicStructureTests PRIVATE Orbit::Terrain)
+target_compile_features(OrbitTectonicStructureTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTectonicStructureTests)
+add_test(NAME Orbit.TectonicStructure COMMAND OrbitTectonicStructureTests)
+
 target_link_libraries(OrbitWorldTests
     PRIVATE
         Orbit::World

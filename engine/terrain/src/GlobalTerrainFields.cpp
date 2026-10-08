@@ -301,6 +301,8 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
     };
 
     return {
+        .nearestPlate = tectonic.nearestPlate,
+        .secondPlate = tectonic.secondPlate,
         .coarseElevationMeters =
             coarseElevation,
         .landMask = landMask,
@@ -315,6 +317,9 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
         .convergenceMask = tectonic.convergenceMask,
         .divergenceMask = tectonic.divergenceMask,
         .transformMask = tectonic.transformMask,
+        .convergenceContinental = tectonic.convergenceContinental,
+        .convergenceMixed = tectonic.convergenceMixed,
+        .convergenceOceanic = tectonic.convergenceOceanic,
         .nearestPlateContinental = tectonic.nearestIsContinental,
         .secondPlateContinental = tectonic.secondIsContinental,
         .hotspotElevationMeters =
@@ -358,6 +363,14 @@ GlobalTerrainFields::Description()
     const noexcept
 {
     return desc_;
+}
+
+TectonicStructureSample GlobalTerrainFields::SampleTectonicStructure(
+    const math::Double3& direction) const noexcept
+{
+    const math::Double3 unit = math::Normalize(direction);
+    return tectonicField_->SampleStructure(
+        math::LengthSquared(unit) > 0.0 ? unit : math::Double3{0.0, 1.0, 0.0});
 }
 
 std::vector<GpuTectonicPlate>

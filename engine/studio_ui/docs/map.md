@@ -14,6 +14,9 @@ sources = [
   "engine/studio_ui/src/StudioShellTerrainTools.cpp",
   "engine/studio_ui/src/StudioShellPersistence.cpp",
   "engine/studio_ui/src/StudioShellNavigation.cpp",
+  "engine/studio_ui/src/StudioViewportPanels.cpp",
+  "engine/studio_ui/src/StudioRenderViewSet.cpp",
+  "engine/studio_ui/src/StudioRenderViewRpc.cpp",
   "engine/studio_ui/src/StudioShellInspector.cpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioShellModel.hpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioExpansionShell.hpp",
@@ -22,23 +25,37 @@ sources = [
   "engine/studio_ui/include/orbit/studio_ui/ViewportCaptureService.hpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioViewportCamera.hpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioViewportNavigation.hpp",
+  "engine/studio_ui/include/orbit/studio_ui/ImplementationPlan.hpp",
+  "engine/studio_ui/include/orbit/studio_ui/PlanningUi.hpp",
+  "engine/studio_ui/src/ImplementationPlan.cpp",
+  "engine/studio_ui/src/PlanningUi.cpp",
   "engine/studio_ui/include/orbit/studio_ui/StudioFlatMap.hpp",
   "engine/studio_ui/include/orbit/studio_ui/ProfilerUi.hpp",
   "engine/studio_ui/include/orbit/studio_ui/ProfilerModel.hpp",
 ]
 symbols = ["StudioExpansionShell", "StudioInspectorProviderRegistration", "StudioViewContinuity", "ViewportCaptureService", "ProfilerUi", "StudioTerrainNavigationConfig"]
 invariants = [
+  "Snap remains visible with Select active and opens the same settings editor used by Properties. Distance units default to meters and support mm/cm/m/km/in/ft; the manipulator still consumes canonical meters. Angle increments use degrees and scale uses percent. StudioViewportPanels::SetSnapping validates finite positive increments before changing shared state; viewport.snapping_get/set and MCP reuse it. Distance and preferred unit persist in StudioPersistentState, and old state defaults to meters. Native implementation changes use the central generation handoff.",
+  "Build groups transform tools with smaller World/Local/Snap modifiers, categorized creation menus (Meshes, Procedurals, Lighting, VFX, SFX), selection editing, and history. The shell no longer reserves a selected-object breadcrumb row; command shortcuts and argument forms are serviced by the remaining context band. Categories gather registered creation commands and plugin contributions and use the existing owners, including argument forms for parameterized tools. Empty categories report that no tools are registered. Selected tools use an accent tint; unavailable creation, selection, and history commands are disabled. Universe capability toggles use the same presentation. Narrow layouts retain all actions as compact icons with tooltips, and UI callbacks retain the existing RPC-backed owners.",
   "StudioExpansionShell owns lifecycle and contribution registration; StudioShellPersistence, StudioShellInspector, StudioShellTerrainTools, StudioShellNavigation and StudioShellViewportBand implement its independent responsibilities. Navigation delegates command palette, quick-create popup and full argument/browser forms to separate implementation units. All share the same shell-owned state and existing UI/RPC authority.",
   "Built-in authoring tools and hot-reloadable plugins share ONE inspector provider registry and ONE Properties-panel extension owned by StudioExpansionShell, so two visually identical contextual-inspector pipelines cannot drift; a registration lives exactly as long as its authoring UI instance, and headless/model workflows may populate the registry without an EditorUi host.",
-  "There is one canonical Studio browser on the left (the world/assets browser contract); Explorer and Material Service stay registered as source implementations only. The authoring modes Scene, Planet, Celestial and Simulation share one spatial shell: switching changes contextual tools, never the navigation model or panel geography.",
+  "The left-side Explorer is one panel and one searchable tree for both world objects and project assets. StudioViewportPanels composes the internal Explorer Source into that panel; the old World/Assets mode switch is absent. The Build, Planet, Universe and Simulation workspaces share one spatial shell; Shading, Planning and Plugins switch the center surface.",
+  "Right-clicking an authored Explorer row opens contextual Add element and Delete actions. Add choices follow the clicked parent type and call CommandService; created objects become selected. The world root is protected, and Delete is offered only for leaf objects because object.delete shares that invariant over RPC/MCP.",
+  "The separate top workspace tab band is the single mode selector; Build maps to the existing Scene mode and Universe maps to Celestial, preserving old Scene/Celestial workspace RPC and persistence aliases.",
+  "Planet has a dedicated generation toolbar rather than Build creation categories: create a rocky planet through the authoring command, toggle Surface/Atmosphere/Clouds-Volumetrics/Ocean/Rings/Aurora capabilities with inline element bubbles, open atmosphere presets and solve derived coefficients through AtmospherePropertySolver, choose terrain generation/editing tools, author the persisted deterministic spherical tectonic recipe in Tectonics, and edit runoff budget and river-network recipes, draw a downhill drainage-guidance spline, and preview drainage, precipitation and standing water through Hydrology. The tectonic map layer shows plate identity with convergent/divergent/transform boundary influence from the same analytic field used by terrain. Recipe edits use SurfaceAuthoringModel and terrain.tectonics_get/set, terrain.hydrology_get/set, terrain.rivers_get/set and terrain.drainage_spline_add RPC/MCP methods; map.layer_set supports the existing layers. The shared viewport band retains transform and snapping controls. Capability and terrain state use their existing owners and RPC/MCP routes.",
+  "The workspace tab band uses icon-and-label NavigationTabs on an elevated neutral surface with a shadow gutter; the selected workspace alone has an accent underline. View-mode and surface-debug selectors have compact widths instead of stretching across the contextual band.",
+  "PlanningUi is presentation only. Its project-local ImplementationPlan store is canonical for bubble title, description, status, canvas position and predecessor; the canvas and planning.* RPC/MCP call the same mutations.",
   "Keyboard-first '+ Add' reuses the existing command palette (filtering for authoring verbs surfaces Create/Add/New descriptors with generated argument forms and project-asset pickers) instead of a second modal.",
   "View continuity (camera pose and simulation time of the primary view, saved to <project>/.orbit/StudioView.ini) is presentation state only and never world authority; unknown keys are ignored and a pose with a missing or non-finite field is dropped whole rather than half-applied.",
-  "Viewport navigation controls are presentation-only: nothing in them participates in terrain authority, generation revisions or cache identity; the viewport camera converter takes a generation-stamped logical target, accepts a missing target (blank worlds) and REJECTS a stale universe target rather than rendering it against a replacement FrameGraph/BodyRegistry.",
+  "Viewport navigation controls are presentation-only: nothing in them participates in terrain authority, generation revisions or cache identity; the viewport camera converter takes a generation-stamped logical target and REJECTS a stale universe target rather than rendering it against a replacement FrameGraph/BodyRegistry. Perspective navigation falls back to the view-owned free camera when no celestial target exists, so blank/new worlds remain navigable; viewport.navigate RPC/MCP uses the same path.",
   "High-resolution capture of the primary viewport: up to 8K the view is resized to the capture size and given a few frames to settle (temporal filtering, terrain streaming, lighting caches); larger shots (16K) do not fit in GPU memory as one render, so the camera is turned onto a grid of tiles with a narrower field of view and each tile is rendered at 4K.",
-  "The flat planet map generates every layer from the same terrain samples (switching layers never re-samples the planet) and shares the HUD's convention: latitude = asin(direction.y) with +Y the spin pole, longitude = atan2(direction.z, direction.x), in degrees, on a 2:1 equirectangular image.",
+  "The flat planet map generates every layer from the same terrain samples (switching layers never re-samples the planet); its tectonics layer is populated from the same deterministic GlobalTerrainFields plate field and overlays convergence red, divergence cyan and transform yellow. It shares the HUD's convention: latitude = asin(direction.y) with +Y the spin pole, longitude = atan2(direction.z, direction.x), in degrees, on a 2:1 equirectangular image.",
   "Every profiler panel control has a profiler.panel_* RPC/MCP equivalent driving the same ProfilerModel (MCP parity).",
+  "The Explorer's protected Viewport Camera is a virtual view-owned item, never a world object; lens FOV/focal-length settings update StudioRenderViewSet's canonical per-view zoom, and its Eye Adaptation child edits StudioViewportRenderer's existing per-view config as an artistic camera control. Properties selections call those owners directly; view.camera_* RPC/MCP expose lens state and display.eye_* RPC/MCP expose eye settings.",
+  "The authored world object (for example, GI Room World) is the visible Explorer root; protected Viewport Camera and Lighting items are nested beneath it, and there is no synthetic World Root row. Properties shows the selected object schema and only relevant type-specific providers; global workflow/navigation/preset/property utility controls do not appear as stale object properties.",
+  "The Explorer's protected Lighting item groups renderer contributions into Global Illumination, Direct Lighting & Shadows, Reflections, Atmosphere, Clouds, Ocean & Surface, Anti-Aliasing and Renderer Diagnostics. Contribution controls edit StudioRenderViewSet layer options exposed by view.terrain_layers_* RPC/MCP; diagnostics reuse DisplayDiagnosticsUi. Eye Adaptation remains a Camera child and is omitted from the Lighting renderer body.",
 ]
-related = ["/editor/viewport", "/editor/mcp-rpc", "/editor/model", "/editor/session", "/editor/reports", "/rules/ui", "/legacy/orbit-profiler", "/rendering/shading"]
+related = ["/editor/viewport", "/editor/mcp-rpc", "/editor/model", "/editor/session", "/editor/reports", "/editor/studio-ui/planning", "/rules/ui", "/legacy/orbit-profiler", "/rendering/shading"]
 verify = [
   "ctest -R Orbit.StudioShellModel",
   "ctest -R Orbit.StudioInspectorExtension",
@@ -49,8 +66,9 @@ verify = [
   "ctest -R Orbit.StudioViewportNavigation",
   "ctest -R Orbit.ProfilerModel",
 ]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "329654cd3290274cd945e9daec3fd214267ef2c8"
 [routes]
+"Implementation planning bubbles, project persistence or planning MCP tools" = "/editor/studio-ui/planning"
 "Celestial panel, Celestial Tools, atmosphere preset buttons, System View canvas or orbit handles misbehave" = "/editor/studio-ui/celestial-authoring"
 "Project Browser, World Documents, Project Settings, create/open project or world" = "/editor/studio-ui/world-and-project"
 "Surface panel cache, revision or rebuild numbers look wrong, or a Surface edit has no RPC" = "/editor/studio-ui/surface-authoring"

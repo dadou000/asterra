@@ -303,6 +303,56 @@ inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
     .low = 0x4d4158454c455641ULL
 };
 
+inline constexpr schema::TypeId kRiverBasinConstraintType{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x424153494e435354ULL
+};
+
+inline constexpr schema::PropertyId kTerrainTectonicSeed{
+    .high = 0x4f52424954544543ULL, .low = 0x5345454400000001ULL};
+inline constexpr schema::PropertyId kTerrainTectonicPlateCount{
+    .high = 0x4f52424954544543ULL, .low = 0x504c415445434e54ULL};
+inline constexpr schema::PropertyId kTerrainTectonicIrregularity{
+    .high = 0x4f52424954544543ULL, .low = 0x4952524547554c41ULL};
+inline constexpr schema::PropertyId kTerrainTectonicContinentalFraction{
+    .high = 0x4f52424954544543ULL, .low = 0x434f4e5446524143ULL};
+inline constexpr schema::PropertyId kTerrainTectonicContinentInfluence{
+    .high = 0x4f52424954544543ULL, .low = 0x434f4e54494e464cULL};
+inline constexpr schema::PropertyId kTerrainTectonicBoundaryWidth{
+    .high = 0x4f52424954544543ULL, .low = 0x424f554e44574944ULL};
+inline constexpr schema::PropertyId kTerrainTectonicMinSpeed{
+    .high = 0x4f52424954544543ULL, .low = 0x4d494e5350454544ULL};
+inline constexpr schema::PropertyId kTerrainTectonicMaxSpeed{
+    .high = 0x4f52424954544543ULL, .low = 0x4d41585350454544ULL};
+inline constexpr schema::PropertyId kTerrainTectonicConvergenceUplift{
+    .high = 0x4f52424954544543ULL, .low = 0x434f4e5655504c46ULL};
+inline constexpr schema::PropertyId kTerrainTectonicOceanicScale{
+    .high = 0x4f52424954544543ULL, .low = 0x4f4345414e534341ULL};
+inline constexpr schema::PropertyId kTerrainTectonicHotspotCount{
+    .high = 0x4f52424954544543ULL, .low = 0x484f5453504f544eULL};
+inline constexpr schema::PropertyId kTerrainTectonicHotspotAgeSteps{
+    .high = 0x4f52424954544543ULL, .low = 0x484f544147455354ULL};
+inline constexpr schema::PropertyId kTerrainTectonicHotspotRelief{
+    .high = 0x4f52424954544543ULL, .low = 0x484f5452454c4946ULL};
+inline constexpr schema::PropertyId kTerrainTectonicHotspotDecay{
+    .high = 0x4f52424954544543ULL, .low = 0x484f544445434159ULL};
+inline constexpr schema::PropertyId kTerrainTectonicHotspotSpacing{
+    .high = 0x4f52424954544543ULL, .low = 0x484f545350414349ULL};
+inline constexpr schema::PropertyId kTerrainTectonicHotspotRadius{
+    .high = 0x4f52424954544543ULL, .low = 0x484f545241444955ULL};
+inline constexpr schema::PropertyId kTerrainTectonicPlateSizeVariance{
+    .high = 0x4f52424954544543ULL, .low = 0x504c41544553495aULL};
+inline constexpr schema::PropertyId kTerrainTectonicContinentalBias{
+    .high = 0x4f52424954544543ULL, .low = 0x434f4e5442494153ULL};
+inline constexpr schema::PropertyId kTerrainTectonicOceanicBias{
+    .high = 0x4f52424954544543ULL, .low = 0x4f4345414e424941ULL};
+inline constexpr schema::PropertyId kTerrainTectonicConvergenceReferenceSpeed{
+    .high = 0x4f52424954544543ULL, .low = 0x434f4e5652454653ULL};
+inline constexpr schema::PropertyId kTerrainTectonicTransformReferenceSpeed{
+    .high = 0x4f52424954544543ULL, .low = 0x5452414e53524546ULL};
+inline constexpr schema::PropertyId kTerrainTectonicHotspotRadiusGrowth{
+    .high = 0x4f52424954544543ULL, .low = 0x484f545241444752ULL};
+
 inline constexpr schema::PropertyId kTerrainCratersEnabled{
     .high = 0x4f52424954544552ULL,
     .low = 0x435241544552454eULL
@@ -356,6 +406,12 @@ inline constexpr schema::PropertyId kProcessStreamPowerIterations{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000102ULL};
 inline constexpr schema::PropertyId kProcessStreamPowerIncision{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000103ULL};
+inline constexpr schema::PropertyId kProcessStreamPowerAgeErodibility{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000104ULL};
+inline constexpr schema::PropertyId kProcessStreamPowerAgeUpliftDecay{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000105ULL};
+inline constexpr schema::PropertyId kProcessTectonicDrainageGuidance{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000106ULL};
 
 inline constexpr schema::PropertyId kProcessHydraulicEnabled{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000201ULL};
@@ -365,6 +421,18 @@ inline constexpr schema::PropertyId kProcessHydraulicRainfall{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000203ULL};
 inline constexpr schema::PropertyId kProcessHydraulicTimeStep{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000204ULL};
+inline constexpr schema::PropertyId kProcessHydraulicInfiltration{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000208ULL};
+inline constexpr schema::PropertyId kProcessHydraulicMoistureCapacity{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000209ULL};
+inline constexpr schema::PropertyId kProcessHydraulicEvaporation{
+    .high = 0x4f52424954505243ULL, .low = 0x4d3131000000020aULL};
+inline constexpr schema::PropertyId kProcessHydraulicSeasonalAmplitude{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000205ULL};
+inline constexpr schema::PropertyId kProcessHydraulicSeasonalPeriod{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000206ULL};
+inline constexpr schema::PropertyId kProcessHydraulicSeasonalPhase{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000207ULL};
 
 inline constexpr schema::PropertyId kProcessThermalEnabled{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000301ULL};
@@ -401,6 +469,40 @@ inline constexpr schema::PropertyId kProcessRiverCutoffsEnabled{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000604ULL};
 inline constexpr schema::PropertyId kProcessRiverMinimumDrainageArea{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000605ULL};
+inline constexpr schema::PropertyId kProcessRiverMinimumDischarge{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000606ULL};
+inline constexpr schema::PropertyId kProcessRiverReferenceDischarge{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000607ULL};
+inline constexpr schema::PropertyId kProcessRiverBaseWidth{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000608ULL};
+inline constexpr schema::PropertyId kProcessRiverMinimumWidth{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000609ULL};
+inline constexpr schema::PropertyId kProcessRiverMaximumWidth{
+    .high = 0x4f52424954505243ULL, .low = 0x4d3131000000060aULL};
+inline constexpr schema::PropertyId kProcessRiverWidthExponent{
+    .high = 0x4f52424954505243ULL, .low = 0x4d3131000000060bULL};
+inline constexpr schema::PropertyId kProcessRiverBaseDepth{
+    .high = 0x4f52424954505243ULL, .low = 0x4d3131000000060cULL};
+inline constexpr schema::PropertyId kProcessRiverMinimumDepth{
+    .high = 0x4f52424954505243ULL, .low = 0x4d3131000000060dULL};
+inline constexpr schema::PropertyId kProcessRiverMaximumDepth{
+    .high = 0x4f52424954505243ULL, .low = 0x4d3131000000060eULL};
+inline constexpr schema::PropertyId kProcessRiverDepthExponent{
+    .high = 0x4f52424954505243ULL, .low = 0x4d3131000000060fULL};
+inline constexpr schema::PropertyId kProcessRiverMeanderTimeStep{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000610ULL};
+inline constexpr schema::PropertyId kProcessRiverCurvatureMigrationRate{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000611ULL};
+inline constexpr schema::PropertyId kProcessRiverSeedMigrationRate{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000612ULL};
+inline constexpr schema::PropertyId kProcessRiverMaximumCenterlineOffset{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000613ULL};
+inline constexpr schema::PropertyId kProcessRiverMinimumCutoffPathNodes{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000614ULL};
+inline constexpr schema::PropertyId kProcessRiverCutoffDistanceWidths{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000615ULL};
+inline constexpr schema::PropertyId kProcessRiverMaximumNodeSpacing{
+    .high = 0x4f52424954505243ULL, .low = 0x4d31310000000616ULL};
 
 inline constexpr schema::PropertyId kProcessCoastalEnabled{
     .high = 0x4f52424954505243ULL, .low = 0x4d31310000000701ULL};
@@ -762,6 +864,51 @@ inline constexpr schema::PropertyId kTerrainConstraintEnabled{
 inline constexpr schema::PropertyId kTerrainConstraintPointDirection{
     .high = 0x4f52424954434e53ULL,
     .low = 0x504f494e54444952ULL
+};
+
+inline constexpr schema::PropertyId kRiverConstraintBasin{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x424153494e000001ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintKind{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x4b494e4400000001ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintCenterMeters{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x43454e5445520001ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintDirection{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x4449524543540001ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintRadiusMeters{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x5241444955530001ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintStrength{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x535452454e475401ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintEnabled{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x454e41424c454401ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintPageFace{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x5041474546414345ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintPageLevel{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x504147454c564c31ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintPageX{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x5041474558000001ULL
+};
+inline constexpr schema::PropertyId kRiverConstraintPageY{
+    .high = 0x4f52424954524956ULL,
+    .low = 0x5041474559000001ULL
 };
 
 inline constexpr schema::PropertyId kLightPositionMeters{

@@ -1,7 +1,72 @@
 #include "StudioViewportInternals.hpp"
 
+#include <orbit/terrain_water/LakeWater.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 namespace orbit::studio_ui::viewport_detail
 {
+namespace
+{
+[[nodiscard]] f32 RiverWaterDepthAt(
+    const terrain_erosion::RiverNetwork* network,
+    const u32 x,
+    const u32 y,
+    const u32 resolution,
+    const f64 spacingMeters,
+    const f32 bedElevationMeters)
+{
+    if (network == nullptr || network->resolution != resolution ||
+        network->spacingMeters <= 0.0 || network->segments.empty())
+        return 0.0F;
+
+    const f64 half = static_cast<f64>(resolution - 1U) * 0.5;
+    const math::Double2 point{
+        (static_cast<f64>(x) - half) * spacingMeters,
+        (static_cast<f64>(y) - half) * spacingMeters};
+    f64 waterSurface = -std::numeric_limits<f64>::infinity();
+
+    for (const auto& segment : network->segments)
+    {
+        if (!segment.active || segment.upstreamNode >= network->nodes.size() ||
+            segment.downstreamNode >= network->nodes.size())
+            continue;
+        const auto& a = network->nodes[segment.upstreamNode];
+        const auto& b = network->nodes[segment.downstreamNode];
+        const f64 dx = b.channelOffsetMeters.x - a.channelOffsetMeters.x;
+        const f64 dy = b.channelOffsetMeters.y - a.channelOffsetMeters.y;
+        const f64 lengthSquared = dx * dx + dy * dy;
+        const f64 t = lengthSquared > 1.0e-8
+            ? std::clamp(((point.x - a.channelOffsetMeters.x) * dx +
+                          (point.y - a.channelOffsetMeters.y) * dy) / lengthSquared, 0.0, 1.0)
+            : 0.0;
+        const f64 nearestX = a.channelOffsetMeters.x + dx * t;
+        const f64 nearestY = a.channelOffsetMeters.y + dy * t;
+        const f64 distance = std::hypot(point.x - nearestX, point.y - nearestY);
+        const f64 width = std::max(
+            0.5 * (static_cast<f64>(a.channelWidthMeters) + b.channelWidthMeters),
+            0.0);
+        // Include the nearest cell footprint so sub-cell streams remain visible at coarse LOD.
+        if (distance > width * 0.5 + spacingMeters * 0.55)
+            continue;
+
+        const f64 bankElevation =
+            (1.0 - t) * static_cast<f64>(a.surfaceHeightMeters) +
+            t * static_cast<f64>(b.surfaceHeightMeters);
+        const f64 channelDepth = std::max(
+            (1.0 - t) * static_cast<f64>(a.channelDepthMeters) +
+            t * static_cast<f64>(b.channelDepthMeters),
+            0.0);
+        waterSurface = std::max(waterSurface, bankElevation - channelDepth * 0.18);
+    }
+
+    return std::isfinite(waterSurface)
+        ? static_cast<f32>(std::max(waterSurface - bedElevationMeters, 0.0))
+        : 0.0F;
+}
+} // namespace
 
 [[nodiscard]] bool SameClipmapConfig(
     const terrain_view::ClipmapConfig& a,
@@ -336,12 +401,24 @@ BuildPhysicalRenderPages(
                                 .elevationMeters =
                                     elevation,
                                 .standingWaterDepthMeters =
-                                    static_cast<f32>(
-                                        std::max(
-                                            seaLevelMeters -
-                                                static_cast<f64>(
-                                                    elevation),
-                                            0.0))
+                                    std::max({
+                                        static_cast<f32>(std::max(
+                                            seaLevelMeters - static_cast<f64>(elevation),
+                                            0.0)),
+                                        RiverWaterDepthAt(
+                                            snapshot->rivers.get(), x, y, resolution,
+                                            snapshot->material->SpacingMeters(), elevation),
+                                        snapshot->lakes != nullptr
+                                            ? static_cast<f32>(terrain_water::SampleLakeWater(
+                                                *snapshot->lakes,
+                                                {(static_cast<f64>(x) -
+                                                  static_cast<f64>(resolution - 1U) * 0.5) *
+                                                     snapshot->material->SpacingMeters(),
+                                                 (static_cast<f64>(y) -
+                                                  static_cast<f64>(resolution - 1U) * 0.5) *
+                                                     snapshot->material->SpacingMeters()})
+                                                   .depthMeters)
+                                            : 0.0F})
                             };
                     }
                 }

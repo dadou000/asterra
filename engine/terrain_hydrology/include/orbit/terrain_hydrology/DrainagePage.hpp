@@ -65,6 +65,8 @@ struct DrainageBoundaryCell
 
     i8 flowDx{0};
     i8 flowDy{0};
+    bool outlet{false};
+    u64 basinTerminalFingerprint{0};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };
@@ -89,6 +91,34 @@ struct DrainagePageHalo
     // NW, NE, SE, SW in the receiving page's local orientation.
     std::array<DrainageBoundaryCell, 4> corners{};
 
+    // Shared-edge mode. Physical pages share their edge row/column: a page's
+    // edge cell and the neighbour's edge cell are the SAME physical point, so a
+    // neighbour's edge copy is not a valid "next cell" and treating it as a
+    // drain makes the two copies lift above each other and route into each
+    // other forever. When the twin vectors below are filled:
+    //  - north/east/south/west/corners hold the neighbour's cell one step
+    //    BEYOND the shared edge (the real outward neighbour), and
+    //  - twin* hold the neighbour's copy of the shared edge itself. Their
+    //    conditioned height is a floor for this page's copy of the point (both
+    //    copies converge on one level), and a twin whose flow crosses into this
+    //    page injects its area/discharge at its flow target.
+    // Outward cells that already drain into this page are upstream of the
+    // shared edge, so they are not used as drains. All-empty twins select the
+    // legacy single-layer behaviour used by independently generated pages.
+    std::vector<DrainageBoundaryCell> twinNorth;
+    std::vector<DrainageBoundaryCell> twinEast;
+    std::vector<DrainageBoundaryCell> twinSouth;
+    std::vector<DrainageBoundaryCell> twinWest;
+    // NW, NE, SE, SW copies of this page's corner points held by the diagonal
+    // page. Left default (flow 0, conditioned == surface) when unavailable.
+    std::array<DrainageBoundaryCell, 4> twinCorners{};
+
+    [[nodiscard]] bool HasSharedEdgeTwins() const noexcept
+    {
+        return !twinNorth.empty() || !twinEast.empty() ||
+               !twinSouth.empty() || !twinWest.empty();
+    }
+
     // Boundary-state revision supplied by the page-neighborhood scheduler.
     // Camera/cache residency never participates in this value.
     u64 revision{0};
@@ -101,6 +131,7 @@ struct DrainageFlowTarget
     i8 dx{0};
     i8 dy{0};
     bool exitsPage{false};
+    bool targetIsOutlet{false};
 
     [[nodiscard]] bool HasDownstream() const noexcept
     {
@@ -120,6 +151,7 @@ struct DrainageCell
 
     DrainageFlowTarget flow{};
     bool outlet{false};
+    u64 basinTerminalFingerprint{0};
 };
 
 class DrainagePage
@@ -140,6 +172,10 @@ public:
     [[nodiscard]] DrainageBoundaryCell BoundaryCell(
         DrainageBoundarySide side,
         u32 index) const;
+
+    // Exports any cell in the same form. Neighbours use the cell one step
+    // inside their edge as the outward halo layer of a shared-edge page.
+    [[nodiscard]] DrainageBoundaryCell CellAsBoundary(u32 x, u32 y) const;
 
 private:
     friend DrainagePage BuildDrainagePage(

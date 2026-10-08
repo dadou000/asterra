@@ -1,8 +1,12 @@
 #include <orbit/terrain_water/LakeWater.hpp>
+#include <orbit/terrain_geology/GeologicalMaterial.hpp>
+#include <orbit/terrain_hydrology/DrainagePage.hpp>
+#include <orbit/terrain_material_column/MaterialColumnPage.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <cmath>
 #include <iostream>
+#include <vector>
 
 int main()
 {
@@ -185,5 +189,71 @@ int main()
         std::cerr << "Lake overlap was discarded with the owned-cell mesh.\n";
         return 1;
     }
+
+    // Production extraction consumes the physical M09 page and final M08
+    // material column, preserving derived lake and spill metadata.
+    constexpr orbit::u32 pageResolution = 7U;
+    orbit::terrain_material_column::MaterialColumnPage material(
+        pageResolution, 10.0);
+    for (orbit::u32 y = 0U; y < pageResolution; ++y)
+        for (orbit::u32 x = 0U; x < pageResolution; ++x)
+        {
+            const bool inBasin = x >= 2U && x <= 4U && y >= 2U && y <= 4U;
+            const orbit::f32 bedrock = inBasin
+                ? (x == 3U && y == 3U ? 90.0F : 100.0F)
+                : 120.0F;
+            material.SetCell(x, y, {
+                .bedrockHeightMeters = bedrock,
+                .referenceBedrockHeightMeters = bedrock,
+                .bedrockMaterial = orbit::terrain_geology::reference_rock::Basalt});
+        }
+    orbit::terrain::PhysicalTerrainPageKey pageKey{};
+    pageKey.resolution = pageResolution;
+    std::vector<orbit::terrain_hydrology::DrainageCellInput> drainageInputs(
+        static_cast<std::size_t>(pageResolution) * pageResolution);
+    orbit::terrain_hydrology::DrainagePageHalo halo{};
+    const orbit::terrain_hydrology::DrainageBoundaryCell boundary{
+        .surfaceHeightMeters = 120.0F,
+        .conditionedHeightMeters = 120.0F};
+    halo.north.assign(pageResolution, boundary);
+    halo.east.assign(pageResolution, boundary);
+    halo.south.assign(pageResolution, boundary);
+    halo.west.assign(pageResolution, boundary);
+    halo.corners.fill(boundary);
+    const auto drainage = orbit::terrain_hydrology::BuildDrainagePage(
+        material, pageKey, drainageInputs, halo);
+    const auto physicalLakes = orbit::terrain_water::BuildLakeWaterField(
+        drainage, material, {.minimumWaterDepthMeters = 1.0, .minimumCellsPerBasin = 2U});
+    if (physicalLakes.basins.size() != 1U)
+    {
+        std::cerr << "M09 physical-page extraction did not identify the closed basin.\n";
+        return 1;
+    }
+    const auto& physicalBasin = physicalLakes.basins.front();
+    if (physicalBasin.id == 0U || physicalBasin.cellCount < 2U ||
+        physicalBasin.maximumDepthMeters < 20.0F ||
+        physicalBasin.spillCellIndex >= pageResolution * pageResolution ||
+        physicalBasin.outletCellIndex >= pageResolution * pageResolution)
+    {
+        std::cerr << "M09 physical lake metadata omitted depth or its routed spill.\n";
+        return 1;
+    }
+    orbit::terrain_erosion::RiverNetwork rivers{};
+    rivers.sourcePage = drainage.SourcePage();
+    rivers.resolution = pageResolution;
+    rivers.spacingMeters = drainage.SpacingMeters();
+    rivers.nodes.push_back({
+        .id = {.high = 1U, .low = 2U},
+        .sourceX = physicalBasin.outletCellIndex % pageResolution,
+        .sourceY = physicalBasin.outletCellIndex / pageResolution});
+    const auto connectedLakes = orbit::terrain_water::BuildLakeWaterField(
+        drainage, material, rivers);
+    if (connectedLakes.basins.front().downstreamRiverNode != rivers.nodes.front().id ||
+        connectedLakes.basins.front().downstreamRiverCellCount != 0U)
+    {
+        std::cerr << "Lake spill was not associated with its immediate downstream river node.\n";
+        return 1;
+    }
+
     return 0;
 }

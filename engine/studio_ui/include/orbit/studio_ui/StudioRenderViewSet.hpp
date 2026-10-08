@@ -233,6 +233,18 @@ public:
     // Vertical field of view of the camera the view renders with now (zoom
     // included).
     [[nodiscard]] f64 ViewFovRadians(std::string_view id) const;
+    // Lens controls use the same per-view zoom authority as the viewport.
+    // Setting either lens value updates that zoom and returns the value the
+    // active view can actually represent.
+    [[nodiscard]] f64 CameraFovDegrees(std::string_view id) const;
+    [[nodiscard]] f64 CameraFocalLengthMillimeters(
+        std::string_view id) const;
+    [[nodiscard]] f64 SetCameraFovDegrees(
+        std::string_view id,
+        f64 degrees);
+    [[nodiscard]] f64 SetCameraFocalLengthMillimeters(
+        std::string_view id,
+        f64 millimeters);
 
     // Capture tiling (see StudioCaptureTile). Applied each Refresh on top of
     // the zoomed camera; nullopt returns to the normal camera.
@@ -485,6 +497,7 @@ private:
     std::map<std::string, bool, std::less<>> compositionEnabled_;
     std::map<std::string, bool, std::less<>> textDiagnosticsHud_;
     std::map<std::string, f64, std::less<>> zoom_;
+    std::map<std::string, f64, std::less<>> baseFovRadians_;
     std::map<std::string, StudioCaptureTile, std::less<>> captureTiles_;
 
     std::map<std::string, StudioTerrainLayerOptions, std::less<>>

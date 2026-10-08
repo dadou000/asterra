@@ -196,6 +196,10 @@ void TerrainDependencyGraph::RegisterPage(
         SourceKind::BiomeScatter,
         "BiomeScatter",
         revisions.biome);
+    addSource(
+        SourceKind::DrainageBoundary,
+        "DrainageBoundary",
+        revisions.hydrologyBoundary);
 
     const auto sourceNode =
         [&](const SourceKind source)
@@ -256,7 +260,8 @@ void TerrainDependencyGraph::RegisterPage(
             {
                 record.nodes.geology,
                 sourceNode(SourceKind::Climate),
-                sourceNode(SourceKind::Authoring)
+                sourceNode(SourceKind::Authoring),
+                sourceNode(SourceKind::DrainageBoundary)
             });
 
     record.nodes.terrainProcesses =
@@ -437,6 +442,8 @@ TerrainDependencyGraph::SourceFor(
         return SourceKind::BiomeSurface;
     case TerrainChangeKind::BiomeScatter:
         return SourceKind::BiomeScatter;
+    case TerrainChangeKind::DrainageBoundary:
+        return SourceKind::DrainageBoundary;
     }
 
     return SourceKind::Authoring;
@@ -495,6 +502,15 @@ TerrainDependencyGraph::DirtyProductsFor(
 
     case TerrainChangeKind::BiomeScatter:
         return
+            bit(TerrainDependencyProduct::Scatter);
+
+    case TerrainChangeKind::DrainageBoundary:
+        return
+            bit(TerrainDependencyProduct::Drainage) |
+            bit(TerrainDependencyProduct::TerrainProcesses) |
+            bit(TerrainDependencyProduct::ExposedSurface) |
+            bit(TerrainDependencyProduct::BiomeWeights) |
+            bit(TerrainDependencyProduct::SurfaceMaterial) |
             bit(TerrainDependencyProduct::Scatter);
     }
 
@@ -579,6 +595,9 @@ void TerrainDependencyGraph::IncrementRevision(
     case TerrainChangeKind::BiomeSurfaceMaterial:
     case TerrainChangeKind::BiomeScatter:
         ++revisions.biome;
+        break;
+    case TerrainChangeKind::DrainageBoundary:
+        ++revisions.hydrologyBoundary;
         break;
     }
 }

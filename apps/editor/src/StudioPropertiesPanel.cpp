@@ -92,6 +92,7 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -128,14 +129,317 @@ void StudioPropertiesPanel::Register()
                 orbit::editor_ui::
                     PanelContext& context)
             {
+                const auto selected = worldSession.HasWorld()
+                    ? inspector().SelectedObjects()
+                    : std::vector<orbit::scene::ObjectRecord>{};
+
+                if (selected.empty() &&
+                    inspectorTarget.kind ==
+                        StudioInspectorTargetKind::ViewportCamera)
+                {
+                    context.Heading("Viewport Camera");
+                    context.MutedText(
+                        "Protected viewport camera · changes affect the active view.");
+                    f64 fov = studioViews.CameraFovDegrees(
+                        inspectorTarget.viewId);
+                    if (context.InputDouble("Vertical FOV (degrees)", fov))
+                    {
+                        try
+                        {
+                            static_cast<void>(studioViews.SetCameraFovDegrees(
+                                inspectorTarget.viewId, fov));
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            context.ErrorText(exception.what());
+                        }
+                    }
+                    f64 focalLength = studioViews.CameraFocalLengthMillimeters(
+                        inspectorTarget.viewId);
+                    if (context.InputDouble("Focal Length (mm)", focalLength))
+                    {
+                        try
+                        {
+                            static_cast<void>(
+                                studioViews.SetCameraFocalLengthMillimeters(
+                                    inspectorTarget.viewId, focalLength));
+                        }
+                        catch (const std::exception& exception)
+                        {
+                            context.ErrorText(exception.what());
+                        }
+                    }
+                    context.KeyValue("Sensor height", "24 mm (full-frame)");
+                    context.MutedText(
+                        "FOV and focal length are linked; both use the viewport camera lens.");
+                    return;
+                }
+
+                if (selected.empty() &&
+                    (inspectorTarget.kind ==
+                         StudioInspectorTargetKind::LightingRenderer ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::GlobalIllumination ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::AntiAliasing ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::DirectLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::Reflections ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::AtmosphereLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::CloudLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::SurfaceLighting ||
+                     inspectorTarget.kind ==
+                         StudioInspectorTargetKind::LightingDiagnostics))
+                {
+                    context.Heading("Lighting / Renderer");
+                    auto layers = studioViews.TerrainLayers(
+                        inspectorTarget.viewId);
+                    bool changed = false;
+                    const bool showGlobalIllumination =
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::GlobalIllumination;
+                    const bool showAntiAliasing =
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind ==
+                            StudioInspectorTargetKind::AntiAliasing;
+                    const bool showDirectLighting = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::DirectLighting;
+                    const bool showReflections = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::Reflections;
+                    const bool showAtmosphere = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::AtmosphereLighting;
+                    const bool showClouds = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::CloudLighting;
+                    const bool showSurface = inspectorTarget.kind ==
+                            StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::SurfaceLighting;
+
+                    if (showGlobalIllumination)
+                    {
+                        context.Text("Global Illumination");
+                        f64 giIntensity = layers.giIntensity;
+                        changed |= context.InputDouble(
+                            "GI Intensity (0–16)", giIntensity);
+                        changed |= context.Checkbox(
+                            "GI Only View", layers.giOnlyView);
+                        changed |= context.Checkbox(
+                            "Indirect Coverage View",
+                            layers.indirectCoverageView);
+                        if (std::isfinite(giIntensity))
+                        {
+                            layers.giIntensity = static_cast<orbit::f32>(
+                                std::clamp(giIntensity, 0.0, 16.0));
+                        }
+                    }
+
+                    if (showAntiAliasing)
+                    {
+                        context.Separator();
+                        context.Text("Anti-Aliasing");
+                        static constexpr std::array<
+                            orbit::editor_ui::ToolbarChoice, 3> modes{{
+                            {"Off", orbit::editor_ui::ToolbarIcon::More},
+                            {"FXAA", orbit::editor_ui::ToolbarIcon::AntiAliasing},
+                            {"TAA", orbit::editor_ui::ToolbarIcon::Layers}}};
+                        i32 mode = static_cast<i32>(layers.antiAliasing);
+                        if (context.ToolbarChoices(
+                                "renderer-antialiasing", modes, mode))
+                        {
+                            layers.antiAliasing = static_cast<orbit::u8>(
+                                std::clamp(mode, 0, 2));
+                            changed = true;
+                        }
+                        context.MutedText(
+                            "TAA uses temporal history and falls back to FXAA while history is unavailable.");
+                    }
+
+                    const auto drawBypass = [&context, &changed](
+                        const char* label, bool& value)
+                    {
+                        const bool bypass = value;
+                        bool contributes = !bypass;
+                        if (context.Checkbox(label, contributes))
+                        {
+                            value = !contributes;
+                            changed = true;
+                        }
+                    };
+                    if (showDirectLighting)
+                    {
+                        context.Separator();
+                        context.Text("Direct Lighting & Shadows");
+                        f64 softness = layers.meshShadowSoftness;
+                        changed |= context.InputDouble("Sun Shadow Softness", softness);
+                        if (std::isfinite(softness))
+                        {
+                            layers.meshShadowSoftness = static_cast<orbit::f32>(
+                                std::clamp(softness, 0.0, 8.0));
+                        }
+                        drawBypass("Cloud Shadows", layers.bypassCloudShadow);
+                        drawBypass("Proxy Sun Shadows", layers.bypassProxySunShadow);
+                        drawBypass("Sky Cache Fill", layers.bypassSkyCache);
+                        drawBypass("Visibility Proxy Surfaces", layers.bypassProxySurfaces);
+                        drawBypass("Imported Mesh Surfaces", layers.bypassMeshSurfaces);
+                    }
+                    if (showReflections)
+                    {
+                        context.Separator();
+                        context.Text("Reflections & Indirect Lighting");
+                        drawBypass("Indirect Lighting", layers.bypassIndirectLighting);
+                        drawBypass("Hybrid Reflections", layers.bypassHybridReflections);
+                        drawBypass("Radiance Cache Fallback", layers.bypassRadianceCache);
+                        drawBypass("SDF GI Fallback", layers.bypassSdfGi);
+                        drawBypass("SDF Terrain Contribution", layers.bypassSdfTerrain);
+                        drawBypass("SDF Proxy Contribution", layers.bypassSdfProxies);
+                    }
+                    if (showAtmosphere)
+                    {
+                        context.Separator();
+                        context.Text("Atmosphere");
+                        bool atmosphere = !layers.bypassAtmosphere;
+                        if (context.Checkbox("Atmosphere Enabled", atmosphere))
+                        {
+                            layers.bypassAtmosphere = !atmosphere;
+                            changed = true;
+                        }
+                    }
+                    if (showClouds)
+                    {
+                        context.Separator();
+                        context.Text("Cloud Lighting");
+                        changed |= context.Checkbox("Clouds Enabled", layers.clouds);
+                        changed |= context.Checkbox("Temporal Accumulation", layers.cloudTemporal);
+                        changed |= context.Checkbox("Cloud Light Volume", layers.cloudLightVolume);
+                        f64 resolution = layers.cloudResolutionScale;
+                        f64 godrays = layers.cloudGodrayStrength;
+                        changed |= context.InputDouble("Resolution Scale", resolution);
+                        changed |= context.InputDouble("Godray Strength", godrays);
+                        if (std::isfinite(resolution)) layers.cloudResolutionScale = static_cast<orbit::f32>(std::clamp(resolution, 0.25, 1.0));
+                        if (std::isfinite(godrays)) layers.cloudGodrayStrength = static_cast<orbit::f32>(std::clamp(godrays, 0.0, 2.0));
+                        drawBypass("Cloud Shadows", layers.bypassCloudShadow);
+                    }
+                    if (showSurface)
+                    {
+                        context.Separator();
+                        context.Text("Ocean & Surface Contributions");
+                        changed |= context.Checkbox("Ocean Enabled", layers.ocean);
+                        changed |= context.Checkbox("Surface Effects Enabled", layers.surfaceEffects);
+                        changed |= context.Checkbox("Production Surface", layers.productionSurface);
+                        drawBypass("Near Field Water", layers.bypassNearFieldWater);
+                    }
+
+                    if (changed)
+                    {
+                        studioViews.SetTerrainLayers(
+                            inspectorTarget.viewId, layers);
+                    }
+
+                    if (inspectorTarget.kind == StudioInspectorTargetKind::LightingRenderer ||
+                        inspectorTarget.kind == StudioInspectorTargetKind::LightingDiagnostics)
+                    {
+                        context.Separator();
+                        displayDiagnosticsUi.DrawRendererProperties(
+                            context, inspectorTarget.viewId);
+                    }
+                    return;
+                }
+
+                if (selected.empty() &&
+                    inspectorTarget.kind ==
+                        StudioInspectorTargetKind::EyeAdaptation)
+                {
+                    context.Heading("Eye Adaptation");
+                    const auto diagnostics =
+                        studioViewportRenderer.LuminanceHistogramDiagnostics(
+                            inspectorTarget.viewId);
+                    if (!diagnostics.has_value())
+                    {
+                        context.MutedText(
+                            "Settings are available after this viewport renders its first metered frame.");
+                        return;
+                    }
+
+                    auto config = diagnostics->eyeConfig;
+                    bool changed = false;
+                    changed |= context.Checkbox(
+                        "Highlight Protection", config.highlightProtection);
+
+                    f64 glareThreshold = config.glareThresholdNits;
+                    changed |= context.InputDouble(
+                        "Glare Threshold (nits)", glareThreshold);
+                    f64 highlightAttack = config.highlightAttackSeconds;
+                    changed |= context.InputDouble(
+                        "Highlight Attack (seconds)", highlightAttack);
+                    f64 daylightAdaptation = config.daylightAdaptationNits;
+                    changed |= context.InputDouble(
+                        "Daylight Adaptation (nits)", daylightAdaptation);
+                    f64 maximumBoost = config.maximumBoostStops;
+                    changed |= context.InputDouble(
+                        "Maximum Boost (stops)", maximumBoost);
+                    f64 brightenSeconds = config.photopicBrightenSeconds;
+                    changed |= context.InputDouble(
+                        "Bright Adapt (seconds)", brightenSeconds);
+                    f64 darkenSeconds = config.photopicDarkenSeconds;
+                    changed |= context.InputDouble(
+                        "Darken Adapt (seconds)", darkenSeconds);
+                    f64 darkAdaptSeconds = config.darkAdaptSeconds;
+                    changed |= context.InputDouble(
+                        "Dark Adapt (seconds)", darkAdaptSeconds);
+
+                    if (changed)
+                    {
+                        const auto clampField = [](const f64 value,
+                                                   const f64 minimum,
+                                                   const f64 maximum)
+                        {
+                            return std::isfinite(value)
+                                ? std::clamp(value, minimum, maximum)
+                                : minimum;
+                        };
+                        config.glareThresholdNits = static_cast<orbit::f32>(
+                            clampField(glareThreshold, 1.0, 1.0e12));
+                        config.highlightAttackSeconds = static_cast<orbit::f32>(
+                            clampField(highlightAttack, 0.0, 60.0));
+                        config.daylightAdaptationNits = static_cast<orbit::f32>(
+                            clampField(daylightAdaptation, 1.0e-3, 1.0e9));
+                        config.maximumBoostStops = static_cast<orbit::f32>(
+                            clampField(maximumBoost, 0.0, 40.0));
+                        config.photopicBrightenSeconds = static_cast<orbit::f32>(
+                            clampField(brightenSeconds, 0.0, 600.0));
+                        config.photopicDarkenSeconds = static_cast<orbit::f32>(
+                            clampField(darkenSeconds, 0.0, 600.0));
+                        config.darkAdaptSeconds = static_cast<orbit::f32>(
+                            clampField(darkAdaptSeconds, 0.0, 3600.0));
+                        studioViewportRenderer.SetHumanEyeAdaptationConfig(
+                            inspectorTarget.viewId, config);
+                    }
+
+                    context.Separator();
+                    context.KeyValue(
+                        "Live exposure",
+                        std::format("{:.4f}", diagnostics->eyeState.exposureScale));
+                    context.KeyValue(
+                        "Brightest pixel",
+                        std::format("{:.1f} nits", diagnostics->eyeState.peakNits));
+                    return;
+                }
+
                 if (!worldSession.HasWorld())
                 {
                     context.Text("No world is open.");
                     return;
                 }
-
-                const auto selected =
-                    inspector().SelectedObjects();
 
                 if (selected.empty())
                 {

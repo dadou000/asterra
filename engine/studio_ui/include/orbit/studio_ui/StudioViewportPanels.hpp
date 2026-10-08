@@ -47,6 +47,7 @@ enum class StudioTerrainAuthoringTool : u8
     Lower,
     Protection,
     Drainage,
+    DrainagePath,
     Canyon,
     Ridge,
     Material,
@@ -116,6 +117,10 @@ public:
 
     // Shared operation behind the Scene toolbar, F shortcut and RPC.
     [[nodiscard]] bool FrameSelectedObject();
+    [[nodiscard]] GizmoSettings Snapping() const noexcept;
+    void SetSnapping(const GizmoSettings& settings);
+    void DrawSnappingControls(editor_ui::PanelContext& context, bool compact = false);
+    void DrawSnappingSettings(editor_ui::PanelContext& context);
 
     // Shows the horizontal toolbar that belongs to the active workspace mode
     // (Scene today) and removes it for modes that have none.
@@ -190,6 +195,7 @@ private:
 
     void RegisterShellBands(editor_ui::EditorUi& ui);
     void DrawSceneToolbar(editor_ui::PanelContext& context);
+    void DrawPlanetToolbar(editor_ui::PanelContext& context);
     void DrawCelestialToolbar(editor_ui::PanelContext& context);
 
     // Small "v" chip that opens a popover with the ordinary (non-advanced)
@@ -225,6 +231,10 @@ private:
     content::ContentService* content_{nullptr};
     editor_ui::EditorUi* ui_{nullptr};
     std::string status_;
+    // Tectonics menu structural-layer probe: observer sub-point or a typed point.
+    bool tectonicProbeAtObserver_{true};
+    f64 tectonicProbeLatitude_{0.0};
+    f64 tectonicProbeLongitude_{0.0};
     bool celestialMoreRequested_{false};
     std::optional<scene::ObjectId> bubbleOpenRequest_;
     std::shared_ptr<ViewportModeCommandState> viewportModeCommandState_;

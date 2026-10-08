@@ -1338,5 +1338,82 @@ void RegisterStudioRenderViewRpc(
                 throw rpc::Error(kFailed, exception.what());
             }
         });
+
+    dispatcher.Register(
+        {
+            .name = "view.camera_get",
+            .description =
+                "Gets the rendered viewport camera lens: vertical field of "
+                "view in degrees and equivalent focal length for a 24 mm "
+                "sensor height. id defaults to studio.primary.",
+            .mutating = false
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            try
+            {
+                return Value(Value::Object{
+                    {"id", id},
+                    {"fov_degrees", views.CameraFovDegrees(id)},
+                    {"focal_length_mm", views.CameraFocalLengthMillimeters(id)},
+                    {"sensor_height_mm", 24.0},
+                    {"zoom", views.Zoom(id)}});
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kInvalid, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "view.camera_set",
+            .description =
+                "Sets the viewport camera lens using exactly one of "
+                "fov_degrees (0..170) or focal_length_mm (2..500, on a "
+                "24 mm sensor height). id defaults to studio.primary.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            const auto& object = RequireObject(params);
+            const auto fov = object.find("fov_degrees");
+            const auto focal = object.find("focal_length_mm");
+            if ((fov == object.end()) == (focal == object.end()))
+            {
+                throw rpc::Error(
+                    -32602,
+                    "Provide exactly one of fov_degrees or focal_length_mm.");
+            }
+            try
+            {
+                if (fov != object.end())
+                {
+                    static_cast<void>(views.SetCameraFovDegrees(
+                        id, NumberFromRpc(object, "fov_degrees")));
+                }
+                else
+                {
+                    static_cast<void>(views.SetCameraFocalLengthMillimeters(
+                        id, NumberFromRpc(object, "focal_length_mm")));
+                }
+                return Value(Value::Object{
+                    {"id", id},
+                    {"fov_degrees", views.CameraFovDegrees(id)},
+                    {"focal_length_mm", views.CameraFocalLengthMillimeters(id)},
+                    {"sensor_height_mm", 24.0},
+                    {"zoom", views.Zoom(id)}});
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
 }
 } // namespace orbit::studio_ui

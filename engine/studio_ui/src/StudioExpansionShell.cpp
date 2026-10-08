@@ -26,19 +26,13 @@ StudioExpansionShell::StudioExpansionShell(
 {
     try
     {
-        // Two top rows only: workspace/navigation and contextual authoring.
+        // Workspace tabs, navigation, and contextual authoring are distinct
+        // shell bands, with the main workspace selector visually separated.
         // The bottom activity strip is owned by StudioViewportPanels because
         // it directly controls that object's build/log/diagnostic panels.
-        editor_ui::UpsertShellBand({
-            .id = "orbit.navigation",
-            .order = 0,
-            .height = 40.0F,
-            .draw =
-                [this](editor_ui::PanelContext& context)
-                {
-                    DrawNavigationBand(context);
-                }
-        });
+        // Object breadcrumbs live in the hierarchy. Reserve only the compact
+        // contextual row; command popup servicing follows its draw callback.
+        static_cast<void>(editor_ui::RemoveShellBand("orbit.navigation"));
 
         editor_ui::UpsertShellBand({
             .id = "orbit.viewport-authoring",

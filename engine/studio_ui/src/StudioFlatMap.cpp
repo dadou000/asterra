@@ -5,6 +5,8 @@
 #include <orbit/rhi/Pipeline.hpp>
 #include <orbit/rhi/Resource.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 
 #include <algorithm>
@@ -161,9 +163,40 @@ struct Rgb
     return PackRgba(LerpRgb(kShallow, kDeep, t));
 }
 
+[[nodiscard]] u32 TectonicColor(
+    const terrain::GlobalTerrainFieldSample& sample) noexcept
+{
+    const f64 hue = std::fmod(
+        static_cast<f64>(sample.nearestPlate % terrain::kMaxTectonicPlates) *
+            137.50776405003785,
+        360.0);
+    const f64 sector = hue / 60.0;
+    constexpr f64 chroma = 0.72;
+    const f64 x = chroma * (1.0 - std::abs(std::fmod(sector, 2.0) - 1.0));
+    Rgb color{};
+    if (sector < 1.0) color = {static_cast<f32>(chroma), static_cast<f32>(x), 0.0F};
+    else if (sector < 2.0) color = {static_cast<f32>(x), static_cast<f32>(chroma), 0.0F};
+    else if (sector < 3.0) color = {0.0F, static_cast<f32>(chroma), static_cast<f32>(x)};
+    else if (sector < 4.0) color = {0.0F, static_cast<f32>(x), static_cast<f32>(chroma)};
+    else if (sector < 5.0) color = {static_cast<f32>(x), 0.0F, static_cast<f32>(chroma)};
+    else color = {static_cast<f32>(chroma), 0.0F, static_cast<f32>(x)};
+    color = {color.r + 0.12F, color.g + 0.12F, color.b + 0.12F};
+    const f64 strongest = std::max({sample.convergenceMask, sample.divergenceMask, sample.transformMask});
+    if (strongest > 0.08)
+    {
+        const Rgb boundary = sample.convergenceMask >= sample.divergenceMask && sample.convergenceMask >= sample.transformMask
+            ? Rgb{0.98F,0.22F,0.16F}
+            : (sample.divergenceMask >= sample.transformMask
+                ? Rgb{0.10F,0.84F,0.96F} : Rgb{1.0F,0.88F,0.20F});
+        color = LerpRgb(color, boundary, static_cast<f32>(std::clamp(strongest * 0.95, 0.0, 0.95)));
+    }
+    return PackRgba(color);
+}
+
 [[nodiscard]] u32 LayerColor(
     const FlatMapLayer layer,
-    const terrain::TerrainSample& sample) noexcept
+    const terrain::TerrainSample& sample,
+    const terrain::GlobalTerrainFieldSample* tectonics = nullptr) noexcept
 {
     switch (layer)
     {
@@ -177,6 +210,8 @@ struct Rgb
         return PrecipitationColor(sample.climate.precipitation);
     case FlatMapLayer::WaterDepth:
         return WaterDepthColor(sample);
+    case FlatMapLayer::Tectonics:
+        return tectonics != nullptr ? TectonicColor(*tectonics) : 0xFF202020U;
     }
     return 0xFF000000U;
 }
@@ -403,6 +438,8 @@ std::string_view FlatMapLayerName(const FlatMapLayer layer) noexcept
         return "precipitation";
     case FlatMapLayer::WaterDepth:
         return "water_depth";
+    case FlatMapLayer::Tectonics:
+        return "tectonics";
     }
     return "elevation";
 }
@@ -742,8 +779,10 @@ public:
         const auto started = std::chrono::steady_clock::now();
         const f64 footprintMeters = std::max(
             2.0 * std::numbers::pi * std::max(source->radiusMeters, 1.0) /
-                static_cast<f64>(kFlatMapWidth),
+            static_cast<f64>(kFlatMapWidth),
             1.0);
+        const auto* const analytic =
+            dynamic_cast<const terrain::AnalyticTerrainSource*>(source->terrain);
 
         while (map.nextRow < kFlatMapHeight)
         {
@@ -757,14 +796,22 @@ public:
                     (static_cast<f64>(map.nextColumn) + 0.5) /
                     static_cast<f64>(kFlatMapWidth);
                 const auto latLon = FlatMapLatLonFromUv({u, v});
-                const terrain::TerrainSample sample = source->terrain->Sample({
+                const terrain::TerrainQuery query{
                     .unitDirection = FlatMapDirectionFromLatLon(
                         latLon.latitudeDegrees,
                         latLon.longitudeDegrees),
                     .footprintMeters = footprintMeters,
                     .planet = source->planet,
                     .radialOffsetMeters = 0.0
-                });
+                };
+                const terrain::TerrainSample sample = source->terrain->Sample(query);
+                const terrain::GlobalTerrainFieldSample* tectonics = nullptr;
+                terrain::GlobalTerrainFieldSample tectonicSample{};
+                if (analytic != nullptr)
+                {
+                    tectonicSample = analytic->GlobalFields().Sample(query);
+                    tectonics = &tectonicSample;
+                }
 
                 const std::size_t index =
                     static_cast<std::size_t>(map.nextRow) * kFlatMapWidth +
@@ -774,7 +821,9 @@ public:
                      ++layerIndex)
                 {
                     map.pixels[layerIndex][index] = LayerColor(
-                        static_cast<FlatMapLayer>(layerIndex), sample);
+                        static_cast<FlatMapLayer>(layerIndex), sample,
+                        static_cast<FlatMapLayer>(layerIndex) == FlatMapLayer::Tectonics
+                            ? tectonics : nullptr);
                 }
 
                 if ((map.nextColumn & 31U) == 31U &&

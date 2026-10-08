@@ -3,9 +3,11 @@ add_library(OrbitStudioUi STATIC
     src/DebugViewUi.cpp
     src/DisplayDiagnosticsUi.cpp
     src/DisplayEyeRpc.cpp
+    src/ImplementationPlan.cpp
     src/ProfilerModel.cpp
     src/ProfilerPanelRpc.cpp
     src/ProfilerUi.cpp
+    src/PlanningUi.cpp
     src/ProjectAuthoringUi.cpp
     src/ProjectSettingsUi.cpp
     src/ReportsUi.cpp

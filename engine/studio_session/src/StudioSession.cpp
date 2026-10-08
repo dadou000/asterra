@@ -433,7 +433,8 @@ StudioSession::DispatchRpc(
         terrainRuntime_.Refresh());
 
     terrainPhysicalPages_.Sync(
-        terrainRuntime_.Catalog());
+        terrainRuntime_.Catalog(),
+        clock_.Time());
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();
@@ -514,7 +515,8 @@ StudioTickResult StudioSession::Tick(
         terrainRuntime_.Refresh();
 
     terrainPhysicalPages_.Sync(
-        terrainRuntime_.Catalog());
+        terrainRuntime_.Catalog(),
+        clock_.Time());
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();

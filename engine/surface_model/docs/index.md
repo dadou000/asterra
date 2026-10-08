@@ -15,6 +15,7 @@ sources = [
 symbols = ["SurfaceCompositionStats", "SurfaceMaterialFeatureMasks", "TerrainProcessService"]
 invariants = [
   "Surface capabilities are reconstructed from authoritative semantic children; they are derived, never a second authority.",
+  "TerrainDescription reconstructs its tectonic recipe from the Terrain Surface semantic properties; the Planet toolbar's SurfaceAuthoringModel edits those values transactionally, and composition feeds them into the same analytic GlobalTerrainFields used by terrain generation.",
   "The registry is rebuilt whenever UniverseComposition changes, because SurfaceRegistry intentionally references the active BodyRegistry.",
   "Terrain process state remains in the canonical M08/M14 physical products; the service-level process configuration is solver policy only.",
 ]
@@ -27,5 +28,4 @@ verify = [
 ]
 verified = "b0a0de7f"
 +++
-
 

@@ -27,7 +27,7 @@ symbols = [
   "CreateWaterPipeline",
 ]
 invariants = [
-  "The clipmap terrain pass draws the true bed and never water; standing water is the separate NearFieldWater pass. The bed variant replaces the standing-water block with waterCoverage = 0 and swaps the ocean biome colour for silt (0.30, 0.27, 0.20), because that is what shows through the water.",
+  "The clipmap terrain pass draws the true bed and never water; standing water is the separate NearFieldWater pass. Its page water-depth sample may contain sea, lake or river depth; the bed variant replaces the standing-water block with waterCoverage = 0 and swaps the ocean biome colour for silt (0.30, 0.27, 0.20), because that is what shows through the water.",
   "The water vertex shader is the terrain vertex shader with one block replaced, so morph, toroidal residency and the finer-level hole are identical. Do not fork it: edit ClipmapVertexShader.hpp and keep the markers (the vertex elevation block, `output.waterDepth = 0.0;`, the VSOutput closing brace, the final `return output;`) intact, or construction throws 'Orbit water pass could not locate ...'.",
   "Water vertices sit at sea level (push-constant dword 43, g_centerOffsetMeters.w) or at bed + depth where the sample has standing water. A triangle is drawn only if at least one of its three corners has water depth > 0; the corner sample coordinates in kWaterVertexElevation must match the vertex shader's corner order.",
   "The shoreline is not geometry: the plane over dry corners lies under the terrain and the pixel stage discards fragments whose terrain view depth is not farther than the water's (behind <= 0). The pass therefore needs the terrain depth texture at graphics texture slot 0 (shader binding 2) from the same frame.",

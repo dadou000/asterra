@@ -204,6 +204,19 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
     const auto geologyTree = context.TreeItem("Geology##m28-geology", false);
     if (geologyTree.open)
     {
+        const auto structureTree =
+            context.TreeItem(
+                "Structural Fields##m28-structural-fields",
+                false);
+        if (structureTree.open)
+        {
+            context.Text(
+                "Orbit generates a deterministic spherical plate field with continental/oceanic identity, rotation-driven convergent/divergent/transform boundaries, and mantle hotspots. These are procedural defaults today; this panel cannot author individual plates or inspect their map yet.");
+            context.Text(
+                "Macro uplift, drainage guidance, and geological constraints are editable below and feed terrain generation. Plate count, motion, crust structure, and boundary fields are not exposed here.");
+            context.TreePop();
+        }
+
         auto relief = model.Relief(selected->terrain);
         bool changed = false;
 

@@ -372,27 +372,23 @@ void OctaveBand(
 }
 
 // === Tectonics (elevation-relevant subset only: convergenceMask and
-// plateBiasMeters -- divergence/transform/continental-flag outputs exist
-// only for the CPU-side 2D map's boundary classification, unused here) ===
+// plateBiasMeters -- divergence/transform/collision-class outputs exist
+// only for the CPU side (2D map, macro geology), unused here) ===
 )" R"(
-float3 SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters)
+float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters)
 {
     uint plateCount = ParamUint(kParamPlateCount);
     uint nearest = 0u;
-    uint second = 0u;
-    float d0 = -2.0;
-    float d1 = -2.0;
+    float dTop = -2.0;
+    float dAll[24];
 
     for (uint i = 0; i < plateCount; ++i)
     {
         float d = dot(direction, PlateSeedDirection(i)) + PlateSizeBias(i);
-        if (d > d0)
+        dAll[i] = d;
+        if (d > dTop)
         {
-            second = nearest; d1 = d0; nearest = i; d0 = d;
-        }
-        else if (d > d1)
-        {
-            second = i; d1 = d;
+            nearest = i; dTop = d;
         }
     }
 
@@ -402,35 +398,72 @@ float3 SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMet
         return 0.0;
     }
 
-    float boundaryWidthDot = ParamFloat(kParamBoundaryWidthDot);
-    float boundaryMask = Smooth(1.0 - (d0 - d1) / max(boundaryWidthDot, 1.0e-9));
+    float width = max(ParamFloat(kParamBoundaryWidthDot), 1.0e-9);
 
-    float convergenceMask = 0.0;
-    if (boundaryMask > 0.0)
+    // Every plate within one boundary width of the top takes part in the
+    // local boundary structure; all pairs among them are evaluated so the
+    // mask stays continuous where the runner-up plate changes (mirrors
+    // TectonicField::Sample, kMaxBoundaryCandidates == 8).
+    uint candidates[8];
+    uint candidateCount = 0u;
+    for (uint c = 0; c < plateCount && candidateCount < 8u; ++c)
     {
-        float3 towardSecond = PlateSeedDirection(second) - PlateSeedDirection(nearest);
-        float3 tangentToward = towardSecond - direction * dot(towardSecond, direction);
-        float tangentLenSq = dot(tangentToward, tangentToward);
-        if (tangentLenSq > 0.0)
+        if (dTop - dAll[c] < width)
         {
-            float3 normal = tangentToward / sqrt(tangentLenSq);
-            float3 vNearest = cross(PlateEulerVector(nearest), direction);
-            float3 vSecond = cross(PlateEulerVector(second), direction);
-            float3 relative = vNearest - vSecond;
-
-            float normalSpeed = dot(relative, normal);
-            float convergence = max(0.0, -normalSpeed);
-
-            bool eitherContinental = (PlateIsContinental(nearest) > 0.5) || (PlateIsContinental(second) > 0.5);
-            float collisionScale = eitherContinental ? 1.0 : ParamFloat(kParamOceanicConvergenceScale);
-
-            float referenceSpeed = max(ParamFloat(kParamConvergenceReferenceSpeed), 1.0e-9);
-            convergenceMask = boundaryMask * Smooth(convergence / referenceSpeed) * collisionScale;
+            candidates[candidateCount] = c;
+            candidateCount += 1u;
         }
     }
 
-    float crossBlend = Smooth(0.5 + 0.5 * (d1 - d0) / max(boundaryWidthDot, 1.0e-9));
-    plateBiasMeters = lerp(PlateContinentalBias(nearest), PlateContinentalBias(second), crossBlend);
+    float referenceSpeed = max(ParamFloat(kParamConvergenceReferenceSpeed), 1.0e-9);
+    float convergenceMask = 0.0;
+    for (uint ca = 0; ca < candidateCount; ++ca)
+    {
+        for (uint cb = ca + 1u; cb < candidateCount; ++cb)
+        {
+            uint pi = candidates[ca];
+            uint pj = candidates[cb];
+
+            float weight = min(
+                min(Smooth(1.0 - (dTop - dAll[pi]) / width),
+                    Smooth(1.0 - (dTop - dAll[pj]) / width)),
+                Smooth(1.0 - abs(dAll[pi] - dAll[pj]) / width));
+            if (weight <= 0.0)
+            {
+                continue;
+            }
+
+            float3 towardJ = PlateSeedDirection(pj) - PlateSeedDirection(pi);
+            float3 tangentToward = towardJ - direction * dot(towardJ, direction);
+            float tangentLenSq = dot(tangentToward, tangentToward);
+            if (tangentLenSq <= 0.0)
+            {
+                continue;
+            }
+
+            float3 normal = tangentToward / sqrt(tangentLenSq);
+            float3 relative = cross(PlateEulerVector(pi), direction) - cross(PlateEulerVector(pj), direction);
+            float convergence = max(0.0, -dot(relative, normal));
+
+            bool eitherContinental = (PlateIsContinental(pi) > 0.5) || (PlateIsContinental(pj) > 0.5);
+            float collisionScale = eitherContinental ? 1.0 : ParamFloat(kParamOceanicConvergenceScale);
+
+            convergenceMask = max(convergenceMask, weight * Smooth(convergence / referenceSpeed) * collisionScale);
+        }
+    }
+
+    // Bias blend over every plate near the top; weights g / (1 - g) reproduce
+    // the original two-plate lerp exactly and stay symmetric (see CPU).
+    float biasWeightSum = 0.0;
+    float biasSum = 0.0;
+    for (uint k = 0; k < plateCount; ++k)
+    {
+        float g = Smooth(0.5 + 0.5 * (dAll[k] - dTop) / width);
+        float u = g / (1.0 - g);
+        biasWeightSum += u;
+        biasSum += u * PlateContinentalBias(k);
+    }
+    plateBiasMeters = biasWeightSum > 0.0 ? biasSum / biasWeightSum : PlateContinentalBias(nearest);
     return convergenceMask;
 }
 

@@ -31,6 +31,7 @@ sources = [
 ]
 symbols = []
 invariants = [
+  "The Explorer presents world objects and project assets together in one searchable hierarchy under one panel titled Explorer. All/World/Assets filters narrow that same tree; distinct vector icons mark semantic object and asset kinds in a consistent row gutter, tinted by the shared EditorUi element-category palette. Explorer tree rows, selectable rows, and search input use modest extra vertical padding for easier pointer targeting. The internal Explorer Source panel is composed into the canonical Explorer surface and is not shown as a separate workspace. Selection, object drag/drop reparenting, context actions, and asset discovery stay owned by the existing explorer/content services.",
   "Orbit.exe is the Studio application itself, not a launcher for another UI process; there is no separate launcher, project manager or alternate editor front end (/rules/ui).",
   "A successful local build publishes the current Studio executable to <repo-root>/Orbit.exe; failing to refresh it is a build failure.",
   "Hot reload bootstrap is a development acceleration layer: any host-side failure falls back to the statically linked production path; it applies only to the root development Orbit.exe, the build-tree Studio and staged generation copies, packaged executables stay self-contained.",
@@ -45,5 +46,5 @@ verify = [
   "No test is registered for this module under its own name; changes are exercised through the tests of the modules that use it (see used_by).",
   "python tools/tests/mcp_live_smoke.py --exe Orbit.exe: live Windows/Vulkan smoke; every MCP tool and each unique adapter RPC method must return without terminating Studio.",
 ]
-verified = "5ce37602db58fde9c4bd2f72d154a69437fd7e11"
+verified = "329654cd3290274cd945e9daec3fd214267ef2c8"
 +++

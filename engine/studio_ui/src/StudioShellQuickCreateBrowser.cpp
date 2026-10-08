@@ -176,6 +176,13 @@ void StudioExpansionShell::DrawQuickCreateBrowser(editor_ui::PanelContext& conte
                 }
             };
 
+        if (toolbarArgumentCommand_.IsValid())
+        {
+            const auto requested = toolbarArgumentCommand_;
+            toolbarArgumentCommand_ = {};
+            beginArgumentForm(requested);
+        }
+
         if (quickCreateArgumentCommand_.IsValid())
         {
             const auto* descriptor =

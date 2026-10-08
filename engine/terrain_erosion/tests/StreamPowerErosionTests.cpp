@@ -364,6 +364,71 @@ void TestGeologyControlsIncision()
         "Soft geological material must incise faster than competent bedrock.");
 }
 
+void TestGeologicalAgeWeakensCrustAndIsPartOfRevision()
+{
+    constexpr u32 resolution = 4U;
+    constexpr f64 spacing = 100.0;
+
+    auto geology = MakeGeology();
+    MaterialColumnPage page(resolution, spacing);
+    for (u32 y = 0; y < resolution; ++y)
+    {
+        for (u32 x = 0; x < resolution; ++x)
+        {
+            page.SetCell(
+                x, y,
+                Cell(105.0F - static_cast<f32>(x),
+                     terrain_geology::reference_rock::Basalt));
+        }
+    }
+
+    const auto inputs = Inputs(resolution);
+    const auto halo = Halo(resolution, 500.0F, 100.0F, 500.0F, 500.0F);
+
+    auto young = Forcing(resolution);
+    auto old = Forcing(resolution);
+    for (auto& cell : old)
+    {
+        cell.geologicalAge = 1.0;
+    }
+    Require(old.front().IsValid(), "an aged forcing cell must be valid.");
+
+    auto config = TestConfig();
+    config.incisionCoefficientMetersPerIteration = 20.0;
+    config.ageErodibilityGain = 1.0;
+    Require(config.IsValid(), "age-coupled config must be valid.");
+
+    const auto youngResult = SolveStreamPowerErosion(
+        page, Key(resolution, 20U), geology, inputs, halo, young, config);
+    const auto oldResult = SolveStreamPowerErosion(
+        page, Key(resolution, 20U), geology, inputs, halo, old, config);
+
+    RequireNear(
+        oldResult.At(2, 1).lastErodibility,
+        youngResult.At(2, 1).lastErodibility * 2.0,
+        1.0e-9,
+        "Ancient crust must double erodibility at gain 1.");
+    Require(
+        oldResult.At(2, 1).cumulativeIncisionMeters >
+            youngResult.At(2, 1).cumulativeIncisionMeters,
+        "Ancient crust must incise faster than young crust.");
+
+    auto disabled = config;
+    disabled.ageErodibilityGain = 0.0;
+    const auto flat = SolveStreamPowerErosion(
+        page, Key(resolution, 20U), geology, inputs, halo, old, disabled);
+    RequireNear(
+        flat.At(2, 1).lastErodibility,
+        youngResult.At(2, 1).lastErodibility,
+        1.0e-9,
+        "Zero age gain must reproduce the age-agnostic solver.");
+
+    Require(
+        StreamPowerRevisionFingerprint(Key(resolution, 20U), 1U, 1U, young, config) !=
+            StreamPowerRevisionFingerprint(Key(resolution, 20U), 1U, 1U, old, config),
+        "Geological age must participate in the stream-power revision.");
+}
+
 void TestProtectionAndAuthoredEquilibrium()
 {
     constexpr u32 resolution = 3U;
@@ -829,6 +894,7 @@ int main()
 {
     TestDrainageAreaDrivesValleyIncisionAndBake();
     TestGeologyControlsIncision();
+    TestGeologicalAgeWeakensCrustAndIsPartOfRevision();
     TestProtectionAndAuthoredEquilibrium();
     TestUpliftCreatesConvergingDrainage();
     TestCrossPageStreamPowerBoundary();

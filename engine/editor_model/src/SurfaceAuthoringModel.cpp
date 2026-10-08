@@ -90,6 +90,15 @@ ReadProcessSettings(
             object,
             world_model::kProcessStreamPowerIncision,
             result.streamPower.incisionCoefficientMetersPerIteration);
+    result.streamPower.ageErodibilityGain = PropertyOr<f64>(
+        objects, object, world_model::kProcessStreamPowerAgeErodibility,
+        result.streamPower.ageErodibilityGain);
+    result.streamPower.ageUpliftDecay = PropertyOr<f64>(
+        objects, object, world_model::kProcessStreamPowerAgeUpliftDecay,
+        result.streamPower.ageUpliftDecay);
+    result.streamPower.tectonicDrainageGuidance = PropertyOr<f64>(
+        objects, object, world_model::kProcessTectonicDrainageGuidance,
+        result.streamPower.tectonicDrainageGuidance);
 
     result.hydraulicEnabled =
         PropertyOr<bool>(
@@ -115,6 +124,24 @@ ReadProcessSettings(
             object,
             world_model::kProcessHydraulicTimeStep,
             result.hydraulic.timeStepSeconds);
+    result.hydraulic.seasonalRainfallAmplitude = PropertyOr<f64>(
+        objects, object, world_model::kProcessHydraulicSeasonalAmplitude,
+        result.hydraulic.seasonalRainfallAmplitude);
+    result.hydraulic.seasonalRainfallPeriodSeconds = PropertyOr<f64>(
+        objects, object, world_model::kProcessHydraulicSeasonalPeriod,
+        result.hydraulic.seasonalRainfallPeriodSeconds);
+    result.hydraulic.seasonalRainfallPhaseRadians = PropertyOr<f64>(
+        objects, object, world_model::kProcessHydraulicSeasonalPhase,
+        result.hydraulic.seasonalRainfallPhaseRadians);
+    result.hydraulic.infiltrationMetersPerSecond = PropertyOr<f64>(
+        objects, object, world_model::kProcessHydraulicInfiltration,
+        result.hydraulic.infiltrationMetersPerSecond);
+    result.hydraulic.moistureCapacityDepthMeters = PropertyOr<f64>(
+        objects, object, world_model::kProcessHydraulicMoistureCapacity,
+        result.hydraulic.moistureCapacityDepthMeters);
+    result.hydraulic.evaporationRatePerSecond = PropertyOr<f64>(
+        objects, object, world_model::kProcessHydraulicEvaporation,
+        result.hydraulic.evaporationRatePerSecond);
 
     result.thermalEnabled =
         PropertyOr<bool>(
@@ -215,6 +242,23 @@ ReadProcessSettings(
             object,
             world_model::kProcessRiverMinimumDrainageArea,
             result.rivers.minimumDrainageAreaSquareMeters);
+    result.rivers.minimumDischargeCubicMetersPerSecond = PropertyOr<f64>(objects, object, world_model::kProcessRiverMinimumDischarge, result.rivers.minimumDischargeCubicMetersPerSecond);
+    result.rivers.referenceDischargeCubicMetersPerSecond = PropertyOr<f64>(objects, object, world_model::kProcessRiverReferenceDischarge, result.rivers.referenceDischargeCubicMetersPerSecond);
+    result.rivers.baseChannelWidthMeters = PropertyOr<f64>(objects, object, world_model::kProcessRiverBaseWidth, result.rivers.baseChannelWidthMeters);
+    result.rivers.minimumChannelWidthMeters = PropertyOr<f64>(objects, object, world_model::kProcessRiverMinimumWidth, result.rivers.minimumChannelWidthMeters);
+    result.rivers.maximumChannelWidthMeters = PropertyOr<f64>(objects, object, world_model::kProcessRiverMaximumWidth, result.rivers.maximumChannelWidthMeters);
+    result.rivers.widthDischargeExponent = PropertyOr<f64>(objects, object, world_model::kProcessRiverWidthExponent, result.rivers.widthDischargeExponent);
+    result.rivers.baseChannelDepthMeters = PropertyOr<f64>(objects, object, world_model::kProcessRiverBaseDepth, result.rivers.baseChannelDepthMeters);
+    result.rivers.minimumChannelDepthMeters = PropertyOr<f64>(objects, object, world_model::kProcessRiverMinimumDepth, result.rivers.minimumChannelDepthMeters);
+    result.rivers.maximumChannelDepthMeters = PropertyOr<f64>(objects, object, world_model::kProcessRiverMaximumDepth, result.rivers.maximumChannelDepthMeters);
+    result.rivers.depthDischargeExponent = PropertyOr<f64>(objects, object, world_model::kProcessRiverDepthExponent, result.rivers.depthDischargeExponent);
+    result.rivers.meanderTimeStep = PropertyOr<f64>(objects, object, world_model::kProcessRiverMeanderTimeStep, result.rivers.meanderTimeStep);
+    result.rivers.curvatureMigrationRate = PropertyOr<f64>(objects, object, world_model::kProcessRiverCurvatureMigrationRate, result.rivers.curvatureMigrationRate);
+    result.rivers.deterministicSeedMigrationRate = PropertyOr<f64>(objects, object, world_model::kProcessRiverSeedMigrationRate, result.rivers.deterministicSeedMigrationRate);
+    result.rivers.maximumCenterlineOffsetWidths = PropertyOr<f64>(objects, object, world_model::kProcessRiverMaximumCenterlineOffset, result.rivers.maximumCenterlineOffsetWidths);
+    result.rivers.minimumCutoffPathNodes = U32PropertyOr(objects, object, world_model::kProcessRiverMinimumCutoffPathNodes, result.rivers.minimumCutoffPathNodes);
+    result.rivers.cutoffDistanceWidths = PropertyOr<f64>(objects, object, world_model::kProcessRiverCutoffDistanceWidths, result.rivers.cutoffDistanceWidths);
+    result.rivers.maximumNodeSpacingMeters = PropertyOr<f64>(objects, object, world_model::kProcessRiverMaximumNodeSpacing, result.rivers.maximumNodeSpacingMeters);
 
     result.coastal.enabled =
         PropertyOr<bool>(
@@ -267,6 +311,12 @@ void WriteProcessSettings(
         object,
         world_model::kProcessStreamPowerIncision,
         settings.streamPower.incisionCoefficientMetersPerIteration);
+    commands.SetProperty(object, world_model::kProcessStreamPowerAgeErodibility,
+        settings.streamPower.ageErodibilityGain);
+    commands.SetProperty(object, world_model::kProcessStreamPowerAgeUpliftDecay,
+        settings.streamPower.ageUpliftDecay);
+    commands.SetProperty(object, world_model::kProcessTectonicDrainageGuidance,
+        settings.streamPower.tectonicDrainageGuidance);
 
     commands.SetProperty(
         object,
@@ -284,6 +334,18 @@ void WriteProcessSettings(
         object,
         world_model::kProcessHydraulicTimeStep,
         settings.hydraulic.timeStepSeconds);
+    commands.SetProperty(object, world_model::kProcessHydraulicSeasonalAmplitude,
+        settings.hydraulic.seasonalRainfallAmplitude);
+    commands.SetProperty(object, world_model::kProcessHydraulicSeasonalPeriod,
+        settings.hydraulic.seasonalRainfallPeriodSeconds);
+    commands.SetProperty(object, world_model::kProcessHydraulicSeasonalPhase,
+        settings.hydraulic.seasonalRainfallPhaseRadians);
+    commands.SetProperty(object, world_model::kProcessHydraulicInfiltration,
+        settings.hydraulic.infiltrationMetersPerSecond);
+    commands.SetProperty(object, world_model::kProcessHydraulicMoistureCapacity,
+        settings.hydraulic.moistureCapacityDepthMeters);
+    commands.SetProperty(object, world_model::kProcessHydraulicEvaporation,
+        settings.hydraulic.evaporationRatePerSecond);
 
     commands.SetProperty(
         object,
@@ -352,6 +414,23 @@ void WriteProcessSettings(
         object,
         world_model::kProcessRiverMinimumDrainageArea,
         settings.rivers.minimumDrainageAreaSquareMeters);
+    commands.SetProperty(object, world_model::kProcessRiverMinimumDischarge, settings.rivers.minimumDischargeCubicMetersPerSecond);
+    commands.SetProperty(object, world_model::kProcessRiverReferenceDischarge, settings.rivers.referenceDischargeCubicMetersPerSecond);
+    commands.SetProperty(object, world_model::kProcessRiverBaseWidth, settings.rivers.baseChannelWidthMeters);
+    commands.SetProperty(object, world_model::kProcessRiverMinimumWidth, settings.rivers.minimumChannelWidthMeters);
+    commands.SetProperty(object, world_model::kProcessRiverMaximumWidth, settings.rivers.maximumChannelWidthMeters);
+    commands.SetProperty(object, world_model::kProcessRiverWidthExponent, settings.rivers.widthDischargeExponent);
+    commands.SetProperty(object, world_model::kProcessRiverBaseDepth, settings.rivers.baseChannelDepthMeters);
+    commands.SetProperty(object, world_model::kProcessRiverMinimumDepth, settings.rivers.minimumChannelDepthMeters);
+    commands.SetProperty(object, world_model::kProcessRiverMaximumDepth, settings.rivers.maximumChannelDepthMeters);
+    commands.SetProperty(object, world_model::kProcessRiverDepthExponent, settings.rivers.depthDischargeExponent);
+    commands.SetProperty(object, world_model::kProcessRiverMeanderTimeStep, settings.rivers.meanderTimeStep);
+    commands.SetProperty(object, world_model::kProcessRiverCurvatureMigrationRate, settings.rivers.curvatureMigrationRate);
+    commands.SetProperty(object, world_model::kProcessRiverSeedMigrationRate, settings.rivers.deterministicSeedMigrationRate);
+    commands.SetProperty(object, world_model::kProcessRiverMaximumCenterlineOffset, settings.rivers.maximumCenterlineOffsetWidths);
+    commands.SetProperty(object, world_model::kProcessRiverMinimumCutoffPathNodes, static_cast<i64>(settings.rivers.minimumCutoffPathNodes));
+    commands.SetProperty(object, world_model::kProcessRiverCutoffDistanceWidths, settings.rivers.cutoffDistanceWidths);
+    commands.SetProperty(object, world_model::kProcessRiverMaximumNodeSpacing, settings.rivers.maximumNodeSpacingMeters);
 
     commands.SetProperty(
         object,
@@ -704,6 +783,114 @@ void SurfaceAuthoringModel::SetRelief(
     }
 }
 
+terrain::TectonicFieldDesc SurfaceAuthoringModel::Tectonics(
+    const scene::ObjectId terrainObject) const
+{
+    static_cast<void>(RequireTerrain(terrainObject));
+    terrain::TectonicFieldDesc result{};
+    const i64 seed = PropertyOr<i64>(*objects_, terrainObject,
+        world_model::kTerrainTectonicSeed, i64{0});
+    const i64 plates = PropertyOr<i64>(*objects_, terrainObject,
+        world_model::kTerrainTectonicPlateCount, static_cast<i64>(result.plateCount));
+    const i64 hotspots = PropertyOr<i64>(*objects_, terrainObject,
+        world_model::kTerrainTectonicHotspotCount, static_cast<i64>(result.hotspotCount));
+    const i64 ageSteps = PropertyOr<i64>(*objects_, terrainObject,
+        world_model::kTerrainTectonicHotspotAgeSteps, static_cast<i64>(result.hotspotAgeSteps));
+    if (seed < 0 || plates < 1 || plates > terrain::kMaxTectonicPlates ||
+        hotspots < 0 || hotspots > terrain::kMaxTectonicHotspots ||
+        ageSteps < 0 || ageSteps > terrain::kMaxTectonicHotspotAgeSteps)
+        throw std::runtime_error("Persisted tectonic integer settings are outside supported ranges.");
+    result.seed = static_cast<u64>(seed);
+    result.plateCount = static_cast<u32>(plates);
+    result.hotspotCount = static_cast<u32>(hotspots);
+    result.hotspotAgeSteps = static_cast<u32>(ageSteps);
+    result.plateIrregularity = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicIrregularity, result.plateIrregularity);
+    result.continentalPlateFraction = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicContinentalFraction, result.continentalPlateFraction);
+    result.tectonicContinentInfluence = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicContinentInfluence, result.tectonicContinentInfluence);
+    result.boundaryWidthDot = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicBoundaryWidth, result.boundaryWidthDot);
+    result.minPlateAngularSpeed = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicMinSpeed, result.minPlateAngularSpeed);
+    result.maxPlateAngularSpeed = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicMaxSpeed, result.maxPlateAngularSpeed);
+    result.convergenceUpliftMeters = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicConvergenceUplift, result.convergenceUpliftMeters);
+    result.oceanicConvergenceScale = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicOceanicScale, result.oceanicConvergenceScale);
+    result.hotspotBaseReliefMeters = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicHotspotRelief, result.hotspotBaseReliefMeters);
+    result.hotspotAgeDecay = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicHotspotDecay, result.hotspotAgeDecay);
+    result.hotspotChainSpacingMeters = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicHotspotSpacing, result.hotspotChainSpacingMeters);
+    result.hotspotCoreRadiusMeters = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicHotspotRadius, result.hotspotCoreRadiusMeters);
+    result.plateSizeVarianceDot = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicPlateSizeVariance, result.plateSizeVarianceDot);
+    result.continentalPlateBiasMeters = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicContinentalBias, result.continentalPlateBiasMeters);
+    result.oceanicPlateBiasMeters = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicOceanicBias, result.oceanicPlateBiasMeters);
+    result.convergenceReferenceSpeed = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicConvergenceReferenceSpeed, result.convergenceReferenceSpeed);
+    result.transformReferenceSpeed = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicTransformReferenceSpeed, result.transformReferenceSpeed);
+    result.hotspotRadiusGrowthPerAge = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicHotspotRadiusGrowth, result.hotspotRadiusGrowthPerAge);
+    return result;
+}
+
+void SurfaceAuthoringModel::SetTectonics(
+    const scene::ObjectId terrainObject,
+    const terrain::TectonicFieldDesc& settings)
+{
+    static_cast<void>(RequireTerrain(terrainObject));
+    const auto finiteRange = [](const f64 value, const f64 minimum, const f64 maximum)
+    { return std::isfinite(value) && value >= minimum && value <= maximum; };
+    if (settings.plateCount < 1 || settings.plateCount > terrain::kMaxTectonicPlates ||
+        settings.hotspotCount > terrain::kMaxTectonicHotspots ||
+        settings.hotspotAgeSteps > terrain::kMaxTectonicHotspotAgeSteps ||
+        !finiteRange(settings.plateIrregularity, 0.0, 1.0) ||
+        !finiteRange(settings.continentalPlateFraction, 0.0, 1.0) ||
+        !finiteRange(settings.tectonicContinentInfluence, 0.0, 1.0) ||
+        !finiteRange(settings.boundaryWidthDot, 0.01, 1.0) ||
+        !finiteRange(settings.minPlateAngularSpeed, 0.0, 100.0) ||
+        !finiteRange(settings.maxPlateAngularSpeed, settings.minPlateAngularSpeed, 100.0) ||
+        !finiteRange(settings.convergenceUpliftMeters, 0.0, 1.0e7) ||
+        !finiteRange(settings.oceanicConvergenceScale, 0.0, 2.0) ||
+        !finiteRange(settings.hotspotBaseReliefMeters, 0.0, 1.0e7) ||
+        !finiteRange(settings.hotspotAgeDecay, 0.0, 1.0) ||
+        !finiteRange(settings.hotspotChainSpacingMeters, 0.0, 1.0e8) ||
+        !finiteRange(settings.hotspotCoreRadiusMeters, 0.0, 1.0e8))
+        throw std::invalid_argument("Tectonic recipe values are outside supported physical ranges.");
+    if (!finiteRange(settings.plateSizeVarianceDot, 0.0, 1.0) ||
+        !finiteRange(settings.continentalPlateBiasMeters, -1.0e7, 1.0e7) ||
+        !finiteRange(settings.oceanicPlateBiasMeters, -1.0e7, 1.0e7) ||
+        !finiteRange(settings.convergenceReferenceSpeed, 1.0e-5, 100.0) ||
+        !finiteRange(settings.transformReferenceSpeed, 1.0e-5, 100.0) ||
+        !finiteRange(settings.hotspotRadiusGrowthPerAge, 0.0, 10.0))
+        throw std::invalid_argument("Tectonic recipe values are outside supported physical ranges.");
+
+    const bool owns = !commands_->HasActiveTransaction();
+    if (owns) commands_->BeginTransaction("Edit Planet Tectonics");
+    try
+    {
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicSeed, static_cast<i64>(settings.seed & 0x7fffffffffffffffULL));
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicPlateCount, static_cast<i64>(settings.plateCount));
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicIrregularity, settings.plateIrregularity);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicContinentalFraction, settings.continentalPlateFraction);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicContinentInfluence, settings.tectonicContinentInfluence);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicBoundaryWidth, settings.boundaryWidthDot);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicMinSpeed, settings.minPlateAngularSpeed);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicMaxSpeed, settings.maxPlateAngularSpeed);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicConvergenceUplift, settings.convergenceUpliftMeters);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicOceanicScale, settings.oceanicConvergenceScale);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotCount, static_cast<i64>(settings.hotspotCount));
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotAgeSteps, static_cast<i64>(settings.hotspotAgeSteps));
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotRelief, settings.hotspotBaseReliefMeters);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotDecay, settings.hotspotAgeDecay);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotSpacing, settings.hotspotChainSpacingMeters);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotRadius, settings.hotspotCoreRadiusMeters);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicPlateSizeVariance, settings.plateSizeVarianceDot);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicContinentalBias, settings.continentalPlateBiasMeters);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicOceanicBias, settings.oceanicPlateBiasMeters);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicConvergenceReferenceSpeed, settings.convergenceReferenceSpeed);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicTransformReferenceSpeed, settings.transformReferenceSpeed);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotRadiusGrowth, settings.hotspotRadiusGrowthPerAge);
+        if (owns) commands_->CommitTransaction();
+    }
+    catch (...)
+    {
+        if (owns && commands_->HasActiveTransaction()) commands_->RollbackTransaction();
+        throw;
+    }
+}
+
 
 std::optional<scene::ObjectId>
 SurfaceAuthoringModel::ProcessSettingsObject(
@@ -1007,8 +1194,10 @@ scene::ObjectId SurfaceAuthoringModel::AddMaterialBrush(
     }
 }
 
-scene::ObjectId SurfaceAuthoringModel::AddHeightSpline(
-    const scene::ObjectId terrain,std::string name,const surface_authoring::ConstraintCompositionMode mode,
+scene::ObjectId SurfaceAuthoringModel::AddScalarSpline(
+    const scene::ObjectId terrain,std::string name,
+    const SurfaceTerrainConstraintChannel channel,
+    const surface_authoring::ConstraintCompositionMode mode,
     const std::vector<math::Double3>& input,const f64 halfWidth,const f64 falloff,const f64 value)
 {
     static_cast<void>(RequireTerrain(terrain));
@@ -1025,7 +1214,7 @@ scene::ObjectId SurfaceAuthoringModel::AddHeightSpline(
     {
         const auto id=commands_->CreateObject(world_model::kTerrainConstraintType,name,terrain,
             4'000+static_cast<i64>(TerrainConstraints(terrain).size())*10);
-        commands_->SetProperty(id,world_model::kTerrainConstraintChannel,static_cast<i64>(SurfaceTerrainConstraintChannel::Height));
+        commands_->SetProperty(id,world_model::kTerrainConstraintChannel,static_cast<i64>(channel));
         commands_->SetProperty(id,world_model::kTerrainConstraintShape,i64{1});
         commands_->SetProperty(id,world_model::kTerrainConstraintMode,static_cast<i64>(mode));
         commands_->SetProperty(id,world_model::kTerrainConstraintHalfWidth,halfWidth);
@@ -1053,14 +1242,103 @@ scene::ObjectId SurfaceAuthoringModel::AddCanyonSpline(
     const scene::ObjectId terrain,const std::vector<math::Double3>& points,const f64 halfWidth,const f64 falloff,const f64 depth)
 {
     if(!std::isfinite(depth)||depth<=0.0) throw std::invalid_argument("Canyon depth must be finite and positive.");
-    return AddHeightSpline(terrain,"Canyon",surface_authoring::ConstraintCompositionMode::Subtract,points,halfWidth,falloff,depth);
+    return AddScalarSpline(terrain,"Canyon",SurfaceTerrainConstraintChannel::Height,
+        surface_authoring::ConstraintCompositionMode::Subtract,points,halfWidth,falloff,depth);
 }
 
 scene::ObjectId SurfaceAuthoringModel::AddRidgeSpline(
     const scene::ObjectId terrain,const std::vector<math::Double3>& points,const f64 halfWidth,const f64 falloff,const f64 height)
 {
     if(!std::isfinite(height)||height<=0.0) throw std::invalid_argument("Ridge height must be finite and positive.");
-    return AddHeightSpline(terrain,"Ridge / Embankment",surface_authoring::ConstraintCompositionMode::Add,points,halfWidth,falloff,height);
+    return AddScalarSpline(terrain,"Ridge / Embankment",SurfaceTerrainConstraintChannel::Height,
+        surface_authoring::ConstraintCompositionMode::Add,points,halfWidth,falloff,height);
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddDrainageSpline(
+    const scene::ObjectId terrain,
+    const std::vector<math::Double3>& points,
+    const f64 halfWidth,
+    const f64 falloff,
+    const f64 guidance)
+{
+    if (!std::isfinite(guidance) || guidance < 0.0 || guidance > 1.0)
+        throw std::invalid_argument("Drainage guidance must be in [0, 1].");
+    return AddScalarSpline(
+        terrain,
+        guidance < 0.0 ? "Drainage Repel Path" : "Drainage Guidance Path",
+        SurfaceTerrainConstraintChannel::Drainage,
+        surface_authoring::ConstraintCompositionMode::Add,
+        points,
+        halfWidth,
+        falloff,
+        guidance);
+}
+
+scene::ObjectId SurfaceAuthoringModel::AddRiverBasinConstraint(
+    const scene::ObjectId terrain,
+    const terrain::PhysicalTerrainPageAddress page,
+    const terrain_erosion::RiverBasinId basin,
+    const terrain_erosion::RiverConstraintKind kind,
+    const math::Double2 center,
+    math::Double2 direction,
+    const f64 radius,
+    const f64 strength)
+{
+    static_cast<void>(RequireTerrain(terrain));
+    if (!basin.IsValid() || !std::isfinite(center.x) ||
+        !std::isfinite(center.y) || !std::isfinite(radius) || radius <= 0.0 ||
+        !std::isfinite(strength) || strength < 0.0 || strength > 1.0)
+        throw std::invalid_argument("River basin constraint values are invalid.");
+    if (static_cast<u8>(page.tile.face) > 5U || page.tile.level > 30U ||
+        static_cast<u64>(page.tile.x) >= (u64{1} << page.tile.level) ||
+        static_cast<u64>(page.tile.y) >= (u64{1} << page.tile.level))
+        throw std::invalid_argument("River basin constraint physical page is invalid.");
+    if (kind == terrain_erosion::RiverConstraintKind::Trajectory)
+    {
+        const f64 length = std::hypot(direction.x, direction.y);
+        if (!std::isfinite(length) || length <= 1.0e-12)
+            throw std::invalid_argument("River trajectory direction must be nonzero.");
+        direction.x /= length;
+        direction.y /= length;
+    }
+
+    const bool owns = !commands_->HasActiveTransaction();
+    if (owns)
+        commands_->BeginTransaction("Add River Basin Constraint");
+    try
+    {
+        const auto id = commands_->CreateObject(
+            world_model::kRiverBasinConstraintType,
+            kind == terrain_erosion::RiverConstraintKind::Attract
+                ? "River Attractor"
+                : kind == terrain_erosion::RiverConstraintKind::Repel
+                    ? "River Repulsor"
+                    : "River Trajectory",
+            terrain,
+            8'000 + static_cast<i64>(objects_->Children(terrain).size()) * 10);
+        commands_->SetProperty(id, world_model::kRiverConstraintBasin, basin.ToString());
+        commands_->SetProperty(id, world_model::kRiverConstraintKind, static_cast<i64>(kind));
+        commands_->SetProperty(id, world_model::kRiverConstraintCenterMeters,
+            math::Double3{center.x, center.y, 0.0});
+        commands_->SetProperty(id, world_model::kRiverConstraintDirection,
+            math::Double3{direction.x, direction.y, 0.0});
+        commands_->SetProperty(id, world_model::kRiverConstraintRadiusMeters, radius);
+        commands_->SetProperty(id, world_model::kRiverConstraintStrength, strength);
+        commands_->SetProperty(id, world_model::kRiverConstraintEnabled, true);
+        commands_->SetProperty(id, world_model::kRiverConstraintPageFace, static_cast<i64>(page.tile.face));
+        commands_->SetProperty(id, world_model::kRiverConstraintPageLevel, static_cast<i64>(page.tile.level));
+        commands_->SetProperty(id, world_model::kRiverConstraintPageX, static_cast<i64>(page.tile.x));
+        commands_->SetProperty(id, world_model::kRiverConstraintPageY, static_cast<i64>(page.tile.y));
+        if (owns)
+            commands_->CommitTransaction();
+        return id;
+    }
+    catch (...)
+    {
+        if (owns && commands_->HasActiveTransaction())
+            commands_->RollbackTransaction();
+        throw;
+    }
 }
 
 std::vector<SurfaceBiomeSummary> SurfaceAuthoringModel::Biomes(

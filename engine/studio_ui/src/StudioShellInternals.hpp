@@ -37,12 +37,13 @@ namespace orbit::studio_ui::shell_detail
 extern InspectorProviderRegistry g_inspectorProviders;
 extern StudioUiContributionRegistry g_uiContributions;
 
-constexpr std::array<std::string_view, 9> kTerrainTools{
+constexpr std::array<std::string_view, 10> kTerrainTools{
     "Select",
     "Raise",
     "Lower",
     "Protect",
     "Drainage",
+    "Drainage Path",
     "Canyon",
     "Ridge",
     "Geology",
@@ -132,7 +133,8 @@ constexpr std::array<std::string_view, 4> kSurfaceViews{
     const StudioTerrainAuthoringTool tool) noexcept
 {
     return tool == StudioTerrainAuthoringTool::Canyon ||
-        tool == StudioTerrainAuthoringTool::Ridge;
+        tool == StudioTerrainAuthoringTool::Ridge ||
+        tool == StudioTerrainAuthoringTool::DrainagePath;
 }
 
 [[nodiscard]] inline const char* ViewportModeLabel(

@@ -234,6 +234,41 @@ void StudioExpansionShell::DrawTerrainToolProperties(
         }
         return;
 
+    case StudioTerrainAuthoringTool::DrainagePath:
+        static_cast<void>(context.InputDouble(
+            "Half Width (m)##active-drainage-spline-width",
+            owner_->terrainSplineHalfWidthMeters_));
+        static_cast<void>(context.InputDouble(
+            "Falloff (m)##active-drainage-spline-falloff",
+            owner_->terrainSplineFalloffMeters_));
+        static_cast<void>(context.SliderDouble(
+            "Drainage Guidance##active-drainage-spline-guidance",
+            owner_->terrainDrainageGuidance_,
+            0.0,
+            1.0));
+        owner_->terrainSplineHalfWidthMeters_ =
+            std::max(0.0, owner_->terrainSplineHalfWidthMeters_);
+        owner_->terrainSplineFalloffMeters_ =
+            std::max(0.0, owner_->terrainSplineFalloffMeters_);
+        context.MutedText(
+            "Guides downhill routing within this corridor; it does not force water uphill.");
+        context.MutedText(
+            "River channels remain generated from the drainage field; direct node editing is not available yet.");
+        context.Text(
+            std::format(
+                "Control points: {} · click terrain to add; double-click to commit.",
+                owner_->terrainSplinePoints_.size()));
+        if (!owner_->terrainSplinePoints_.empty() &&
+            context.Button("Cancel Drainage Path##active-drainage-spline-cancel"))
+        {
+            owner_->terrainSplinePoints_.clear();
+            owner_->terrainSplineTerrain_.reset();
+            if (owner_->views_ != nullptr)
+                owner_->views_->ClearTerrainAuthoringOverlay("studio.primary");
+            owner_->status_ = "Transient drainage path cancelled.";
+        }
+        return;
+
     case StudioTerrainAuthoringTool::Canyon:
     case StudioTerrainAuthoringTool::Ridge:
         static_cast<void>(context.InputDouble(

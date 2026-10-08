@@ -511,7 +511,7 @@ void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi
                 {
                     .name = "studio.workspace_get",
                     .description =
-                        "Returns the active workspace mode (Scene, Planet, Celestial, Simulation, Shading).",
+                        "Returns the active workspace mode (Build, Planet, Universe, Simulation, Shading, Planning, Plugins).",
                     .mutating = false
                 },
                 [&studioViewportPanels](const Value&)
@@ -529,7 +529,7 @@ void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi
                 {
                     .name = "studio.workspace_set",
                     .description =
-                        "Switches the workspace mode (Scene, Planet, Celestial, Simulation, Shading), exactly like the Mode selector.",
+                        "Switches the workspace mode (Build, Planet, Universe, Simulation, Shading, Planning, Plugins), exactly like the workspace tabs.",
                     .mutating = true
                 },
                 [&studioViewportPanels](const Value& params)
@@ -547,7 +547,7 @@ void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi
                     {
                         throw orbit::rpc::Error(
                             -32602,
-                            "mode must be one of Scene, Planet, Celestial, Simulation, Shading.");
+                            "mode must be one of Build, Planet, Universe, Simulation, Shading, Planning, Plugins.");
                     }
                     return Value(
                         Value::Object{
@@ -588,6 +588,75 @@ void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi
                         Value::Object{
                             {"requested", true}
                         });
+                });
+
+            const auto snapResult = [&studioViewportPanels]()
+            {
+                const auto snap = studioViewportPanels.Snapping();
+                return Value(Value::Object{
+                    {"translation_enabled",snap.translationSnap},
+                    {"surface_enabled",snap.surfaceSnap},
+                    {"distance",snap.translationSnapMeters / studio_ui::SnapUnitMeters(snap.translationSnapUnit)},
+                    {"unit",std::string(studio_ui::SnapUnitSymbol(snap.translationSnapUnit))},
+                    {"distance_meters",snap.translationSnapMeters},
+                    {"rotation_enabled",snap.rotationSnap},
+                    {"rotation_degrees",snap.rotationSnapDegrees},
+                    {"scale_enabled",snap.scaleSnap},
+                    {"scale_percent",snap.scaleSnapStep * 100.0}
+                });
+            };
+            dispatcher.Register({.name="viewport.snapping_get",
+                .description="Read the shared gizmo snap distances, units, angles, and scale increments.",.mutating=false},
+                [snapResult](const Value&) { return snapResult(); });
+            dispatcher.Register({.name="viewport.snapping_set",
+                .description="Update shared snapping. Distance defaults to meters; units mm/cm/m/km/in/ft. Rotation uses degrees and scale uses percent.",.mutating=true},
+                [&studioViewportPanels,snapResult](const Value& params)
+                {
+                    if (!params.IsObject()) throw rpc::Error(-32602,"Snap settings must be an object.");
+                    auto next = studioViewportPanels.Snapping();
+                    const auto boolean = [&](std::string_view key, bool& target)
+                    {
+                        if (const auto* value=params.Find(key))
+                        {
+                            if (!value->IsBool()) throw rpc::Error(-32602,std::string(key)+" must be boolean.");
+                            target=value->AsBool();
+                        }
+                    };
+                    const auto number = [&](std::string_view key, f64& target)
+                    {
+                        if (const auto* value=params.Find(key))
+                        {
+                            if (!value->IsNumber()) throw rpc::Error(-32602,std::string(key)+" must be numeric.");
+                            target=value->AsNumber();
+                        }
+                    };
+                    boolean("translation_enabled",next.translationSnap);
+                    boolean("surface_enabled",next.surfaceSnap);
+                    boolean("rotation_enabled",next.rotationSnap);
+                    boolean("scale_enabled",next.scaleSnap);
+                    if (const auto* value=params.Find("unit"))
+                    {
+                        if (!value->IsString()) throw rpc::Error(-32602,"unit must be mm, cm, m, km, in, or ft.");
+                        bool found=false;
+                        for (u32 i=0;i<6;++i)
+                            if (value->AsString()==studio_ui::SnapUnitSymbol(static_cast<studio_ui::SnapLengthUnit>(i)))
+                            { next.translationSnapUnit=static_cast<studio_ui::SnapLengthUnit>(i); found=true; break; }
+                        if (!found) throw rpc::Error(-32602,"unit must be mm, cm, m, km, in, or ft.");
+                    }
+                    else if (params.Find("distance")) next.translationSnapUnit=studio_ui::SnapLengthUnit::Meters;
+                    if (params.Find("distance"))
+                    {
+                        f64 distance=0; number("distance",distance);
+                        next.translationSnapMeters=distance * studio_ui::SnapUnitMeters(next.translationSnapUnit);
+                    }
+                    number("rotation_degrees",next.rotationSnapDegrees);
+                    if (params.Find("scale_percent"))
+                    {
+                        f64 percent=0; number("scale_percent",percent); next.scaleSnapStep=percent/100.0;
+                    }
+                    try { studioViewportPanels.SetSnapping(next); }
+                    catch (const std::invalid_argument& e) { throw rpc::Error(-32602,e.what()); }
+                    return snapResult();
                 });
 
             dispatcher.Register(

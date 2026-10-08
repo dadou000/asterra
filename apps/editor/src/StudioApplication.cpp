@@ -64,6 +64,8 @@
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/DebugViewUi.hpp>
 #include <orbit/studio_ui/ProfilerUi.hpp>
+#include <orbit/studio_ui/ImplementationPlan.hpp>
+#include <orbit/studio_ui/PlanningUi.hpp>
 #include <orbit/studio_ui/ReportThumbnailCache.hpp>
 #include <orbit/studio_ui/ReportsUi.hpp>
 #include <orbit/studio_ui/SimulationControlsUi.hpp>
@@ -1096,6 +1098,26 @@ int orbit::editor_app::StudioApplication::Run(
                 reportsUi.NewReportAndShow();
             });
 
+        // The implementation plan is project-local and shared by the planning
+        // canvas and planning.* RPC/MCP operations.
+        orbit::studio_ui::ImplementationPlan implementationPlan;
+        try
+        {
+            implementationPlan.Open(
+                project.RootDirectory() / "Planning" / "implementation-plan.json");
+        }
+        catch (const std::exception& exception)
+        {
+            orbit::log::Warning(
+                std::format(
+                    "Planning: cannot open the plan file; changes will not be "
+                    "saved this session: {}",
+                    exception.what()));
+        }
+        orbit::studio_ui::PlanningUi planningUi(implementationPlan);
+        planningUi.Register(ui);
+        planningUi.RegisterRpc(rpcHost.Dispatcher());
+
         orbit::studio_ui::RegisterStudioRenderViewRpc(
             rpcHost.Dispatcher(),
             studioViews);
@@ -1637,6 +1659,7 @@ int orbit::editor_app::StudioApplication::Run(
                 }
             };
 
+        orbit::editor_app::StudioInspectorTarget inspectorTarget;
         orbit::editor_app::StudioPanelEnvironment panelEnvironment{
             ui,
             worldSession,
@@ -1650,6 +1673,9 @@ int orbit::editor_app::StudioApplication::Run(
             pendingMaterialViewResize,
             presentActions,
             studioViews,
+            studioViewportRenderer,
+            displayDiagnosticsUi,
+            inspectorTarget,
             primaryTextHud,
             studioViewportPanels,
             viewportCapture,

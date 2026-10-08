@@ -12,7 +12,9 @@ enum class StudioWorkspaceMode : u8
     Planet,
     Celestial,
     Simulation,
-    Shading
+    Shading,
+    Planning,
+    Plugins
 };
 
 enum class StudioBrowserMode : u8
@@ -24,9 +26,9 @@ enum class StudioBrowserMode : u8
 struct WorldAssetsBrowserContract
 {
     editor_ui::PanelId panel{};
-    // Canonical Studio browser. Explorer and Material Service remain
-    // registered as source implementations only; users interact with this
-    // single left-side surface and switch its content contextually.
+    // Canonical Studio Explorer. The Explorer source panel supplies one
+    // searchable world-and-assets tree; legacy browser mode is retained only
+    // for persisted-state compatibility.
     bool defaultOpen{true};
     editor_ui::DockRegion defaultDock{editor_ui::DockRegion::Left};
     i32 dockOrder{-100};
@@ -44,7 +46,8 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
 [[nodiscard]] constexpr StudioBrowserMode DefaultBrowserMode(
     const StudioWorkspaceMode workspace) noexcept
 {
-    return workspace == StudioWorkspaceMode::Shading
+    return workspace == StudioWorkspaceMode::Shading ||
+           workspace == StudioWorkspaceMode::Plugins
         ? StudioBrowserMode::Assets
         : StudioBrowserMode::World;
 }
@@ -53,7 +56,7 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
     const StudioBrowserMode mode) noexcept
 {
     return mode == StudioBrowserMode::World
-        ? std::string_view{"Explorer"}
+        ? std::string_view{"Explorer Source"}
         : std::string_view{"Material Service"};
 }
 
@@ -63,15 +66,27 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
 [[nodiscard]] constexpr bool UsesCanonicalViewportWorkspace(
     const StudioWorkspaceMode workspace) noexcept
 {
-    return workspace != StudioWorkspaceMode::Shading;
+    return workspace == StudioWorkspaceMode::Scene ||
+           workspace == StudioWorkspaceMode::Planet ||
+           workspace == StudioWorkspaceMode::Celestial ||
+           workspace == StudioWorkspaceMode::Simulation;
 }
 
 [[nodiscard]] constexpr std::string_view WorkspaceCenterPanelTitle(
     const StudioWorkspaceMode workspace) noexcept
 {
-    return UsesCanonicalViewportWorkspace(workspace)
-        ? std::string_view{"Viewport"}
-        : std::string_view{"Shading"};
+    switch (workspace)
+    {
+    case StudioWorkspaceMode::Scene:
+    case StudioWorkspaceMode::Planet:
+    case StudioWorkspaceMode::Celestial:
+    case StudioWorkspaceMode::Simulation:
+        return "Viewport";
+    case StudioWorkspaceMode::Shading: return "Shading";
+    case StudioWorkspaceMode::Planning: return "Planning";
+    case StudioWorkspaceMode::Plugins: return "Plugins";
+    }
+    return "Viewport";
 }
 
 [[nodiscard]] constexpr std::string_view StudioWorkspaceName(
@@ -79,11 +94,13 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
 {
     switch (workspace)
     {
-    case StudioWorkspaceMode::Scene: return "Scene";
+    case StudioWorkspaceMode::Scene: return "Build";
     case StudioWorkspaceMode::Planet: return "Planet";
-    case StudioWorkspaceMode::Celestial: return "Celestial";
+    case StudioWorkspaceMode::Celestial: return "Universe";
     case StudioWorkspaceMode::Simulation: return "Simulation";
     case StudioWorkspaceMode::Shading: return "Shading";
+    case StudioWorkspaceMode::Planning: return "Planning";
+    case StudioWorkspaceMode::Plugins: return "Plugins";
     }
 
     return "Scene";

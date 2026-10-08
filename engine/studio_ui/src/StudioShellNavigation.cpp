@@ -36,171 +36,109 @@ namespace orbit::studio_ui
 {
 using namespace shell_detail;
 
-void StudioExpansionShell::DrawNavigationBand(
-    editor_ui::PanelContext& context)
+namespace
 {
-    SyncPersistentState();
+enum class CreationCategory : u8 { Meshes, Procedurals, Lighting, Vfx, Sfx };
 
-    // Workspace selection and navigation are one mental model. The owner draws
-    // the mode selector first; breadcrumbs, quick-create and command search
-    // continue on the same row instead of reserving another strip of viewport.
-    if (owner_ != nullptr)
-    {
-        owner_->DrawWorkspaceBand(context);
-    }
-    else
-    {
-        context.Text("Mode");
-    }
+CreationCategory CategoryForTool(std::string_view category, std::string_view label)
+{
+    const std::string text = PaletteLower(std::string(category) + " " + std::string(label));
+    const auto has = [&](std::string_view term) { return text.find(term) != std::string::npos; };
+    if (has("sfx") || has("audio") || has("sound")) return CreationCategory::Sfx;
+    if (has("light") || has("lamp")) return CreationCategory::Lighting;
+    if (has("vfx") || has("volum") || has("particle") || has("smoke") || has("fire") || has("fog")) return CreationCategory::Vfx;
+    if (has("procedural") || has("terrain") || has("surface") || has("path") || has("spline")) return CreationCategory::Procedurals;
+    if (has("mesh") || has("primitive") || has("proxy") || has("material")) return CreationCategory::Meshes;
+    return CreationCategory::Procedurals;
+}
+}
 
-    context.SameLine();
-    context.MutedText("|");
-
-    if (owner_ == nullptr ||
-        owner_->session_ == nullptr ||
-        !owner_->session_->World().HasWorld())
-    {
-        context.SameLine();
-        context.MutedText("Open a world for navigation and commands.");
-        return;
-    }
-
+void StudioExpansionShell::DrawCreationMenus(editor_ui::PanelContext& context, bool compact)
+{
+    if (owner_ == nullptr || owner_->session_ == nullptr || !owner_->session_->World().HasWorld()) return;
+    using editor_ui::ToolbarIcon;
+    using editor_ui::ToolbarStyle;
+    struct Category { std::string_view label; ToolbarIcon icon; };
+    static constexpr std::array<Category,5> categories{{
+        {"Meshes",ToolbarIcon::Box}, {"Procedurals",ToolbarIcon::Procedural},
+        {"Lighting",ToolbarIcon::PointLight}, {"VFX",ToolbarIcon::Vfx}, {"SFX",ToolbarIcon::Sfx}}};
     auto& world = owner_->session_->World();
-    const auto& selection = world.Selection().Ordered();
-
-    if (selection.size() == 1U)
-    {
-        const auto breadcrumbs =
-            BuildSelectionBreadcrumbs(
-                world.Objects(),
-                selection.front());
-
-        // Breadcrumbs are the flexible part of row 1. Preserve enough room
-        // for the two high-frequency actions that follow (+ Add and Commands),
-        // then retain the selected object and as many nearest parents as fit.
-        constexpr std::size_t kMaximumVisibleBreadcrumbs = 3U;
-        const f32 scale = editor_ui::CurrentUiScale();
-        const f32 breadcrumbBudget = std::max(
-            0.0F,
-            context.ContentAvailable().width - 300.0F * scale);
-
-        const auto estimatedWidth =
-            [scale, &breadcrumbs](
-                const std::size_t first) noexcept
-            {
-                f32 width = 0.0F;
-                for (std::size_t index = first;
-                     index < breadcrumbs.size();
-                     ++index)
-                {
-                    width +=
-                        static_cast<f32>(breadcrumbs[index].label.size()) *
-                            8.0F * scale +
-                        30.0F * scale;
-                    if (index != first)
-                    {
-                        width += 22.0F * scale;
-                    }
-                }
-                return width;
-            };
-
-        std::size_t first =
-            breadcrumbs.size() > kMaximumVisibleBreadcrumbs
-                ? breadcrumbs.size() - kMaximumVisibleBreadcrumbs
-                : 0U;
-        while (first + 1U < breadcrumbs.size() &&
-               estimatedWidth(first) > breadcrumbBudget)
-        {
-            ++first;
-        }
-
-        if (first > 0U)
-        {
-            std::vector<editor_ui::ActionPresentation> hiddenAncestors;
-            hiddenAncestors.reserve(first);
-            for (std::size_t index = 0U; index < first; ++index)
-            {
-                const auto breadcrumb = breadcrumbs[index];
-                hiddenAncestors.push_back({
-                    .label = breadcrumb.label,
-                    .invoke =
-                        [&world, id = breadcrumb.id]
-                        {
-                            const std::array selected{id};
-                            world.Selection().Set(
-                                std::span<const scene::ObjectId>(selected));
-                        }
-                });
-            }
-
-            context.SameLine();
-            const bool openHidden =
-                context.Button("…##breadcrumb-overflow");
-            context.ContextMenu(
-                "breadcrumb-overflow-menu",
-                hiddenAncestors,
-                openHidden);
-        }
-
-        for (std::size_t index = first;
-             index < breadcrumbs.size();
-             ++index)
-        {
-            context.SameLine();
-            if (index != first)
-            {
-                context.MutedText(">");
-                context.SameLine();
-            }
-
-            const auto& breadcrumb = breadcrumbs[index];
-            std::string label = breadcrumb.label;
-            label += "##breadcrumb-";
-            label += breadcrumb.id.ToString();
-
-            if (context.Button(label))
-            {
-                const std::array selected{breadcrumb.id};
-                world.Selection().Set(
-                    std::span<const scene::ObjectId>(selected));
-            }
-        }
-    }
-
-    context.SameLine();
-    const bool openQuickCreate =
-        context.Button("+ Add##quick-create-toggle");
-
-    context.SameLine();
-    const f32 commandHintThreshold =
-        230.0F * editor_ui::CurrentUiScale();
-    const std::string_view commandButtonLabel =
-        context.ContentAvailable().width >= commandHintThreshold
-            ? "Commands  /##command-palette-toggle"
-            : "Commands##command-palette-toggle";
-    const bool openCommandPalette =
-        context.Button(commandButtonLabel) ||
-        std::exchange(commandPaletteOpenRequested_, false);
-    if (openCommandPalette)
-    {
-        commandQuery_.clear();
-        commandPaletteSelection_ = 0;
-    }
-
     auto& registry = world.CommandRegistry();
+    const auto palette = BuildCommandPalette(registry.Catalog());
+    const auto contributions = GlobalStudioUiContributions().Catalog(StudioContributionSurface::QuickCreate);
+    for (std::size_t i=0; i<categories.size(); ++i)
+    {
+        if (i != 0) context.SameLine();
+        const auto category = static_cast<CreationCategory>(i);
+        const std::string popupId = "toolbar-create-" + std::to_string(i);
+        const bool open = context.ToolbarButton(std::string(categories[i].label)+"##"+popupId,
+            categories[i].icon,false,true,compact,ToolbarStyle::Menu);
+        context.AnchorNextPopupBelowItem();
+        if (!context.BeginPopup(popupId,open,{320.0F * editor_ui::CurrentUiScale(),0})) continue;
+        context.Heading(categories[i].label);
+        context.Separator();
+        std::vector<editor_ui::ActionPresentation> actions;
+        const bool canCreate = owner_->CanCreateAtViewport("studio.primary");
+        const auto builtin = [&](std::string label, const auto& action)
+        {
+            actions.push_back({.label=std::move(label), .enabled=canCreate,
+                .disabledReason="Focus a perspective viewport to place this object.",
+                .invoke=[this, action, &context]
+                {
+                    try { action(); owner_->status_.clear(); context.CloseCurrentPopup(); }
+                    catch (const std::exception& e) { owner_->status_=e.what(); }
+                }});
+        };
+        if (category == CreationCategory::Meshes)
+        {
+            builtin("Box",[this] { owner_->CreateVisibilityProxyAtViewport("studio.primary",true); });
+            builtin("Sphere",[this] { owner_->CreateVisibilityProxyAtViewport("studio.primary",false); });
+        }
+        if (category == CreationCategory::Lighting)
+        {
+            builtin("Point Light",[this] { owner_->CreateLocalLightAtViewport("studio.primary",false); });
+            builtin("Spot Light",[this] { owner_->CreateLocalLightAtViewport("studio.primary",true); });
+        }
+        for (const auto& entry : palette)
+        {
+            const auto contribution = std::ranges::find_if(contributions,[&](const auto& value)
+                { return value.kind == StudioContributionKind::Command && value.command == entry.command; });
+            if (!IsQuickCreateLabel(entry.label) && contribution == contributions.end()) continue;
+            const std::string_view group = contribution != contributions.end() && !contribution->category.empty()
+                ? std::string_view(contribution->category) : std::string_view(entry.category);
+            if (CategoryForTool(group,entry.label) != category) continue;
+            const auto enablement = registry.Enablement(entry.command);
+            actions.push_back({.label=entry.label+"##category-"+entry.command.ToString(),
+                .enabled=enablement.enabled || entry.requiresArguments,
+                .disabledReason=enablement.reason,
+                .invoke=[this, &registry, &context, command=entry.command, arguments=entry.requiresArguments]
+                {
+                    try
+                    {
+                        if (arguments) toolbarArgumentCommand_=command;
+                        else registry.Invoke(command);
+                        owner_->status_.clear(); context.CloseCurrentPopup();
+                    }
+                    catch (const std::exception& e) { owner_->status_=e.what(); }
+                }});
+        }
+        if (actions.empty()) context.MutedText("No creation tools registered in this category.");
+        else static_cast<void>(context.ActionList(actions));
+        context.EndPopup();
+    }
+}
+
+void StudioExpansionShell::DrawNavigationBand(editor_ui::PanelContext& context)
+{
+    // Service palette/argument popups without a permanent breadcrumb row.
+    SyncPersistentState();
+    if (owner_ == nullptr || owner_->session_ == nullptr || !owner_->session_->World().HasWorld()) return;
+    auto& registry = owner_->session_->World().CommandRegistry();
     const auto commandCatalog = registry.Catalog();
-    const auto palette =
-        BuildCommandPalette(commandCatalog);
-
-    DrawCommandPalettePopup(context, openCommandPalette, registry, palette);
-    const bool openQuickCreateBrowser =
-        DrawQuickCreatePopup(context, openQuickCreate, registry, palette);
-    DrawQuickCreateBrowser(context, openQuickCreateBrowser, commandCatalog, registry, palette);
-
-    static_cast<void>(DrawContributions(
-        context,
-        StudioContributionSurface::WorkspaceToolbar,
-        true));
+    const auto palette = BuildCommandPalette(commandCatalog);
+    const bool openCommandPalette = std::exchange(commandPaletteOpenRequested_, false);
+    DrawCommandPalettePopup(context,openCommandPalette,registry,palette);
+    DrawQuickCreateBrowser(context,toolbarArgumentCommand_.IsValid(),commandCatalog,registry,palette);
+    static_cast<void>(DrawContributions(context,StudioContributionSurface::WorkspaceToolbar,true));
 }
 } // namespace orbit::studio_ui

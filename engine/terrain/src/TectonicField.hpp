@@ -4,6 +4,7 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain/TectonicFieldDesc.hpp>
+#include <orbit/terrain/TectonicStructure.hpp>
 
 #include <array>
 #include <vector>
@@ -33,6 +34,14 @@ struct TectonicSample
     // Smoothly blended continental/oceanic elevation bias between the two
     // nearest plates -- shapes coastlines to cohere with plate identity.
     f64 plateBiasMeters{0.0};
+    // convergenceMask split by the crust types of the colliding pair, each
+    // unscaled and continuous across the field (a max over every plate pair
+    // near the surface point). Use these, not the two nearest plates' flags,
+    // to weight anything by collision type: the flags switch abruptly where
+    // the runner-up plate changes.
+    f64 convergenceContinental{0.0};
+    f64 convergenceMixed{0.0};
+    f64 convergenceOceanic{0.0};
     // Plate-type identity of the two nearest plates, for classifying a
     // boundary's geological subtype (e.g. orogeny needs both continental,
     // subduction needs at least one oceanic) without a second plate lookup.
@@ -51,6 +60,9 @@ public:
         const TectonicFieldDesc& desc);
 
     [[nodiscard]] TectonicSample Sample(
+        const math::Double3& direction) const noexcept;
+
+    [[nodiscard]] TectonicStructureSample SampleStructure(
         const math::Double3& direction) const noexcept;
 
     [[nodiscard]] f64 HotspotElevationMeters(
@@ -76,6 +88,9 @@ private:
         // (which risks two seeds landing close enough to degenerate into
         // one abnormally huge cell -- see plateIrregularity).
         f64 sizeBiasDot{0.0};
+        // Interior crust properties used only by SampleStructure.
+        f64 crustThicknessKm{0.0};
+        f64 crustAge{0.0};
     };
 
     struct Hotspot

@@ -27,6 +27,8 @@
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/StudioViewportRenderer.hpp>
+#include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
 #include <orbit/studio_ui/StudioTextDiagnosticsHud.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/ViewportCaptureService.hpp>
@@ -112,6 +114,28 @@ inline constexpr editor_ui::PanelId
             0x44494f504c554749ULL
     };
 
+enum class StudioInspectorTargetKind
+{
+    WorldSelection,
+    ViewportCamera,
+    LightingRenderer,
+    GlobalIllumination,
+    AntiAliasing,
+    DirectLighting,
+    Reflections,
+    AtmosphereLighting,
+    CloudLighting,
+    SurfaceLighting,
+    LightingDiagnostics,
+    EyeAdaptation
+};
+
+struct StudioInspectorTarget
+{
+    StudioInspectorTargetKind kind{StudioInspectorTargetKind::WorldSelection};
+    std::string viewId{"studio.primary"};
+};
+
 struct StudioPanelEnvironment
 {
     editor_ui::EditorUi& ui;
@@ -129,6 +153,9 @@ struct StudioPanelEnvironment
         editor_model::CommandSurfaceKind)>
         presentActions;
     studio_ui::StudioRenderViewSet& studioViews;
+    studio_ui::StudioViewportRenderer& studioViewportRenderer;
+    studio_ui::DisplayDiagnosticsUi& displayDiagnosticsUi;
+    StudioInspectorTarget& inspectorTarget;
     studio_ui::StudioTextDiagnosticsHud& primaryTextHud;
     studio_ui::StudioViewportPanels& studioViewportPanels;
     studio_ui::ViewportCaptureService& viewportCapture;
@@ -154,6 +181,9 @@ public:
           pendingMaterialViewResize(environment.pendingMaterialViewResize),
           presentActions(environment.presentActions),
           studioViews(environment.studioViews),
+          studioViewportRenderer(environment.studioViewportRenderer),
+          displayDiagnosticsUi(environment.displayDiagnosticsUi),
+          inspectorTarget(environment.inspectorTarget),
           primaryTextHud(environment.primaryTextHud),
           studioViewportPanels(environment.studioViewportPanels),
           viewportCapture(environment.viewportCapture),
@@ -180,6 +210,9 @@ protected:
         editor_model::CommandSurfaceKind)>
         presentActions;
     studio_ui::StudioRenderViewSet& studioViews;
+    studio_ui::StudioViewportRenderer& studioViewportRenderer;
+    studio_ui::DisplayDiagnosticsUi& displayDiagnosticsUi;
+    StudioInspectorTarget& inspectorTarget;
     studio_ui::StudioTextDiagnosticsHud& primaryTextHud;
     studio_ui::StudioViewportPanels& studioViewportPanels;
     studio_ui::ViewportCaptureService& viewportCapture;
@@ -267,9 +300,6 @@ public:
 
     // State the draw callbacks keep between frames.
     std::string explorerSearch;
-    std::string renameBuffer;
-    orbit::u64 renameSelectionRevision =
-        ~orbit::u64{0};
 };
 
 class StudioPropertiesPanel : public StudioPanelBase

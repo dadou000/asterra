@@ -268,6 +268,12 @@ bool StreamPowerErosionConfig::IsValid() const noexcept
             looseMaterialErodibility) &&
         looseMaterialErodibility >= 0.0 &&
         looseMaterialErodibility <= 1.0 &&
+        std::isfinite(ageErodibilityGain) &&
+        ageErodibilityGain >= 0.0 && ageErodibilityGain <= 8.0 &&
+        std::isfinite(ageUpliftDecay) &&
+        ageUpliftDecay >= 0.0 && ageUpliftDecay <= 1.0 &&
+        std::isfinite(tectonicDrainageGuidance) &&
+        tectonicDrainageGuidance >= 0.0 && tectonicDrainageGuidance <= 1.0 &&
         std::isfinite(
             minimumBedSlope) &&
         minimumBedSlope >= 0.0 &&
@@ -287,7 +293,10 @@ bool StreamPowerCellForcing::IsValid() const noexcept
         std::isfinite(
             protection) &&
         protection >= 0.0 &&
-        protection <= 1.0;
+        protection <= 1.0 &&
+        std::isfinite(geologicalAge) &&
+        geologicalAge >= 0.0 &&
+        geologicalAge <= 1.0;
 }
 
 const StreamPowerCellResult&
@@ -382,6 +391,11 @@ BuildStreamPowerForcing(
                     std::clamp(
                         sample.protection,
                         0.0,
+                        1.0),
+                .geologicalAge =
+                    std::clamp(
+                        sample.geologicalAge,
+                        0.0,
                         1.0)
             };
         }
@@ -467,6 +481,11 @@ u64 StreamPowerRevisionFingerprint(
     value =
         CombineDouble(
             value,
+            config.ageErodibilityGain);
+
+    value =
+        CombineDouble(
+            value,
             config.minimumBedSlope);
 
     value =
@@ -509,6 +528,11 @@ u64 StreamPowerRevisionFingerprint(
             CombineDouble(
                 value,
                 cell.protection);
+
+        value =
+            CombineDouble(
+                value,
+                cell.geologicalAge);
     }
 
     return value;
@@ -702,7 +726,10 @@ StreamPowerErosionResult SolveStreamPowerErosion(
                     CellErodibility(
                         working.At(x, y),
                         geology,
-                        config);
+                        config) *
+                    (1.0 +
+                     config.ageErodibilityGain *
+                         forcing[index].geologicalAge);
 
                 lastErodibility[index] =
                     erodibility;

@@ -50,7 +50,8 @@ enum class TerrainChangeKind : u8
     ProcessSettings,
     BiomePlacement,
     BiomeSurfaceMaterial,
-    BiomeScatter
+    BiomeScatter,
+    DrainageBoundary
 };
 
 struct TerrainSpatialInvalidationScope
@@ -184,6 +185,7 @@ private:
         BiomePlacement,
         BiomeSurface,
         BiomeScatter,
+        DrainageBoundary,
         Count
     };
 
