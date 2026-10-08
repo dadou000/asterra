@@ -505,6 +505,40 @@ bool BoundariesAreNaturalisedAtBakeTime()
     return ok;
 }
 
+bool FaultsAreLinearNotWhorls()
+{
+    // Faults are stripes parallel to the boundary: at a fixed distance across
+    // the boundary the pattern varies slowly along strike, and it varies fast
+    // across. A generator that jitters the stripe phase with fine noise makes
+    // closed whorls, where moving along strike changes the pattern as much as
+    // moving across it.
+    const auto planet = MakePlanet();
+    const terrain::AnalyticTerrainSource source(planet, MakeDesc());
+    const auto& fields = source.GlobalFields();
+
+    f64 alongSum = 0.0;
+    f64 acrossSum = 0.0;
+    u32 samples = 0;
+    constexpr u32 count = 20000;
+    for (u32 i = 0; i < count; ++i)
+    {
+        const math::Double3 p = Fibonacci(i, count);
+        const f64 across = 0.05 + 0.85 * static_cast<f64>((i * 7919U) % 1000U) / 1000.0;
+        const f64 here = fields.FaultIntensity(p, across, 1.0);
+        const math::Double3 helper = std::abs(p.y) < 0.9 ? math::Double3{0.0, 1.0, 0.0} : math::Double3{1.0, 0.0, 0.0};
+        const math::Double3 e1 = math::Normalize(math::Cross(p, helper));
+        const math::Double3 q = math::Normalize(p + e1 * 0.01);
+        alongSum += std::abs(fields.FaultIntensity(q, across, 1.0) - here);
+        acrossSum += std::abs(fields.FaultIntensity(p, across + 0.02, 1.0) - here);
+        ++samples;
+    }
+    const f64 ratio = alongSum / std::max(acrossSum, 1.0e-12);
+    std::cout << "fault pattern change along strike / across (0.01 rad vs 0.02 of the width): " << ratio
+              << " over " << samples << " points" << std::endl;
+    return Check(acrossSum > 0.0 && ratio < 0.6,
+        "faults must vary far less along strike than across it (stripes, not whorls)");
+}
+
 int main()
 {
     bool ok = true;
@@ -575,3 +609,4 @@ bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
 
     ok &= CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel();
     ok &= BoundariesAreNaturalisedAtBakeTime();
+    ok &= FaultsAreLinearNotWhorls();

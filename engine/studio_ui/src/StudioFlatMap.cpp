@@ -240,7 +240,7 @@ struct Rgb
     const u32 stop = std::min(static_cast<u32>(scaled), 2U);
     Rgb color = LerpRgb(kStops[stop], kStops[stop + 1U], scaled - static_cast<f32>(stop));
     const f32 fracture = static_cast<f32>(std::clamp(structure.fractureDensity, 0.0, 1.0));
-    color = LerpRgb(color, Rgb{0.78F, 0.92F, 1.0F}, fracture * fracture * 0.85F);
+    color = LerpRgb(color, Rgb{0.78F, 0.92F, 1.0F}, fracture * 0.9F);
     return PackRgba(color);
 }
 

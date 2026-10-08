@@ -154,6 +154,16 @@ public:
     // [-1, resolution], evaluated from the grown plate claims and boundary
     // normals. This is what the baker rasterizes; it ignores any attached
     // bake and is not for use while generating terrain.
+    // Fault intensity (0..1) for a point whose distance across the nearest
+    // boundary is `across` (claim difference over the boundary width) and whose
+    // boundary influence is `activity`: thin stripes parallel to the boundary,
+    // meandering gently and present only in patches along strike. Exposed so
+    // the stripe-versus-strike property can be tested directly.
+    [[nodiscard]] f64 FaultIntensity(
+        const math::Double3& direction,
+        f64 across,
+        f64 activity) const noexcept;
+
     [[nodiscard]] BakedTectonicTexel EvaluateTectonicTexel(
         const TectonicGrowth& growth,
         u32 face,

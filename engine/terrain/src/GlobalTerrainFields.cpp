@@ -470,6 +470,32 @@ std::shared_ptr<const TectonicGrowth> GlobalTerrainFields::BuildTectonicGrowth(
         cancel, workers);
 }
 
+f64 GlobalTerrainFields::FaultIntensity(
+    const math::Double3& direction,
+    const f64 across,
+    const f64 activity) const noexcept
+{
+    // Thin ridges of stripe sets parallel to the boundary (constant claim
+    // difference follows every bend of it). The phase meanders only gently --
+    // its gradient stays well below the stripe frequency, so the sets cannot
+    // close into whorls -- and each set exists only in patches along strike,
+    // so faults are segmented and offset instead of continuous.
+    const u64 faultSeed = desc_.seed ^ 0x4641554C54ULL;
+    const auto patch = [&](const f64 frequency, const u64 salt)
+    {
+        const f64 n = 0.5 + 0.5 * detail::ValueNoise3D(direction * frequency, faultSeed ^ salt);
+        return detail::Smooth(std::clamp((n - 0.30) / 0.30, 0.0, 1.0));
+    };
+    constexpr f64 kPi = 3.14159265358979323846;
+    const f64 phaseA = 5.0 * across + 0.7 * detail::ValueNoise3D(direction * 3.0, faultSeed ^ 0xAULL);
+    const f64 phaseB = 11.0 * across + 1.1 * detail::ValueNoise3D(direction * 3.7, faultSeed ^ 0xBULL);
+    const f64 ridgeA = std::pow(1.0 - std::abs(std::sin(kPi * phaseA)), 3.0);
+    const f64 ridgeB = std::pow(1.0 - std::abs(std::sin(kPi * phaseB)), 4.0);
+    const f64 faults = std::max(
+        patch(7.0, 0x11ULL) * ridgeA, 0.6 * patch(9.0, 0x12ULL) * ridgeB);
+    return std::clamp(std::pow(activity, 0.7) * (0.08 + 0.92 * faults), 0.0, 1.0);
+}
+
 BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
     const TectonicGrowth& growth,
     const u32 face,
@@ -488,20 +514,13 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
     TectonicStructureSample structure =
         tectonicField_->SampleStructureWithClaims(safe, false, claims, &normalFn);
 
-    // Faults: bands parallel to the boundary (constant claim difference, so
-    // they follow its every bend), phase-jittered so they are not a regular
-    // comb, strongest where the boundary is active.
     {
         const f64 activity = std::clamp(
             std::max({sample.convergenceMask, sample.divergenceMask, sample.transformMask}),
             0.0, 1.0);
-        const f64 offset = std::abs(
-            claims[sample.nearestPlate] - claims[sample.secondPlate]);
-        const f64 phase = 3.2 * offset / std::max(desc_.tectonic.boundaryWidthDot, 1.0e-9) +
-            1.7 * detail::ValueNoise3D(safe * 14.0, desc_.seed ^ 0x4641554C54ULL);
-        const f64 band = 0.5 + 0.5 * std::cos(2.0 * 3.14159265358979323846 * phase);
-        structure.fractureDensity = std::clamp(
-            std::pow(activity, 0.7) * (0.2 + 0.8 * band * band), 0.0, 1.0);
+        const f64 across = std::abs(claims[sample.nearestPlate] - claims[sample.secondPlate]) /
+            std::max(desc_.tectonic.boundaryWidthDot, 1.0e-9);
+        structure.fractureDensity = FaultIntensity(safe, across, activity);
     }
     // Strike-slip zones carry fault valleys.
     structure.structuralElevationMeters -= 0.1 *
