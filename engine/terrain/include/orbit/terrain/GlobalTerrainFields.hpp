@@ -95,6 +95,9 @@ struct GlobalTerrainFieldSample
     // convergence strength, 0..1 -- replaces the old noise-based mountain
     // range mask so ranges cohere into plate-boundary-shaped chains.
     f64 convergenceMask{0.0};
+    // Wide convergence envelope terrain relief is built from (mountain belts);
+    // convergenceMask is the structure mask (narrow in a bake).
+    f64 orogenEnvelope{0.0};
     // 0..1, strongest where the two nearest plates are actively separating
     // (mid-ocean ridge / continental rift). See TectonicSample.
     f64 divergenceMask{0.0};

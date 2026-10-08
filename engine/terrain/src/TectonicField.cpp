@@ -215,13 +215,14 @@ TectonicSample TectonicField::Sample(
             math::Dot(direction, plates_[i].seedDirection) +
             plates_[i].sizeBiasDot;
     }
-    return SampleWithClaims(direction, claims, nullptr);
+    return SampleWithClaims(direction, claims, nullptr, desc_.boundaryWidthDot);
 }
 
 TectonicSample TectonicField::SampleWithClaims(
     const math::Double3& direction,
     const ClaimArray& claims,
-    const BoundaryNormalFn* const normalFn) const noexcept
+    const BoundaryNormalFn* const normalFn,
+    const f64 boundaryWidth) const noexcept
 {
     const ClaimArray& d = claims;
     u32 nearest = 0;
@@ -259,7 +260,9 @@ TectonicSample TectonicField::SampleWithClaims(
         };
     }
 
-    const f64 width = std::max(desc_.boundaryWidthDot, 1.0e-9);
+    const f64 width = std::max(boundaryWidth, 1.0e-9);
+    // Continental/oceanic bias keeps blending over the recipe width.
+    const f64 biasWidth = std::max(desc_.boundaryWidthDot, 1.0e-9);
 
     // Every plate whose claim is within one boundary width of the top is part
     // of the local boundary structure. Evaluating all pairs among them, rather
@@ -416,7 +419,7 @@ TectonicSample TectonicField::SampleWithClaims(
     f64 biasSum = 0.0;
     for (u32 i = 0; i < plateCount_; ++i)
     {
-        const f64 g = Smooth(0.5 + 0.5 * (d[i] - d0) / width);
+        const f64 g = Smooth(0.5 + 0.5 * (d[i] - d0) / biasWidth);
         const f64 u = g / (1.0 - g);
         biasWeightSum += u;
         biasSum += u * plates_[i].continentalBiasMeters;
@@ -429,6 +432,7 @@ TectonicSample TectonicField::SampleWithClaims(
         .nearestPlate = nearest,
         .secondPlate = second,
         .convergenceMask = convergenceMask,
+        .orogenEnvelope = convergenceMask,
         .divergenceMask = divergenceMask,
         .transformMask = transformMask,
         .plateBiasMeters = plateBiasMeters,
@@ -453,16 +457,18 @@ TectonicStructureSample TectonicField::SampleStructure(
             math::Dot(direction, plates_[i].seedDirection) +
             plates_[i].sizeBiasDot;
     }
-    return SampleStructureWithClaims(direction, includeHotspot, claims, nullptr);
+    return SampleStructureWithClaims(
+        direction, includeHotspot, claims, nullptr, desc_.boundaryWidthDot);
 }
 
 TectonicStructureSample TectonicField::SampleStructureWithClaims(
     const math::Double3& direction,
     const bool includeHotspot,
     const ClaimArray& claims,
-    const BoundaryNormalFn* const normalFn) const noexcept
+    const BoundaryNormalFn* const normalFn,
+    const f64 boundaryWidth) const noexcept
 {
-    const TectonicSample base = SampleWithClaims(direction, claims, normalFn);
+    const TectonicSample base = SampleWithClaims(direction, claims, normalFn, boundaryWidth);
     const Plate& plate = plates_[base.nearestPlate];
 
     TectonicStructureSample out{};

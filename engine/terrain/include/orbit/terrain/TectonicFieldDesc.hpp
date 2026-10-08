@@ -21,7 +21,7 @@ struct TectonicFieldDesc
     // Zero means derive from the owning GlobalTerrainFieldDesc's seed.
     u64 seed{0};
 
-    u32 plateCount{14};
+    u32 plateCount{20};
     f64 plateIrregularity{0.35};
     // Dot-product amplitude of each plate's random claim bias -- makes a
     // plain nearest-seed Voronoi diagram (which, for evenly spread seeds,
@@ -32,7 +32,7 @@ struct TectonicFieldDesc
     // for this: that perturbs seed *positions*, and far enough it can
     // land two seeds close enough together to degenerate into one
     // abnormally huge, mostly-boundaryless cell.
-    f64 plateSizeVarianceDot{0.12};
+    f64 plateSizeVarianceDot{0.30};
     f64 continentalPlateFraction{0.4};
     f64 continentalPlateBiasMeters{1'800.0};
     f64 oceanicPlateBiasMeters{-2'600.0};
@@ -65,7 +65,7 @@ struct TectonicFieldDesc
     // against, separate from convergenceReferenceSpeed -- higher than it
     // so incidental shear near a convergent/divergent point doesn't win
     // the boundary-type classification just because it saturates faster.
-    f64 transformReferenceSpeed{0.7};
+    f64 transformReferenceSpeed{1.5};
     // Relief scale for an oceanic-oceanic collision relative to any
     // collision involving a continental plate (island arcs are lower than
     // continental collision ranges like the Himalaya).

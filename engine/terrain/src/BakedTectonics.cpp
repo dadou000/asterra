@@ -296,7 +296,7 @@ BakedTectonicRasters::SampleConvergenceAndBias(
         return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty;
     };
     return {
-        .convergence = bilinear(BakedTectonicLayer::Convergence),
+        .convergence = bilinear(BakedTectonicLayer::OrogenEnvelope),
         .plateBiasMeters = bilinear(BakedTectonicLayer::PlateBiasMeters),
         .structuralElevationMeters =
             bilinear(BakedTectonicLayer::StructuralElevationMeters)};
@@ -306,7 +306,7 @@ std::vector<f32> BakedTectonicRasters::BuildGpuConvergenceAndBias() const
 {
     const std::size_t count = GutterCount(resolution_);
     std::vector<f32> result(count * 3U);
-    const std::size_t convergence = static_cast<std::size_t>(BakedTectonicLayer::Convergence);
+    const std::size_t convergence = static_cast<std::size_t>(BakedTectonicLayer::OrogenEnvelope);
     const std::size_t bias = static_cast<std::size_t>(BakedTectonicLayer::PlateBiasMeters);
     const std::size_t structural =
         static_cast<std::size_t>(BakedTectonicLayer::StructuralElevationMeters);

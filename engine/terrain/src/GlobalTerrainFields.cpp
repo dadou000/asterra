@@ -159,7 +159,7 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
     const f64 mountainElevation =
         (0.65 + 0.35 * mountainRidges * mountainModulation) *
         landMask *
-        tectonic.convergenceMask *
+        tectonic.orogenEnvelope *
         desc_.
             mountainAmplitudeMeters *
         mountainWeight;
@@ -318,6 +318,7 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
                 desc_.
                     seaLevelMeters) : BiomeWeights{},
         .convergenceMask = tectonic.convergenceMask,
+        .orogenEnvelope = tectonic.orogenEnvelope,
         .divergenceMask = tectonic.divergenceMask,
         .transformMask = tectonic.transformMask,
         .convergenceContinental = tectonic.convergenceContinental,
@@ -487,8 +488,8 @@ f64 GlobalTerrainFields::FaultIntensity(
         return detail::Smooth(std::clamp((n - 0.30) / 0.30, 0.0, 1.0));
     };
     constexpr f64 kPi = 3.14159265358979323846;
-    const f64 phaseA = 5.0 * across + 0.7 * detail::ValueNoise3D(direction * 3.0, faultSeed ^ 0xAULL);
-    const f64 phaseB = 11.0 * across + 1.1 * detail::ValueNoise3D(direction * 3.7, faultSeed ^ 0xBULL);
+    const f64 phaseA = 2.0 * across + 0.7 * detail::ValueNoise3D(direction * 3.0, faultSeed ^ 0xAULL);
+    const f64 phaseB = 4.5 * across + 1.1 * detail::ValueNoise3D(direction * 3.7, faultSeed ^ 0xBULL);
     const f64 ridgeA = std::pow(1.0 - std::abs(std::sin(kPi * phaseA)), 3.0);
     const f64 ridgeB = std::pow(1.0 - std::abs(std::sin(kPi * phaseB)), 4.0);
     const f64 faults = std::max(
@@ -509,17 +510,23 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
     growth.Claims(face, x, y, claims);
     const detail::BoundaryNormalFn normalFn =
         [&](const u32 i, const u32 j) { return growth.BoundaryNormal(face, x, y, i, j); };
+    // Structure (boundary masks, trench, arc, rift, stress) is evaluated at the
+    // narrow structure width; the wide envelope terrain relief is built from is
+    // stored separately.
+    const f64 structureWidth = tectonicField_->StructureWidth();
     const detail::TectonicSample sample =
-        tectonicField_->SampleWithClaims(safe, claims, &normalFn);
-    TectonicStructureSample structure =
-        tectonicField_->SampleStructureWithClaims(safe, false, claims, &normalFn);
+        tectonicField_->SampleWithClaims(safe, claims, &normalFn, structureWidth);
+    const detail::TectonicSample wide = tectonicField_->SampleWithClaims(
+        safe, claims, &normalFn, tectonicField_->BoundaryWidth());
+    TectonicStructureSample structure = tectonicField_->SampleStructureWithClaims(
+        safe, false, claims, &normalFn, structureWidth);
 
     {
         const f64 activity = std::clamp(
             std::max({sample.convergenceMask, sample.divergenceMask, sample.transformMask}),
             0.0, 1.0);
         const f64 across = std::abs(claims[sample.nearestPlate] - claims[sample.secondPlate]) /
-            std::max(desc_.tectonic.boundaryWidthDot, 1.0e-9);
+            std::max(structureWidth, 1.0e-9);
         structure.fractureDensity = FaultIntensity(safe, across, activity);
     }
     // Strike-slip zones carry fault valleys.
@@ -563,6 +570,7 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
             structure.continentalCrustFraction)));
     texel.Set(BakedTectonicLayer::FractureDensity,
         static_cast<f32>(structure.fractureDensity));
+    texel.Set(BakedTectonicLayer::OrogenEnvelope, static_cast<f32>(wide.convergenceMask));
     texel.plate = static_cast<u8>(sample.nearestPlate);
     texel.neighbour = static_cast<u8>(sample.secondPlate);
     return texel;
@@ -600,6 +608,7 @@ detail::TectonicSample GlobalTerrainFields::TectonicAt(
     sample.structuralElevationMeters =
         static_cast<f64>(texel.Get(BakedTectonicLayer::StructuralElevationMeters));
     sample.convergenceMask = mask(BakedTectonicLayer::Convergence);
+    sample.orogenEnvelope = mask(BakedTectonicLayer::OrogenEnvelope);
     sample.divergenceMask = mask(BakedTectonicLayer::Divergence);
     sample.transformMask = mask(BakedTectonicLayer::Transform);
     sample.plateBiasMeters =

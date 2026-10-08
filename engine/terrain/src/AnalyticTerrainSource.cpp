@@ -572,7 +572,7 @@ TerrainSample AnalyticTerrainSource::Sample(
     // function of direction only (see TectonicField::Sample), so it can't
     // introduce a footprint-dependent discontinuity here.
     const f64 coastMask = detail::Smooth((elevation - desc_.global.seaLevelMeters) / 700.0);
-    const f64 rangeMask = global.convergenceMask;
+    const f64 rangeMask = global.orogenEnvelope;
     const f64 mountainMask = desc_.mountains.reliefMeters > 0.0 && desc_.mountains.octaves > 0
         ? global.landMask * coastMask * rangeMask : 0.0;
     const f64 ceiling = desc_.global.seaLevelMeters + desc_.maximumElevationAboveSeaLevelMeters;
@@ -691,7 +691,7 @@ u64 TectonicBakeRecipeHash(
     const AnalyticTerrainDesc& desc) noexcept
 {
     // Bump when the baked layer set or how it is computed changes.
-    constexpr u64 kBakeAlgorithmVersion = 9;
+    constexpr u64 kBakeAlgorithmVersion = 10;
 
     const TectonicFieldDesc& t = desc.global.tectonic;
     u64 hash = StableCombine64(0x54454354424B4531ULL, kBakeAlgorithmVersion);

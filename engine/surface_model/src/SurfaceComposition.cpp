@@ -1232,7 +1232,7 @@ ConstraintSetFor(
         world_model::kTerrainMaximumElevationMeters,
         8'000.0);
     result.global.tectonic.seed = static_cast<u64>(PropertyOr<i64>(objects, object, world_model::kTerrainTectonicSeed, i64{0}));
-    result.global.tectonic.plateCount = static_cast<u32>(PropertyOr<i64>(objects, object, world_model::kTerrainTectonicPlateCount, i64{14}));
+    result.global.tectonic.plateCount = static_cast<u32>(PropertyOr<i64>(objects, object, world_model::kTerrainTectonicPlateCount, i64{20}));
     result.global.tectonic.plateIrregularity = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicIrregularity, 0.35);
     result.global.tectonic.continentalPlateFraction = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicContinentalFraction, 0.4);
     result.global.tectonic.tectonicContinentInfluence = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicContinentInfluence, 0.7);
@@ -1247,11 +1247,11 @@ ConstraintSetFor(
     result.global.tectonic.hotspotAgeDecay = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicHotspotDecay, 0.55);
     result.global.tectonic.hotspotChainSpacingMeters = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicHotspotSpacing, 180'000.0);
     result.global.tectonic.hotspotCoreRadiusMeters = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicHotspotRadius, 45'000.0);
-    result.global.tectonic.plateSizeVarianceDot = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicPlateSizeVariance, 0.12);
+    result.global.tectonic.plateSizeVarianceDot = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicPlateSizeVariance, 0.30);
     result.global.tectonic.continentalPlateBiasMeters = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicContinentalBias, 1'800.0);
     result.global.tectonic.oceanicPlateBiasMeters = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicOceanicBias, -2'600.0);
     result.global.tectonic.convergenceReferenceSpeed = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicConvergenceReferenceSpeed, 0.4);
-    result.global.tectonic.transformReferenceSpeed = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicTransformReferenceSpeed, 0.7);
+    result.global.tectonic.transformReferenceSpeed = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicTransformReferenceSpeed, 1.5);
     result.global.tectonic.hotspotRadiusGrowthPerAge = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicHotspotRadiusGrowth, 0.4);
     result.craters.enabled = PropertyOr<bool>(
         objects, object, world_model::kTerrainCratersEnabled, true);

@@ -47,6 +47,9 @@ enum class BakedTectonicLayer : u8
     StructuralElevationMeters,
     // 0..1 fault/fracture intensity inside the deformation corridor.
     FractureDensity,
+    // Wide convergence envelope terrain relief (mountain belts) is built from;
+    // the Convergence layer itself is the narrow structure mask.
+    OrogenEnvelope,
     Count
 };
 
@@ -82,7 +85,7 @@ struct BakedTectonicTexel
 class BakedTectonicRasters
 {
 public:
-    static constexpr u32 kFormatVersion = 5;
+    static constexpr u32 kFormatVersion = 6;
 
     // Quantizes float layers. `layers[i]` holds 6 * (resolution + 2)^2 values
     // for layer i in face-major, row-major order with the gutter included;
@@ -124,6 +127,7 @@ public:
     // Hot path: only the two layers the elevation generator consumes.
     struct ConvergenceAndBias
     {
+        // The orogen envelope (what terrain builds relief from).
         f32 convergence{0.0F};
         f32 plateBiasMeters{0.0F};
         f32 structuralElevationMeters{0.0F};

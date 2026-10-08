@@ -27,6 +27,11 @@ struct TectonicSample
     // 0..1, strongest where the two plates are actively colliding (weighted
     // down for ocean-ocean collisions), zero away from any boundary.
     f64 convergenceMask{0.0};
+    // The wide convergence envelope terrain relief is built from (mountain
+    // belts take their width from boundaryWidthDot). Equal to convergenceMask
+    // from the plate model; a bake evaluates the structure masks at a narrower
+    // width and stores this one separately.
+    f64 orogenEnvelope{0.0};
     // 0..1, strongest where the two plates are actively separating (mid-ocean
     // ridge / continental rift), zero away from any boundary. Unlike
     // convergenceMask, not weighted down for an ocean-ocean pairing --
@@ -87,7 +92,8 @@ public:
     [[nodiscard]] TectonicSample SampleWithClaims(
         const math::Double3& direction,
         const ClaimArray& claims,
-        const BoundaryNormalFn* normal) const noexcept;
+        const BoundaryNormalFn* normal,
+        f64 boundaryWidth) const noexcept;
 
     // Plate seeds and the claim-width constant, for plate growth.
     [[nodiscard]] u32 PlateCount() const noexcept { return plateCount_; }
@@ -100,6 +106,9 @@ public:
         return plates_[plate].sizeBiasDot;
     }
     [[nodiscard]] f64 BoundaryWidth() const noexcept { return desc_.boundaryWidthDot; }
+    // Width of the boundary structure in a bake: real boundaries are narrow,
+    // while the recipe width also shapes mountain belts (see orogenEnvelope).
+    [[nodiscard]] f64 StructureWidth() const noexcept { return desc_.boundaryWidthDot * 0.32; }
 
     // includeHotspot = false leaves hotspot chains out of uplift and volcanism
     // (the baker stores only the plate-driven part; hotspots are closed form
@@ -108,11 +117,15 @@ public:
         const math::Double3& direction,
         bool includeHotspot = true) const noexcept;
 
+    // `boundaryWidth` is the width of the boundary masks and of everything
+    // derived from them (trench, arc, rift, stress); crust properties keep
+    // blending over the recipe's boundaryWidthDot.
     [[nodiscard]] TectonicStructureSample SampleStructureWithClaims(
         const math::Double3& direction,
         bool includeHotspot,
         const ClaimArray& claims,
-        const BoundaryNormalFn* normal) const noexcept;
+        const BoundaryNormalFn* normal,
+        f64 boundaryWidth) const noexcept;
 
     [[nodiscard]] f64 HotspotElevationMeters(
         const math::Double3& direction) const noexcept;
