@@ -713,6 +713,35 @@ bool CollisionsEmergeAsLandAndArcsAsIslands()
            Check(oceanN > 1000U && oceanMean < -1000.0, "open ocean floor must not be lifted or clamped to sea level");
 }
 
+bool BeltsHaveStrikeAlignedRelief()
+{
+    // A collision belt is folded ridges and valleys, not rolling highlands: the
+    // baked structural elevation inside a strong continental belt must swing by
+    // hundreds of metres.
+    const auto planet = MakePlanet();
+    std::vector<f64> belt;
+    for (const u64 seed : {4242ULL, 7ULL})
+    {
+        auto desc = MakeDesc(seed);
+        desc.global.bakedTectonics = terrain_bake::BakeTectonics(planet, desc, {.resolution = 128});
+        if (!Check(desc.global.bakedTectonics != nullptr, "bake must complete")) return false;
+        constexpr u32 n = 100'000;
+        for (u32 i = 0; i < n; ++i)
+        {
+            const auto t = desc.global.bakedTectonics->Sample(Fibonacci(i, n));
+            const f32 envelope = t.Get(terrain::BakedTectonicLayer::OrogenEnvelope);
+            const f32 structural = t.Get(terrain::BakedTectonicLayer::StructuralElevationMeters);
+            if (envelope > 0.7F)
+                belt.push_back(structural);
+        }
+    }
+    if (!Check(belt.size() > 500U, "belts must exist")) return false;
+    std::sort(belt.begin(), belt.end());
+    const f64 spread = belt[belt.size() * 9 / 10] - belt[belt.size() / 10];
+    std::cout << "belt structural relief p10..p90 spread " << spread << " m (" << belt.size() << ")" << std::endl;
+    return Check(spread > 500.0, "belts must carry ridge-and-valley relief");
+}
+
 int main()
 {
     bool ok = true;
@@ -787,3 +816,4 @@ bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
     ok &= EveryPlateOwnsTerritoryAndKeepsAnInterior();
     ok &= BeltHeightDoesNotDependOnTheSampleFootprint();
     ok &= CollisionsEmergeAsLandAndArcsAsIslands();
+    ok &= BeltsHaveStrikeAlignedRelief();

@@ -556,6 +556,36 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
             0.45 * unit * oceanic * (wide.divergenceMask - std::clamp(sample.divergenceMask, 0.0, 1.0));
     }
 
+    // Belt character: a collision belt is a set of ridges and valleys parallel
+    // to the boundary (folds and thrust sheets), not rolling highlands. Stripes
+    // follow the constant-claim-difference lines, so they bend with the
+    // boundary; each set is patchy along strike and the relief is roughly zero
+    // mean so the belt keeps its overall height. Baked (structural), so it is
+    // identical at every footprint.
+    {
+        const f64 envelopeWidth = std::max(tectonicField_->EnvelopeWidth(), 1.0e-9);
+        const f64 crust = detail::Smooth(std::clamp(
+            (structure.continentalCrustFraction - 0.35) / 0.35, 0.0, 1.0));
+        const f64 weight = std::clamp(envelope.convergenceMask, 0.0, 1.0) * crust;
+        if (weight > 0.01)
+        {
+            const u64 beltSeed = desc_.seed ^ 0x42454C54ULL;
+            constexpr f64 kPi = 3.14159265358979323846;
+            const f64 across =
+                std::abs(claims[envelope.nearestPlate] - claims[envelope.secondPlate]) /
+                envelopeWidth;
+            const f64 u = std::pow(std::max(across, 0.0), 1.2);
+            const f64 rate = 3.2 + 1.2 * detail::ValueNoise3D(safe * 2.4, beltSeed ^ 0x1ULL);
+            const f64 phase = rate * u + 0.6 * detail::ValueNoise3D(safe * 3.1, beltSeed ^ 0x2ULL);
+            const f64 crest = std::pow(1.0 - std::abs(std::sin(kPi * phase)), 1.6);
+            const f64 segment = detail::Smooth(std::clamp(
+                (0.5 + 0.5 * detail::ValueNoise3D(safe * 9.0, beltSeed ^ 0x3ULL) - 0.25) / 0.5,
+                0.0, 1.0));
+            structure.structuralElevationMeters += weight * 0.5 * desc_.mountainAmplitudeMeters *
+                ((0.3 + 0.7 * segment) * crest - 0.3);
+        }
+    }
+
     // Distributed deformation: stress depends on how fast the plates move
     // past each other (the masks saturate, so on their own they paint every
     // boundary the same) and is the narrow core plus a broad halo that decays
