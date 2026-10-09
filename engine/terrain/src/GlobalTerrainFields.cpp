@@ -581,7 +581,7 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
             const f64 segment = detail::Smooth(std::clamp(
                 (0.5 + 0.5 * detail::ValueNoise3D(safe * 9.0, beltSeed ^ 0x3ULL) - 0.25) / 0.5,
                 0.0, 1.0));
-            structure.structuralElevationMeters += weight * 0.5 * desc_.mountainAmplitudeMeters *
+            structure.structuralElevationMeters += weight * 1.0 * desc_.mountainAmplitudeMeters *
                 ((0.3 + 0.7 * segment) * crest - 0.3);
         }
     }
