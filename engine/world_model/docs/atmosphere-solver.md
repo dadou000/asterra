@@ -42,7 +42,7 @@ verify = [
   "ctest -R Orbit.AtmospherePropertySolver: Earth-like derived scale height, provenance persistence, expert value preservation, imported/locked preservation, conflict reporting, one-transaction preset + solve undo/redo, pressure edit invalidating the fingerprint, Expert mode performing no derivation, Inspector edit promotion.",
   "ctest -R Orbit.PropertyProvenance and Orbit.CelestialAtmosphereBinding.",
 ]
-verified = "04d589b3"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [[diagnose]]
 symptom = "derived atmosphere values did not change after editing pressure or composition"
@@ -76,4 +76,4 @@ object type, unknown preset, idempotent re-solve).
 
 No full chemical equilibrium, condensation or cloud microphysics, line-by-line spectroscopy, arbitrary molecular species,
 pressure/temperature vertical profile tables or imported atmospheric profile formats. These extend the authoring layer
-while still resolving into the same runtime parameters. Source: `/legacy/research-v006-atmosphere-authoring-solver`.
+while still resolving into the same runtime parameters. Source: `/legacy/tree-history-research-v006-atmosphere-authoring-solver`.

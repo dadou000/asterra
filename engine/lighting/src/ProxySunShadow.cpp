@@ -315,18 +315,11 @@ float3 CosineDirection(float3 normal, float u, float v)
         normal * sqrt(max(1.0 - u, 0.0)));
 }
 
-[numthreads(8, 8, 1)]
-void main(uint3 dispatchId : SV_DispatchThreadID)
+// Shades one pixel. knownSun >= 0 is the already-traced sun visibility of this
+// pixel (or of a neighbour the quad test proved equivalent); a negative value
+// traces it.
+void ShadePixel(uint2 pixel, float knownSun)
 {
-    if (dispatchId.x >= g.width ||
-        dispatchId.y >= g.height)
-    {
-        return;
-    }
-
-    const uint2 pixel =
-        dispatchId.xy;
-
     const float2 uv =
         (float2(pixel) + 0.5) /
         float2(g.width, g.height);
@@ -367,7 +360,11 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         // Surfaces facing away from the sun take no direct light anyway.
         if (dot(normal, toSun) > 0.0)
         {
-            if (Occluded(origin, toSun, g.maximumDistance))
+            if (knownSun >= 0.0)
+            {
+                sunVisibility = knownSun;
+            }
+            else if (Occluded(origin, toSun, g.maximumDistance))
             {
                 sunVisibility = 0.0;
             }
@@ -380,17 +377,23 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
         // surface). Terrain is not in this scene, so a direction below the
         // horizon would otherwise read as open sky and light the underside of
         // a roof. Terrain keeps the lighting it already had.
+        const float surfaceMeta =
+            g_emissionClass.SampleLevel(
+                g_emissionSampler,
+                uv,
+                0).a;
         const float surfaceClass =
-            floor(
-                g_emissionClass.SampleLevel(
-                    g_emissionSampler,
-                    uv,
-                    0).a + 0.01);
+            floor(surfaceMeta + 0.01);
+        // Imported mesh pixels are also class 3 (sub-kind 8), but their sky
+        // fill comes from the mesh shadow pass, which overwrites this
+        // channel; tracing 12 rays for them here is wasted work.
+        const bool meshPixel =
+            round(frac(surfaceMeta + 0.01) * 16.0) == 8.0;
 
         const uint rayCount =
             min(uint(g.depthRangeSkyRays.z + 0.5), 64u);
 
-        if (surfaceClass == 3.0 && rayCount > 0u)
+        if (surfaceClass == 3.0 && !meshPixel && rayCount > 0u)
         {
             const float jitterU =
                 Hash12(float2(pixel));
@@ -430,6 +433,125 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 
     g_shadow[pixel] =
         float4(sunVisibility, skyIrradiance);
+}
+
+// One ray per 2x2 quad decides the sun visibility of the whole quad where the
+// 3x3 quad neighbourhood agrees (same visibility, similar depth) - the large
+// lit and fully shadowed areas. Quads on a penumbra edge, a depth edge or the
+// tile border trace all four pixels, so shadow edges keep full resolution.
+groupshared float s_vis[256];
+groupshared float s_depth[256];
+
+[numthreads(16, 16, 1)]
+void main(uint3 dispatchId : SV_DispatchThreadID, uint3 groupThread : SV_GroupThreadID)
+{
+    const uint local = groupThread.y * 16u + groupThread.x;
+    const uint2 quadBase = dispatchId.xy * 2u;
+    const bool inside = quadBase.x < g.width && quadBase.y < g.height;
+
+    s_vis[local] = -2.0;
+    s_depth[local] = 0.0;
+
+    if (inside)
+    {
+        const float2 uv =
+            (float2(quadBase) + 0.5) /
+            float2(g.width, g.height);
+        const float depth =
+            g_depth.SampleLevel(g_depthSampler, uv, 0).r;
+        if (depth > 0.0)
+        {
+            const float3 normal =
+                normalize(
+                    g_normalMetallic.SampleLevel(
+                        g_normalSampler, uv, 0).xyz);
+            const float3 toSun =
+                normalize(g.sunDirectionBias.xyz);
+            s_depth[local] = ReverseZViewDepth(depth);
+            if (dot(normal, toSun) > 0.0)
+            {
+                const float3 position =
+                    ReconstructPosition(uv, depth);
+                const float bias =
+                    g.sunDirectionBias.w +
+                    s_depth[local] * 2.0e-4;
+                const float3 origin =
+                    position +
+                    g.cameraToScene.xyz +
+                    normal * bias;
+                s_vis[local] =
+                    Occluded(origin, toSun, g.maximumDistance) ? 0.0 : 1.0;
+            }
+        }
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    if (!inside)
+    {
+        return;
+    }
+
+    const float centerVis = s_vis[local];
+    bool quadUniform =
+        centerVis >= 0.0 &&
+        groupThread.x > 0u && groupThread.y > 0u &&
+        groupThread.x < 15u && groupThread.y < 15u;
+
+    if (quadUniform)
+    {
+        [unroll]
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+            [unroll]
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                const uint n =
+                    uint(int(groupThread.y) + dy) * 16u +
+                    uint(int(groupThread.x) + dx);
+                // Same visibility everywhere, and no depth discontinuity: a
+                // sloped plane has a constant depth gradient, so test the
+                // second difference rather than the plain difference.
+                if (s_vis[n] != centerVis ||
+                    abs(s_depth[n] - s_depth[local]) >
+                        0.4 * s_depth[local])
+                {
+                    quadUniform = false;
+                }
+            }
+        }
+
+        const float c = s_depth[local];
+        const float lapX =
+            abs(s_depth[local - 1u] + s_depth[local + 1u] - 2.0 * c);
+        const float lapY =
+            abs(s_depth[local - 16u] + s_depth[local + 16u] - 2.0 * c);
+        if (lapX > 0.015 * c + 0.01 || lapY > 0.015 * c + 0.01)
+        {
+            quadUniform = false;
+        }
+    }
+
+    [loop]
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        const uint2 pixel = quadBase + uint2(k & 1u, k >> 1u);
+        if (pixel.x >= g.width || pixel.y >= g.height)
+        {
+            continue;
+        }
+
+        float known = -1.0;
+        if (k == 0u)
+        {
+            known = centerVis;
+        }
+        else if (quadUniform)
+        {
+            known = centerVis;
+        }
+        ShadePixel(pixel, known);
+    }
 }
 )";
 } // namespace
@@ -634,9 +756,10 @@ void ProxySunShadowRenderer::Draw(
         0U,
         *scene.SceneAccelerationStructure());
 
+    // One thread per 2x2 quad, 16x16 quads (32x32 pixels) per group.
     commands.Dispatch(
-        (width + 7U) / 8U,
-        (height + 7U) / 8U,
+        (width + 31U) / 32U,
+        (height + 31U) / 32U,
         1U);
 }
 } // namespace orbit::lighting

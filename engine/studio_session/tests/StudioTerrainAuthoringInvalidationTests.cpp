@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <span>
+#include <string>
 
 namespace
 {
@@ -152,6 +153,37 @@ int main()
                         Scatter);
 
         Check(dirty == expected);
+    }
+
+    {
+        orbit::terrain_impacts::ImpactFieldDefinition recipe{
+            .id = {.high = 1U, .low = 2U},
+            .planet = planet.id,
+            .name = "Local crater edit"};
+        recipe.authoredImpacts.push_back({
+            .id = {.high = 3U, .low = 4U},
+            .centerUnitDirection = {1.0, 0.0, 0.0},
+            .radiusMeters = 12'000.0,
+            .ageOrder = 10U});
+        const std::string newRecipe =
+            orbit::terrain_impacts::SerializeImpactFieldToml(recipe);
+        const auto local =
+            orbit::studio_session::BuildImpactHistoryInvalidations(
+                planet, {}, newRecipe, 10U);
+        Check(!local.empty());
+        for (const auto& request : local)
+        {
+            Check(!request.scope.global);
+            Check(request.scope.planet == planet.id);
+        }
+
+        recipe.surfaceAgeYears = 3.8e9;
+        const std::string agedRecipe =
+            orbit::terrain_impacts::SerializeImpactFieldToml(recipe);
+        const auto global =
+            orbit::studio_session::BuildImpactHistoryInvalidations(
+                planet, newRecipe, agedRecipe, 10U);
+        Check(global.size() == 1U && global.front().scope.global);
     }
 
     return 0;

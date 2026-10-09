@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstring>
 #include <exception>
+#include <stdexcept>
 #include <set>
 #include <utility>
 
@@ -118,7 +119,23 @@ void MeshLibrary::WorkerMain()
             std::error_code error;
             result.modified = std::filesystem::last_write_time(file, error);
 
-            result.asset = mesh_import::ImportGltfFile(file);
+            std::function<mesh_import::MeshAsset()> generator;
+            {
+                const std::lock_guard lock(mutex_);
+                if (const auto found = generators_.find(Key(file));
+                    found != generators_.end())
+                {
+                    generator = found->second;
+                }
+            }
+
+            result.asset = generator ? generator()
+                                     : mesh_import::ImportGltfFile(file);
+            if (generator && result.asset.vertices.empty())
+            {
+                throw std::runtime_error(
+                    "generated mesh has no geometry");
+            }
 
             // Decode every image a material actually samples, once each.
             std::set<i32> wanted;
@@ -231,6 +248,33 @@ const MeshModel* MeshLibrary::Acquire(const std::filesystem::path& file)
         entry.loadInFlight = true;
         entry.nextStatCheck =
             std::chrono::steady_clock::now() + kStatInterval;
+        Enqueue(file);
+    }
+
+    return entry.model != nullptr && entry.state == MeshLoadState::Ready
+               ? entry.model.get()
+               : nullptr;
+}
+
+const MeshModel* MeshLibrary::AcquireGenerated(
+    const std::string& key,
+    const std::function<mesh_import::MeshAsset()>& build)
+{
+    const std::filesystem::path file(key);
+    const std::string normalised = Key(file);
+    auto [found, inserted] = entries_.try_emplace(normalised);
+    Entry& entry = found->second;
+    entry.lastRequested = std::chrono::steady_clock::now();
+
+    if (inserted)
+    {
+        entry.file = file;
+        entry.generated = true;
+        entry.loadInFlight = true;
+        {
+            const std::lock_guard lock(mutex_);
+            generators_[normalised] = build;
+        }
         Enqueue(file);
     }
 
@@ -569,7 +613,8 @@ void MeshLibrary::Pump(rhi::CommandList& commands)
         UploadPending(entry, commands);
 
         // Hot reload: re-import when the file on disk changed.
-        if (!entry.loadInFlight && now >= entry.nextStatCheck)
+        if (!entry.generated && !entry.loadInFlight &&
+            now >= entry.nextStatCheck)
         {
             entry.nextStatCheck = now + kStatInterval;
             std::error_code error;
@@ -593,6 +638,11 @@ void MeshLibrary::Pump(rhi::CommandList& commands)
             {
                 retired_.push_back(
                     {std::move(it->second.model), {}, tick_ + kRetireTicks});
+            }
+            if (it->second.generated)
+            {
+                const std::lock_guard lock(mutex_);
+                generators_.erase(it->first);
             }
             it = entries_.erase(it);
         }

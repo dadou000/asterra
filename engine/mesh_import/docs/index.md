@@ -16,10 +16,11 @@ invariants = [
   "Recoverable problems become MeshAsset::warnings; only unusable files throw MeshImportError.",
   "Draco/meshopt geometry is refused, never partially imported.",
   "Mirrored node transforms flip triangle winding and tangent sign.",
+  "BuildPrimitiveMesh (PrimitiveMesh.hpp) generates box / sphere / cylinder / capsule / plane meshes at their real size with one material, outward counter-clockwise winding, tangents and UVs; non-finite or non-positive sizes give an empty asset, never partial geometry. See /authoring/primitives.",
 ]
 related = ["/authoring/content", "/authoring/static-mesh"]
 verify = ["ctest -R Orbit.MeshImport (set ORBIT_TEST_GLB to also import a real file)"]
-verified = "8523e82c"
+verified = "1229ef74"
 +++
 
 Imports `.glb` and `.gltf` into a `MeshAsset` in glTF axes and metres. See `docs/ORBIT_STATIC_MESH.md`.

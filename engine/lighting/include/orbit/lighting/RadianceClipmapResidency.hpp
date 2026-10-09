@@ -169,6 +169,17 @@ private:
     u64 sourceRevision_{0U};
     bool residencyInitialized_{false};
     std::vector<Level> levels_;
+    // Per-frame cost control for static views. Age ticks are batched (priority
+    // weights saturate at 60 s, so a quarter-second of lag is invisible), and
+    // BuildUpdateList skips its full-cache scan until something that can make
+    // a cell dirty has happened since a scan last found none.
+    f32 pendingAgeSeconds_{0.0F};
+    mutable bool scanNeeded_{true};
+    mutable RadianceResidencyStats lastScanStats_{};
+    // Best candidates from the last full scan, best first. Intermediate frames
+    // draw from it (re-checking each cell) instead of rescanning every cell.
+    mutable std::vector<RadianceUpdateCandidate> candidateCache_;
+    mutable u32 candidateCacheFramesLeft_{0U};
     mutable RadianceGpuSnapshot gpuSnapshotCache_;
     mutable bool gpuSnapshotCacheInitialized_{false};
     mutable std::vector<std::vector<u32>> gpuSnapshotDirtyCellIndices_;

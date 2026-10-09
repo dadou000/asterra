@@ -27,6 +27,14 @@ constexpr f32 kRuler = 20.0F;
 constexpr f32 kRowHeight = 15.0F;
 constexpr f32 kLaneGap = 4.0F;
 constexpr f32 kStripHeight = 54.0F;
+constexpr std::array<std::string_view, 4> kViewportCaptureResolutions{
+    "720p", "1080p", "1440p", "2160p"};
+constexpr std::array<std::string_view, 5> kViewportCaptureScenarios{
+    "static", "walk_1_94_mps", "surface_200_kmh",
+    "flight_2000_mps_5000m", "ground_to_orbit_20s"};
+constexpr std::array<std::string_view, 5> kViewportCaptureScenarioLabels{
+    "Static", "Walking (1.94 m/s)", "Surface travel (200 km/h)",
+    "Flight (2,000 m/s at 5 km)", "Ground to 500 km orbit (20 s)"};
 
 [[nodiscard]] f64 SteadySeconds()
 {
@@ -183,6 +191,38 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
             captureError_ = exception.what();
         }
     }
+    ProfilerOptions captureOptions = model_.Options();
+    i32 captureScenarioIndex = static_cast<i32>(std::distance(
+        kViewportCaptureScenarios.begin(),
+        std::find(
+            kViewportCaptureScenarios.begin(),
+            kViewportCaptureScenarios.end(),
+            captureOptions.viewportCaptureScenario)));
+    if (context.Combo(
+            "Capture workload##profiler-capture-scenario",
+            kViewportCaptureScenarioLabels,
+            captureScenarioIndex))
+    {
+        captureOptions.viewportCaptureScenario =
+            kViewportCaptureScenarios[static_cast<std::size_t>(captureScenarioIndex)];
+        model_.SetOptions(captureOptions);
+    }
+    if (context.PrimaryButton("Capture viewport only##profiler-viewport-capture") &&
+        viewportOnlyCaptureAction_)
+    {
+        const auto& options = model_.Options();
+        if (!viewportOnlyCaptureAction_(
+                options.viewportCaptureDurationMs,
+                options.viewportCaptureResolution,
+                options.viewportCaptureScenario))
+        {
+            captureError_ = "Capture settings are invalid or this scenario needs a targeted camera.";
+        }
+        else
+        {
+            captureError_.clear();
+        }
+    }
 
     const auto summary = profiler::Frames();
     const auto& snapshot = model_.Snapshot();
@@ -241,6 +281,31 @@ void ProfilerUi::DrawOptions(PanelContext& context)
         changed = true;
     }
 
+    f64 captureDurationSeconds = options.viewportCaptureDurationMs / 1000.0;
+    if (context.SliderDouble(
+            "Viewport capture duration (s)##profiler-capture-duration",
+            captureDurationSeconds,
+            1.0,
+            30.0))
+    {
+        options.viewportCaptureDurationMs = captureDurationSeconds * 1000.0;
+        changed = true;
+    }
+    i32 captureResolutionIndex = static_cast<i32>(std::distance(
+        kViewportCaptureResolutions.begin(),
+        std::find(
+            kViewportCaptureResolutions.begin(),
+            kViewportCaptureResolutions.end(),
+            options.viewportCaptureResolution)));
+    if (context.Combo(
+            "Viewport capture resolution##profiler-capture-resolution",
+            kViewportCaptureResolutions,
+            captureResolutionIndex))
+    {
+        options.viewportCaptureResolution =
+            kViewportCaptureResolutions[static_cast<std::size_t>(captureResolutionIndex)];
+        changed = true;
+    }
     static constexpr std::array<std::string_view, 2> kGroupings{
         "By thread", "By core"};
     i32 grouping = options.grouping == ProfilerGrouping::Threads ? 0 : 1;

@@ -3,7 +3,7 @@ path = "/rendering/terrain/water"
 title = "WaterService, coastal process, rivers and lakes (M17)"
 kind = "subsystem"
 status = "stable"
-summary = "WaterService owns fluid definitions, water pages, domains, hull masks and the read-only handoff terrain processes consume; the coastal process is a boundary-aware shallow-water solver on the M08 bed; RiverWater and LakeWater provide sampled river segments and lake basins for rendering and queries."
+summary = "WaterService owns fluid definitions, water pages, domains, hull masks and the read-only handoff terrain processes consume; the coastal process is a boundary-aware shallow-water solver on the M08 bed; RiverWater and LakeWater provide sampled river segments and M09-derived lake basins for rendering and queries."
 owner_module = "OrbitTerrainWater"
 keywords = ["water", "water service", "coastal", "shoreline", "shallow water", "lake", "river water", "wet dry", "manning", "cfl", "fluid", "hull", "flooding"]
 sources = [
@@ -11,6 +11,7 @@ sources = [
   "engine/terrain_water/include/orbit/terrain_water/LakeWater.hpp",
   "engine/terrain_water/include/orbit/terrain_water/RiverWater.hpp",
   "engine/terrain_water/include/orbit/terrain_water/WaterService.hpp",
+  "tests/LakeWaterTests.cpp",
   "engine/terrain_water/CMakeLists.txt"]
 symbols = ["WaterService", "CoastalWaterPage", "CoastalShallowWaterConfig", "LakeWaterField", "RiverWaterNetwork"]
 invariants = [
@@ -19,7 +20,9 @@ invariants = [
   "M17 water depth, momentum, wet/dry state and shoreline masks are derived solver state: M08 stays the only terrain authority and M14 the only mobile-sediment authority; disabling the process returns M08 and M14 unchanged.",
   "The coastal solver is a positivity-clamped finite-volume shallow-water update with hydrostatic reconstruction across changing bed elevation, a CFL-bounded time step, Manning friction and an explicit velocity ceiling; when M08 changes, water depth is resynchronised preserving the free-surface elevation.",
   "Pages are advanced serially and share one solver scratch buffer.",
-  "Standing lake water is sampled in O(1) from a dense support field (overlap plus a dry bank); no per-frame cell mesh or visibility budget is needed."]
+  "Standing lake water is sampled in O(1) from a dense support field (overlap plus a dry bank); no per-frame cell mesh or visibility budget is needed.",
+  "Production lake fields are derived from M09 depression fill and final M08 material on each physical page, then shared by the water upload, Hydrology inspector and terrain.lakes_nearby RPC; cross-page spill resolution is not inferred.",
+  "When an M16 page network exists, each lake basin follows its M09 spill outlet to the first downstream M16 river node on the same page. This is a derived link only: it does not create or modify river routing, and page exits or missing qualifying channels remain explicit."]
 related = ["/rendering/terrain/erosion", "/rendering/terrain/regions", "/legacy/standing-water-rendering"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/terrain/erosion", "/rendering/terrain/geology", "/rendering/terrain/hydrology", "/rendering/terrain/material-column", "/world/planet-coordinates", "/world/universe"]
 used_by = ["/rendering/terrain/gpu-passes", "/rendering/terrain/regions", "/world/surface-composition"]
@@ -30,5 +33,3 @@ verify = [
   "ctest -R Orbit.LakeWater"]
 verified = "b0a0de7f"
 +++
-
-

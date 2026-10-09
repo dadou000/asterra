@@ -4,6 +4,7 @@
 #include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 #include <orbit/world/Planet.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -317,6 +318,74 @@ void TestDeterministicBodySpaceDistortion()
         "Same seed and physical position must produce identical macro uplift.");
 }
 
+void TestStructuralLayerSteersWatershedsAndAgesUplift()
+{
+    const world::PlanetDefinition planet = MakePlanet();
+
+    terrain::GlobalTerrainFieldDesc globalDesc{};
+    globalDesc.seed = 0x5151515151515151ULL;
+    terrain::GlobalTerrainFields globals(planet, globalDesc);
+
+    terrain_macro_geology::MacroGeologyDesc neutral{};
+    terrain_macro_geology::MacroGeologyDesc coupled{};
+    coupled.ageUpliftDecay = 0.8;
+    coupled.tectonicDrainageGuidance = 0.6;
+    Require(neutral.IsValid() && coupled.IsValid(), "coupling descs must be valid.");
+
+    terrain_macro_geology::MacroGeologyField off(planet, globals, nullptr, neutral);
+    terrain_macro_geology::MacroGeologyField on(planet, globals, nullptr, coupled);
+
+    u32 steered = 0U;
+    u32 upliftBelts = 0U;
+    u32 basins = 0U;
+    f64 oldestDecayed = 0.0;
+    constexpr u32 count = 6000U;
+    for (u32 i = 0U; i < count; ++i)
+    {
+        const f64 y = 1.0 - 2.0 * (static_cast<f64>(i) + 0.5) / static_cast<f64>(count);
+        const f64 r = std::sqrt(std::max(0.0, 1.0 - y * y));
+        const f64 a = 2.399963229728653 * static_cast<f64>(i);
+        const terrain::PlanetSurfacePosition position{
+            .planet = planet.id,
+            .unitDirection = {r * std::cos(a), y, r * std::sin(a)},
+            .radialOffsetMeters = 0.0};
+
+        const auto base = off.Sample(position);
+        const auto sample = on.Sample(position);
+
+        Require(sample.geologicalAge >= 0.0 && sample.geologicalAge <= 1.0,
+            "geological age must be exposed within 0..1.");
+        Require(sample.crustThicknessKm >= 3.0, "crust thickness must be exposed.");
+        Require(std::abs(sample.drainageGuidance) <= 1.0, "guidance must stay in [-1, 1].");
+        RequireNear(base.drainageGuidance, 0.0, 0.0,
+            "disabled coupling must leave unauthored drainage guidance at zero.");
+        RequireNear(sample.drainageGuidance,
+            std::clamp(0.6 * sample.tectonicDrainageSteer, -1.0, 1.0), 1.0e-12,
+            "coupled guidance must equal the weighted tectonic steer.");
+        Require(sample.tectonicUpliftMeters <= base.tectonicUpliftMeters + 1.0e-9,
+            "age decay must never increase tectonic uplift.");
+        Require(sample.tectonicSubsidenceMeters == base.tectonicSubsidenceMeters,
+            "age decay must not change subsidence.");
+
+        if (sample.drainageGuidance != 0.0) ++steered;
+        if (sample.tectonicDrainageSteer < -0.05) ++upliftBelts;
+        if (sample.tectonicDrainageSteer > 0.05) ++basins;
+        if (base.tectonicUpliftMeters > 0.0)
+        {
+            oldestDecayed = std::max(oldestDecayed,
+                1.0 - sample.tectonicUpliftMeters / base.tectonicUpliftMeters);
+        }
+    }
+    Require(steered > 0U, "some positions must be steered.");
+    Require(upliftBelts > 0U && basins > 0U,
+        "belts must repel and rifts or trenches must attract routing.");
+    Require(oldestDecayed > 0.0, "some uplift must decay with crust age.");
+
+    terrain_macro_geology::MacroGeologyDesc invalid{};
+    invalid.tectonicDrainageGuidance = 1.5;
+    Require(!invalid.IsValid(), "out-of-range guidance must be rejected.");
+}
+
 void TestMacroRevisionExcludesFineDetailState()
 {
     const terrain_macro_geology::MacroGeologyRevisionInputs inputs{
@@ -387,6 +456,7 @@ int main()
     TestMountainBeltAndBasinUseM04Authority();
     TestImportedRasterCanDriveUplift();
     TestDeterministicBodySpaceDistortion();
+    TestStructuralLayerSteersWatershedsAndAgesUplift();
     TestMacroRevisionExcludesFineDetailState();
     TestCrossPlanetAuthorityRejected();
 

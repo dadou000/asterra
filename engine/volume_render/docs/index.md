@@ -22,13 +22,13 @@ invariants = [
   "Per-viewport active-index lists and indirect draw arguments are rebuilt at presentation time while the simulation state stays shared and GPU-resident.",
   "The particle centre is rebased with the particle state whenever the floating/presentation origin changes.",
 ]
-related = ["/rendering/volumes", "/rendering/lighting", "/rendering/terrain/gpu-cache", "/legacy/research-v007-universal-volumetrics"]
+related = ["/rendering/volumes", "/rendering/lighting", "/rendering/terrain/gpu-cache", "/legacy/tree-history-research-v007-universal-volumetrics"]
 depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/rendering/lighting/radiance-cache", "/rendering/render-graph", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/volumes/fields", "/rendering/volumes/representation", "/world/world-model"]
 used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.UniversalVolumeRenderer",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

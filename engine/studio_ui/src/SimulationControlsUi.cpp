@@ -1,5 +1,6 @@
 #include <orbit/studio_ui/SimulationControlsUi.hpp>
 #include <orbit/world_model/CelestialLightingService.hpp>
+#include <orbit/world_model/CelestialRadiometryBinding.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -12,9 +13,11 @@
 #include <numbers>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace orbit::studio_ui
 {
@@ -70,6 +73,29 @@ struct ActiveDay
     std::optional<f64> observerLatitudeRadians;
 };
 
+struct SystemPlanetMarker
+{
+    std::string name;
+    f64 semiMajorAxisMeters{0.0};
+};
+
+struct StellarSystemDiagram
+{
+    std::string starName;
+    f64 luminosityWatts{0.0};
+    f64 habitableInnerMeters{0.0};
+    f64 habitableOuterMeters{0.0};
+    std::vector<SystemPlanetMarker> planets;
+};
+
+constexpr f64 kAstronomicalUnitMeters = 149'597'870'700.0;
+constexpr f64 kSolarLuminosityWatts = 3.828e26;
+constexpr f64 kSolarIrradianceWattsPerSquareMeter = 1361.0;
+// Approximate conservative solar-like flux limits: moist greenhouse inside,
+// maximum greenhouse outside. This is an irradiance guide, not a climate test.
+constexpr f64 kHabitableInnerFluxEarth = 1.01;
+constexpr f64 kHabitableOuterFluxEarth = 0.35;
+
 template <typename T>
 [[nodiscard]] T ReadProperty(
     const scene::ObjectStore& objects,
@@ -86,6 +112,127 @@ template <typename T>
         }
     }
     return fallback;
+}
+
+[[nodiscard]] std::optional<StellarSystemDiagram>
+ResolveStellarSystemDiagram(
+    const scene::ObjectStore& objects,
+    const scene::ObjectId selectedBody)
+{
+    const auto star = objects.Find(selectedBody);
+    if (!star.has_value() ||
+        star->type != world_model::kCelestialBodyType)
+    {
+        return std::nullopt;
+    }
+
+    f64 luminosityWatts = 0.0;
+    try
+    {
+        const auto radiative = world_model::ResolveRadiativeBody(
+            objects, selectedBody);
+        if (!radiative.has_value())
+        {
+            return std::nullopt;
+        }
+        luminosityWatts = radiative->radiative.luminosityWatts;
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+    if (!std::isfinite(luminosityWatts) || luminosityWatts <= 0.0)
+    {
+        return std::nullopt;
+    }
+
+    std::optional<scene::ObjectRecord> system;
+    auto ancestor = star;
+    while (ancestor->parent.has_value())
+    {
+        ancestor = objects.Find(*ancestor->parent);
+        if (!ancestor.has_value())
+        {
+            break;
+        }
+        if (ancestor->type == world_model::kCelestialSystemType)
+        {
+            system = ancestor;
+            break;
+        }
+    }
+
+    const f64 innerIrradiance =
+        kSolarIrradianceWattsPerSquareMeter * kHabitableInnerFluxEarth;
+    const f64 outerIrradiance =
+        kSolarIrradianceWattsPerSquareMeter * kHabitableOuterFluxEarth;
+    StellarSystemDiagram diagram{
+        .starName = star->name,
+        .luminosityWatts = luminosityWatts,
+        .habitableInnerMeters = std::sqrt(
+            luminosityWatts /
+            (4.0 * std::numbers::pi_v<f64> * innerIrradiance)),
+        .habitableOuterMeters = std::sqrt(
+            luminosityWatts /
+            (4.0 * std::numbers::pi_v<f64> * outerIrradiance))
+    };
+
+    if (system.has_value())
+    {
+        for (const auto& body : objects.Children(system->id))
+        {
+            if (body.type != world_model::kCelestialBodyType ||
+                body.id == selectedBody)
+            {
+                continue;
+            }
+
+            bool isRadiativeEmitter = false;
+            for (const auto& capability : objects.Children(body.id))
+            {
+                if (capability.type == world_model::kRadiativeEmitterCapabilityType &&
+                    ReadProperty(objects, capability.id,
+                                 world_model::kCapabilityEnabled, true))
+                {
+                    isRadiativeEmitter = true;
+                    break;
+                }
+            }
+            if (isRadiativeEmitter)
+            {
+                continue;
+            }
+
+            for (const auto& capability : objects.Children(body.id))
+            {
+                if (capability.type != world_model::kOrbitCapabilityType ||
+                    !ReadProperty(objects, capability.id,
+                                  world_model::kCapabilityEnabled, true))
+                {
+                    continue;
+                }
+                const auto model = ReadProperty(
+                    objects, capability.id, world_model::kCapabilityModel,
+                    std::string{"Fixed"});
+                if (model == "Fixed")
+                {
+                    break;
+                }
+
+                const f64 axis = ReadProperty(
+                    objects, capability.id,
+                    world_model::kOrbitSemiMajorAxisMeters, 0.0);
+                if (std::isfinite(axis) && axis > 0.0)
+                {
+                    diagram.planets.push_back({body.name, axis});
+                }
+                break;
+            }
+        }
+    }
+
+    std::ranges::sort(diagram.planets, {}, &SystemPlanetMarker::semiMajorAxisMeters);
+    return diagram;
 }
 
 [[nodiscard]] ActiveDay ResolveActiveDay(
@@ -704,18 +851,33 @@ void SimulationControlsUi::Draw(editor_ui::PanelContext& context)
     const DayClock clock = ResolveDayClock(
         *session_, day, controls_->TimeMicroseconds());
     const f64 fraction = clock.localFraction;
-    context.SameLine();
-    context.MutedText("UTC");
-    context.SameLine();
-    context.Text(FormatLocalTime(clock.utcFraction));
-    context.SameLine();
-    context.MutedText("Local");
-    context.SameLine();
-    context.Text(FormatLocalTime(fraction));
-    if (day.observerLongitudeDegrees.has_value())
+    std::optional<StellarSystemDiagram> stellarSystem;
+    if (const auto active = session_->ActiveBody().Active(); active.has_value())
     {
+        stellarSystem = ResolveStellarSystemDiagram(
+            session_->World().Objects(), active->semanticObject);
+    }
+    context.SameLine();
+    if (stellarSystem.has_value())
+    {
+        context.MutedText("System");
         context.SameLine();
-        context.MutedText(FormatZone(day));
+        context.Text(stellarSystem->starName);
+    }
+    else
+    {
+        context.MutedText("UTC");
+        context.SameLine();
+        context.Text(FormatLocalTime(clock.utcFraction));
+        context.SameLine();
+        context.MutedText("Local");
+        context.SameLine();
+        context.Text(FormatLocalTime(fraction));
+        if (day.observerLongitudeDegrees.has_value())
+        {
+            context.SameLine();
+            context.MutedText(FormatZone(day));
+        }
     }
 
     context.SameLine();
@@ -726,77 +888,186 @@ void SimulationControlsUi::Draw(editor_ui::PanelContext& context)
     const auto scrubber = context.Canvas(
         "##sim-local-day-scrubber",
         {sliderWidth, 26.0F * uiScale});
-    const math::Float4 daylight = DaylightSkyColor(*session_);
     context.CanvasRect(
         {0.02F, 0.24F},
         {0.98F, 0.76F},
         {0.12F, 0.15F, 0.22F, 1.0F},
         true);
-    constexpr i32 kSkyGradientSegments = 96;
-    for (i32 index = 0; index < kSkyGradientSegments; ++index)
+    if (stellarSystem.has_value())
     {
-        const f32 left = static_cast<f32>(index) /
-            static_cast<f32>(kSkyGradientSegments);
-        const f32 right = static_cast<f32>(index + 1) /
-            static_cast<f32>(kSkyGradientSegments);
-        context.CanvasGradientRect(
-            {0.02F + 0.96F * left, 0.28F},
-            {0.02F + 0.96F * right, 0.72F},
-            SkyGradientColor(left, day, clock, daylight),
-            SkyGradientColor(right, day, clock, daylight));
-    }
-    context.CanvasRect(
-        {0.02F, 0.28F},
-        {0.02F + 0.96F * static_cast<f32>(fraction), 0.72F},
-        {1.0F, 1.0F, 1.0F, 0.10F},
-        true);
-    context.CanvasCircle(
-        {0.02F + 0.96F * static_cast<f32>(fraction), 0.50F},
-        9.0F * uiScale,
-        {0.07F, 0.09F, 0.14F, 1.0F});
-    context.CanvasCircle(
-        {0.02F + 0.96F * static_cast<f32>(fraction), 0.50F},
-        7.0F * uiScale,
-        {0.94F, 0.97F, 1.0F, 1.0F});
-    if (scrubber.hovered)
-    {
-        context.CanvasTooltip(
-            day.observerLongitudeDegrees.has_value()
-                ? std::format(
-                      "{} clock; zone {} at {:.1f} deg longitude. Drag across midnight to keep scrubbing.",
-                      clock.solar ? "Dominant-star solar" : "Rotation fallback",
-                      FormatZone(day),
-                      *day.observerLongitudeDegrees)
-                : "Prime-meridian clock. Drag across midnight to keep scrubbing.");
-    }
+        const auto& diagram = *stellarSystem;
+        f64 maximumMeters = diagram.habitableOuterMeters;
+        for (const auto& planet : diagram.planets)
+        {
+            maximumMeters = std::max(maximumMeters, planet.semiMajorAxisMeters);
+        }
+        maximumMeters = std::max(maximumMeters, 0.1 * kAstronomicalUnitMeters);
 
-    if (scrubber.clicked)
-    {
-        f64 fractionDelta =
-            static_cast<f64>(scrubber.u - 0.02F) / 0.96 - fraction;
-        if (fractionDelta > 0.5)
+        constexpr f32 kAxisStart = 0.045F;
+        constexpr f32 kAxisEnd = 0.955F;
+        constexpr f32 kDataEnd = 0.855F;
+        const f32 dataWidth = kDataEnd - kAxisStart;
+        const auto xForDistance = [&](const f64 meters)
         {
-            fractionDelta -= 1.0;
+            const f64 fractionAlong = std::clamp(meters / maximumMeters, 0.0, 1.0);
+            return kAxisStart + dataWidth * static_cast<f32>(fractionAlong);
+        };
+
+        const f32 innerX = xForDistance(diagram.habitableInnerMeters);
+        const f32 outerX = xForDistance(diagram.habitableOuterMeters);
+        context.CanvasLine(
+            {kAxisStart, 0.50F}, {kAxisEnd, 0.50F},
+            {0.44F, 0.50F, 0.62F, 1.0F}, 1.5F * uiScale);
+        context.CanvasRect(
+            {innerX, 0.29F}, {outerX, 0.71F},
+            {0.25F, 0.70F, 0.48F, 0.58F}, true);
+        context.CanvasLine(
+            {innerX, 0.23F}, {innerX, 0.77F},
+            {0.54F, 0.91F, 0.67F, 0.95F}, 1.0F * uiScale);
+        context.CanvasLine(
+            {outerX, 0.23F}, {outerX, 0.77F},
+            {0.54F, 0.91F, 0.67F, 0.95F}, 1.0F * uiScale);
+
+        context.CanvasCircle(
+            {kAxisStart, 0.50F}, 7.0F * uiScale,
+            {1.0F, 0.68F, 0.22F, 1.0F});
+        context.CanvasCircle(
+            {kAxisStart, 0.50F}, 9.5F * uiScale,
+            {1.0F, 0.55F, 0.12F, 0.25F}, false, 1.5F * uiScale);
+
+        for (const auto& planet : diagram.planets)
+        {
+            const f32 x = xForDistance(planet.semiMajorAxisMeters);
+            const bool inZone =
+                planet.semiMajorAxisMeters >= diagram.habitableInnerMeters &&
+                planet.semiMajorAxisMeters <= diagram.habitableOuterMeters;
+            context.CanvasLine(
+                {x, 0.34F}, {x, 0.66F},
+                inZone
+                    ? math::Float4{0.62F, 1.0F, 0.73F, 0.95F}
+                    : math::Float4{0.66F, 0.80F, 1.0F, 0.90F},
+                1.0F * uiScale);
+            context.CanvasCircle(
+                {x, 0.50F}, 4.5F * uiScale,
+                inZone
+                    ? math::Float4{0.62F, 1.0F, 0.73F, 1.0F}
+                    : math::Float4{0.66F, 0.80F, 1.0F, 1.0F});
         }
-        else if (fractionDelta < -0.5)
+
+        if (scrubber.hovered)
         {
-            fractionDelta += 1.0;
-        }
-        if (const auto newTime = TimeForLocalDelta(
-                *session_, day, controls_->TimeMicroseconds(), fractionDelta))
-        {
-            controls_->SetTimeMicroseconds(*newTime);
+            const f32 hoverX = std::clamp(scrubber.u, 0.0F, 1.0F);
+            const SystemPlanetMarker* nearest = nullptr;
+            f32 nearestDelta = 0.035F;
+            for (const auto& planet : diagram.planets)
+            {
+                const f32 delta = std::fabs(xForDistance(planet.semiMajorAxisMeters) - hoverX);
+                if (delta < nearestDelta)
+                {
+                    nearest = &planet;
+                    nearestDelta = delta;
+                }
+            }
+
+            if (nearest != nullptr)
+            {
+                context.CanvasTooltip(std::format(
+                    "{} · {:.3g} AU from {}",
+                    nearest->name,
+                    nearest->semiMajorAxisMeters / kAstronomicalUnitMeters,
+                    diagram.starName));
+            }
+            else if (hoverX >= innerX && hoverX <= outerX)
+            {
+                context.CanvasTooltip(std::format(
+                    "Approximate habitable zone · {:.3g}–{:.3g} AU · based on stellar irradiance",
+                    diagram.habitableInnerMeters / kAstronomicalUnitMeters,
+                    diagram.habitableOuterMeters / kAstronomicalUnitMeters));
+            }
+            else if (hoverX <= kAxisStart + 0.025F)
+            {
+                context.CanvasTooltip(std::format(
+                    "{} · {:.3g} solar luminosities",
+                    diagram.starName,
+                    diagram.luminosityWatts / kSolarLuminosityWatts));
+            }
+            else
+            {
+                context.CanvasTooltip(
+                    "System orbit scale · each marker shows a planet's semi-major axis.");
+            }
         }
     }
-    else if (std::fabs(scrubber.dragDeltaX) > 0.0F && sliderWidth > 0.0F)
+    else
     {
-        const f64 fractionDelta =
-            static_cast<f64>(scrubber.dragDeltaX) /
-            (static_cast<f64>(sliderWidth) * 0.96);
-        if (const auto newTime = TimeForLocalDelta(
-                *session_, day, controls_->TimeMicroseconds(), fractionDelta))
+        const math::Float4 daylight = DaylightSkyColor(*session_);
+        constexpr i32 kSkyGradientSegments = 96;
+        for (i32 index = 0; index < kSkyGradientSegments; ++index)
         {
-            controls_->SetTimeMicroseconds(*newTime);
+            const f32 left = static_cast<f32>(index) /
+                static_cast<f32>(kSkyGradientSegments);
+            const f32 right = static_cast<f32>(index + 1) /
+                static_cast<f32>(kSkyGradientSegments);
+            context.CanvasGradientRect(
+                {0.02F + 0.96F * left, 0.28F},
+                {0.02F + 0.96F * right, 0.72F},
+                SkyGradientColor(left, day, clock, daylight),
+                SkyGradientColor(right, day, clock, daylight));
+        }
+
+        context.CanvasRect(
+            {0.02F, 0.28F},
+            {0.02F + 0.96F * static_cast<f32>(fraction), 0.72F},
+            {1.0F, 1.0F, 1.0F, 0.10F},
+            true);
+        context.CanvasCircle(
+            {0.02F + 0.96F * static_cast<f32>(fraction), 0.50F},
+            9.0F * uiScale,
+            {0.07F, 0.09F, 0.14F, 1.0F});
+        context.CanvasCircle(
+            {0.02F + 0.96F * static_cast<f32>(fraction), 0.50F},
+            7.0F * uiScale,
+            {0.94F, 0.97F, 1.0F, 1.0F});
+        if (scrubber.hovered)
+        {
+            context.CanvasTooltip(
+                day.observerLongitudeDegrees.has_value()
+                    ? std::format(
+                          "{} clock; zone {} at {:.1f} deg longitude. Drag across midnight to keep scrubbing.",
+                          clock.solar ? "Dominant-star solar" : "Rotation fallback",
+                          FormatZone(day),
+                          *day.observerLongitudeDegrees)
+                    : "Prime-meridian clock. Drag across midnight to keep scrubbing.");
+        }
+
+        if (scrubber.clicked)
+        {
+            f64 fractionDelta =
+                static_cast<f64>(scrubber.u - 0.02F) / 0.96 - fraction;
+            if (fractionDelta > 0.5)
+            {
+                fractionDelta -= 1.0;
+            }
+            else if (fractionDelta < -0.5)
+            {
+                fractionDelta += 1.0;
+            }
+            if (const auto newTime = TimeForLocalDelta(
+                    *session_, day, controls_->TimeMicroseconds(), fractionDelta))
+            {
+                controls_->SetTimeMicroseconds(*newTime);
+            }
+        }
+        else if (std::fabs(scrubber.dragDeltaX) > 0.0F && sliderWidth > 0.0F)
+        {
+            const f64 fractionDelta =
+                static_cast<f64>(scrubber.dragDeltaX) /
+                (static_cast<f64>(sliderWidth) * 0.96);
+            if (const auto newTime = TimeForLocalDelta(
+                    *session_, day, controls_->TimeMicroseconds(), fractionDelta))
+            {
+                controls_->SetTimeMicroseconds(*newTime);
+            }
         }
     }
 

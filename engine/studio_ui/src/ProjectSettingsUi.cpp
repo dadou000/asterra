@@ -104,6 +104,7 @@ ProjectSettingsUi::RunTerrainRoundTripValidation()
     return report;
 }
 
+#if defined(ORBIT_ENABLE_VALIDATION_TOOLS)
 studio_session::StudioTerrainValidationScenarioReport
 ProjectSettingsUi::RunTerrainValidationScenario()
 {
@@ -134,6 +135,8 @@ ProjectSettingsUi::RunTerrainValidationScenario()
 
     return report;
 }
+
+#endif
 
 void ProjectSettingsUi::DrawBase(
     editor_ui::PanelContext& context)
@@ -321,6 +324,7 @@ void ProjectSettingsUi::DrawBase(
             }
         }
 
+#if defined(ORBIT_ENABLE_VALIDATION_TOOLS)
         context.Text("M15 End-to-End Terrain Scenario");
         context.Text(
             "Runs the deterministic production-terrain acceptance sequence in an "
@@ -394,6 +398,7 @@ void ProjectSettingsUi::DrawBase(
                         step.diagnostic));
             }
         }
+#endif
 
     }
 

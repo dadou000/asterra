@@ -1,5 +1,5 @@
 #include <orbit/documents/ProjectDocument.hpp>
-#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
+#include <orbit/validation/StudioTerrainValidationScenario.hpp>
 
 #include <cstdlib>
 #include <filesystem>

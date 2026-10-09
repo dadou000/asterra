@@ -59,7 +59,6 @@
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
-#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
 #include <orbit/studio_ui/DebugViewUi.hpp>
@@ -317,21 +316,46 @@ void StudioViewportPanel::Register()
                     }
                 }
 
+                // End the toolbar row before measuring the viewport. Without
+                // this, ImGui reports only the unused width after the Zoom
+                // input, shrinking both the rendered image and its hit area.
+                context.Separator();
                 const auto available =
                     context.ContentAvailable();
 
+                // Render scale (view layer setting): the view renders at
+                // this fraction of the panel and is shown stretched to it.
+                const orbit::f32 renderScale = std::clamp(
+                    studioViews.TerrainLayers("studio.primary").renderScale,
+                    0.25F,
+                    1.0F);
+                const bool scaledRender = renderScale < 0.999F;
+
                 const orbit::u32 width =
-                    static_cast<orbit::u32>(
-                        std::max(
-                            available.width,
-                            1.0F));
+                    scaledRender
+                        ? std::max(
+                              1U,
+                              static_cast<orbit::u32>(std::lround(
+                                  static_cast<double>(
+                                      std::max(available.width, 1.0F)) *
+                                  renderScale)))
+                        : static_cast<orbit::u32>(
+                              std::max(
+                                  available.width,
+                                  1.0F));
 
                 const orbit::u32 height =
-                    static_cast<orbit::u32>(
-                        std::max(
-                            available.height -
-                                22.0F,
-                            1.0F));
+                    scaledRender
+                        ? std::max(
+                              1U,
+                              static_cast<orbit::u32>(std::lround(
+                                  static_cast<double>(
+                                      std::max(available.height, 1.0F)) *
+                                  renderScale)))
+                        : static_cast<orbit::u32>(
+                              std::max(
+                                  available.height,
+                                  1.0F));
 
                 if (!viewportCapture.Active() &&
                     (width !=
@@ -343,21 +367,26 @@ void StudioViewportPanel::Register()
                         std::pair{width, height};
                 }
 
-                auto interaction =
-                    context.Image(
-                        primaryView->DisplayColor(),
-                        {
-                            .width =
-                                static_cast<
-                                    orbit::f32>(
-                                        primaryView->
-                                            Width()),
-                            .height =
-                                static_cast<
-                                    orbit::f32>(
-                                        primaryView->
-                                            Height())
-                        });
+                const orbit::editor_ui::UiSize imageSize{
+                    .width =
+                        static_cast<
+                            orbit::f32>(
+                                primaryView->
+                                    Width()),
+                    .height =
+                        static_cast<
+                            orbit::f32>(
+                                primaryView->
+                                    Height())
+                };
+                auto interaction = scaledRender
+                    ? context.ImageFit(
+                          primaryView->DisplayColor(),
+                          available,
+                          imageSize)
+                    : context.Image(
+                          primaryView->DisplayColor(),
+                          imageSize);
 
                 // Move / Rotate / Scale handles of the selected object.
                 // While they own the pointer the press is not a

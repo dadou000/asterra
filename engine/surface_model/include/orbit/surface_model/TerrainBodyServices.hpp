@@ -1,5 +1,9 @@
 #pragma once
 
+#include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain/BakedRivers.hpp>
+#include <orbit/terrain/BakedGeology.hpp>
+#include <orbit/terrain/BakedTectonics.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_erosion/AeolianErosion.hpp>
 #include <orbit/terrain_erosion/GlacialErosion.hpp>
@@ -8,18 +12,37 @@
 #include <orbit/terrain_erosion/StreamPowerErosion.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
+#include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
 #include <orbit/terrain_water/CoastalProcess.hpp>
 #include <orbit/terrain_water/WaterService.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
+
+#include <memory>
+#include <optional>
 
 namespace orbit::surface_model
 {
 // Runtime owner for the implemented physical terrain process configuration of
 // one rocky body. The process state itself remains in the canonical M08/M14
 // physical products; these configs are service-level solver policy only.
+// Planet bake policy for one body: how fine the baked rasters are and whether
+// a changed recipe rebakes by itself once it stops changing.
+struct PlanetBakeSettings
+{
+    u32 resolution{256};
+    bool autoRebake{true};
+
+    [[nodiscard]] bool IsValid() const noexcept
+    {
+        return resolution >= 16U && resolution <= 2048U;
+    }
+};
+
 struct TerrainProcessService
 {
+    PlanetBakeSettings bake{};
+
     bool streamPowerEnabled{true};
     terrain_erosion::StreamPowerErosionConfig streamPower{};
 
@@ -90,9 +113,48 @@ public:
     [[nodiscard]] terrain_gpu::PersistentGpuTerrainCache& Cache() noexcept;
     [[nodiscard]] const terrain_gpu::PersistentGpuTerrainCache& Cache() const noexcept;
 
+    // What the current terrain source was composed from. The baked planet
+    // structure must match this recipe; the bake service compares against it.
+    struct BakeRecipe
+    {
+        world::PlanetDefinition planet{};
+        terrain::AnalyticTerrainDesc desc{};
+    };
+    [[nodiscard]] const std::optional<BakeRecipe>& Recipe() const noexcept;
+    void SetRecipe(BakeRecipe recipe);
+
+    // Baked tectonic rasters installed by the bake service; null until a bake
+    // exists. The terrain source reads them when it is composed.
+    [[nodiscard]] const std::shared_ptr<const terrain::BakedTectonicRasters>&
+    TectonicBake() const noexcept;
+    void SetTectonicBake(
+        std::shared_ptr<const terrain::BakedTectonicRasters> bake) noexcept;
+
+    // Baked river graph installed by the bake service; the terrain source cuts
+    // channels from it instead of building drainage while it generates.
+    [[nodiscard]] const std::shared_ptr<const terrain::BakedRiverNetwork>&
+    RiverBake() const noexcept;
+    void SetRiverBake(
+        std::shared_ptr<const terrain::BakedRiverNetwork> bake) noexcept;
+
+    [[nodiscard]] const std::shared_ptr<const terrain::BakedGeologyRasters>&
+    GeologicalBake() const noexcept;
+    void SetGeologicalBake(
+        std::shared_ptr<const terrain::BakedGeologyRasters> bake) noexcept;
+
+    [[nodiscard]] const std::shared_ptr<const terrain_geology::CompiledStratigraphyProfile>&
+    Stratigraphy() const noexcept;
+    void SetStratigraphyProfile(
+        std::optional<terrain_geology::StratigraphyProfile> profile);
+
     [[nodiscard]] bool IsValid() const noexcept;
 
 private:
+    std::optional<BakeRecipe> recipe_;
+    std::shared_ptr<const terrain::BakedTectonicRasters> tectonicBake_;
+    std::shared_ptr<const terrain::BakedRiverNetwork> riverBake_;
+    std::shared_ptr<const terrain::BakedGeologyRasters> geologicalBake_;
+    std::shared_ptr<const terrain_geology::CompiledStratigraphyProfile> stratigraphy_;
     universe::BodyId body_{};
     u64 instanceId_{0U};
     terrain_geology::GeologicalMaterialLibrary geology_{};

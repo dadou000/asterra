@@ -61,7 +61,8 @@ void DisplayDiagnosticsUi::RegisterBase(
 void DisplayDiagnosticsUi::DrawViewportBase(
     editor_ui::PanelContext& context,
     const std::string_view viewportId,
-    const std::string_view label)
+    const std::string_view label,
+    const bool includeEyeAdaptation)
 {
     if (renderer_ == nullptr)
     {
@@ -383,6 +384,8 @@ void DisplayDiagnosticsUi::DrawViewportBase(
                 {});
     }
 
+    if (includeEyeAdaptation)
+    {
     context.Separator();
     context.Text("Eye Adaptation");
 
@@ -638,6 +641,7 @@ void DisplayDiagnosticsUi::DrawViewportBase(
         renderer_->
             ResetHumanEyeAdaptation(
                 viewportId);
+    }
     }
 
     if (viewportId == "studio.primary")
@@ -1365,9 +1369,10 @@ void DisplayDiagnosticsUi::Register(
 void DisplayDiagnosticsUi::DrawViewport(
     editor_ui::PanelContext& context,
     const std::string_view viewportId,
-    const std::string_view label)
+    const std::string_view label,
+    const bool includeEyeAdaptation)
 {
-    DrawViewportBase(context, viewportId, label);
+    DrawViewportBase(context, viewportId, label, includeEyeAdaptation);
 
     if (viewportId != "studio.primary")
     {
@@ -1786,5 +1791,12 @@ void DisplayDiagnosticsUi::DrawViewport(
                 Mebibytes(render.historyBytes),
                 Mebibytes(render.scratchBytes)));
     }
+}
+
+void DisplayDiagnosticsUi::DrawRendererProperties(
+    editor_ui::PanelContext& context,
+    const std::string_view viewportId)
+{
+    DrawViewport(context, viewportId, "Primary View", false);
 }
 } // namespace orbit::studio_ui

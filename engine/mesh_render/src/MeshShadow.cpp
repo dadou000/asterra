@@ -14,7 +14,7 @@ namespace
 {
 constexpr u64 kRecordRetireTicks = 24U;
 constexpr u32 kShadowPushDwords = 16U;
-constexpr u32 kResolvePushDwords = 28U;
+constexpr u32 kResolvePushDwords = 29U;
 
 constexpr const char* kShadowVertexShader = R"(
 [[vk::binding(0, 0)]]
@@ -140,8 +140,17 @@ struct Constants
     float4 rightFar;
     float4 upRadius;
     float4 center;
+    uint temporalIndex;
 };
 [[vk::push_constant]] Constants g;
+
+// The pixel seed of the stochastic terms, shifted per frame so the pattern
+// moves and temporal anti-aliasing can average it.
+float2 TemporalSeed(uint2 pixel)
+{
+    const uint t = g.temporalIndex & 255u;
+    return float2(pixel) + float2(float(t * 37u), float(t * 91u));
+}
 
 static const uint kSkyDirections = 16u;
 static const uint kSkyTile = 256u;
@@ -359,90 +368,266 @@ float SkyOpenness(float3 position, float3 normal, float3 up, float2 pixelSeed)
     return total > 0.0 ? open / total : 0.0;
 }
 
-[numthreads(8, 8, 1)]
-void main(uint3 id : SV_DispatchThreadID)
+)"
+R"(
+// Sun visibility (PCSS) of one receiver; 1 when it faces away from the sun or
+// lies outside the shadow map.
+float PixelSunVisibility(float2 pixel, float depth, float3 normal, float3 position)
 {
-    if (id.x >= g.width || id.y >= g.height)
+    const float3 toSun = normalize(g.toSunNear.xyz);
+    if (dot(normal, toSun) <= 0.0)
+    {
+        return 1.0;
+    }
+
+    const float radius = g.upRadius.w;
+    const float texel = 2.0 * radius / float(g.mapSize);
+
+    // Offset along the normal and toward the sun by a couple of texels (plus a
+    // view-distance term for far receivers).
+    const float cosine = saturate(dot(normal, toSun));
+    const float3 origin =
+        position +
+        normal * (texel * (1.5 + 2.0 * sqrt(1.0 - cosine * cosine)) +
+                  ReverseZViewDepth(depth) * 1.0e-4) +
+        toSun * texel * 1.0;
+
+    const float3 q = origin - g.center.xyz;
+    const float2 window = float2(
+        dot(q, g.rightFar.xyz), dot(q, g.upRadius.xyz)) / radius;
+
+    if (abs(window.x) < 1.0 && abs(window.y) < 1.0)
+    {
+        const float receiverDepth =
+            (radius - dot(q, toSun)) / (2.0 * radius);
+        const float2 t = float2(
+            window.x * 0.5 + 0.5,
+            0.5 - window.y * 0.5) * float(g.mapSize);
+
+        return SunShadowPcss(t, receiverDepth, pixel);
+    }
+    return 1.0;
+}
+
+bool IsMeshPixel(float meta)
+{
+    return floor(meta + 0.01) == 3.0 &&
+        round(frac(meta + 0.01) * 16.0) == 8.0;
+}
+
+// One thread per 2x2 quad (16x16 quads = 32x32 pixels per group). The quad's
+// first pixel evaluates the expensive terms; the other pixels reuse them where
+// the 3x3 quad neighbourhood supports it:
+//  * sky openness is smooth, so every mesh pixel is rebuilt from the
+//    neighbourhood's samples with spatial x normal x depth weights;
+//  * sun visibility is reused where the whole neighbourhood is fully lit or
+//    fully shadowed on a planar surface; penumbrae and depth edges evaluate
+//    every pixel, so shadow edges keep full resolution.
+groupshared float4 s_sky[256];   // rgb sky fill, a = 1 when a mesh sample
+groupshared float4 s_geo[256];   // normal.xyz, linear depth (0 = none)
+groupshared float s_visibility[256];
+
+[numthreads(16, 16, 1)]
+void main(uint3 id : SV_DispatchThreadID, uint3 gt : SV_GroupThreadID)
+{
+    const uint local = gt.y * 16u + gt.x;
+    const uint2 quadBase = id.xy * 2u;
+    const bool inside = quadBase.x < g.width && quadBase.y < g.height;
+
+    s_sky[local] = 0.0;
+    s_geo[local] = 0.0;
+    s_visibility[local] = -2.0;
+
+    if (inside)
+    {
+        const uint2 pixel = quadBase;
+        const float2 uv = (float2(pixel) + 0.5) / float2(g.width, g.height);
+        const float depth = g_depth.SampleLevel(g_depthSampler, uv, 0).r;
+        if (depth > 0.0)
+        {
+            const float3 normal = normalize(
+                g_normalMetallic.SampleLevel(g_normalSampler, uv, 0).xyz);
+            const float3 position = ReconstructPosition(uv, depth);
+            const float meta =
+                g_emissionClass.SampleLevel(g_emissionSampler, uv, 0).a;
+            s_geo[local] = float4(normal, ReverseZViewDepth(depth));
+
+            if (IsMeshPixel(meta))
+            {
+                const float4 skyParameters = g_params[0];
+                if (skyParameters.w > 0.0)
+                {
+                    s_sky[local] = float4(
+                        skyParameters.rgb *
+                            SkyOpenness(
+                                position, normal,
+                                normalize(g_params[1].xyz), TemporalSeed(pixel)),
+                        1.0);
+                }
+            }
+
+            if (dot(normal, normalize(g.toSunNear.xyz)) > 0.0)
+            {
+                s_visibility[local] =
+                    PixelSunVisibility(TemporalSeed(pixel), depth, normal, position);
+            }
+        }
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    if (!inside)
     {
         return;
     }
 
-    const uint2 pixel = id.xy;
-    const float2 uv = (float2(pixel) + 0.5) / float2(g.width, g.height);
-    const float depth = g_depth.SampleLevel(g_depthSampler, uv, 0).r;
-
-    float visibility = 1.0;
-    float3 skyFill = 0.0;
-    bool meshPixel = false;
-
-    if (depth > 0.0)
+    const float centerVisibility = s_visibility[local];
+    const float centerDepth = s_geo[local].w;
+    bool visibilityUniform =
+        (centerVisibility == 0.0 || centerVisibility == 1.0) &&
+        gt.x > 0u && gt.y > 0u && gt.x < 15u && gt.y < 15u;
+    if (visibilityUniform)
     {
-        const float3 normal = normalize(
-            g_normalMetallic.SampleLevel(g_normalSampler, uv, 0).xyz);
-        const float3 toSun = normalize(g.toSunNear.xyz);
-        const float3 position = ReconstructPosition(uv, depth);
+        [unroll]
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+            [unroll]
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                const uint n =
+                    uint(int(gt.y) + dy) * 16u + uint(int(gt.x) + dx);
+                if (s_visibility[n] != centerVisibility ||
+                    abs(s_geo[n].w - centerDepth) > 0.4 * centerDepth)
+                {
+                    visibilityUniform = false;
+                }
+            }
+        }
+        const float lapX = abs(
+            s_geo[local - 1u].w + s_geo[local + 1u].w - 2.0 * centerDepth);
+        const float lapY = abs(
+            s_geo[local - 16u].w + s_geo[local + 16u].w - 2.0 * centerDepth);
+        if (lapX > 0.015 * centerDepth + 0.01 ||
+            lapY > 0.015 * centerDepth + 0.01)
+        {
+            visibilityUniform = false;
+        }
+    }
 
-        const float meta =
-            g_emissionClass.SampleLevel(g_emissionSampler, uv, 0).a;
-        meshPixel =
-            floor(meta + 0.01) == 3.0 &&
-            round(frac(meta + 0.01) * 16.0) == 8.0;
+    [loop]
+    for (uint k = 0u; k < 4u; ++k)
+    {
+        const uint2 pixel = quadBase + uint2(k & 1u, k >> 1u);
+        if (pixel.x >= g.width || pixel.y >= g.height)
+        {
+            continue;
+        }
 
+        const float2 uv = (float2(pixel) + 0.5) / float2(g.width, g.height);
+        const float depth = g_depth.SampleLevel(g_depthSampler, uv, 0).r;
+
+        float visibility = 1.0;
+        float3 skyFill = 0.0;
+        bool meshPixel = false;
+
+        if (depth > 0.0)
+        {
+            const float3 normal = normalize(
+                g_normalMetallic.SampleLevel(g_normalSampler, uv, 0).xyz);
+            const float3 position = ReconstructPosition(uv, depth);
+            const float meta =
+                g_emissionClass.SampleLevel(g_emissionSampler, uv, 0).a;
+            meshPixel = IsMeshPixel(meta);
+
+            if (meshPixel)
+            {
+                const float4 skyParameters = g_params[0];
+                if (skyParameters.w > 0.0)
+                {
+                    if (k == 0u && s_sky[local].a > 0.5)
+                    {
+                        skyFill = s_sky[local].rgb;
+                    }
+                    else
+                    {
+                        const float linearDepth = ReverseZViewDepth(depth);
+                        const int sx = (k & 1u) != 0u ? 1 : -1;
+                        const int sy = (k >> 1u) != 0u ? 1 : -1;
+                        float3 sum = 0.0;
+                        float weightSum = 0.0;
+                        [unroll]
+                        for (int dy = -1; dy <= 1; ++dy)
+                        {
+                            [unroll]
+                            for (int dx = -1; dx <= 1; ++dx)
+                            {
+                                const int2 t = int2(gt.xy) + int2(dx, dy);
+                                if (any(t < 0) || any(t >= 16))
+                                {
+                                    continue;
+                                }
+                                const uint n = uint(t.y) * 16u + uint(t.x);
+                                if (s_sky[n].a < 0.5)
+                                {
+                                    continue;
+                                }
+                                const float facing =
+                                    saturate(dot(normal, s_geo[n].xyz));
+                                const float f2 = facing * facing;
+                                const float f4 = f2 * f2;
+                                const float depthWeight = exp(
+                                    -abs(s_geo[n].w - linearDepth) /
+                                    (0.02 * linearDepth + 0.05));
+                                const float wx =
+                                    dx == 0 ? 3.0 : (dx == sx ? 1.0 : 0.15);
+                                const float wy =
+                                    dy == 0 ? 3.0 : (dy == sy ? 1.0 : 0.15);
+                                const float w =
+                                    wx * wy * f4 * f4 * f4 * depthWeight;
+                                sum += w * s_sky[n].rgb;
+                                weightSum += w;
+                            }
+                        }
+                        skyFill = weightSum > 1.0e-4
+                            ? sum / weightSum
+                            : skyParameters.rgb *
+                                SkyOpenness(
+                                    position, normal,
+                                    normalize(g_params[1].xyz), TemporalSeed(pixel));
+                    }
+                }
+            }
+
+            if (dot(normal, normalize(g.toSunNear.xyz)) > 0.0)
+            {
+                if (k == 0u && centerVisibility >= 0.0)
+                {
+                    visibility = centerVisibility;
+                }
+                else if (visibilityUniform)
+                {
+                    visibility = centerVisibility;
+                }
+                else
+                {
+                    visibility =
+                        PixelSunVisibility(TemporalSeed(pixel), depth, normal, position);
+                }
+            }
+        }
+
+        float4 value = float4(visibility, 0.0, 0.0, 0.0);
+        if (g.initialize == 0u)
+        {
+            value = g_shadow[pixel];
+            value.x = min(value.x, visibility);
+        }
         if (meshPixel)
         {
-            const float4 skyParameters = g_params[0];
-            if (skyParameters.w > 0.0)
-            {
-                skyFill =
-                    skyParameters.rgb *
-                    SkyOpenness(
-                        position, normal, normalize(g_params[1].xyz),
-                        float2(pixel));
-            }
+            value.yzw = skyFill;
         }
-
-        if (dot(normal, toSun) > 0.0)
-        {
-            const float radius = g.upRadius.w;
-            const float texel = 2.0 * radius / float(g.mapSize);
-
-            // Offset along the normal and toward the sun by a couple of
-            // texels (plus a view-distance term for far receivers).
-            const float cosine = saturate(dot(normal, toSun));
-            const float3 origin =
-                position +
-                normal * (texel * (1.5 + 2.0 * sqrt(1.0 - cosine * cosine)) +
-                          ReverseZViewDepth(depth) * 1.0e-4) +
-                toSun * texel * 1.0;
-
-            const float3 q = origin - g.center.xyz;
-            const float2 window = float2(
-                dot(q, g.rightFar.xyz), dot(q, g.upRadius.xyz)) / radius;
-
-            if (abs(window.x) < 1.0 && abs(window.y) < 1.0)
-            {
-                const float receiverDepth =
-                    (radius - dot(q, toSun)) / (2.0 * radius);
-                const float2 t = float2(
-                    window.x * 0.5 + 0.5,
-                    0.5 - window.y * 0.5) * float(g.mapSize);
-
-                visibility = SunShadowPcss(t, receiverDepth, float2(pixel));
-            }
-        }
+        g_shadow[pixel] = value;
     }
-
-    float4 value = float4(visibility, 0.0, 0.0, 0.0);
-    if (g.initialize == 0u)
-    {
-        value = g_shadow[pixel];
-        value.x = min(value.x, visibility);
-    }
-    if (meshPixel)
-    {
-        value.yzw = skyFill;
-    }
-    g_shadow[pixel] = value;
 }
 )";
 
@@ -896,7 +1081,8 @@ void MeshSunShadowRenderer::Draw(
     const lighting::LightingView& view,
     const MeshShadowFrame& frame,
     const MeshSkyFill& sky,
-    const bool initialize)
+    const bool initialize,
+    const u32 temporalIndex)
 {
     if (pipeline_ == nullptr || width == 0U || height == 0U)
     {
@@ -949,7 +1135,8 @@ void MeshSunShadowRenderer::Draw(
         AsBits(frame.radius),
 
         AsBits(frame.center[0]), AsBits(frame.center[1]),
-        AsBits(frame.center[2]), AsBits(frame.sunTanHalfAngle)};
+        AsBits(frame.center[2]), AsBits(frame.sunTanHalfAngle),
+        temporalIndex};
 
     commands.SetComputePipeline(*pipeline_);
     commands.SetComputeConstants(constants);
@@ -960,7 +1147,8 @@ void MeshSunShadowRenderer::Draw(
     commands.SetComputeTexture(2U, depth);
     commands.SetComputeTexture(3U, shadowMap);
     commands.SetComputeTexture(4U, skyAtlas);
-    commands.Dispatch((width + 7U) / 8U, (height + 7U) / 8U, 1U);
+    // One thread per 2x2 quad, 16x16 quads (32x32 pixels) per group.
+    commands.Dispatch((width + 31U) / 32U, (height + 31U) / 32U, 1U);
 
     parameters_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
 }

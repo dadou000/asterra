@@ -27,6 +27,8 @@ invariants = [
   "Photopic gain may exceed the full-daylight setting (daylightAdaptationNits, default 50,000) by at most maximumBoostStops (default 6); this keeps dark interiors from being lifted to mid-grey.",
   "Settings persist in the display settings as display.eye.*; orbit_eye_set validates and changes any subset of fields but does not persist them.",
   "The eye update lives in the hot-reloadable post-process module (interface kHumanEyeAdaptationHotReloadInterfaceVersion = 2); new state fields must default to 'no limit' so running state survives an implementation swap.",
+  "The luminance histogram build accumulates per 8x8 group in shared memory and flushes one global atomic per non-empty bin plus the three statistics words per group; per-pixel global atomics on the shared statistics words serialise the dispatch.",
+  "The histogram build meters one pixel (the top-left) of every 2x2 quad - a quarter of the reads and atomics - and writes that sample's values into the metering mask for all four pixels, so the overlay still covers the frame; counts are therefore per quad, which the percentile maths (relative weights) does not care about.",
 ]
 related = ["/rendering/lighting"]
 depends_on = ["/rendering/lighting"]
@@ -35,7 +37,7 @@ verify = [
   "orbit_eye_get: brightest pixel in cd/m^2, stops removed by protection, stops the boost limit refused.",
   "Save HumanEyeAdaptation.cpp while Studio runs: the implementation swaps in-process and exposure state is preserved.",
 ]
-verified = "b0a0de7f"
+verified = "1229ef74"
 
 [[diagnose]]
 symptom = "highlights are blown out or the whole scene is too bright"

@@ -6,6 +6,8 @@
 #include <orbit/studio_ui/ViewportAuthoringState.hpp>
 
 #include <filesystem>
+#include <orbit/studio_ui/CommandPaletteModel.hpp>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -69,7 +71,22 @@ public:
         commandPaletteOpenRequested_ = true;
     }
 
+    void DrawCreationMenus(editor_ui::PanelContext& context, bool compact);
+    // Reuses the shared terrain-tool owner in workspace-specific toolbars.
+    void DrawTerrainContext(editor_ui::PanelContext& context);
+
 private:
+    void DrawCommandPalettePopup(editor_ui::PanelContext& context, bool openCommandPalette,
+        commands::CommandRegistry& registry,
+        const std::vector<CommandPaletteEntry>& palette);
+    bool DrawQuickCreatePopup(editor_ui::PanelContext& context, bool openQuickCreate,
+        commands::CommandRegistry& registry,
+        const std::vector<CommandPaletteEntry>& palette);
+    void DrawQuickCreateBrowser(editor_ui::PanelContext& context, bool openQuickCreateBrowser,
+        const std::vector<commands::CommandCatalogEntry>& commandCatalog,
+        commands::CommandRegistry& registry,
+        const std::vector<CommandPaletteEntry>& palette);
+
     void DrawNavigationBand(editor_ui::PanelContext& context);
     void DrawViewportBand(editor_ui::PanelContext& context);
     void DrawInspectorExtension(editor_ui::PanelContext& context);
@@ -80,7 +97,6 @@ private:
         bool verticalList = false);
 
     [[nodiscard]] bool TerrainContextRelevant() const noexcept;
-    void DrawTerrainContext(editor_ui::PanelContext& context);
     void DrawTerrainToolProperties(editor_ui::PanelContext& context);
 
     [[nodiscard]] std::string_view SelectedViewportId() const noexcept;
@@ -100,6 +116,7 @@ private:
     std::string commandQuery_;
     i32 commandPaletteSelection_{0};
     bool commandPaletteOpenRequested_{false};
+    commands::CommandId toolbarArgumentCommand_{};
     std::string quickCreateBrowseQuery_;
     i32 quickCreateBrowseSelection_{0};
     commands::CommandId quickCreateArgumentCommand_{};

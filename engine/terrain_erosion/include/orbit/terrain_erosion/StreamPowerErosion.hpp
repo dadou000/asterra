@@ -45,6 +45,17 @@ struct StreamPowerErosionConfig
     f64 referenceDischargeCubicMetersPerSecond{1.0};
 
     f64 looseMaterialErodibility{1.0};
+
+    // Geological-age coupling. Erodibility is multiplied by
+    // 1 + ageErodibilityGain * geologicalAge, so old, weathered crust
+    // equilibrates at lower, rounder relief while young orogens stay steep
+    // and incised.
+    f64 ageErodibilityGain{0.6};
+    // Passed to MacroGeologyDesc by the page builder: old crust loses
+    // tectonic uplift, and routing is steered away from uplifting belts
+    // toward basins (see MacroGeologyDesc).
+    f64 ageUpliftDecay{0.35};
+    f64 tectonicDrainageGuidance{0.5};
     f64 minimumBedSlope{1.0e-5};
     f64 maximumIncisionMetersPerIteration{25.0};
 
@@ -65,6 +76,10 @@ struct StreamPowerCellForcing
     // M04 protection coefficient [0,1]. Protection scales erosion only;
     // tectonic uplift/subsidence remains geological forcing.
     f64 protection{0.0};
+
+    // Planet structural layer geological age [0 new, 1 ancient]. Zero (the
+    // default) leaves erodibility unchanged.
+    f64 geologicalAge{0.0};
 
     [[nodiscard]] bool IsValid() const noexcept;
 };

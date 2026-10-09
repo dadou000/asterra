@@ -33,14 +33,14 @@ verify = [
   "orbit_view_text_diagnostics: the `clouds` object (layer count, mean coverage and optical depth, time bucket, GPU residency) is absent when the body has no cloud layer.",
   "Clouds-on vs clouds-off captures at 0.8, 3, 8, 60 and 2,000 km differ only by clouds and their shadow.",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [routes]
 "how the near-field cloud march works, why it is blurry/striped/slow" = "raymarch"
 "cloud shadows on the ground, god rays, cloud-on-cloud shadow" = "shadows-and-light-volume"
 "inspect one isolated cloud of a chosen type" = "cloud-lab"
-"weather model, orbital weather representation" = "/legacy/research-v006-cloud-weather"
-"universal volumetrics (clouds, fog, generic media)" = "/legacy/research-v007-universal-volumetrics"
+"weather model, orbital weather representation" = "/legacy/tree-history-research-v006-cloud-weather"
+"universal volumetrics (clouds, fog, generic media)" = "/legacy/tree-history-research-v007-universal-volumetrics"
 +++
 
 ## Module map (`engine/celestial_clouds`)

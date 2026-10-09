@@ -15,13 +15,13 @@ invariants = [
   "The product is derived from existing TerrainSource outputs (elevation, coarse elevation, climate temperature, biome classification and weights, standing-water depth, generation revisions); there is no second surface database, material hierarchy or persistent orbital texture authority.",
   "The product is disposable and revisioned: it is rebuilt when the TerrainSource or generation revisions change.",
 ]
-related = ["/celestial/globe", "/celestial/far-render", "/rendering/terrain", "/legacy/research-v006-planetary-appearance"]
+related = ["/celestial/globe", "/celestial/far-render", "/rendering/terrain", "/legacy/tree-history-research-v006-planetary-appearance"]
 depends_on = ["/foundation/core", "/foundation/math", "/rendering/rhi", "/rendering/terrain/contracts"]
 used_by = ["/celestial/far-render", "/celestial/giants", "/celestial/globe", "/celestial/ocean", "/celestial/small-bodies", "/editor/studio-session", "/editor/studio-ui", "/rendering/lighting/radiance-cache"]
 verify = [
   "ctest -R Orbit.PlanetaryAppearance",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

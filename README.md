@@ -23,7 +23,7 @@ V0.0.6 is the next major scaffold after the accepted V0.0.5 terrain/Studio loop.
 
 The release keeps one semantic body authority while allowing independent simulation and rendering representations. Production toroidal terrain remains the ground path; orbital and far-distance representations are derived from the same world data.
 
-Read the celestial module blocks under `/world` ([docs/ORBIT_DOCS.md](docs/ORBIT_DOCS.md)) before implementing celestial systems. The V0.0.6 SPEC and PROGRESS documents were retired in 0.0.9 and remain in git history; the research contract is in [docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
+Read the celestial module blocks under `/world` ([docs/ORBIT_DOCS.md](docs/ORBIT_DOCS.md)) before implementing celestial systems. The V0.0.6 SPEC and PROGRESS documents were retired in 0.0.9 and remain in git history; the research contract is in [docs/tree/history/research/V006_CELESTIAL_RESEARCH_BASELINE.md](docs/tree/history/research/V006_CELESTIAL_RESEARCH_BASELINE.md).
 
 ## V0.0.7 — Dynamic Lighting, GI & HDR Presentation
 
@@ -31,7 +31,7 @@ V0.0.7 is the lighting/presentation and universal-volumetrics scaffold built on 
 
 Hardware ray tracing is an optional visibility accelerator rather than a separate lighting mode: the default Auto/Balanced policy keeps an explicit lighting budget and uses RT hardware to improve difficult visibility work inside that budget.
 
-Read [docs/V0.0.7_SPEC.md](docs/V0.0.7_SPEC.md) before adding lighting/GI/exposure/post-processing/volumetric systems. Progress is tracked in [docs/V0.0.7_PROGRESS.md](docs/V0.0.7_PROGRESS.md). Research baselines are [dynamic lighting / GI / eye response](docs/research/V007_DYNAMIC_LIGHTING_BASELINE.md) and [universal volumetrics](docs/research/V007_UNIVERSAL_VOLUMETRICS.md).
+Read [docs/V0.0.7_SPEC.md](docs/V0.0.7_SPEC.md) before adding lighting/GI/exposure/post-processing/volumetric systems. Progress is tracked in [docs/V0.0.7_PROGRESS.md](docs/V0.0.7_PROGRESS.md). Research baselines are [dynamic lighting / GI / eye response](docs/tree/history/research/V007_DYNAMIC_LIGHTING_BASELINE.md) and [universal volumetrics](docs/tree/history/research/V007_UNIVERSAL_VOLUMETRICS.md).
 
 ## Hot iteration — save to reflect
 
@@ -108,7 +108,7 @@ captures the production terrain viewport.
 On a Vulkan-capable Windows development machine:
 
 ```bat
-run_terrain_ui_smoke.bat
+tools/validation/run_terrain_ui_smoke.bat
 ```
 
 Use `debug` or `release` to select the configuration, `nobuild` to reuse an

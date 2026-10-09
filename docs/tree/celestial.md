@@ -31,7 +31,7 @@ related = ["/world/universe", "/rendering/atmosphere", "/rendering/clouds"]
 "derived work budget, stale completions" = "scheduler"
 "sky, scattering, limb" = "/rendering/atmosphere"
 "clouds" = "/rendering/clouds"
-"all V0.0.6 research notes" = "/legacy/research-v006-celestial-research-baseline"
+"all V0.0.6 research notes" = "/legacy/tree-history-research-v006-celestial-research-baseline"
 +++
 
 The V0.0.6 milestones M01-M31 built this layer; each module's card links the research note that records its baseline and intentional limits. The shared rules:

@@ -17,13 +17,13 @@ invariants = [
   "Run state is explicit: live, paused, singleStepRequested, resetRequested and followCamera are separate flags; diagnostics report eligibility, whether it stepped or reset this frame, iterations, solved scalar channels, source/effector counts, scratch bytes and GPU milliseconds with a validity flag.",
   "A CPU reference cell model (SurfaceVolumeReferenceConfig, LocalVolumeReferenceCell) exists next to the GPU solve for deterministic tests.",
 ]
-related = ["/rendering/volumes", "/rendering/volumes/representation", "/legacy/research-v007-universal-volumetrics"]
+related = ["/rendering/volumes", "/rendering/volumes/representation", "/legacy/tree-history-research-v007-universal-volumetrics"]
 depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/rendering/render-graph", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/volumes/fields", "/rendering/volumes/representation", "/world/world-model"]
 used_by = ["/apps/studio", "/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.SurfaceVolumeSolver",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

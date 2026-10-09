@@ -21,7 +21,9 @@ sources = [
   "engine/studio_session/src/StudioSession.cpp",
   "engine/editor_session/src/WorldDocumentsModel.cpp",
   "engine/editor_rpc/src/EditorSessionRpcHost.cpp",
-  "apps/editor/src/Main.cpp",
+  "apps/editor/src/StudioApplication.cpp",
+  "apps/editor/src/StudioWorkspaceRpc.cpp",
+  "apps/editor/src/RelaunchStudio.cpp",
 ]
 symbols = [
   "ProjectAuthoringUi",
@@ -34,11 +36,12 @@ symbols = [
   "RelaunchStudioWithProject",
 ]
 invariants = [
+  "The isolated end-to-end terrain acceptance button and RunTerrainValidationScenario method are available only in an ORBIT_ENABLE_VALIDATION_TOOLS=ON Studio build. Normal Project Settings and the production save/reopen round-trip verifier remain available with the option OFF.",
   "The panels own presentation buffers only (paths, names, selection, status text). Authority is StudioWorkspace / ProjectDocument / EditorWorldSession; WorldDocumentsUi never reopens project authority and routes every operation through the one StudioSession that Explorer, the runtime and RPC use.",
   "World create / rename / set-startup in the UI end in the same ProjectDocument calls as world.create / world.set_display_name / world.set_startup (WorldDocumentsModel::Create/Rename/SetStartup versus EditorSessionRpcHost). Open World and Close Active World ARE the world.open / world.close RPC: StudioSession::OpenWorld/CloseWorld call DispatchWorldLifecycle through the session's own dispatcher and clear pending terrain invalidations, physical pages and volume output.",
   "The world catalog is diagnostic, not all-or-nothing: an unreadable world document appears as valid=false with its diagnostic and an [Invalid] label, and gets no Open / Set Startup / Rename controls; it never makes the catalog or settings panel unavailable.",
   "Project create/open/close in the Project Browser go through ProjectBrowserModel into StudioWorkspace, which builds and validates a complete candidate project + session before replacing the current one; a failed open leaves the workspace and the recent-projects (MRU) order unchanged. The only persisted browser state is the MRU list of Project.orbit.toml paths.",
-  "ProjectAuthoringUi::CreateProject / OpenProject are the single callable operations behind the buttons and the project.create / project.open RPC registered in apps/editor/src/Main.cpp; both run NotifyWorkspaceChanged. In the editor the browser's own StudioWorkspace is separate from the editing one: a switch saves the project, checkpoints the world, closes the browser workspace and relaunches Studio on the chosen project (RPC result carries relaunching=true), so clients must poll project.info for the new project id.",
+  "ProjectAuthoringUi::CreateProject / OpenProject are the single callable operations behind the buttons and the project.create / project.open RPC registered in apps/editor/src/StudioWorkspaceRpc.cpp; both run NotifyWorkspaceChanged. In the editor the browser's own StudioWorkspace is separate from the editing one: a switch saves the project, checkpoints the world, closes the browser workspace and relaunches Studio on the chosen project (RPC result carries relaunching=true), so clients must poll project.info for the new project id.",
   "ProjectSettingsUi::Register and Draw call the RegisterBase / DrawBase methods of the same file and append the 'Lighting / Display Defaults' section. Lighting and display defaults are project-owned (LightingDisplay.orbitcfg in the project root), clamped on input, and applied through lighting::SetStudioLightingRuntimeConfig and PublishStudioDisplayDefaultsRuntime; Display Diagnostics overrides them per session without rewriting the file.",
   "Project display name is written through ProjectDocument; startup-world changes go through StudioSession::SetStartupWorld. ProjectSettingsUi::SynchronizeAuthority re-reads the manifest name each draw and resets the edit buffer when the persisted name changes.",
   "Project Settings and World Documents are registered only by ProjectSettingsUi and WorldDocumentsUi (session-bound); ProjectAuthoringUi registers only the Project Browser (RegisterProjectBrowser). Its workspace-bound copies of the settings and world panels, and StudioUiBundle which registered them, were removed in 0.0.9 because nothing used them.",
@@ -52,7 +55,7 @@ verify = [
   "ctest -R Orbit.WorldDocumentsModel",
   "ctest -R Orbit.StudioSession",
 ]
-verified = "55d48117"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [routes]
 "project or world file on disk is wrong, not the panel" = "/authoring/documents"
@@ -72,7 +75,7 @@ symptom = "After project.open or project.create over RPC the old project keeps a
 steps = [
   "This is the designed handoff: Studio relaunches into the target project (result has relaunching=true). Poll project.info until its id equals the id returned by project.open.",
   "orbit_project_open / orbit_project_create do this polling when wait=True (default timeout 120 s).",
-  "If it never switches, RelaunchStudioWithProject failed in apps/editor/src/Main.cpp and the pending switch is dropped.",
+  "If it never switches, RelaunchStudioWithProject failed in apps/editor/src/StudioApplication.cpp and the pending switch is dropped.",
 ]
 docs = ["/apps/studio"]
 
@@ -109,7 +112,7 @@ steps = [
 [[diagnose]]
 symptom = "Two 'Project Settings' or 'World Documents' panels, or a panel is missing"
 steps = [
-  "apps/editor/src/Main.cpp registers the browser from ProjectAuthoringUi and the other two from WorldDocumentsUi / ProjectSettingsUi; check studio.panel_list (orbit_panel_list) for what is registered.",
+  "apps/editor/src/StudioApplication.cpp registers the browser from ProjectAuthoringUi and the other two from WorldDocumentsUi / ProjectSettingsUi; check studio.panel_list (orbit_panel_list) for what is registered.",
 ]
 +++
 
@@ -147,7 +150,7 @@ The Project Browser has Recent Projects (filter box above six entries), Find Pro
 | world catalog | `world.active`, `world.list`, `world.describe` | `orbit_world_active`, `orbit_world_list`, `orbit_world_describe` |
 | world lifecycle and metadata | `world.create`, `world.open`, `world.close`, `world.set_startup`, `world.set_display_name` | `orbit_world_create`, `orbit_world_open`, `orbit_world_close`, `orbit_world_set_startup`, `orbit_world_set_display_name` |
 
-`world.open` and `world.close` must be standalone requests (`EditorSessionRpcHost` rejects them inside a batch). `project.create` / `project.open` are registered by `apps/editor/src/Main.cpp` over `ProjectAuthoringUi`. The in-process, transactional variants that used to live in `StudioWorkspaceRpcHost` were removed in 0.0.9 (no app instantiated them).
+`world.open` and `world.close` must be standalone requests (`EditorSessionRpcHost` rejects them inside a batch). `project.create` / `project.open` are registered by `apps/editor/src/StudioApplication.cpp` over `ProjectAuthoringUi`. The in-process, transactional variants that used to live in `StudioWorkspaceRpcHost` were removed in 0.0.9 (no app instantiated them).
 
 ## Known gaps
 

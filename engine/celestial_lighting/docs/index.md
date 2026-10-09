@@ -17,13 +17,13 @@ invariants = [
   "Independent visibility fractions are never multiplied: several occluders are evaluated as the union of projected discs over the source disc with a deterministic equal-solid-angle golden-angle sample set.",
   "Results expose obscured and visible fractions plus front/overlap, total-eclipse and annular-eclipse states.",
 ]
-related = ["/celestial/radiometry", "/rendering/atmosphere", "/legacy/research-v006-eclipse-reflected-light"]
+related = ["/celestial/radiometry", "/rendering/atmosphere", "/legacy/tree-history-research-v006-eclipse-reflected-light"]
 depends_on = ["/celestial/radiometry", "/foundation/core", "/foundation/math"]
 used_by = ["/celestial/far-render", "/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialLighting",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

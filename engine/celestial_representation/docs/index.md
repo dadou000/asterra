@@ -20,13 +20,13 @@ invariants = [
   "Feature requirements are runtime capabilities, not body classes: complex far appearance picks the cached disc, a radiative emitter picks the stellar point proxy when sub-pixel.",
   "In Studio the full clipmap (full_clipmap, default on) overrides this ladder and draws the production surface from ground to orbit; the ladder applies when full_clipmap is off (/rendering/terrain/clipmaps).",
 ]
-related = ["/celestial/globe", "/celestial/far-render", "/rendering/terrain/clipmaps", "/legacy/research-v006-representation-resolver", "/legacy/research-v006-surface-globe-transition"]
+related = ["/celestial/globe", "/celestial/far-render", "/rendering/terrain/clipmaps", "/legacy/tree-history-research-v006-representation-resolver", "/legacy/tree-history-research-v006-surface-globe-transition"]
 depends_on = ["/foundation/core"]
 used_by = ["/celestial/compact-objects", "/celestial/far-render", "/editor/studio-session", "/editor/studio-ui", "/rendering/lighting/radiance-cache"]
 verify = [
   "ctest -R Orbit.CelestialRepresentation",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

@@ -2,6 +2,7 @@
 
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_session/StudioMeshRpc.hpp>
+#include <orbit/studio_session/StudioTerrainSampleRpc.hpp>
 #include <orbit/studio_session/StudioTerrainStatusRpc.hpp>
 #include <orbit/studio_session/ViewportTargetRpc.hpp>
 #include <orbit/studio_session/VolumeParticleOutputState.hpp>
@@ -114,6 +115,7 @@ StudioSession::StudioSession(
       pathNetwork_(world_),
       pathRouting_(world_),
       pathProducts_(world_),
+      terrainBake_(world_),
       terrainPhysicalPages_(
           world_,
           terrainDebugPages_),
@@ -127,6 +129,9 @@ StudioSession::StudioSession(
         rpc_.Dispatcher(),
         viewports_);
     RegisterStudioTerrainStatusRpc(
+        rpc_.Dispatcher(),
+        *this);
+    RegisterStudioTerrainSampleRpc(
         rpc_.Dispatcher(),
         *this);
     RegisterStudioMeshRpc(
@@ -433,7 +438,8 @@ StudioSession::DispatchRpc(
         terrainRuntime_.Refresh());
 
     terrainPhysicalPages_.Sync(
-        terrainRuntime_.Catalog());
+        terrainRuntime_.Catalog(),
+        clock_.Time());
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();
@@ -451,6 +457,16 @@ const editor_rpc::EditorSessionRpcHost&
 StudioSession::Rpc() const noexcept
 {
     return rpc_;
+}
+
+StudioTerrainBakeController& StudioSession::TerrainBake() noexcept
+{
+    return terrainBake_;
+}
+
+const StudioTerrainBakeController& StudioSession::TerrainBake() const noexcept
+{
+    return terrainBake_;
 }
 
 StudioTickResult StudioSession::Tick(
@@ -478,6 +494,7 @@ StudioTickResult StudioSession::Tick(
         RefreshTerrainDebugGeneration();
         result.terrainRuntimeChanged =
             terrainRuntime_.Refresh();
+        terrainBake_.Clear();
         terrainPhysicalPages_.Clear();
         pendingTerrainInvalidations_.clear();
         ResetVolumeOutputRuntime();
@@ -497,6 +514,14 @@ StudioTickResult StudioSession::Tick(
     result.compositionChanged =
         world_.RefreshUniverseIfChanged();
 
+    // Bake before anything reads the terrain: the first bake of a planet is
+    // blocking, so no page is generated from the plate model, and a finished
+    // rebake swaps in here by recomposing the terrain source.
+    if (terrainBake_.Tick())
+    {
+        result.compositionChanged = true;
+    }
+
     result.activeBodyChanged =
         activeBody_.Refresh();
     result.pathNetworkRebound =
@@ -514,7 +539,8 @@ StudioTickResult StudioSession::Tick(
         terrainRuntime_.Refresh();
 
     terrainPhysicalPages_.Sync(
-        terrainRuntime_.Catalog());
+        terrainRuntime_.Catalog(),
+        clock_.Time());
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();

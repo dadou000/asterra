@@ -3,11 +3,14 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain/TectonicFieldDesc.hpp>
+#include <orbit/terrain/BakedTectonics.hpp>
+#include <orbit/terrain/TectonicStructure.hpp>
 #include <orbit/terrain/TerrainFields.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -20,7 +23,10 @@ namespace detail
 // GlobalTerrainFields.cpp for the definition of GlobalTerrainFields'
 // pimpl-held instance.
 class TectonicField;
+struct TectonicSample;
 } // namespace detail
+
+class TectonicGrowth;
 
 // Exported copies of TectonicField's private per-plate/per-hotspot state,
 // for a GPU field generator to upload verbatim -- the GPU and CPU
@@ -47,6 +53,10 @@ struct GpuTectonicHotspot
     std::array<f64, kMaxTectonicHotspotAgeSteps> chainChordRadius{};
 };
 
+// Height above sea level (m) a thick continental collision is kept at, the belt
+// floor; mirrored by the GPU generator.
+inline constexpr double kCollisionEmergeMeters = 1800.0;
+
 struct GlobalTerrainFieldDesc
 {
     // Zero means derive from the owning terrain source seed.
@@ -68,10 +78,19 @@ struct GlobalTerrainFieldDesc
     f64 lapseRateCPerKilometer{6.2};
 
     TectonicFieldDesc tectonic{};
+
+    // When set, plate-driven fields (boundary masks, plate bias, structural
+    // layer) are sampled from these baked rasters instead of being evaluated
+    // from the plate model, so no plate math runs while generating terrain.
+    // The pointer is shared and immutable; swapping a bake means building a
+    // new source, which is how terrain revisions and caches invalidate.
+    std::shared_ptr<const BakedTectonicRasters> bakedTectonics{};
 };
 
 struct GlobalTerrainFieldSample
 {
+    u32 nearestPlate{0};
+    u32 secondPlate{0};
     f64 coarseElevationMeters{0.0};
     f64 landMask{0.0};
     TerrainClimate climate{};
@@ -80,12 +99,22 @@ struct GlobalTerrainFieldSample
     // convergence strength, 0..1 -- replaces the old noise-based mountain
     // range mask so ranges cohere into plate-boundary-shaped chains.
     f64 convergenceMask{0.0};
+    // Wide convergence envelope terrain relief is built from (mountain belts);
+    // convergenceMask is the structure mask (narrow in a bake).
+    f64 orogenEnvelope{0.0};
     // 0..1, strongest where the two nearest plates are actively separating
     // (mid-ocean ridge / continental rift). See TectonicSample.
     f64 divergenceMask{0.0};
     // 0..1, strongest where the two nearest plates slide laterally past
     // each other (transform/strike-slip fault). See TectonicSample.
     f64 transformMask{0.0};
+    // convergenceMask split by the crust types of the colliding pair, each
+    // unscaled and continuous. Weight anything by collision type with these:
+    // the nearest/second plate flags below switch abruptly where the runner-up
+    // plate changes.
+    f64 convergenceContinental{0.0};
+    f64 convergenceMixed{0.0};
+    f64 convergenceOceanic{0.0};
     // Plate-type identity of the two nearest plates -- lets a caller tell
     // a continental collision (orogeny) apart from a subduction zone, or
     // an oceanic spreading ridge apart from a continental rift, from the
@@ -115,6 +144,42 @@ public:
     [[nodiscard]] const GlobalTerrainFieldDesc&
     Description() const noexcept;
 
+    // Planet structural layer (plate, boundary, crust thickness/age, uplift,
+    // subsidence, stress, volcanism) at a unit direction. Pure and
+    // thread-safe; consumed by hydrology, biomes, UI and RPC.
+    [[nodiscard]] TectonicStructureSample SampleTectonicStructure(
+        const math::Double3& direction) const noexcept;
+
+    // Bake-time plate ownership by noise-metric growth over a cube-sphere
+    // raster (see TectonicGrowth). Returns null if `cancel` was raised.
+    [[nodiscard]] std::shared_ptr<const TectonicGrowth> BuildTectonicGrowth(
+        u32 resolution,
+        const std::atomic<bool>* cancel,
+        u32 workers) const;
+
+    // Every baked layer at raster texel (face, x, y), x and y in
+    // [-1, resolution], evaluated from the grown plate claims and boundary
+    // normals. This is what the baker rasterizes; it ignores any attached
+    // bake and is not for use while generating terrain.
+    // Fault intensity (0..1) for a point whose distance across the nearest
+    // boundary is `across` (claim difference over the boundary width) and whose
+    // boundary influence is `activity`: thin stripes parallel to the boundary,
+    // meandering gently and present only in patches along strike. Exposed so
+    // the stripe-versus-strike property can be tested directly.
+    [[nodiscard]] f64 FaultIntensity(
+        const math::Double3& direction,
+        f64 across,
+        f64 activity) const noexcept;
+
+    [[nodiscard]] BakedTectonicTexel EvaluateTectonicTexel(
+        const TectonicGrowth& growth,
+        u32 face,
+        i32 x,
+        i32 y) const noexcept;
+
+    [[nodiscard]] u32 TectonicPlateCount() const noexcept;
+    [[nodiscard]] bool TectonicPlateIsContinental(u32 plate) const noexcept;
+
     // Exports the exact plates/hotspots this instance generated, for a
     // GPU field generator to upload -- see GpuTectonicPlate's comment for
     // why this must be exported rather than regenerated GPU-side.
@@ -142,6 +207,11 @@ private:
         bool includeBiomes) const noexcept;
 
     [[nodiscard]] f64 ContinentalSignal(
+        const math::Double3& direction) const noexcept;
+
+    // Plate-driven fields at a direction: from the baked rasters when
+    // attached, otherwise from the plate model.
+    [[nodiscard]] detail::TectonicSample TectonicAt(
         const math::Double3& direction) const noexcept;
 
     world::PlanetDefinition planet_;

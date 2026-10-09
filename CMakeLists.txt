@@ -14,6 +14,8 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(ORBIT_ENABLE_VALIDATION_TOOLS "Include scene acceptance commands and isolated terrain validation in Studio" OFF)
+
 option(ORBIT_WARNINGS_AS_ERRORS "Treat Orbit warnings as errors" OFF)
 option(
     ORBIT_FAST_HOT_ITERATION

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/lighting/LightingView.hpp>
+#include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/rhi/Command.hpp>
 #include <orbit/rhi/Device.hpp>
 #include <orbit/shader/ShaderCompiler.hpp>
@@ -42,9 +43,14 @@ public:
         u32 height,
         const LightingView& view,
         f32 qualityScale,
-        const HybridReflectionSettings& settings = {});
+        const HybridReflectionSettings& settings = {},
+        // The merged mesh distance field: where the screen cannot answer, a
+        // smooth surface reflects the room it finds there instead of the
+        // radiance cache's low-frequency sky. Null: cache only.
+        const SdfGatherInput* sdf = nullptr);
 
 private:
     std::unique_ptr<rhi::ComputePipeline> pipeline_;
+    std::unique_ptr<rhi::Buffer> dummySdf_;
 };
 } // namespace orbit::lighting

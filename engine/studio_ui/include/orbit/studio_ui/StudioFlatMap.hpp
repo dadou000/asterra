@@ -37,10 +37,20 @@ enum class FlatMapLayer : u8
     Biomes,
     Temperature,
     Precipitation,
-    WaterDepth
+    WaterDepth,
+    // Plates and every boundary influence on one map (the original overlay).
+    Tectonics,
+    // The three views below separate what the overlay mixes, so a feature can
+    // be told apart from an artifact of one of them.
+    // Plate identity only, with plate outlines.
+    PlateId,
+    // Relative plate motion at boundaries: convergence / divergence / shear.
+    BoundaryMotion,
+    // Distributed crustal deformation: stress and the fault network.
+    CrustalDeformation
 };
 
-inline constexpr u32 kFlatMapLayerCount = 5U;
+inline constexpr u32 kFlatMapLayerCount = 9U;
 
 // Raster resolution of the map image (equirectangular, 2:1).
 inline constexpr u32 kFlatMapWidth = 1024U;

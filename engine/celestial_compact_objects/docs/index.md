@@ -15,13 +15,13 @@ invariants = [
   "A celestial body is not assumed to be a solid-surface object: Compact Object and Accretion Flow are ordinary body capabilities needing no Surface or Reference Shape authority.",
   "The runtime model is a deliberately replaceable Schwarzschild baseline that fixes the semantic contracts for later Kerr, ray-integrated lensing and radiative transfer; it does not claim to be full general relativity.",
 ]
-related = ["/celestial/compact-render", "/legacy/research-v006-compact-objects"]
+related = ["/celestial/compact-render", "/legacy/tree-history-research-v006-compact-objects"]
 depends_on = ["/celestial/representation", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
 used_by = ["/celestial/compact-render", "/editor/studio-session", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialCompactObjects",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

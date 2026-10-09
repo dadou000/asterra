@@ -30,6 +30,25 @@ namespace
     std::free(value);
     return found;
 }
+
+[[nodiscard]] bool VulkanValidationExplicitlyDisabled() noexcept
+{
+    char* value = nullptr;
+    std::size_t valueLength = 0;
+    const bool found =
+        _dupenv_s(
+            &value,
+            &valueLength,
+            "ORBIT_VK_VALIDATION") == 0 &&
+        value != nullptr &&
+        valueLength > 1;
+    const bool disabled =
+        found &&
+        value[0] == '0' &&
+        value[1] == '\0';
+    std::free(value);
+    return disabled;
+}
 } // namespace
 
 RuntimeSession::RuntimeSession(const RuntimeSessionDesc& desc)
@@ -78,7 +97,8 @@ RuntimeSession::RuntimeSession(const RuntimeSessionDesc& desc)
     device_ =
         rhi::vulkan::CreateDevice({
             .enableValidation =
-                enableDefaultValidation ||
+                (enableDefaultValidation &&
+                 !VulkanValidationExplicitlyDisabled()) ||
                 enableBestPractices ||
                 enableSyncValidation ||
                 enableGpuAssisted,

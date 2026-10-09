@@ -29,6 +29,8 @@ invariants = [
   "Sky fill on proxy surfaces uses skyRayCount cosine-weighted rays (default 12, capped at 64 in the shader) against the other proxies and adds albedo/pi times the sky irradiance times the open fraction, on proxy surfaces only; terrain lighting is unchanged.",
   "bypass_proxy_sun_shadow turns off the sun shadow and the proxy sky fill together; bypass_proxy_surfaces returns proxies to invisible occluders.",
   "Known limit: proxy shadows do not darken terrain's own sky or bounce light; the radiance cache traces proxies for those, but only for pixels the screen-space gather leaves unresolved.",
+  "The pass is quad based (16x16 quads = 32x32 pixels per group): one ray per 2x2 quad decides the whole quad where its 3x3 quad neighbourhood has the same visibility and a planar depth (second-difference test); penumbra, depth-edge and tile-border quads trace every pixel. Sun-facing tests stay per pixel.",
+  "Proxy sky-fill rays (skyRayCount per pixel) run only for authored proxy surfaces: imported mesh pixels share surface class 3 (sub-kind 8) but get their sky fill from the mesh shadow pass, which overwrites this channel, so they are skipped here.",
 ]
 related = ["/rendering/lighting/sky-cache-fill"]
 depends_on = ["/rendering/lighting"]
@@ -37,7 +39,7 @@ verify = [
   "orbit_view_terrain_layers_set(bypass_proxy_sun_shadow=true): the proxy shadow and proxy sky fill disappear; terrain lighting must not change.",
   "Edit a proxy property: the semantic-revision rebuild applies it without a restart.",
 ]
-verified = "b0a0de7f"
+verified = "1229ef74"
 
 [[diagnose]]
 symptom = "authored proxies cast no sun shadow at all"

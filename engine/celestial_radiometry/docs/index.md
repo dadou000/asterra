@@ -16,13 +16,13 @@ invariants = [
   "RadiativeEmitter and Photosphere remain ordinary semantic capabilities; luminosity can be derived from the photosphere radius and temperature via an explicit toggle.",
   "Appearance layers (corona, glare, diffraction) never become light sources and never feed back into the luminosity solve.",
 ]
-related = ["/celestial/stellar", "/celestial/lighting", "/rendering/lighting/eye-adaptation", "/legacy/research-v006-radiometry-hdr-exposure"]
+related = ["/celestial/stellar", "/celestial/lighting", "/rendering/lighting/eye-adaptation", "/legacy/tree-history-research-v006-radiometry-hdr-exposure"]
 depends_on = ["/foundation/core", "/foundation/math"]
 used_by = ["/celestial/lighting", "/editor/studio-ui", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialRadiometry",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

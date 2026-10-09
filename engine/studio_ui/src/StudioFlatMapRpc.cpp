@@ -150,8 +150,12 @@ void RegisterStudioFlatMapRpc(
             .name = "map.layer_set",
             .description =
                 "Chooses what the flat map colours the planet by: "
-                "elevation, biomes, temperature, precipitation or "
-                "water_depth. Switching layers does not re-sample the planet. "
+                "elevation, biomes, temperature, precipitation, water_depth, "
+                "tectonics (plate identity and boundary influence together), "
+                "plate_id (plate identity and outlines only), boundary_motion "
+                "(convergence / divergence / shear only) or crustal_deformation "
+                "(stress and the fault network). Switching "
+                "layers does not re-sample the planet. "
                 "id defaults to studio.primary.",
             .mutating = true
         },
@@ -172,7 +176,8 @@ void RegisterStudioFlatMapRpc(
                 throw rpc::Error(
                     -32602,
                     "layer must be elevation, biomes, temperature, "
-                    "precipitation or water_depth.");
+                    "precipitation, water_depth, tectonics, plate_id, "
+                    "boundary_motion or crustal_deformation.");
             }
 
             const std::string id = ViewIdOrPrimary(params);

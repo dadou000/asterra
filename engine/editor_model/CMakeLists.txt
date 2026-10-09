@@ -225,4 +225,26 @@ if(BUILD_TESTING)
         NAME Orbit.InspectorProvenance
         COMMAND OrbitInspectorProvenanceTests
     )
+
+    add_executable(
+        OrbitObjectStoreReadCacheTests
+        tests/ObjectStoreReadCacheTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitObjectStoreReadCacheTests
+        PRIVATE
+            Orbit::Documents
+            Orbit::EditorModel
+    )
+
+    target_compile_features(
+        OrbitObjectStoreReadCacheTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitObjectStoreReadCacheTests)
+
+    add_test(
+        NAME Orbit.ObjectStoreReadCache
+        COMMAND OrbitObjectStoreReadCacheTests
+    )
 endif()

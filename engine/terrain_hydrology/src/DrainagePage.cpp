@@ -35,6 +35,10 @@ constexpr std::array<NeighborOffset, 8> kNeighbors{{
 struct WorkingCell
 {
     f64 surfaceHeightMeters{0.0};
+    // Lowest conditioned elevation this cell may take. Equal to the surface
+    // except at shared edge points, where the neighbour's conditioned copy of
+    // the same point raises it.
+    f64 floorElevationMeters{0.0};
     f64 drainageElevationMeters{0.0};
     f64 authoredDrainage{0.0};
 
@@ -46,6 +50,12 @@ struct WorkingCell
 
     bool available{false};
     bool outlet{false};
+    u64 basinTerminalFingerprint{0};
+
+    // Shared-edge halo cell that sits above its twin copy of the shared point
+    // in the neighbour's published solution: it drains toward the page, so it
+    // cannot be a drain for the page.
+    bool upstreamOfSharedEdge{false};
 };
 
 struct FloodNode
@@ -82,6 +92,23 @@ struct FloodNodeGreater
         static_cast<std::size_t>(x);
 }
 
+[[nodiscard]] u64 BasinTerminalFingerprint(
+    const terrain::PhysicalTerrainPageAddress& address,
+    const u32 x,
+    const u32 y) noexcept
+{
+    u64 value = terrain::StableCombine64(
+        0x4D3039424153494EULL,
+        address.planet.high);
+    value = terrain::StableCombine64(value, address.planet.low);
+    value = terrain::StableCombine64(value, static_cast<u64>(address.tile.face));
+    value = terrain::StableCombine64(value, address.tile.level);
+    value = terrain::StableCombine64(value, address.tile.x);
+    value = terrain::StableCombine64(value, address.tile.y);
+    value = terrain::StableCombine64(value, (static_cast<u64>(x) << 32U) | y);
+    return value == 0U ? 1U : value;
+}
+
 [[nodiscard]] bool IsInteriorPaddedCoordinate(
     const i32 x,
     const i32 y,
@@ -115,6 +142,10 @@ void AssignBoundaryCell(
         static_cast<f64>(
             boundary.conditionedHeightMeters);
 
+    cell.floorElevationMeters =
+        static_cast<f64>(
+            boundary.surfaceHeightMeters);
+
     cell.authoredDrainage =
         static_cast<f64>(
             boundary.authoredDrainage);
@@ -128,6 +159,8 @@ void AssignBoundaryCell(
     cell.flowDx = boundary.flowDx;
     cell.flowDy = boundary.flowDy;
     cell.available = true;
+    cell.outlet = boundary.outlet;
+    cell.basinTerminalFingerprint = boundary.basinTerminalFingerprint;
 }
 
 void PopulateHalo(
@@ -201,7 +234,8 @@ void PopulateHalo(
 void ConditionDepressions(
     std::vector<WorkingCell>& working,
     const u32 resolution,
-    const f64 minimumDropMeters)
+    const f64 minimumDropMeters,
+    const bool sharedEdges)
 {
     const u32 paddedResolution =
         resolution + 2U;
@@ -239,30 +273,41 @@ void ConditionDepressions(
 
     // Every imported halo cell is a fixed boundary condition, not an
     // automatically-invented outlet. Its conditioned elevation already
-    // encodes the neighboring page's solution.
-    for (u32 y = 0; y < paddedResolution; ++y)
-    {
-        for (u32 x = 0; x < paddedResolution; ++x)
+    // encodes the neighboring page's solution. With shared edges, an outward
+    // cell whose published flow drains into this page is upstream of the
+    // shared edge, so seeding it would force the edge above its own tributary
+    // and feed the lift back to the neighbour; only the other outward cells
+    // are drains.
+    const auto seedHalo =
+        [&](const bool skipUpstream)
         {
-            const bool isHalo =
-                x == 0U ||
-                y == 0U ||
-                x + 1U == paddedResolution ||
-                y + 1U == paddedResolution;
-
-            const std::size_t index =
-                Index(
-                    paddedResolution,
-                    x,
-                    y);
-
-            if (isHalo &&
-                working[index].available)
+            for (u32 y = 0; y < paddedResolution; ++y)
             {
-                seed(index);
+                for (u32 x = 0; x < paddedResolution; ++x)
+                {
+                    const bool isHalo =
+                        x == 0U ||
+                        y == 0U ||
+                        x + 1U == paddedResolution ||
+                        y + 1U == paddedResolution;
+
+                    const std::size_t index =
+                        Index(
+                            paddedResolution,
+                            x,
+                            y);
+
+                    if (isHalo &&
+                        working[index].available &&
+                        !(skipUpstream &&
+                          working[index].upstreamOfSharedEdge))
+                    {
+                        seed(index);
+                    }
+                }
             }
-        }
-    }
+        };
+    seedHalo(sharedEdges);
 
     // Explicit physical outlets (ocean etc.) are additional fixed seeds.
     for (u32 y = 0; y < resolution; ++y)
@@ -280,6 +325,13 @@ void ConditionDepressions(
                 seed(paddedIndex);
             }
         }
+    }
+
+    if (frontier.empty() && sharedEdges)
+    {
+        // Every outward cell drains into the page: fall back to treating
+        // them all as drains rather than leaving the fill without a boundary.
+        seedHalo(false);
     }
 
     if (frontier.empty())
@@ -347,7 +399,7 @@ void ConditionDepressions(
 
             target.drainageElevationMeters =
                 std::max(
-                    target.surfaceHeightMeters,
+                    target.floorElevationMeters,
                     minimumTargetElevation);
 
             visited[neighborIndex] = 1U;
@@ -360,6 +412,115 @@ void ConditionDepressions(
             });
         }
     }
+}
+
+// Interior padded coordinate of the shared edge point a twin describes.
+struct TwinSlot
+{
+    u32 paddedX{0};
+    u32 paddedY{0};
+    const DrainageBoundaryCell* cell{nullptr};
+    // Direction (in this page's frame) a flow must have a component along to
+    // be leaving the twin's page for ours.
+    i8 inwardX{0};
+    i8 inwardY{0};
+};
+
+template <typename Visitor>
+void ForEachTwin(
+    const DrainagePageHalo& halo,
+    const u32 resolution,
+    Visitor&& visit)
+{
+    for (u32 i = 0; i < resolution; ++i)
+    {
+        if (i < halo.twinNorth.size())
+            visit(TwinSlot{i + 1U, 1U, &halo.twinNorth[i], 0, 1});
+        if (i < halo.twinEast.size())
+            visit(TwinSlot{resolution, i + 1U, &halo.twinEast[i], -1, 0});
+        if (i < halo.twinSouth.size())
+            visit(TwinSlot{i + 1U, resolution, &halo.twinSouth[i], 0, -1});
+        if (i < halo.twinWest.size())
+            visit(TwinSlot{1U, i + 1U, &halo.twinWest[i], 1, 0});
+    }
+    visit(TwinSlot{1U, 1U, &halo.twinCorners[0], 1, 1});
+    visit(TwinSlot{resolution, 1U, &halo.twinCorners[1], -1, 1});
+    visit(TwinSlot{resolution, resolution, &halo.twinCorners[2], -1, -1});
+    visit(TwinSlot{1U, resolution, &halo.twinCorners[3], 1, -1});
+}
+
+void ApplySharedEdgeFloors(
+    std::vector<WorkingCell>& working,
+    const u32 resolution,
+    const DrainagePageHalo& halo)
+{
+    const u32 paddedResolution = resolution + 2U;
+    ForEachTwin(halo, resolution, [&](const TwinSlot& slot)
+    {
+        WorkingCell& cell = working[Index(paddedResolution, slot.paddedX, slot.paddedY)];
+        cell.floorElevationMeters = std::max(
+            cell.floorElevationMeters,
+            static_cast<f64>(slot.cell->conditionedHeightMeters));
+    });
+
+    const auto classify =
+        [&](const u32 x, const u32 y, const DrainageBoundaryCell& outer)
+        {
+            // Upstream when the neighbour's published flow for this outward
+            // cell drains into this page: it feeds the shared edge rather than
+            // draining it.
+            const bool upstream =
+                (outer.flowDx != 0 || outer.flowDy != 0) &&
+                IsInteriorPaddedCoordinate(
+                    static_cast<i32>(x) + outer.flowDx,
+                    static_cast<i32>(y) + outer.flowDy,
+                    resolution);
+            working[Index(paddedResolution, x, y)].upstreamOfSharedEdge = upstream;
+        };
+    for (u32 i = 0; i < resolution; ++i)
+    {
+        classify(i + 1U, 0U, halo.north[i]);
+        classify(paddedResolution - 1U, i + 1U, halo.east[i]);
+        classify(i + 1U, paddedResolution - 1U, halo.south[i]);
+        classify(0U, i + 1U, halo.west[i]);
+    }
+    classify(0U, 0U, halo.corners[0]);
+    classify(paddedResolution - 1U, 0U, halo.corners[1]);
+    classify(paddedResolution - 1U, paddedResolution - 1U, halo.corners[2]);
+    classify(0U, paddedResolution - 1U, halo.corners[3]);
+}
+
+// A twin that drains across the seam into this page carries water this page's
+// own copy of the point cannot see. Flow along the shared edge, or away from
+// this page, stays in the twin's own accumulation and is not imported.
+void InjectTwinInflows(
+    const std::vector<WorkingCell>&,
+    DrainagePage& result,
+    const DrainagePageHalo& halo)
+{
+    const u32 resolution = result.Resolution();
+    ForEachTwin(halo, resolution, [&](const TwinSlot& slot)
+    {
+        const DrainageBoundaryCell& twin = *slot.cell;
+        if (twin.flowDx == 0 && twin.flowDy == 0)
+            return;
+
+        const bool crosses =
+            (slot.inwardX != 0 && twin.flowDx == slot.inwardX) ||
+            (slot.inwardY != 0 && twin.flowDy == slot.inwardY);
+        if (!crosses)
+            return;
+
+        const i32 targetX = static_cast<i32>(slot.paddedX) + twin.flowDx;
+        const i32 targetY = static_cast<i32>(slot.paddedY) + twin.flowDy;
+        if (!IsInteriorPaddedCoordinate(targetX, targetY, resolution))
+            return;
+
+        DrainageCell& target = result.At(
+            static_cast<u32>(targetX - 1), static_cast<u32>(targetY - 1));
+        target.drainageAreaSquareMeters += twin.drainageAreaSquareMeters;
+        target.dischargeCubicMetersPerSecond += twin.dischargeCubicMetersPerSecond;
+    });
 }
 
 void RouteFlow(
@@ -403,6 +564,7 @@ void RouteFlow(
 
             i8 bestDx = 0;
             i8 bestDy = 0;
+            bool bestTargetIsOutlet = false;
 
             for (const NeighborOffset& neighbor :
                  kNeighbors)
@@ -487,6 +649,7 @@ void RouteFlow(
                     bestIndex = targetIndex;
                     bestDx = neighbor.dx;
                     bestDy = neighbor.dy;
+                    bestTargetIsOutlet = target.outlet;
                 }
             }
 
@@ -509,7 +672,8 @@ void RouteFlow(
                             bestDx,
                         static_cast<i32>(py) +
                             bestDy,
-                        resolution)
+                        resolution),
+                .targetIsOutlet = bestTargetIsOutlet
             };
         }
     }
@@ -701,6 +865,50 @@ void AccumulateInternalFlow(
                 dischargeCubicMetersPerSecond;
     }
 }
+
+void ResolveBasinTerminals(
+    DrainagePage& result,
+    const std::vector<WorkingCell>& working)
+{
+    const u32 resolution = result.Resolution();
+    const u32 paddedResolution = resolution + 2U;
+    std::vector<u32> order(static_cast<std::size_t>(resolution) * resolution);
+    std::iota(order.begin(), order.end(), 0U);
+    std::stable_sort(order.begin(), order.end(), [&result, resolution](u32 a, u32 b)
+    {
+        return result.At(a % resolution, a / resolution).drainageElevationMeters <
+               result.At(b % resolution, b / resolution).drainageElevationMeters;
+    });
+
+    for (const u32 index : order)
+    {
+        const u32 x = index % resolution;
+        const u32 y = index / resolution;
+        auto& cell = result.At(x, y);
+        if (cell.outlet || !cell.flow.HasDownstream())
+        {
+            cell.basinTerminalFingerprint =
+                BasinTerminalFingerprint(result.SourcePage().address, x, y);
+            continue;
+        }
+
+        const i32 nx = static_cast<i32>(x) + cell.flow.dx;
+        const i32 ny = static_cast<i32>(y) + cell.flow.dy;
+        const u32 paddedX = static_cast<u32>(static_cast<i32>(x) + 1 + cell.flow.dx);
+        const u32 paddedY = static_cast<u32>(static_cast<i32>(y) + 1 + cell.flow.dy);
+        if (cell.flow.exitsPage || nx < 0 || ny < 0 ||
+            nx >= static_cast<i32>(resolution) || ny >= static_cast<i32>(resolution))
+        {
+            cell.basinTerminalFingerprint = working[Index(paddedResolution, paddedX, paddedY)]
+                .basinTerminalFingerprint;
+        }
+        else
+        {
+            cell.basinTerminalFingerprint = result.At(
+                static_cast<u32>(nx), static_cast<u32>(ny)).basinTerminalFingerprint;
+        }
+    }
+}
 } // namespace
 
 bool DrainageRoutingConfig::IsValid() const noexcept
@@ -762,6 +970,20 @@ bool DrainagePageHalo::IsComplete(
                     return cell.IsValid();
                 });
         };
+
+    if (HasSharedEdgeTwins() &&
+        (twinNorth.size() != resolution ||
+         twinEast.size() != resolution ||
+         twinSouth.size() != resolution ||
+         twinWest.size() != resolution ||
+         !validRange(twinNorth) ||
+         !validRange(twinEast) ||
+         !validRange(twinSouth) ||
+         !validRange(twinWest) ||
+         !validRange(twinCorners)))
+    {
+        return false;
+    }
 
     return
         validRange(north) &&
@@ -861,6 +1083,13 @@ DrainageBoundaryCell DrainagePage::BoundaryCell(
         break;
     }
 
+    return CellAsBoundary(x, y);
+}
+
+DrainageBoundaryCell DrainagePage::CellAsBoundary(
+    const u32 x,
+    const u32 y) const
+{
     const DrainageCell& cell =
         At(
             x,
@@ -880,7 +1109,9 @@ DrainageBoundaryCell DrainagePage::BoundaryCell(
         .flowDx =
             cell.flow.dx,
         .flowDy =
-            cell.flow.dy
+            cell.flow.dy,
+        .outlet = cell.outlet,
+        .basinTerminalFingerprint = cell.basinTerminalFingerprint
     };
 }
 
@@ -1051,6 +1282,9 @@ DrainagePage BuildDrainagePage(
             workingCell.drainageElevationMeters =
                 surfaceHeight;
 
+            workingCell.floorElevationMeters =
+                surfaceHeight;
+
             workingCell.authoredDrainage =
                 static_cast<f64>(
                     input.
@@ -1089,6 +1323,18 @@ DrainagePage BuildDrainagePage(
         }
     }
 
+    const bool sharedEdges =
+        hasCompleteHalo &&
+        halo.HasSharedEdgeTwins();
+
+    if (sharedEdges)
+    {
+        ApplySharedEdgeFloors(
+            working,
+            resolution,
+            halo);
+    }
+
     if (config.depressionPolicy ==
         DepressionRoutingPolicy::
             FillToBoundary)
@@ -1098,7 +1344,8 @@ DrainagePage BuildDrainagePage(
             resolution,
             static_cast<f64>(
                 config.
-                    minimumDrainageDropMeters));
+                    minimumDrainageDropMeters),
+            sharedEdges);
     }
 
     for (u32 y = 0; y < resolution; ++y)
@@ -1137,12 +1384,26 @@ DrainagePage BuildDrainagePage(
         result,
         config);
 
-    InjectBoundaryInflows(
-        working,
-        result);
+    if (sharedEdges)
+    {
+        InjectTwinInflows(
+            working,
+            result,
+            halo);
+    }
+    else
+    {
+        InjectBoundaryInflows(
+            working,
+            result);
+    }
 
     AccumulateInternalFlow(
         result);
+
+    ResolveBasinTerminals(
+        result,
+        working);
 
     return result;
 }

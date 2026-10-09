@@ -16,13 +16,13 @@ invariants = [
   "Ground and orbit share one authority: TerrainSample.elevationMeters is the ground/bed and standingWaterDepthMeters the canonical exterior standing-water depth; ground terrain renders bed plus standing water on the same clipmap triangles.",
   "The legacy detached OceanRenderer (engine/water_render) was removed in 0.0.9 and is not reintroduced into the production planetary path.",
 ]
-related = ["/celestial/appearance", "/legacy/research-v006-orbital-ocean", "/legacy/standing-water-rendering"]
+related = ["/celestial/appearance", "/legacy/tree-history-research-v006-orbital-ocean", "/legacy/standing-water-rendering"]
 depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/terrain/contracts"]
 used_by = ["/editor/studio-ui", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialOcean",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

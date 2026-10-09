@@ -4,8 +4,10 @@
 #include <orbit/math/Vector.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain/TectonicFieldDesc.hpp>
+#include <orbit/terrain/TectonicStructure.hpp>
 
 #include <array>
+#include <functional>
 #include <vector>
 
 namespace orbit::terrain::detail
@@ -14,6 +16,10 @@ namespace orbit::terrain::detail
 // tectonic plates. Everything here is a pure function of `direction` only
 // (never `footprintMeters`), so it can be multiplied into elevation masks
 // without introducing footprint-dependent discontinuities.
+using ClaimArray = std::array<f64, kMaxTectonicPlates>;
+// Unit tangent at the sample point from plate i towards plate j.
+using BoundaryNormalFn = std::function<math::Double3(u32, u32)>;
+
 struct TectonicSample
 {
     u32 nearestPlate{0};
@@ -21,6 +27,17 @@ struct TectonicSample
     // 0..1, strongest where the two plates are actively colliding (weighted
     // down for ocean-ocean collisions), zero away from any boundary.
     f64 convergenceMask{0.0};
+    // The wide convergence envelope terrain relief is built from (mountain
+    // belts take their width from boundaryWidthDot). Equal to convergenceMask
+    // from the plate model; a bake evaluates the structure masks at a narrower
+    // width and stores this one separately.
+    f64 orogenEnvelope{0.0};
+    // Largest closeness-weighted relative plate speed over the boundary pairs
+    // at this point (planet-radius units per unit angular speed). Unlike the
+    // masks it does not saturate, so it separates fast boundaries from slow.
+    f64 relativeSpeed{0.0};
+    // Baked thick-continental-collision land mask (0 from the plate model).
+    f64 collisionLand{0.0};
     // 0..1, strongest where the two plates are actively separating (mid-ocean
     // ridge / continental rift), zero away from any boundary. Unlike
     // convergenceMask, not weighted down for an ocean-ocean pairing --
@@ -33,9 +50,28 @@ struct TectonicSample
     // Smoothly blended continental/oceanic elevation bias between the two
     // nearest plates -- shapes coastlines to cohere with plate identity.
     f64 plateBiasMeters{0.0};
+    // convergenceMask split by the crust types of the colliding pair, each
+    // unscaled and continuous across the field (a max over every plate pair
+    // near the surface point). Use these, not the two nearest plates' flags,
+    // to weight anything by collision type: the flags switch abruptly where
+    // the runner-up plate changes.
+    f64 convergenceContinental{0.0};
+    f64 convergenceMixed{0.0};
+    f64 convergenceOceanic{0.0};
     // Plate-type identity of the two nearest plates, for classifying a
     // boundary's geological subtype (e.g. orogeny needs both continental,
     // subduction needs at least one oceanic) without a second plate lookup.
+    // Subduction with polarity (zero away from a subduction pair): the trench
+    // sits on the descending plate's side of the boundary, the volcanic arc
+    // inland on the overriding plate's side. Each pair decides which plate
+    // descends (the more oceanic one, else the older), so both are continuous
+    // within a pair and the max over pairs keeps them continuous across the
+    // field.
+    f64 subductionTrench{0.0};
+    f64 subductionArc{0.0};
+    // Baked structural elevation (m); zero from the plate model itself, which
+    // only the baker's structure evaluation produces.
+    f64 structuralElevationMeters{0.0};
     bool nearestIsContinental{false};
     bool secondIsContinental{false};
 };
@@ -52,6 +88,58 @@ public:
 
     [[nodiscard]] TectonicSample Sample(
         const math::Double3& direction) const noexcept;
+
+    // Same evaluation from caller-supplied per-plate claims (larger = closer
+    // to that plate) instead of the seed-distance ones, and optionally a
+    // boundary normal provider (unit tangent from plate i towards plate j).
+    // The baker uses this with claims from noise-metric plate growth
+    // (TectonicGrowth); without a provider the seed directions give the
+    // normal.
+    [[nodiscard]] TectonicSample SampleWithClaims(
+        const math::Double3& direction,
+        const ClaimArray& claims,
+        const BoundaryNormalFn* normal,
+        f64 boundaryWidth,
+        const ClaimArray* widthLimit = nullptr,
+        const ClaimArray* widthScale = nullptr) const noexcept;
+
+    // Plate seeds and the claim-width constant, for plate growth.
+    [[nodiscard]] u32 PlateCount() const noexcept { return plateCount_; }
+    [[nodiscard]] math::Double3 PlateSeed(u32 plate) const noexcept
+    {
+        return plates_[plate].seedDirection;
+    }
+    [[nodiscard]] f64 PlateSizeBias(u32 plate) const noexcept
+    {
+        return plates_[plate].sizeBiasDot;
+    }
+    [[nodiscard]] f64 BoundaryWidth() const noexcept { return desc_.boundaryWidthDot; }
+    // Width of the boundary structure in a bake: real boundaries are narrow,
+    // while the recipe width also shapes mountain belts (see orogenEnvelope).
+    [[nodiscard]] f64 StructureWidth() const noexcept { return desc_.boundaryWidthDot * 0.22; }
+    // Width of the orogen envelope in a bake: mountain belts take their width
+    // from the recipe's boundaryWidthDot, but the full width makes belts and
+    // plateaus far wider than a mountain range.
+    [[nodiscard]] f64 EnvelopeWidth() const noexcept { return desc_.boundaryWidthDot * 0.55; }
+
+    // includeHotspot = false leaves hotspot chains out of uplift and volcanism
+    // (the baker stores only the plate-driven part; hotspots are closed form
+    // and added at sample time).
+    [[nodiscard]] TectonicStructureSample SampleStructure(
+        const math::Double3& direction,
+        bool includeHotspot = true) const noexcept;
+
+    // `boundaryWidth` is the width of the boundary masks and of everything
+    // derived from them (trench, arc, rift, stress); crust properties keep
+    // blending over the recipe's boundaryWidthDot.
+    [[nodiscard]] TectonicStructureSample SampleStructureWithClaims(
+        const math::Double3& direction,
+        bool includeHotspot,
+        const ClaimArray& claims,
+        const BoundaryNormalFn* normal,
+        f64 boundaryWidth,
+        const ClaimArray* widthLimit = nullptr,
+        const ClaimArray* widthScale = nullptr) const noexcept;
 
     [[nodiscard]] f64 HotspotElevationMeters(
         const math::Double3& direction) const noexcept;
@@ -76,6 +164,12 @@ private:
         // (which risks two seeds landing close enough to degenerate into
         // one abnormally huge cell -- see plateIrregularity).
         f64 sizeBiasDot{0.0};
+        // Interior crust properties used only by SampleStructure.
+        f64 crustThicknessKm{0.0};
+        f64 crustAge{0.0};
+        // Plate-wide mean continental fraction; the per-point fraction adds
+        // intra-plate continent geometry on top (SampleStructure).
+        f64 continentalBase{0.0};
     };
 
     struct Hotspot

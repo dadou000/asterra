@@ -84,6 +84,191 @@ ResolveGlobalDesc(
 }
 } // namespace
 
+namespace
+{
+// Immutable recipe fingerprint, including the generator algorithm version.
+// With includeRivers = false the baked river network is left out, which is the
+// identity a river bake itself must match (the network is its output).
+[[nodiscard]] u64 ComputeSourceRevision(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc,
+    const bool includeRivers)
+{
+    u64 revision = detail::Mix64(desc.seed ^ 0x4153544552524103ULL);
+    const auto mix = [&](const u64 value) { revision = detail::Mix64(revision ^ value); };
+    mix(desc.global.seed);
+    mix(desc.detailOctaves);
+    mix(desc.mountains.octaves);
+    mix(desc.global.tectonic.seed);
+    if (includeRivers)
+    {
+        mix(desc.bakedRivers != nullptr ? desc.bakedRivers->ContentHash() : 0U);
+        mix(desc.bakedGeology != nullptr ? desc.bakedGeology->ContentHash() : 0U);
+    }
+    // A baked tectonic raster is part of the recipe: swapping it changes the
+    // terrain, so it must change the revision and invalidate caches.
+    mix(desc.global.bakedTectonics != nullptr
+            ? desc.global.bakedTectonics->ContentHash()
+            : 0U);
+    mix(desc.global.tectonic.plateCount);
+    mix(desc.global.tectonic.hotspotCount);
+    mix(desc.global.tectonic.hotspotAgeSteps);
+    mix(desc.global.tectonic.rainShadowSteps);
+    mix(desc.craters.enabled ? 1U : 0U);
+    mix(desc.craters.count);
+    mix(desc.craters.localLevels);
+    const auto mixDouble = [&](const f64 value)
+    {
+        if (!std::isfinite(value))
+        {
+            throw std::invalid_argument("Orbit geological recipe must contain finite values.");
+        }
+        mix(std::bit_cast<u64>(value));
+    };
+    if (desc.impactHistory != nullptr)
+    {
+        const auto& history = *desc.impactHistory;
+        mix(terrain_impacts::ImpactField::kAlgorithmVersion);
+        mix(history.id.high);
+        mix(history.id.low);
+        mix(history.planet.high);
+        mix(history.planet.low);
+        mix(history.seed);
+        mix(static_cast<u64>(history.environment));
+        mixDouble(history.surfaceAgeYears);
+        mixDouble(history.surfaceGravityMetersPerSecondSquared);
+        mixDouble(history.targetDensityKgPerCubicMeter);
+        mixDouble(history.targetStrengthPascals);
+        mix(history.procedural.count);
+        mixDouble(history.procedural.minimumRadiusMeters);
+        mixDouble(history.procedural.maximumRadiusMeters);
+        mixDouble(history.procedural.cumulativeExponent);
+        mixDouble(history.complexTransitionRadiusMeters);
+        for (const auto& event : history.authoredImpacts)
+        {
+            mix(event.id.high);
+            mix(event.id.low);
+            mixDouble(event.centerUnitDirection.x);
+            mixDouble(event.centerUnitDirection.y);
+            mixDouble(event.centerUnitDirection.z);
+            mixDouble(event.radiusMeters);
+            mix(static_cast<u64>(event.profile));
+            for (const f64 value : {
+                     event.simpleDepthRatio, event.complexDepthRatio,
+                     event.rimHeightRatio, event.ejectaThicknessRatio,
+                     event.ejectaExtentRadii, event.rayStrength,
+                     event.degradation, event.formationAgeYears,
+                     event.impactAngleDegrees, event.impactAzimuthRadians,
+                     event.shapeIrregularity, event.meltFraction,
+                     event.brecciaFraction, event.multiringStrength,
+                     event.impactorDiameterMeters,
+                     event.impactVelocityMetersPerSecond,
+                     event.impactorDensityKgPerCubicMeter,
+                     event.binarySeparationRadii,
+                     event.binaryCompanionRadiusRatio,
+                     event.binaryAzimuthRadians,
+                     event.secondaryRadiusRatio,
+                     event.secondaryRayAlignment})
+            {
+                mixDouble(value);
+            }
+            mix(event.rayCount);
+            mix(event.secondaryCount);
+            mix(event.ageOrder);
+            mix(event.enabled ? 1U : 0U);
+        }
+        for (const auto& event : history.resurfacingEvents)
+        {
+            mix(event.id.high);
+            mix(event.id.low);
+            mix(static_cast<u64>(event.kind));
+            mix(event.ageOrder);
+            mix(event.enabled ? 1U : 0U);
+            mixDouble(event.widthMeters);
+            mixDouble(event.thicknessMeters);
+            mixDouble(event.formationAgeYears);
+            for (const auto& direction : event.centerlineUnitDirections)
+            {
+                mixDouble(direction.x);
+                mixDouble(direction.y);
+                mixDouble(direction.z);
+            }
+        }
+    }
+    const terrain_impacts::IceFractureDefinition* iceDefinition =
+        desc.iceFractures.get();
+    if (iceDefinition == nullptr && desc.impactHistory != nullptr &&
+        desc.impactHistory->iceFractures != nullptr)
+    {
+        iceDefinition = desc.impactHistory->iceFractures.get();
+    }
+    if (iceDefinition != nullptr)
+    {
+        const auto& ice = *iceDefinition;
+        mix(ice.seed);
+        mix(ice.enabled ? 1U : 0U);
+        for (const f64 value : {
+                 ice.tidalAxis.x, ice.tidalAxis.y, ice.tidalAxis.z,
+                 ice.spinAxis.x, ice.spinAxis.y, ice.spinAxis.z,
+                 ice.tidalStress, ice.rotationalStress, ice.tensileStrength,
+                 ice.maximumLengthMeters, ice.widthMeters,
+                 ice.grooveDepthMeters, ice.ridgeHeightMeters,
+                 ice.branchProbability})
+        {
+            mixDouble(value);
+        }
+        mix(ice.fractureCount);
+        mix(ice.segmentsPerFracture);
+    }
+    for (const f64 value : {planet.radiusMeters, desc.macroAmplitudeMeters,
+             desc.macroWavelengthMeters, desc.detailAmplitudeMeters, desc.detailWavelengthMeters,
+             desc.mountains.reliefMeters, desc.mountains.wavelengthMeters,
+             desc.mountains.warpWavelengthMeters, desc.mountains.warpAmplitudeMeters,
+             desc.maximumElevationAboveSeaLevelMeters, desc.global.seaLevelMeters,
+             desc.global.continentalAmplitudeMeters, desc.global.continentalWavelengthMeters,
+             desc.global.continentalBiasMeters, desc.global.mountainAmplitudeMeters,
+             desc.global.mountainWavelengthMeters, desc.global.climateWavelengthMeters,
+             desc.global.equatorTemperatureC, desc.global.poleTemperatureC,
+             desc.global.temperatureVariationC, desc.global.lapseRateCPerKilometer,
+             desc.global.tectonic.plateIrregularity, desc.global.tectonic.continentalPlateFraction,
+             desc.global.tectonic.continentalPlateBiasMeters, desc.global.tectonic.oceanicPlateBiasMeters,
+             desc.global.tectonic.tectonicContinentInfluence, desc.global.tectonic.boundaryWidthDot,
+             desc.global.tectonic.minPlateAngularSpeed, desc.global.tectonic.maxPlateAngularSpeed,
+             desc.global.tectonic.convergenceReferenceSpeed, desc.global.tectonic.oceanicConvergenceScale,
+             desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
+             desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
+             desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
+             desc.global.tectonic.beltRidgeRelief,
+             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
+             desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowThresholdMeters,
+             desc.global.tectonic.rainShadowRangeMeters, desc.global.tectonic.windBandTransitionDegrees})
+    {
+        if (!std::isfinite(value))
+        {
+            throw std::invalid_argument("Orbit terrain recipe must contain finite values.");
+        }
+        mix(std::bit_cast<u64>(value));
+    }
+    for (const f64 value : {desc.craters.minimumRadiusMeters,
+             desc.craters.maximumRadiusMeters, desc.craters.cumulativeExponent,
+             desc.craters.complexTransitionRadiusMeters,
+             desc.craters.maximumEjectaExtentRadii,
+             desc.craters.localBaseSpacingMeters,
+             desc.craters.localDensity})
+    {
+        mix(std::bit_cast<u64>(value));
+    }
+    return revision;
+}
+} // namespace
+
+u64 TerrainRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc)
+{
+    return ComputeSourceRevision(planet, desc, false);
+}
+
 AnalyticTerrainSource::AnalyticTerrainSource(
     const world::PlanetDefinition planet,
     const AnalyticTerrainDesc desc)
@@ -111,7 +296,7 @@ AnalyticTerrainSource::AnalyticTerrainSource(
              desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
              desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
              desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
-             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
+             desc.global.tectonic.beltRidgeRelief, desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
              desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowRangeMeters,
              desc.global.tectonic.windBandTransitionDegrees})
     {
@@ -202,6 +387,24 @@ AnalyticTerrainSource::AnalyticTerrainSource(
             });
     }
 
+    if (desc.impactHistory != nullptr)
+    {
+        impactField_ = std::make_unique<terrain_impacts::ImpactField>(
+            planet_, *desc.impactHistory);
+    }
+    const terrain_impacts::IceFractureDefinition* iceDefinition =
+        desc.iceFractures.get();
+    if (iceDefinition == nullptr && desc.impactHistory != nullptr &&
+        desc.impactHistory->iceFractures != nullptr)
+    {
+        iceDefinition = desc.impactHistory->iceFractures.get();
+    }
+    if (iceDefinition != nullptr)
+    {
+        iceFractureField_ = std::make_unique<terrain_impacts::IceFractureField>(
+            planet_, *iceDefinition);
+    }
+
     const auto prepare = [&](auto& bands, const u32 count, f64 wavelength,
                              f64 amplitude, const f64 lacunarity, const u64 salt)
     {
@@ -231,57 +434,7 @@ AnalyticTerrainSource::AnalyticTerrainSource(
     warpFootprintScale_ = 1.0 + 11.25 * desc.mountains.warpAmplitudeMeters /
         desc.mountains.warpWavelengthMeters;
 
-    // Immutable recipe fingerprint, including the generator algorithm version.
-    revision_ = detail::Mix64(desc.seed ^ 0x4153544552524103ULL);
-    const auto mix = [&](const u64 value) { revision_ = detail::Mix64(revision_ ^ value); };
-    mix(desc.global.seed);
-    mix(desc.detailOctaves);
-    mix(desc.mountains.octaves);
-    mix(desc.global.tectonic.seed);
-    mix(desc.global.tectonic.plateCount);
-    mix(desc.global.tectonic.hotspotCount);
-    mix(desc.global.tectonic.hotspotAgeSteps);
-    mix(desc.global.tectonic.rainShadowSteps);
-    mix(desc.craters.enabled ? 1U : 0U);
-    mix(desc.craters.count);
-    mix(desc.craters.localLevels);
-    for (const f64 value : {planet.radiusMeters, desc.macroAmplitudeMeters,
-             desc.macroWavelengthMeters, desc.detailAmplitudeMeters, desc.detailWavelengthMeters,
-             desc.mountains.reliefMeters, desc.mountains.wavelengthMeters,
-             desc.mountains.warpWavelengthMeters, desc.mountains.warpAmplitudeMeters,
-             desc.maximumElevationAboveSeaLevelMeters, desc.global.seaLevelMeters,
-             desc.global.continentalAmplitudeMeters, desc.global.continentalWavelengthMeters,
-             desc.global.continentalBiasMeters, desc.global.mountainAmplitudeMeters,
-             desc.global.mountainWavelengthMeters, desc.global.climateWavelengthMeters,
-             desc.global.equatorTemperatureC, desc.global.poleTemperatureC,
-             desc.global.temperatureVariationC, desc.global.lapseRateCPerKilometer,
-             desc.global.tectonic.plateIrregularity, desc.global.tectonic.continentalPlateFraction,
-             desc.global.tectonic.continentalPlateBiasMeters, desc.global.tectonic.oceanicPlateBiasMeters,
-             desc.global.tectonic.tectonicContinentInfluence, desc.global.tectonic.boundaryWidthDot,
-             desc.global.tectonic.minPlateAngularSpeed, desc.global.tectonic.maxPlateAngularSpeed,
-             desc.global.tectonic.convergenceReferenceSpeed, desc.global.tectonic.oceanicConvergenceScale,
-             desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
-             desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
-             desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
-             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
-             desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowThresholdMeters,
-             desc.global.tectonic.rainShadowRangeMeters, desc.global.tectonic.windBandTransitionDegrees})
-    {
-        if (!std::isfinite(value))
-        {
-            throw std::invalid_argument("Orbit terrain recipe must contain finite values.");
-        }
-        mix(std::bit_cast<u64>(value));
-    }
-    for (const f64 value : {desc.craters.minimumRadiusMeters,
-             desc.craters.maximumRadiusMeters, desc.craters.cumulativeExponent,
-             desc.craters.complexTransitionRadiusMeters,
-             desc.craters.maximumEjectaExtentRadii,
-             desc.craters.localBaseSpacingMeters,
-             desc.craters.localDensity})
-    {
-        mix(std::bit_cast<u64>(value));
-    }
+    revision_ = ComputeSourceRevision(planet, desc, true);
 }
 
 f64 AnalyticTerrainSource::LocalCraterHeightDelta(
@@ -517,6 +670,26 @@ f64 AnalyticTerrainSource::MountainShape(
     return ShapeRidge(sum / mountainNormalization_);
 }
 
+terrain_impacts::CraterProcessSample AnalyticTerrainSource::SampleImpactProcesses(
+    const math::Double3& unitDirection,
+    const f64 footprintMeters,
+    terrain_impacts::ImpactQueryScratch& scratch) const
+{
+    return impactField_ != nullptr
+        ? impactField_->Sample(unitDirection, footprintMeters, scratch)
+        : terrain_impacts::CraterProcessSample{};
+}
+
+terrain_impacts::IceFractureSample AnalyticTerrainSource::SampleIceFractures(
+    const math::Double3& unitDirection,
+    const f64 footprintMeters,
+    terrain_impacts::ImpactQueryScratch& scratch) const
+{
+    return iceFractureField_ != nullptr
+        ? iceFractureField_->Sample(unitDirection, footprintMeters, scratch)
+        : terrain_impacts::IceFractureSample{};
+}
+
 TerrainSample AnalyticTerrainSource::Sample(
     const TerrainQuery& query) const noexcept
 {
@@ -542,7 +715,7 @@ TerrainSample AnalyticTerrainSource::Sample(
     // function of direction only (see TectonicField::Sample), so it can't
     // introduce a footprint-dependent discontinuity here.
     const f64 coastMask = detail::Smooth((elevation - desc_.global.seaLevelMeters) / 700.0);
-    const f64 rangeMask = global.convergenceMask;
+    const f64 rangeMask = global.orogenEnvelope;
     const f64 mountainMask = desc_.mountains.reliefMeters > 0.0 && desc_.mountains.octaves > 0
         ? global.landMask * coastMask * rangeMask : 0.0;
     const f64 ceiling = desc_.global.seaLevelMeters + desc_.maximumElevationAboveSeaLevelMeters;
@@ -561,6 +734,72 @@ TerrainSample AnalyticTerrainSource::Sample(
         CraterHeightDelta(direction, query.footprintMeters) +
         LocalCraterHeightDelta(direction, query.footprintMeters);
     elevation += craterDelta;
+    terrain_impacts::CraterProcessSample impactProcesses{};
+    terrain_impacts::IceFractureSample iceFractures{};
+    if (query.footprintMeters > 0.0 &&
+        (impactField_ != nullptr || iceFractureField_ != nullptr ||
+            desc_.bakedGeology != nullptr))
+    {
+        if (desc_.bakedGeology != nullptr &&
+            desc_.bakedGeology->HasProcessChannels())
+        {
+            const BakedGeologyProcessTexel process =
+                desc_.bakedGeology->SampleProcesses(
+                    direction, query.footprintMeters, planet_.radiusMeters);
+            impactProcesses = {
+                .excavationDepthMeters = process.excavationDepthMeters,
+                .ejectaThicknessMeters = process.ejectaThicknessMeters,
+                .debrisField = process.debrisField,
+                .rayField = process.rayField,
+                .meltThicknessMeters = process.meltThicknessMeters,
+                .brecciaField = process.brecciaField,
+                .resurfacedMaterialFraction = process.resurfacedMaterialFraction,
+                .resurfacingThicknessMeters = process.resurfacingThicknessMeters,
+                .microImpactRoughnessMeters = process.microImpactRoughnessMeters,
+                .microImpactCoverage = process.microImpactCoverage,
+                .excavationCoverage = process.excavationCoverage,
+                .formationAgeOrder = process.formationAgeOrder,
+                .exposureAgeOrder = process.exposureAgeOrder,
+                .formationAgeYears = process.formationAgeYears,
+                .exposureAgeYears = process.exposureAgeYears,
+                .affectingImpacts = process.affectingImpacts};
+            iceFractures = {
+                .heightDeltaMeters = desc_.bakedGeology->IceDeltaMeters(
+                    direction, query.footprintMeters, planet_.radiusMeters),
+                .damage = process.iceDamage,
+                .fractureCoverage = process.fractureCoverage,
+                .nearbySegments = process.nearbySegments};
+        }
+        else
+        {
+            // Terrain sources are sampled concurrently by streaming workers.
+            // This thread-local storage is temporary query state; geological
+            // authority and compiled event indexes remain immutable.
+            thread_local terrain_impacts::ImpactQueryScratch impactScratch;
+            if (impactField_ != nullptr)
+            {
+                impactProcesses = impactField_->Sample(
+                    direction, query.footprintMeters, impactScratch);
+                if (desc_.bakedGeology == nullptr)
+                    elevation += impactProcesses.heightDeltaMeters;
+            }
+            if (iceFractureField_ != nullptr)
+            {
+                iceFractures = iceFractureField_->Sample(
+                    direction, query.footprintMeters, impactScratch);
+                if (desc_.bakedGeology == nullptr)
+                    elevation += iceFractures.heightDeltaMeters;
+            }
+        }
+    }
+    if (desc_.bakedGeology != nullptr)
+    {
+        impactProcesses.heightDeltaMeters =
+            desc_.bakedGeology->ImpactDeltaMeters(
+                direction, query.footprintMeters, planet_.radiusMeters);
+        elevation += desc_.bakedGeology->ReliefDeltaMeters(
+            direction, query.footprintMeters, planet_.radiusMeters);
+    }
     const f64 coarseElevation = elevation;
     // The full signed fBm sum is bounded by twice its initial amplitude.
     // Reserve that headroom before adding detail instead of flattening peaks
@@ -582,6 +821,28 @@ TerrainSample AnalyticTerrainSource::Sample(
         elevation += detail::ValueNoise3D(direction * band.frequency, band.seed) *
             band.amplitude * weight * detailGain * landformWeight;
     }
+    // Baked stream-power relief change (macro valleys and uplift balance),
+    // land only: a lookup into the bake, no erosion is solved here.
+    if (desc_.bakedRivers != nullptr && desc_.bakedRivers->HasIncision() &&
+        elevation > desc_.global.seaLevelMeters)
+    {
+        elevation = std::max(
+            elevation + static_cast<f64>(desc_.bakedRivers->IncisionDeltaMeters(direction)),
+            std::min(elevation, desc_.global.seaLevelMeters));
+    }
+    // Baked river channels: a lookup of the stored centerlines, cut into land
+    // only and never below the water it drains to.
+    if (desc_.bakedRivers != nullptr && elevation > desc_.global.seaLevelMeters)
+    {
+        const BakedRiverCarve carve = desc_.bakedRivers->Sample(direction, query.footprintMeters);
+        if (carve.depthMeters > 0.0F)
+        {
+            elevation = std::max(
+                elevation - static_cast<f64>(carve.depthMeters),
+                std::min(elevation, desc_.global.seaLevelMeters));
+        }
+    }
+
     TerrainClimate climate = global.climate;
     // Global climate used only the broad elevation. Apply the remaining lapse
     // once so high mountains are actually cold and classify consistently.
@@ -639,8 +900,35 @@ TerrainSample AnalyticTerrainSource::Sample(
         .coarseElevationMeters = coarseElevation,
         .climate = climate,
         .biomes = ClassifyBiomeWeights(climate, elevation, desc_.global.seaLevelMeters),
-        .standingWaterDepthMeters = std::max(desc_.global.seaLevelMeters - elevation, 0.0)
+        .standingWaterDepthMeters = std::max(desc_.global.seaLevelMeters - elevation, 0.0),
+        .impactProcesses = impactProcesses,
+        .iceFractures = iceFractures
     };
+}
+
+u64 TectonicBakeRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc) noexcept
+{
+    // Bump when the baked layer set or how it is computed changes.
+    constexpr u64 kBakeAlgorithmVersion = 18;
+
+    const TectonicFieldDesc& t = desc.global.tectonic;
+    u64 hash = StableCombine64(0x54454354424B4531ULL, kBakeAlgorithmVersion);
+    hash = StableCombine64(hash, desc.seed);
+    hash = StableCombine64(hash, desc.global.seed);
+    hash = StableCombine64(hash, t.seed);
+    hash = StableCombine64(hash, t.plateCount);
+    for (const f64 value : {planet.radiusMeters, t.plateIrregularity,
+             t.plateSizeVarianceDot, t.continentalPlateFraction,
+             t.continentalPlateBiasMeters, t.oceanicPlateBiasMeters,
+             t.boundaryWidthDot, t.minPlateAngularSpeed, t.maxPlateAngularSpeed,
+             t.convergenceReferenceSpeed, t.transformReferenceSpeed,
+             t.oceanicConvergenceScale, t.convergenceUpliftMeters, t.beltRidgeRelief})
+    {
+        hash = StableCombine64(hash, std::bit_cast<u64>(value));
+    }
+    return hash == 0U ? 1U : hash;
 }
 
 u64 AnalyticTerrainSource::Revision() const noexcept

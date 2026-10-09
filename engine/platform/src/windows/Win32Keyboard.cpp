@@ -1,5 +1,7 @@
 #include "Win32Keyboard.hpp"
 
+#include <array>
+#include <cstddef>
 #include <stdexcept>
 
 namespace orbit::platform
@@ -81,7 +83,44 @@ bool IsPositionalKey(const Key key) noexcept
     return PositionalScanCode(key) != 0U;
 }
 
+namespace
+{
+int VirtualKeyForUncached(const Key key, const HKL layout);
+} // namespace
+
+// The per-key layout lookups (MapVirtualKeyEx / VkKeyScanEx) are slow and the
+// editor polls ~30 keys every frame, so the answer is cached per layout.
 int VirtualKeyFor(const Key key, const HKL layout)
+{
+    constexpr std::size_t kCacheSize = 256U;
+    thread_local HKL cachedLayout = nullptr;
+    thread_local std::array<int, kCacheSize> cachedValues{};
+    thread_local std::array<bool, kCacheSize> cachedValid{};
+
+    const auto index = static_cast<std::size_t>(key);
+    if (index >= kCacheSize)
+    {
+        return VirtualKeyForUncached(key, layout);
+    }
+
+    if (cachedLayout != layout)
+    {
+        cachedLayout = layout;
+        cachedValid.fill(false);
+    }
+
+    if (!cachedValid[index])
+    {
+        cachedValues[index] = VirtualKeyForUncached(key, layout);
+        cachedValid[index] = true;
+    }
+
+    return cachedValues[index];
+}
+
+namespace
+{
+int VirtualKeyForUncached(const Key key, const HKL layout)
 {
     if (const UINT scan = PositionalScanCode(key); scan != 0U)
     {
@@ -171,4 +210,5 @@ int VirtualKeyFor(const Key key, const HKL layout)
 
     throw std::invalid_argument("Orbit received an invalid platform key.");
 }
+} // namespace
 } // namespace orbit::platform

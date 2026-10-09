@@ -10,6 +10,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 namespace orbit::studio_ui
 {
@@ -77,6 +78,12 @@ private:
     studio_session::StudioSession* session_{nullptr};
     std::optional<scene::ObjectId> selectedBiome_;
     std::string newBiomeName_{"Desert"};
+    std::string impactHistoryDraft_;
+    scene::ObjectId impactHistoryDraftTerrain_{};
+    std::unordered_map<scene::ObjectId, std::string> impactHistoryDrafts_;
+    std::string stratigraphyDraft_;
+    scene::ObjectId stratigraphyDraftTerrain_{};
+    std::unordered_map<scene::ObjectId, std::string> stratigraphyDrafts_;
 
     math::Double3 localOverrideDirection_{0.0, 1.0, 0.0};
     f64 localOverrideInnerRadiusMeters_{250.0};

@@ -76,6 +76,8 @@ void RadianceClipmapResidency::Reset(
     const math::Double3& observerInFrameMeters,
     const u64 sourceRevision)
 {
+    scanNeeded_ = true;
+    candidateCacheFramesLeft_ = 0U;
     gpuSnapshotCacheInitialized_ = false;
     for (auto& indices : gpuSnapshotDirtyCellIndices_)
     {
@@ -237,6 +239,8 @@ RadianceClipmapResidency::ScrollTo(
 
     if (authorityChanged)
     {
+        scanNeeded_ = true;
+    candidateCacheFramesLeft_ = 0U;
         residencyInitialized_ = false;
         frame_ = view.frame;
         body_ = view.body;
@@ -260,11 +264,13 @@ RadianceClipmapResidency::ScrollTo(
     RadianceResidencyStats stats;
 
     const f32 ageDelta =
-        std::isfinite(deltaSeconds)
+        pendingAgeSeconds_ +
+        (std::isfinite(deltaSeconds)
             ? std::max(
                   deltaSeconds,
                   0.0F)
-            : 0.0F;
+            : 0.0F);
+    pendingAgeSeconds_ = 0.0F;
 
     bool centersUnchanged =
         residencyInitialized_ &&
@@ -288,6 +294,13 @@ RadianceClipmapResidency::ScrollTo(
 
     if (centersUnchanged)
     {
+        constexpr f32 kAgeBatchSeconds = 0.25F;
+        if (!collectStats && ageDelta < kAgeBatchSeconds)
+        {
+            pendingAgeSeconds_ = ageDelta;
+            return stats;
+        }
+
         for (auto& level : levels_)
         {
             for (auto& slot : level.slots)
@@ -314,6 +327,9 @@ RadianceClipmapResidency::ScrollTo(
         }
         return stats;
     }
+
+    scanNeeded_ = true;
+    candidateCacheFramesLeft_ = 0U;
 
     for (auto& level : levels_)
     {
@@ -442,6 +458,8 @@ void RadianceClipmapResidency::InvalidateSphere(
     const f32 priorityBoost,
     const bool preservePreviousValue)
 {
+    scanNeeded_ = true;
+    candidateCacheFramesLeft_ = 0U;
     if (!std::isfinite(radiusMeters) ||
         radiusMeters < 0.0)
     {
@@ -544,6 +562,8 @@ void RadianceClipmapResidency::InvalidateSphere(
 
 void RadianceClipmapResidency::RequestGlobalRefresh() noexcept
 {
+    scanNeeded_ = true;
+    candidateCacheFramesLeft_ = 0U;
     for (auto& level : levels_)
     {
         for (auto& slot : level.slots)
@@ -572,9 +592,68 @@ RadianceClipmapResidency::BuildUpdateList(
     const u32 maximumUpdates,
     RadianceResidencyStats* const outputStats) const
 {
+    if (!scanNeeded_)
+    {
+        // The last scan found no cell needing an update and nothing has
+        // been invalidated, scrolled or re-revisioned since.
+        if (outputStats != nullptr)
+        {
+            *outputStats = lastScanStats_;
+        }
+        return {};
+    }
+
+    constexpr u32 kScanBatchFrames = 8U;
+
+    if (candidateCacheFramesLeft_ > 0U &&
+        !candidateCache_.empty() &&
+        maximumUpdates > 0U)
+    {
+        --candidateCacheFramesLeft_;
+        std::vector<RadianceUpdateCandidate> reused;
+        reused.reserve(maximumUpdates);
+        std::size_t consumed = 0U;
+        for (; consumed < candidateCache_.size() &&
+               reused.size() < maximumUpdates;
+             ++consumed)
+        {
+            const auto& candidate = candidateCache_[consumed];
+            const auto* slot = SlotFor(candidate.key);
+            if (slot != nullptr && slot->occupied &&
+                slot->key == candidate.key &&
+                (slot->dirty || !slot->cell.valid ||
+                 slot->sourceRevision != sourceRevision_))
+            {
+                reused.push_back(candidate);
+            }
+        }
+        candidateCache_.erase(
+            candidateCache_.begin(),
+            candidateCache_.begin() +
+                static_cast<std::ptrdiff_t>(consumed));
+        if (!reused.empty())
+        {
+            if (outputStats != nullptr)
+            {
+                *outputStats = lastScanStats_;
+                outputStats->dirtyCells -=
+                    std::min<u64>(
+                        outputStats->dirtyCells,
+                        static_cast<u64>(reused.size()));
+                lastScanStats_ = *outputStats;
+            }
+            return reused;
+        }
+        candidateCacheFramesLeft_ = 0U;
+    }
+
+    // Scan for several frames' worth of candidates at once; later frames
+    // reuse the remainder (see candidateCache_).
+    const u32 scanCapacity = maximumUpdates * kScanBatchFrames;
+
     std::vector<RadianceUpdateCandidate>
         candidates;
-    candidates.reserve(maximumUpdates);
+    candidates.reserve(scanCapacity);
 
     RadianceResidencyStats stats;
 
@@ -647,7 +726,8 @@ RadianceClipmapResidency::BuildUpdateList(
                         updateAgeSeconds)
                     ? std::max(
                           slot.cell.
-                              updateAgeSeconds,
+                              updateAgeSeconds +
+                              pendingAgeSeconds_,
                           0.0F)
                     : 1.0e6F;
 
@@ -680,7 +760,7 @@ RadianceClipmapResidency::BuildUpdateList(
             // candidate. The small tolerance makes the prefilter
             // conservative around f32 priority rounding; the final ordering
             // below remains unchanged.
-            if (candidates.size() == maximumUpdates)
+            if (candidates.size() == scanCapacity)
             {
                 const f32 cutoff = candidates.front().priority;
                 const f64 cellSizeSafe =
@@ -738,7 +818,7 @@ RadianceClipmapResidency::BuildUpdateList(
                     age
             };
 
-            if (candidates.size() < maximumUpdates)
+            if (candidates.size() < scanCapacity)
             {
                 candidates.push_back(candidate);
                 std::push_heap(
@@ -765,6 +845,24 @@ RadianceClipmapResidency::BuildUpdateList(
         candidates.begin(),
         candidates.end(),
         higherPriority);
+
+    lastScanStats_ = stats;
+    if (stats.dirtyCells == 0U)
+    {
+        scanNeeded_ = false;
+    }
+
+    candidateCache_.clear();
+    candidateCacheFramesLeft_ = 0U;
+    if (candidates.size() > maximumUpdates)
+    {
+        candidateCache_.assign(
+            candidates.begin() +
+                static_cast<std::ptrdiff_t>(maximumUpdates),
+            candidates.end());
+        candidates.resize(maximumUpdates);
+        candidateCacheFramesLeft_ = kScanBatchFrames - 1U;
+    }
 
     if (outputStats != nullptr)
     {

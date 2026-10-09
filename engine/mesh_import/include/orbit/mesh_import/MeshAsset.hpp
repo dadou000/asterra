@@ -63,6 +63,12 @@ struct MeshMaterial
     AlphaMode alphaMode{AlphaMode::Opaque};
     f32 alphaCutoff{0.5F};
     bool doubleSided{false};
+
+    // Whether the emissive factor also feeds the distance field's emissive
+    // channel (the GI rays' view of the surface). Generated emitters turn it
+    // off: they light their surroundings analytically (mesh_render::
+    // EmissiveLightRenderer) instead of being found by chance by rays.
+    bool emissiveInGi{true};
 };
 
 struct MeshTexture

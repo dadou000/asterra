@@ -6,9 +6,16 @@
 #include <orbit/studio_ui/StudioShellModel.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/world_model/CelestialSchemas.hpp>
+#include <orbit/world_model/AtmospherePropertySolver.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/VisibilityProxyBinding.hpp>
 #include <orbit/world_model/LocalLightBinding.hpp>
+#include <orbit/world/PlanetTileNeighborhood.hpp>
+#include <orbit/terrain_erosion/RiverNetwork.hpp>
+#include <orbit/studio_session/StudioTerrainTectonicsProbe.hpp>
+#include <orbit/terrain_bake/TerrainBakeService.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
+#include <orbit/studio_session/StudioTerrainAuthoringInvalidation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -17,6 +24,7 @@
 #include <exception>
 #include <format>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,6 +44,7 @@
 #include <cmath>
 #include <format>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -70,6 +79,7 @@ constexpr commands::CommandId kViewportDebugCommand{
     case StudioTerrainAuthoringTool::Lower: return "Lower";
     case StudioTerrainAuthoringTool::Protection: return "Protect";
     case StudioTerrainAuthoringTool::Drainage: return "Drainage";
+    case StudioTerrainAuthoringTool::DrainagePath: return "Drainage Path";
     case StudioTerrainAuthoringTool::Canyon: return "Canyon";
     case StudioTerrainAuthoringTool::Ridge: return "Ridge";
     case StudioTerrainAuthoringTool::Material: return "Geology";
@@ -83,7 +93,8 @@ constexpr commands::CommandId kViewportDebugCommand{
 {
     return
         tool == StudioTerrainAuthoringTool::Canyon ||
-        tool == StudioTerrainAuthoringTool::Ridge;
+        tool == StudioTerrainAuthoringTool::Ridge ||
+        tool == StudioTerrainAuthoringTool::DrainagePath;
 }
 
 [[nodiscard]] const char* CubeFaceName(
@@ -168,6 +179,243 @@ SelectedBiomeObject(
     }
 
     return "Replace";
+}
+
+[[nodiscard]] bool DrawU32(
+    editor_ui::PanelContext& context,
+    const std::string& label,
+    u32& value)
+{
+    i64 draft = static_cast<i64>(value);
+    if (!context.InputInteger(label, draft))
+        return false;
+    value = static_cast<u32>(std::clamp<i64>(
+        draft, 0, static_cast<i64>(std::numeric_limits<u32>::max())));
+    return true;
+}
+
+[[nodiscard]] bool DrawAgeOrder(
+    editor_ui::PanelContext& context,
+    const std::string& label,
+    u64& value)
+{
+    i64 draft = static_cast<i64>(std::min<u64>(
+        value, static_cast<u64>(std::numeric_limits<i64>::max())));
+    if (!context.InputInteger(label, draft))
+        return false;
+    value = static_cast<u64>(std::max<i64>(draft, 0));
+    return true;
+}
+
+[[nodiscard]] u64 NextGeologicalAgeOrder(
+    const terrain_impacts::ImpactFieldDefinition& history)
+{
+    u64 next = 0U;
+    for (const auto& impact : history.authoredImpacts)
+        next = std::max(next, impact.ageOrder);
+    for (const auto& event : history.resurfacingEvents)
+        next = std::max(next, event.ageOrder);
+    return next == std::numeric_limits<u64>::max() ? next : next + 1U;
+}
+
+[[nodiscard]] math::Double3 DirectionFromLatLon(
+    const f64 latitudeDegrees,
+    const f64 longitudeDegrees)
+{
+    const f64 latitude = latitudeDegrees * std::numbers::pi_v<f64> / 180.0;
+    const f64 longitude = longitudeDegrees * std::numbers::pi_v<f64> / 180.0;
+    const f64 latitudeCosine = std::cos(latitude);
+    return {
+        latitudeCosine * std::cos(longitude),
+        std::sin(latitude),
+        latitudeCosine * std::sin(longitude)};
+}
+
+[[nodiscard]] bool DrawSurfacePlacement(
+    editor_ui::PanelContext& context,
+    const std::string& label,
+    math::Double3& direction)
+{
+    const f64 length = std::sqrt(math::LengthSquared(direction));
+    if (!(length > 0.0) || !std::isfinite(length))
+        direction = {1.0, 0.0, 0.0};
+    else
+    {
+        direction.x /= length;
+        direction.y /= length;
+        direction.z /= length;
+    }
+
+    f64 latitudeDegrees = std::asin(std::clamp(direction.y, -1.0, 1.0)) *
+        180.0 / std::numbers::pi_v<f64>;
+    f64 longitudeDegrees = std::atan2(direction.z, direction.x) *
+        180.0 / std::numbers::pi_v<f64>;
+    bool changed = context.InputDouble(
+        "Latitude (deg)##" + label + "-latitude", latitudeDegrees);
+    changed |= context.InputDouble(
+        "Longitude (deg)##" + label + "-longitude", longitudeDegrees);
+    if (changed)
+    {
+        latitudeDegrees = std::clamp(latitudeDegrees, -90.0, 90.0);
+        longitudeDegrees = std::remainder(longitudeDegrees, 360.0);
+        direction = DirectionFromLatLon(latitudeDegrees, longitudeDegrees);
+    }
+    return changed;
+}
+
+[[nodiscard]] bool DrawCraterRecord(
+    editor_ui::PanelContext& context,
+    terrain_impacts::ImpactRecord& impact,
+    const std::size_t index)
+{
+    using terrain_impacts::CraterProfileKind;
+    const std::string key = "planet-crater-" + std::to_string(index);
+    context.MutedText(std::format("Stable crater ID: {}", impact.id.ToString()));
+    bool changed = context.Checkbox(
+        "Enabled##" + key + "-enabled", impact.enabled);
+
+    static constexpr std::array<std::string_view, 3> profiles{
+        "Automatic", "Simple", "Complex"};
+    i32 profile = impact.profile == CraterProfileKind::Auto ? 0
+        : impact.profile == CraterProfileKind::Simple ? 1 : 2;
+    if (context.Combo("Crater Profile##" + key + "-profile", profiles, profile))
+    {
+        impact.profile = profile == 1 ? CraterProfileKind::Simple
+            : profile == 2 ? CraterProfileKind::Complex
+                           : CraterProfileKind::Auto;
+        changed = true;
+    }
+
+    changed |= context.InputDouble(
+        "Radius (m)##" + key + "-radius", impact.radiusMeters);
+    changed |= DrawSurfacePlacement(
+        context, key + "-center", impact.centerUnitDirection);
+    changed |= context.InputDouble(
+        "Simple Depth / Radius##" + key + "-simple-depth", impact.simpleDepthRatio);
+    changed |= context.InputDouble(
+        "Complex Depth / Radius##" + key + "-complex-depth", impact.complexDepthRatio);
+    changed |= context.InputDouble(
+        "Rim Height / Radius##" + key + "-rim", impact.rimHeightRatio);
+    changed |= context.InputDouble(
+        "Ejecta Thickness / Radius##" + key + "-ejecta-thickness", impact.ejectaThicknessRatio);
+    changed |= context.InputDouble(
+        "Ejecta Reach (radii)##" + key + "-ejecta-reach", impact.ejectaExtentRadii);
+    changed |= context.InputDouble(
+        "Ray Strength##" + key + "-ray-strength", impact.rayStrength);
+    changed |= DrawU32(context, "Ray Count##" + key + "-ray-count", impact.rayCount);
+    changed |= context.SliderDouble(
+        "Degradation##" + key + "-degradation", impact.degradation, 0.0, 1.0);
+
+    changed |= context.InputDouble(
+        "Formation Age (years)##" + key + "-formation-age", impact.formationAgeYears);
+    changed |= DrawAgeOrder(
+        context, "Chronological Age Order##" + key + "-age-order", impact.ageOrder);
+    changed |= context.InputDouble(
+        "Impact Angle (deg)##" + key + "-angle", impact.impactAngleDegrees);
+    changed |= context.InputDouble(
+        "Impact Azimuth (rad)##" + key + "-azimuth", impact.impactAzimuthRadians);
+    changed |= context.SliderDouble(
+        "Shape Irregularity##" + key + "-irregularity", impact.shapeIrregularity, 0.0, 0.25);
+    changed |= context.SliderDouble(
+        "Melt Fraction##" + key + "-melt", impact.meltFraction, 0.0, 1.0);
+    changed |= context.SliderDouble(
+        "Breccia Fraction##" + key + "-breccia", impact.brecciaFraction, 0.0, 1.0);
+    changed |= context.SliderDouble(
+        "Multi-ring Strength##" + key + "-multiring", impact.multiringStrength, 0.0, 1.0);
+
+    context.MutedText("Optional impactor scaling: set all three fields to derive crater size.");
+    changed |= context.InputDouble(
+        "Impactor Diameter (m)##" + key + "-impactor-diameter", impact.impactorDiameterMeters);
+    changed |= context.InputDouble(
+        "Impact Velocity (m/s)##" + key + "-impact-velocity", impact.impactVelocityMetersPerSecond);
+    changed |= context.InputDouble(
+        "Impactor Density (kg/m³)##" + key + "-impactor-density", impact.impactorDensityKgPerCubicMeter);
+
+    changed |= context.InputDouble(
+        "Binary Separation (radii)##" + key + "-binary-separation", impact.binarySeparationRadii);
+    changed |= context.SliderDouble(
+        "Binary Companion Radius Ratio##" + key + "-binary-radius", impact.binaryCompanionRadiusRatio, 0.01, 1.0);
+    changed |= context.InputDouble(
+        "Binary Azimuth (rad)##" + key + "-binary-azimuth", impact.binaryAzimuthRadians);
+    changed |= DrawU32(context, "Secondary Count##" + key + "-secondary-count", impact.secondaryCount);
+    changed |= context.SliderDouble(
+        "Secondary Radius Ratio##" + key + "-secondary-radius", impact.secondaryRadiusRatio, 0.01, 0.25);
+    changed |= context.SliderDouble(
+        "Secondary Ray Alignment##" + key + "-secondary-alignment", impact.secondaryRayAlignment, 0.0, 1.0);
+    return changed;
+}
+
+[[nodiscard]] bool DrawLavaFlow(
+    editor_ui::PanelContext& context,
+    terrain_impacts::ResurfacingRecord& flow,
+    const std::size_t index)
+{
+    const std::string key = "planet-volcanology-flow-" + std::to_string(index);
+    context.MutedText(std::format("Stable event ID: {} · Lava Flow", flow.id.ToString()));
+    bool changed = context.Checkbox(
+        "Enabled##" + key + "-enabled", flow.enabled);
+    changed |= context.InputDouble(
+        "Flow Width (m)##" + key + "-width", flow.widthMeters);
+    changed |= context.InputDouble(
+        "Lava Thickness (m)##" + key + "-thickness", flow.thicknessMeters);
+    changed |= context.InputDouble(
+        "Formation Age (years)##" + key + "-age", flow.formationAgeYears);
+    changed |= DrawAgeOrder(
+        context, "Chronological Age Order##" + key + "-order", flow.ageOrder);
+
+    i64 pointCount = static_cast<i64>(flow.centerlineUnitDirections.size());
+    if (context.InputInteger("Mare Centerline Points##" + key + "-point-count", pointCount))
+    {
+        const std::size_t bounded = static_cast<std::size_t>(
+            std::clamp<i64>(pointCount, 2, 4096));
+        flow.centerlineUnitDirections.resize(bounded, {1.0, 0.0, 0.0});
+        changed = true;
+    }
+    context.MutedText("Choose where the mare lies with its latitude/longitude centerline points.");
+    for (std::size_t point = 0U; point < flow.centerlineUnitDirections.size(); ++point)
+    {
+        if (context.Section(
+                std::format("Mare Point {}##{}-point-{}", point + 1U, key, point),
+                point == 0U))
+        {
+            changed |= DrawSurfacePlacement(
+                context,
+                key + "-point-" + std::to_string(point),
+                flow.centerlineUnitDirections[point]);
+        }
+    }
+    return changed;
+}
+[[nodiscard]] bool DrawIceRenewal(
+    editor_ui::PanelContext& context,
+    terrain_impacts::ResurfacingRecord& event,
+    const std::size_t index)
+{
+    const std::string key = "planet-cryosphere-renewal-" + std::to_string(index);
+    context.MutedText(std::format("Stable event ID: {} · Ice Renewal", event.id.ToString()));
+    bool changed = context.Checkbox("Enabled##" + key + "-enabled", event.enabled);
+    changed |= context.InputDouble("Renewal Width (m)##" + key + "-width", event.widthMeters);
+    changed |= context.InputDouble("Renewal Thickness (m)##" + key + "-thickness", event.thicknessMeters);
+    changed |= context.InputDouble("Formation Age (years)##" + key + "-age", event.formationAgeYears);
+    changed |= DrawAgeOrder(context, "Chronological Age Order##" + key + "-order", event.ageOrder);
+
+    i64 pointCount = static_cast<i64>(event.centerlineUnitDirections.size());
+    if (context.InputInteger("Ice Centerline Points##" + key + "-point-count", pointCount))
+    {
+        const std::size_t bounded = static_cast<std::size_t>(std::clamp<i64>(pointCount, 2, 4096));
+        event.centerlineUnitDirections.resize(bounded, {1.0, 0.0, 0.0});
+        changed = true;
+    }
+    for (std::size_t point = 0U; point < event.centerlineUnitDirections.size(); ++point)
+    {
+        if (context.Section(
+                std::format("Ice Point {}##{}-point-{}", point + 1U, key, point), point == 0U))
+        {
+            changed |= DrawSurfacePlacement(
+                context, key + "-point-" + std::to_string(point), event.centerlineUnitDirections[point]);
+        }
+    }
+    return changed;
 }
 } // namespace
 
@@ -679,20 +927,26 @@ void StudioViewportPanels::DrawViewBase(
                         session_->World().Selection());
 
                     const auto constraint =
-                        terrainTool_ ==
-                                StudioTerrainAuthoringTool::Canyon
-                            ? model.AddCanyonSpline(
+                        terrainTool_ == StudioTerrainAuthoringTool::DrainagePath
+                            ? model.AddDrainageSpline(
                                   *terrainSplineTerrain_,
                                   terrainSplinePoints_,
                                   terrainSplineHalfWidthMeters_,
                                   terrainSplineFalloffMeters_,
-                                  terrainSplineHeightMeters_)
-                            : model.AddRidgeSpline(
-                                  *terrainSplineTerrain_,
-                                  terrainSplinePoints_,
-                                  terrainSplineHalfWidthMeters_,
-                                  terrainSplineFalloffMeters_,
-                                  terrainSplineHeightMeters_);
+                                  terrainDrainageGuidance_)
+                            : terrainTool_ == StudioTerrainAuthoringTool::Canyon
+                                ? model.AddCanyonSpline(
+                                      *terrainSplineTerrain_,
+                                      terrainSplinePoints_,
+                                      terrainSplineHalfWidthMeters_,
+                                      terrainSplineFalloffMeters_,
+                                      terrainSplineHeightMeters_)
+                                : model.AddRidgeSpline(
+                                      *terrainSplineTerrain_,
+                                      terrainSplinePoints_,
+                                      terrainSplineHalfWidthMeters_,
+                                      terrainSplineFalloffMeters_,
+                                      terrainSplineHeightMeters_);
 
                     model.SelectObject(constraint);
 
@@ -718,8 +972,9 @@ void StudioViewportPanels::DrawViewBase(
                     terrainSplinePoints_.clear();
                     terrainSplineTerrain_.reset();
                     views_->ClearTerrainAuthoringOverlay(id);
-                    status_ =
-                        "Terrain spline committed with bounded M27 invalidation.";
+                    status_ = terrainTool_ == StudioTerrainAuthoringTool::DrainagePath
+                        ? "Drainage guidance path committed with bounded M27 invalidation."
+                        : "Terrain spline committed with bounded M27 invalidation.";
                 }
                 catch (const std::exception& exception)
                 {
@@ -745,12 +1000,33 @@ void StudioViewportPanels::DrawViewBase(
     }
 
     const auto available = context.ContentAvailable();
-    const u32 width =
+    const u32 panelWidth =
         static_cast<u32>(
             std::max(available.width, 1.0F));
-    const u32 height =
+    const u32 panelHeight =
         static_cast<u32>(
             std::max(available.height, 1.0F));
+    const bool captureSize =
+        id == "studio.primary" && viewportCaptureResolution_.has_value();
+    // Render scale: below 1 the view renders fewer pixels than the panel
+    // shows and the image is stretched to the panel (see ImageFit below).
+    const f32 renderScale = std::clamp(
+        views_->TerrainLayers(id).renderScale, 0.25F, 1.0F);
+    const bool scaledRender = renderScale < 0.999F;
+    const u32 outputWidth = captureSize
+        ? viewportCaptureResolution_->first
+        : panelWidth;
+    const u32 outputHeight = captureSize
+        ? viewportCaptureResolution_->second
+        : panelHeight;
+    const u32 width = scaledRender
+        ? std::max(1U, static_cast<u32>(
+              std::lround(static_cast<f64>(outputWidth) * renderScale)))
+        : outputWidth;
+    const u32 height = scaledRender
+        ? std::max(1U, static_cast<u32>(
+              std::lround(static_cast<f64>(outputHeight) * renderScale)))
+        : outputHeight;
 
     if (renderView->Width() != width ||
         renderView->Height() != height)
@@ -759,15 +1035,18 @@ void StudioViewportPanels::DrawViewBase(
         renderView = views_->Find(id);
     }
 
-    const auto imageInteraction =
-        context.Image(
-            renderView->DisplayColor(),
-            {
-                .width = static_cast<f32>(
-                    renderView->Width()),
-                .height = static_cast<f32>(
-                    renderView->Height())
-            });
+    const auto imageInteraction = (captureSize || scaledRender)
+        ? context.ImageFit(
+              renderView->DisplayColor(),
+              available,
+              {
+                  .width = static_cast<f32>(renderView->Width()),
+                  .height = static_cast<f32>(renderView->Height())})
+        : context.Image(
+              renderView->DisplayColor(),
+              {
+                  .width = static_cast<f32>(renderView->Width()),
+                  .height = static_cast<f32>(renderView->Height())});
 
     textHud_.Draw(context, *views_, id, imageInteraction);
 
@@ -1100,21 +1379,26 @@ void StudioViewportPanels::DrawViewBase(
                                         Selection());
 
                             const auto constraint =
-                                terrainTool_ ==
-                                        StudioTerrainAuthoringTool::
-                                            Canyon
-                                    ? model.AddCanyonSpline(
+                                terrainTool_ == StudioTerrainAuthoringTool::DrainagePath
+                                    ? model.AddDrainageSpline(
                                           *terrainSplineTerrain_,
                                           terrainSplinePoints_,
                                           terrainSplineHalfWidthMeters_,
                                           terrainSplineFalloffMeters_,
-                                          terrainSplineHeightMeters_)
-                                    : model.AddRidgeSpline(
-                                          *terrainSplineTerrain_,
-                                          terrainSplinePoints_,
-                                          terrainSplineHalfWidthMeters_,
-                                          terrainSplineFalloffMeters_,
-                                          terrainSplineHeightMeters_);
+                                          terrainDrainageGuidance_)
+                                    : terrainTool_ == StudioTerrainAuthoringTool::Canyon
+                                        ? model.AddCanyonSpline(
+                                              *terrainSplineTerrain_,
+                                              terrainSplinePoints_,
+                                              terrainSplineHalfWidthMeters_,
+                                              terrainSplineFalloffMeters_,
+                                              terrainSplineHeightMeters_)
+                                        : model.AddRidgeSpline(
+                                              *terrainSplineTerrain_,
+                                              terrainSplinePoints_,
+                                              terrainSplineHalfWidthMeters_,
+                                              terrainSplineFalloffMeters_,
+                                              terrainSplineHeightMeters_);
 
                             model.SelectObject(
                                 constraint);
@@ -1130,8 +1414,9 @@ void StudioViewportPanels::DrawViewBase(
                                 clear();
                             terrainSplineTerrain_.
                                 reset();
-                            status_ =
-                                "Terrain spline committed with bounded M27 invalidation.";
+                            status_ = terrainTool_ == StudioTerrainAuthoringTool::DrainagePath
+                                ? "Drainage guidance path committed with bounded M27 invalidation."
+                                : "Terrain spline committed with bounded M27 invalidation.";
                         }
                         catch (const std::exception& exception)
                         {
@@ -1232,6 +1517,7 @@ void StudioViewportPanels::DrawViewBase(
                         }
 
                         case StudioTerrainAuthoringTool::Select:
+                        case StudioTerrainAuthoringTool::DrainagePath:
                         case StudioTerrainAuthoringTool::Canyon:
                         case StudioTerrainAuthoringTool::Ridge:
                         case StudioTerrainAuthoringTool::BiomePaint:
@@ -1315,7 +1601,7 @@ void CloseLegacyBrowserSources(editor_ui::EditorUi& ui)
     ClosePanels(
         ui,
         {
-            "Explorer",
+            "Explorer Source",
             "Material Service"
         });
 }
@@ -1336,7 +1622,9 @@ void CloseSpecialistPanels(editor_ui::EditorUi& ui)
             "Debug",
             "Display Diagnostics",
             "World Documents",
-            "Project Settings"
+            "Project Settings",
+            "Planning",
+            "Plugins"
         });
 }
 
@@ -1346,7 +1634,7 @@ void OpenCanonicalBrowser(
 {
     g_browserMode = mode;
     CloseLegacyBrowserSources(ui);
-    OpenPanels(ui, {"World / Assets"});
+    OpenPanels(ui, {"Explorer"});
 }
 
 void OpenCanonicalWorkspace(
@@ -1402,6 +1690,20 @@ void ActivateWorkspace(
             ui,
             {"Shading", "Properties"});
         break;
+
+    case WorkspaceMode::Planning:
+        CloseSpecialistPanels(ui);
+        ClosePanels(ui, {"Viewport", "Build", "Output"});
+        OpenCanonicalBrowser(ui, BrowserMode::World);
+        OpenPanels(ui, {"Planning", "Properties"});
+        break;
+
+    case WorkspaceMode::Plugins:
+        CloseSpecialistPanels(ui);
+        ClosePanels(ui, {"Viewport", "Build", "Output"});
+        OpenCanonicalBrowser(ui, BrowserMode::Assets);
+        OpenPanels(ui, {"Plugins", "Properties"});
+        break;
     }
 }
 
@@ -1416,7 +1718,7 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
 
     ui.RegisterMenuAction({
         .menu = "Home",
-        .label = "Workspace: Scene",
+        .label = "Workspace: Build",
         .invoke = [&ui]
         {
             ActivateWorkspace(ui, WorkspaceMode::Scene);
@@ -1434,7 +1736,7 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
 
     ui.RegisterMenuAction({
         .menu = "Home",
-        .label = "Workspace: Celestial",
+        .label = "Workspace: Universe",
         .invoke = [&ui]
         {
             ActivateWorkspace(ui, WorkspaceMode::Celestial);
@@ -1458,6 +1760,18 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
             ActivateWorkspace(ui, WorkspaceMode::Shading);
         }
     });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Planning",
+        .invoke = [&ui] { ActivateWorkspace(ui, WorkspaceMode::Planning); }
+    });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Plugins",
+        .invoke = [&ui] { ActivateWorkspace(ui, WorkspaceMode::Plugins); }
+    });
 }
 
 void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
@@ -1472,7 +1786,7 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
 
     ui.RegisterPanel({
         .id = contract.panel,
-        .title = "World / Assets",
+        .title = "Explorer",
         .defaultOpen = contract.defaultOpen,
         .defaultDock = contract.defaultDock,
         .dockOrder = contract.dockOrder,
@@ -1482,42 +1796,12 @@ void RegisterWorldAssetsBrowser(editor_ui::EditorUi& ui)
             [&ui](editor_ui::PanelContext& context)
             {
                 CloseLegacyBrowserSources(ui);
-
-                static constexpr std::array<std::string_view, 2>
-                    kBrowserModes{
-                        "World",
-                        "Assets"
-                    };
-
-                i32 browserIndex =
-                    g_browserMode == BrowserMode::World
-                        ? 0
-                        : 1;
-
-                if (context.SegmentedControl(
-                        "world-assets-mode",
-                        kBrowserModes,
-                        browserIndex))
-                {
-                    g_browserMode =
-                        browserIndex == 0
-                            ? BrowserMode::World
-                            : BrowserMode::Assets;
-                }
-
-                context.Separator();
-
-                const std::string_view sourceTitle =
-                    BrowserSourcePanelTitle(g_browserMode);
-
                 if (!ui.DrawPanelContentsByTitle(
-                        sourceTitle,
-                        context))
+                    "Explorer Source",
+                    context))
                 {
                     context.MutedText(
-                        g_browserMode == BrowserMode::World
-                            ? "World hierarchy is not registered in this Studio configuration."
-                            : "Asset service is not registered in this Studio configuration.");
+                        "Explorer is not registered in this Studio configuration.");
                 }
             }
     });
@@ -1539,6 +1823,8 @@ StudioViewportPanels::~StudioViewportPanels()
         static_cast<void>(
             editor_ui::RemoveShellBand("orbit.activity"));
         static_cast<void>(
+            editor_ui::RemoveShellBand("orbit.workspace-tabs"));
+        static_cast<void>(
             editor_ui::RemoveShellBand("orbit.mode-toolbar"));
         g_shellPanels = nullptr;
         g_workspaceUi = nullptr;
@@ -1550,6 +1836,17 @@ void StudioViewportPanels::RegisterShellBands(
 {
     g_shellPanels = this;
     g_workspaceUi = &ui;
+
+    editor_ui::UpsertShellBand({
+        .id = "orbit.workspace-tabs",
+        .order = -10,
+        .height = 58.0F,
+        .emphasized = true,
+        .draw = [](editor_ui::PanelContext& context)
+        {
+            if (g_shellPanels != nullptr) g_shellPanels->DrawWorkspaceBand(context);
+        }
+    });
 
     editor_ui::UpsertShellBand({
         .id = "orbit.activity",
@@ -1589,6 +1886,7 @@ bool StudioViewportPanels::SetWorkspaceMode(const std::string_view name)
 void StudioViewportPanels::SyncModeToolbar()
 {
     if (g_workspaceMode != WorkspaceMode::Scene &&
+        g_workspaceMode != WorkspaceMode::Planet &&
         g_workspaceMode != WorkspaceMode::Celestial)
     {
         static_cast<void>(
@@ -1608,7 +1906,11 @@ void StudioViewportPanels::SyncModeToolbar()
                     return;
                 }
 
-                if (g_workspaceMode == WorkspaceMode::Celestial)
+                if (g_workspaceMode == WorkspaceMode::Planet)
+                {
+                    g_shellPanels->DrawPlanetToolbar(context);
+                }
+                else if (g_workspaceMode == WorkspaceMode::Celestial)
                 {
                     g_shellPanels->DrawCelestialToolbar(context);
                 }
@@ -1633,7 +1935,7 @@ void StudioViewportPanels::DrawElementBubble(
 
     const std::string suffix = object.ToString();
     bool open =
-        context.Button("v##bubble-open-" + suffix);
+        context.ToolbarButton("Properties##bubble-open-" + suffix, editor_ui::ToolbarIcon::Properties, false, true, true);
     context.AnchorNextPopupBelowItem();
 
     if (bubbleOpenRequest_.has_value() &&
@@ -1807,7 +2109,9 @@ void StudioViewportPanels::DrawCelestialToolbar(
         world.Commands(),
         world.Selection());
 
-    context.Text("Celestial");
+    using editor_ui::ToolbarIcon;
+    const bool compact = context.ContentAvailable().width < 1600.0F * editor_ui::CurrentUiScale();
+    context.MutedText("Bodies");
     context.SameLine();
 
     const auto body = model.SelectedBody();
@@ -1821,13 +2125,12 @@ void StudioViewportPanels::DrawCelestialToolbar(
     context.Text(body->name);
     context.SameLine();
     DrawElementBubble(context, body->id);
-    context.SameLine();
-    context.MutedText("|");
-    context.SameLine();
+    context.ToolbarDivider();
 
     const auto toggle =
         [&](const schema::TypeId type,
-            const std::string_view label)
+            const std::string_view label,
+            const ToolbarIcon icon)
         {
             const auto state =
                 model.CapabilityEnabled(body->id, type);
@@ -1838,8 +2141,9 @@ void StudioViewportPanels::DrawCelestialToolbar(
                 "##celestial-tb-" +
                 type.ToString();
 
-            if (context.Checkbox(id, enabled))
+            if (context.ToolbarButton(id, icon, enabled, true, compact))
             {
+                enabled = !enabled;
                 try
                 {
                     model.SetCapabilityEnabled(
@@ -1870,14 +2174,14 @@ void StudioViewportPanels::DrawCelestialToolbar(
             context.SameLine();
         };
 
-    toggle(world_model::kAtmosphereCapabilityType, "Atmosphere");
-    toggle(world_model::kCloudLayerCapabilityType, "Clouds");
-    toggle(world_model::kOceanCapabilityType, "Ocean");
-    toggle(world_model::kRingSystemCapabilityType, "Rings");
-    toggle(world_model::kMagnetosphereCapabilityType, "Aurora");
-    toggle(world_model::kSurfaceCapabilityType, "Surface");
+    toggle(world_model::kAtmosphereCapabilityType, "Atmosphere", ToolbarIcon::Atmosphere);
+    toggle(world_model::kCloudLayerCapabilityType, "Clouds", ToolbarIcon::Clouds);
+    toggle(world_model::kOceanCapabilityType, "Ocean", ToolbarIcon::Ocean);
+    toggle(world_model::kRingSystemCapabilityType, "Rings", ToolbarIcon::Rings);
+    toggle(world_model::kMagnetosphereCapabilityType, "Aurora", ToolbarIcon::Aurora);
+    toggle(world_model::kSurfaceCapabilityType, "Surface", ToolbarIcon::Surface);
 
-    if (context.Button("More...##celestial-tb-more"))
+    if (context.ToolbarButton("More##celestial-tb-more", ToolbarIcon::More, false, true, compact))
     {
         celestialMoreRequested_ = true;
     }
@@ -1922,6 +2226,10 @@ void StudioViewportPanels::DrawCelestialToolbar(
 
         context.EndPopup();
     }
+
+    context.ToolbarDivider();
+    if (context.ToolbarButton("Commands /##toolbar-commands", editor_ui::ToolbarIcon::More, false, true, true))
+        expansion_.RequestCommandPaletteOpen();
 
     if (!status_.empty())
     {
@@ -2021,6 +2329,96 @@ bool StudioViewportPanels::FrameSelectedObject()
     return false;
 }
 
+GizmoSettings StudioViewportPanels::Snapping() const noexcept
+{
+    return expansion_.ViewportState().gizmo;
+}
+
+void StudioViewportPanels::SetSnapping(const GizmoSettings& settings)
+{
+    if (!std::isfinite(settings.translationSnapMeters) || settings.translationSnapMeters <= 0 ||
+        !std::isfinite(settings.rotationSnapDegrees) || settings.rotationSnapDegrees <= 0 ||
+        !std::isfinite(settings.scaleSnapStep) || settings.scaleSnapStep <= 0 ||
+        static_cast<u32>(settings.translationSnapUnit) > 5U)
+        throw std::invalid_argument("Snap steps must be finite and greater than zero; distance units must be mm, cm, m, km, in, or ft.");
+    auto& gizmo = expansion_.ViewportState().gizmo;
+    gizmo.translationSnap = settings.translationSnap;
+    gizmo.translationSnapMeters = settings.translationSnapMeters;
+    gizmo.translationSnapUnit = settings.translationSnapUnit;
+    gizmo.surfaceSnap = settings.surfaceSnap;
+    gizmo.rotationSnap = settings.rotationSnap;
+    gizmo.rotationSnapDegrees = settings.rotationSnapDegrees;
+    gizmo.scaleSnap = settings.scaleSnap;
+    gizmo.scaleSnapStep = settings.scaleSnapStep;
+}
+
+void StudioViewportPanels::DrawSnappingSettings(editor_ui::PanelContext& context)
+{
+    auto next = Snapping();
+    bool changed = context.Checkbox("Grid snap##snap-grid",next.translationSnap);
+    f64 distance = next.translationSnapMeters / SnapUnitMeters(next.translationSnapUnit);
+    if (context.InputDouble("Distance##snap-distance",distance,130.0F * editor_ui::CurrentUiScale()))
+    {
+        next.translationSnapMeters = distance * SnapUnitMeters(next.translationSnapUnit);
+        changed = true;
+    }
+    context.SameLine();
+    static constexpr std::array<std::string_view,6> units{"mm","cm","m","km","in","ft"};
+    i32 unit = static_cast<i32>(next.translationSnapUnit);
+    if (context.Combo("##snap-distance-unit",units,unit,70.0F * editor_ui::CurrentUiScale()))
+    {
+        next.translationSnapUnit = static_cast<SnapLengthUnit>(unit);
+        changed = true;
+    }
+    changed = context.Checkbox("Snap to surface##snap-surface",next.surfaceSnap) || changed;
+    context.Separator();
+    changed = context.Checkbox("Angle snap##snap-angle",next.rotationSnap) || changed;
+    changed = context.InputDouble("Angle (deg)##snap-degrees",next.rotationSnapDegrees) || changed;
+    context.Separator();
+    changed = context.Checkbox("Scale snap##snap-scale",next.scaleSnap) || changed;
+    f64 percent = next.scaleSnapStep * 100.0;
+    if (context.InputDouble("Scale (%)##snap-percent",percent))
+    {
+        next.scaleSnapStep = percent / 100.0;
+        changed = true;
+    }
+    if (changed)
+    {
+        try { SetSnapping(next); status_.clear(); }
+        catch (const std::exception& e) { status_=e.what(); }
+    }
+    if (!status_.empty()) context.ErrorText(status_);
+}
+
+void StudioViewportPanels::DrawSnappingControls(editor_ui::PanelContext& context, bool compact)
+{
+    const auto settings = Snapping();
+    bool enabled = settings.translationSnap || settings.surfaceSnap;
+    std::string label = compact ? "Snap" : std::format("Snap {:g} {}",
+        settings.translationSnapMeters / SnapUnitMeters(settings.translationSnapUnit),SnapUnitSymbol(settings.translationSnapUnit));
+    if (settings.tool == GizmoTool::Rotate)
+    {
+        enabled = settings.rotationSnap;
+        if (!compact) label = std::format("Snap {:g} deg",settings.rotationSnapDegrees);
+    }
+    else if (settings.tool == GizmoTool::Scale)
+    {
+        enabled = settings.scaleSnap;
+        if (!compact) label = std::format("Snap {:g}%",settings.scaleSnapStep * 100.0);
+    }
+    // Retain the word Snap even in compact mode so its settings are discoverable.
+    const bool open = context.ToolbarButton(label+"##toolbar-snap",editor_ui::ToolbarIcon::Snap,
+        enabled,true,false,editor_ui::ToolbarStyle::ModifierMenu);
+    context.AnchorNextPopupBelowItem();
+    if (context.BeginPopup("toolbar-snap-settings",open,{360.0F * editor_ui::CurrentUiScale(),0}))
+    {
+        context.Heading("Snapping");
+        context.MutedText("Movement uses real distances; default unit is meters.");
+        DrawSnappingSettings(context);
+        context.EndPopup();
+    }
+}
+
 void StudioViewportPanels::DrawSceneToolbar(
     editor_ui::PanelContext& context)
 {
@@ -2028,7 +2426,7 @@ void StudioViewportPanels::DrawSceneToolbar(
         !session_->World().HasWorld())
     {
         context.MutedText(
-            "Open a world to use the Scene tools.");
+            "Open a world to use the Build tools.");
         return;
     }
 
@@ -2053,93 +2451,44 @@ void StudioViewportPanels::DrawSceneToolbar(
     const auto separator =
         [&context]
         {
-            context.SameLine();
-            context.MutedText("|");
-            context.SameLine();
+            context.ToolbarDivider();
         };
 
-    context.Text("Scene");
-    context.SameLine();
-
-    static constexpr std::array<std::string_view, 4> kTools{
-        "Select", "Move", "Rotate", "Scale"};
+    using editor_ui::ToolbarIcon;
+    const bool compact = context.ContentAvailable().width < 1900.0F * editor_ui::CurrentUiScale();
+    static constexpr std::array<editor_ui::ToolbarChoice, 4> kTools{{
+        {"Select", ToolbarIcon::Select}, {"Move", ToolbarIcon::Move},
+        {"Rotate", ToolbarIcon::Rotate}, {"Scale", ToolbarIcon::Scale}}};
     i32 tool = static_cast<i32>(gizmo.tool);
-    if (context.SegmentedControl(
+    if (context.ToolbarChoices(
             "scene-toolbar-gizmo-tool",
             kTools,
-            tool))
+            tool, compact))
     {
         gizmo.tool = static_cast<GizmoTool>(std::clamp(tool, 0, 3));
     }
 
     context.SameLine();
-    static constexpr std::array<std::string_view, 2> kSpaces{
-        "World", "Local"};
+    static constexpr std::array<editor_ui::ToolbarChoice, 2> kSpaces{{
+        {"World", ToolbarIcon::World}, {"Local", ToolbarIcon::Local}}};
     i32 space = static_cast<i32>(gizmo.space);
-    if (context.SegmentedControl(
+    if (context.ToolbarChoices(
             "scene-toolbar-space",
             kSpaces,
-            space))
+            space, compact, editor_ui::ToolbarStyle::Modifier))
     {
         gizmo.space = static_cast<GizmoSpace>(std::clamp(space, 0, 1));
     }
 
-    if (gizmo.tool != GizmoTool::Select)
-    {
-        context.SameLine();
-        bool* snap = &gizmo.translationSnap;
-        if (gizmo.tool == GizmoTool::Rotate)
-        {
-            snap = &gizmo.rotationSnap;
-        }
-        else if (gizmo.tool == GizmoTool::Scale)
-        {
-            snap = &gizmo.scaleSnap;
-        }
-        static_cast<void>(
-            context.Checkbox("Snap##scene-toolbar-snap", *snap));
-    }
+    context.SameLine();
+    DrawSnappingControls(context, compact);
 
     separator();
-    context.MutedText("Create");
-    context.SameLine();
-
-    const bool canCreate = CanCreateAtViewport(kViewport);
-    if (!canCreate)
-    {
-        context.MutedText("(focus a viewport)");
-        context.SameLine();
-    }
-    else
-    {
-        if (context.Button("+ Point Light##scene-tb-point"))
-        {
-            run([&] { CreateLocalLightAtViewport(kViewport, false); });
-        }
-        context.SameLine();
-        if (context.Button("+ Spot Light##scene-tb-spot"))
-        {
-            run([&] { CreateLocalLightAtViewport(kViewport, true); });
-        }
-        context.SameLine();
-        if (context.Button("+ Box##scene-tb-box"))
-        {
-            run([&] { CreateVisibilityProxyAtViewport(kViewport, true); });
-        }
-        context.SameLine();
-        if (context.Button("+ Sphere##scene-tb-sphere"))
-        {
-            run([&] { CreateVisibilityProxyAtViewport(kViewport, false); });
-        }
-        context.SameLine();
-    }
+    expansion_.DrawCreationMenus(context, compact);
 
     separator();
-    context.MutedText("Edit");
-    context.SameLine();
-
     const bool hasSelection = !world.Selection().Ordered().empty();
-    if (context.Button("Frame Selected##scene-tb-frame") && hasSelection)
+    if (context.ToolbarButton("Frame Selected##scene-tb-frame", ToolbarIcon::Frame, false, hasSelection, compact))
     {
         run([&]
         {
@@ -2150,17 +2499,17 @@ void StudioViewportPanels::DrawSceneToolbar(
         });
     }
     context.SameLine();
-    if (context.Button("Duplicate##scene-tb-dup") && hasSelection)
+    if (context.ToolbarButton("Duplicate##scene-tb-dup", ToolbarIcon::Duplicate, false, hasSelection, compact))
     {
         run([&] { DuplicateSelection(); });
     }
     context.SameLine();
-    if (context.Button("Delete##scene-tb-del") && hasSelection)
+    if (context.ToolbarButton("Delete##scene-tb-del", ToolbarIcon::Delete, false, hasSelection, compact))
     {
         run([&] { DeleteSelection(); });
     }
-    context.SameLine();
-    if (context.Button("Undo##scene-tb-undo"))
+    separator();
+    if (context.ToolbarButton("Undo##scene-tb-undo", ToolbarIcon::Undo, false, world.Commands().CanUndo(), compact))
     {
         run([&]
         {
@@ -2169,7 +2518,7 @@ void StudioViewportPanels::DrawSceneToolbar(
         });
     }
     context.SameLine();
-    if (context.Button("Redo##scene-tb-redo"))
+    if (context.ToolbarButton("Redo##scene-tb-redo", ToolbarIcon::Redo, false, world.Commands().CanRedo(), compact))
     {
         run([&]
         {
@@ -2181,11 +2530,652 @@ void StudioViewportPanels::DrawSceneToolbar(
     if (world.Selection().Ordered().size() == 1U)
     {
         separator();
-        context.MutedText("Selected");
-        context.SameLine();
         DrawElementBubble(
             context,
             world.Selection().Ordered().front());
+    }
+
+    context.ToolbarDivider();
+    if (context.ToolbarButton("Commands /##toolbar-commands", editor_ui::ToolbarIcon::More, false, true, true))
+        expansion_.RequestCommandPaletteOpen();
+
+    if (!status_.empty())
+    {
+        context.SameLine();
+        context.MutedText(status_);
+    }
+}
+
+void StudioViewportPanels::DrawPlanetToolbar(
+    editor_ui::PanelContext& context)
+{
+    if (session_ == nullptr || !session_->World().HasWorld())
+    {
+        context.MutedText("Open a world to use the Planet tools.");
+        return;
+    }
+
+    auto& world = session_->World();
+    using editor_ui::ToolbarIcon;
+    const bool compact = context.ContentAvailable().width <
+        1900.0F * editor_ui::CurrentUiScale();
+
+    const auto createPlanet = world.CommandRegistry().Enablement(
+        editor_model::authoring_commands::kCreateRockyPlanet);
+    if (context.ToolbarButton("Create Rocky Planet##planet-toolbar-create",
+            ToolbarIcon::Planet, false, createPlanet.enabled, compact))
+    {
+        try
+        {
+            world.CommandRegistry().Invoke(editor_model::authoring_commands::kCreateRockyPlanet);
+            status_.clear();
+        }
+        catch (const std::exception& exception) { status_ = exception.what(); }
+    }
+    context.ToolbarDivider();
+
+    editor_model::CelestialAuthoringModel model(
+        world.Objects(), world.Schemas(), world.Commands(), world.Selection());
+    const auto body = model.SelectedBody();
+
+    if (!body.has_value())
+    {
+        context.MutedText("Select a planet to edit its generation elements.");
+    }
+    else
+    {
+        const auto bodyChildren = world.Objects().Children(body->id);
+
+        const auto toggleCapability = [&](const schema::TypeId type,
+                                          const std::string_view label,
+                                          const ToolbarIcon icon)
+        {
+            const auto state = model.CapabilityEnabled(body->id, type);
+            bool enabled = state.value_or(false);
+            if (context.ToolbarButton(std::string(label) + "##planet-feature-" +
+                    type.ToString(), icon, enabled, true, compact))
+            {
+                try
+                {
+                    model.SetCapabilityEnabled(body->id, type, !enabled);
+                    status_.clear();
+                }
+                catch (const std::exception& exception) { status_ = exception.what(); }
+            }
+            if (state.has_value())
+            {
+                for (const auto& child : world.Objects().Children(body->id))
+                {
+                    if (child.type == type)
+                    {
+                        context.SameLine();
+                        DrawElementBubble(context, child.id);
+                        break;
+                    }
+                }
+            }
+            context.SameLine();
+        };
+
+        const auto terrainSurface = std::ranges::find_if(
+            bodyChildren,
+            [](const auto& child)
+            {
+                return child.type == world_model::kTerrainSurfaceType;
+            });
+        editor_model::SurfaceAuthoringModel terrainAuthoring(
+            world.Objects(), world.Commands(), world.Selection());
+        if (terrainSurface != bodyChildren.end())
+        {
+            const scene::ObjectId terrainId = terrainSurface->id;
+            context.SameLine();
+            const bool openHydrology = context.ToolbarButton(
+                "Hydrology##planet-toolbar-hydrology",
+                ToolbarIcon::Procedural,
+                false,
+                true,
+                compact,
+                editor_ui::ToolbarStyle::Menu);
+            context.AnchorNextPopupBelowItem();
+            if (context.BeginPopup(
+                    "planet-hydrology-popup",
+                    openHydrology,
+                    {520.0F * editor_ui::CurrentUiScale(), 0.0F}))
+            {
+                auto processes = terrainAuthoring.ProcessSettings(terrainId);
+                context.Heading("Hydrology · Runoff and Water Balance");
+                context.MutedText("Tune rainfall, infiltration, soil storage, evaporation and seasonal forcing.");
+                context.Heading("Runoff budget");
+                context.MutedText("Runoff uses this rainfall rate times the static terrain precipitation field. Seasonal forcing scales it with simulation time; groundwater is not modeled.");
+                bool changed = context.InputDouble(
+                    "Rainfall Rate (m/s)##planet-hydrology-rainfall",
+                    processes.hydraulic.rainfallMetersPerSecond);
+                const auto waterBalance = context.TreeItem("Infiltration and soil water##planet-hydrology-water-balance", false);
+                if (waterBalance.open)
+                {
+                    changed |= context.InputDouble(
+                        "Infiltration Rate (m/s)##planet-hydrology-infiltration",
+                        processes.hydraulic.infiltrationMetersPerSecond);
+                    changed |= context.InputDouble(
+                        "Soil Moisture Capacity (m)##planet-hydrology-moisture-capacity",
+                        processes.hydraulic.moistureCapacityDepthMeters);
+                    changed |= context.InputDouble(
+                        "Evaporation Rate (1/s)##planet-hydrology-evaporation",
+                        processes.hydraulic.evaporationRatePerSecond);
+                    context.TreePop();
+                }
+                const auto seasonal = context.TreeItem("Seasonal rainfall##planet-hydrology-seasonal", false);
+                if (seasonal.open)
+                {
+                    context.MutedText(
+                        "Simulation time modulates the static precipitation map; runoff is refreshed in 12 steps per season cycle.");
+                    changed |= context.SliderDouble(
+                        "Amplitude##planet-hydrology-seasonal-amplitude",
+                        processes.hydraulic.seasonalRainfallAmplitude, 0.0, 1.0);
+                    constexpr f64 secondsPerYear = 31'557'600.0;
+                    f64 seasonYears =
+                        processes.hydraulic.seasonalRainfallPeriodSeconds / secondsPerYear;
+                    if (context.InputDouble(
+                            "Season Length (years)##planet-hydrology-seasonal-period",
+                            seasonYears))
+                    {
+                        processes.hydraulic.seasonalRainfallPeriodSeconds =
+                            std::max(1.0 / secondsPerYear, seasonYears) * secondsPerYear;
+                        changed = true;
+                    }
+                    f64 seasonPhaseDegrees =
+                        processes.hydraulic.seasonalRainfallPhaseRadians * 180.0 / std::numbers::pi;
+                    if (context.InputDouble(
+                            "Phase Offset (degrees)##planet-hydrology-seasonal-phase",
+                            seasonPhaseDegrees))
+                    {
+                        processes.hydraulic.seasonalRainfallPhaseRadians =
+                            seasonPhaseDegrees * std::numbers::pi / 180.0;
+                        changed = true;
+                    }
+                    context.TreePop();
+                }
+                context.Separator();
+                if (changed)
+                {
+                    try
+                    {
+                        terrainAuthoring.SetProcessSettings(terrainId, processes);
+                        const auto targetBody = session_->World().Surfaces().BodyForTerrainObject(terrainId);
+                        if (!targetBody.has_value())
+                            throw std::runtime_error("Terrain process settings require a spherical terrain body.");
+                        const auto planet = session_->World().Surfaces().Registry().SphericalPlanetDefinition(*targetBody);
+                        if (!planet.has_value())
+                            throw std::runtime_error("Terrain process settings require a spherical planet definition.");
+                        session_->QueueTerrainInvalidation({
+                            .kind = terrain_dependency::TerrainChangeKind::ProcessSettings,
+                            .scope = {.planet = planet->id, .global = true}});
+                        status_ = "Hydrology settings updated; runoff is rebuilding.";
+                    }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+                context.Separator();
+                context.Heading("Planet map previews");
+                context.MutedText("Map layers use the same terrain and climate samples as the viewport.");
+                if (context.Button("Preview Rainfall Map##planet-hydrology-precipitation"))
+                {
+                    try
+                    {
+                        session_->Viewports().SetMode("studio.primary", studio_session::ViewportMode::FlatMap);
+                        if (views_ != nullptr)
+                            views_->SetFlatMapLayer("studio.primary", FlatMapLayer::Precipitation);
+                        status_ = "Showing planet precipitation on the flat map.";
+                    }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+                if (context.Button("Preview Standing Water##planet-hydrology-water-depth"))
+                {
+                    try
+                    {
+                        session_->Viewports().SetMode("studio.primary", studio_session::ViewportMode::FlatMap);
+                        if (views_ != nullptr)
+                            views_->SetFlatMapLayer("studio.primary", FlatMapLayer::WaterDepth);
+                        status_ = "Showing standing-water depth on the flat map.";
+                    }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+                context.EndPopup();
+            }
+            DrawRiversToolbarBubble(context, terrainAuthoring, terrainId, compact);
+            DrawTerrainProcessesToolbarBubble(context, terrainAuthoring, terrainId, compact);
+            context.SameLine();
+            const bool openTectonics = context.ToolbarButton(
+                "Tectonics##planet-toolbar-tectonics",
+                ToolbarIcon::Procedural,
+                false,
+                true,
+                compact,
+                editor_ui::ToolbarStyle::Menu);
+            context.AnchorNextPopupBelowItem();
+            if (context.BeginPopup(
+                    "planet-tectonics-popup",
+                    openTectonics,
+                    {520.0F * editor_ui::CurrentUiScale(), 0.0F}))
+            {
+                auto settings = terrainAuthoring.Tectonics(terrainId);
+                context.Heading("Planetary Tectonics");
+                context.MutedText("Recipe changes rebuild the same spherical plate field used by terrain and the tectonic map.");
+
+                i32 preset = 0;
+                static constexpr std::array<std::string_view, 3> kTectonicPresets{
+                    "Earthlike", "Ancient / Stable", "Hotspot Rich"};
+                if (context.Combo("Starting Recipe##planet-tectonics-preset", kTectonicPresets, preset))
+                {
+                    if (preset == 0)
+                    {
+                        settings = terrain::TectonicFieldDesc{};
+                    }
+                    else if (preset == 1)
+                    {
+                        settings.plateCount = 8U;
+                        settings.continentalPlateFraction = 0.55;
+                        settings.minPlateAngularSpeed = 0.08;
+                        settings.maxPlateAngularSpeed = 0.38;
+                        settings.hotspotCount = 2U;
+                    }
+                    else if (preset == 2)
+                    {
+                        settings.plateCount = 18U;
+                        settings.continentalPlateFraction = 0.32;
+                        settings.hotspotCount = 8U;
+                        settings.hotspotBaseReliefMeters = 8'000.0;
+                    }
+                    try
+                    {
+                        terrainAuthoring.SetTectonics(terrainId, settings);
+                        status_ = std::format("Applied {} tectonic recipe.", kTectonicPresets[static_cast<std::size_t>(preset)]);
+                    }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+
+                context.Heading("Plate Layout");
+                i64 plateCount = static_cast<i64>(settings.plateCount);
+                bool changed = context.InputInteger("Major Plates (1–24)##planet-tectonics-plates", plateCount);
+                settings.plateCount = plateCount >= 0 ? static_cast<u32>(plateCount) : 0U;
+                changed |= context.SliderDouble("Continental Fraction##planet-tectonics-continent-fraction", settings.continentalPlateFraction, 0.0, 1.0);
+                changed |= context.SliderDouble("Plate Control of Continents##planet-tectonics-continent-influence", settings.tectonicContinentInfluence, 0.0, 1.0);
+                context.Heading("Boundary Character");
+                changed |= context.InputDouble("Convergent Uplift (m)##planet-tectonics-uplift", settings.convergenceUpliftMeters);
+                changed |= context.SliderDouble("Oceanic Collision Relief##planet-tectonics-oceanic-scale", settings.oceanicConvergenceScale, 0.0, 2.0);
+                changed |= context.SliderDouble("Belt Ridge Relief##planet-tectonics-belt-ridge-relief", settings.beltRidgeRelief, 0.0, 3.0);
+                context.Heading("Hotspots");
+                i64 hotspotCount = static_cast<i64>(settings.hotspotCount);
+                changed |= context.InputInteger("Mantle Hotspots (0–8)##planet-tectonics-hotspots", hotspotCount);
+                settings.hotspotCount = hotspotCount >= 0 ? static_cast<u32>(hotspotCount) : 0U;
+                changed |= context.InputDouble("Hotspot Relief (m)##planet-tectonics-hotspot-relief", settings.hotspotBaseReliefMeters);
+
+                const auto advanced = context.TreeItem("Advanced Plate Controls##planet-tectonics-advanced", false);
+                if (advanced.open)
+                {
+                    i64 seed = static_cast<i64>(std::min<u64>(settings.seed, 0x7fffffffffffffffULL));
+                    changed |= context.InputInteger("Tectonic Seed (0 = terrain seed)##planet-tectonics-seed", seed);
+                    settings.seed = seed >= 0 ? static_cast<u64>(seed) : 0U;
+                    changed |= context.SliderDouble("Plate Irregularity##planet-tectonics-irregularity", settings.plateIrregularity, 0.0, 1.0);
+                    changed |= context.SliderDouble("Boundary Influence Width##planet-tectonics-boundary-width", settings.boundaryWidthDot, 0.01, 1.0);
+                    changed |= context.InputDouble("Minimum Plate Motion##planet-tectonics-min-speed", settings.minPlateAngularSpeed);
+                    changed |= context.InputDouble("Maximum Plate Motion##planet-tectonics-max-speed", settings.maxPlateAngularSpeed);
+                    i64 ageSteps = static_cast<i64>(settings.hotspotAgeSteps);
+                    changed |= context.InputInteger("Hotspot Chain Age Steps (0–6)##planet-tectonics-age-steps", ageSteps);
+                    settings.hotspotAgeSteps = ageSteps >= 0 ? static_cast<u32>(ageSteps) : 0U;
+                    changed |= context.SliderDouble("Hotspot Age Decay##planet-tectonics-hotspot-decay", settings.hotspotAgeDecay, 0.0, 1.0);
+                    changed |= context.InputDouble("Hotspot Chain Spacing (m)##planet-tectonics-hotspot-spacing", settings.hotspotChainSpacingMeters);
+                    changed |= context.InputDouble("Hotspot Core Radius (m)##planet-tectonics-hotspot-radius", settings.hotspotCoreRadiusMeters);
+                    changed |= context.SliderDouble("Plate Size Variance##planet-tectonics-size-variance", settings.plateSizeVarianceDot, 0.0, 1.0);
+                    changed |= context.InputDouble("Continental Crust Bias (m)##planet-tectonics-continental-bias", settings.continentalPlateBiasMeters);
+                    changed |= context.InputDouble("Oceanic Crust Bias (m)##planet-tectonics-oceanic-bias", settings.oceanicPlateBiasMeters);
+                    changed |= context.InputDouble("Convergence Reference Speed##planet-tectonics-convergence-speed", settings.convergenceReferenceSpeed);
+                    changed |= context.InputDouble("Transform Reference Speed##planet-tectonics-transform-speed", settings.transformReferenceSpeed);
+                    changed |= context.InputDouble("Hotspot Radius Growth per Age##planet-tectonics-hotspot-growth", settings.hotspotRadiusGrowthPerAge);
+                    context.TreePop();
+                }
+
+                if (changed)
+                {
+                    try
+                    {
+                        terrainAuthoring.SetTectonics(terrainId, settings);
+                        status_ = "Tectonic recipe updated; terrain generation is refreshing.";
+                    }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+
+                context.Separator();
+                context.Heading("Geological Coupling");
+                context.MutedText("How crust age and uplift shape erosion and watersheds. Edits regenerate terrain.");
+                {
+                    auto coupling = terrainAuthoring.ProcessSettings(terrainId);
+                    bool couplingChanged = context.SliderDouble(
+                        "Old Crust Erodes Faster##planet-tectonics-age-erodibility",
+                        coupling.streamPower.ageErodibilityGain, 0.0, 4.0);
+                    couplingChanged |= context.SliderDouble(
+                        "Old Crust Loses Uplift##planet-tectonics-age-uplift",
+                        coupling.streamPower.ageUpliftDecay, 0.0, 1.0);
+                    couplingChanged |= context.SliderDouble(
+                        "Belts Steer Watersheds##planet-tectonics-drainage-guidance",
+                        coupling.streamPower.tectonicDrainageGuidance, 0.0, 1.0);
+                    if (couplingChanged)
+                    {
+                        try
+                        {
+                            terrainAuthoring.SetProcessSettings(terrainId, coupling);
+                            const auto targetBody = session_->World().Surfaces().BodyForTerrainObject(terrainId);
+                            if (!targetBody.has_value())
+                                throw std::runtime_error("Terrain process settings require a spherical terrain body.");
+                            const auto planet = session_->World().Surfaces().Registry().SphericalPlanetDefinition(*targetBody);
+                            if (!planet.has_value())
+                                throw std::runtime_error("Terrain process settings require a spherical planet definition.");
+                            session_->QueueTerrainInvalidation({
+                                .kind = terrain_dependency::TerrainChangeKind::ProcessSettings,
+                                .scope = {.planet = planet->id, .global = true}});
+                            status_ = "Geological coupling updated; terrain generation is refreshing.";
+                        }
+                        catch (const std::exception& exception) { status_ = exception.what(); }
+                    }
+                }
+                context.MutedText("Old crust erodes to lower, rounder relief; belts act as divides that steer routing toward basins. Routing never climbs uphill.");
+
+                context.Separator();
+                context.Heading("Planet Bake");
+                context.MutedText("Terrain samples a baked planet structure and never evaluates plates while it generates. Editing the recipe rebakes in the background; the old bake keeps rendering until the new one is ready.");
+                if (const auto bake = session_->TerrainBake().Status(terrainId); bake.has_value())
+                {
+                    std::string line = std::format(
+                        "{} · {}x{} texels per face · {:.1f} MB",
+                        terrain_bake::BakeStateName(bake->state),
+                        bake->activeResolution, bake->activeResolution,
+                        static_cast<f64>(bake->activeBytes) / (1024.0 * 1024.0));
+                    if (bake->state == terrain_bake::BakeState::Baking)
+                        line = std::format("baking {:.0f}% · {}", static_cast<f64>(bake->progress) * 100.0, line);
+                    else if (bake->lastBakeSeconds > 0.0)
+                        line += std::format(" · last bake {:.1f} s", bake->lastBakeSeconds);
+                    context.MutedText(line);
+                    context.MutedText(bake->riversActive
+                        ? std::format("Rivers: {} reaches, {} nodes, {:.1f} MB · stream-power incision {}", bake->riverSegments,
+                              bake->riverNodes, static_cast<f64>(bake->riverBytes) / (1024.0 * 1024.0),
+                              bake->incisionActive ? "baked" : "off")
+                        : std::string("Rivers: not baked yet"));
+                    if (bake->geologyActive)
+                    {
+                        context.MutedText(std::format(
+                            "Geology: {} levels at {} texels/face · {:.1f} MB · {} process tiles updated · {} samples · {} event records",
+                            bake->geologyLevels, bake->geologyResolution,
+                            static_cast<f64>(bake->geologyBytes) / (1024.0 * 1024.0),
+                            bake->geologyTilesUpdated, bake->geologyBakeSamples,
+                            bake->geologyEventRecords));
+                        if (bake->geologySamplesPerSecond > 0.0 && bake->geologyDispatches > 0U)
+                            context.MutedText(std::format(
+                                "Last geology GPU compile: {:.0f} raster samples/s · {:.0f} event records/s · {} dispatches · {:.1f} MB buffer transfers · {:.2f} ms GPU queue · {:.2f} ms fence waits · {} tiles invalidated",
+                                bake->geologySamplesPerSecond,
+                                bake->geologyEventRecordsPerSecond,
+                                bake->geologyDispatches,
+                                static_cast<f64>(bake->geologyTransferBytes) / (1024.0 * 1024.0),
+                                bake->geologyGpuQueueMilliseconds,
+                                bake->geologyFenceWaitMilliseconds,
+                                bake->geologyTilesUpdated));
+                        else if (bake->geologySamplesPerSecond > 0.0)
+                            context.MutedText(std::format(
+                                "Last geology CPU compile: {:.0f} raster samples/s · {:.0f} event records/s · {} tiles invalidated",
+                                bake->geologySamplesPerSecond,
+                                bake->geologyEventRecordsPerSecond,
+                                bake->geologyTilesUpdated));
+                        if (bake->geologyDispatches > 0U)
+                            context.MutedText("GPU occupancy telemetry is unavailable from the current RHI.");
+                        if (bake->geologyDispatches > 0U && !bake->geologyGpuTimestampAvailable)
+                            context.MutedText("GPU timestamp queries are unavailable for this device.");
+                    }
+                    if (bake->state == terrain_bake::BakeState::Stale)
+                        context.MutedText("The tectonics recipe changed since this bake; it is rebaking or waiting for Bake Now.");
+                    if (!bake->error.empty())
+                        context.MutedText(bake->error);
+
+                    auto bakePolicy = terrainAuthoring.ProcessSettings(terrainId);
+                    static constexpr std::array<u32, 4> kBakeResolutions{128U, 256U, 512U, 1024U};
+                    static constexpr std::array<std::string_view, 4> kBakeResolutionLabels{
+                        "128 (fast, ~80 km texels)", "256 (default, ~40 km)", "512 (~20 km)", "1024 (~10 km, 190 MB)"};
+                    int resolutionIndex = 1;
+                    for (std::size_t i = 0; i < kBakeResolutions.size(); ++i)
+                        if (kBakeResolutions[i] <= bakePolicy.bake.resolution)
+                            resolutionIndex = static_cast<int>(i);
+                    bool bakePolicyChanged = context.Combo(
+                        "Resolution##planet-bake-resolution", kBakeResolutionLabels, resolutionIndex);
+                    if (bakePolicyChanged)
+                        bakePolicy.bake.resolution = kBakeResolutions[static_cast<std::size_t>(resolutionIndex)];
+                    bakePolicyChanged |= context.Checkbox(
+                        "Rebake Automatically##planet-bake-auto", bakePolicy.bake.autoRebake);
+                    if (bakePolicyChanged)
+                    {
+                        try
+                        {
+                            terrainAuthoring.SetProcessSettings(terrainId, bakePolicy);
+                            status_ = "Planet bake policy updated.";
+                        }
+                        catch (const std::exception& exception) { status_ = exception.what(); }
+                    }
+
+                    if (context.PrimaryButton("Bake Now##planet-bake-start"))
+                    {
+                        status_ = session_->TerrainBake().StartBake(terrainId)
+                            ? "Planet bake started; terrain keeps using the current bake until it finishes."
+                            : "The planet bake could not be started.";
+                    }
+                    if (bake->state == terrain_bake::BakeState::Baking)
+                    {
+                        context.SameLine();
+                        if (context.Button("Cancel##planet-bake-cancel"))
+                        {
+                            session_->TerrainBake().Cancel(terrainId);
+                            status_ = "Planet bake cancelled; the active bake is untouched.";
+                        }
+                    }
+                }
+                else
+                {
+                    context.MutedText("No bake yet: the planet bakes when its terrain is composed.");
+                }
+                context.MutedText("Same operations as terrain.bake_status / bake_start / bake_cancel / bake_set.");
+
+                context.Separator();
+                context.Heading("Structural Sample");
+                static_cast<void>(context.Checkbox(
+                    "Under Observer##planet-tectonics-probe-observer", tectonicProbeAtObserver_));
+                if (!tectonicProbeAtObserver_)
+                {
+                    static_cast<void>(context.InputDouble(
+                        "Latitude (deg)##planet-tectonics-probe-lat", tectonicProbeLatitude_));
+                    static_cast<void>(context.InputDouble(
+                        "Longitude (deg)##planet-tectonics-probe-lon", tectonicProbeLongitude_));
+                    tectonicProbeLatitude_ = std::clamp(tectonicProbeLatitude_, -90.0, 90.0);
+                }
+                std::optional<math::Double3> probeDirection;
+                if (!tectonicProbeAtObserver_)
+                    probeDirection = studio_session::TectonicsDirectionFromLatLon(
+                        tectonicProbeLatitude_, tectonicProbeLongitude_);
+                const auto probe = studio_session::ProbeTectonicStructure(
+                    *session_, "studio.primary", probeDirection);
+                if (probe.has_value())
+                {
+                    const auto& s = probe->structure;
+                    context.MutedText(std::format(
+                        "{:.2f}°, {:.2f}° · plate {} ({}) beside {} ({}) · {} boundary {:.0f}%",
+                        probe->latitudeDegrees, probe->longitudeDegrees,
+                        s.plateId, s.continental ? "continental" : "oceanic",
+                        s.neighbourPlateId, s.neighbourContinental ? "continental" : "oceanic",
+                        terrain::TectonicBoundaryTypeName(s.boundaryType), s.boundaryStrength * 100.0));
+                    context.MutedText(std::format(
+                        "Crust {:.1f} km thick · age {:.2f} · geological age {:.2f}",
+                        s.crustThicknessKm, s.crustAge, s.geologicalAge));
+                    context.MutedText(std::format(
+                        "Uplift {:.0f} m · subsidence {:.0f} m · stress {:.0f}% · volcanism {:.0f}%",
+                        s.upliftMeters, s.subsidenceMeters, s.stress * 100.0, s.volcanism * 100.0));
+                }
+                else
+                {
+                    context.MutedText("No analytic terrain runtime is available to sample.");
+                }
+                context.MutedText("Same data as orbit_terrain_tectonics_sample.");
+
+                context.Separator();
+                if (context.PrimaryButton("Preview Tectonic Plates##planet-tectonics-preview"))
+                {
+                    try
+                    {
+                        session_->Viewports().SetMode("studio.primary", studio_session::ViewportMode::FlatMap);
+                        if (views_ != nullptr)
+                            views_->SetFlatMapLayer("studio.primary", FlatMapLayer::Tectonics);
+                        status_ = "Showing plate identities and convergent / divergent / transform boundary influence.";
+                    }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+                context.MutedText("Map colors identify plates; red = convergent, cyan = divergent, yellow = transform influence.");
+                context.EndPopup();
+            }
+
+            DrawGeologicalToolbarBubbles(
+                context, terrainAuthoring, body->id, terrainId, compact);
+        }
+
+        context.ToolbarDivider();
+
+        toggleCapability(world_model::kSurfaceCapabilityType, "Surface", ToolbarIcon::Surface);
+        toggleCapability(world_model::kAtmosphereCapabilityType, "Atmosphere", ToolbarIcon::Atmosphere);
+        toggleCapability(world_model::kCloudLayerCapabilityType, "Clouds / Volumetrics", ToolbarIcon::Clouds);
+        toggleCapability(world_model::kOceanCapabilityType, "Ocean", ToolbarIcon::Ocean);
+        toggleCapability(world_model::kRingSystemCapabilityType, "Rings", ToolbarIcon::Rings);
+        toggleCapability(world_model::kMagnetosphereCapabilityType, "Aurora", ToolbarIcon::Aurora);
+
+        const auto atmosphere = std::ranges::find_if(
+            bodyChildren,
+            [](const auto& child) { return child.type == world_model::kAtmosphereCapabilityType; });
+        const bool hasAtmosphere = atmosphere != bodyChildren.end();
+        const bool atmosphereMenu = context.ToolbarButton(
+            "Atmosphere Setup##planet-atmosphere-setup", ToolbarIcon::Atmosphere,
+            false, hasAtmosphere, compact, editor_ui::ToolbarStyle::Menu);
+        context.AnchorNextPopupBelowItem();
+        if (context.BeginPopup("planet-atmosphere-setup-popup", atmosphereMenu,
+                {320.0F * editor_ui::CurrentUiScale(), 0.0F}))
+        {
+            context.Heading("Atmosphere Generation");
+            if (hasAtmosphere)
+            {
+                world_model::AtmospherePropertySolver solver(world.Objects(), world.Commands());
+                for (const auto preset : world_model::AtmospherePropertySolver::Presets())
+                {
+                    if (context.Button(std::string(preset) + "##planet-atmosphere-preset-" + std::string(preset)))
+                    {
+                        try
+                        {
+                            const auto report = solver.ApplyPreset(atmosphere->id, preset);
+                            status_ = std::format("Applied {} atmosphere preset; {} values derived.",
+                                preset, report.DerivedCount());
+                        }
+                        catch (const std::exception& exception) { status_ = exception.what(); }
+                    }
+                }
+                if (context.PrimaryButton("Solve Derived Coefficients##planet-atmosphere-solve"))
+                {
+                    try
+                    {
+                        const auto report = solver.Solve(atmosphere->id);
+                        status_ = std::format("Atmosphere solve derived {} values{}.",
+                            report.DerivedCount(), report.HasConflict() ? " with conflicts" : "");
+                    }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+                context.MutedText("Use Properties for exact atmospheric coefficients and authoring modes.");
+            }
+            context.EndPopup();
+        }
+        context.SameLine();
+
+        const auto capabilities = model.AvailableCapabilities();
+        const bool openMore = context.ToolbarButton(
+            "More Planet Elements##planet-toolbar-more", ToolbarIcon::More,
+            false, true, compact, editor_ui::ToolbarStyle::Menu);
+        context.AnchorNextPopupBelowItem();
+        if (context.BeginPopup("planet-toolbar-more-popup", openMore,
+                {360.0F * editor_ui::CurrentUiScale(), 0.0F}))
+        {
+            context.Heading("Additional Body Elements");
+            for (const auto& capability : capabilities)
+            {
+                const auto type = capability.type;
+                if (type == world_model::kSurfaceCapabilityType ||
+                    type == world_model::kAtmosphereCapabilityType ||
+                    type == world_model::kCloudLayerCapabilityType ||
+                    type == world_model::kOceanCapabilityType ||
+                    type == world_model::kRingSystemCapabilityType ||
+                    type == world_model::kMagnetosphereCapabilityType)
+                    continue;
+                bool enabled = model.CapabilityEnabled(body->id, type).value_or(false);
+                if (context.Checkbox(std::string(capability.label) + "##planet-extra-" + type.ToString(), enabled))
+                {
+                    try { model.SetCapabilityEnabled(body->id, type, enabled); status_.clear(); }
+                    catch (const std::exception& exception) { status_ = exception.what(); }
+                }
+            }
+            context.EndPopup();
+        }
+
+        context.SameLine();
+        const bool openExploreEdit = context.ToolbarButton(
+            "Explore & Edit##planet-toolbar-explore-edit", ToolbarIcon::More,
+            false, true, compact, editor_ui::ToolbarStyle::Menu);
+        context.AnchorNextPopupBelowItem();
+        if (context.BeginPopup("planet-explore-edit-popup", openExploreEdit,
+                {400.0F * editor_ui::CurrentUiScale(), 0.0F}))
+        {
+            context.Heading("Explore & Edit Planet");
+            context.MutedText(
+                "Surface Authoring contains relief, biomes, scatter, stratigraphy, authored constraints and terrain diagnostics.");
+            if (context.PrimaryButton("Open Surface Authoring##planet-open-surface-authoring"))
+            {
+                if (ui_ != nullptr && ui_->FocusPanelByTitle("Surface Authoring"))
+                    status_ = "Surface Authoring opened for the selected planet.";
+                else
+                    status_ = "Surface Authoring panel is not registered.";
+            }
+
+            context.Separator();
+            context.Heading("Planet Map Layers");
+            context.MutedText(
+                "Choose a layer to open Flat Map. All layers use the same terrain samples.");
+            static constexpr std::array<std::pair<std::string_view, FlatMapLayer>, 9> kPlanetMapLayers{{
+                {"Elevation", FlatMapLayer::Elevation},
+                {"Biomes", FlatMapLayer::Biomes},
+                {"Temperature", FlatMapLayer::Temperature},
+                {"Precipitation", FlatMapLayer::Precipitation},
+                {"Water Depth", FlatMapLayer::WaterDepth},
+                {"Tectonic Plates", FlatMapLayer::Tectonics},
+                {"Plate Identity", FlatMapLayer::PlateId},
+                {"Boundary Motion", FlatMapLayer::BoundaryMotion},
+                {"Crustal Deformation", FlatMapLayer::CrustalDeformation}
+            }};
+            for (std::size_t index = 0; index < kPlanetMapLayers.size(); ++index)
+            {
+                const auto [label, layer] = kPlanetMapLayers[index];
+                if (!context.Button(std::string(label) + "##planet-map-layer-" + std::to_string(index)))
+                    continue;
+                try
+                {
+                    if (views_ == nullptr)
+                        throw std::runtime_error("Planet map views are not available.");
+                    session_->Viewports().SetMode("studio.primary", studio_session::ViewportMode::FlatMap);
+                    views_->SetFlatMapLayer("studio.primary", layer);
+                    status_ = std::format("Showing {} on the planet flat map.", label);
+                }
+                catch (const std::exception& exception)
+                {
+                    status_ = exception.what();
+                }
+            }
+            context.MutedText("Map layers can also be changed over map.layer_set / orbit_map_layer_set.");
+            context.EndPopup();
+        }
     }
 
     if (!status_.empty())
@@ -2193,6 +3183,993 @@ void StudioViewportPanels::DrawSceneToolbar(
         context.SameLine();
         context.MutedText(status_);
     }
+}
+
+void StudioViewportPanels::DrawTerrainProcessesToolbarBubble(
+    editor_ui::PanelContext& context,
+    editor_model::SurfaceAuthoringModel& terrainAuthoring,
+    const scene::ObjectId terrainId,
+    const bool compact)
+{
+    context.SameLine();
+    const bool open = context.ToolbarButton(
+        "Terrain Processes##planet-toolbar-processes", editor_ui::ToolbarIcon::Procedural,
+        false, true, compact, editor_ui::ToolbarStyle::Menu);
+    context.AnchorNextPopupBelowItem();
+    if (!context.BeginPopup("planet-processes-popup", open,
+            {680.0F * editor_ui::CurrentUiScale(), 0.0F}))
+        return;
+
+    auto processes = terrainAuthoring.ProcessSettings(terrainId);
+    context.Heading("Terrain Processes · Erosion and Transport");
+    context.MutedText("Switch physical solvers on or off. Open a process section for its common settings; advanced controls are grouped below each process.");
+    const bool scrollable = context.BeginChild(
+        "planet-processes-scroll", {0.0F, 620.0F * editor_ui::CurrentUiScale()}, true);
+    if (scrollable)
+    {
+        bool changed = false;
+        const auto drawPositiveU32 = [&](const std::string& label, u32& value)
+        {
+            i64 draft = static_cast<i64>(value);
+            if (!context.InputInteger(label, draft))
+                return false;
+            value = static_cast<u32>(std::clamp<i64>(
+                draft, 1, static_cast<i64>(std::numeric_limits<u32>::max())));
+            return true;
+        };
+
+        const auto stream = context.TreeItem("Stream Power · landscape scale##planet-process-stream", true);
+        if (stream.open)
+        {
+            changed |= context.Checkbox("Enabled##planet-process-stream-enabled", processes.streamPowerEnabled);
+            if (processes.streamPowerEnabled)
+            {
+                changed |= drawPositiveU32("Iterations##planet-process-stream-iterations", processes.streamPower.iterations);
+                changed |= context.InputDouble("Incision (m/iteration)##planet-process-stream-incision", processes.streamPower.incisionCoefficientMetersPerIteration);
+                context.MutedText("Geological age and tectonic drainage coupling are edited in Tectonics.");
+            }
+            context.TreePop();
+        }
+
+        const auto hydraulic = context.TreeItem("Hydraulic · runoff and sediment##planet-process-hydraulic", false);
+        if (hydraulic.open)
+        {
+            changed |= context.Checkbox("Enabled##planet-process-hydraulic-enabled", processes.hydraulicEnabled);
+            if (processes.hydraulicEnabled)
+            {
+                changed |= drawPositiveU32("Iterations##planet-process-hydraulic-iterations", processes.hydraulic.iterations);
+                changed |= context.InputDouble("Time Step (s)##planet-process-hydraulic-dt", processes.hydraulic.timeStepSeconds);
+                context.MutedText("Rainfall, infiltration, soil storage and seasonal forcing are in Hydrology.");
+            }
+            context.TreePop();
+        }
+
+        const auto thermal = context.TreeItem("Thermal · slope failure##planet-process-thermal", false);
+        if (thermal.open)
+        {
+            changed |= context.Checkbox("Enabled##planet-process-thermal-enabled", processes.thermalEnabled);
+            if (processes.thermalEnabled)
+            {
+                changed |= context.InputDouble("Relaxation##planet-process-thermal-relaxation", processes.thermal.relaxation);
+                changed |= drawPositiveU32("Maximum Iterations##planet-process-thermal-iterations", processes.thermal.maximumIterations);
+            }
+            context.TreePop();
+        }
+
+        const auto aeolian = context.TreeItem("Aeolian · wind transport##planet-process-aeolian", false);
+        if (aeolian.open)
+        {
+            changed |= context.Checkbox("Enabled##planet-process-aeolian-enabled", processes.aeolianEnabled);
+            if (processes.aeolianEnabled)
+            {
+                changed |= context.InputDouble("Capacity Coefficient##planet-process-aeolian-capacity", processes.aeolian.capacityCoefficient);
+                changed |= drawPositiveU32("Iterations##planet-process-aeolian-iterations", processes.aeolian.iterations);
+                changed |= context.InputDouble("Time Step (s)##planet-process-aeolian-dt", processes.aeolian.timeStepSeconds);
+            }
+            context.TreePop();
+        }
+
+        const auto glacial = context.TreeItem("Glacial · ice flow and erosion##planet-process-glacial", false);
+        if (glacial.open)
+        {
+            changed |= context.Checkbox("Enabled##planet-process-glacial-enabled", processes.glacialEnabled);
+            if (processes.glacialEnabled)
+            {
+                changed |= context.InputDouble("Maximum Glacier Temperature (°C)##planet-process-glacial-temperature", processes.glacial.maximumGlacierTemperatureC);
+                changed |= drawPositiveU32("Iterations##planet-process-glacial-iterations", processes.glacial.iterations);
+                changed |= context.InputDouble("Time Step (years)##planet-process-glacial-dt", processes.glacial.timeStepYears);
+                context.MutedText("Ice fracture geometry and resurfacing history are authored in Ice & Cryosphere.");
+            }
+            context.TreePop();
+        }
+
+        const auto coastal = context.TreeItem("Coastal · shoreline and waves##planet-process-coastal", false);
+        if (coastal.open)
+        {
+            changed |= context.Checkbox("Enabled##planet-process-coastal-enabled", processes.coastal.enabled);
+            if (processes.coastal.enabled)
+            {
+                changed |= drawPositiveU32("Hydrodynamic Steps##planet-process-coastal-steps", processes.coastal.hydrodynamicSteps);
+                changed |= context.InputDouble("CFL##planet-process-coastal-cfl", processes.coastal.water.cflNumber);
+                changed |= context.InputDouble("Maximum Time Step (s)##planet-process-coastal-dt", processes.coastal.water.maximumTimeStepSeconds);
+            }
+            context.TreePop();
+        }
+
+        if (changed)
+        {
+            try
+            {
+                terrainAuthoring.SetProcessSettings(terrainId, processes);
+                const auto targetBody = session_->World().Surfaces().BodyForTerrainObject(terrainId);
+                if (!targetBody.has_value())
+                    throw std::runtime_error("Terrain process settings require a spherical terrain body.");
+                const auto planet = session_->World().Surfaces().Registry().SphericalPlanetDefinition(*targetBody);
+                if (!planet.has_value())
+                    throw std::runtime_error("Terrain process settings require a spherical planet definition.");
+                session_->QueueTerrainInvalidation({
+                    .kind = terrain_dependency::TerrainChangeKind::ProcessSettings,
+                    .scope = {.planet = planet->id, .global = true}});
+                status_ = "Terrain process settings saved; affected terrain is rebuilding.";
+            }
+            catch (const std::exception& exception) { status_ = exception.what(); }
+        }
+    }
+    context.EndChild();
+    context.EndPopup();
+}
+
+void StudioViewportPanels::DrawRiversToolbarBubble(
+    editor_ui::PanelContext &context,
+    editor_model::SurfaceAuthoringModel &terrainAuthoring,
+    const scene::ObjectId terrainId, const bool compact) {
+  context.SameLine();
+  const bool openRivers = context.ToolbarButton(
+      "Rivers##planet-toolbar-rivers", editor_ui::ToolbarIcon::Procedural,
+      false, true, compact, editor_ui::ToolbarStyle::Menu);
+  context.AnchorNextPopupBelowItem();
+  if (!context.BeginPopup("planet-rivers-popup", openRivers,
+                          {680.0F * editor_ui::CurrentUiScale(), 0.0F}))
+    return;
+
+  auto processes = terrainAuthoring.ProcessSettings(terrainId);
+  context.Heading("Rivers · Network and Channels");
+  context.MutedText(
+      "Set how runoff becomes connected channels. Channel sizing, meanders and "
+      "cutoffs open as focused sections below.");
+  const bool scrollable =
+      context.BeginChild("planet-rivers-scroll",
+                         {0.0F, 620.0F * editor_ui::CurrentUiScale()}, true);
+  if (scrollable) {
+    bool changed = false;
+    changed |= context.Checkbox("Generate rivers##planet-rivers-enabled",
+                                processes.riversEnabled);
+    if (processes.riversEnabled) {
+      context.MutedText(
+          "Straight reaches use this maximum spacing; headwaters, sharp bends, "
+          "confluences and page exits are always retained.");
+      changed |= context.InputDouble(
+          "Maximum Graph Node Spacing (m)##planet-rivers-node-spacing",
+          processes.rivers.maximumNodeSpacingMeters);
+      changed |=
+          context.InputDouble("Minimum Catchment (m²)##planet-rivers-area",
+                              processes.rivers.minimumDrainageAreaSquareMeters);
+      changed |= context.InputDouble(
+          "Minimum Discharge (m³/s)##planet-rivers-discharge",
+          processes.rivers.minimumDischargeCubicMetersPerSecond);
+      changed |= context.Checkbox("Meander channels##planet-rivers-meanders",
+                                  processes.rivers.enableMeanders);
+      changed |= context.Checkbox("Allow cutoffs##planet-rivers-cutoffs",
+                                  processes.rivers.enableCutoffs);
+      const auto channel = context.TreeItem(
+          "Channel sizing · discharge to width/depth##planet-rivers-channel",
+          false);
+      if (channel.open) {
+        changed |= context.InputDouble(
+            "Reference Discharge (m³/s)##planet-rivers-reference-discharge",
+            processes.rivers.referenceDischargeCubicMetersPerSecond);
+        changed |=
+            context.InputDouble("Base Width (m)##planet-rivers-base-width",
+                                processes.rivers.baseChannelWidthMeters);
+        changed |=
+            context.InputDouble("Minimum Width (m)##planet-rivers-min-width",
+                                processes.rivers.minimumChannelWidthMeters);
+        changed |=
+            context.InputDouble("Maximum Width (m)##planet-rivers-max-width",
+                                processes.rivers.maximumChannelWidthMeters);
+        changed |= context.InputDouble(
+            "Width Scaling Exponent##planet-rivers-width-exponent",
+            processes.rivers.widthDischargeExponent);
+        changed |=
+            context.InputDouble("Base Depth (m)##planet-rivers-base-depth",
+                                processes.rivers.baseChannelDepthMeters);
+        changed |=
+            context.InputDouble("Minimum Depth (m)##planet-rivers-min-depth",
+                                processes.rivers.minimumChannelDepthMeters);
+        changed |=
+            context.InputDouble("Maximum Depth (m)##planet-rivers-max-depth",
+                                processes.rivers.maximumChannelDepthMeters);
+        changed |= context.InputDouble(
+            "Depth Scaling Exponent##planet-rivers-depth-exponent",
+            processes.rivers.depthDischargeExponent);
+        context.TreePop();
+      }
+      if (processes.rivers.enableMeanders) {
+        const auto meanders = context.TreeItem(
+            "Meander behavior##planet-rivers-meanders-advanced", false);
+        if (meanders.open) {
+          i64 iterations = static_cast<i64>(processes.rivers.meanderIterations);
+          if (context.InputInteger("Iterations##planet-rivers-iterations",
+                                   iterations)) {
+            processes.rivers.meanderIterations =
+                static_cast<u32>(std::clamp<i64>(
+                    iterations, 1,
+                    static_cast<i64>(std::numeric_limits<u32>::max())));
+            changed = true;
+          }
+          changed |=
+              context.InputDouble("Time Step##planet-rivers-meander-time",
+                                  processes.rivers.meanderTimeStep);
+          changed |= context.InputDouble(
+              "Curvature Migration##planet-rivers-curvature-migration",
+              processes.rivers.curvatureMigrationRate);
+          changed |= context.InputDouble(
+              "Seed Migration##planet-rivers-seed-migration",
+              processes.rivers.deterministicSeedMigrationRate);
+          changed |= context.InputDouble(
+              "Maximum Offset (channel widths)##planet-rivers-offset",
+              processes.rivers.maximumCenterlineOffsetWidths);
+          context.TreePop();
+        }
+      }
+      if (processes.rivers.enableCutoffs) {
+        const auto cutoffs = context.TreeItem(
+            "Cutoff behavior##planet-rivers-cutoffs-advanced", false);
+        if (cutoffs.open) {
+          i64 pathNodes =
+              static_cast<i64>(processes.rivers.minimumCutoffPathNodes);
+          if (context.InputInteger(
+                  "Minimum Path Nodes##planet-rivers-cutoff-nodes",
+                  pathNodes)) {
+            processes.rivers.minimumCutoffPathNodes =
+                static_cast<u32>(std::clamp<i64>(
+                    pathNodes, 2,
+                    static_cast<i64>(std::numeric_limits<u32>::max())));
+            changed = true;
+          }
+          changed |= context.InputDouble(
+              "Cutoff Distance (channel widths)##planet-rivers-cutoff-distance",
+              processes.rivers.cutoffDistanceWidths);
+          context.TreePop();
+        }
+      }
+    }
+    if (changed) {
+      try {
+        terrainAuthoring.SetProcessSettings(terrainId, processes);
+        const auto targetBody =
+            session_->World().Surfaces().BodyForTerrainObject(terrainId);
+        if (!targetBody.has_value())
+          throw std::runtime_error(
+              "Terrain process settings require a spherical terrain body.");
+        const auto planet =
+            session_->World().Surfaces().Registry().SphericalPlanetDefinition(
+                *targetBody);
+        if (!planet.has_value())
+          throw std::runtime_error("Terrain process settings require a "
+                                   "spherical planet definition.");
+        session_->QueueTerrainInvalidation(
+            {.kind = terrain_dependency::TerrainChangeKind::ProcessSettings,
+             .scope = {.planet = planet->id, .global = true}});
+        status_ = "River recipe updated; drainage and channels are rebuilding.";
+      } catch (const std::exception &exception) {
+        status_ = exception.what();
+      }
+    }
+    if (views_ != nullptr) {
+      auto diagnostics = views_->TerrainDiagnosticOverlays("studio.primary");
+      if (context.Checkbox(
+              "Show drainage and river channels##planet-rivers-preview",
+              diagnostics.drainageVectors)) {
+        views_->SetTerrainDiagnosticOverlays("studio.primary", diagnostics);
+        status_ = diagnostics.drainageVectors
+                      ? "Showing downhill flow and connected river channels in "
+                        "the viewport."
+                      : "River channel preview hidden.";
+      }
+    }
+    if (context.PrimaryButton(
+            "Draw Drainage Guidance Path##planet-hydrology-draw-path")) {
+      terrainTool_ = StudioTerrainAuthoringTool::DrainagePath;
+      terrainSplinePoints_.clear();
+      terrainSplineTerrain_.reset();
+      if (views_ != nullptr)
+        views_->ClearTerrainAuthoringOverlay("studio.primary");
+      status_ =
+          "Click terrain to add drainage path points; double-click to commit.";
+    }
+    context.Separator();
+    context.Heading("Generated river nodes near viewport");
+    const auto riverRuntime =
+        session_->TerrainRuntime().Capture("studio.primary");
+    if (!riverRuntime.has_value() || riverRuntime->terrainObject != terrainId) {
+      context.MutedText("Bind this planet to the primary viewport to inspect "
+                        "generated channels.");
+    } else {
+      static f64 riverConstraintRadiusMeters = 500.0;
+      static f64 riverConstraintStrength = 1.0;
+      static_cast<void>(context.InputDouble(
+          "Constraint Radius (m)##planet-river-constraint-radius",
+          riverConstraintRadiusMeters));
+      static_cast<void>(context.SliderDouble(
+          "Constraint Strength##planet-river-constraint-strength",
+          riverConstraintStrength, 0.0, 1.0));
+      riverConstraintRadiusMeters = std::max(1.0, riverConstraintRadiusMeters);
+      const auto riverTiles =
+          world::TileNeighborhood(riverRuntime->observerPhysicalPage.tile, 1U);
+      u64 riverNodes = 0U;
+      u64 riverSegments = 0U;
+      u64 riverBoundaryLinks = 0U;
+      u64 pendingRiverPages = 0U;
+      u64 shownRiverNodes = 0U;
+      u64 shownRiverSegments = 0U;
+      u64 shownBoundaryLinks = 0U;
+      u64 lakeBasinCount = 0U;
+      u64 pendingLakePages = 0U;
+      u64 shownLakeBasins = 0U;
+      for (const auto &tile : riverTiles) {
+        const terrain::PhysicalTerrainPageAddress address{
+            .planet = riverRuntime->planet.id, .tile = tile};
+        const auto page = session_->TerrainPhysicalPages().Find(address);
+        if (page == nullptr || page->lakes == nullptr) {
+          ++pendingLakePages;
+        } else {
+          lakeBasinCount += page->lakes->basins.size();
+          for (const auto &basin : page->lakes->basins) {
+            if (shownLakeBasins >= 6U)
+              break;
+            const u32 resolution = page->lakes->resolution;
+            const std::string spill =
+                basin.spillCellIndex < resolution * resolution
+                    ? std::format("spill ({}, {}){}",
+                                  basin.spillCellIndex % resolution,
+                                  basin.spillCellIndex / resolution,
+                                  basin.spillExitsPage ? " · exits page" : "")
+                    : "no routed spill cell";
+            const std::string downstream =
+                basin.downstreamRiverNode.IsValid()
+                    ? std::format("M16 {} · {} cells downstream",
+                                  basin.downstreamRiverNode.ToString(),
+                                  basin.downstreamRiverCellCount)
+                : basin.downstreamRiverExitsPage
+                    ? "overflow continues off page"
+                    : "no qualifying downstream channel";
+            context.MutedText(std::format(
+                "Lake · {:.0f} m² · {:.1f} m deep · surface {:.1f} m · {} · {}",
+                basin.areaSquareMeters, basin.maximumDepthMeters,
+                basin.surfaceElevationMeters, spill, downstream));
+            ++shownLakeBasins;
+          }
+        }
+        if (page == nullptr || page->rivers == nullptr) {
+          ++pendingRiverPages;
+          continue;
+        }
+        riverNodes += page->rivers->nodes.size();
+        riverSegments += page->rivers->segments.size();
+        riverBoundaryLinks += page->rivers->boundaryLinks.size();
+        for (const auto &link : page->rivers->boundaryLinks) {
+          if (shownBoundaryLinks >= 6U)
+            break;
+          context.MutedText(std::format("Page continuation · basin {} · flow "
+                                        "({}, {}) · edge cell ({}, {})",
+                                        link.basin.ToString(), link.flowDx,
+                                        link.flowDy, link.targetX,
+                                        link.targetY));
+          ++shownBoundaryLinks;
+        }
+        for (const auto &node : page->rivers->nodes) {
+          if (shownRiverNodes >= 8U)
+            break;
+          const std::string nodeLabel = std::format(
+              "Node {} · {:.2f} m³/s · {:.1f} m wide · {:.2f} "
+              "m/s##river-node-{}",
+              shownRiverNodes + 1U, node.dischargeCubicMetersPerSecond,
+              node.channelWidthMeters, node.velocityMetersPerSecond,
+              node.id.ToString());
+          if (context.Button(nodeLabel)) {
+            status_ = std::format(
+                "River node {} · basin {} · discharge {:.3f} m³/s · width "
+                "{:.2f} m · depth {:.2f} m · level {:.1f} m · slope {:.5f} · "
+                "velocity {:.2f} m/s · roughness {:.3f} · section {:.1f} m² · "
+                "suspended sediment {:.2f} kg.",
+                node.id.ToString(), node.basin.ToString(),
+                node.dischargeCubicMetersPerSecond, node.channelWidthMeters,
+                node.channelDepthMeters, node.waterLevelMeters, node.slope,
+                node.velocityMetersPerSecond, node.manningRoughness,
+                node.crossSectionAreaSquareMeters, node.suspendedSedimentKg);
+          }
+          const terrain::PhysicalTerrainPageAddress nodePage{
+              .planet = riverRuntime->planet.id, .tile = tile};
+          const math::Double2 nodeCenter{node.channelOffsetMeters.x,
+                                         node.channelOffsetMeters.y};
+          const math::Double2 flowDirection{
+              static_cast<f64>(node.drainageFlowDx),
+              static_cast<f64>(node.drainageFlowDy)};
+          const math::Double2 constraintDirection =
+              std::hypot(flowDirection.x, flowDirection.y) > 1.0e-12
+                  ? flowDirection
+                  : math::Double2{1.0, 0.0};
+          const auto authorConstraint =
+              [&](const terrain_erosion::RiverConstraintKind kind,
+                  const char *action) {
+                try {
+                  const auto constraint =
+                      terrainAuthoring.AddRiverBasinConstraint(
+                          terrainId, nodePage, node.basin, kind, nodeCenter,
+                          constraintDirection, riverConstraintRadiusMeters,
+                          riverConstraintStrength);
+                  terrainAuthoring.SelectObject(constraint);
+                  status_ = std::format("{} constraint saved for basin {}.",
+                                        action, node.basin.ToString());
+                } catch (const std::exception &exception) {
+                  status_ = exception.what();
+                }
+              };
+          if (context.Button(
+                  std::format("Attract##river-attract-{}", node.id.ToString())))
+            authorConstraint(terrain_erosion::RiverConstraintKind::Attract,
+                             "Attract");
+          if (context.Button(
+                  std::format("Repel##river-repel-{}", node.id.ToString())))
+            authorConstraint(terrain_erosion::RiverConstraintKind::Repel,
+                             "Repel");
+          if (context.Button(std::format("Follow flow##river-trajectory-{}",
+                                         node.id.ToString())))
+            authorConstraint(terrain_erosion::RiverConstraintKind::Trajectory,
+                             "Trajectory");
+          ++shownRiverNodes;
+        }
+        for (const auto &segment : page->rivers->segments) {
+          if (shownRiverSegments >= 5U)
+            break;
+          context.MutedText(std::format(
+              "Reach · {} routing points · slope {:.5f} · {:.2f} m/s · {:.3f} "
+              "roughness · {:.2f} kg suspended sediment",
+              segment.routingPathMeters.size(), segment.slope,
+              segment.velocityMetersPerSecond, segment.manningRoughness,
+              segment.suspendedSedimentKg));
+          ++shownRiverSegments;
+        }
+      }
+      context.MutedText(std::format(
+          "{} graph nodes · {} reaches · {} page continuations in {} nearby "
+          "pages · {} pages still building.",
+          riverNodes, riverSegments, riverBoundaryLinks,
+          riverTiles.size() - pendingRiverPages, pendingRiverPages));
+      context.MutedText(std::format("{} M09 lake basins in {} nearby pages · "
+                                    "{} lake pages still building.",
+                                    lakeBasinCount,
+                                    riverTiles.size() - pendingLakePages,
+                                    pendingLakePages));
+      if (lakeBasinCount > shownLakeBasins)
+        context.MutedText(
+            "Showing the first 6 basins; use orbit_terrain_lakes_nearby for "
+            "full page-local spill details.");
+      if (riverBoundaryLinks > shownBoundaryLinks)
+        context.MutedText(
+            "Showing the first 6 page continuations; use "
+            "orbit_terrain_rivers_nearby for the full boundary-link list.");
+      if (riverNodes > shownRiverNodes)
+        context.MutedText(
+            "Showing the first 8 nodes; use orbit_terrain_rivers_nearby for "
+            "the full page result.");
+      if (riverSegments > shownRiverSegments)
+        context.MutedText("Showing the first 5 reaches; use "
+                          "orbit_terrain_rivers_nearby for the routing paths.");
+      if (riverNodes == 0U && pendingRiverPages == 0U)
+        context.MutedText("No river nodes meet the current drainage and "
+                          "discharge thresholds nearby.");
+    }
+  }
+  context.EndChild();
+  context.EndPopup();
+}
+
+void StudioViewportPanels::DrawGeologicalToolbarBubbles(
+    editor_ui::PanelContext &context,
+    editor_model::SurfaceAuthoringModel &terrainAuthoring,
+    const scene::ObjectId bodyObject, const scene::ObjectId terrainObject,
+    const bool compact) {
+  if (session_ == nullptr || !session_->World().HasWorld())
+    return;
+
+  auto &world = session_->World();
+  const auto body = world.Universe().BodyForObject(bodyObject);
+  if (!body.has_value()) {
+    static_cast<void>(context.ToolbarButton(
+        "Craters##planet-toolbar-craters", editor_ui::ToolbarIcon::Procedural,
+        false, false, compact, editor_ui::ToolbarStyle::Menu));
+    context.SameLine();
+    static_cast<void>(context.ToolbarButton(
+        "Volcanology##planet-toolbar-volcanology", editor_ui::ToolbarIcon::Vfx,
+        false, false, compact, editor_ui::ToolbarStyle::Menu));
+    return;
+  }
+  const auto planet =
+      world.Surfaces().Registry().SphericalPlanetDefinition(*body);
+  if (!planet.has_value()) {
+    static_cast<void>(context.ToolbarButton(
+        "Craters##planet-toolbar-craters", editor_ui::ToolbarIcon::Procedural,
+        false, false, compact, editor_ui::ToolbarStyle::Menu));
+    context.SameLine();
+    static_cast<void>(context.ToolbarButton(
+        "Volcanology##planet-toolbar-volcanology", editor_ui::ToolbarIcon::Vfx,
+        false, false, compact, editor_ui::ToolbarStyle::Menu));
+    return;
+  }
+
+  auto draftIt = impactHistoryDrafts_.find(terrainObject);
+  if (draftIt == impactHistoryDrafts_.end()) {
+    terrain_impacts::ImpactFieldDefinition draft;
+    const std::string saved = terrainAuthoring.ImpactHistoryToml(terrainObject);
+    if (!saved.empty()) {
+      draft = terrain_impacts::ParseImpactFieldToml(saved);
+    } else {
+      draft = terrain_impacts::MakeMoonLikeImpactPreset(
+          planet->id, terrain_impacts::ImpactFieldId::Random(),
+          planet->generationSeed);
+      draft.name = "Moon-like impact history";
+      draft.environment = terrain_impacts::SurfaceEnvironment::Airless;
+      draft.surfaceAgeYears = 4.5e9;
+      draft.surfaceGravityMetersPerSecondSquared = 1.62;
+    }
+    draftIt =
+        impactHistoryDrafts_.emplace(terrainObject, std::move(draft)).first;
+  }
+
+  auto &history = draftIt->second;
+  const auto saveDraft =
+      [&](const std::string_view successMessage) {
+        if (history.planet != planet->id)
+          throw std::invalid_argument(
+              "Geological history belongs to a different planet.");
+        const std::string previous = terrainAuthoring.ImpactHistoryToml(terrainObject);
+        const std::string next = terrain_impacts::SerializeImpactFieldToml(history);
+        const auto runtime = session_->TerrainRuntime().Capture("studio.primary");
+        const u8 physicalLevel = runtime.has_value() && runtime->body == *body
+            ? runtime->physicalPageLevel
+            : 10U;
+        const auto invalidations = studio_session::BuildImpactHistoryInvalidations(
+            *planet, previous, next, physicalLevel);
+        terrainAuthoring.SetImpactHistoryToml(terrainObject, next);
+        session_->QueueTerrainInvalidations(invalidations);
+        history = terrain_impacts::ParseImpactFieldToml(next);
+        status_ = std::format("{} {} local terrain regions queued.",
+            successMessage, invalidations.size());
+      };
+
+  context.SameLine();
+  const bool openCraters = context.ToolbarButton(
+      "Craters##planet-toolbar-craters", editor_ui::ToolbarIcon::Procedural,
+      false, true, compact, editor_ui::ToolbarStyle::Menu);
+  context.AnchorNextPopupBelowItem();
+  if (context.BeginPopup("planet-craters-popup", openCraters,
+                         {760.0F * editor_ui::CurrentUiScale(),
+                          720.0F * editor_ui::CurrentUiScale()})) {
+    context.Heading("Crater History");
+    context.MutedText(
+        "Edit the procedural crater population and every authored impact "
+        "property. Changes stay in this draft until saved.");
+    const bool scrollable =
+        context.BeginChild("planet-craters-scroll",
+                           {0.0F, 590.0F * editor_ui::CurrentUiScale()}, true);
+    if (scrollable) {
+      bool changed = false;
+      context.Heading("Impact Regime");
+      changed |=
+          context.InputText("History Name##planet-craters-name", history.name);
+      i64 seed = static_cast<i64>(std::min<u64>(
+          history.seed, static_cast<u64>(std::numeric_limits<i64>::max())));
+      if (context.InputInteger("Seed##planet-craters-seed", seed)) {
+        history.seed = static_cast<u64>(std::max<i64>(seed, 0));
+        changed = true;
+      }
+      static constexpr std::array<std::string_view, 4> environments{
+          "Airless", "Wet", "Icy", "Geologically Active"};
+      i32 environment = static_cast<i32>(history.environment);
+      if (context.Combo("Surface Environment##planet-craters-environment",
+                        environments, environment)) {
+        history.environment = static_cast<terrain_impacts::SurfaceEnvironment>(
+            std::clamp(environment, 0, 3));
+        changed = true;
+      }
+      changed |= context.InputDouble("Surface Age (years)##planet-craters-age",
+                                     history.surfaceAgeYears);
+      changed |=
+          context.InputDouble("Surface Gravity (m/s²)##planet-craters-gravity",
+                              history.surfaceGravityMetersPerSecondSquared);
+      changed |=
+          context.InputDouble("Target Density (kg/m³)##planet-craters-density",
+                              history.targetDensityKgPerCubicMeter);
+      changed |=
+          context.InputDouble("Target Strength (Pa)##planet-craters-strength",
+                              history.targetStrengthPascals);
+      changed |= context.InputDouble(
+          "Complex Crater Transition Radius (m)##planet-craters-transition",
+          history.complexTransitionRadiusMeters);
+
+      context.Separator();
+      context.Heading("Procedural Crater Population");
+      changed |= DrawU32(context, "Crater Count##planet-craters-count",
+                         history.procedural.count);
+      changed |=
+          context.InputDouble("Minimum Radius (m)##planet-craters-min-radius",
+                              history.procedural.minimumRadiusMeters);
+      changed |=
+          context.InputDouble("Maximum Radius (m)##planet-craters-max-radius",
+                              history.procedural.maximumRadiusMeters);
+      changed |= context.InputDouble(
+          "Cumulative Size-Frequency Exponent##planet-craters-exponent",
+          history.procedural.cumulativeExponent);
+
+      context.Separator();
+      context.Heading(
+          std::format("Authored Craters · {}", history.authoredImpacts.size()));
+      const i64 pageCount = std::max<i64>(
+          1, static_cast<i64>((history.authoredImpacts.size() + 5U) / 6U));
+      craterHistoryPage_ = static_cast<i32>(
+          std::clamp<i64>(craterHistoryPage_, 0, pageCount - 1));
+      if (pageCount > 1) {
+        i64 page = static_cast<i64>(craterHistoryPage_ + 1);
+        if (context.InputInteger("Crater Page##planet-craters-page", page))
+          craterHistoryPage_ =
+              static_cast<i32>(std::clamp<i64>(page - 1, 0, pageCount - 1));
+        context.MutedText(
+            std::format("Page {} of {} · six authored craters per page.",
+                        craterHistoryPage_ + 1, pageCount));
+      }
+      const std::size_t first =
+          static_cast<std::size_t>(craterHistoryPage_) * 6U;
+      const std::size_t last =
+          std::min(first + 6U, history.authoredImpacts.size());
+      bool removedCrater = false;
+      for (std::size_t index = first; index < last; ++index) {
+        auto &impact = history.authoredImpacts[index];
+        const bool open = context.Section(
+            std::format("Crater {} · {:.1f} km##planet-crater-record-{}",
+                        index + 1U, impact.radiusMeters / 1000.0, index),
+            false);
+        if (!open)
+          continue;
+        changed |= DrawCraterRecord(context, impact, index);
+        if (context.Button(
+                std::format("Remove Crater {}##planet-crater-remove-{}",
+                            index + 1U, index))) {
+          history.authoredImpacts.erase(history.authoredImpacts.begin() +
+                                        static_cast<std::ptrdiff_t>(index));
+          changed = true;
+          removedCrater = true;
+          break;
+        }
+      }
+      if (removedCrater)
+        craterHistoryPage_ =
+            std::min(craterHistoryPage_, static_cast<i32>(pageCount - 1));
+      if (context.Button("Add Authored Crater##planet-craters-add")) {
+        history.authoredImpacts.push_back(
+            {.id = terrain_impacts::ImpactId::Random(),
+             .centerUnitDirection = {1.0, 0.0, 0.0},
+             .radiusMeters = 10'000.0});
+        craterHistoryPage_ =
+            static_cast<i32>((history.authoredImpacts.size() - 1U) / 6U);
+        changed = true;
+      }
+      if (changed)
+        status_ = "Crater draft changed. Save Crater History to apply and "
+                  "rebuild affected terrain.";
+    }
+    context.EndChild();
+    context.SameLine();
+    if (context.Button("Reload Saved##planet-craters-reload")) {
+      try {
+        const std::string saved =
+            terrainAuthoring.ImpactHistoryToml(terrainObject);
+        if (!saved.empty())
+          history = terrain_impacts::ParseImpactFieldToml(saved);
+        else
+          history = terrain_impacts::MakeMoonLikeImpactPreset(
+              planet->id, terrain_impacts::ImpactFieldId::Random(),
+              planet->generationSeed);
+        craterHistoryPage_ = 0;
+        status_ = "Crater draft reloaded from the saved terrain history.";
+      } catch (const std::exception &exception) {
+        status_ = exception.what();
+      }
+    }
+    context.SameLine();
+    if (context.PrimaryButton("Save Crater History##planet-craters-save")) {
+      try {
+        saveDraft("Crater history saved;");
+      } catch (const std::exception &exception) {
+        status_ =
+            std::format("Crater history failed to save: {}", exception.what());
+      }
+    }
+    context.EndPopup();
+  }
+
+  context.SameLine();
+  const bool openVolcanology = context.ToolbarButton(
+      "Volcanology##planet-toolbar-volcanology", editor_ui::ToolbarIcon::Vfx,
+      false, true, compact, editor_ui::ToolbarStyle::Menu);
+  context.AnchorNextPopupBelowItem();
+  if (context.BeginPopup("planet-volcanology-popup", openVolcanology,
+                         {700.0F * editor_ui::CurrentUiScale(),
+                          700.0F * editor_ui::CurrentUiScale()})) {
+    context.Heading("Volcanology · Maria and Lava Resurfacing");
+    context.MutedText(
+        "A mare is authored here as a lava-flow resurfacing record. Set its "
+        "width, thickness, age, and spherical centerline.");
+    const bool scrollable =
+        context.BeginChild("planet-volcanology-scroll",
+                           {0.0F, 570.0F * editor_ui::CurrentUiScale()}, true);
+    if (scrollable) {
+      bool changed = false;
+      static constexpr std::array<std::string_view, 4> environments{
+          "Airless", "Wet", "Icy", "Geologically Active"};
+      i32 environment = static_cast<i32>(history.environment);
+      if (context.Combo(
+              "Volcanic Surface Environment##planet-volcanology-environment",
+              environments, environment)) {
+        history.environment = static_cast<terrain_impacts::SurfaceEnvironment>(
+            std::clamp(environment, 0, 3));
+        changed = true;
+      }
+      changed |=
+          context.InputDouble("Surface Age (years)##planet-volcanology-age",
+                              history.surfaceAgeYears);
+      context.MutedText(
+          "The environment and surface age are shared with Craters because "
+          "both tools edit one chronological geological history.");
+      context.Separator();
+      context.Heading(std::format(
+          "Lava Flows / Maria · {}",
+          std::ranges::count_if(
+              history.resurfacingEvents, [](const auto &event) {
+                return event.kind == terrain_impacts::ResurfacingKind::LavaFlow;
+              })));
+      context.MutedText(
+          "Latitude is positive north (+Y); longitude 0° points along +X. Each "
+          "flow follows the ordered centerline points.");
+
+      bool removedFlow = false;
+      for (std::size_t index = 0U; index < history.resurfacingEvents.size();
+           ++index) {
+        auto &event = history.resurfacingEvents[index];
+        if (event.kind != terrain_impacts::ResurfacingKind::LavaFlow)
+          continue;
+        if (!context.Section(std::format("Mare Flow {} · {:.0f} km "
+                                         "wide##planet-volcanology-record-{}",
+                                         index + 1U, event.widthMeters / 1000.0,
+                                         index),
+                             false))
+          continue;
+        changed |= DrawLavaFlow(context, event, index);
+        if (context.Button(
+                std::format("Remove Mare Flow {}##planet-volcanology-remove-{}",
+                            index + 1U, index))) {
+          history.resurfacingEvents.erase(history.resurfacingEvents.begin() +
+                                          static_cast<std::ptrdiff_t>(index));
+          changed = true;
+          removedFlow = true;
+          break;
+        }
+      }
+      static_cast<void>(removedFlow);
+      if (context.Button("Add Mare / Lava Flow##planet-volcanology-add-mare")) {
+        history.resurfacingEvents.push_back(
+            {.id = terrain_impacts::ImpactId::Random(),
+             .kind = terrain_impacts::ResurfacingKind::LavaFlow,
+             .centerlineUnitDirections = {DirectionFromLatLon(0.0, -8.0),
+                                          DirectionFromLatLon(0.0, 0.0),
+                                          DirectionFromLatLon(0.0, 8.0)},
+             .widthMeters = 250'000.0,
+             .thicknessMeters = 900.0,
+             .formationAgeYears = 3.5e9,
+             .ageOrder = NextGeologicalAgeOrder(history)});
+        changed = true;
+      }
+      if (changed)
+        status_ = "Volcanology draft changed. Save Volcanology to apply and "
+                  "rebuild affected terrain.";
+    }
+    context.EndChild();
+    context.SameLine();
+    if (context.Button("Reload Saved##planet-volcanology-reload")) {
+      try {
+        const std::string saved =
+            terrainAuthoring.ImpactHistoryToml(terrainObject);
+        if (!saved.empty())
+          history = terrain_impacts::ParseImpactFieldToml(saved);
+        else
+          history = terrain_impacts::MakeMoonLikeImpactPreset(
+              planet->id, terrain_impacts::ImpactFieldId::Random(),
+              planet->generationSeed);
+        status_ = "Volcanology draft reloaded from the saved terrain history.";
+      } catch (const std::exception &exception) {
+        status_ = exception.what();
+      }
+    }
+    context.SameLine();
+    if (context.PrimaryButton("Save Volcanology##planet-volcanology-save")) {
+      try {
+        saveDraft("Volcanology history saved;");
+      } catch (const std::exception &exception) {
+        status_ =
+            std::format("Volcanology failed to save: {}", exception.what());
+      }
+    }
+    context.EndPopup();
+  }
+
+  context.SameLine();
+  const bool openCryosphere = context.ToolbarButton(
+      "Ice & Cryosphere##planet-toolbar-cryosphere",
+      editor_ui::ToolbarIcon::Procedural, false, true, compact,
+      editor_ui::ToolbarStyle::Menu);
+  context.AnchorNextPopupBelowItem();
+  if (context.BeginPopup("planet-cryosphere-popup", openCryosphere,
+                         {720.0F * editor_ui::CurrentUiScale(),
+                          700.0F * editor_ui::CurrentUiScale()})) {
+    context.Heading("Ice & Cryosphere");
+    context.MutedText(
+        "Author stress-driven fracture networks and dated ice-renewal regions. "
+        "Fracture axes and renewal centerlines use latitude/longitude on the sphere.");
+    const bool scrollable =
+        context.BeginChild("planet-cryosphere-scroll",
+                           {0.0F, 570.0F * editor_ui::CurrentUiScale()}, true);
+    if (scrollable) {
+      bool changed = false;
+      context.Heading("Ice fracture network");
+      if (history.iceFractures == nullptr) {
+        context.MutedText("No fracture network is authored for this surface yet.");
+        if (context.Button("Add Ice Fracture Network##planet-cryosphere-add-fractures")) {
+          history.iceFractures =
+              std::make_shared<terrain_impacts::IceFractureDefinition>();
+          changed = true;
+        }
+      } else {
+        auto fractures = std::make_shared<terrain_impacts::IceFractureDefinition>(
+            *history.iceFractures);
+        context.MutedText(std::format("Deterministic seed: {}", fractures->seed));
+        changed |= context.Checkbox(
+            "Enabled##planet-cryosphere-fractures-enabled", fractures->enabled);
+        i64 seed = static_cast<i64>(std::min<u64>(
+            fractures->seed, static_cast<u64>(std::numeric_limits<i64>::max())));
+        if (context.InputInteger("Fracture Seed##planet-cryosphere-seed", seed)) {
+          fractures->seed = static_cast<u64>(std::max<i64>(seed, 0));
+          changed = true;
+        }
+        changed |= DrawAgeOrder(
+            context, "Chronological Age Order##planet-cryosphere-order",
+            fractures->ageOrder);
+        changed |= context.InputDouble(
+            "Formation Age (years)##planet-cryosphere-age",
+            fractures->formationAgeYears);
+        changed |= DrawSurfacePlacement(
+            context, "planet-cryosphere-tidal-axis", fractures->tidalAxis);
+        changed |= DrawSurfacePlacement(
+            context, "planet-cryosphere-spin-axis", fractures->spinAxis);
+        changed |= context.SliderDouble(
+            "Tidal Stress##planet-cryosphere-tidal-stress",
+            fractures->tidalStress, 0.0, 1.0);
+        changed |= context.SliderDouble(
+            "Rotational Stress##planet-cryosphere-rotational-stress",
+            fractures->rotationalStress, 0.0, 1.0);
+        changed |= context.SliderDouble(
+            "Tensile Strength##planet-cryosphere-tensile-strength",
+            fractures->tensileStrength, 0.0, 1.0);
+        changed |= DrawU32(
+            context, "Fracture Count##planet-cryosphere-count",
+            fractures->fractureCount);
+        changed |= DrawU32(
+            context, "Segments per Fracture##planet-cryosphere-segments",
+            fractures->segmentsPerFracture);
+        changed |= context.InputDouble(
+            "Maximum Length (m)##planet-cryosphere-length",
+            fractures->maximumLengthMeters);
+        changed |= context.InputDouble(
+            "Fracture Width (m)##planet-cryosphere-width",
+            fractures->widthMeters);
+        changed |= context.InputDouble(
+            "Groove Depth (m)##planet-cryosphere-groove",
+            fractures->grooveDepthMeters);
+        changed |= context.InputDouble(
+            "Ridge Height (m)##planet-cryosphere-ridge",
+            fractures->ridgeHeightMeters);
+        changed |= context.SliderDouble(
+            "Branch Probability##planet-cryosphere-branch-probability",
+            fractures->branchProbability, 0.0, 1.0);
+        if (changed)
+          history.iceFractures = std::move(fractures);
+      }
+
+      context.Separator();
+      context.Heading(std::format(
+          "Ice renewal events · {}",
+          std::ranges::count_if(history.resurfacingEvents, [](const auto &event) {
+            return event.kind == terrain_impacts::ResurfacingKind::IceRenewal;
+          })));
+      context.MutedText(
+          "Each renewal event resurfaces its dated, spherical centerline region.");
+      bool removedRenewal = false;
+      for (std::size_t index = 0U; index < history.resurfacingEvents.size();
+           ++index) {
+        auto &event = history.resurfacingEvents[index];
+        if (event.kind != terrain_impacts::ResurfacingKind::IceRenewal)
+          continue;
+        if (!context.Section(
+                std::format("Ice Renewal {} · {:.0f} km wide##planet-cryosphere-event-{}",
+                            index + 1U, event.widthMeters / 1000.0, index), false))
+          continue;
+        changed |= DrawIceRenewal(context, event, index);
+        if (context.Button(std::format(
+                "Remove Ice Renewal {}##planet-cryosphere-remove-{}",
+                index + 1U, index))) {
+          history.resurfacingEvents.erase(history.resurfacingEvents.begin() +
+                                          static_cast<std::ptrdiff_t>(index));
+          changed = true;
+          removedRenewal = true;
+          break;
+        }
+      }
+      static_cast<void>(removedRenewal);
+      if (context.Button("Add Ice Renewal Region##planet-cryosphere-add-renewal")) {
+        history.resurfacingEvents.push_back(
+            {.id = terrain_impacts::ImpactId::Random(),
+             .kind = terrain_impacts::ResurfacingKind::IceRenewal,
+             .centerlineUnitDirections = {DirectionFromLatLon(76.0, -12.0),
+                                          DirectionFromLatLon(78.0, 0.0),
+                                          DirectionFromLatLon(76.0, 12.0)},
+             .widthMeters = 150'000.0,
+             .thicknessMeters = 350.0,
+             .formationAgeYears = 1.0e9,
+             .ageOrder = NextGeologicalAgeOrder(history)});
+        changed = true;
+      }
+      if (changed)
+        status_ = "Cryosphere draft changed. Save Ice & Cryosphere to apply and "
+                  "rebuild affected terrain.";
+    }
+    context.EndChild();
+    context.SameLine();
+    if (context.Button("Reload Saved##planet-cryosphere-reload")) {
+      try {
+        const std::string saved =
+            terrainAuthoring.ImpactHistoryToml(terrainObject);
+        if (!saved.empty())
+          history = terrain_impacts::ParseImpactFieldToml(saved);
+        else
+          history = terrain_impacts::MakeMoonLikeImpactPreset(
+              planet->id, terrain_impacts::ImpactFieldId::Random(),
+              planet->generationSeed);
+        status_ = "Cryosphere draft reloaded from the saved terrain history.";
+      } catch (const std::exception &exception) {
+        status_ = exception.what();
+      }
+    }
+    context.SameLine();
+    if (context.PrimaryButton("Save Ice & Cryosphere##planet-cryosphere-save")) {
+      try {
+        saveDraft("Ice & Cryosphere history saved;");
+      } catch (const std::exception &exception) {
+        status_ = std::format("Cryosphere history failed to save: {}",
+                              exception.what());
+      }
+    }
+    context.EndPopup();
+  }
 }
 
 void StudioViewportPanels::DrawWorkspaceBand(
@@ -2203,24 +4180,24 @@ void StudioViewportPanels::DrawWorkspaceBand(
         return;
     }
 
-    context.Text("Mode");
-    context.SameLine();
-
-    static constexpr std::array<std::string_view, 5> kWorkspaceModes{
-        "Scene",
-        "Planet",
-        "Celestial",
-        "Simulation",
-        "Shading"
-    };
+    using editor_ui::NavigationIcon;
+    static constexpr std::array<editor_ui::NavigationTab, 7> kWorkspaceModes{{
+        {"Build", NavigationIcon::Build},
+        {"Planet", NavigationIcon::Planet},
+        {"Universe", NavigationIcon::Universe},
+        {"Simulation", NavigationIcon::Simulation},
+        {"Shading", NavigationIcon::Shading},
+        {"Planning", NavigationIcon::Planning},
+        {"Plugins", NavigationIcon::Plugins}
+    }};
 
     i32 workspace = static_cast<i32>(g_workspaceMode);
-    if (context.Combo(
-            "##workspace-mode-compact",
+    if (context.NavigationTabs(
+            "studio-workspace-tabs",
             kWorkspaceModes,
             workspace))
     {
-        workspace = std::clamp(workspace, 0, 4);
+        workspace = std::clamp(workspace, 0, 6);
         ActivateWorkspace(
             *g_workspaceUi,
             static_cast<WorkspaceMode>(workspace));
@@ -2276,6 +4253,10 @@ i32 StudioViewportPanels::QuickCreateCommandPriority(
                matches("Material")
             ? 4
             : 0;
+
+    case WorkspaceMode::Planning:
+    case WorkspaceMode::Plugins:
+        return 0;
     }
 
     return 1;
@@ -2290,7 +4271,7 @@ bool StudioViewportPanels::PreferCommandQuickCreate() const noexcept
 
 bool StudioViewportPanels::ShowViewportQuickCreate() const noexcept
 {
-    return g_workspaceMode != WorkspaceMode::Shading;
+    return UsesCanonicalViewportWorkspace(g_workspaceMode);
 }
 
 void StudioViewportPanels::DrawContextBand(
@@ -2658,6 +4639,11 @@ void StudioViewportPanels::DrawContextBand(
             std::format(
                 "{} tools are available contextually in Properties.",
                 WorkspaceName(g_workspaceMode)));
+        break;
+    case WorkspaceMode::Planning:
+    case WorkspaceMode::Plugins:
+        context.MutedText(
+            "Use the active workspace panel for planning or plugin management.");
         break;
     }
 }

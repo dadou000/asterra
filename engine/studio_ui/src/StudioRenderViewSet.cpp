@@ -316,10 +316,57 @@ bool StudioRenderViewSet::NavigateReference(
 
     const auto* viewport = session_->Viewports().Find(id);
     if (viewport == nullptr ||
-        !viewport->target.has_value() ||
         viewport->mode != studio_session::ViewportMode::Perspective)
     {
         return false;
+    }
+
+    if (!viewport->target.has_value())
+    {
+        // Perspective views must remain navigable before a celestial body is
+        // authored or when the selected object is not registered as a body.
+        // In that state use a free camera in the view's current reference
+        // frame instead of requiring a terrain/body target.
+        if (input.mouseDeltaX == 0.0 && input.mouseDeltaY == 0.0 &&
+            input.moveRight == 0.0 && input.moveForward == 0.0 &&
+            input.moveUp == 0.0)
+        {
+            return false;
+        }
+
+        auto& navigation = RequireNavigationState(id);
+        auto& camera = view->Camera();
+        const f64 altitude = std::max(
+            math::Length(camera.localPositionMeters),
+            navigation.config.minimumGroundClearanceMeters);
+        const auto update = navigation.freeCamera.Update({
+            .deltaSeconds = std::clamp(input.deltaSeconds, 0.0, 0.1) *
+                navigation.config.movementSpeedScale,
+            .mouseDeltaX = input.mouseDeltaX,
+            .mouseDeltaY = input.mouseDeltaY,
+            .moveRight = input.moveRight,
+            .moveForward = input.moveForward,
+            .moveUp = input.moveUp,
+            .boost = input.boost,
+            .altitudeMeters = altitude
+        });
+
+        const math::Double3 forwardHorizontal = math::Normalize(
+            math::Double3{update.forward.x, 0.0, update.forward.z});
+        const math::Double3 horizontalForward =
+            math::LengthSquared(forwardHorizontal) > 1.0e-12
+                ? forwardHorizontal
+                : math::Double3{0.0, 0.0, 1.0};
+        const math::Double3 right{
+            horizontalForward.z, 0.0, -horizontalForward.x};
+        camera.localPositionMeters = camera.localPositionMeters +
+            right * update.tangentMotionMeters.x +
+            horizontalForward * update.tangentMotionMeters.y +
+            math::Double3{0.0, update.verticalMotionMeters, 0.0};
+        camera.forward = update.forward;
+        camera.up = update.up;
+        return update.moved || input.mouseDeltaX != 0.0 ||
+            input.mouseDeltaY != 0.0;
     }
 
     const auto& target = *viewport->target;
@@ -517,6 +564,60 @@ bool StudioRenderViewSet::NavigateTerrain(
         update.moved ||
         input.mouseDeltaX != 0.0 ||
         input.mouseDeltaY != 0.0;
+}
+
+std::optional<StudioNavigationReadout> StudioRenderViewSet::NavigationReadout(
+    const std::string_view id)
+{
+    if (session_ == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const auto terrain = session_->TerrainRuntime().Capture(id);
+    if (!terrain.has_value() || !session_->TerrainRuntime().IsCurrent(*terrain))
+    {
+        return std::nullopt;
+    }
+
+    auto& state = RequireNavigationState(id);
+    const auto& baseSource = session_->TerrainRuntime().TerrainSource(*terrain);
+    const auto drawnGround = renderedGround_.find(id);
+    std::optional<RenderedGroundFloorSource> flooredSource;
+    if (drawnGround != renderedGround_.end())
+    {
+        flooredSource.emplace(
+            baseSource,
+            drawnGround->second.unitDirection,
+            drawnGround->second.elevationMeters,
+            terrain->planet.radiusMeters);
+    }
+    const terrain::TerrainSource& source =
+        flooredSource.has_value()
+            ? static_cast<const terrain::TerrainSource&>(*flooredSource)
+            : baseSource;
+
+    const auto current = CurrentTerrainNavigation(state, *terrain, source);
+    StudioNavigationReadout readout;
+    readout.distanceFromCoreMeters = math::Length(terrain->observer.meters);
+    readout.heightAboveTerrainMeters = current.altitudeAboveTerrainMeters;
+    if (readout.distanceFromCoreMeters > 0.0)
+    {
+        const math::Double3 radial =
+            terrain->observer.meters / readout.distanceFromCoreMeters;
+        const auto point = SampleStudioTerrainPoint(
+            baseSource,
+            terrain->planet.id,
+            terrain->planet.radiusMeters,
+            radial,
+            std::max(std::abs(readout.heightAboveTerrainMeters) * 0.02, 1.0));
+        if (point.underwater)
+        {
+            readout.heightAboveWaterSurfaceMeters =
+                readout.distanceFromCoreMeters - point.renderedSurfaceRadiusFromCoreMeters;
+        }
+    }
+    return readout;
 }
 
 bool StudioRenderViewSet::FocusTerrainBody(
@@ -833,6 +934,67 @@ f64 StudioRenderViewSet::ViewFovRadians(const std::string_view id) const
         throw std::out_of_range("Studio render-view ID is not registered.");
     }
     return view->Camera().verticalFovRadians;
+}
+
+f64 StudioRenderViewSet::CameraFovDegrees(const std::string_view id) const
+{
+    constexpr f64 kRadiansToDegrees = 57.295779513082320876;
+    const auto base = baseFovRadians_.find(id);
+    const f64 baseFov = base == baseFovRadians_.end()
+        ? ViewFovRadians(id) * Zoom(id)
+        : base->second;
+    return 2.0 * std::atan(
+        std::tan(baseFov * 0.5) / Zoom(id)) * kRadiansToDegrees;
+}
+
+f64 StudioRenderViewSet::CameraFocalLengthMillimeters(
+    const std::string_view id) const
+{
+    // A 24 mm sensor height is the fixed full-frame camera convention.
+    constexpr f64 kDegreesToRadians = 0.01745329251994329577;
+    return 24.0 /
+        (2.0 * std::tan(CameraFovDegrees(id) * kDegreesToRadians * 0.5));
+}
+
+f64 StudioRenderViewSet::SetCameraFovDegrees(
+    const std::string_view id,
+    const f64 degrees)
+{
+    constexpr f64 kDegreesToRadians = 0.01745329251994329577;
+    if (!std::isfinite(degrees) || degrees <= 0.0 || degrees >= 170.0)
+    {
+        throw std::invalid_argument(
+            "Camera field of view must be finite and between 0 and 170 degrees.");
+    }
+
+    const f64 currentZoom = Zoom(id);
+    const auto base = baseFovRadians_.find(id);
+    const f64 baseFov = base == baseFovRadians_.end()
+        ? ViewFovRadians(id) * currentZoom
+        : base->second;
+    const f64 baseHalfTangent = std::tan(baseFov * 0.5);
+    const f64 targetZoom =
+        baseHalfTangent / std::tan(degrees * kDegreesToRadians * 0.5);
+    SetZoom(id, targetZoom);
+    return 2.0 * std::atan(
+        baseHalfTangent / Zoom(id)) * 57.295779513082320876;
+}
+
+f64 StudioRenderViewSet::SetCameraFocalLengthMillimeters(
+    const std::string_view id,
+    const f64 millimeters)
+{
+    constexpr f64 kRadiansToDegrees = 57.295779513082320876;
+    if (!std::isfinite(millimeters) || millimeters < 2.0 || millimeters > 500.0)
+    {
+        throw std::invalid_argument(
+            "Camera focal length must be between 2 and 500 mm.");
+    }
+    const f64 fovDegrees =
+        2.0 * std::atan(24.0 / (2.0 * millimeters)) * kRadiansToDegrees;
+    const f64 appliedFov = SetCameraFovDegrees(id, fovDegrees);
+    return 24.0 /
+        (2.0 * std::tan(appliedFov * kRadiansToDegrees * 0.5));
 }
 
 void StudioRenderViewSet::SetCaptureTile(
@@ -1863,12 +2025,16 @@ u32 StudioRenderViewSet::Refresh(
         if (!camera.has_value())
         {
             view->Camera() = {};
+            baseFovRadians_.erase(id);
             debugPhysicalPages_.erase(id);
             terrainSurfacePicks_.erase(id);
             terrainAuthoringOverlays_.erase(id);
             liveDebugPages_.erase(id);
             continue;
         }
+
+        baseFovRadians_.insert_or_assign(
+            id, camera->verticalFovRadians);
 
         if (const auto zoom = zoom_.find(id);
             zoom != zoom_.end() && zoom->second != 1.0)

@@ -1,5 +1,7 @@
 add_executable(OrbitStudio
     src/Main.cpp
+    src/StudioApplication.cpp
+    src/StudioWorkspaceRpc.cpp
     src/EditorAppSupport.cpp
     src/StudioBuildHost.cpp
     src/StudioPathNetworkHost.cpp
@@ -74,6 +76,7 @@ target_link_libraries(OrbitStudio
         Orbit::ShaderDxc
         Orbit::StudioSession
         Orbit::StudioUi
+        Orbit::TerrainGpu
         Orbit::Universe
         Orbit::WorldModel
         Orbit::VolumeFields

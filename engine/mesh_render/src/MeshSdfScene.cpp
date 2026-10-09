@@ -72,6 +72,42 @@ void main(uint3 id : SV_DispatchThreadID)
 }
 )";
 
+// Repacks the merged distance field as one uint4 of eight f16 corners per
+// cell (see SdfTraceShader.hpp), so the gather's trace step is one load.
+constexpr const char* kCornerShader = R"(
+[[vk::binding(0, 0)]] StructuredBuffer<float4> g_params : register(t0);
+[[vk::binding(1, 0)]] RWStructuredBuffer<float> g_dist : register(u1);
+[[vk::binding(2, 0)]] RWStructuredBuffer<uint4> g_corners : register(u2);
+
+uint PackPair(float a, float b)
+{
+    return f32tof16(min(a, 60000.0)) | (f32tof16(min(b, 60000.0)) << 16);
+}
+
+[numthreads(4, 4, 4)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    const int3 dims = int3(g_params[0].xyz);
+    const int3 i0 = int3(id);
+    if (any(i0 >= dims))
+    {
+        return;
+    }
+    const int3 i1 = min(i0 + 1, dims - 1);
+    const int row = dims.x;
+    const int slab = dims.x * dims.y;
+    const int b000 = i0.z * slab + i0.y * row;
+    const int b010 = i0.z * slab + i1.y * row;
+    const int b001 = i1.z * slab + i0.y * row;
+    const int b011 = i1.z * slab + i1.y * row;
+    g_corners[i0.z * slab + i0.y * row + i0.x] = uint4(
+        PackPair(g_dist[b000 + i0.x], g_dist[b000 + i1.x]),
+        PackPair(g_dist[b010 + i0.x], g_dist[b010 + i1.x]),
+        PackPair(g_dist[b001 + i0.x], g_dist[b001 + i1.x]),
+        PackPair(g_dist[b011 + i0.x], g_dist[b011 + i1.x]));
+}
+)";
+
 // Merges one mesh instance's distance field into the global volume: each
 // global voxel is mapped into the mesh's local space, the mesh field is
 // sampled trilinearly (plus the distance to the mesh's grid box when outside
@@ -737,6 +773,7 @@ MeshSdfScene::MeshSdfScene(
     lightPipeline_ = make(kLightShader, 6U);
     primitivePipeline_ = make(kPrimitiveShader, 6U);
     terrainPipeline_ = make(kTerrainShader, 6U);
+    cornerPipeline_ = make(kCornerShader, 3U);
 }
 
 void MeshSdfScene::Update(
@@ -876,7 +913,7 @@ void MeshSdfScene::Update(
     {
         Retired old;
         old.retireAtTick = tick_ + kRetireTicks;
-        for (auto* slot : {&distance_, &albedo_, &normal_, &emissive_, &radiance_})
+        for (auto* slot : {&distance_, &distanceCorners_, &albedo_, &normal_, &emissive_, &radiance_})
         {
             if (*slot != nullptr)
             {
@@ -897,6 +934,7 @@ void MeshSdfScene::Update(
         };
         radiance_ = allocate(voxels * sizeof(f32) * 4U);
         distance_ = allocate(voxels * sizeof(f32));
+        distanceCorners_ = allocate(voxels * 4U * sizeof(u32));
         albedo_ = allocate(voxels * sizeof(u32));
         normal_ = allocate(voxels * sizeof(u32));
         emissive_ = allocate(voxels * sizeof(u32));
@@ -1109,6 +1147,23 @@ void MeshSdfScene::Update(
         temporaries.buffers.push_back(std::move(heightsBuf));
         barrierAll();
     }
+
+    // Repack the finished field for the gather's sphere trace.
+    if (cornerPipeline_ != nullptr)
+    {
+        std::vector<f32> params(4U, 0.0F);
+        params[0] = static_cast<f32>(dims[0]);
+        params[1] = static_cast<f32>(dims[1]);
+        params[2] = static_cast<f32>(dims[2]);
+        auto paramsBuf = paramsBuffer(params);
+        commands.SetComputePipeline(*cornerPipeline_);
+        commands.SetComputeBuffer(0U, *paramsBuf);
+        commands.SetComputeBuffer(1U, *distance_);
+        commands.SetComputeBuffer(2U, *distanceCorners_);
+        commands.Dispatch((dims[0] + 3U) / 4U, (dims[1] + 3U) / 4U, (dims[2] + 3U) / 4U);
+        commands.UavBarrier(*distanceCorners_);
+        temporaries.buffers.push_back(std::move(paramsBuf));
+    }
     retired_.push_back(std::move(temporaries));
 
     volume_.ready = true;
@@ -1117,6 +1172,7 @@ void MeshSdfScene::Update(
     volume_.dimensions = dims;
     volume_.revision = ++revision_;
     volume_.distance = distance_.get();
+    volume_.distanceCorners = distanceCorners_.get();
     volume_.albedo = albedo_.get();
     volume_.normal = normal_.get();
     volume_.emissive = emissive_.get();
@@ -1131,6 +1187,40 @@ void MeshSdfScene::Light(
     if (!volume_.ready || lightPipeline_ == nullptr)
     {
         return;
+    }
+
+    {
+        const auto same =
+            [](const math::Float3& a, const math::Float3& b)
+            {
+                return a.x == b.x && a.y == b.y && a.z == b.z;
+            };
+        const bool unchanged =
+            lastLightRevision_ == volume_.revision &&
+            same(lastLightInput_.toSun, input.toSun) &&
+            same(lastLightInput_.skyIrradiance, input.skyIrradiance) &&
+            same(lastLightInput_.up, input.up) &&
+            lastLightInput_.sunIrradiance == input.sunIrradiance;
+        if (unchanged)
+        {
+            if (stableLightFrames_ < 0xFFFFU)
+            {
+                ++stableLightFrames_;
+            }
+        }
+        else
+        {
+            stableLightFrames_ = 0U;
+            lastLightInput_ = input;
+            lastLightRevision_ = volume_.revision;
+        }
+
+        // 4 quarter-refreshes per cycle x up to 8 bounces of settling.
+        constexpr u32 kSettledFrames = 48U;
+        if (stableLightFrames_ > kSettledFrames)
+        {
+            return;
+        }
     }
 
     std::vector<f32> params(16U, 0.0F);

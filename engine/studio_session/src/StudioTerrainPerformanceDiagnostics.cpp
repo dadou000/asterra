@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <string_view>
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -196,8 +197,12 @@ RecordViewportStreaming(
         viewports_[
             std::string(viewportId)];
 
-    record.adapterName =
-        std::string(adapterName);
+    if (std::string_view(record.adapterName) != adapterName)
+    {
+        record.adapterName.assign(
+            adapterName.data(),
+            adapterName.size());
+    }
     record.streaming =
         streaming;
 

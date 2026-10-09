@@ -22,12 +22,13 @@ invariants = [
   "Per page the product chain is Geology -> Drainage -> TerrainProcesses -> ExposedSurface -> BiomeWeights -> {SurfaceMaterial, Scatter}; Drainage, TerrainProcesses and Scatter run on the GPU backend, the others on the CPU.",
   "Which products a change dirties (DirtyProductsFor): RockPhysics and TerrainAuthoring -> all seven; Climate -> all but Geology; Water and ProcessSettings -> TerrainProcesses and everything after it; BiomePlacement -> BiomeWeights, SurfaceMaterial, Scatter; BiomeSurfaceMaterial -> SurfaceMaterial only; BiomeScatter -> Scatter only.",
   "Biome edits have three separate source branches (placement/rules, surface material, scatter) and none is an ancestor of erosion: a tree-density edit never reruns terrain processes and a moss material edit never touches scatter.",
-  "Each affected page advances only the revision domain of the change (geology, authoring, climate, water, processes) - all three biome kinds advance the single `biome` domain.",
+  "Each affected page advances only the revision domain of the change (geology, authoring, climate, water, processes, or hydrology boundary) - all three biome kinds advance the single `biome` domain.",
   "ApplyChange removes ALL persistent-GPU-cache entries of every affected page address (InvalidateAddress), whatever the kind: cache invalidation is address-granular, not product-granular.",
   "Bounded scopes work at the physical page tile level of scope.center: only pages on the SAME level within radiusTiles + downstreamRadiusTiles (clamped to 64) are affected. Edits spanning levels must be projected by the caller or expressed as global.",
   "An invalid scope throws std::invalid_argument; the default scope is global.",
   "UnregisterPage never blocks: it returns false while any node of the page has in-flight work, and on success also invalidates the page address in the cache.",
   "Distant pages outside the bounded neighbourhood keep clean committed products.",
+  "DrainageBoundary advances only the hydrology-boundary revision and dirties Drainage plus its descendants; Studio submits it to resident cardinal neighbors when a published M09 boundary payload changes.",
 ]
 related = ["/rendering/terrain/gpu-cache"]
 depends_on = ["/rendering/terrain", "/rendering/terrain/gpu-cache"]
@@ -68,8 +69,9 @@ climate + biome placement     -> biome weights
                 biome weights -> biome scatter           (+ scatter source)
 ```
 
-The graph's source kinds are RockPhysics, Authoring, Climate, Water, ProcessSettings, BiomePlacement, BiomeSurface and
-BiomeScatter; `TerrainChangeKind` maps one-to-one onto them.
+The graph's source kinds are RockPhysics, Authoring, Climate, Water, ProcessSettings, BiomePlacement, BiomeSurface,
+BiomeScatter and DrainageBoundary; `TerrainChangeKind` maps one-to-one onto them. DrainageBoundary is consumed only by
+Drainage and advances the independent hydrology-boundary revision.
 
 ## Build seams
 

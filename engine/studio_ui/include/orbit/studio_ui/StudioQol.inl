@@ -86,26 +86,6 @@ inline void StudioViewportPanels::InstallQol(editor_ui::EditorUi* ui) noexcept
 {
     if (ui != nullptr) ui_ = ui;
 
-    try
-    {
-        GlobalInspectorProviders().Upsert({
-            .id = "orbit.selection.qol",
-            .owner = "orbit",
-            .title = "Workflow",
-            .order = 10,
-            .defaultOpen = true,
-            .relevant = [this]
-            {
-                return session_ != nullptr && session_->World().HasWorld();
-            },
-            .draw = [this](editor_ui::PanelContext& context)
-            {
-                DrawQolProperties(context);
-            }
-        });
-    }
-    catch (...) {}
-
     if (qolInstalled_) return;
     auto* shortcuts = editor_model::ShortcutRegistry::Active();
     if (shortcuts == nullptr) return;
@@ -348,7 +328,7 @@ inline void StudioViewportPanels::CommitRenameSelection()
 inline void StudioViewportPanels::RevealSelectionInWorld()
 {
     if (session_ == nullptr || session_->World().Selection().Ordered().empty()) return;
-    if (ui_ != nullptr) static_cast<void>(ui_->FocusPanelByTitle("World / Assets"));
+    if (ui_ != nullptr) static_cast<void>(ui_->FocusPanelByTitle("Explorer"));
     Notify("Selection revealed", "Alt+Up/Down walks the semantic hierarchy.");
 }
 

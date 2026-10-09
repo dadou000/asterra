@@ -2,7 +2,10 @@
 
 #include <SQLiteCpp/SQLiteCpp.h>
 
+#include <map>
+#include <mutex>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -114,6 +117,32 @@ public:
         }
     }
 
+    // Read memoization. Every query is otherwise a SQLite read transaction
+    // (WAL shared lock, file-size probe, statement prepare), and the render
+    // and UI loops ask the same questions every frame. All object writes go
+    // through this store and bump previewRevision, which invalidates the lot.
+    void SyncCache() const
+    {
+        if (cacheTag != previewRevision)
+        {
+            findCache.clear();
+            rootsCache.reset();
+            childrenCache.clear();
+            propertyCache.clear();
+            cacheTag = previewRevision;
+        }
+    }
+
+    mutable std::mutex cacheMutex;
+    mutable u64 cacheTag{~u64{0}};
+    mutable std::map<std::pair<u64, u64>, std::optional<ObjectRecord>>
+        findCache;
+    mutable std::optional<std::vector<ObjectRecord>> rootsCache;
+    mutable std::map<std::pair<u64, u64>, std::vector<ObjectRecord>>
+        childrenCache;
+    mutable std::map<std::string, std::optional<schema::PropertyValue>>
+        propertyCache;
+
     SQLite::Database database;
     bool readOnly{false};
     std::unique_ptr<SQLite::Transaction>
@@ -137,6 +166,18 @@ std::optional<ObjectRecord>
 ObjectStore::Find(
     const ObjectId id) const
 {
+    std::lock_guard cacheLock(impl_->cacheMutex);
+    impl_->SyncCache();
+    const auto cacheKey = std::make_pair(
+        static_cast<u64>(id.high), static_cast<u64>(id.low));
+    if (const auto hit = impl_->findCache.find(cacheKey);
+        hit != impl_->findCache.end())
+    {
+        return hit->second;
+    }
+
+    std::optional<ObjectRecord> found;
+    {
     SQLite::Statement query(
         impl_->database,
         "SELECT id, parent_id, type_id, name, sort_order "
@@ -145,17 +186,26 @@ ObjectStore::Find(
         1,
         id.ToString());
 
-    if (!query.executeStep())
+    if (query.executeStep())
     {
-        return std::nullopt;
+        found = ReadObject(query);
+    }
     }
 
-    return ReadObject(query);
+    impl_->findCache.emplace(cacheKey, found);
+    return found;
 }
 
 std::vector<ObjectRecord>
 ObjectStore::Roots() const
 {
+    std::lock_guard cacheLock(impl_->cacheMutex);
+    impl_->SyncCache();
+    if (impl_->rootsCache.has_value())
+    {
+        return *impl_->rootsCache;
+    }
+
     SQLite::Statement query(
         impl_->database,
         "SELECT id, parent_id, type_id, name, sort_order "
@@ -170,6 +220,7 @@ ObjectStore::Roots() const
             ReadObject(query));
     }
 
+    impl_->rootsCache = result;
     return result;
 }
 
@@ -177,6 +228,16 @@ std::vector<ObjectRecord>
 ObjectStore::Children(
     const ObjectId parent) const
 {
+    std::lock_guard cacheLock(impl_->cacheMutex);
+    impl_->SyncCache();
+    const auto cacheKey = std::make_pair(
+        static_cast<u64>(parent.high), static_cast<u64>(parent.low));
+    if (const auto hit = impl_->childrenCache.find(cacheKey);
+        hit != impl_->childrenCache.end())
+    {
+        return hit->second;
+    }
+
     SQLite::Statement query(
         impl_->database,
         "SELECT id, parent_id, type_id, name, sort_order "
@@ -194,6 +255,7 @@ ObjectStore::Children(
             ReadObject(query));
     }
 
+    impl_->childrenCache.emplace(cacheKey, result);
     return result;
 }
 
@@ -257,6 +319,18 @@ ObjectStore::GetProperty(
     const ObjectId object,
     const schema::PropertyId property) const
 {
+    std::lock_guard cacheLock(impl_->cacheMutex);
+    impl_->SyncCache();
+    const std::string cacheKey =
+        object.ToString() + "/" + property.ToString();
+    if (const auto hit = impl_->propertyCache.find(cacheKey);
+        hit != impl_->propertyCache.end())
+    {
+        return hit->second;
+    }
+
+    const auto result = [&]() -> std::optional<schema::PropertyValue>
+    {
     SQLite::Statement query(
         impl_->database,
         "SELECT value_kind, value_integer, value_real, "
@@ -338,6 +412,10 @@ ObjectStore::GetProperty(
 
     throw std::runtime_error(
         "Unknown stored property kind.");
+    }();
+
+    impl_->propertyCache.emplace(cacheKey, result);
+    return result;
 }
 
 void ObjectStore::Insert(

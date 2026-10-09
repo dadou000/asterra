@@ -4,7 +4,9 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
-#include <orbit/studio_session/StudioTerrainValidationScenario.hpp>
+#if defined(ORBIT_ENABLE_VALIDATION_TOOLS)
+#include <orbit/validation/StudioTerrainValidationScenario.hpp>
+#endif
 
 #include <optional>
 #include <string>
@@ -25,8 +27,10 @@ public:
     [[nodiscard]] studio_session::StudioTerrainRoundTripReport
     RunTerrainRoundTripValidation();
 
+#if defined(ORBIT_ENABLE_VALIDATION_TOOLS)
     [[nodiscard]] studio_session::StudioTerrainValidationScenarioReport
     RunTerrainValidationScenario();
+#endif
 
     inline static constexpr editor_ui::PanelId kPanelId{
         .high = 0x4f52424954535455ULL,
@@ -49,9 +53,11 @@ private:
     std::optional<
         studio_session::StudioTerrainRoundTripReport>
         terrainRoundTripReport_;
+#if defined(ORBIT_ENABLE_VALIDATION_TOOLS)
     std::optional<
         studio_session::StudioTerrainValidationScenarioReport>
         terrainValidationScenarioReport_;
+#endif
     std::string status_;
 };
 } // namespace orbit::studio_ui

@@ -5,6 +5,8 @@ add_library(OrbitEditorUi STATIC
     src/EditorUi.cpp
     src/FocusState.cpp
     src/SegmentedControl.cpp
+    src/NavigationTabs.cpp
+    src/Toolbar.cpp
     src/ShellBands.cpp
 )
 

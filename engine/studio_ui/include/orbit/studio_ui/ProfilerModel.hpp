@@ -94,6 +94,10 @@ struct ProfilerOptions
     std::string filter;
     // Pause by itself when a hitch is recorded, framed on the long frame.
     bool freezeOnHitch{true};
+    // Default settings for the viewport-only Perfetto capture action.
+    f64 viewportCaptureDurationMs{4000.0};
+    std::string viewportCaptureResolution{"1440p"};
+    std::string viewportCaptureScenario{"static"};
 };
 
 // State behind the Profiler panel and the profiler.* panel RPC methods: a live

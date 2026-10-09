@@ -293,6 +293,35 @@ int main()
     }
 
     {
+        // Under an ocean the floor is the seabed, not the water surface or
+        // the reference sphere: the camera can dive below sea level and is
+        // stopped only by the bed.
+        FlatTerrainSource seabed(-4'000.0, 92U);
+        auto terrain = TerrainAtAltitude(-3'900.0);
+
+        orbit::studio_ui::StudioTerrainNavigationState state;
+        const auto current =
+            orbit::studio_ui::CurrentTerrainNavigation(state, terrain, seabed);
+        Check(std::abs(current.altitudeAboveTerrainMeters - 100.0) < 1.0e-6);
+
+        orbit::f64 radius = orbit::math::Length(terrain.observer.meters);
+        for (int step = 0; step < 40; ++step)
+        {
+            terrain.observer.meters = orbit::math::Normalize(terrain.observer.meters) * radius;
+            const auto moved = orbit::studio_ui::AdvanceTerrainNavigation(
+                state, terrain, seabed, {.deltaSeconds = 0.5, .moveUp = -1.0});
+            radius = orbit::math::Length(moved.observer.meters);
+            terrain.observer = moved.observer;
+        }
+        const orbit::f64 floor =
+            terrain.planet.radiusMeters - 4'000.0 +
+            state.config.minimumGroundClearanceMeters;
+        // Dived below sea level (radius < planet radius) and rests on the bed.
+        Check(radius < terrain.planet.radiusMeters - 3'000.0);
+        Check(radius >= floor - 1.0e-6);
+    }
+
+    {
         const orbit::world::PlanetDefinition planet{
             .radiusMeters =
                 6'000'000.0

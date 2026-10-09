@@ -1,8 +1,10 @@
 add_library(OrbitStudioSession STATIC
+    src/BakedRiverPage.cpp
     src/StudioSession.cpp
     src/SimulationClock.cpp
     src/StudioRuntimeBinding.cpp
     src/StudioTerrainAuthoringInvalidation.cpp
+    src/StudioTerrainBakeController.cpp
     src/StudioTerrainRebuildScheduler.cpp
     src/StudioTerrainPerformanceDiagnostics.cpp
     src/StudioTerrainPhysicalPageService.cpp
@@ -10,8 +12,9 @@ add_library(OrbitStudioSession STATIC
     src/StudioTerrainRuntimeBridge.cpp
     src/StudioTerrainServiceStatus.cpp
     src/StudioMeshRpc.cpp
+    src/StudioTerrainSampleRpc.cpp
     src/StudioTerrainStatusRpc.cpp
-    src/StudioTerrainValidationScenario.cpp
+    src/StudioTerrainTectonicsProbe.cpp
     src/StudioWorkspace.cpp
     src/ProjectBrowserModel.cpp
     src/UniverseBoundPathCache.cpp
@@ -39,6 +42,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::CelestialRepresentation
         Orbit::CelestialSmallBodies
         Orbit::Documents
+        Orbit::EditorModel
         Orbit::EditorRpc
         Orbit::EditorSession
         Orbit::Jobs
@@ -48,7 +52,9 @@ target_link_libraries(OrbitStudioSession
         Orbit::Paths
         Orbit::Rpc
         Orbit::SurfaceModel
+        Orbit::WorldModel
         Orbit::Terrain
+        Orbit::TerrainBake
         Orbit::TerrainDebug
         Orbit::TerrainDependency
         Orbit::TerrainGpu
@@ -58,12 +64,24 @@ target_link_libraries(OrbitStudioSession
         Orbit::TerrainScatter
         Orbit::TerrainStream
         Orbit::TerrainView
+        Orbit::TerrainWater
         Orbit::VolumeRepresentation
         Orbit::World
 )
 
 target_compile_features(OrbitStudioSession PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitStudioSession)
+
+if(BUILD_TESTING OR ORBIT_ENABLE_VALIDATION_TOOLS)
+    add_library(OrbitTerrainValidationSupport STATIC
+        ${PROJECT_SOURCE_DIR}/tools/validation/StudioTerrainValidationScenario.cpp)
+    target_include_directories(OrbitTerrainValidationSupport PUBLIC
+        ${PROJECT_SOURCE_DIR}/tools/validation/include)
+    target_link_libraries(OrbitTerrainValidationSupport PUBLIC
+        Orbit::StudioSession Orbit::EditorModel Orbit::WorldModel)
+    target_compile_features(OrbitTerrainValidationSupport PUBLIC cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainValidationSupport)
+endif()
 
 if(BUILD_TESTING)
     add_executable(OrbitStudioSessionTests
@@ -202,6 +220,7 @@ if(BUILD_TESTING)
 
     target_link_libraries(OrbitStudioTerrainValidationScenarioTests
         PRIVATE
+            OrbitTerrainValidationSupport
             Orbit::EditorModel
             Orbit::StudioSession
             Orbit::WorldModel
@@ -252,6 +271,68 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioTerrainServiceStatus
         COMMAND OrbitStudioTerrainServiceStatusTests
+    )
+
+    add_executable(OrbitBakedRiverPageTests
+        tests/BakedRiverPageTests.cpp
+    )
+
+    target_include_directories(OrbitBakedRiverPageTests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(OrbitBakedRiverPageTests
+        PRIVATE
+            Orbit::StudioSession
+            Orbit::TerrainHydrology
+    )
+
+    target_compile_features(OrbitBakedRiverPageTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitBakedRiverPageTests)
+
+    add_test(
+        NAME Orbit.BakedRiverPage
+        COMMAND OrbitBakedRiverPageTests
+    )
+
+    add_executable(OrbitStudioTerrainBakeTests
+        tests/StudioTerrainBakeTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainBakeTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::StudioSession
+            Orbit::TerrainBake
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioTerrainBakeTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainBakeTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainBake
+        COMMAND OrbitStudioTerrainBakeTests
+    )
+
+    add_executable(OrbitStudioTerrainSampleRpcTests
+        tests/StudioTerrainSampleRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainSampleRpcTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioTerrainSampleRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainSampleRpcTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainSampleRpc
+        COMMAND OrbitStudioTerrainSampleRpcTests
     )
 
     add_executable(OrbitStudioTerrainRuntimeBridgeTests

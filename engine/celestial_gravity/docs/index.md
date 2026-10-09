@@ -16,13 +16,13 @@ invariants = [
   "A model evaluates acceleration in its own source/body frame (AccelerationLocal(sourceToPointMeters)); the service transforms the query point into the source frame, evaluates, then rotates the acceleration back into the caller's frame - required so J2 and spherical-harmonic fields, which depend on the body's axis, evaluate correctly.",
   "Coordinates come from the existing FrameGraph and semantic gravity sources.",
 ]
-related = ["/celestial/orbits", "/foundation/frames", "/legacy/research-v006-gravity-capability"]
+related = ["/celestial/orbits", "/foundation/frames", "/legacy/tree-history-research-v006-gravity-capability"]
 depends_on = ["/foundation/core", "/foundation/frames", "/foundation/math", "/foundation/time"]
 used_by = ["/world/world-model"]
 verify = [
   "ctest -R Orbit.GravityService",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

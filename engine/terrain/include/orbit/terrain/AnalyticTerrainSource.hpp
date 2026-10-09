@@ -1,10 +1,14 @@
 #pragma once
 
+#include <orbit/terrain/BakedRivers.hpp>
+#include <orbit/terrain/BakedGeology.hpp>
 #include <orbit/terrain/GlobalTerrainFields.hpp>
 #include <orbit/terrain/TerrainSource.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
 #include <orbit/world/Planet.hpp>
 
 #include <array>
+#include <memory>
 #include <vector>
 
 namespace orbit::terrain
@@ -65,7 +69,37 @@ struct AnalyticTerrainDesc
     ProceduralCraterTerrainDesc craters{};
     // Mountain relief and local detail share the available elevation headroom.
     f64 maximumElevationAboveSeaLevelMeters{8'000.0};
+
+    // Baked global river network. When set, channels are cut into the terrain
+    // from the stored centerlines; no drainage is computed while generating.
+    // Immutable and shared; swapping it means composing a new source.
+    std::shared_ptr<const BakedRiverNetwork> bakedRivers{};
+    // GPU-facing relief raster compiled from the same authored impact/ice
+    // history as the CPU process channels. Immutable and shared per planet.
+    std::shared_ptr<const BakedGeologyRasters> bakedGeology{};
+
+    // Authored chronological planetary event history. The immutable event
+    // authority compiles once with this source and is sampled through its
+    // spherical index, never regenerated from renderer or clipmap state.
+    std::shared_ptr<const terrain_impacts::ImpactFieldDefinition> impactHistory{};
+    std::shared_ptr<const terrain_impacts::IceFractureDefinition> iceFractures{};
 };
+
+// Identity of everything the baked tectonic rasters depend on: the plate model
+// recipe (seeds, plate count and shape, crust biases, plate motion, boundary
+// width, reference speeds, convergence uplift and oceanic scale) and the planet
+// radius, plus the baker's algorithm version. Hotspot chains and rain-shadow
+// settings are not baked, so editing them never makes a bake stale.
+[[nodiscard]] u64 TectonicBakeRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc) noexcept;
+
+// Fingerprint of everything that shapes the terrain except the baked river
+// network, which is a product of this recipe. A river bake is stale when this
+// (or its own options) changed. Includes the baked tectonic raster identity.
+[[nodiscard]] u64 TerrainRecipeHash(
+    const world::PlanetDefinition& planet,
+    const AnalyticTerrainDesc& desc);
 
 class AnalyticTerrainSource final : public TerrainSource
 {
@@ -78,6 +112,17 @@ public:
         const TerrainQuery& query) const noexcept override;
 
     [[nodiscard]] u64 Revision() const noexcept override;
+
+    // Process channels paired with Sample() for material-column compilation.
+    // The returned relief is already present in Sample().
+    [[nodiscard]] terrain_impacts::CraterProcessSample SampleImpactProcesses(
+        const math::Double3& unitDirection,
+        f64 footprintMeters,
+        terrain_impacts::ImpactQueryScratch& scratch) const;
+    [[nodiscard]] terrain_impacts::IceFractureSample SampleIceFractures(
+        const math::Double3& unitDirection,
+        f64 footprintMeters,
+        terrain_impacts::ImpactQueryScratch& scratch) const;
 
     // Exposes the coarse whole-planet fields (continents, coarse
     // mountain ridges, climate, plate/hotspot tectonic data) this
@@ -132,6 +177,8 @@ private:
     std::array<NoiseOctave, 16> detailBands_{};
     std::array<NoiseOctave, 16> mountainBands_{};
     std::vector<GpuProceduralCrater> craters_;
+    std::unique_ptr<terrain_impacts::ImpactField> impactField_;
+    std::unique_ptr<terrain_impacts::IceFractureField> iceFractureField_;
     f64 mountainNormalization_{1.0};
     f64 warpFrequency_{0.0};
     f64 warpFootprintScale_{1.0};

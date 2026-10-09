@@ -38,7 +38,7 @@ verify = [
   "StudioAtmosphereDiagnostics: body, static fingerprint, sky fingerprint, observer radius/altitude, direct irradiance and all LUT dimensions.",
   "Climbing from the ground to orbit rebuilds the sky view a few times per altitude decade, not every frame (profile with orbit_profiler_capture: atmosphere.build_sky_view scope).",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 
 [[diagnose]]
 symptom = "sky or limb looks wrong after editing atmosphere properties (stale or unchanged)"
@@ -71,4 +71,4 @@ directions and 48 sky-view steps.
 No pressure/composition derivation at runtime (that is the authoring solver), no wavelength-resolved spectral transport,
 no weather-dependent aerosol field, no atmospheric refraction, no aerial-perspective volume texture. Aerial perspective
 for clouds is integrated inside the cloud shader over the camera-to-cloud distance with the same LUTs
-(`/rendering/clouds/raymarch`). Source: `/legacy/research-v006-physical-atmosphere`.
+(`/rendering/clouds/raymarch`). Source: `/legacy/tree-history-research-v006-physical-atmosphere`.

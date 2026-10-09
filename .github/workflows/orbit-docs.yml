@@ -2,19 +2,17 @@ name: Orbit Docs
 
 on:
   push:
-    branches: [orbit]
+    branches: [orbit, pre0.0.9-experimental]
     paths:
       - "docs/**"
-      - "code_change/**"
       - "engine/**"
       - "apps/**"
       - "tools/**"
       - ".github/workflows/orbit-docs.yml"
   pull_request:
-    branches: [orbit]
+    branches: [orbit, pre0.0.9-experimental]
     paths:
       - "docs/**"
-      - "code_change/**"
       - "engine/**"
       - "apps/**"
       - "tools/**"
@@ -45,6 +43,9 @@ jobs:
 
       - name: Docs tooling tests
         run: python -m unittest discover -s tools/tests -p "test_orbit_docs.py"
+
+      - name: Validate production and test build isolation
+        run: python -m unittest discover -s tools/tests -p "test_validation_build.py"
 
       - name: Validate docs MCP server
         run: python -m py_compile tools/mcp_server/orbit_docs_mcp_server.py tools/orbit_docs_cli.py

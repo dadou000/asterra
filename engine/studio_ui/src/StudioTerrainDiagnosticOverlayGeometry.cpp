@@ -1361,6 +1361,105 @@ void AppendDrainageVectors(
         }
     }
 }
+
+void AppendRiverChannels(
+    std::vector<editor_ui::PreviewLine>& result,
+    const StudioTerrainDiagnosticPage& page,
+    const studio_session::StudioTerrainViewportRuntimeSnapshot& runtime,
+    const terrain::TerrainSource& source,
+    const render_view::CameraState& camera)
+{
+    if (page.snapshot == nullptr || page.snapshot->rivers == nullptr)
+        return;
+
+    const auto& network = *page.snapshot->rivers;
+    const f32 resolution = static_cast<f32>(network.resolution);
+    const math::Float4 color{0.08F, 0.42F, 1.0F, 0.98F};
+    if (network.resolution < 2U)
+        return;
+
+    for (const auto& segment : network.segments)
+    {
+        if (!segment.active ||
+            segment.upstreamNode >= network.nodes.size() ||
+            segment.downstreamNode >= network.nodes.size())
+            continue;
+
+        const auto& upstream = network.nodes[segment.upstreamNode];
+        const auto& downstream = network.nodes[segment.downstreamNode];
+        if (segment.routingPathMeters.size() >= 2U)
+        {
+            const f64 half = (static_cast<f64>(network.resolution) - 1.0) * 0.5;
+            const math::Double2 offsetA{
+                upstream.channelOffsetMeters.x - upstream.drainageOffsetMeters.x,
+                upstream.channelOffsetMeters.y - upstream.drainageOffsetMeters.y};
+            const math::Double2 offsetB{
+                downstream.channelOffsetMeters.x - downstream.drainageOffsetMeters.x,
+                downstream.channelOffsetMeters.y - downstream.drainageOffsetMeters.y};
+            const auto centerlinePoint = [&](const std::size_t index)
+            {
+                const f64 t = static_cast<f64>(index) /
+                    static_cast<f64>(segment.routingPathMeters.size() - 1U);
+                const auto& route = segment.routingPathMeters[index];
+                return math::Double2{
+                    route.x + offsetA.x * (1.0 - t) + offsetB.x * t,
+                    route.y + offsetA.y * (1.0 - t) + offsetB.y * t};
+            };
+            for (std::size_t i = 1U; i < segment.routingPathMeters.size(); ++i)
+            {
+                const auto a = centerlinePoint(i - 1U);
+                const auto b = centerlinePoint(i);
+                AppendGridLine(
+                    result, page,
+                    a.x / network.spacingMeters + half,
+                    a.y / network.spacingMeters + half,
+                    b.x / network.spacingMeters + half,
+                    b.y / network.spacingMeters + half,
+                    static_cast<u32>(resolution),
+                    static_cast<u32>(resolution),
+                    color, runtime, source, camera);
+            }
+        }
+        else
+        {
+            AppendGridLine(
+                result,
+                page,
+                static_cast<f64>(upstream.sourceX),
+                static_cast<f64>(upstream.sourceY),
+                static_cast<f64>(downstream.sourceX),
+                static_cast<f64>(downstream.sourceY),
+                static_cast<u32>(resolution),
+                static_cast<u32>(resolution),
+                color,
+                runtime,
+                source,
+                camera);
+        }
+    }
+
+    for (const auto& link : network.boundaryLinks)
+    {
+        const auto found = std::find_if(
+            network.nodes.begin(), network.nodes.end(),
+            [&link](const auto& node) { return node.id == link.upstreamNode; });
+        if (found == network.nodes.end())
+            continue;
+        AppendGridLine(
+            result,
+            page,
+            static_cast<f64>(found->sourceX),
+            static_cast<f64>(found->sourceY),
+            static_cast<f64>(link.targetX),
+            static_cast<f64>(link.targetY),
+            static_cast<u32>(resolution),
+            static_cast<u32>(resolution),
+            color,
+            runtime,
+            source,
+            camera);
+    }
+}
 } // namespace
 
 std::vector<editor_ui::PreviewLine>
@@ -1491,6 +1590,12 @@ BuildTerrainDiagnosticOverlayLines(
         if (options.drainageVectors)
         {
             AppendDrainageVectors(
+                result,
+                *observerPage,
+                runtime,
+                source,
+                camera);
+            AppendRiverChannels(
                 result,
                 *observerPage,
                 runtime,

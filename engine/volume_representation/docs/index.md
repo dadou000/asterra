@@ -22,13 +22,13 @@ invariants = [
   "Output rejection sampling is explicitly bounded even when only a tiny fraction of a volume is above the output threshold.",
   "The pending request batch is handed to its consumer in one transfer that atomically leaves the queue empty, so requests are never observed twice.",
 ]
-related = ["/rendering/volumes", "/legacy/research-v007-universal-volumetrics"]
+related = ["/rendering/volumes", "/legacy/tree-history-research-v007-universal-volumetrics"]
 depends_on = ["/authoring/scene", "/foundation/core", "/foundation/math", "/foundation/time", "/world/world-model"]
 used_by = ["/editor/studio-session", "/editor/studio-ui", "/rendering/volumes/fields", "/rendering/volumes/render", "/rendering/volumes/solver"]
 verify = [
   "ctest -R Orbit.VolumeRepresentation",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

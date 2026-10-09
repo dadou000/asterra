@@ -1,6 +1,8 @@
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
+#include <orbit/terrain/BakedRivers.hpp>
+#include <orbit/terrain_bake/TectonicBaker.hpp>
 #include <orbit/terrain_gpu/GpuFieldGenerator.hpp>
 
 #include <cmath>
@@ -37,10 +39,110 @@ static_assert(sizeof(SampleRecord) == 32);
 // noise field" large.
 } // namespace
 
-int main()
+// 0: procedural plates, 1: baked tectonics, 2: baked tectonics + a baked river,
+// 3: baked tectonics + a baked stream-power incision raster.
+int RunCase(const int mode, f64* const maxDeltaOut)
 {
+    const bool baked = mode >= 1;
     const world::PlanetDefinition planet{.radiusMeters = 6'000'000.0};
-    const terrain::AnalyticTerrainDesc desc{.seed = 0xA57E22AULL};
+    terrain::AnalyticTerrainDesc desc{.seed = 0xA57E22AULL};
+    if (baked)
+    {
+        // Same field, but plate fields come from baked rasters on both the
+        // CPU reference and the GPU generator.
+        desc.global.bakedTectonics =
+            terrain_bake::BakeTectonics(planet, desc, {.resolution = 128});
+        if (desc.global.bakedTectonics == nullptr)
+        {
+            std::cerr << "The tectonic bake did not complete.\n";
+            return 1;
+        }
+    }
+    // A surveyed lowland (not a hard-coded spot): the carve only cuts land, and
+    // where land sits depends on the tectonic geography.
+    const world::SurfaceFrame frame = world::MakeSurfaceFrame([&]
+    {
+        const terrain::AnalyticTerrainSource survey(planet, desc);
+        math::Double3 best{0.365111510558, 0.187057495117, -0.911977564625};
+        f64 bestScore = 1.0e30;
+        constexpr u32 count = 6000;
+        for (u32 i = 0; i < count; ++i)
+        {
+            const f64 y = 1.0 - 2.0 * (static_cast<f64>(i) + 0.5) / count;
+            const f64 r = std::sqrt(std::max(0.0, 1.0 - y * y));
+            const f64 a = 2.399963229728653 * static_cast<f64>(i);
+            const math::Double3 d{r * std::cos(a), y, r * std::sin(a)};
+            const f64 e = survey.Sample({.unitDirection = d, .footprintMeters = 50.0}).elevationMeters;
+            const f64 score = std::abs(e - 900.0);
+            if (score < bestScore)
+            {
+                bestScore = score;
+                best = d;
+            }
+        }
+        return math::Normalize(best);
+    }());
+    f64 riverCentreCarve = 0.0;
+    if (mode == 2)
+    {
+        // A 400 m wide, 60 m deep channel running north-south just east of the
+        // survey centre, long enough that every grid point sees the same reach.
+        const auto at = [&](const f64 northMeters, const f64 eastMeters)
+        {
+            return math::Normalize(
+                frame.up + frame.north * (northMeters / planet.radiusMeters) +
+                frame.east * (eastMeters / planet.radiusMeters));
+        };
+        std::vector<terrain::BakedRiverNode> nodes(2);
+        nodes[0].direction = at(-3000.0, 100.0);
+        nodes[1].direction = at(3000.0, 100.0);
+        for (auto& node : nodes)
+        {
+            node.widthMeters = 400.0F;
+            node.depthMeters = 60.0F;
+            node.dischargeCubicMetersPerSecond = 5000.0F;
+        }
+        desc.bakedRivers = std::make_shared<const terrain::BakedRiverNetwork>(
+            terrain::BakedRiverNetwork::Build(planet.radiusMeters, 1, nodes, {{0, 1}}));
+        const terrain::AnalyticTerrainSource dry(planet, [&] { auto d = desc; d.bakedRivers.reset(); return d; }());
+        const terrain::AnalyticTerrainSource wet(planet, desc);
+        const math::Double3 centre = at(0.0, 100.0);
+        riverCentreCarve = dry.Sample({.unitDirection = centre, .footprintMeters = 50.0}).elevationMeters -
+            wet.Sample({.unitDirection = centre, .footprintMeters = 50.0}).elevationMeters;
+        std::printf("CPU river carve at the channel centre: %.2f m\n", riverCentreCarve);
+        if (riverCentreCarve < 10.0)
+        {
+            std::cerr << "The test channel must visibly cut the terrain on the CPU.\n";
+            return 1;
+        }
+    }
+    if (mode == 3)
+    {
+        // A smooth synthetic relief change (tens of metres) over a coarse grid,
+        // so the bilinear gutter lookup is what is being compared.
+        constexpr u32 kIncisionResolution = 8;
+        constexpr std::size_t kStride = kIncisionResolution + 2U;
+        std::vector<f32> gutter(6U * kStride * kStride);
+        for (std::size_t i = 0; i < gutter.size(); ++i)
+        {
+            gutter[i] = static_cast<f32>(30.0 + 12.0 * std::sin(0.37 * static_cast<f64>(i)));
+        }
+        desc.bakedRivers = std::make_shared<const terrain::BakedRiverNetwork>(
+            terrain::BakedRiverNetwork::Build(planet.radiusMeters, 1, {}, {}, kIncisionResolution, gutter));
+        auto dryDesc = desc;
+        dryDesc.bakedRivers.reset();
+        const terrain::AnalyticTerrainSource dry(planet, dryDesc);
+        const terrain::AnalyticTerrainSource wet(planet, desc);
+        const math::Double3 centre = frame.up;
+        const f64 change = wet.Sample({.unitDirection = centre, .footprintMeters = 50.0}).elevationMeters -
+            dry.Sample({.unitDirection = centre, .footprintMeters = 50.0}).elevationMeters;
+        std::printf("CPU incision change at the survey centre: %.2f m\n", change);
+        if (std::abs(change) < 1.0)
+        {
+            std::cerr << "The test incision must visibly change the CPU terrain.\n";
+            return 1;
+        }
+    }
     const terrain::AnalyticTerrainSource source(planet, desc);
 
     const auto device = rhi::vulkan::CreateDevice({.enableValidation = true});
@@ -54,9 +156,6 @@ int main()
     // morph (morphToCoarser = false) -- keeps this first real test to
     // the core noise/tectonics/climate/biome path.
     constexpr u32 kResolution = 17;
-    const world::SurfaceFrame frame = world::MakeSurfaceFrame(
-        math::Normalize(math::Double3{0.365111510558, 0.187057495117, -0.911977564625}));
-
     terrain_gpu::GpuFieldRequest request{};
     request.resolution = kResolution;
     request.spacingMeters = 50.0;
@@ -155,8 +254,8 @@ int main()
     const f64 meanAbsElevationDelta = sumAbsElevationDelta / comparedCount;
 
     std::printf(
-        "GPU vs CPU elevation: mean |delta| = %.3f m, max |delta| = %.3f m over %u points\n",
-        meanAbsElevationDelta, maxAbsElevationDelta, comparedCount);
+        "GPU vs CPU elevation (%s tectonics): mean |delta| = %.3f m, max |delta| = %.3f m over %u points\n",
+        mode == 3 ? "baked tectonics + incision" : mode == 2 ? "baked tectonics + river" : (baked ? "baked" : "procedural"), meanAbsElevationDelta, maxAbsElevationDelta, comparedCount);
 
     // The underlying 64-bit hash lattice is bit-exact (see
     // FieldGenerationCompute.hpp); the only source of divergence is
@@ -175,5 +274,47 @@ int main()
         return 1;
     }
 
+    if (maxDeltaOut != nullptr)
+    {
+        *maxDeltaOut = maxAbsElevationDelta;
+    }
+    return 0;
+}
+
+int main()
+{
+    f64 bakedDelta = 0.0;
+    f64 riverDelta = 0.0;
+    f64 incisionDelta = 0.0;
+    if (const int procedural = RunCase(0, nullptr); procedural != 0)
+    {
+        return procedural;
+    }
+    if (const int baked = RunCase(1, &bakedDelta); baked != 0)
+    {
+        return baked;
+    }
+    if (const int rivers = RunCase(2, &riverDelta); rivers != 0)
+    {
+        return rivers;
+    }
+    if (const int incision = RunCase(3, &incisionDelta); incision != 0)
+    {
+        return incision;
+    }
+    if (incisionDelta > bakedDelta + 1.0)
+    {
+        std::cerr << "GPU incision diverges from the CPU (" << incisionDelta << " m vs "
+                  << bakedDelta << " m without it).\n";
+        return 1;
+    }
+    // The GPU must cut the same channel as the CPU: a missing or misplaced
+    // carve would add metres on top of the baked-case noise jitter.
+    if (riverDelta > bakedDelta + 1.0)
+    {
+        std::cerr << "GPU river carve diverges from the CPU (" << riverDelta
+                  << " m vs " << bakedDelta << " m without a river).\n";
+        return 1;
+    }
     return 0;
 }

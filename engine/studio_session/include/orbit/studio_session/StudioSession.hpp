@@ -7,6 +7,7 @@
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
 #include <orbit/studio_session/SimulationClock.hpp>
 #include <orbit/studio_session/StudioTerrainPerformanceDiagnostics.hpp>
+#include <orbit/studio_session/StudioTerrainBakeController.hpp>
 #include <orbit/studio_session/StudioTerrainPhysicalPageService.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain_dependency/TerrainDependencyGraph.hpp>
@@ -148,6 +149,10 @@ public:
 
     [[nodiscard]] StudioTickResult Tick(bool pollPlugins = true);
 
+    // Planet bake (tectonics, rivers next): status, explicit bake, cancel.
+    [[nodiscard]] StudioTerrainBakeController& TerrainBake() noexcept;
+    [[nodiscard]] const StudioTerrainBakeController& TerrainBake() const noexcept;
+
 private:
     void RefreshTerrainDebugGeneration();
 
@@ -163,6 +168,7 @@ private:
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
+    StudioTerrainBakeController terrainBake_;
     StudioTerrainPhysicalPageService terrainPhysicalPages_;
     StudioTerrainRuntimeBridge terrainRuntime_;
     StudioTerrainPerformanceDiagnostics terrainPerformance_;

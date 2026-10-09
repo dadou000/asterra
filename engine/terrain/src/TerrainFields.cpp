@@ -236,7 +236,49 @@ TerrainSample LerpTerrainSample(
                 b.biomes,
                 blend),
         .standingWaterDepthMeters = a.standingWaterDepthMeters +
-            (b.standingWaterDepthMeters - a.standingWaterDepthMeters) * blend
+            (b.standingWaterDepthMeters - a.standingWaterDepthMeters) * blend,
+        .impactProcesses = {
+            .heightDeltaMeters = a.impactProcesses.heightDeltaMeters +
+                (b.impactProcesses.heightDeltaMeters - a.impactProcesses.heightDeltaMeters) * blend,
+            .excavationDepthMeters = a.impactProcesses.excavationDepthMeters +
+                (b.impactProcesses.excavationDepthMeters - a.impactProcesses.excavationDepthMeters) * blend,
+            .ejectaThicknessMeters = a.impactProcesses.ejectaThicknessMeters +
+                (b.impactProcesses.ejectaThicknessMeters - a.impactProcesses.ejectaThicknessMeters) * blend,
+            .debrisField = a.impactProcesses.debrisField +
+                (b.impactProcesses.debrisField - a.impactProcesses.debrisField) * blend,
+            .rayField = a.impactProcesses.rayField +
+                (b.impactProcesses.rayField - a.impactProcesses.rayField) * blend,
+            .meltThicknessMeters = a.impactProcesses.meltThicknessMeters +
+                (b.impactProcesses.meltThicknessMeters - a.impactProcesses.meltThicknessMeters) * blend,
+            .brecciaField = a.impactProcesses.brecciaField +
+                (b.impactProcesses.brecciaField - a.impactProcesses.brecciaField) * blend,
+            .resurfacedMaterialFraction = a.impactProcesses.resurfacedMaterialFraction +
+                (b.impactProcesses.resurfacedMaterialFraction - a.impactProcesses.resurfacedMaterialFraction) * blend,
+            .resurfacingThicknessMeters = a.impactProcesses.resurfacingThicknessMeters +
+                (b.impactProcesses.resurfacingThicknessMeters - a.impactProcesses.resurfacingThicknessMeters) * blend,
+            .microImpactRoughnessMeters = a.impactProcesses.microImpactRoughnessMeters +
+                (b.impactProcesses.microImpactRoughnessMeters - a.impactProcesses.microImpactRoughnessMeters) * blend,
+            .microImpactCoverage = a.impactProcesses.microImpactCoverage +
+                (b.impactProcesses.microImpactCoverage - a.impactProcesses.microImpactCoverage) * blend,
+            .excavationCoverage = a.impactProcesses.excavationCoverage +
+                (b.impactProcesses.excavationCoverage - a.impactProcesses.excavationCoverage) * blend,
+            .formationAgeOrder = blend < 0.5 ? a.impactProcesses.formationAgeOrder : b.impactProcesses.formationAgeOrder,
+            .exposureAgeOrder = blend < 0.5 ? a.impactProcesses.exposureAgeOrder : b.impactProcesses.exposureAgeOrder,
+            .formationAgeYears = a.impactProcesses.formationAgeYears +
+                (b.impactProcesses.formationAgeYears - a.impactProcesses.formationAgeYears) * blend,
+            .exposureAgeYears = a.impactProcesses.exposureAgeYears +
+                (b.impactProcesses.exposureAgeYears - a.impactProcesses.exposureAgeYears) * blend,
+            .affectingImpacts = blend < 0.5 ? a.impactProcesses.affectingImpacts : b.impactProcesses.affectingImpacts
+        },
+        .iceFractures = {
+            .heightDeltaMeters = a.iceFractures.heightDeltaMeters +
+                (b.iceFractures.heightDeltaMeters - a.iceFractures.heightDeltaMeters) * blend,
+            .damage = a.iceFractures.damage +
+                (b.iceFractures.damage - a.iceFractures.damage) * blend,
+            .fractureCoverage = a.iceFractures.fractureCoverage +
+                (b.iceFractures.fractureCoverage - a.iceFractures.fractureCoverage) * blend,
+            .nearbySegments = blend < 0.5 ? a.iceFractures.nearbySegments : b.iceFractures.nearbySegments
+        }
     };
 }
 

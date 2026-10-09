@@ -132,6 +132,61 @@ struct ItemPointer
 
 class ShellBandRegistry;
 
+// Code-native line icons; no font glyph or external asset dependency.
+enum class NavigationIcon : u8
+{
+    Build,
+    Planet,
+    Universe,
+    Simulation,
+    Shading,
+    Planning,
+    Plugins
+};
+
+// Shared semantic tints for element and workspace icons. These colors never
+// encode selection, validation, or enabled state.
+enum class ElementCategory : u8
+{
+    Neutral,
+    Meshes,
+    Procedurals,
+    Lighting,
+    Simulation,
+    Vfx,
+    Sfx,
+    Shading,
+    Celestial,
+    Plugins,
+    Planning
+};
+
+[[nodiscard]] math::Float4 ElementCategoryColor(
+    ElementCategory category) noexcept;
+
+struct NavigationTab
+{
+    std::string_view label;
+    NavigationIcon icon;
+};
+
+enum class ToolbarIcon : u8
+{
+    Select, Move, Rotate, Scale, World, Local, Snap,
+    PointLight, SpotLight, Box, Sphere, Frame, Duplicate, Delete,
+    Undo, Redo, Properties, Atmosphere, Clouds, Ocean, Rings, Aurora, Surface, More, Procedural, Vfx, Sfx, Asset,
+      Decal, Visibility, Layers, Planet, Camera, Renderer,
+      GlobalIllumination, AntiAliasing
+};
+
+enum class ToolbarStyle : u8 { Action, Modifier, Menu, ModifierMenu };
+
+struct ToolbarChoice
+{
+    std::string_view label;
+    ToolbarIcon icon;
+};
+
 class PanelContext
 {
 public:
@@ -152,6 +207,10 @@ public:
         f32 width);
     [[nodiscard]] bool PrimaryButton(std::string_view label);
     [[nodiscard]] bool InputText(std::string_view label, std::string& value);
+    [[nodiscard]] bool InputText(
+        std::string_view label,
+        std::string& value,
+        f32 extraVerticalPadding);
     // Focuses the next widget submitted through this context.
     void FocusNextItem();
     [[nodiscard]] bool KeyPressed(
@@ -175,6 +234,18 @@ public:
         std::string_view id,
         std::span<const std::string_view> items,
         i32& index);
+    [[nodiscard]] bool NavigationTabs(
+        std::string_view id,
+        std::span<const NavigationTab> items,
+        i32& index);
+    [[nodiscard]] bool ToolbarButton(std::string_view label, ToolbarIcon icon,
+        bool selected = false, bool enabled = true, bool compact = false,
+        ToolbarStyle style = ToolbarStyle::Action);
+    [[nodiscard]] bool ToolbarChoices(std::string_view id,
+        std::span<const ToolbarChoice> items, i32& index, bool compact = false,
+        ToolbarStyle style = ToolbarStyle::Action);
+    // Inserts an inline separator and spacing before the next tool group.
+    void ToolbarDivider();
     [[nodiscard]] bool SliderDouble(
         std::string_view label,
         f64& value,
@@ -191,13 +262,41 @@ public:
         bool border = false);
     void EndChild();
     [[nodiscard]] UiSize ContentAvailable() const;
-    [[nodiscard]] bool Selectable(std::string_view label, bool selected);
+      [[nodiscard]] bool Selectable(std::string_view label, bool selected);
+      [[nodiscard]] bool SelectableWithIcon(
+          std::string_view label, bool selected, ToolbarIcon icon);
+      [[nodiscard]] bool SelectableWithIcon(
+          std::string_view label,
+          bool selected,
+          ToolbarIcon icon,
+          f32 extraVerticalPadding);
+    // Draws a toolbar-family vector icon inside the immediately preceding row.
+    // Call after Selectable or TreeItem to keep the row's native hit target.
+    void DecorateLastRow(
+        ToolbarIcon icon,
+        bool muted = false,
+        f32 inset = 7.0F);
     [[nodiscard]] TreeItemInteraction TreeItem(std::string_view label, bool selected);
+    [[nodiscard]] TreeItemInteraction TreeItemWithIcon(
+        std::string_view label,
+        bool selected,
+        ToolbarIcon icon,
+        f32 iconInset = 24.0F);
+    [[nodiscard]] TreeItemInteraction TreeItemWithIcon(
+        std::string_view label,
+        bool selected,
+        ToolbarIcon icon,
+        f32 iconInset,
+        f32 extraVerticalPadding);
     // Sets the first-appearance open state for the next TreeItem without
     // overriding user expansion state on later frames.
     void SetNextTreeItemOpen(bool open);
     void TreePop();
     [[nodiscard]] ImageInteraction Image(rhi::Texture& texture, UiSize size);
+    [[nodiscard]] ImageInteraction ImageFit(
+        rhi::Texture& texture,
+        UiSize available,
+        UiSize sourceSize);
     // An image that captures drags and the mouse wheel (for orbiting a
     // preview). `id` must be unique in the panel.
     [[nodiscard]] ImageInteraction InteractiveImage(
@@ -413,6 +512,9 @@ struct ShellBandDefinition
     std::string id;
     i32 order{0};
     f32 height{40.0F};
+    // Use the stronger card surface and a shadow gutter to separate this band
+    // from adjacent editor chrome.
+    bool emphasized{false};
     ShellBandEdge edge{ShellBandEdge::Top};
     std::function<void(PanelContext&)> draw;
 };
@@ -556,6 +658,10 @@ public:
 
     void BeginFrame(platform::Window& window, f64 deltaSeconds);
     void DrawStudioShell();
+    // Draw only the requested panel as a borderless, full-window surface.
+    // Used while capturing viewport performance so the rest of the shell and
+    // its panels do not run, while the viewport's normal draw callback stays live.
+    [[nodiscard]] bool DrawPanelFullscreen(PanelId panel);
     void Render(rhi::CommandList& commands, rhi::Texture& target, u32 targetWidth, u32 targetHeight);
     [[nodiscard]] bool WantsMouse() const noexcept;
     [[nodiscard]] bool WantsKeyboard() const noexcept;

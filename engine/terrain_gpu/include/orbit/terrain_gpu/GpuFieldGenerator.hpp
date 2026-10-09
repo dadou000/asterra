@@ -118,5 +118,7 @@ private:
     std::unique_ptr<rhi::Buffer> platesBuffer_;
     std::unique_ptr<rhi::Buffer> hotspotsBuffer_;
     std::unique_ptr<rhi::Buffer> cratersBuffer_;
+    std::unique_ptr<rhi::Buffer> bakedTectonicsBuffer_;
+    std::unique_ptr<rhi::Buffer> riversBuffer_;
 };
 } // namespace orbit::terrain_gpu

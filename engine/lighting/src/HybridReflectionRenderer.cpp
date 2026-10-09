@@ -1,9 +1,12 @@
 #include <orbit/lighting/HybridReflectionRenderer.hpp>
+#include <orbit/lighting/SdfTraceShader.hpp>
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstring>
+#include <string>
 
 namespace orbit::lighting
 {
@@ -33,41 +36,49 @@ StructuredBuffer<GpuRadianceCell> g_cells : register(t0);
 [[vk::binding(1, 0)]]
 StructuredBuffer<GpuRadianceLevelInfo> g_levels : register(t1);
 
-[[vk::binding(2, 0)]]
+// Merged mesh distance field: what a reflected ray meets once it leaves the
+// screen (dummies when absent). Corner-packed distances, see SdfTraceShader.hpp.
+#define SDF_DIST_CORNERS 1
+[[vk::binding(2, 0)]] RWStructuredBuffer<uint4> g_sdfDist : register(u20);
+[[vk::binding(3, 0)]] RWStructuredBuffer<uint> g_sdfAlbedo : register(u21);
+[[vk::binding(4, 0)]] RWStructuredBuffer<uint> g_sdfNormal : register(u22);
+[[vk::binding(5, 0)]] RWStructuredBuffer<float4> g_sdfRadiance : register(u23);
+
+[[vk::binding(6, 0)]]
 RWTexture2D<float4> g_target : register(u2);
 
-[[vk::binding(3, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_sceneColor : register(t3);
-[[vk::binding(3, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_sceneSampler : register(s3);
 
-[[vk::binding(4, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness : register(t4);
-[[vk::binding(4, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler : register(s4);
 
-[[vk::binding(5, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic : register(t5);
-[[vk::binding(5, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler : register(s5);
 
-[[vk::binding(6, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth : register(t6);
-[[vk::binding(6, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler : register(s6);
 
-[[vk::binding(7, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass : register(t7);
-[[vk::binding(7, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler : register(s7);
 
@@ -82,10 +93,20 @@ struct Constants
     float4 upTanHalfFov;
     float4 depthTrace;
     float4 reflectionTuning;
+    float4 sdfOriginVoxel;       // volume voxel (0,0,0) centre relative to the camera, voxel size
+    float4 sdfDimensionsEnable;  // dimensions, enable (1 = a field is bound)
 };
 
 [[vk::push_constant]]
 Constants g;
+
+#define SDF_ORIGIN g.sdfOriginVoxel.xyz
+#define SDF_VOXEL g.sdfOriginVoxel.w
+#define SDF_DIMS int3(g.sdfDimensionsEnable.xyz)
+//SDF_TRACE_INCLUDE
+
+// How far a reflected ray looks for the room (metres).
+static const float kSdfReflectionDistance = 40.0;
 
 float ReverseZViewDepth(float depth)
 {
@@ -523,9 +544,34 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
                   reflectionDirection) *
               max(g.reflectionTuning.z, 0.0);
 
+    // What the screen could not show: for smooth surfaces trace the mesh
+    // distance field and read the lit surface it meets (the room behind the
+    // camera, the walls beside it); only where that finds nothing does the
+    // radiance cache's low-frequency light (mostly sky) stand in.
+    float3 offscreenRadiance = cacheRadiance;
+    if (g.sdfDimensionsEnable.w > 0.5 &&
+        screenConfidence < 0.999 &&
+        roughness <= 0.35)
+    {
+        float3 sdfHit;
+        float sdfT;
+        const float3 sdfOrigin =
+            position + normal * (0.6 * SDF_VOXEL);
+        if (SdfTrace(
+                sdfOrigin,
+                reflectionDirection,
+                kSdfReflectionDistance,
+                sdfHit,
+                sdfT))
+        {
+            offscreenRadiance =
+                SdfFetchRadiance(sdfHit, -reflectionDirection);
+        }
+    }
+
     reflectedRadiance =
         lerp(
-            cacheRadiance,
+            offscreenRadiance,
             reflectedRadiance,
             screenConfidence);
 
@@ -567,6 +613,15 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             scene.a);
 }
 )";
+
+[[nodiscard]] std::string ReflectionSource()
+{
+    std::string source = kCs;
+    const std::string marker = "//SDF_TRACE_INCLUDE";
+    source.replace(
+        source.find(marker), marker.size(), kSdfTraceHlsl);
+    return source;
+}
 } // namespace
 
 HybridReflectionRenderer::
@@ -576,7 +631,7 @@ HybridReflectionRenderer(
 {
     const auto shader =
         compiler.Compile({
-            .source = kCs,
+            .source = ReflectionSource(),
             .entryPoint = "main",
             .stage = shader::Stage::Compute,
             .debug = false
@@ -588,11 +643,23 @@ HybridReflectionRenderer(
                 .data = shader.bytecode.data(),
                 .size = shader.bytecode.size()
             },
-            .pushConstantDwords = 20U,
-            .shaderResourceBuffers = 2U,
+            .pushConstantDwords = 28U,
+            .shaderResourceBuffers = 6U,
             .storageTextures = 1U,
             .sampledTextures = 5U
         });
+
+    dummySdf_ = device.CreateBuffer({
+        .sizeBytes = 64U,
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::UnorderedAccess
+    });
+    std::memset(
+        dummySdf_->Map(),
+        0,
+        static_cast<std::size_t>(dummySdf_->SizeBytes()));
+    dummySdf_->Unmap();
 }
 
 void HybridReflectionRenderer::Resolve(
@@ -610,7 +677,8 @@ void HybridReflectionRenderer::Resolve(
     const u32 height,
     const LightingView& view,
     const f32 qualityScale,
-    const HybridReflectionSettings& settings)
+    const HybridReflectionSettings& settings,
+    const SdfGatherInput* const sdf)
 {
     if (width == 0U ||
         height == 0U ||
@@ -647,7 +715,15 @@ void HybridReflectionRenderer::Resolve(
                 settings.maximumSteps,
                 2U));
 
-    const std::array<u32, 20> constants{
+    const bool sdfAvailable =
+        sdf != nullptr && sdf->distance != nullptr &&
+        sdf->albedo != nullptr && sdf->normal != nullptr &&
+        sdf->radiance != nullptr;
+    const math::Double3 sdfOriginRelative = sdfAvailable
+        ? sdf->originInFrameMeters - view.cameraPositionInFrameMeters
+        : math::Double3{};
+
+    const std::array<u32, 28> constants{
         width,
         height,
         radianceLevelCount,
@@ -692,7 +768,17 @@ void HybridReflectionRenderer::Resolve(
         bits(std::max(
             settings.cacheStrength,
             0.0F)),
-        bits(quality)
+        bits(quality),
+
+        bits(static_cast<f32>(sdfOriginRelative.x)),
+        bits(static_cast<f32>(sdfOriginRelative.y)),
+        bits(static_cast<f32>(sdfOriginRelative.z)),
+        bits(sdfAvailable ? sdf->voxelSize : 0.25F),
+
+        bits(sdfAvailable ? static_cast<f32>(sdf->dimensions[0]) : 1.0F),
+        bits(sdfAvailable ? static_cast<f32>(sdf->dimensions[1]) : 1.0F),
+        bits(sdfAvailable ? static_cast<f32>(sdf->dimensions[2]) : 1.0F),
+        bits(sdfAvailable ? 1.0F : 0.0F)
     };
 
     commands.SetComputePipeline(
@@ -706,6 +792,14 @@ void HybridReflectionRenderer::Resolve(
     commands.SetComputeBuffer(
         1U,
         radianceLevels);
+    commands.SetComputeBuffer(
+        2U, sdfAvailable ? *sdf->distance : *dummySdf_);
+    commands.SetComputeBuffer(
+        3U, sdfAvailable ? *sdf->albedo : *dummySdf_);
+    commands.SetComputeBuffer(
+        4U, sdfAvailable ? *sdf->normal : *dummySdf_);
+    commands.SetComputeBuffer(
+        5U, sdfAvailable ? *sdf->radiance : *dummySdf_);
 
     commands.SetComputeStorageTexture(
         0U,

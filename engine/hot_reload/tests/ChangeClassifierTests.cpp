@@ -17,6 +17,10 @@ int main()
     using orbit::hot_reload::ChangeKind;
 
     if (!Expect("engine/terrain/src/Terrain.cpp", ChangeKind::NativeModule) ||
+        !Expect("engine/studio_ui/src/StudioViewportTerrainPass.cpp", ChangeKind::NativeModule) ||
+        !Expect("apps/editor/src/StudioApplication.cpp", ChangeKind::NativeModule) ||
+        !Expect("tools/validation/SceneValidationScenarios.cpp", ChangeKind::NativeModule) ||
+        !Expect("tools/validation/include/orbit/validation/SceneValidationScenarios.hpp", ChangeKind::NativeModule) ||
         !Expect("Content/Shaders/terrain.hlsl", ChangeKind::Shader) ||
         !Expect("engine/render/shaders/terrain.hlsl", ChangeKind::RestartRequired) ||
         !Expect("Plugins/weather.luau", ChangeKind::Script) ||

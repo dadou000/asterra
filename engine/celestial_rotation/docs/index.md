@@ -16,13 +16,13 @@ invariants = [
   "The authored pole vector defines the body's +Z axis in the parent frame: the pole is normalised, a stable orthonormal equatorial X/Y basis is built perpendicular to it, X/Y rotate about it by phase and +Z is preserved exactly - tilt has a direct geometric meaning, not a generic axis-angle about the parent identity basis.",
   "OrientationProvider is the extension seam for later precession, nutation, libration and higher-order models.",
 ]
-related = ["/celestial/orbits", "/world/universe", "/legacy/research-v006-rotation-orientation"]
+related = ["/celestial/orbits", "/world/universe", "/legacy/tree-history-research-v006-rotation-orientation"]
 depends_on = ["/celestial/orbits", "/foundation/core", "/foundation/math", "/foundation/time"]
 used_by = ["/world/universe", "/world/world-model"]
 verify = [
   "ctest -R Orbit.CelestialRotation",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 

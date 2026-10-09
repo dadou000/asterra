@@ -10,6 +10,7 @@ sources = [
   "engine/content/include/orbit/content/AssetPipeline.hpp",
   "engine/content/include/orbit/content/ContentHash.hpp",
   "engine/content/include/orbit/content/ContentService.hpp",
+  "engine/content/src/ContentService.cpp",
   "engine/content/include/orbit/content/DerivedDataCache.hpp",
   "engine/content/include/orbit/content/RuntimeTexture.hpp",
   "engine/content/include/orbit/content/ThumbnailService.hpp",
@@ -17,6 +18,7 @@ sources = [
 symbols = ["ImportArtifact", "ContentHash", "ShaderMaterialParameter", "DerivedDataCache", "RuntimeTexture", "ThumbnailRequest"]
 invariants = [
   "Asset IDs derive from normalised project-relative paths and stay stable across rescans.",
+  "ContentService prefers a canonical project root and falls back to an absolute lexically normalized root when canonicalization is denied; per-entry canonicalization and mount containment checks remain authoritative.",
   "Importing does not replace or mutate project authority; the source asset in Content stays canonical and derived artifacts live in the DerivedDataCache.",
   "Derived artifacts are immutable: concurrent writers of the same key converge on the same path and the first completed rename wins.",
   "The cook path used by BuildService preserves the asset's canonical .orbitimport.toml settings so editor imports and headless cooks share exactly the same DDC key semantics.",
@@ -32,5 +34,4 @@ verify = [
   "ctest -R Orbit.RuntimeTexture"]
 verified = "b0a0de7f"
 +++
-
 

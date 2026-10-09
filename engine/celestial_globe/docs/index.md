@@ -20,14 +20,14 @@ invariants = [
   "The old renderer stays compiled privately so the adaptive wrapper reuses its proven Vulkan pipelines for each independently resident patch; the wrapper registers the terrain authority and keeps shared ownership of the source so background patch builds cannot outlive it.",
   "With full_clipmap on (default) no globe is drawn at any altitude; the globe path is used when it is off (/rendering/terrain/clipmaps).",
 ]
-related = ["/celestial/representation", "/celestial/appearance", "/rendering/terrain/clipmaps", "/legacy/research-v006-macro-orbital-globe", "/legacy/planet-patch1"]
+related = ["/celestial/representation", "/celestial/appearance", "/rendering/terrain/clipmaps", "/legacy/tree-history-research-v006-macro-orbital-globe", "/legacy/planet-patch1"]
 depends_on = ["/celestial/appearance", "/foundation/core", "/foundation/math", "/rendering/render-view", "/rendering/rhi", "/rendering/shader-compiler", "/rendering/terrain/contracts", "/world/universe"]
 used_by = ["/editor/studio-ui"]
 verify = [
   "ctest -R Orbit.MacroGlobe",
   "ctest -R Orbit.PlanetPatchHierarchy",
 ]
-verified = "b0a0de7f"
+verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
 +++
 
 
