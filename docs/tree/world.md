@@ -22,6 +22,7 @@ related = ["/authoring", "/rendering/terrain"]
 "road/path meshes and centrelines" = "path-geometry"
 "route planning" = "path-routing"
 "terrain edit invalidation" = "/rendering/terrain/invalidation"
+"CM1 comparison, fast storm solver, supercell experiments" = "weather-lab"
 +++
 
 Persistent world state is compact authoritative data; generated geometry, collision and caches are disposable
