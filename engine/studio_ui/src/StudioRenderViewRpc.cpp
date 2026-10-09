@@ -337,6 +337,11 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_near_field_water", layers.bypassNearFieldWater},
         {"bypass_atmosphere", layers.bypassAtmosphere},
         {"bypass_hybrid_reflections", layers.bypassHybridReflections},
+        {"reflection_exact_triangles", layers.reflectionExactTriangles},
+        {"reflection_temporal", layers.reflectionTemporal},
+        {"reflection_maximum_roughness", static_cast<f64>(layers.reflectionMaximumRoughness)},
+        {"reflection_distance_meters", static_cast<f64>(layers.reflectionDistanceMeters)},
+        {"reflection_debug_view", static_cast<f64>(layers.reflectionDebugView)},
         {"bypass_radiance_cache", layers.bypassRadianceCache},
         {"indirect_coverage_view", layers.indirectCoverageView},
         {"gi_only_view", layers.giOnlyView},
@@ -930,6 +935,22 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
                 applyFlag("bypass_atmosphere", layers.bypassAtmosphere);
                 applyFlag("bypass_hybrid_reflections", layers.bypassHybridReflections);
+                applyFlag("reflection_exact_triangles", layers.reflectionExactTriangles);
+                applyFlag("reflection_temporal", layers.reflectionTemporal);
+                const auto reflectionNumber = [&values](const char* key, f64 current, f64 lo, f64 hi)
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end()) return current;
+                    if (!found->second.IsNumber() || !std::isfinite(found->second.AsNumber()))
+                        throw rpc::Error(kInvalid, std::string(key) + " must be a finite number.");
+                    return std::clamp(found->second.AsNumber(), lo, hi);
+                };
+                layers.reflectionMaximumRoughness = static_cast<f32>(reflectionNumber(
+                    "reflection_maximum_roughness", layers.reflectionMaximumRoughness, 0.0, 1.0));
+                layers.reflectionDistanceMeters = static_cast<f32>(reflectionNumber(
+                    "reflection_distance_meters", layers.reflectionDistanceMeters, 0.1, 1000.0));
+                layers.reflectionDebugView = static_cast<u32>(reflectionNumber(
+                    "reflection_debug_view", layers.reflectionDebugView, 0.0, 2.0));
                 applyFlag("bypass_radiance_cache", layers.bypassRadianceCache);
                 applyFlag("indirect_coverage_view", layers.indirectCoverageView);
                 applyFlag("gi_only_view", layers.giOnlyView);

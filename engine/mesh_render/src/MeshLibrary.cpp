@@ -1,4 +1,5 @@
 #include <orbit/mesh_render/MeshLibrary.hpp>
+#include <orbit/mesh_render/ReflectionBvh.hpp>
 
 #include <orbit/content/RuntimeTexture.hpp>
 #include <orbit/content_wic/WicTextureImporter.hpp>
@@ -136,6 +137,8 @@ void MeshLibrary::WorkerMain()
                 throw std::runtime_error(
                     "generated mesh has no geometry");
             }
+
+            result.reflectionTriangles = BuildReflectionTriangles(result.asset);
 
             // Decode every image a material actually samples, once each.
             std::set<i32> wanted;
@@ -312,6 +315,7 @@ void MeshLibrary::Adopt(
     model->boundsMin_ = asset.boundsMin;
     model->boundsMax_ = asset.boundsMax;
     model->triangles_ = asset.TriangleCount();
+    model->reflectionTriangles_ = std::move(result.reflectionTriangles);
 
     // Geometry: device-local buffers filled through the caller's commands.
     const std::size_t vertexBytes =

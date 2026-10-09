@@ -105,6 +105,7 @@ bool SdfTrace(float3 origin, float3 direction, float maxDistance, out float3 hit
     [loop]
     for (uint i = 0u; i < 56u; ++i)
     {
+        if (t > maxDistance) break;
         const float3 position = origin + direction * t;
         const float d = SdfDistance(position);
         if (d < 0.4 * SDF_VOXEL)
@@ -146,35 +147,72 @@ float SdfSoftShadow(float3 origin, float3 toLight, float maxDistance, float soft
     return saturate(visibility);
 }
 
-// Outgoing radiance of the surface voxel nearest to `position` whose normal
-// faces `towardViewer` (the ray came from there).
-float3 SdfFetchRadiance(float3 position, float3 towardViewer)
+// Reconstruct attributes from valid corners of the same facing surface.
+// Opposing walls never average together; empty corners have no weight.
+struct SdfSurfaceSample
 {
+    float3 radiance;
+    float3 albedo;
+    float3 normal;
+    float valid;
+};
+SdfSurfaceSample SdfFetchSurface(float3 position, float3 towardViewer)
+{
+    SdfSurfaceSample sample = (SdfSurfaceSample)0;
     const int3 dims = SDF_DIMS;
     const float3 gc = (position - SDF_ORIGIN) / SDF_VOXEL;
+    if (any(gc < 0.0) || any(gc > float3(dims-1))) return sample;
     const int3 base = int3(floor(gc));
+    const float3 fraction = gc - float3(base);
     float best = 1.0e9;
-    float3 radiance = 0.0;
-    [unroll]
-    for (int k = 0; k < 8; ++k)
+    uint nearest = 0u;
+    float3 referenceNormal = 0.0;
+    [unroll] for (int k = 0; k < 8; ++k)
     {
-        const int3 c = clamp(base + int3(k & 1, (k >> 1) & 1, (k >> 2) & 1), 0, dims - 1);
+        const int3 c = min(base + int3(k & 1, (k >> 1) & 1, (k >> 2) & 1), dims - 1);
         const uint index = SdfIndex(c);
-        if ((g_sdfAlbedo[index] >> 24) != 0u)
-        {
-            const float3 n = SdfUnpackOct(g_sdfNormal[index]);
-            if (dot(n, towardViewer) > -0.1)
-            {
-                const float d = length(float3(c) - gc);
-                if (d < best)
-                {
-                    best = d;
-                    radiance = g_sdfRadiance[index].rgb;
-                }
-            }
-        }
+        if ((g_sdfAlbedo[index] >> 24) == 0u) continue;
+        const float3 normal = SdfUnpackOct(g_sdfNormal[index]);
+        if (dot(normal, towardViewer) <= -0.1) continue;
+        const float distance = length(float3(c) - gc);
+        if (distance < best) { best = distance; nearest = index; referenceNormal = normal; }
     }
-    return radiance;
+    if (best > 1.0e8) return sample;
+    float weightSum = 0.0;
+    [unroll] for (int k = 0; k < 8; ++k)
+    {
+        const int3 corner = int3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        const uint index = SdfIndex(min(base + corner, dims - 1));
+        const uint packed = g_sdfAlbedo[index];
+        if ((packed >> 24) == 0u) continue;
+        const float3 normal = SdfUnpackOct(g_sdfNormal[index]);
+        if (dot(normal, referenceNormal) < 0.75 || dot(normal, towardViewer) <= -0.1) continue;
+        const float3 w = lerp(1.0-fraction, fraction, float3(corner));
+        const float weight = w.x*w.y*w.z;
+        sample.radiance += max(g_sdfRadiance[index].rgb, 0.0) * weight;
+        sample.albedo += float3(packed & 255u, (packed >> 8) & 255u, (packed >> 16) & 255u) / 255.0 * weight;
+        sample.normal += normal * weight;
+        weightSum += weight;
+    }
+    if (weightSum < 1.0e-5)
+    {
+        const uint packed = g_sdfAlbedo[nearest];
+        sample.radiance = max(g_sdfRadiance[nearest].rgb, 0.0);
+        sample.albedo = float3(packed & 255u, (packed >> 8) & 255u, (packed >> 16) & 255u) / 255.0;
+        sample.normal = referenceNormal;
+    }
+    else
+    {
+        sample.radiance /= weightSum;
+        sample.albedo /= weightSum;
+        sample.normal = normalize(sample.normal);
+    }
+    sample.valid = 1.0;
+    return sample;
+}
+float3 SdfFetchRadiance(float3 position, float3 towardViewer)
+{
+    return SdfFetchSurface(position, towardViewer).radiance;
 }
 )";
 } // namespace orbit::lighting
