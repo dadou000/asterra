@@ -20,6 +20,7 @@ sources = [
 ]
 symbols = ["RecentProjectItem", "SimulationClock", "StudioRuntimeSnapshot"]
 invariants = [
+  "BuildImpactHistoryInvalidations delegates local edits to ImpactField's ChangedAuthoredEventInfluenceCaps, preserving the union of moved/removed/added event bounds, long ray support and physical size scaling. It falls back to global physical-page invalidation if a changed cap exceeds the current 64-tile bounded scope, or history advection requires a global rebuild; it never silently clips a large impact influence.",
   "StudioTerrainValidationScenario is tooling-owned in tools/validation and compiled into OrbitTerrainValidationSupport only with BUILD_TESTING or ORBIT_ENABLE_VALIDATION_TOOLS. OrbitStudioSession never links back to this support library. Studio production UI includes it only with ORBIT_ENABLE_VALIDATION_TOOLS=ON.",
   "Terrain authoring edits flow through StudioTerrainAuthoringInvalidation into the dependency graph (/rendering/terrain/invalidation) and the rebuild scheduler; physical page uploads carry an upload revision (BeginUpload/CompleteUpload) so a stale completion can be rejected (/rendering/terrain/gpu-cache).",
   "Reading the ground never needs a camera: terrain.list, terrain.sample (batched points or a great-circle transect, optionally with the plate structure) and studio.process_info (pid, to detect a relaunch or hot handoff) are read-only RPC/MCP methods in StudioTerrainSampleRpc.cpp; viewport.fly_to (studio_ui) is the one-call way to place the camera.",

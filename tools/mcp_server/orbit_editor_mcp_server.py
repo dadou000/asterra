@@ -1192,7 +1192,11 @@ def orbit_terrain_impacts_get(terrain_id: str) -> dict[str, Any]:
 def orbit_terrain_impacts_set(terrain_id: str, history_toml: str) -> dict[str, Any]:
     """Persist a complete validated .orbitimpacts TOML recipe as one undoable
     terrain edit and queue geology regeneration. Pass an empty string to clear
-    the recipe. See orbit_terrain_impacts_get for the current value."""
+    the recipe. In [[impact]], ray_extent_radii (0 for legacy support, or
+    >1 through 100) and ray_irregularity (0-1) control long, fading material
+    rays independently of ejecta_extent_radii. impact_angle_degrees is measured
+    from the normal: 0 is vertical and 89 nearly grazing. See
+    orbit_terrain_impacts_get for the current value."""
     return _rpc(
         "terrain.impacts_set",
         {"terrain": terrain_id, "history_toml": history_toml},
