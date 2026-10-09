@@ -658,6 +658,57 @@ bool BeltHeightDoesNotDependOnTheSampleFootprint()
            Check(worstSpread < 600.0, "belt height must not depend on the sample footprint (page seams)");
 }
 
+bool CollisionsEmergeAsLandAndArcsAsIslands()
+{
+    // Thick continental collisions must rise as land whatever the noise
+    // coastline says (a third of them used to be underwater), volcanic arcs on
+    // oceanic crust must form island chains, and the lift must not touch open
+    // ocean (a plain max() with sea level once clamped every ocean floor).
+    const auto planet = MakePlanet();
+    u32 collisionN = 0, collisionLand = 0, arcN = 0, arcLand = 0, oceanN = 0;
+    f64 oceanSum = 0.0;
+    for (const u64 seed : {4242ULL, 7ULL, 99ULL})
+    {
+        auto desc = MakeDesc(seed);
+        desc.global.bakedTectonics = terrain_bake::BakeTectonics(planet, desc, {.resolution = 128});
+        if (!Check(desc.global.bakedTectonics != nullptr, "bake must complete")) return false;
+        const terrain::AnalyticTerrainSource source(planet, desc);
+        const f64 sea = desc.global.seaLevelMeters;
+        constexpr u32 n = 100'000;
+        for (u32 i = 0; i < n; ++i)
+        {
+            const math::Double3 d = Fibonacci(i, n);
+            const auto t = desc.global.bakedTectonics->Sample(d);
+            const f32 cc = t.Get(terrain::BakedTectonicLayer::ConvergenceContinental);
+            const f32 cm = t.Get(terrain::BakedTectonicLayer::ConvergenceMixed);
+            const f32 co = t.Get(terrain::BakedTectonicLayer::ConvergenceOceanic);
+            const f32 conv = t.Get(terrain::BakedTectonicLayer::Convergence);
+            const f32 div = t.Get(terrain::BakedTectonicLayer::Divergence);
+            const f32 tr = t.Get(terrain::BakedTectonicLayer::Transform);
+            const f32 fraction = t.Get(terrain::BakedTectonicLayer::ContinentalCrustFraction);
+            const bool collision = conv > 0.5F && conv >= div && conv >= tr && cc >= cm && cc >= co;
+            const bool arc = conv > 0.5F && conv >= div && conv >= tr && co > cc && co >= cm;
+            const bool openOcean = std::max({conv, div, tr}) < 0.05F && fraction < 0.2F;
+            if (!collision && !arc && !openOcean) continue;
+            const terrain::TerrainQuery q{.unitDirection = d, .footprintMeters = 5000.0,
+                .planet = planet.id, .radialOffsetMeters = 0.0};
+            const f64 elevation = source.Sample(q).elevationMeters;
+            if (collision) { ++collisionN; collisionLand += elevation > sea; }
+            else if (arc) { ++arcN; arcLand += elevation > sea; }
+            else { ++oceanN; oceanSum += elevation - sea; }
+        }
+    }
+    const f64 collisionShare = collisionN ? 100.0 * collisionLand / collisionN : 0.0;
+    const f64 arcShare = arcN ? 100.0 * arcLand / arcN : 0.0;
+    const f64 oceanMean = oceanN ? oceanSum / oceanN : 0.0;
+    std::cout << "continental collisions above sea " << collisionShare << "% (" << collisionN
+              << "), ocean-ocean arcs above sea " << arcShare << "% (" << arcN
+              << "), open ocean mean " << oceanMean << " m (" << oceanN << ")" << std::endl;
+    return Check(collisionN > 500U && collisionShare > 85.0, "continental collisions must rise above sea level") &&
+           Check(arcN > 500U && arcShare > 18.0, "volcanic arcs on oceanic crust must form islands") &&
+           Check(oceanN > 1000U && oceanMean < -1000.0, "open ocean floor must not be lifted or clamped to sea level");
+}
+
 int main()
 {
     bool ok = true;
@@ -731,3 +782,4 @@ bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
     ok &= FaultsAreLinearNotWhorls();
     ok &= EveryPlateOwnsTerritoryAndKeepsAnInterior();
     ok &= BeltHeightDoesNotDependOnTheSampleFootprint();
+    ok &= CollisionsEmergeAsLandAndArcsAsIslands();

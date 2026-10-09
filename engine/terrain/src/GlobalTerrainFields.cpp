@@ -120,11 +120,13 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
          desc_.continentalBiasMeters) *
         continentalWeight;
 
-    const f64 landMask =
+    // Thick continental collision is land whatever the noise coastline says.
+    const f64 landMask = std::max(
         detail::Smooth(
             (blendedSignal +
              0.15) /
-            0.55);
+            0.55),
+        tectonic.collisionLand);
 
     const f64 mountainRidges =
         landMask > 0.0 && mountainWeight > 0.0 && desc_.mountainAmplitudeMeters > 0.0
@@ -167,10 +169,18 @@ GlobalTerrainFieldSample GlobalTerrainFields::SampleNormalized(
         desc_.
             mountainAmplitudeMeters;
 
-    const f64 coarseElevation =
+    // ... and it stays above sea level: colliding thick crust is buoyant, so a
+    // collision under "ocean noise" must still rise as a range, not drown. The
+    // lift fades in with the mask (no effect at 0, a hard floor at 1) instead
+    // of a plain max(), which would clamp every ocean floor to sea level.
+    const f64 unliftedElevation =
         continentalElevation +
         mountainElevation +
         tectonic.structuralElevationMeters;
+    const f64 coarseElevation = unliftedElevation +
+        tectonic.collisionLand *
+            std::max(0.0, desc_.seaLevelMeters + tectonic.collisionLand * kCollisionEmergeMeters -
+                              unliftedElevation);
 
     const f64 latitude =
         std::clamp(
@@ -611,6 +621,17 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
     texel.Set(BakedTectonicLayer::FractureDensity,
         static_cast<f32>(structure.fractureDensity));
     texel.Set(BakedTectonicLayer::OrogenEnvelope, static_cast<f32>(envelope.convergenceMask));
+    // Thick continental collision: the convergence envelope where the crust is
+    // continental, thresholded so only the core of a collision is forced above
+    // sea level (the envelope's soft tails would otherwise turn coastal strips
+    // along every convergent boundary into land).
+    {
+        const f64 continental = detail::Smooth(std::clamp(
+            (structure.continentalCrustFraction - 0.55) / 0.25, 0.0, 1.0));
+        texel.Set(BakedTectonicLayer::CollisionLand,
+            static_cast<f32>(detail::Smooth(std::clamp(
+                (envelope.convergenceMask * continental - 0.45) / 0.45, 0.0, 1.0))));
+    }
     texel.plate = static_cast<u8>(sample.nearestPlate);
     texel.neighbour = static_cast<u8>(sample.secondPlate);
     return texel;
@@ -649,6 +670,7 @@ detail::TectonicSample GlobalTerrainFields::TectonicAt(
         static_cast<f64>(texel.Get(BakedTectonicLayer::StructuralElevationMeters));
     sample.convergenceMask = mask(BakedTectonicLayer::Convergence);
     sample.orogenEnvelope = mask(BakedTectonicLayer::OrogenEnvelope);
+    sample.collisionLand = mask(BakedTectonicLayer::CollisionLand);
     sample.divergenceMask = mask(BakedTectonicLayer::Divergence);
     sample.transformMask = mask(BakedTectonicLayer::Transform);
     sample.plateBiasMeters =

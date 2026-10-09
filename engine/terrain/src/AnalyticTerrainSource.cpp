@@ -691,7 +691,7 @@ u64 TectonicBakeRecipeHash(
     const AnalyticTerrainDesc& desc) noexcept
 {
     // Bump when the baked layer set or how it is computed changes.
-    constexpr u64 kBakeAlgorithmVersion = 14;
+    constexpr u64 kBakeAlgorithmVersion = 15;
 
     const TectonicFieldDesc& t = desc.global.tectonic;
     u64 hash = StableCombine64(0x54454354424B4531ULL, kBakeAlgorithmVersion);

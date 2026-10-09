@@ -36,6 +36,8 @@ struct TectonicSample
     // at this point (planet-radius units per unit angular speed). Unlike the
     // masks it does not saturate, so it separates fast boundaries from slow.
     f64 relativeSpeed{0.0};
+    // Baked thick-continental-collision land mask (0 from the plate model).
+    f64 collisionLand{0.0};
     // 0..1, strongest where the two plates are actively separating (mid-ocean
     // ridge / continental rift), zero away from any boundary. Unlike
     // convergenceMask, not weighted down for an ocean-ocean pairing --

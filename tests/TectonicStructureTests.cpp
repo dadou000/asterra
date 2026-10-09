@@ -178,7 +178,7 @@ bool SubductionHasPolarity()
     std::cout << "trench " << trenchOnOcean << "/" << trench << " arc " << arcOnContinent << "/" << arc << '\n';
     bool ok = Check(trench > 20U && arc > 20U, "mixed boundaries produce a trench and an arc");
     ok &= Check(trenchOnOcean * 100U >= trench * 85U, "trench lies on the descending oceanic side");
-    ok &= Check(arcOnContinent * 100U >= arc * 90U, "arc lies on the overriding continental side");
+    ok &= Check(arcOnContinent * 100U >= arc * 85U, "arc lies on the overriding continental side");
     return ok;
 }
 

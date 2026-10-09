@@ -385,14 +385,14 @@ void OctaveBand(
 // Baked tectonic rasters: interleaved {convergence, plate bias, structural
 // elevation} per texel of six
 // cube faces, each with a one-texel gutter (mirrors BakedTectonicRasters).
-float3 BakedTectonicTexel(uint face, int x, int y, uint resolution)
+float4 BakedTectonicTexel(uint face, int x, int y, uint resolution)
 {
     uint stride = resolution + 2u;
     uint index = (face * stride + uint(y + 1)) * stride + uint(x + 1);
-    return asfloat(g_bakedTectonics.Load3(index * 12u));
+    return asfloat(g_bakedTectonics.Load4(index * 16u));
 }
 
-float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters)
+float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters, out float collisionLand)
 {
     uint resolution = ParamUint(kParamBakedTectonicResolution);
     float3 a = abs(direction);
@@ -425,24 +425,28 @@ float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters,
     float tx = saturate(fx - float(x0));
     float ty = saturate(fy - float(y0));
 
-    float3 t00 = BakedTectonicTexel(face, x0, y0, resolution);
-    float3 t10 = BakedTectonicTexel(face, x0 + 1, y0, resolution);
-    float3 t01 = BakedTectonicTexel(face, x0, y0 + 1, resolution);
-    float3 t11 = BakedTectonicTexel(face, x0 + 1, y0 + 1, resolution);
-    float3 blended = lerp(lerp(t00, t10, tx), lerp(t01, t11, tx), ty);
+    float4 t00 = BakedTectonicTexel(face, x0, y0, resolution);
+    float4 t10 = BakedTectonicTexel(face, x0 + 1, y0, resolution);
+    float4 t01 = BakedTectonicTexel(face, x0, y0 + 1, resolution);
+    float4 t11 = BakedTectonicTexel(face, x0 + 1, y0 + 1, resolution);
+    float4 blended = lerp(lerp(t00, t10, tx), lerp(t01, t11, tx), ty);
     plateBiasMeters = blended.y;
     return blended.x;
     structuralMeters = blended.z;
+    collisionLand = blended.w;
+    return blended.x;
 }
 
 // structuralMeters is baked only (the plate model has no structural elevation),
 // so it is zero on the unbaked path -- same as the CPU.
-float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters)
+float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMeters, out float structuralMeters, out float collisionLand)
 {
     if (ParamUint(kParamBakedTectonicResolution) != 0u)
     {
-        return SampleBakedConvergenceAndBias(direction, plateBiasMeters, structuralMeters);
+        return SampleBakedConvergenceAndBias(direction, plateBiasMeters, structuralMeters, collisionLand);
     }
+
+    collisionLand = 0.0;
 
     structuralMeters = 0.0;
     uint plateCount = ParamUint(kParamPlateCount);
@@ -582,7 +586,8 @@ float PlateElevationEstimateMeters(float3 direction)
 {
     float plateBiasMeters;
     float structuralMeters;
-    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters);
+    float collisionLand;
+    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters, collisionLand);
 
     float continentalAmplitudeSafe = max(ParamFloat(kParamContinentalAmplitudeMeters), 1.0e-9);
     float blendedSignal = ContinentalSignal(direction) +
@@ -618,7 +623,8 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
 
     float plateBiasMeters;
     float structuralMeters;
-    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters);
+    float collisionLand;
+    float convergenceMask = SampleTectonicConvergenceAndBias(direction, plateBiasMeters, structuralMeters, collisionLand);
 
     float continentSignal = ContinentalSignal(direction);
     float continentalAmplitudeSafe = max(ParamFloat(kParamContinentalAmplitudeMeters), 1.0e-9);
@@ -628,7 +634,9 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
     float continentalElevation = (blendedSignal * ParamFloat(kParamContinentalAmplitudeMeters) +
         ParamFloat(kParamContinentalBiasMeters)) * continentalWeight;
 
-    float landMask = Smooth((blendedSignal + 0.15) / 0.55);
+    // Thick continental collision is land whatever the noise coastline says
+    // (mirrors GlobalTerrainFields).
+    float landMask = max(Smooth((blendedSignal + 0.15) / 0.55), collisionLand);
 
     float globalMountainAmplitude = ParamFloat(kParamGlobalMountainAmplitudeMeters);
     float globalMountainWavelength = ParamFloat(kParamGlobalMountainWavelengthMeters);
@@ -655,7 +663,11 @@ GlobalSample SampleGlobalFields(float3 direction, float footprintMeters)
     float mountainElevation = (0.65 + 0.35 * mountainRidges * mountainModulation * mountainWeight) *
         landMask * convergenceMask * globalMountainAmplitude;
 
-    float coarseElevation = continentalElevation + mountainElevation + structuralMeters;
+    // ... and it stays above sea level (kCollisionEmergeMeters = 1800); the lift
+    // fades in with the mask, as in GlobalTerrainFields.
+    float unliftedElevation = continentalElevation + mountainElevation + structuralMeters;
+    float coarseElevation = unliftedElevation + collisionLand *
+        max(0.0, ParamFloat(kParamSeaLevelMeters) + collisionLand * 1800.0 - unliftedElevation);
 
     float latitude = saturate(abs(direction.y));
     float climateNoise = SampleBand(direction, radius, ParamFloat(kParamClimateWavelengthMeters),

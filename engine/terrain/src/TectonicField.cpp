@@ -399,7 +399,7 @@ TectonicSample TectonicField::SampleWithClaims(
                 const f64 side = (d[overriding] - d[descending]) / width;
                 const f64 pairTerm = convergenceTerm * collisionScale;
                 const f64 trenchOffset = (side + 0.35) / 0.25;
-                const f64 arcOffset = (side - 0.5) / 0.3;
+                const f64 arcOffset = (side - 0.45) / 0.42;
                 subductionTrench = std::max(
                     subductionTrench, pairTerm * std::exp(-trenchOffset * trenchOffset));
                 subductionArc = std::max(
@@ -610,7 +610,14 @@ TectonicStructureSample TectonicField::SampleStructureWithClaims(
         const f64 riftFloor = -divergence * fraction * 0.35;
         const f64 riftShoulder = 4.0 * divergence * (1.0 - divergence) * fraction * 0.25;
         const f64 trenchDepth = -base.subductionTrench * 1.2;
-        const f64 arcRise = base.subductionArc * 0.45;
+        // Volcanic arcs are chains of volcanoes, not a continuous ridge: along
+        // strike they come and go. Where the overriding plate is oceanic the
+        // chain must reach above sea level (island arcs) from a -2.6 km floor;
+        // on continental crust the arc rides the range and needs far less.
+        const f64 chainNoise = 0.5 + 0.5 * ValueNoise3D(direction * 38.0, desc_.seed ^ 0x41524358ULL);
+        const f64 chain = Smooth(std::clamp((chainNoise - 0.35) / 0.25, 0.0, 1.0));
+        const f64 arcRise = base.subductionArc *
+            ((1.0 - fraction) * (0.45 + 2.2 * chain) + fraction * 0.55);
         out.structuralElevationMeters = unitMeters *
             (ridge + ageDepth + riftFloor + riftShoulder + trenchDepth + arcRise);
     }

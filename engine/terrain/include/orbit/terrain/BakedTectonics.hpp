@@ -50,6 +50,10 @@ enum class BakedTectonicLayer : u8
     // Wide convergence envelope terrain relief (mountain belts) is built from;
     // the Convergence layer itself is the narrow structure mask.
     OrogenEnvelope,
+    // 0..1: thick continental collision. Terrain treats it as land and keeps it
+    // above sea level whatever the noise coastline says (see
+    // GlobalTerrainFields::SampleNormalized).
+    CollisionLand,
     Count
 };
 
@@ -85,7 +89,7 @@ struct BakedTectonicTexel
 class BakedTectonicRasters
 {
 public:
-    static constexpr u32 kFormatVersion = 6;
+    static constexpr u32 kFormatVersion = 7;
 
     // Quantizes float layers. `layers[i]` holds 6 * (resolution + 2)^2 values
     // for layer i in face-major, row-major order with the gutter included;
@@ -131,11 +135,12 @@ public:
         f32 convergence{0.0F};
         f32 plateBiasMeters{0.0F};
         f32 structuralElevationMeters{0.0F};
+        f32 collisionLand{0.0F};
     };
     [[nodiscard]] ConvergenceAndBias SampleConvergenceAndBias(
         const math::Double3& direction) const noexcept;
 
-    // Interleaved {convergence, bias, structural elevation} floats, 6 * (resolution + 2)^2 texels
+    // Interleaved {convergence, bias, structural elevation, collision land} floats, 6 * (resolution + 2)^2 texels
     // with the gutter, for the GPU field generator.
     [[nodiscard]] std::vector<f32> BuildGpuConvergenceAndBias() const;
 

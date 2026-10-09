@@ -299,22 +299,25 @@ BakedTectonicRasters::SampleConvergenceAndBias(
         .convergence = bilinear(BakedTectonicLayer::OrogenEnvelope),
         .plateBiasMeters = bilinear(BakedTectonicLayer::PlateBiasMeters),
         .structuralElevationMeters =
-            bilinear(BakedTectonicLayer::StructuralElevationMeters)};
+            bilinear(BakedTectonicLayer::StructuralElevationMeters),
+        .collisionLand = bilinear(BakedTectonicLayer::CollisionLand)};
 }
 
 std::vector<f32> BakedTectonicRasters::BuildGpuConvergenceAndBias() const
 {
     const std::size_t count = GutterCount(resolution_);
-    std::vector<f32> result(count * 3U);
+    std::vector<f32> result(count * 4U);
     const std::size_t convergence = static_cast<std::size_t>(BakedTectonicLayer::OrogenEnvelope);
     const std::size_t bias = static_cast<std::size_t>(BakedTectonicLayer::PlateBiasMeters);
     const std::size_t structural =
         static_cast<std::size_t>(BakedTectonicLayer::StructuralElevationMeters);
+    const std::size_t collision = static_cast<std::size_t>(BakedTectonicLayer::CollisionLand);
     for (std::size_t i = 0; i < count; ++i)
     {
-        result[i * 3U] = Dequantize(convergence, i);
-        result[i * 3U + 1U] = Dequantize(bias, i);
-        result[i * 3U + 2U] = Dequantize(structural, i);
+        result[i * 4U] = Dequantize(convergence, i);
+        result[i * 4U + 1U] = Dequantize(bias, i);
+        result[i * 4U + 2U] = Dequantize(structural, i);
+        result[i * 4U + 3U] = Dequantize(collision, i);
     }
     return result;
 }

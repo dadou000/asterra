@@ -53,6 +53,10 @@ struct GpuTectonicHotspot
     std::array<f64, kMaxTectonicHotspotAgeSteps> chainChordRadius{};
 };
 
+// Height above sea level (m) a thick continental collision is kept at, the belt
+// floor; mirrored by the GPU generator.
+inline constexpr double kCollisionEmergeMeters = 1800.0;
+
 struct GlobalTerrainFieldDesc
 {
     // Zero means derive from the owning terrain source seed.
