@@ -747,6 +747,13 @@ void TestImpactScalingUsesGravityAndTargetStrength()
             terrain_impacts::ScaleImpactCraterRadiusMeters(strongerTarget) < normal &&
             terrain_impacts::ScaleImpactCraterRadiusMeters(higherGravity) < normal,
         "Impact scaling must respond to target strength and gravity in the excavation regime.");
+    auto vertical = baseline;
+    vertical.impactAngleDegrees = 0.0;
+    auto grazing = baseline;
+    grazing.impactAngleDegrees = 89.0;
+    Require(terrain_impacts::ScaleImpactCraterRadiusMeters(vertical) > normal &&
+            normal > terrain_impacts::ScaleImpactCraterRadiusMeters(grazing),
+        "Angles measured from the normal must give vertical impacts the largest radius.");
 
     const auto planet = MakePlanet();
     auto definition = EmptyDefinition(planet, 0x4500ULL);
@@ -759,6 +766,158 @@ void TestImpactScalingUsesGravityAndTargetStrength()
     terrain_impacts::ImpactField field(planet, definition);
     RequireNear(field.ResolvedImpacts().front().radiusMeters, normal, 1.0e-8,
         "Authored impactor parameters must compile into the crater radius used by terrain sampling.");
+    definition.authoredImpacts.front().impactAngleDegrees = 0.0;
+    const terrain_impacts::ImpactField verticalField(planet, definition);
+    RequireNear(verticalField.ResolvedImpacts().front().radiusMeters,
+        terrain_impacts::ScaleImpactCraterRadiusMeters(vertical), 1.0e-8,
+        "A default vertical authored impact must use exactly the same scaling convention.");
+}
+
+void TestLongIrregularRaysAndRegionalBounds()
+{
+    const auto planet = MakePlanet();
+    auto definition = EmptyDefinition(planet, 0x4510ULL);
+    const math::Double3 center = math::Normalize(math::Double3{0.7, 0.2, 0.68});
+    auto impact = MakeImpact(0x4511ULL, center, 20'000.0);
+    impact.rayStrength = 1.2;
+    impact.rayCount = 7U;
+    impact.rayExtentRadii = 16.0;
+    impact.rayIrregularity = 0.2;
+    definition.authoredImpacts.push_back(impact);
+    const terrain_impacts::ImpactField field(planet, definition);
+    auto legacyDefinition = definition;
+    legacyDefinition.authoredImpacts.front().rayExtentRadii = 0.0;
+    legacyDefinition.authoredImpacts.front().rayIrregularity = 0.0;
+    const terrain_impacts::ImpactField legacy(planet, legacyDefinition);
+    const auto frame = world::MakeSurfaceFrame(center);
+    terrain_impacts::ImpactQueryScratch scratch;
+    std::vector<terrain_impacts::GeologicalEventReference> batch;
+    f64 maximumRay = 0.0;
+    f64 minimumRay = 1.0;
+    math::Double3 brightestDirection{};
+    for (u32 index = 0U; index < 128U; ++index)
+    {
+        const f64 azimuth = 2.0 * std::numbers::pi_v<f64> * index / 128.0;
+        const auto direction = world::DirectionAtSurfaceOffset(planet, frame,
+            {std::cos(azimuth) * impact.radiusMeters * 10.0,
+             std::sin(azimuth) * impact.radiusMeters * 10.0});
+        const auto sample = field.Sample(direction, 50.0, scratch);
+        RequireNear(sample.heightDeltaMeters, 0.0, 0.0,
+            "Distant material rays must not extend the massive ejecta relief.");
+        RequireNear(sample.ejectaThicknessMeters, 0.0, 0.0,
+            "Distant material rays must not invent a massive ejecta deposit.");
+        RequireNear(legacy.Sample(direction, 50.0).rayField, 0.0, 0.0,
+            "Recipes without an extended ray field must retain legacy finite support.");
+        field.CollectEventsIntersectingCap(direction, 0.0, scratch, batch);
+        Require(batch.size() == 1U,
+            "A distant ray tile must include its source crater in the spatial batch.");
+        RequireNear(field.Sample(direction, 50.0, scratch, batch).rayField,
+            sample.rayField, 1.0e-12,
+            "Tile batching must preserve rays beyond the ejecta blanket.");
+        minimumRay = std::min(minimumRay, sample.rayField);
+        if (sample.rayField > maximumRay)
+        {
+            maximumRay = sample.rayField;
+            brightestDirection = direction;
+        }
+    }
+    Require(maximumRay > 0.2 && minimumRay < 0.001,
+        "Extended rays should be isolated spokes with gaps instead of a bright disk.");
+
+    const auto caps = terrain_impacts::ChangedAuthoredEventInfluenceCaps(
+        planet, legacyDefinition, definition);
+    Require(caps.has_value() && caps->size() == 2U,
+        "Ray edits should invalidate the union of their old and new regional support.");
+    const f64 rayAngle = std::acos(std::clamp(math::Dot(center, brightestDirection), -1.0, 1.0));
+    Require(caps->back().angularRadiusRadians > rayAngle,
+        "Invalidation must cover the extended rays beyond the old crater support.");
+
+    const auto rayFrame = world::MakeSurfaceFrame(brightestDirection);
+    definition.resurfacingEvents.push_back({
+        .id = ImpactId(0x4512ULL),
+        .centerlineUnitDirections = {
+            world::DirectionAtSurfaceOffset(planet, rayFrame, {-2'000.0, 0.0}),
+            world::DirectionAtSurfaceOffset(planet, rayFrame, {2'000.0, 0.0})},
+        .widthMeters = 2'000.0,
+        .thicknessMeters = 100.0,
+        .ageOrder = impact.ageOrder + 1U});
+    const terrain_impacts::ImpactField buried(planet, definition);
+    RequireNear(buried.Sample(brightestDirection, 50.0).rayField, 0.0, 0.0,
+        "Younger resurfacing must bury distant material rays through the same chronology.");
+
+    const auto outside = world::DirectionAtSurfaceOffset(
+        planet, frame, {impact.radiusMeters * 30.0, 0.0});
+    Require(field.CandidateCount(outside) == 0U &&
+            field.Sample(outside, 50.0).affectingImpacts == 0U,
+        "Extended rays must still have bounded, spatially pruned support.");
+}
+
+void TestRayRecipeValidationAndLegacyDefaults()
+{
+    const auto planet = MakePlanet();
+    auto definition = EmptyDefinition(planet, 0x4520ULL);
+    auto impact = MakeImpact(0x4521ULL, {0.0, 1.0, 0.0}, 20'000.0);
+    for (const f64 invalidExtent : {-1.0, 0.5, 1.0, 101.0})
+    {
+        impact.rayExtentRadii = invalidExtent;
+        Require(!impact.IsValid(), "Ray extents must be zero or in (1, 100].");
+    }
+    impact.rayExtentRadii = 12.0;
+    impact.rayIrregularity = 1.1;
+    Require(!impact.IsValid(), "Ray irregularity must stay in its normalized range.");
+    impact.rayIrregularity = 0.3;
+    impact.rayStrength = 1.0;
+    impact.rayCount = 8U;
+    definition.authoredImpacts.push_back(impact);
+    const auto encoded = terrain_impacts::SerializeImpactFieldToml(definition);
+    const auto decoded = terrain_impacts::ParseImpactFieldToml(encoded);
+    Require(decoded.authoredImpacts.front().rayExtentRadii == 12.0 &&
+            decoded.authoredImpacts.front().rayIrregularity == 0.3,
+        "New ray modifiers must survive project-authority serialization.");
+    auto oldRecipe = encoded;
+    for (const std::string key : {"ray_extent_radii", "ray_irregularity"})
+    {
+        const auto start = oldRecipe.find(key + " =");
+        Require(start != std::string::npos, "The ray field must be serialized.");
+        oldRecipe.erase(start, oldRecipe.find('\n', start) - start + 1U);
+    }
+    const auto old = terrain_impacts::ParseImpactFieldToml(oldRecipe);
+    Require(old.authoredImpacts.front().rayExtentRadii == 0.0 &&
+            old.authoredImpacts.front().rayIrregularity == 0.0,
+        "Old recipes must default to unchanged ray support and regularity.");
+}
+
+void TestFreshResurfacingClearsStatisticalMicrocraters()
+{
+    const auto planet = MakePlanet();
+    auto definition = EmptyDefinition(planet, 0x4530ULL);
+    definition.surfaceAgeYears = 100'000'000.0;
+    definition.procedural.count = 200'000U;
+    definition.procedural.minimumRadiusMeters = 100.0;
+    const math::Double3 center{0.0, 1.0, 0.0};
+    const auto frame = world::MakeSurfaceFrame(center);
+    definition.resurfacingEvents.push_back({
+        .id = ImpactId(0x4531ULL),
+        .centerlineUnitDirections = {
+            world::DirectionAtSurfaceOffset(planet, frame, {-20'000.0, 0.0}),
+            world::DirectionAtSurfaceOffset(planet, frame, {20'000.0, 0.0})},
+        .widthMeters = 50'000.0,
+        .thicknessMeters = 200.0,
+        .formationAgeYears = definition.surfaceAgeYears,
+        .ageOrder = 1ULL << 40U});
+    const terrain_impacts::ImpactField field(planet, definition);
+    const auto fresh = field.Sample(center, 1'000.0);
+    Require(fresh.exposureAgeYears == 0.0 && fresh.resurfacedMaterialFraction == 1.0 &&
+            fresh.microImpactCoverage == 0.0 && fresh.microImpactRoughnessMeters == 0.0,
+        "Zero exposure age after fresh lava must not restore an ancient micro-impact population.");
+    const auto untouched = field.Sample(center * -1.0, 1'000.0);
+    Require(untouched.microImpactCoverage > 0.0,
+        "Fresh resurfacing must leave the distant statistical population intact.");
+    const auto& events = field.ResolvedImpacts();
+    Require(events.front().formationAgeYears > 0.0 &&
+            events.back().formationAgeYears < definition.surfaceAgeYears &&
+            events.front().formationAgeYears < events.back().formationAgeYears,
+        "Procedural impacts must span the history instead of all forming at its start.");
 }
 
 void TestBinaryAndSecondaryCraterEvents()
@@ -1135,6 +1294,9 @@ int main()
     TestDegradationCanSoftenAndFillCraterRelief();
     TestEnvironmentAgeAndObliqueMorphology();
     TestImpactScalingUsesGravityAndTargetStrength();
+    TestLongIrregularRaysAndRegionalBounds();
+    TestRayRecipeValidationAndLegacyDefaults();
+    TestFreshResurfacingClearsStatisticalMicrocraters();
     TestBinaryAndSecondaryCraterEvents();
     TestStressGuidedIceFractureCurves();
     TestEjectaRaysAndDebrisFields();

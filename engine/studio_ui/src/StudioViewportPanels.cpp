@@ -303,6 +303,10 @@ SelectedBiomeObject(
     changed |= context.InputDouble(
         "Ray Strength##" + key + "-ray-strength", impact.rayStrength);
     changed |= DrawU32(context, "Ray Count##" + key + "-ray-count", impact.rayCount);
+    changed |= context.InputDouble(
+        "Ray Reach (radii; 0 = ejecta reach)##" + key + "-ray-reach", impact.rayExtentRadii);
+    changed |= context.SliderDouble(
+        "Ray Irregularity##" + key + "-ray-irregularity", impact.rayIrregularity, 0.0, 1.0);
     changed |= context.SliderDouble(
         "Degradation##" + key + "-degradation", impact.degradation, 0.0, 1.0);
 
@@ -311,7 +315,7 @@ SelectedBiomeObject(
     changed |= DrawAgeOrder(
         context, "Chronological Age Order##" + key + "-age-order", impact.ageOrder);
     changed |= context.InputDouble(
-        "Impact Angle (deg)##" + key + "-angle", impact.impactAngleDegrees);
+        "Angle From Normal (deg)##" + key + "-angle", impact.impactAngleDegrees);
     changed |= context.InputDouble(
         "Impact Azimuth (rad)##" + key + "-azimuth", impact.impactAzimuthRadians);
     changed |= context.SliderDouble(

@@ -3,9 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
-#include <map>
 #include <optional>
-#include <set>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -15,50 +13,6 @@ namespace
 {
 constexpr f64 Pi =
     3.1415926535897932384626433832795;
-
-[[nodiscard]] u64 MixImpact(const terrain_impacts::ImpactRecord& event) noexcept
-{
-    u64 hash = terrain::StableCombine64(event.id.high, event.id.low);
-    const auto mix = [&](const u64 value) { hash = terrain::StableCombine64(hash, value); };
-    for (const f64 value : {
-             event.centerUnitDirection.x, event.centerUnitDirection.y,
-             event.centerUnitDirection.z, event.radiusMeters,
-             event.simpleDepthRatio, event.complexDepthRatio, event.rimHeightRatio,
-             event.ejectaThicknessRatio, event.ejectaExtentRadii, event.rayStrength,
-             event.degradation, event.formationAgeYears, event.impactAngleDegrees,
-             event.impactAzimuthRadians, event.shapeIrregularity, event.meltFraction,
-             event.brecciaFraction, event.multiringStrength,
-             event.impactorDiameterMeters, event.impactVelocityMetersPerSecond,
-             event.impactorDensityKgPerCubicMeter, event.binarySeparationRadii,
-             event.binaryCompanionRadiusRatio, event.binaryAzimuthRadians,
-             event.secondaryRadiusRatio, event.secondaryRayAlignment})
-        mix(std::bit_cast<u64>(value));
-    mix(static_cast<u64>(event.profile));
-    mix(event.rayCount);
-    mix(event.ageOrder);
-    mix(event.secondaryCount);
-    mix(event.enabled ? 1U : 0U);
-    mix(event.authored ? 1U : 0U);
-    return hash;
-}
-
-[[nodiscard]] u64 MixResurfacing(const terrain_impacts::ResurfacingRecord& event) noexcept
-{
-    u64 hash = terrain::StableCombine64(event.id.high, event.id.low);
-    hash = terrain::StableCombine64(hash, static_cast<u64>(event.kind));
-    hash = terrain::StableCombine64(hash, std::bit_cast<u64>(event.widthMeters));
-    hash = terrain::StableCombine64(hash, std::bit_cast<u64>(event.thicknessMeters));
-    hash = terrain::StableCombine64(hash, std::bit_cast<u64>(event.formationAgeYears));
-    hash = terrain::StableCombine64(hash, event.ageOrder);
-    hash = terrain::StableCombine64(hash, event.enabled ? 1U : 0U);
-    for (const auto& point : event.centerlineUnitDirections)
-    {
-        hash = terrain::StableCombine64(hash, std::bit_cast<u64>(point.x));
-        hash = terrain::StableCombine64(hash, std::bit_cast<u64>(point.y));
-        hash = terrain::StableCombine64(hash, std::bit_cast<u64>(point.z));
-    }
-    return hash;
-}
 
 [[nodiscard]] u64 MixGlobalImpactRecipe(
     const terrain_impacts::ImpactFieldDefinition& recipe) noexcept
@@ -377,6 +331,8 @@ BuildImpactHistoryInvalidations(
     const u8 physicalTileLevel,
     const u32 downstreamRadiusTiles)
 {
+    if (physicalTileLevel > 30U || downstreamRadiusTiles > 64U)
+        throw std::invalid_argument("Impact history invalidation tile scope is invalid.");
     std::optional<terrain_impacts::ImpactFieldDefinition> previous;
     std::optional<terrain_impacts::ImpactFieldDefinition> next;
     if (!previousToml.empty()) previous = terrain_impacts::ParseImpactFieldToml(previousToml);
@@ -401,61 +357,52 @@ BuildImpactHistoryInvalidations(
             .scope = {.planet = planet.id, .global = true}}};
     }
 
-    using Id = std::pair<u64, u64>;
-    std::map<Id, u64> priorImpacts;
-    std::map<Id, u64> nextImpacts;
-    std::map<Id, u64> priorFlows;
-    std::map<Id, u64> nextFlows;
-    if (previous.has_value())
+    if (!previous.has_value() && !next.has_value()) return {};
+    auto before = previous.has_value() ? *previous : *next;
+    auto after = next.has_value() ? *next : *previous;
+    if (!previous.has_value())
     {
-        for (const auto& event : previous->authoredImpacts)
-            priorImpacts[{event.id.high, event.id.low}] = MixImpact(event);
-        for (const auto& event : previous->resurfacingEvents)
-            priorFlows[{event.id.high, event.id.low}] = MixResurfacing(event);
+        before.authoredImpacts.clear();
+        before.resurfacingEvents.clear();
     }
-    if (next.has_value())
+    if (!next.has_value())
     {
-        for (const auto& event : next->authoredImpacts)
-            nextImpacts[{event.id.high, event.id.low}] = MixImpact(event);
-        for (const auto& event : next->resurfacingEvents)
-            nextFlows[{event.id.high, event.id.low}] = MixResurfacing(event);
+        after.authoredImpacts.clear();
+        after.resurfacingEvents.clear();
     }
 
+    // Reuse the geological owner's exact old/new bounds. Independent editor
+    // bounds omitted moved/deleted centers, long rays, physical size scaling
+    // and tectonic advection, leaving historical pages stale after an edit.
+    const auto caps = terrain_impacts::ChangedAuthoredEventInfluenceCaps(
+        planet, before, after);
+    if (!caps.has_value())
+    {
+        return {terrain_dependency::TerrainInvalidationRequest{
+            .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            .scope = {.planet = planet.id, .global = true}}};
+    }
     std::vector<terrain_dependency::TerrainInvalidationRequest> result;
-    std::set<Id> processedImpacts;
-    std::set<Id> processedFlows;
-    const auto changed = [](const auto& a, const auto& b, const Id& id)
+    for (const auto& cap : *caps)
     {
-        const auto first = a.find(id);
-        const auto second = b.find(id);
-        return first == a.end() || second == b.end() || first->second != second->second;
-    };
-    const auto appendRegion = [&](const std::span<const math::Double3> points, const f64 influence)
-    {
+        // A single bounded page scope cannot represent a wider spherical
+        // event. Do not silently clamp its radius and leave outer rays stale.
+        const f64 tileMeters = std::max(planet.radiusMeters /
+            static_cast<f64>(u64{1} << physicalTileLevel) * 0.5, 0.001);
+        const f64 requestedTiles = std::ceil(
+            cap.angularRadiusRadians * planet.radiusMeters / tileMeters) + 1.0;
+        if (requestedTiles + downstreamRadiusTiles > 64.0)
+        {
+            return {terrain_dependency::TerrainInvalidationRequest{
+                .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+                .scope = {.planet = planet.id, .global = true}}};
+        }
         auto local = BuildTerrainAuthoringInvalidations(
-            planet, points, influence, physicalTileLevel, downstreamRadiusTiles,
+            planet, std::span<const math::Double3>(&cap.centerDirection, 1U),
+            cap.angularRadiusRadians * planet.radiusMeters,
+            physicalTileLevel, downstreamRadiusTiles,
             terrain_dependency::TerrainChangeKind::TerrainAuthoring);
         result.insert(result.end(), local.begin(), local.end());
-    };
-    for (const auto* recipe : {previous.has_value() ? &*previous : nullptr,
-                                next.has_value() ? &*next : nullptr})
-    {
-        if (recipe == nullptr) continue;
-        for (const auto& event : recipe->authoredImpacts)
-        {
-            const Id id{event.id.high, event.id.low};
-            if (!changed(priorImpacts, nextImpacts, id) || !processedImpacts.insert(id).second) continue;
-            const math::Double3 point = event.centerUnitDirection;
-            const f64 influence = event.radiusMeters * std::max(
-                1.0, event.ejectaExtentRadii + event.binarySeparationRadii + 1.0);
-            appendRegion(std::span<const math::Double3>(&point, 1U), influence);
-        }
-        for (const auto& event : recipe->resurfacingEvents)
-        {
-            const Id id{event.id.high, event.id.low};
-            if (!changed(priorFlows, nextFlows, id) || !processedFlows.insert(id).second) continue;
-            appendRegion(event.centerlineUnitDirections, event.widthMeters * 0.5);
-        }
     }
     return result;
 }

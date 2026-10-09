@@ -133,8 +133,10 @@ int RunGeologyCompilerTest()
         .ejectaExtentRadii = 3.5,
         .rayStrength = 0.5,
         .rayCount = 8U,
+        .rayExtentRadii = 12.0,
+        .rayIrregularity = 0.2,
         .degradation = 0.2,
-        .ageOrder = 10U,
+        .ageOrder = 0xfffffff0ULL,
         .formationAgeYears = 4.0e9,
         .impactAngleDegrees = 35.0,
         .impactAzimuthRadians = 0.4,
@@ -146,13 +148,31 @@ int RunGeologyCompilerTest()
         .secondaryCount = 2U});
     auto ice = std::make_shared<terrain_impacts::IceFractureDefinition>();
     ice->seed = 42U;
-    ice->ageOrder = 20U;
-    ice->formationAgeYears = 2.0e9;
+    ice->ageOrder = 0xfffffffeULL;
+    ice->formationAgeYears = 4.2e9;
     ice->fractureCount = 128U;
     ice->segmentsPerFracture = 10U;
     ice->maximumLengthMeters = 1'500'000.0;
     ice->widthMeters = 150'000.0;
     history.iceFractures = ice;
+    const auto flowFrame = world::MakeSurfaceFrame(craterCenter);
+    terrain_impacts::ResurfacingRecord flow{
+        .id = {.high = 19U, .low = 23U},
+        .kind = terrain_impacts::ResurfacingKind::TectonicRenewal,
+        .centerlineUnitDirections = {
+            world::DirectionAtSurfaceOffset(planet, flowFrame, {-700'000.0, 0.0}),
+            world::DirectionAtSurfaceOffset(planet, flowFrame, {700'000.0, 0.0})},
+        .widthMeters = 500'000.0,
+        .thicknessMeters = 100.0,
+        .formationAgeYears = 4.4e9,
+        .ageOrder = 0x100000001ULL};
+    history.resurfacingEvents.push_back(flow);
+    flow.id.low += 1U;
+    flow.kind = terrain_impacts::ResurfacingKind::LavaFlow;
+    flow.widthMeters = 220'000.0;
+    flow.formationAgeYears = history.surfaceAgeYears;
+    flow.ageOrder += 1U;
+    history.resurfacingEvents.push_back(flow);
 
     auto historyPointer =
         std::make_shared<const terrain_impacts::ImpactFieldDefinition>(history);
@@ -205,6 +225,10 @@ int RunGeologyCompilerTest()
         recordProcessDelta(Difference(actual.meltThicknessMeters,
             expected.meltThicknessMeters), "melt");
         recordProcessDelta(Difference(actual.brecciaField, expected.brecciaField), "breccia");
+        recordProcessDelta(Difference(actual.resurfacedMaterialFraction,
+            expected.resurfacedMaterialFraction), "resurfaced material");
+        recordProcessDelta(Difference(actual.resurfacingThicknessMeters,
+            expected.resurfacingThicknessMeters), "resurfacing thickness");
         recordProcessDelta(Difference(actual.iceDamage, expected.iceDamage), "ice damage");
         recordProcessDelta(Difference(actual.fractureCoverage,
             expected.fractureCoverage), "fracture coverage");
