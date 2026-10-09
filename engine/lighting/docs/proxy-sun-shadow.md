@@ -39,7 +39,7 @@ verify = [
   "orbit_view_terrain_layers_set(bypass_proxy_sun_shadow=true): the proxy shadow and proxy sky fill disappear; terrain lighting must not change.",
   "Edit a proxy property: the semantic-revision rebuild applies it without a restart.",
 ]
-verified = "1229ef74"
+verified = "f842a956"
 
 [[diagnose]]
 symptom = "authored proxies cast no sun shadow at all"
@@ -55,7 +55,7 @@ symptom = "bands of wrongly occluded rays or shadow stripes on proxy walls"
 steps = [
   "Suspect a stale GPU origin: a scene built while the camera was far away (for example a world reopened from a planet-scale view) resolves only about a metre in float32.",
   "Move to within 20 km of the proxies and more than 1.5 km from the build origin: ProxyGpuOriginIsStale should trigger a rebuild; if it does not, check the thresholds in ProxySurface.hpp and the call site in StudioViewportRenderer.cpp.",
-  "The exact reflections share the same scene, so a reflection artefact with the same pattern confirms it.",
+  "Smooth reflections now use the mesh triangle scene plus the merged SDF; debug the proxy shadow AS separately from reflection geometry.",
 ]
 docs = ["/rendering/lighting"]
 

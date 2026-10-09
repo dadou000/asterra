@@ -312,6 +312,11 @@ def orbit_view_terrain_layers_set(
     bypass_near_field_water: bool | None = None,
     bypass_atmosphere: bool | None = None,
     bypass_hybrid_reflections: bool | None = None,
+    reflection_exact_triangles: bool | None = None,
+    reflection_temporal: bool | None = None,
+    reflection_maximum_roughness: float | None = None,
+    reflection_distance_meters: float | None = None,
+    reflection_debug_view: int | None = None,
     bypass_radiance_cache: bool | None = None,
     indirect_coverage_view: bool | None = None,
     gi_only_view: bool | None = None,
@@ -325,7 +330,14 @@ def orbit_view_terrain_layers_set(
     cloud_temporal: bool | None = None,
 ) -> dict[str, Any]:
     """Choose which terrain layers a viewport draws and its LOD bias. Omitted
-    fields keep their value. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
+    fields keep their value. reflection_exact_triangles switches the shared mesh
+    BVH for smooth opaque reflections and analytic glass; reflection_temporal
+    controls reflection-only history (independent of scene TAA).
+    reflection_maximum_roughness [0,1] defaults to 0.25,
+    reflection_distance_meters [0.1,1000] defaults to 40.
+    reflection_debug_view: 0 scene, 1 reflected radiance, 2 hit distance (magenta
+    means environment/cache). Hardware traversal follows the lighting scheduler;
+    disabling it preserves software traversal and shading. lod_bias_stops is clamped to [-4, 4]: +1 keeps richer
     representations longer and doubles orbital patch resolution, -1 is coarser and
     cheaper (with full_clipmap it scales the clipmap planner's target spacing too).
     full_clipmap (default true) draws the production clipmap from the ground to
@@ -430,6 +442,11 @@ def orbit_view_terrain_layers_set(
         "bypass_indirect_lighting": bypass_indirect_lighting,
         "bypass_near_field_water": bypass_near_field_water,
         "bypass_hybrid_reflections": bypass_hybrid_reflections,
+        "reflection_exact_triangles": reflection_exact_triangles,
+        "reflection_temporal": reflection_temporal,
+        "reflection_maximum_roughness": reflection_maximum_roughness,
+        "reflection_distance_meters": reflection_distance_meters,
+        "reflection_debug_view": reflection_debug_view,
         "bypass_radiance_cache": bypass_radiance_cache,
         "bypass_atmosphere": bypass_atmosphere,
         "indirect_coverage_view": indirect_coverage_view,

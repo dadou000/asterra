@@ -47,7 +47,6 @@ StudioViewportRenderer::StudioViewportRenderer(
       meshSunShadowRenderer_(device, compiler),
       antiAliasingRenderer_(device, compiler),
       hybridReflectionRenderer_(device, compiler),
-      exactReflectionQueryRenderer_(device, compiler),
       surfaceDebugRenderer_(device, compiler),
       flatMapRenderer_(device, compiler, framesInFlight),
       luminanceHistogramRenderer_(device, compiler),

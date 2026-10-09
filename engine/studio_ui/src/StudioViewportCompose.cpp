@@ -56,6 +56,10 @@ StudioViewportRenderer::Compose(
     lighting::LightingTimestampRecorder* const lightingTimestamps,
     const StudioComposeCpuTimingRecorder& cpuTimingRecorder)
 {
+    hybridReflectionRenderer_.BeginFrame(frameIndex, framesInFlight_);
+    meshSdfScene_.BeginReflectionFrame(frameIndex, framesInFlight_);
+    glassSurfaceRenderer_.BeginFrame(frameIndex, framesInFlight_);
+
     const auto overlays =
         StudioLightingOverlays();
 

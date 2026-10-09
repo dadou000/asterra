@@ -1202,6 +1202,11 @@ void StudioRenderViewSet::SetTerrainLayers(
         throw std::out_of_range(
             "Studio render-view ID is not registered.");
     }
+    if (!std::isfinite(options.reflectionMaximumRoughness)) options.reflectionMaximumRoughness = 0.25F;
+    if (!std::isfinite(options.reflectionDistanceMeters)) options.reflectionDistanceMeters = 40.0F;
+    options.reflectionMaximumRoughness = std::clamp(options.reflectionMaximumRoughness, 0.0F, 1.0F);
+    options.reflectionDistanceMeters = std::clamp(options.reflectionDistanceMeters, 0.1F, 1000.0F);
+    options.reflectionDebugView = std::min(options.reflectionDebugView, 2U);
     if (!std::isfinite(options.lodBiasStops))
     {
         options.lodBiasStops = 0.0F;

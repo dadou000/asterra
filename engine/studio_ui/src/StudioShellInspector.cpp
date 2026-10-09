@@ -536,6 +536,21 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                 context.Checkbox(
                     "Bypass hybrid reflections only##bypass-hybrid-reflections",
                     layers.bypassHybridReflections) || layersChanged;
+            if (context.Section("Smooth reflections##smooth-reflections", false))
+            {
+                layersChanged = context.Checkbox("Exact mesh triangles##reflection-exact", layers.reflectionExactTriangles) || layersChanged;
+                layersChanged = context.Checkbox("Reflection history##reflection-temporal", layers.reflectionTemporal) || layersChanged;
+                f64 roughness = layers.reflectionMaximumRoughness;
+                if (context.SliderDouble("Maximum roughness##reflection-roughness", roughness, 0.0, 1.0))
+                { layers.reflectionMaximumRoughness = static_cast<f32>(roughness); layersChanged = true; }
+                f64 distance = layers.reflectionDistanceMeters;
+                if (context.SliderDouble("Trace distance (m)##reflection-distance", distance, 0.1, 1000.0))
+                { layers.reflectionDistanceMeters = static_cast<f32>(distance); layersChanged = true; }
+                static constexpr std::array<std::string_view, 3> reflectionViews{"Scene", "Reflected radiance", "Hit distance"};
+                i32 debug = static_cast<i32>(layers.reflectionDebugView);
+                if (context.Combo("Reflection view##reflection-debug", reflectionViews, debug))
+                { layers.reflectionDebugView = static_cast<u32>(debug); layersChanged = true; }
+            }
             layersChanged =
                 context.Checkbox(
                     "Bypass radiance cache fallback only##bypass-radiance-cache",

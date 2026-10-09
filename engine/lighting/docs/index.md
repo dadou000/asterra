@@ -7,7 +7,7 @@ owner_module = "OrbitLighting"
 summary = """
 Near-field lighting stack: DirectLightingRenderer combines the stellar term (with cloud shadow and proxy sun shadow) \
 with sky fill from the radiance cache; a screen-space final gather and a radiance clipmap supply indirect light; hybrid \
-and exact (hardware ray) reflections cover specular. Occlusion queries go through one visibility registry that knows \
+reflections with software/hardware triangle queries cover smooth specular. Occlusion queries go through one visibility registry that knows \
 terrain, authored proxies and analytic bodies. Every stage can be bypassed per view to bisect an artefact."""
 keywords = ["lighting", "direct lighting", "indirect", "radiance cache", "final gather", "reflections", "visibility", "ray query", "bypass", "gi"]
 sources = [
@@ -16,10 +16,10 @@ sources = [
   "engine/lighting/include/orbit/lighting/RadianceEstimator.hpp",
   "engine/lighting/include/orbit/lighting/ScreenSpaceFinalGather.hpp",
   "engine/lighting/include/orbit/lighting/HybridReflectionRenderer.hpp",
-  "engine/lighting/include/orbit/lighting/ExactReflectionQueryRenderer.hpp",
+  "engine/lighting/include/orbit/lighting/ReflectionScene.hpp",
   "engine/lighting/include/orbit/lighting/Visibility.hpp",
 ]
-symbols = ["DirectLightingRenderer", "HybridReflectionRenderer", "ExactReflectionQueryRenderer", "ScreenSpaceFinalGatherRenderer", "RadianceClipmapConfig", "GpuRadianceCell"]
+symbols = ["DirectLightingRenderer", "HybridReflectionRenderer", "ScreenSpaceFinalGatherRenderer", "RadianceClipmapConfig", "GpuRadianceCell"]
 invariants = [
   "Occlusion for lighting is answered through the shared visibility registry (terrain, authored proxies, analytic bodies); do not add a parallel occlusion path for one effect.",
   "The near-field indirect stack is off when the planet is seen from orbit and whenever bypass_indirect_lighting is set; fills that depend on it vanish with it.",
@@ -32,9 +32,9 @@ invariants = [
   "BuildTiledLightGrid uses flat count-then-fill arrays (no per-tile heap vectors): tiles keep the first maximumLightsPerTile lights in submission order and the rest count as droppedAssignments.",
   "The final gather's edit of the earlier invariant: it traces ONE ray per 2x2 QUAD (not per pixel). Each thread picks a pixel of its quad (a different one every frame while the camera is still), traces one ray, and every pixel of the quad is rebuilt from the 3x3 quad neighbourhood with bilinear-style spatial weights times normal/depth bilateral weights, so the tracing cost does not scale with pixel count.",
   "The gather's 3x3 reconstruction suppresses fireflies: a neighbourhood sample whose luminance exceeds 4x the weighted mean of the others (plus a small floor) is scaled down to that level before filtering, so one ray that hits a bright SDF voxel is not spread into a blob. It trades a little energy (about 2% mean frame brightness in the atrium) for removing the dominant speckle.",
-  "Pass culling is content driven, not configured: the final gather counts surface, smooth (roughness < 0.25 or metallic), uncovered (confidence < 0.5) and mirror-like (roughness <= 0.1) pixels into a 16-byte host-visible buffer per frame slot (FinalGatherPresentation::needStatsBuffers). The CPU reads each slot when it comes round again and keeps a pass alive for 90 frames after the last frame it was needed: hybrid reflections and their copy-back need >0.2% smooth pixels, the exact ray-traced reflection chain >0.2% mirror-like pixels, the radiance-cache fallback >1% uncovered pixels. Until data exists (or for sky-only views) every pass stays on. The bypass_* flags still force a pass off.",
+  "Pass culling is content driven, not configured: the final gather counts surface, smooth (roughness <= 0.25 or metallic), uncovered (confidence < 0.5) and mirror-like (roughness <= 0.1) pixels into a 16-byte host-visible buffer per frame slot (FinalGatherPresentation::needStatsBuffers). The CPU reads each slot when it comes round again and keeps a pass alive for 90 frames after the last frame it was needed: hybrid reflections and their copy-back need >0.2% smooth pixels, the radiance-cache fallback >1% uncovered pixels. Until data exists (or for sky-only views) every pass stays on. The bypass_* flags still force a pass off. The former proxy-only exact pass is no longer scheduled: triangle queries and independent reflection history live inside HybridReflections. A roughness threshold above 0.25 or a reflection debug view disables its smooth-pixel culling because the counters use the fixed 0.25 threshold.",
 ]
-related = ["/rendering/terrain", "/rendering/terrain/clipmaps/debugging"]
+related = ["/rendering/lighting/smooth-reflections", "/rendering/terrain", "/rendering/terrain/clipmaps/debugging"]
 depends_on = ["/rendering"]
 used_by = ["/editor/viewport"]
 verify = [
@@ -42,11 +42,12 @@ verify = [
   "orbit_view_terrain_layers_get lists every bypass_* flag; all must be false in normal use.",
   "ctest -R Orbit.LightingLocalLightRegistry (capped-tile ordering and dropped counts).",
 ]
-verified = "1229ef74"
+verified = "f842a956"
 
 [routes]
 "cache cells, residency, dark slabs, relighting, 96-byte cell" = "radiance-cache"
 "visibility queries, providers, terminal miss, reflections, final gather" = "visibility-and-reflections"
+"smooth mirrors, glass, triangle BVH, reflection history" = "smooth-reflections"
 "lighting budget, quality policy, overload/recovery, stable view" = "scheduler"
 "no or wrong sun shadow from authored boxes/spheres, proxy walls look wrong" = "proxy-sun-shadow"
 "shadowed or enclosed areas are black instead of sky-lit" = "sky-cache-fill"
@@ -61,7 +62,7 @@ verified = "1229ef74"
 | --- | --- |
 | direct light (stellar term, cloud shadow, sky fill) | `DirectLighting.hpp`, `ProxySunShadow.hpp`, `SkyVisibility.hpp` |
 | indirect light | `RadianceClipmap.hpp`, `RadianceClipmapResidency.hpp`, `RadianceEstimator.hpp`, `ScreenSpaceFinalGather.hpp` |
-| reflections | `HybridReflectionRenderer.hpp`, `ExactReflectionQueryRenderer.hpp` |
+| reflections | `HybridReflectionRenderer.hpp`, `ReflectionScene.hpp`, `ReflectionTraceShader.hpp` |
 | visibility sources | `Visibility.hpp`, `AnalyticBodyVisibility.hpp`, `TerrainHeightfieldVisibility.hpp`, `SoftwareProxyVisibility.hpp`, `HardwareRayQueryVisibility.hpp` |
 | authored occluders drawn as geometry | `ProxySurface.hpp`, `SurfaceBuffer.hpp`, `SurfaceData.hpp` |
 | emission | `MaterialEmission.hpp`, `Emissive*.hpp`, `LocalLightRegistry.hpp` |
