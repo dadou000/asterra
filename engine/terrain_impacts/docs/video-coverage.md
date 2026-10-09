@@ -14,7 +14,7 @@ sources = [
   "engine/terrain_bake/src/TerrainBakeService.cpp",
   "engine/terrain_gpu/src/FieldGenerationCompute.hpp"]
 related = ["/rendering/terrain/impacts", "/rendering/terrain/bake", "/rendering/terrain/gpu-passes"]
-verified = "f4a2dc61"
+verified = "707c225d50c50f01b9ef797e67903447c1a66d5f"
 +++
 
 The supplied transcript is the feature checklist; it is not a scientific

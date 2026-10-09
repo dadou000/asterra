@@ -50,7 +50,7 @@ verify = [
   "Call terrain.cache_stats for the selected terrain object and compare cache.resident_pages and cache.hits with the panel's 'M26 Cache' row.",
   "Open Surface Cache / Debug, edit a process iteration count, and confirm the status line reads 'Terrain process settings updated; M27 process descendants queued.'",
 ]
-verified = "f4a2dc61"
+verified = "707c225d50c50f01b9ef797e67903447c1a66d5f"
 
 [routes]
 "terrain cache misses or generations keep growing while the camera is still" = "/rendering/terrain/gpu-cache"

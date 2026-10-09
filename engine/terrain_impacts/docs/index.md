@@ -41,7 +41,7 @@ depends_on = ["/foundation/core", "/foundation/math", "/world/planet-coordinates
 used_by = ["/rendering/terrain/contracts", "/rendering/terrain/material-column"]
 verify = [
   "ctest -R Orbit.TerrainImpacts"]
-verified = "f4a2dc61"
+verified = "707c225d50c50f01b9ef797e67903447c1a66d5f"
 +++
 
 ## Authoring extended rays

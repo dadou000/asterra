@@ -44,5 +44,5 @@ verify = [
   "ctest -R Orbit.ViewportTargetRegistry",
   "ctest -R Orbit.SimulationClock",
 ]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "707c225d50c50f01b9ef797e67903447c1a66d5f"
 +++

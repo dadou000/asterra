@@ -57,7 +57,7 @@ verify = [
   "ctest -R Orbit.TerrainBake",
   "ctest -R Orbit.StudioTerrainBake",
   "ctest -R Orbit.TerrainGpuField"]
-verified = ""
+verified = "707c225d50c50f01b9ef797e67903447c1a66d5f"
 +++
 
 # Planet bake
