@@ -237,6 +237,7 @@ void RegisterSchemas(
             schema::PropertySchema{.id=kTerrainTectonicTransformReferenceSpeed,.name="Transform Reference Speed",.kind=schema::PropertyKind::Float,.defaultValue=0.7,.range={.minimum=1.0e-5,.maximum=100.0},.advanced=true},
             schema::PropertySchema{.id=kTerrainTectonicHotspotRadiusGrowth,.name="Hotspot Radius Growth per Age",.kind=schema::PropertyKind::Float,.defaultValue=0.4,.range={.minimum=0.0,.maximum=10.0},.advanced=true},
             schema::PropertySchema{
+            schema::PropertySchema{.id=kTerrainTectonicBeltRidgeRelief,.name="Belt Ridge Relief",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=3.0},.advanced=true},
                 .id = kTerrainCratersEnabled,
                 .name = "Procedural Craters",
                 .kind = schema::PropertyKind::Boolean,

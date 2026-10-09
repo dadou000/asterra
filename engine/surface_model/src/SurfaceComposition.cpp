@@ -1267,6 +1267,7 @@ ConstraintSetFor(
     result.craters.minimumRadiusMeters = PropertyOr<f64>(
         objects, object, world_model::kTerrainCraterMinimumRadiusMeters,
         4'000.0);
+    result.global.tectonic.beltRidgeRelief = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicBeltRidgeRelief, 1.0);
     result.craters.maximumRadiusMeters = PropertyOr<f64>(
         objects, object, world_model::kTerrainCraterMaximumRadiusMeters,
         280'000.0);

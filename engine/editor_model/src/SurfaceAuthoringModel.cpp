@@ -839,6 +839,7 @@ terrain::TectonicFieldDesc SurfaceAuthoringModel::Tectonics(
     result.hotspotRadiusGrowthPerAge = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicHotspotRadiusGrowth, result.hotspotRadiusGrowthPerAge);
     return result;
 }
+    result.beltRidgeRelief = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicBeltRidgeRelief, result.beltRidgeRelief);
 
 void SurfaceAuthoringModel::SetTectonics(
     const scene::ObjectId terrainObject,
@@ -868,7 +869,8 @@ void SurfaceAuthoringModel::SetTectonics(
         !finiteRange(settings.oceanicPlateBiasMeters, -1.0e7, 1.0e7) ||
         !finiteRange(settings.convergenceReferenceSpeed, 1.0e-5, 100.0) ||
         !finiteRange(settings.transformReferenceSpeed, 1.0e-5, 100.0) ||
-        !finiteRange(settings.hotspotRadiusGrowthPerAge, 0.0, 10.0))
+        !finiteRange(settings.hotspotRadiusGrowthPerAge, 0.0, 10.0) ||
+        !finiteRange(settings.beltRidgeRelief, 0.0, 3.0))
         throw std::invalid_argument("Tectonic recipe values are outside supported physical ranges.");
 
     const bool owns = !commands_->HasActiveTransaction();
@@ -898,6 +900,7 @@ void SurfaceAuthoringModel::SetTectonics(
         commands_->SetProperty(terrainObject, world_model::kTerrainTectonicTransformReferenceSpeed, settings.transformReferenceSpeed);
         commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotRadiusGrowth, settings.hotspotRadiusGrowthPerAge);
         if (owns) commands_->CommitTransaction();
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicBeltRidgeRelief, settings.beltRidgeRelief);
     }
     catch (...)
     {

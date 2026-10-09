@@ -191,7 +191,7 @@ AnalyticTerrainSource::AnalyticTerrainSource(
              desc.global.tectonic.convergenceUpliftMeters, desc.global.tectonic.hotspotBaseReliefMeters,
              desc.global.tectonic.hotspotAgeDecay, desc.global.tectonic.hotspotChainSpacingMeters,
              desc.global.tectonic.hotspotCoreRadiusMeters, desc.global.tectonic.hotspotRadiusGrowthPerAge,
-             desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
+             desc.global.tectonic.beltRidgeRelief, desc.global.tectonic.rainShadowStrength, desc.global.tectonic.rainShadowStepMeters,
              desc.global.tectonic.rainShadowStepGrowth, desc.global.tectonic.rainShadowRangeMeters,
              desc.global.tectonic.windBandTransitionDegrees})
     {
@@ -238,6 +238,7 @@ AnalyticTerrainSource::AnalyticTerrainSource(
             desc.craters.maximumRadiusMeters,
             -desc.craters.cumulativeExponent);
 
+             desc.global.tectonic.beltRidgeRelief,
         for (u32 index = 0; index < desc.craters.count; ++index)
         {
             const u64 ordinal = static_cast<u64>(index) + 1ULL;
@@ -704,7 +705,7 @@ u64 TectonicBakeRecipeHash(
              t.continentalPlateBiasMeters, t.oceanicPlateBiasMeters,
              t.boundaryWidthDot, t.minPlateAngularSpeed, t.maxPlateAngularSpeed,
              t.convergenceReferenceSpeed, t.transformReferenceSpeed,
-             t.oceanicConvergenceScale, t.convergenceUpliftMeters})
+             t.oceanicConvergenceScale, t.convergenceUpliftMeters, t.beltRidgeRelief})
     {
         hash = StableCombine64(hash, std::bit_cast<u64>(value));
     }

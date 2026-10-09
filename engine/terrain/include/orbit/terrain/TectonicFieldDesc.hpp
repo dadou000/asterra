@@ -70,6 +70,9 @@ struct TectonicFieldDesc
     // collision involving a continental plate (island arcs are lower than
     // continental collision ranges like the Himalaya).
     f64 oceanicConvergenceScale{0.85};
+    // Strength of the ridge-and-valley relief baked into continental collision
+    // belts, as a multiple of the mountain amplitude (0 = smooth belt).
+    f64 beltRidgeRelief{1.0};
     // Cheap analytic uplift bump used only by the rain-shadow probe's
     // coarse elevation estimate (no ridge noise).
     f64 convergenceUpliftMeters{2'200.0};

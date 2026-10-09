@@ -160,3 +160,16 @@ int main()
     std::filesystem::remove_all(root);
     return 0;
 }
+
+        // The belt ridge relief is baked into the tectonic rasters, so editing it
+        // persists and makes the plate bake stale.
+        auto ridges = model.Tectonics(*terrainObject);
+        Check(ridges.beltRidgeRelief == 1.0);
+        ridges.beltRidgeRelief = 0.5;
+        model.SetTectonics(*terrainObject, ridges);
+        static_cast<void>(studio.Tick());
+        Check(model.Tectonics(*terrainObject).beltRidgeRelief == 0.5);
+        const auto ridgeStatus = studio.TerrainBake().Status(*terrainObject);
+        Check(ridgeStatus->currentRecipeHash != ridgeStatus->activeRecipeHash);
+        Check(Rpc(studio, "terrain.tectonics_get", "{\"terrain\":\"" + terrainObject->ToString() + "\"}")
+                  .find("\"belt_ridge_relief\":0.5") != std::string::npos);

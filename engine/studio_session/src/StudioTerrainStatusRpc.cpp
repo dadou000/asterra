@@ -111,7 +111,8 @@ void QueueGlobalProcessSettingsInvalidation(
         {"oceanic_crust_bias_meters", settings.oceanicPlateBiasMeters},
         {"convergence_reference_speed", settings.convergenceReferenceSpeed},
         {"transform_reference_speed", settings.transformReferenceSpeed},
-        {"hotspot_radius_growth_per_age", settings.hotspotRadiusGrowthPerAge}
+        {"hotspot_radius_growth_per_age", settings.hotspotRadiusGrowthPerAge},
+        {"belt_ridge_relief", settings.beltRidgeRelief}
     });
 }
 
@@ -119,7 +120,7 @@ void ReadTectonicsPatch(
     const rpc::Value::Object& values,
     terrain::TectonicFieldDesc& settings)
 {
-    static constexpr std::array<std::string_view, 22> kSettings{
+    static constexpr std::array<std::string_view, 23> kSettings{
         "seed", "plate_count", "plate_irregularity", "plate_size_variance",
         "continental_fraction", "continental_crust_bias_meters",
         "oceanic_crust_bias_meters", "continent_influence", "boundary_width",
@@ -128,7 +129,7 @@ void ReadTectonicsPatch(
         "convergent_uplift_meters", "oceanic_collision_scale", "hotspot_count",
         "hotspot_age_steps", "hotspot_relief_meters", "hotspot_age_decay",
         "hotspot_chain_spacing_meters", "hotspot_core_radius_meters",
-        "hotspot_radius_growth_per_age"};
+        "hotspot_radius_growth_per_age", "belt_ridge_relief"};
     for (const auto& [key, value] : values)
     {
         static_cast<void>(value);
@@ -192,6 +193,7 @@ void ReadTectonicsPatch(
 [[nodiscard]] rpc::Value TectonicProbeToRpc(
     const StudioTectonicsProbe& probe)
 {
+    number("belt_ridge_relief", settings.beltRidgeRelief);
     const auto& s = probe.structure;
     return rpc::Value(rpc::Value::Object{
         {"latitude_degrees", probe.latitudeDegrees},

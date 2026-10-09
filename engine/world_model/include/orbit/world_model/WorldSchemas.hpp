@@ -360,6 +360,8 @@ inline constexpr schema::PropertyId kTerrainCratersEnabled{
 
 inline constexpr schema::PropertyId kTerrainCraterCount{
     .high = 0x4f52424954544552ULL,
+inline constexpr schema::PropertyId kTerrainTectonicBeltRidgeRelief{
+    .high = 0x4f52424954544543ULL, .low = 0x42454c5452494447ULL};
     .low = 0x435241544552434eULL
 };
 

@@ -2811,6 +2811,7 @@ void StudioViewportPanels::DrawPlanetToolbar(
                 context.Heading("Boundary Character");
                 changed |= context.InputDouble("Convergent Uplift (m)##planet-tectonics-uplift", settings.convergenceUpliftMeters);
                 changed |= context.SliderDouble("Oceanic Collision Relief##planet-tectonics-oceanic-scale", settings.oceanicConvergenceScale, 0.0, 2.0);
+                changed |= context.SliderDouble("Belt Ridge Relief##planet-tectonics-belt-ridge-relief", settings.beltRidgeRelief, 0.0, 3.0);
                 context.Heading("Hotspots");
                 i64 hotspotCount = static_cast<i64>(settings.hotspotCount);
                 changed |= context.InputInteger("Mantle Hotspots (0–8)##planet-tectonics-hotspots", hotspotCount);
