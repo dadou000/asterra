@@ -8,6 +8,7 @@ add_library(OrbitWeatherLab STATIC
     src/WxFormat.cpp
     src/FastStormSolver.cpp
     src/StormMetrics.cpp
+    src/WeatherLabSession.cpp
 )
 
 add_library(Orbit::WeatherLab ALIAS OrbitWeatherLab)

@@ -1,6 +1,7 @@
 #include <orbit/weather_lab/FastStormSolver.hpp>
 #include <orbit/weather_lab/StormMetrics.hpp>
 #include <orbit/weather_lab/Thermo.hpp>
+#include <orbit/weather_lab/WeatherLabSession.hpp>
 #include <orbit/weather_lab/WxFormat.hpp>
 
 #include <algorithm>
@@ -8,7 +9,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <chrono>
 #include <source_location>
+#include <thread>
 #include <vector>
 
 namespace
@@ -157,6 +160,128 @@ void TestFormatRoundTripAndMetrics()
     Check(metrics[1].maxUpdraft > metrics[0].maxUpdraft);
     std::filesystem::remove(path);
 }
+
+bool WaitFor(WeatherLabSession& session, const SessionState wanted, const double seconds)
+{
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::duration<double>(seconds);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (session.Status().state == wanted)
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
+WeatherLabSettings SessionSettings()
+{
+    WeatherLabSettings s;
+    s.solver = SmallConfig();
+    s.solver.nx = 16;
+    s.solver.ny = 16;
+    s.solver.dx = 4000.0F;
+    s.solver.dy = 4000.0F;
+    s.solver.maxTimeStep = 24.0F;
+    s.solver.maxCourant = 2.5F;
+    s.targetMinutes = 20.0;
+    s.frameIntervalSeconds = 300.0;
+    return s;
+}
+
+void TestSessionLifecycle()
+{
+    WeatherLabSession session;
+    Check(session.Status().state == SessionState::Idle);
+    Check(!session.GetSlice({}).valid);
+    Check(session.Configure(SessionSettings()).empty());
+    Check(session.Start().empty());
+    Check(WaitFor(session, SessionState::Finished, 120.0));
+    const WeatherLabStatus status = session.Status();
+    Check(std::fabs(status.simTime - 1200.0) < 0.01);
+    Check(status.liveFrames == 5U); // 0, 300, 600, 900, 1200 s
+    const auto metrics = session.LiveMetrics();
+    Check(metrics.size() == 5U);
+    Check(std::fabs(metrics[2].time - 600.0F) < 0.01F);
+    Check(status.realTimeRatio > 1.0);
+    Check(!session.Start().empty()); // finished runs need a Reset
+
+    const Slice plan = session.GetSlice({.kind = SliceKind::Plan, .field = "w", .height = 3000.0F});
+    Check(plan.valid && plan.width == 16U && plan.height == 16U);
+    Check(plan.values.size() == 256U);
+    const Slice section = session.GetSlice({.kind = SliceKind::Section, .field = "qr"});
+    Check(section.valid && section.height == 40U);
+    const Slice column = session.GetSlice({.kind = SliceKind::ColumnMax, .field = "condensate"});
+    Check(column.valid && column.maxValue >= column.minValue);
+    Check(!session.GetSlice({.field = "bogus"}).valid);
+
+    session.Reset();
+    Check(session.Status().state == SessionState::Idle);
+    Check(session.LiveMetrics().empty());
+}
+
+void TestSessionPauseStepAndConfigure()
+{
+    WeatherLabSession session;
+    Check(session.Configure(SessionSettings()).empty());
+    Check(session.Step(100.0).empty());
+    Check(WaitFor(session, SessionState::Paused, 30.0));
+    // Step returns immediately; wait for the budget to be consumed.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    while (session.Status().simTime < 99.9
+        && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    Check(std::fabs(session.Status().simTime - 100.0) < 0.5);
+    // Settings are frozen while a run exists.
+    Check(!session.Configure(SessionSettings()).empty());
+    session.Reset();
+    Check(session.Configure(SessionSettings()).empty());
+    WeatherLabSettings bad = SessionSettings();
+    bad.solver.nx = 48;
+    Check(!session.Configure(bad).empty());
+}
+
+void TestSessionPlaybackAndCompare()
+{
+    const auto path = std::filesystem::temp_directory_path()
+        / "orbit_weather_lab_session_test.orbitwx";
+    WeatherLabSettings settings = SessionSettings();
+    settings.recordPath = path;
+    WeatherLabSession recorder;
+    Check(recorder.Configure(settings).empty());
+    Check(recorder.Start().empty());
+    Check(WaitFor(recorder, SessionState::Finished, 120.0));
+    Check(!recorder.Status().recording);
+
+    WeatherLabSession session;
+    Check(session.Configure(SessionSettings()).empty());
+    Check(!session.LoadPlayback(path.string() + ".missing").empty());
+    Check(session.LoadPlayback(path).empty());
+    Check(session.Status().hasPlayback && session.Status().playbackFrames == 5U);
+    Check(session.SelectPlaybackFrame(4).empty());
+    Check(!session.SelectPlaybackFrame(9).empty());
+    const Slice playback = session.GetSlice({.source = DisplaySource::Playback,
+        .kind = SliceKind::Plan, .field = "thp", .height = 250.0F});
+    Check(playback.valid && std::fabs(playback.time - 1200.0) < 0.01);
+
+    // Same settings, same machine: a rerun must reproduce the recording, so
+    // the comparison rows match to round-off.
+    Check(session.Start().empty());
+    Check(WaitFor(session, SessionState::Finished, 120.0));
+    const auto rows = session.Compare();
+    Check(rows.size() == 5U);
+    for (const ComparisonRow& row : rows)
+    {
+        Check(row.reference.maxUpdraft == row.live.maxUpdraft);
+    }
+    session.ClearPlayback();
+    Check(!session.Status().hasPlayback);
+    std::filesystem::remove(path);
+}
 } // namespace
 
 int main()
@@ -168,6 +293,9 @@ int main()
     TestStormInitiates();
     TestDeterministicAcrossThreadCounts();
     TestFormatRoundTripAndMetrics();
+    TestSessionLifecycle();
+    TestSessionPauseStepAndConfigure();
+    TestSessionPlaybackAndCompare();
     std::cout << "Weather lab tests passed\n";
     return 0;
 }
