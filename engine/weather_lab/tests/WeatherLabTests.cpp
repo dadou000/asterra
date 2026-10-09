@@ -1,5 +1,6 @@
 #include <orbit/weather_lab/FastStormSolver.hpp>
 #include <orbit/weather_lab/StormMetrics.hpp>
+#include <orbit/weather_lab/SliceColor.hpp>
 #include <orbit/weather_lab/Thermo.hpp>
 #include <orbit/weather_lab/WeatherLabSession.hpp>
 #include <orbit/weather_lab/WxFormat.hpp>
@@ -282,6 +283,32 @@ void TestSessionPlaybackAndCompare()
     Check(!session.Status().hasPlayback);
     std::filesystem::remove(path);
 }
+
+void TestSliceColors()
+{
+    Slice signedSlice;
+    signedSlice.field = "w";
+    signedSlice.minValue = -10.0F;
+    signedSlice.maxValue = 40.0F;
+    // Zero is white regardless of the asymmetric range; extremes are saturated.
+    const auto zero = SliceColor(signedSlice, 0.0F);
+    Check(zero[0] > 0.9F && zero[1] > 0.9F && zero[2] > 0.9F);
+    const auto up = SliceColor(signedSlice, 40.0F);
+    Check(up[0] > up[2]);
+    const auto down = SliceColor(signedSlice, -40.0F);
+    Check(down[2] > down[0] && down[0] < 0.2F);
+
+    Slice sequential;
+    sequential.field = "qr";
+    sequential.minValue = 0.0F;
+    sequential.maxValue = 8.0F;
+    const auto low = SliceColor(sequential, 0.0F);
+    const auto high = SliceColor(sequential, 8.0F);
+    Check(high[0] + high[1] > low[0] + low[1]);
+    // Out-of-range values clamp instead of wrapping.
+    Check(SliceColor(sequential, 99.0F) == high);
+    Check(IsSignedField("zvort") && !IsSignedField("qr"));
+}
 } // namespace
 
 int main()
@@ -293,6 +320,7 @@ int main()
     TestStormInitiates();
     TestDeterministicAcrossThreadCounts();
     TestFormatRoundTripAndMetrics();
+    TestSliceColors();
     TestSessionLifecycle();
     TestSessionPauseStepAndConfigure();
     TestSessionPlaybackAndCompare();

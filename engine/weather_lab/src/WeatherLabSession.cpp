@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <exception>
 #include <map>
 #include <mutex>
 #include <thread>

@@ -26,6 +26,8 @@ add_library(OrbitStudioUi STATIC
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
     src/VolumeAuthoringUi.cpp
+    src/WeatherLabRpc.cpp
+    src/WeatherLabUi.cpp
     src/StudioViewContinuity.cpp
     src/StudioViewportCamera.cpp
     src/StudioViewportManipulatorUi.cpp
@@ -109,6 +111,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::VolumeSolver
         Orbit::VolumeRender
         Orbit::VolumeRepresentation
+        Orbit::WeatherLab
 )
 
 target_compile_features(OrbitStudioUi PUBLIC cxx_std_23)
@@ -388,6 +391,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioViewContinuity
         COMMAND OrbitStudioViewContinuityTests
+    )
+
+    add_executable(OrbitWeatherLabRpcTests
+        tests/WeatherLabRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitWeatherLabRpcTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitWeatherLabRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitWeatherLabRpcTests)
+
+    add_test(
+        NAME Orbit.WeatherLabRpc
+        COMMAND OrbitWeatherLabRpcTests
     )
 
     add_executable(OrbitProfilerModelTests

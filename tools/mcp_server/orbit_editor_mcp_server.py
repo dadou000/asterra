@@ -918,6 +918,172 @@ def orbit_profiler_snapshot(top_scopes: int = 15, slowest: int = 15) -> dict[str
 
 
 @mcp.tool()
+def orbit_weather_lab_status() -> dict[str, Any]:
+    """State of the Weather Lab (SC-01 supercell experiment): idle / paused /
+    running / finished / failed, simulated time vs target, steps, realtime_ratio
+    (simulated seconds per compute second), solver diagnostics (max
+    updraft/downdraft, divergence residual, total-water drift), per-stage step
+    timings, resident memory, the settings and the loaded CM1/playback reference."""
+    return _rpc("weather_lab.status")
+
+
+@mcp.tool()
+def orbit_weather_lab_configure(
+    nx: int | None = None,
+    ny: int | None = None,
+    nz: int | None = None,
+    dx: float | None = None,
+    dz: float | None = None,
+    bubble_k: float | None = None,
+    max_time_step: float | None = None,
+    max_courant: float | None = None,
+    advection: str | None = None,
+    moisture: bool | None = None,
+    mass_fixer: bool | None = None,
+    horizontal_mixing: float | None = None,
+    vertical_mixing: float | None = None,
+    threads: int | None = None,
+    target_minutes: float | None = None,
+    frame_interval_s: float | None = None,
+    speed_limit: float | None = None,
+    record_path: str | None = None,
+) -> dict[str, Any]:
+    """Set the fast-core storm experiment (only while no live run exists; use
+    orbit_weather_lab_control(action='reset') first). nx/ny must be powers of two;
+    dx is the square cell size in metres, dz the layer thickness; the validated
+    preset is nx=ny=64, nz=40, dx=2000, dz=500, bubble_k=1, max_time_step=24,
+    max_courant=2.5. advection is 'cubic' (needed for a persistent storm) or
+    'linear'. frame_interval_s is the metric/record cadence, speed_limit caps
+    simulated seconds per wall second (0 = unlimited), record_path writes an
+    .orbitwx file. Returns the settings."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "nx": nx, "ny": ny, "nz": nz, "dx": dx, "dz": dz,
+            "bubble_k": bubble_k, "max_time_step": max_time_step,
+            "max_courant": max_courant, "advection": advection,
+            "moisture": moisture, "mass_fixer": mass_fixer,
+            "horizontal_mixing": horizontal_mixing,
+            "vertical_mixing": vertical_mixing, "threads": threads,
+            "target_minutes": target_minutes,
+            "frame_interval_s": frame_interval_s, "speed_limit": speed_limit,
+            "record_path": record_path,
+        }.items()
+        if value is not None
+    }
+    return _rpc("weather_lab.configure", params)
+
+
+@mcp.tool()
+def orbit_weather_lab_control(
+    action: str,
+    seconds: float | None = None,
+    limit: float | None = None,
+) -> dict[str, Any]:
+    """Drive the live run like the Weather Lab panel's buttons. action: 'start'
+    (create the solver if needed and run/resume), 'pause', 'reset' (discard the
+    run and its metrics), 'step' (advance `seconds` of simulated time then pause;
+    returns immediately, poll orbit_weather_lab_status) or 'speed' (set `limit`,
+    simulated seconds per wall second, 0 = unlimited). Returns the status."""
+    params: dict[str, Any] = {"action": action}
+    if seconds is not None:
+        params["seconds"] = seconds
+    if limit is not None:
+        params["limit"] = limit
+    return _rpc("weather_lab.control", params)
+
+
+@mcp.tool()
+def orbit_weather_lab_playback(
+    action: str,
+    path: str | None = None,
+    frame: int | None = None,
+) -> dict[str, Any]:
+    """Load and step through a reference run (.orbitwx from
+    tools/weather_lab/cm1_lab.py or a fast-core recording). action: 'load' (path;
+    computes its metrics), 'select' (frame index shown by source='playback'
+    slices) or 'clear'. Returns the playback state."""
+    params: dict[str, Any] = {"action": action}
+    if path is not None:
+        params["path"] = path
+    if frame is not None:
+        params["frame"] = frame
+    return _rpc("weather_lab.playback", params)
+
+
+@mcp.tool()
+def orbit_weather_lab_metrics(source: str = "live") -> dict[str, Any]:
+    """Storm metrics per sampled frame for source 'live' or 'playback': time, max
+    updraft and its height, max downdraft, max rain mixing ratio, cloud top, max
+    vorticity below 1 km, 2-5 km updraft helicity, cold-pool deficit, rain area."""
+    return _rpc("weather_lab.metrics", {"source": source})
+
+
+@mcp.tool()
+def orbit_weather_lab_compare() -> dict[str, Any]:
+    """Playback reference (for example a CM1 run) vs the live fast-core run, paired
+    by time within 1 s: one row per reference frame the live run has also
+    sampled, each with 'reference' and 'live' metrics."""
+    return _rpc("weather_lab.compare")
+
+
+@mcp.tool()
+def orbit_weather_lab_slice(
+    source: str = "live",
+    kind: str = "plan",
+    field: str = "w",
+    height_m: float | None = None,
+    row: int | None = None,
+    include_values: bool = False,
+    max_cells: int | None = None,
+) -> dict[str, Any]:
+    """A 2-D slice of the live run or the playback frame, as the panel draws it.
+    kind: 'plan' (map at height_m), 'section' (x-z cut at y row `row`, -1 = through
+    the strongest updraft) or 'column_max'. field: w, qr, qc, qv (g/kg), thp (theta
+    perturbation, K), zvort, speed, condensate. Returns size, min/max, the peak
+    cell and time; include_values adds the row-major grid (row 0 is y=0 or z=0),
+    max_cells decimates each axis to at most that many cells."""
+    params: dict[str, Any] = {
+        "source": source, "kind": kind, "field": field,
+        "include_values": include_values,
+    }
+    if height_m is not None:
+        params["height_m"] = height_m
+    if row is not None:
+        params["row"] = row
+    if max_cells is not None:
+        params["max_cells"] = max_cells
+    return _rpc("weather_lab.slice", params)
+
+
+@mcp.tool()
+def orbit_weather_lab_view(
+    source: str | None = None,
+    plan_field: str | None = None,
+    plan_height_m: float | None = None,
+    section_field: str | None = None,
+    section_row: int | None = None,
+    column_field: str | None = None,
+    show_metrics: bool | None = None,
+    show_comparison: bool | None = None,
+) -> dict[str, Any]:
+    """Get or set what the Weather Lab panel shows (source 'live' | 'playback',
+    the three slice fields, the map height and section row, metrics and
+    comparison visibility). With no arguments just returns the view."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "source": source, "plan_field": plan_field,
+            "plan_height_m": plan_height_m, "section_field": section_field,
+            "section_row": section_row, "column_field": column_field,
+            "show_metrics": show_metrics, "show_comparison": show_comparison,
+        }.items()
+        if value is not None
+    }
+    return _rpc("weather_lab.view", params)
+
+
+@mcp.tool()
 def orbit_build_profiles() -> list[dict[str, Any]]:
     """Return build profiles from the open Project.orbit.toml."""
     return _rpc("build.profiles")

@@ -84,6 +84,7 @@
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/SystemViewUi.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
+#include <orbit/studio_ui/WeatherLabUi.hpp>
 #include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
@@ -1339,6 +1340,19 @@ int orbit::editor_app::StudioApplication::Run(
         orbit::studio_ui::RegisterProfilerPanelRpc(
             rpcHost.Dispatcher(),
             profilerUi.Model());
+
+        // Weather Lab (SC-01 storm experiment) panel and weather_lab.* RPC,
+        // both driving one session (docs/ORBIT_MCP.md).
+        orbit::weather_lab::WeatherLabSession weatherLabSession;
+        orbit::studio_ui::WeatherLabView weatherLabView;
+        orbit::studio_ui::WeatherLabUi weatherLabUi(
+            weatherLabSession,
+            weatherLabView);
+        weatherLabUi.Register(ui);
+        orbit::studio_ui::RegisterWeatherLabRpc(
+            rpcHost.Dispatcher(),
+            weatherLabSession,
+            weatherLabView);
 
         // Simulation transport (Simulate / Pause / Step) and time.* RPC, both
         // driving the one Studio clock that moves the planets, the sun and the
