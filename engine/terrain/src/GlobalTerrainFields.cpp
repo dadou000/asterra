@@ -620,7 +620,13 @@ BakedTectonicTexel GlobalTerrainFields::EvaluateTectonicTexel(
             structure.continentalCrustFraction)));
     texel.Set(BakedTectonicLayer::FractureDensity,
         static_cast<f32>(structure.fractureDensity));
-    texel.Set(BakedTectonicLayer::OrogenEnvelope, static_cast<f32>(envelope.convergenceMask));
+    // The mountain-belt body is crustal thickening, so it needs continental
+    // crust to thicken: ocean-ocean convergence builds an island arc (structural
+    // elevation), not a plateau-high belt.
+    texel.Set(BakedTectonicLayer::OrogenEnvelope,
+        static_cast<f32>(envelope.convergenceMask *
+            detail::Smooth(std::clamp(
+                (structure.continentalCrustFraction - 0.35) / 0.35, 0.0, 1.0))));
     // Thick continental collision: the convergence envelope where the crust is
     // continental, thresholded so only the core of a collision is forced above
     // sea level (the envelope's soft tails would otherwise turn coastal strips

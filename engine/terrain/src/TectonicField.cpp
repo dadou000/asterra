@@ -399,7 +399,7 @@ TectonicSample TectonicField::SampleWithClaims(
                 const f64 side = (d[overriding] - d[descending]) / width;
                 const f64 pairTerm = convergenceTerm * collisionScale;
                 const f64 trenchOffset = (side + 0.35) / 0.25;
-                const f64 arcOffset = (side - 0.45) / 0.42;
+                const f64 arcOffset = (side - 0.45) / 0.50;
                 subductionTrench = std::max(
                     subductionTrench, pairTerm * std::exp(-trenchOffset * trenchOffset));
                 subductionArc = std::max(

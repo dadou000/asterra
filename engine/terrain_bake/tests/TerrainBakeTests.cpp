@@ -665,7 +665,7 @@ bool CollisionsEmergeAsLandAndArcsAsIslands()
     // oceanic crust must form island chains, and the lift must not touch open
     // ocean (a plain max() with sea level once clamped every ocean floor).
     const auto planet = MakePlanet();
-    u32 collisionN = 0, collisionLand = 0, arcN = 0, arcLand = 0, oceanN = 0;
+    u32 collisionN = 0, collisionLand = 0, arcN = 0, arcLand = 0, arcHigh = 0, oceanN = 0;
     f64 oceanSum = 0.0;
     for (const u64 seed : {4242ULL, 7ULL, 99ULL})
     {
@@ -694,18 +694,22 @@ bool CollisionsEmergeAsLandAndArcsAsIslands()
                 .planet = planet.id, .radialOffsetMeters = 0.0};
             const f64 elevation = source.Sample(q).elevationMeters;
             if (collision) { ++collisionN; collisionLand += elevation > sea; }
-            else if (arc) { ++arcN; arcLand += elevation > sea; }
+            else if (arc) { ++arcN; arcLand += elevation > sea; arcHigh += elevation > sea + 3500.0; }
             else { ++oceanN; oceanSum += elevation - sea; }
         }
     }
     const f64 collisionShare = collisionN ? 100.0 * collisionLand / collisionN : 0.0;
     const f64 arcShare = arcN ? 100.0 * arcLand / arcN : 0.0;
     const f64 oceanMean = oceanN ? oceanSum / oceanN : 0.0;
+    // Island arcs are volcanic chains, not belt-high plateaus: the belt body
+    // needs continental crust, so few arc points may exceed 3.5 km.
+    const f64 arcHighShare = arcLand ? 100.0 * arcHigh / arcLand : 0.0;
     std::cout << "continental collisions above sea " << collisionShare << "% (" << collisionN
-              << "), ocean-ocean arcs above sea " << arcShare << "% (" << arcN
+              << "), ocean-ocean arcs above sea " << arcShare << "% (" << arcN << ", " << arcHighShare << "% of that land above 3.5 km"
               << "), open ocean mean " << oceanMean << " m (" << oceanN << ")" << std::endl;
     return Check(collisionN > 500U && collisionShare > 85.0, "continental collisions must rise above sea level") &&
            Check(arcN > 500U && arcShare > 18.0, "volcanic arcs on oceanic crust must form islands") &&
+           Check(arcHighShare < 15.0, "island arcs must not reach belt heights") &&
            Check(oceanN > 1000U && oceanMean < -1000.0, "open ocean floor must not be lifted or clamped to sea level");
 }
 
