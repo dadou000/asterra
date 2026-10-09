@@ -268,6 +268,10 @@ successors as floating ideas. Data is saved to
 | `orbit_planning_create(title, description?)` | `planning.create` | Adds a floating idea. |
 | `orbit_planning_update(id, title?, description?, status?, after?, clear_after?, x?, y?)` | `planning.update` | Status is `idea`, `ready`, `in_progress` or `done`; set `after` to schedule, or `clear_after=true` to float it. |
 | `orbit_planning_delete(id)` | `planning.delete` | Deletes a bubble and clears links to it. |
+| `orbit_viewport_fly_to(latitude_degrees, longitude_degrees, altitude_meters?, yaw_degrees?, pitch_degrees?, view_id?)` | `viewport.fly_to` (one-call travel plus pose: altitude is above the reference sphere, negative below sea level; returns the pose plus `height_above_terrain_meters`) |
+| `orbit_terrain_list()` | `terrain.list` (terrain object ids, names, parent body, planet radius and sea level; the id is the `terrain` argument of every `terrain.*` method) |
+| `orbit_terrain_sample(terrain_id, points?, transect?, include_tectonics?, footprint_meters?)` | `terrain.sample` (read-only batched samples, up to 4096 per call, at latitude/longitude `points` or along a great-circle `transect {from, to, count}`; each sample has `elevation_meters` (the bed the camera collides with), `coarse_elevation_meters`, `detail_delta_meters`, `height_above_sea_level_meters`, `standing_water_depth_meters`, `underwater`, climate, `biome_weights`, and with `include_tectonics` the plate structure including `structural_elevation_meters`, `subduction_trench`, `volcanic_arc`, `fracture_density` and `continental_crust_fraction`; no camera is moved) |
+| `orbit_studio_process_info()` | `studio.process_info` (`pid`, `uptime_seconds`, `terrain_count`; a hot generation handoff or relaunch changes the pid, so poll it after `project.open` or a rebuild instead of sleeping) |
 | `orbit_viewport_pose_get(view_id?)` / `orbit_viewport_pose_set(pose_json, view_id?)` | `viewport.pose_get` / `viewport.pose_set` | Exact camera pose (observer, surface frame, look angles) of a view; what reports capture and restore. |
 
 Hot iteration: the model and UI are ordinary `engine/` native code (generation

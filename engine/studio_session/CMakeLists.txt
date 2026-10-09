@@ -12,6 +12,7 @@ add_library(OrbitStudioSession STATIC
     src/StudioTerrainRuntimeBridge.cpp
     src/StudioTerrainServiceStatus.cpp
     src/StudioMeshRpc.cpp
+    src/StudioTerrainSampleRpc.cpp
     src/StudioTerrainStatusRpc.cpp
     src/StudioTerrainTectonicsProbe.cpp
     src/StudioWorkspace.cpp
@@ -312,6 +313,25 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioTerrainBake
         COMMAND OrbitStudioTerrainBakeTests
+    )
+
+    add_executable(OrbitStudioTerrainSampleRpcTests
+        tests/StudioTerrainSampleRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioTerrainSampleRpcTests
+        PRIVATE
+            Orbit::EditorModel
+            Orbit::StudioSession
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioTerrainSampleRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioTerrainSampleRpcTests)
+
+    add_test(
+        NAME Orbit.StudioTerrainSampleRpc
+        COMMAND OrbitStudioTerrainSampleRpcTests
     )
 
     add_executable(OrbitStudioTerrainRuntimeBridgeTests

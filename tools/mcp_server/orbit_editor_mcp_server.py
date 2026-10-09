@@ -2103,6 +2103,78 @@ def orbit_planning_create(title: str, description: str = "") -> dict[str, Any]:
 
 
 @mcp.tool()
+@mcp.tool()
+def orbit_viewport_fly_to(
+    latitude_degrees: float,
+    longitude_degrees: float,
+    altitude_meters: float | None = None,
+    yaw_degrees: float | None = None,
+    pitch_degrees: float | None = None,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Put the terrain camera over a latitude/longitude in one call.
+    altitude_meters is above the reference sphere (negative is below sea
+    level); yaw_degrees and pitch_degrees (negative looks down) are optional.
+    Omitted values keep the travel defaults. Returns the pose plus
+    height_above_terrain_meters."""
+    params: dict[str, Any] = {
+        "id": view_id,
+        "latitude_degrees": latitude_degrees,
+        "longitude_degrees": longitude_degrees,
+    }
+    for key, value in {
+        "altitude_meters": altitude_meters,
+        "yaw_degrees": yaw_degrees,
+        "pitch_degrees": pitch_degrees,
+    }.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("viewport.fly_to", params)
+
+
+@mcp.tool()
+def orbit_terrain_list() -> dict[str, Any]:
+    """List the terrain objects of the open world (terrain id, name, parent
+    body, planet radius, sea level). The terrain id is the terrain_id argument
+    of every orbit_terrain_* tool."""
+    return _rpc("terrain.list", {})
+
+
+@mcp.tool()
+def orbit_terrain_sample(
+    terrain_id: str,
+    points: list[dict[str, float]] | None = None,
+    transect: dict[str, Any] | None = None,
+    include_tectonics: bool = False,
+    footprint_meters: float = 500.0,
+) -> dict[str, Any]:
+    """Sample the composed terrain without moving any camera. Give points
+    (up to 4096 {latitude_degrees, longitude_degrees}) or a great-circle
+    transect {from: {...}, to: {...}, count: 2..4096}. Each sample has
+    elevation_meters (the bed the camera collides with), coarse elevation,
+    height above sea level, standing water depth, underwater, climate and
+    biome weights; include_tectonics adds crust, boundary masks, structural
+    elevation, trench/arc and fracture density."""
+    params: dict[str, Any] = {
+        "terrain": terrain_id,
+        "include_tectonics": include_tectonics,
+        "footprint_meters": footprint_meters,
+    }
+    if points is not None:
+        params["points"] = points
+    if transect is not None:
+        params["transect"] = transect
+    return _rpc("terrain.sample", params)
+
+
+@mcp.tool()
+def orbit_studio_process_info() -> dict[str, Any]:
+    """Which Studio process answers: pid, uptime_seconds and terrain_count. A
+    hot generation handoff or project relaunch changes the pid; poll this
+    after project.open or a rebuild instead of sleeping."""
+    return _rpc("studio.process_info", {})
+
+
 def orbit_planning_update(
     id: int,
     title: str | None = None,

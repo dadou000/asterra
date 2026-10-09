@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <orbit/mesh_render/MeshLibrary.hpp>
 #include <orbit/post_process/AntiAliasing.hpp>
+#include <orbit/studio_ui/StudioFlatMap.hpp>
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 
 #include <cmath>
@@ -101,6 +102,23 @@ constexpr i64 kFailed = 1071;
     const auto found = object.find(key);
     if (found == object.end() || !found->second.IsNumber() ||
         !std::isfinite(found->second.AsNumber()))
+    {
+        throw rpc::Error(
+            -32602, std::string(key) + " must be a finite number.");
+    }
+    return found->second.AsNumber();
+}
+
+[[nodiscard]] std::optional<f64> OptionalFiniteNumber(
+    const Value::Object& object,
+    const char* key)
+{
+    const auto found = object.find(key);
+    if (found == object.end())
+    {
+        return std::nullopt;
+    }
+    if (!found->second.IsNumber() || !std::isfinite(found->second.AsNumber()))
     {
         throw rpc::Error(
             -32602, std::string(key) + " must be a finite number.");
@@ -1281,6 +1299,90 @@ void RegisterStudioRenderViewRpc(
                 return Value(Value::Object{
                     {"id", id},
                     {"restored", views.RestoreViewPose(id, pose)}});
+            }
+            catch (const std::exception& exception)
+            {
+                throw rpc::Error(kFailed, exception.what());
+            }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "viewport.fly_to",
+            .description =
+                "Puts the terrain camera over a latitude/longitude in one "
+                "call (map.travel plus pose_set without hand-building "
+                "vectors). Give latitude_degrees and longitude_degrees; "
+                "altitude_meters (above the reference sphere, so negative is "
+                "below sea level), yaw_degrees and pitch_degrees (negative "
+                "looks down) are optional and keep the travel defaults when "
+                "omitted. The viewport returns to perspective mode. Returns "
+                "the resulting pose plus height_above_terrain_meters. id "
+                "defaults to studio.primary.",
+            .mutating = true
+        },
+        [&views](const Value& params)
+        {
+            const std::string id = ViewIdOrPrimary(params);
+            const auto& object = RequireObject(params);
+            const f64 latitude = NumberFromRpc(object, "latitude_degrees");
+            const f64 longitude = NumberFromRpc(object, "longitude_degrees");
+            if (std::abs(latitude) > 90.0)
+            {
+                throw rpc::Error(-32602, "latitude_degrees must be within -90..90.");
+            }
+            const auto altitude = OptionalFiniteNumber(object, "altitude_meters");
+            const auto yaw = OptionalFiniteNumber(object, "yaw_degrees");
+            const auto pitch = OptionalFiniteNumber(object, "pitch_degrees");
+            constexpr f64 kRadians = 3.14159265358979323846 / 180.0;
+            try
+            {
+                if (!views.FocusTerrainDirection(
+                        id, FlatMapDirectionFromLatLon(latitude, longitude)))
+                {
+                    throw rpc::Error(
+                        kFailed,
+                        "The viewport has no current terrain runtime to fly with.");
+                }
+                views.SetViewportMode(
+                    id, studio_session::ViewportMode::Perspective);
+                auto pose = views.ViewPose(id);
+                if (!pose.has_value())
+                {
+                    throw rpc::Error(
+                        kInvalid,
+                        "View '" + id + "' has no target body or camera pose.");
+                }
+                if (altitude.has_value() || yaw.has_value() || pitch.has_value())
+                {
+                    if (altitude.has_value())
+                    {
+                        const f64 radius = views.TextDiagnostics(id).planetRadiusMeters;
+                        if (!(radius > 0.0))
+                        {
+                            throw rpc::Error(
+                                kFailed, "The target body has no planet radius.");
+                        }
+                        pose->observerMeters =
+                            math::Normalize(pose->observerMeters) * (radius + *altitude);
+                    }
+                    if (yaw.has_value()) pose->yawRadians = *yaw * kRadians;
+                    if (pitch.has_value()) pose->pitchRadians = *pitch * kRadians;
+                    static_cast<void>(views.RestoreViewPose(id, *pose));
+                    pose = views.ViewPose(id);
+                }
+                const auto report = views.TextDiagnostics(id);
+                Value result = PoseToRpc(id, *pose);
+                auto& out = result.AsObject();
+                out.emplace("height_above_terrain_meters",
+                    report.heightAboveTerrainMeters.has_value()
+                        ? Value(*report.heightAboveTerrainMeters)
+                        : Value());
+                return result;
+            }
+            catch (const rpc::Error&)
+            {
+                throw;
             }
             catch (const std::exception& exception)
             {
