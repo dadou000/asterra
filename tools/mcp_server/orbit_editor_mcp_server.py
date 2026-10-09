@@ -1670,9 +1670,15 @@ def orbit_viewport_navigate(
     move_up: float = 0.0,
     boost: bool = False,
 ) -> dict[str, Any]:
-    """Apply one camera navigation step to the primary viewport, like the
-    right-mouse look + WASD/QE gesture. Uses terrain navigation when the active
-    body has terrain, otherwise the same navigation on a reference sphere. Call repeatedly to move continuously."""
+    """Apply camera navigation to a viewport, like the right-mouse look +
+    WASD/QE gesture. steps (default 1, up to 1200) repeats the step so one call
+    can fly or dive a distance; mouse_dx/mouse_dy apply once, on the first
+    step. Uses terrain navigation when the body has terrain (ground clearance,
+    the bed as the floor), otherwise the same navigation on a reference
+    sphere. For a terrain view the result also has distance_from_core_meters,
+    height_above_terrain_meters and height_above_water_surface_meters (set
+    where the ground is under water: negative beneath the surface, positive
+    above it; null over dry land), read from the live observer."""
     return _rpc(
         "viewport.navigate",
         {
@@ -1705,6 +1711,8 @@ def orbit_map_open(view_id: str = "studio.primary") -> dict[str, Any]:
 
 @mcp.tool()
 def orbit_map_status(view_id: str = "studio.primary") -> dict[str, Any]:
+    steps: int = 1,
+    view_id: str = "studio.primary",
     """Flat map state: active layer and the available layers, whether a terrain
     source is bound, rows_generated / rows_total, complete, and the camera
     marker as latitude/longitude in degrees (HUD convention; null if unknown)."""
@@ -1712,6 +1720,8 @@ def orbit_map_status(view_id: str = "studio.primary") -> dict[str, Any]:
 
 
 @mcp.tool()
+            "id": view_id,
+            "steps": steps,
 def orbit_map_layer_set(layer: str, view_id: str = "studio.primary") -> dict[str, Any]:
     """Choose what the flat map colours the planet by: elevation, biomes,
     temperature, precipitation, water_depth, tectonics (plate identity and

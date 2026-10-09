@@ -1371,12 +1371,12 @@ void RegisterStudioRenderViewRpc(
                     static_cast<void>(views.RestoreViewPose(id, *pose));
                     pose = views.ViewPose(id);
                 }
-                const auto report = views.TextDiagnostics(id);
+                const auto readout = views.NavigationReadout(id);
                 Value result = PoseToRpc(id, *pose);
                 auto& out = result.AsObject();
                 out.emplace("height_above_terrain_meters",
-                    report.heightAboveTerrainMeters.has_value()
-                        ? Value(*report.heightAboveTerrainMeters)
+                    readout.has_value()
+                        ? Value(readout->heightAboveTerrainMeters)
                         : Value());
                 return result;
             }

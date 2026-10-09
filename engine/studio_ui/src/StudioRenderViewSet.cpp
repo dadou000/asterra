@@ -566,6 +566,60 @@ bool StudioRenderViewSet::NavigateTerrain(
         input.mouseDeltaY != 0.0;
 }
 
+std::optional<StudioNavigationReadout> StudioRenderViewSet::NavigationReadout(
+    const std::string_view id)
+{
+    if (session_ == nullptr)
+    {
+        return std::nullopt;
+    }
+
+    const auto terrain = session_->TerrainRuntime().Capture(id);
+    if (!terrain.has_value() || !session_->TerrainRuntime().IsCurrent(*terrain))
+    {
+        return std::nullopt;
+    }
+
+    auto& state = RequireNavigationState(id);
+    const auto& baseSource = session_->TerrainRuntime().TerrainSource(*terrain);
+    const auto drawnGround = renderedGround_.find(id);
+    std::optional<RenderedGroundFloorSource> flooredSource;
+    if (drawnGround != renderedGround_.end())
+    {
+        flooredSource.emplace(
+            baseSource,
+            drawnGround->second.unitDirection,
+            drawnGround->second.elevationMeters,
+            terrain->planet.radiusMeters);
+    }
+    const terrain::TerrainSource& source =
+        flooredSource.has_value()
+            ? static_cast<const terrain::TerrainSource&>(*flooredSource)
+            : baseSource;
+
+    const auto current = CurrentTerrainNavigation(state, *terrain, source);
+    StudioNavigationReadout readout;
+    readout.distanceFromCoreMeters = math::Length(terrain->observer.meters);
+    readout.heightAboveTerrainMeters = current.altitudeAboveTerrainMeters;
+    if (readout.distanceFromCoreMeters > 0.0)
+    {
+        const math::Double3 radial =
+            terrain->observer.meters / readout.distanceFromCoreMeters;
+        const auto point = SampleStudioTerrainPoint(
+            baseSource,
+            terrain->planet.id,
+            terrain->planet.radiusMeters,
+            radial,
+            std::max(std::abs(readout.heightAboveTerrainMeters) * 0.02, 1.0));
+        if (point.underwater)
+        {
+            readout.heightAboveWaterSurfaceMeters =
+                readout.distanceFromCoreMeters - point.renderedSurfaceRadiusFromCoreMeters;
+        }
+    }
+    return readout;
+}
+
 bool StudioRenderViewSet::FocusTerrainBody(
     const std::string_view id)
 {

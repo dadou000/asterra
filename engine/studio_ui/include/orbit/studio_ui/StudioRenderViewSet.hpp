@@ -95,6 +95,18 @@ struct StudioTerrainDiagnosticOverlayOptions
         const StudioTerrainDiagnosticOverlayOptions&) const noexcept = default;
 };
 
+// Where the terrain observer is right now, measured the way navigation measures
+// it (the live observer, the CPU terrain floored by the drawn ground), not from
+// the last rendered camera, so it is current right after NavigateTerrain.
+struct StudioNavigationReadout
+{
+    f64 distanceFromCoreMeters{0.0};
+    f64 heightAboveTerrainMeters{0.0};
+    // Set where the ground under the observer is under water: negative when
+    // the observer is beneath the surface, positive above it.
+    std::optional<f64> heightAboveWaterSurfaceMeters;
+};
+
 struct StudioViewPose
 {
     // scene::ObjectId::ToString of the viewport's target body.
@@ -196,6 +208,12 @@ public:
     [[nodiscard]] bool NavigateTerrain(
         std::string_view id,
         const StudioTerrainNavigationInput& input);
+
+    // The observer's distance from the core and its height above the terrain
+    // bed (and below the water surface when underwater), from the live observer.
+    // Absent when the viewport has no current terrain runtime.
+    [[nodiscard]] std::optional<StudioNavigationReadout> NavigationReadout(
+        std::string_view id);
 
     // True when the viewport currently has a usable terrain runtime, i.e.
     // NavigateTerrain drives the terrain observer rather than the reference

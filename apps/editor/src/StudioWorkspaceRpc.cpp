@@ -288,7 +288,7 @@ void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi
                 {
                     .name = "viewport.navigate",
                     .description =
-                        "Applies one navigation step to the primary viewport camera, exactly like the right-mouse look/WASD gesture: mouse_dx/mouse_dy in pixels, move_right/move_forward/move_up in -1..1, delta_seconds, boost. Uses terrain navigation when the active body has terrain, and free-fly otherwise.",
+                        "Applies navigation steps to a viewport camera, exactly like the right-mouse look/WASD gesture: mouse_dx/mouse_dy in pixels (applied once, on the first step), move_right/move_forward/move_up in -1..1, delta_seconds (0..1 per step), boost. steps (default 1, up to 1200) repeats the step so one call can fly or dive a distance. id defaults to studio.primary. Uses terrain navigation when the body has terrain (ground clearance, the terrain bed as the floor) and free-fly otherwise. Returns moved, navigation, steps and, for a terrain view, distance_from_core_meters, height_above_terrain_meters and height_above_water_surface_meters (set where the ground is under water: negative when the camera is beneath the surface, positive above it; null over dry land). The readout is the live observer, current right after the last step.",
                     .mutating = true
                 },
                 [&studioViews](const Value& params)
@@ -309,6 +309,31 @@ void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi
                             }
                             return found->second.AsNumber();
                         };
+
+                    const auto viewId =
+                        [&params]() -> std::string
+                        {
+                            if (params.IsObject())
+                            {
+                                const auto found = params.AsObject().find("id");
+                                if (found != params.AsObject().end() &&
+                                    found->second.IsString() &&
+                                    !found->second.AsString().empty())
+                                {
+                                    return found->second.AsString();
+                                }
+                            }
+                            return "studio.primary";
+                        }();
+                    const f64 stepCount = params.IsObject() &&
+                            params.AsObject().find("steps") != params.AsObject().end()
+                        ? number("steps")
+                        : 1.0;
+                    if (!(stepCount >= 1.0 && stepCount <= 1200.0))
+                    {
+                        throw orbit::rpc::Error(
+                            -32602, "steps must be within 1..1200.");
+                    }
 
                     orbit::studio_ui::StudioTerrainNavigationInput input{
                         .deltaSeconds =
@@ -333,21 +358,45 @@ void RegisterStudioWorkspaceRpc(rpc::Dispatcher& dispatcher, editor_ui::EditorUi
                     };
 
                     const bool terrainDriven =
-                        studioViews.HasTerrainNavigation(
-                            "studio.primary");
-                    const bool moved =
-                        studioViews.NavigateTerrain(
-                            "studio.primary",
-                            input);
-                    return Value(
-                        Value::Object{
-                            {"moved", moved},
-                            {"navigation",
-                             std::string(
-                                 terrainDriven
-                                     ? "terrain"
-                                     : "reference_sphere")}
-                        });
+                        studioViews.HasTerrainNavigation(viewId);
+                    bool moved = false;
+                    for (u32 step = 0U;
+                         step < static_cast<u32>(stepCount);
+                         ++step)
+                    {
+                        moved |= studioViews.NavigateTerrain(viewId, input);
+                        // Look input is a one-shot delta, not a rate.
+                        input.mouseDeltaX = 0.0;
+                        input.mouseDeltaY = 0.0;
+                    }
+                    Value::Object result{
+                        {"moved", moved},
+                        {"navigation",
+                         std::string(
+                             terrainDriven
+                                 ? "terrain"
+                                 : "reference_sphere")},
+                        {"steps", static_cast<i64>(stepCount)}};
+                    if (terrainDriven)
+                    {
+                        // The live observer, not the last rendered frame.
+                        if (const auto readout = studioViews.NavigationReadout(viewId);
+                            readout.has_value())
+                        {
+                            result.emplace(
+                                "distance_from_core_meters",
+                                readout->distanceFromCoreMeters);
+                            result.emplace(
+                                "height_above_terrain_meters",
+                                readout->heightAboveTerrainMeters);
+                            result.emplace(
+                                "height_above_water_surface_meters",
+                                readout->heightAboveWaterSurfaceMeters.has_value()
+                                    ? Value(*readout->heightAboveWaterSurfaceMeters)
+                                    : Value());
+                        }
+                    }
+                    return Value(std::move(result));
                 });
 
             dispatcher.Register(
