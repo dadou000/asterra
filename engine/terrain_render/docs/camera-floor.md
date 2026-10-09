@@ -19,6 +19,7 @@ symbols = ["NavigateTerrain", "StudioRenderViewSet"]
 invariants = [
   "The floor only ever raises the camera; where the drawn ground is below the CPU terrain, the CPU value stays.",
   "The floor uses the highest of the four vertices around the nadir (conservative) and applies to elevation queries within about 150 m of that point.",
+  "The floor is the terrain bed, never sea level or the reference sphere: under an ocean the camera may dive below the water surface and rests on the seabed. The only other bound is a 1 m radius guard against the planet centre (navigation, StudioTerrainRuntimeBridge::ObserverValid and the renderer all use it).",
   "The readback is a few frames late by design (host-readable buffer); it must never stall the frame.",
   "Reported as clipmap_plan.rendered_ground_elevation_meters and the 'Drawn ground under camera' HUD line, beside the CPU's below_camera.terrain_elevation_meters.",
 ]
@@ -34,6 +35,7 @@ symptom = "the camera is below, or clips into, the terrain that is drawn"
 steps = [
   "Read view.text_diagnostics: compare clipmap_plan.rendered_ground_elevation_meters with below_camera.terrain_elevation_meters.",
   "If the drawn ground is higher than the CPU value the floor should already lift the camera; check the readback is arriving (value changing as you move).",
+  "If the camera cannot descend below the water surface, look for a floor tied to the reference sphere (planet radius + epsilon) rather than the terrain bed.",
   "If the two disagree by tens of metres systematically, check generator parity before changing the floor.",
 ]
 docs = ["/rendering/terrain/clipmaps/generator-parity"]
