@@ -11,12 +11,16 @@
 #include <orbit/terrain/TectonicFieldDesc.hpp>
 #include <orbit/terrain_erosion/RiverNetwork.hpp>
 #include <orbit/terrain_water/LakeWater.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
+#include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/world/PlanetTileNeighborhood.hpp>
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace orbit::studio_session
 {
@@ -53,14 +57,16 @@ namespace
 
 void QueueGlobalProcessSettingsInvalidation(
     StudioSession& session,
-    const scene::ObjectId terrain)
+    const scene::ObjectId terrain,
+    const terrain_dependency::TerrainChangeKind kind =
+        terrain_dependency::TerrainChangeKind::ProcessSettings)
 {
     const auto body = session.World().Surfaces().BodyForTerrainObject(terrain);
     if (!body.has_value()) throw rpc::Error(-32602, "terrain is not bound to a spherical body.");
     const auto planet = session.World().Surfaces().Registry().SphericalPlanetDefinition(*body);
     if (!planet.has_value()) throw rpc::Error(-32602, "terrain body has no spherical planet definition.");
     session.QueueTerrainInvalidation({
-        .kind = terrain_dependency::TerrainChangeKind::ProcessSettings,
+        .kind = kind,
         .scope = {.planet = planet->id, .global = true}});
 }
 
@@ -188,12 +194,12 @@ void ReadTectonicsPatch(
     number("convergence_reference_speed", settings.convergenceReferenceSpeed);
     number("transform_reference_speed", settings.transformReferenceSpeed);
     number("hotspot_radius_growth_per_age", settings.hotspotRadiusGrowthPerAge);
+    number("belt_ridge_relief", settings.beltRidgeRelief);
 }
 
 [[nodiscard]] rpc::Value TectonicProbeToRpc(
     const StudioTectonicsProbe& probe)
 {
-    number("belt_ridge_relief", settings.beltRidgeRelief);
     const auto& s = probe.structure;
     return rpc::Value(rpc::Value::Object{
         {"latitude_degrees", probe.latitudeDegrees},
@@ -248,6 +254,27 @@ void ReadTectonicsPatch(
         {"river_nodes", static_cast<i64>(status.riverNodes)},
         {"river_segments", static_cast<i64>(status.riverSegments)},
         {"river_bytes", static_cast<i64>(status.riverBytes)},
+        {"incision_active", status.incisionActive},
+        {"incision_resolution", static_cast<i64>(status.incisionResolution)},
+        {"geology_active", status.geologyActive},
+        {"geology_resolution", static_cast<i64>(status.geologyResolution)},
+        {"geology_levels", static_cast<i64>(status.geologyLevels)},
+        {"geology_bytes", static_cast<i64>(status.geologyBytes)},
+        {"geology_process_channels_active", status.geologyProcessChannelsActive},
+        {"geology_bake_samples", static_cast<i64>(status.geologyBakeSamples)},
+        {"geology_event_records", static_cast<i64>(status.geologyEventRecords)},
+        {"geology_tiles_updated", static_cast<i64>(status.geologyTilesUpdated)},
+        {"geology_samples_per_second", status.geologySamplesPerSecond},
+        {"geology_event_records_per_second", status.geologyEventRecordsPerSecond},
+        {"geology_gpu_transfer_bytes", static_cast<i64>(status.geologyTransferBytes)},
+        {"geology_gpu_dispatches", static_cast<i64>(status.geologyDispatches)},
+        {"geology_gpu_fence_wait_ms", status.geologyFenceWaitMilliseconds},
+        {"geology_gpu_queue_ms", status.geologyGpuQueueMilliseconds},
+        {"geology_gpu_timestamp_available", status.geologyGpuTimestampAvailable},
+        {"geology_gpu_occupancy_available", false},
+        {"geology_gpu_transfer_bytes_are_estimate", true},
+        {"geology_cache_misses", static_cast<i64>(status.geologyTilesUpdated)},
+        {"geology_tiles_invalidated", static_cast<i64>(status.geologyTilesUpdated)},
         {"current_river_hash", HashText(status.currentRiverHash)},
         {"active_river_hash", HashText(status.activeRiverHash)},
         {"current_recipe_hash", HashText(status.currentRecipeHash)},
@@ -340,6 +367,320 @@ void RegisterStudioTerrainStatusRpc(
             {
                 throw rpc::Error(1004, exception.what());
             }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.impacts_get",
+            .description = "Returns the persisted .orbitimpacts TOML recipe for a terrain surface.",
+            .mutating = false
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto terrain = scene::ObjectId::Parse(RequireString(values, "terrain"));
+            if (!terrain.has_value()) throw rpc::Error(-32602, "terrain must be a terrain object id.");
+            try
+            {
+                const std::string recipe = SurfaceModel(session).ImpactHistoryToml(*terrain);
+                rpc::Value::Object result{
+                    {"terrain", terrain->ToString()},
+                    {"history_toml", recipe},
+                    {"enabled", !recipe.empty()}};
+                if (!recipe.empty())
+                {
+                    const auto parsed = terrain_impacts::ParseImpactFieldToml(recipe);
+                    result.emplace("impact_count", static_cast<i64>(parsed.authoredImpacts.size()));
+                    result.emplace("resurfacing_count", static_cast<i64>(parsed.resurfacingEvents.size()));
+                }
+                return rpc::Value(std::move(result));
+            }
+            catch (const std::exception& exception) { throw rpc::Error(1004, exception.what()); }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.impacts_set",
+            .description = "Persists a validated chronological .orbitimpacts TOML recipe as one undoable terrain edit and queues geological regeneration.",
+            .mutating = true
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            for (const auto& [key, value] : values)
+            {
+                static_cast<void>(value);
+                if (key != "terrain" && key != "history_toml")
+                    throw rpc::Error(-32602, "Unknown geological history setting: " + key + ".");
+            }
+            const auto terrain = scene::ObjectId::Parse(RequireString(values, "terrain"));
+            if (!terrain.has_value()) throw rpc::Error(-32602, "terrain must be a terrain object id.");
+            const auto recipeValue = values.find("history_toml");
+            if (recipeValue == values.end() || !recipeValue->second.IsString())
+                throw rpc::Error(-32602, "history_toml must be a string (empty clears the recipe).");
+            try
+            {
+                const std::string recipe = recipeValue->second.AsString();
+                if (!recipe.empty())
+                {
+                    const auto parsed = terrain_impacts::ParseImpactFieldToml(recipe);
+                    const auto body = session.World().Surfaces().BodyForTerrainObject(*terrain);
+                    if (!body.has_value()) throw rpc::Error(-32602, "terrain is not bound to a spherical body.");
+                    const auto planet = session.World().Surfaces().Registry().SphericalPlanetDefinition(*body);
+                    if (!planet.has_value() || parsed.planet != planet->id)
+                        throw rpc::Error(-32602, "Geological history must target the terrain's spherical planet.");
+                }
+                auto model = SurfaceModel(session);
+                const std::string previousRecipe = model.ImpactHistoryToml(*terrain);
+                const auto body = session.World().Surfaces().BodyForTerrainObject(*terrain);
+                const auto planet = body.has_value()
+                    ? session.World().Surfaces().Registry().SphericalPlanetDefinition(*body)
+                    : std::nullopt;
+                std::vector<terrain_dependency::TerrainInvalidationRequest> invalidations;
+                const auto runtime = session.TerrainRuntime().Capture("studio.primary");
+                if (planet.has_value())
+                {
+                    const u8 physicalPageLevel = runtime.has_value() && runtime->body == *body
+                        ? runtime->physicalPageLevel
+                        : 10U;
+                    invalidations = BuildImpactHistoryInvalidations(
+                        *planet, previousRecipe, recipe, physicalPageLevel);
+                }
+                model.SetImpactHistoryToml(*terrain, recipe);
+                session.QueueTerrainInvalidations(invalidations);
+                return rpc::Value(rpc::Value::Object{
+                    {"terrain", terrain->ToString()},
+                    {"enabled", !recipe.empty()},
+                    {"history_toml", recipe},
+                    {"invalidations_queued", static_cast<i64>(invalidations.size())}});
+            }
+            catch (const rpc::Error&) { throw; }
+            catch (const std::invalid_argument& exception) { throw rpc::Error(-32602, exception.what()); }
+            catch (const std::exception& exception) { throw rpc::Error(1004, exception.what()); }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.stratigraphy_get",
+            .description = "Returns the persisted .orbitstratigraphy profile used by impact excavation and physical bedrock sampling.",
+            .mutating = false
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto terrain = scene::ObjectId::Parse(RequireString(values, "terrain"));
+            if (!terrain.has_value()) throw rpc::Error(-32602, "terrain must be a terrain object id.");
+            try
+            {
+                const std::string profile = SurfaceModel(session).StratigraphyToml(*terrain);
+                return rpc::Value(rpc::Value::Object{
+                    {"terrain", terrain->ToString()},
+                    {"profile_toml", profile},
+                    {"enabled", !profile.empty()}});
+            }
+            catch (const std::exception& exception) { throw rpc::Error(1004, exception.what()); }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.stratigraphy_set",
+            .description = "Persists a validated, material-resolved stratigraphy profile and invalidates affected physical material columns.",
+            .mutating = true
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            for (const auto& [key, value] : values)
+            {
+                static_cast<void>(value);
+                if (key != "terrain" && key != "profile_toml")
+                    throw rpc::Error(-32602, "Unknown stratigraphy setting: " + key + ".");
+            }
+            const auto terrain = scene::ObjectId::Parse(RequireString(values, "terrain"));
+            if (!terrain.has_value()) throw rpc::Error(-32602, "terrain must be a terrain object id.");
+            const auto profileValue = values.find("profile_toml");
+            if (profileValue == values.end() || !profileValue->second.IsString())
+                throw rpc::Error(-32602, "profile_toml must be a string (empty clears the profile).");
+            try
+            {
+                const std::string profileToml = profileValue->second.AsString();
+                if (!profileToml.empty())
+                {
+                    const auto profile = terrain_geology::ParseStratigraphyProfileToml(profileToml);
+                    const auto body = session.World().Surfaces().BodyForTerrainObject(*terrain);
+                    if (!body.has_value()) throw rpc::Error(-32602, "terrain is not bound to a rocky body.");
+                    const auto* services = session.World().Surfaces().ServicesForBody(*body);
+                    if (services == nullptr || !terrain_geology::ReferencesKnownMaterials(profile, services->Geology()))
+                        throw rpc::Error(-32602, "stratigraphy references a material not present on this body.");
+                }
+                auto model = SurfaceModel(session);
+                model.SetStratigraphyToml(*terrain, profileToml);
+                const auto body = session.World().Surfaces().BodyForTerrainObject(*terrain);
+                const auto planet = body.has_value()
+                    ? session.World().Surfaces().Registry().SphericalPlanetDefinition(*body)
+                    : std::nullopt;
+                if (planet.has_value())
+                    session.QueueTerrainInvalidation({
+                        .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+                        .scope = {.planet = planet->id, .global = true}});
+                return rpc::Value(rpc::Value::Object{
+                    {"terrain", terrain->ToString()},
+                    {"enabled", !profileToml.empty()},
+                    {"profile_toml", profileToml},
+                    {"invalidations_queued", planet.has_value() ? 1 : 0}});
+            }
+            catch (const rpc::Error&) { throw; }
+            catch (const std::invalid_argument& exception) { throw rpc::Error(-32602, exception.what()); }
+            catch (const std::exception& exception) { throw rpc::Error(1004, exception.what()); }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.processes_get",
+            .description = "Returns the terrain erosion and transport process switches and toolbar settings.",
+            .mutating = false
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto terrain = scene::ObjectId::Parse(RequireString(values, "terrain"));
+            if (!terrain.has_value()) throw rpc::Error(-32602, "terrain must be a terrain object id.");
+            try
+            {
+                const auto settings = SurfaceModel(session).ProcessSettings(*terrain);
+                return rpc::Value(rpc::Value::Object{
+                    {"terrain", terrain->ToString()},
+                    {"stream_power_enabled", settings.streamPowerEnabled},
+                    {"stream_power_iterations", static_cast<i64>(settings.streamPower.iterations)},
+                    {"stream_incision_coefficient_meters_per_iteration", settings.streamPower.incisionCoefficientMetersPerIteration},
+                    {"hydraulic_enabled", settings.hydraulicEnabled},
+                    {"hydraulic_iterations", static_cast<i64>(settings.hydraulic.iterations)},
+                    {"hydraulic_time_step_seconds", settings.hydraulic.timeStepSeconds},
+                    {"thermal_enabled", settings.thermalEnabled},
+                    {"thermal_iterations", static_cast<i64>(settings.thermal.maximumIterations)},
+                    {"thermal_relaxation", settings.thermal.relaxation},
+                    {"aeolian_enabled", settings.aeolianEnabled},
+                    {"aeolian_iterations", static_cast<i64>(settings.aeolian.iterations)},
+                    {"aeolian_capacity_coefficient", settings.aeolian.capacityCoefficient},
+                    {"aeolian_time_step_seconds", settings.aeolian.timeStepSeconds},
+                    {"glacial_enabled", settings.glacialEnabled},
+                    {"glacial_iterations", static_cast<i64>(settings.glacial.iterations)},
+                    {"glacial_time_step_years", settings.glacial.timeStepYears},
+                    {"glacial_maximum_temperature_c", settings.glacial.maximumGlacierTemperatureC},
+                    {"coastal_enabled", settings.coastal.enabled},
+                    {"coastal_hydrodynamic_steps", static_cast<i64>(settings.coastal.hydrodynamicSteps)},
+                    {"coastal_cfl_number", settings.coastal.water.cflNumber},
+                    {"coastal_maximum_time_step_seconds", settings.coastal.water.maximumTimeStepSeconds}
+                });
+            }
+            catch (const std::exception& exception) { throw rpc::Error(1004, exception.what()); }
+        });
+
+    dispatcher.Register(
+        {
+            .name = "terrain.processes_set",
+            .description = "Updates supplied erosion and transport process settings as one undoable edit through SurfaceAuthoringModel.",
+            .mutating = true
+        },
+        [&session](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto terrain = scene::ObjectId::Parse(RequireString(values, "terrain"));
+            if (!terrain.has_value()) throw rpc::Error(-32602, "terrain must be a terrain object id.");
+            static constexpr std::array<std::string_view, 21> fields{
+                "stream_power_enabled", "stream_power_iterations",
+                "stream_incision_coefficient_meters_per_iteration", "hydraulic_enabled",
+                "hydraulic_iterations", "hydraulic_time_step_seconds", "thermal_enabled",
+                "thermal_iterations", "thermal_relaxation", "aeolian_enabled",
+                "aeolian_iterations", "aeolian_capacity_coefficient", "aeolian_time_step_seconds",
+                "glacial_enabled", "glacial_iterations", "glacial_time_step_years",
+                "glacial_maximum_temperature_c", "coastal_enabled", "coastal_hydrodynamic_steps",
+                "coastal_cfl_number", "coastal_maximum_time_step_seconds"};
+            for (const auto& [key, value] : values)
+            {
+                static_cast<void>(value);
+                if (key != "terrain" && std::find(fields.begin(), fields.end(), key) == fields.end())
+                    throw rpc::Error(-32602, "Unknown terrain process setting: " + key + ".");
+            }
+            try
+            {
+                auto model = SurfaceModel(session);
+                auto settings = model.ProcessSettings(*terrain);
+                const auto boolean = [&values](const char* key, bool& target)
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end()) return;
+                    if (!found->second.IsBool()) throw rpc::Error(-32602, std::string(key) + " must be a boolean.");
+                    target = found->second.AsBool();
+                };
+                const auto number = [&values](const char* key, f64& target)
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end()) return;
+                    if (!found->second.IsNumber()) throw rpc::Error(-32602, std::string(key) + " must be a number.");
+                    target = found->second.AsNumber();
+                };
+                const auto positiveU32 = [&values](const char* key, u32& target)
+                {
+                    const auto found = values.find(key);
+                    if (found == values.end()) return;
+                    if (!found->second.IsInteger() || found->second.AsInteger() < 1 ||
+                        static_cast<u64>(found->second.AsInteger()) > std::numeric_limits<u32>::max())
+                        throw rpc::Error(-32602, std::string(key) + " must be a positive uint32 integer.");
+                    target = static_cast<u32>(found->second.AsInteger());
+                };
+                boolean("stream_power_enabled", settings.streamPowerEnabled);
+                positiveU32("stream_power_iterations", settings.streamPower.iterations);
+                number("stream_incision_coefficient_meters_per_iteration", settings.streamPower.incisionCoefficientMetersPerIteration);
+                boolean("hydraulic_enabled", settings.hydraulicEnabled);
+                positiveU32("hydraulic_iterations", settings.hydraulic.iterations);
+                number("hydraulic_time_step_seconds", settings.hydraulic.timeStepSeconds);
+                boolean("thermal_enabled", settings.thermalEnabled);
+                positiveU32("thermal_iterations", settings.thermal.maximumIterations);
+                number("thermal_relaxation", settings.thermal.relaxation);
+                boolean("aeolian_enabled", settings.aeolianEnabled);
+                positiveU32("aeolian_iterations", settings.aeolian.iterations);
+                number("aeolian_capacity_coefficient", settings.aeolian.capacityCoefficient);
+                number("aeolian_time_step_seconds", settings.aeolian.timeStepSeconds);
+                boolean("glacial_enabled", settings.glacialEnabled);
+                positiveU32("glacial_iterations", settings.glacial.iterations);
+                number("glacial_time_step_years", settings.glacial.timeStepYears);
+                number("glacial_maximum_temperature_c", settings.glacial.maximumGlacierTemperatureC);
+                boolean("coastal_enabled", settings.coastal.enabled);
+                positiveU32("coastal_hydrodynamic_steps", settings.coastal.hydrodynamicSteps);
+                number("coastal_cfl_number", settings.coastal.water.cflNumber);
+                number("coastal_maximum_time_step_seconds", settings.coastal.water.maximumTimeStepSeconds);
+                model.SetProcessSettings(*terrain, settings);
+                QueueGlobalProcessSettingsInvalidation(session, *terrain);
+                return rpc::Value(rpc::Value::Object{
+                    {"terrain", terrain->ToString()},
+                    {"stream_power_enabled", settings.streamPowerEnabled},
+                    {"stream_power_iterations", static_cast<i64>(settings.streamPower.iterations)},
+                    {"stream_incision_coefficient_meters_per_iteration", settings.streamPower.incisionCoefficientMetersPerIteration},
+                    {"hydraulic_enabled", settings.hydraulicEnabled},
+                    {"hydraulic_iterations", static_cast<i64>(settings.hydraulic.iterations)},
+                    {"hydraulic_time_step_seconds", settings.hydraulic.timeStepSeconds},
+                    {"thermal_enabled", settings.thermalEnabled},
+                    {"thermal_iterations", static_cast<i64>(settings.thermal.maximumIterations)},
+                    {"thermal_relaxation", settings.thermal.relaxation},
+                    {"aeolian_enabled", settings.aeolianEnabled},
+                    {"aeolian_iterations", static_cast<i64>(settings.aeolian.iterations)},
+                    {"aeolian_capacity_coefficient", settings.aeolian.capacityCoefficient},
+                    {"aeolian_time_step_seconds", settings.aeolian.timeStepSeconds},
+                    {"glacial_enabled", settings.glacialEnabled},
+                    {"glacial_iterations", static_cast<i64>(settings.glacial.iterations)},
+                    {"glacial_time_step_years", settings.glacial.timeStepYears},
+                    {"glacial_maximum_temperature_c", settings.glacial.maximumGlacierTemperatureC},
+                    {"coastal_enabled", settings.coastal.enabled},
+                    {"coastal_hydrodynamic_steps", static_cast<i64>(settings.coastal.hydrodynamicSteps)},
+                    {"coastal_cfl_number", settings.coastal.water.cflNumber},
+                    {"coastal_maximum_time_step_seconds", settings.coastal.water.maximumTimeStepSeconds},
+                    {"rebuild_queued", true}
+                });
+            }
+            catch (const rpc::Error&) { throw; }
+            catch (const std::invalid_argument& exception) { throw rpc::Error(-32602, exception.what()); }
+            catch (const std::exception& exception) { throw rpc::Error(1004, exception.what()); }
         });
 
     dispatcher.Register(

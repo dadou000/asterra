@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -194,6 +195,16 @@ public:
     // first call starts the background import.
     [[nodiscard]] const MeshModel* Acquire(const std::filesystem::path& file);
 
+    // Like Acquire for a model that has no file: `build` produces the
+    // MeshAsset (it runs once, on the loader thread, and must only touch what
+    // it captured by value). `key` identifies the model, so it has to encode
+    // every input of `build`; changing an input means asking with a new key,
+    // and the unused model is released after the usual idle time. Generated
+    // models are never hot-reloaded from disk.
+    [[nodiscard]] const MeshModel* AcquireGenerated(
+        const std::string& key,
+        const std::function<mesh_import::MeshAsset()>& build);
+
     // Render thread, once per draw, before any instance is drawn: adopts
     // finished loads, records pending texture uploads into `commands`
     // (bounded per call), detects on-disk changes for hot reload and retires
@@ -236,6 +247,8 @@ private:
         std::vector<std::string> warnings;
         std::filesystem::file_time_type modified{};
         bool loadInFlight{true};
+        // Built from a registered generator instead of a file on disk.
+        bool generated{false};
         // Last Acquire(); a model idle for a while is released by Pump().
         std::chrono::steady_clock::time_point lastRequested{};
         u32 texturesTotal{0U};
@@ -275,6 +288,8 @@ private:
     std::mutex mutex_;
     std::condition_variable wake_;
     std::deque<std::filesystem::path> queue_;
+    // Generator per generated key, read by the loader thread.
+    std::map<std::string, std::function<mesh_import::MeshAsset()>> generators_;
     std::vector<LoadResult> finished_;
     bool stopping_{false};
     std::thread worker_;

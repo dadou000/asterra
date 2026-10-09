@@ -214,6 +214,8 @@ void RegisterSchemas(
                     .minimum = 1.0
                 }
             },
+            schema::PropertySchema{.id=kTerrainImpactHistoryToml,.name="Geological Event History (.orbitimpacts TOML)",.kind=schema::PropertyKind::String,.defaultValue=std::string{},.advanced=true},
+            schema::PropertySchema{.id=kTerrainStratigraphyToml,.name="Geological Stratigraphy (.orbitstratigraphy TOML)",.kind=schema::PropertyKind::String,.defaultValue=std::string{},.advanced=true},
             schema::PropertySchema{.id=kTerrainTectonicSeed,.name="Tectonic Seed (0 = terrain seed)",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0},.advanced=true},
             schema::PropertySchema{.id=kTerrainTectonicPlateCount,.name="Tectonic Plate Count",.kind=schema::PropertyKind::Integer,.defaultValue=i64{14},.range={.minimum=1.0,.maximum=24.0},.advanced=true},
             schema::PropertySchema{.id=kTerrainTectonicIrregularity,.name="Plate Seed Irregularity",.kind=schema::PropertyKind::Float,.defaultValue=0.35,.range={.minimum=0.0,.maximum=1.0},.advanced=true},
@@ -235,9 +237,9 @@ void RegisterSchemas(
             schema::PropertySchema{.id=kTerrainTectonicOceanicBias,.name="Oceanic Crust Bias",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=-2'600.0,.range={.minimum=-1.0e7,.maximum=1.0e7},.advanced=true},
             schema::PropertySchema{.id=kTerrainTectonicConvergenceReferenceSpeed,.name="Convergence Reference Speed",.kind=schema::PropertyKind::Float,.defaultValue=0.4,.range={.minimum=1.0e-5,.maximum=100.0},.advanced=true},
             schema::PropertySchema{.id=kTerrainTectonicTransformReferenceSpeed,.name="Transform Reference Speed",.kind=schema::PropertyKind::Float,.defaultValue=0.7,.range={.minimum=1.0e-5,.maximum=100.0},.advanced=true},
+            schema::PropertySchema{.id=kTerrainTectonicBeltRidgeRelief,.name="Belt Ridge Relief",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=3.0},.advanced=true},
             schema::PropertySchema{.id=kTerrainTectonicHotspotRadiusGrowth,.name="Hotspot Radius Growth per Age",.kind=schema::PropertyKind::Float,.defaultValue=0.4,.range={.minimum=0.0,.maximum=10.0},.advanced=true},
             schema::PropertySchema{
-            schema::PropertySchema{.id=kTerrainTectonicBeltRidgeRelief,.name="Belt Ridge Relief",.kind=schema::PropertyKind::Float,.defaultValue=1.0,.range={.minimum=0.0,.maximum=3.0},.advanced=true},
                 .id = kTerrainCratersEnabled,
                 .name = "Procedural Craters",
                 .kind = schema::PropertyKind::Boolean,
@@ -1024,6 +1026,13 @@ void RegisterSchemas(
             {.id=kPrimitivePositionMeters,.name="Parent-frame Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
             {.id=kPrimitiveEulerDegrees,.name="Parent-frame Euler Rotation",.kind=schema::PropertyKind::Vector3,.unit="deg",.defaultValue=math::Double3{}},
             {.id=kPrimitiveSizeMeters,.name="Size",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{1.0,1.0,1.0}},
+            {.id=kPrimitiveSurface,.name="Surface",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=3.0}},
+            {.id=kPrimitiveColor,.name="Color",.kind=schema::PropertyKind::Vector3,.defaultValue=math::Double3{0.8,0.8,0.8}},
+            {.id=kPrimitiveRoughness,.name="Roughness",.kind=schema::PropertyKind::Float,.defaultValue=0.5,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kPrimitiveMetallic,.name="Metallic",.kind=schema::PropertyKind::Float,.defaultValue=0.0,.range={.minimum=0.0,.maximum=1.0}},
+            {.id=kPrimitiveIor,.name="Index of Refraction",.kind=schema::PropertyKind::Float,.defaultValue=1.5,.range={.minimum=1.0,.maximum=3.0}},
+            {.id=kPrimitiveEmissionNits,.name="Emission",.kind=schema::PropertyKind::Float,.unit="nits",.defaultValue=100000.0,.range={.minimum=0.0,.maximum=1.0e9}},
+            {.id=kPrimitiveCaustics,.name="Caustics",.kind=schema::PropertyKind::Boolean,.defaultValue=true,.advanced=true},
             {.id=kPrimitiveMaterialAsset,.name="Material Asset",.kind=schema::PropertyKind::String,.defaultValue=std::string{}},
             {.id=kPrimitiveCastShadows,.name="Cast Shadows",.kind=schema::PropertyKind::Boolean,.defaultValue=true,.advanced=true}
         }

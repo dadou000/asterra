@@ -27,6 +27,7 @@ invariants = [
   "The same static LUT authority serves ground sky and orbital limb: observers outside the atmosphere are not clamped to the top radius.",
   "Sunlight on surfaces and clouds comes from the same transmittance LUT the sky is made of (SunTransmittanceAt), so lit surfaces receive the same reddened sunlight as the sky.",
   "bypass_atmosphere skips the atmosphere pass for a view (and, as documented, the clouds drawn after it); it is a diagnostic flag and must be restored.",
+  "The aerial-perspective raymarch uses ceil(pathLength / 300 m) + 3 steps clamped to 4..40: near-field surface pixels take a handful of steps, long space-to-ground paths keep all 40.",
 ]
 related = ["/rendering/clouds", "/rendering/lighting"]
 depends_on = ["/rendering"]
@@ -35,7 +36,7 @@ verify = [
   "ctest -R Orbit.CelestialAtmosphere (Atmosphere and SkyIrradiance tests), Orbit.CelestialAtmosphereBinding and Orbit.AtmospherePropertySolver.",
   "orbit_view_terrain_layers_set(bypass_atmosphere=true): the sky, haze and limb disappear; restoring false brings them back without a restart.",
 ]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "1229ef74"
 
 [routes]
 "how the LUTs are built, fingerprints, what invalidates what, sky view, limb" = "lut-pipeline"

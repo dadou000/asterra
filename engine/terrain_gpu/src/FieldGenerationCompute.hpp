@@ -94,6 +94,9 @@ static const uint kParamLocalCraterDensity = 53;
 static const uint kParamBakedTectonicResolution = 54;
 static const uint kParamRiverIndexCount = 55;
 static const uint kParamRiverSegmentCount = 56;
+static const uint kParamIncisionResolution = 57;
+static const uint kParamGeologyResolution = 58;
+static const uint kParamGeologyLevelCount = 59;
 
 static const uint kMaxHotspotAgeSteps = 6u;
 static const uint kPlateStrideBytes = 36u;
@@ -431,7 +434,6 @@ float SampleBakedConvergenceAndBias(float3 direction, out float plateBiasMeters,
     float4 t11 = BakedTectonicTexel(face, x0 + 1, y0 + 1, resolution);
     float4 blended = lerp(lerp(t00, t10, tx), lerp(t01, t11, tx), ty);
     plateBiasMeters = blended.y;
-    return blended.x;
     structuralMeters = blended.z;
     collisionLand = blended.w;
     return blended.x;
@@ -445,10 +447,9 @@ float SampleTectonicConvergenceAndBias(float3 direction, out float plateBiasMete
     {
         return SampleBakedConvergenceAndBias(direction, plateBiasMeters, structuralMeters, collisionLand);
     }
-
+    structuralMeters = 0.0;
     collisionLand = 0.0;
 
-    structuralMeters = 0.0;
     uint plateCount = ParamUint(kParamPlateCount);
     uint nearest = 0u;
     float dTop = -2.0;
@@ -1165,6 +1166,122 @@ float RiverCarveDepth(float3 direction, float footprintMeters)
     }
     return best;
 }
+
+// Baked stream-power relief change: bilinear gutter raster stored after the
+// segments in g_rivers (mirrors BakedRiverNetwork::IncisionDeltaMeters).
+float RiverIncisionDelta(float3 direction)
+{
+    uint resolution = ParamUint(kParamIncisionResolution);
+    if (resolution == 0u) return 0.0;
+
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+
+    float r = float(resolution);
+    float fx = (uv.x + 1.0) * 0.5 * r - 0.5;
+    float fy = (uv.y + 1.0) * 0.5 * r - 0.5;
+    int last = int(resolution);
+    int x0 = clamp(int(floor(fx)), -1, last - 1);
+    int y0 = clamp(int(floor(fy)), -1, last - 1);
+    float tx = saturate(fx - float(x0));
+    float ty = saturate(fy - float(y0));
+
+    uint stride = resolution + 2u;
+    uint baseBytes = kRiverRangeBytes + ParamUint(kParamRiverIndexCount) * 4u +
+        ParamUint(kParamRiverSegmentCount) * kRiverSegmentBytes;
+    uint i00 = (face * stride + uint(y0 + 1)) * stride + uint(x0 + 1);
+    float v00 = asfloat(g_rivers.Load(baseBytes + i00 * 4u));
+    float v10 = asfloat(g_rivers.Load(baseBytes + (i00 + 1u) * 4u));
+    float v01 = asfloat(g_rivers.Load(baseBytes + (i00 + stride) * 4u));
+    float v11 = asfloat(g_rivers.Load(baseBytes + (i00 + stride + 1u) * 4u));
+    float top = lerp(v00, v10, tx);
+    return lerp(top, lerp(v01, v11, tx), ty);
+}
+
+// Compiled impact and fracture relief follows the optional incision raster in
+// the same immutable river/geology payload buffer.
+float GeologicalReliefDelta(float3 direction, float footprintMeters)
+{
+    uint resolution = ParamUint(kParamGeologyResolution);
+    uint levelCount = ParamUint(kParamGeologyLevelCount);
+    if (resolution == 0u || levelCount == 0u) return 0.0;
+    float3 a = abs(direction);
+    uint face = 4u;
+    float2 uv = float2(0.0, 0.0);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        if (direction.x >= 0.0) { face = 0u; uv = float2(-direction.z, direction.y) / a.x; }
+        else { face = 1u; uv = float2(direction.z, direction.y) / a.x; }
+    }
+    else if (a.y >= a.x && a.y >= a.z)
+    {
+        if (direction.y >= 0.0) { face = 2u; uv = float2(direction.x, -direction.z) / a.y; }
+        else { face = 3u; uv = float2(direction.x, direction.z) / a.y; }
+    }
+    else
+    {
+        if (direction.z >= 0.0) { face = 4u; uv = float2(direction.x, direction.y) / a.z; }
+        else { face = 5u; uv = float2(-direction.x, direction.y) / a.z; }
+    }
+    uv = clamp(uv, float2(-1.0, -1.0), float2(1.0, 1.0));
+    uint geologyBaseBytes = kRiverRangeBytes + ParamUint(kParamRiverIndexCount) * 4u +
+        ParamUint(kParamRiverSegmentCount) * kRiverSegmentBytes;
+    uint incisionResolution = ParamUint(kParamIncisionResolution);
+    if (incisionResolution != 0u)
+        geologyBaseBytes += 6u * (incisionResolution + 2u) * (incisionResolution + 2u) * 4u;
+    uint levelResolution = resolution;
+    uint selectedLevel = 0u;
+    uint levelByteOffset = 0u;
+    [loop]
+    while (selectedLevel + 1u < levelCount &&
+        footprintMeters >= 4.0 * ParamFloat(kParamPlanetRadiusMeters) / float(levelResolution))
+    {
+        levelByteOffset += 2u * 6u * (levelResolution + 2u) * (levelResolution + 2u) * 4u;
+        levelResolution /= 2u;
+        selectedLevel += 1u;
+    }
+    resolution = levelResolution;
+    uint stride = resolution + 2u;
+    float levelR = float(resolution);
+    float levelFx = (uv.x + 1.0) * 0.5 * levelR - 0.5;
+    float levelFy = (uv.y + 1.0) * 0.5 * levelR - 0.5;
+    int levelLast = int(resolution);
+    int levelX0 = clamp(int(floor(levelFx)), -1, levelLast - 1);
+    int levelY0 = clamp(int(floor(levelFy)), -1, levelLast - 1);
+    float levelTx = saturate(levelFx - float(levelX0));
+    float levelTy = saturate(levelFy - float(levelY0));
+    uint i00 = (face * stride + uint(levelY0 + 1)) * stride + uint(levelX0 + 1);
+    uint impactBytes = geologyBaseBytes + levelByteOffset;
+    uint iceBytes = impactBytes + 6u * stride * stride * 4u;
+    float impact = lerp(
+        lerp(asfloat(g_rivers.Load(impactBytes + i00 * 4u)),
+             asfloat(g_rivers.Load(impactBytes + (i00 + 1u) * 4u)), levelTx),
+        lerp(asfloat(g_rivers.Load(impactBytes + (i00 + stride) * 4u)),
+             asfloat(g_rivers.Load(impactBytes + (i00 + stride + 1u) * 4u)), levelTx), levelTy);
+    float ice = lerp(
+        lerp(asfloat(g_rivers.Load(iceBytes + i00 * 4u)),
+             asfloat(g_rivers.Load(iceBytes + (i00 + 1u) * 4u)), levelTx),
+        lerp(asfloat(g_rivers.Load(iceBytes + (i00 + stride) * 4u)),
+             asfloat(g_rivers.Load(iceBytes + (i00 + stride + 1u) * 4u)), levelTx), levelTy);
+    return impact + ice;
+}
 )" R"(
 struct FullSample
 {
@@ -1214,6 +1331,7 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
 
     elevation += ProceduralCraterHeight(direction, footprintMeters) +
         LocalCraterHeight(direction, footprintMeters);
+    elevation += GeologicalReliefDelta(direction, footprintMeters);
 
     float coarseElevation = elevation;
     float detailAmplitude = ParamFloat(kParamDetailAmplitudeMeters);
@@ -1244,6 +1362,12 @@ FullSample GenerateSample(float3 direction, float footprintMeters)
             elevation += ValueNoise3D(direction * (radius / bandWavelength), bandSeed) *
                 bandAmplitude * weight * detailGain * landformWeight;
         }
+    }
+
+    // Baked stream-power relief change, land only.
+    if (elevation > seaLevel && ParamUint(kParamIncisionResolution) != 0u)
+    {
+        elevation = max(elevation + RiverIncisionDelta(direction), min(elevation, seaLevel));
     }
 
     // Baked river channels: cut into land only, never below the water level.
@@ -1417,9 +1541,14 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
             FullSample coarseSample = GenerateSample(coarseDirection, g_pc.coarseFootprintMeters);
             sample = LerpFullSample(sample, coarseSample, morph);
 
+            // The slope the coarse ring itself computes at this point: its own
+            // footprint and spacing (see fineNormalFootprintMeters / Epsilon in
+            // the request). Using the fine ring's footprint here left the fine
+            // ring's normals lumpy at the ring boundary while the coarse ring's
+            // are smooth: a hard shading edge even where the heights agree.
             float2 coarseFineSlope = SampleFineSlope(
                 g_pc.fineUp.xyz, g_pc.fineEast.xyz, g_pc.fineNorth.xyz, snappedCoarseOffset,
-                fineFootprint, fineEpsilon, radius);
+                g_pc.coarseFootprintMeters, g_pc.coarseSpacingMeters, radius);
             fineSlope = lerp(fineSlope, coarseFineSlope, morph);
         }
     }
@@ -1438,8 +1567,3 @@ void main(uint3 dispatchId : SV_DispatchThreadID)
 }
 )";
 } // namespace orbit::terrain_gpu::detail
-            // The slope the coarse ring itself computes at this point: its own
-            // footprint and spacing (see fineNormalFootprintMeters / Epsilon in
-            // the request). Using the fine ring's footprint here left the fine
-            // ring's normals lumpy at the ring boundary while the coarse ring's
-            // are smooth: a hard shading edge even where the heights agree.

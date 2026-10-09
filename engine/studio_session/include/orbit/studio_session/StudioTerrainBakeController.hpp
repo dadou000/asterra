@@ -50,6 +50,9 @@ public:
 
     void Cancel(scene::ObjectId terrainObject);
 
+    void SetGeologyBakeBackend(
+        std::shared_ptr<const terrain_bake::GeologyBakeBackend> backend);
+
 private:
     [[nodiscard]] std::optional<world::PlanetId> PlanetFor(
         scene::ObjectId terrainObject) const;
@@ -57,6 +60,7 @@ private:
     editor_session::EditorWorldSession& world_;
     std::unique_ptr<terrain_bake::TerrainBakeService> service_;
     std::filesystem::path root_;
+    std::shared_ptr<const terrain_bake::GeologyBakeBackend> geologyBakeBackend_;
     std::chrono::steady_clock::time_point lastTick_{};
 };
 } // namespace orbit::studio_session

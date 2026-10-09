@@ -2,6 +2,7 @@
 
 #include <orbit/terrain/BakedRivers.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <fstream>
@@ -18,6 +19,7 @@ constexpr std::array<char, 8> kMagic{
 constexpr u32 kContainerVersion = 1;
 constexpr u32 kTectonicTag = 0x54434554U; // "TECT"
 constexpr u32 kRiverTag = 0x52564952U;    // "RIVR"
+constexpr u32 kGeologyTag = 0x314F4547U;  // "GEO1"
 
 [[nodiscard]] u64 Fnv1a(const std::vector<char>& bytes) noexcept
 {
@@ -95,6 +97,14 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool GetBytes(std::vector<char>& bytes, const std::size_t count)
+    {
+        if (count > size_ - offset_) return false;
+        bytes.assign(data_ + offset_, data_ + offset_ + count);
+        offset_ += count;
+        return true;
+    }
+
     [[nodiscard]] std::size_t Remaining() const noexcept
     {
         return size_ - offset_;
@@ -105,6 +115,129 @@ private:
     std::size_t size_;
     std::size_t offset_{0};
 };
+
+[[nodiscard]] std::size_t GeologyIndex(
+    const u32 resolution,
+    const u32 face,
+    const i32 x,
+    const i32 y) noexcept
+{
+    const std::size_t stride = static_cast<std::size_t>(resolution) + 2U;
+    return (static_cast<std::size_t>(face) * stride +
+        static_cast<std::size_t>(y + 1)) * stride +
+        static_cast<std::size_t>(x + 1);
+}
+
+[[nodiscard]] u32 GeologyTilesAcross(const u32 resolution) noexcept
+{
+    u32 tiles = 1U;
+    while (resolution / (tiles * 2U) >= 64U &&
+           resolution % (tiles * 2U) == 0U && tiles < 64U)
+        tiles *= 2U;
+    return tiles;
+}
+
+void WriteGeologyProcess(Writer& writer, const terrain::BakedGeologyProcessTexel& value)
+{
+    writer.Put(value.excavationDepthMeters);
+    writer.Put(value.ejectaThicknessMeters);
+    writer.Put(value.debrisField);
+    writer.Put(value.rayField);
+    writer.Put(value.meltThicknessMeters);
+    writer.Put(value.brecciaField);
+    writer.Put(value.resurfacedMaterialFraction);
+    writer.Put(value.resurfacingThicknessMeters);
+    writer.Put(value.microImpactRoughnessMeters);
+    writer.Put(value.microImpactCoverage);
+    writer.Put(value.excavationCoverage);
+    writer.Put(value.formationAgeYears);
+    writer.Put(value.exposureAgeYears);
+    writer.Put(value.formationAgeOrder);
+    writer.Put(value.exposureAgeOrder);
+    writer.Put(value.affectingImpacts);
+    writer.Put(value.iceDamage);
+    writer.Put(value.fractureCoverage);
+    writer.Put(value.nearbySegments);
+}
+
+[[nodiscard]] bool ReadGeologyProcess(
+    Reader& reader,
+    terrain::BakedGeologyProcessTexel& value) noexcept
+{
+    return reader.Get(value.excavationDepthMeters) &&
+        reader.Get(value.ejectaThicknessMeters) && reader.Get(value.debrisField) &&
+        reader.Get(value.rayField) && reader.Get(value.meltThicknessMeters) &&
+        reader.Get(value.brecciaField) && reader.Get(value.resurfacedMaterialFraction) &&
+        reader.Get(value.resurfacingThicknessMeters) &&
+        reader.Get(value.microImpactRoughnessMeters) && reader.Get(value.microImpactCoverage) &&
+        reader.Get(value.excavationCoverage) && reader.Get(value.formationAgeYears) &&
+        reader.Get(value.exposureAgeYears) && reader.Get(value.formationAgeOrder) &&
+        reader.Get(value.exposureAgeOrder) && reader.Get(value.affectingImpacts) &&
+        reader.Get(value.iceDamage) && reader.Get(value.fractureCoverage) &&
+        reader.Get(value.nearbySegments);
+}
+
+[[nodiscard]] std::vector<char> CompressTileBytes(const std::vector<char>& input)
+{
+    std::vector<char> output;
+    output.reserve(input.size());
+    std::size_t cursor = 0U;
+    while (cursor < input.size())
+    {
+        std::size_t zeroRun = 0U;
+        while (cursor + zeroRun < input.size() && input[cursor + zeroRun] == 0 && zeroRun < 127U)
+            ++zeroRun;
+        if (zeroRun >= 3U)
+        {
+            output.push_back(static_cast<char>(0x80U | static_cast<u8>(zeroRun)));
+            cursor += zeroRun;
+            continue;
+        }
+        const std::size_t start = cursor;
+        while (cursor < input.size() && cursor - start < 127U)
+        {
+            std::size_t nextZeroRun = 0U;
+            while (cursor + nextZeroRun < input.size() &&
+                   input[cursor + nextZeroRun] == 0 && nextZeroRun < 3U)
+                ++nextZeroRun;
+            if (nextZeroRun >= 3U) break;
+            ++cursor;
+        }
+        const std::size_t length = cursor - start;
+        output.push_back(static_cast<char>(static_cast<u8>(length)));
+        output.insert(output.end(), input.begin() + static_cast<std::ptrdiff_t>(start),
+            input.begin() + static_cast<std::ptrdiff_t>(cursor));
+    }
+    return output;
+}
+
+[[nodiscard]] bool DecompressTileBytes(
+    const std::vector<char>& input,
+    const std::size_t expectedSize,
+    std::vector<char>& output)
+{
+    output.clear();
+    output.reserve(expectedSize);
+    std::size_t cursor = 0U;
+    while (cursor < input.size())
+    {
+        const u8 token = static_cast<u8>(input[cursor++]);
+        const std::size_t length = token & 0x7FU;
+        if (length == 0U || length > expectedSize - output.size()) return false;
+        if ((token & 0x80U) != 0U)
+        {
+            output.insert(output.end(), length, 0);
+        }
+        else
+        {
+            if (length > input.size() - cursor) return false;
+            output.insert(output.end(), input.begin() + static_cast<std::ptrdiff_t>(cursor),
+                input.begin() + static_cast<std::ptrdiff_t>(cursor + length));
+            cursor += length;
+        }
+    }
+    return output.size() == expectedSize;
+}
 
 [[nodiscard]] std::vector<char> EncodeTectonics(
     const terrain::BakedTectonicRasters& bake)
@@ -243,6 +376,8 @@ DecodeTectonics(const std::vector<char>& payload, std::string* error)
         w.Put(segment.upstream);
         w.Put(segment.downstream);
     }
+    w.Put(rivers.IncisionResolution());
+    w.PutArray(rivers.IncisionGutter());
     return w.Data();
 }
 
@@ -269,7 +404,8 @@ DecodeRivers(const std::vector<char>& payload, std::string* error)
     {
         return fail("River section header is truncated.");
     }
-    if (version != terrain::BakedRiverNetwork::kFormatVersion)
+    // Version 1 files have no incision field; they load as a graph only.
+    if (version != 1U && version != terrain::BakedRiverNetwork::kFormatVersion)
     {
         return fail("River section has an unsupported version.");
     }
@@ -299,11 +435,30 @@ DecodeRivers(const std::vector<char>& payload, std::string* error)
         static_cast<void>(r.Get(segment.downstream));
     }
 
+    u32 incisionResolution = 0;
+    std::vector<f32> incision;
+    if (version >= 2U)
+    {
+        if (!r.Get(incisionResolution) || incisionResolution > 4096U)
+        {
+            return fail("River incision header is invalid.");
+        }
+        if (incisionResolution != 0U)
+        {
+            const std::size_t stride = static_cast<std::size_t>(incisionResolution) + 2U;
+            if (!r.GetArray(incision, 6U * stride * stride))
+            {
+                return fail("River incision data is truncated.");
+            }
+        }
+    }
+
     try
     {
         return std::make_shared<const terrain::BakedRiverNetwork>(
             terrain::BakedRiverNetwork::Build(
-                radius, recipeHash, std::move(nodes), std::move(segments)));
+                radius, recipeHash, std::move(nodes), std::move(segments),
+                incisionResolution, std::move(incision)));
     }
     catch (const std::exception& exception)
     {
@@ -311,6 +466,238 @@ DecodeRivers(const std::vector<char>& payload, std::string* error)
         {
             *error = exception.what();
         }
+        return nullptr;
+    }
+}
+
+[[nodiscard]] std::vector<char> EncodeGeology(
+    const terrain::BakedGeologyRasters& geology)
+{
+    Writer w;
+    w.Put(terrain::BakedGeologyRasters::kFormatVersion);
+    w.Put(geology.Resolution());
+    w.Put(geology.RecipeHash());
+    const u32 tilesAcross = GeologyTilesAcross(geology.Resolution());
+    const u32 coreResolution = geology.Resolution() / tilesAcross;
+    const u32 tileCount = 6U * tilesAcross * tilesAcross;
+    w.Put(tilesAcross);
+    w.Put(coreResolution);
+    w.Put(tileCount);
+
+    const auto& relief = geology.ReliefGutter();
+    const auto& ice = geology.IceReliefGutter();
+    const auto& process = geology.ProcessGutter();
+    for (u32 face = 0U; face < 6U; ++face)
+    {
+        for (u32 tileY = 0U; tileY < tilesAcross; ++tileY)
+        {
+            for (u32 tileX = 0U; tileX < tilesAcross; ++tileX)
+            {
+                Writer tile;
+                tile.Put(face);
+                tile.Put(tileX);
+                tile.Put(tileY);
+                tile.Put(coreResolution);
+                for (i32 y = -1; y <= static_cast<i32>(coreResolution); ++y)
+                {
+                    for (i32 x = -1; x <= static_cast<i32>(coreResolution); ++x)
+                    {
+                        const i32 sourceX = static_cast<i32>(tileX * coreResolution) + x;
+                        const i32 sourceY = static_cast<i32>(tileY * coreResolution) + y;
+                        tile.Put(relief[GeologyIndex(geology.Resolution(), face, sourceX, sourceY)]);
+                        tile.Put(ice[GeologyIndex(geology.Resolution(), face, sourceX, sourceY)]);
+                        WriteGeologyProcess(tile, process[GeologyIndex(
+                            geology.Resolution(), face, sourceX, sourceY)]);
+                    }
+                }
+                const u64 tileSize = static_cast<u64>(tile.Data().size());
+                std::vector<char> compressed = CompressTileBytes(tile.Data());
+                const bool useCompressed = compressed.size() < tile.Data().size();
+                const u8 encoding = useCompressed ? 1U : 0U;
+                const auto& payload = useCompressed ? compressed : tile.Data();
+                const u64 payloadSize = static_cast<u64>(payload.size());
+                w.Put(encoding);
+                w.Put(tileSize);
+                w.Put(payloadSize);
+                w.Put(Fnv1a(tile.Data()));
+                w.PutBytes(payload);
+            }
+        }
+    }
+    return w.Data();
+}
+
+[[nodiscard]] std::shared_ptr<const terrain::BakedGeologyRasters>
+DecodeGeology(const std::vector<char>& payload, std::string* error)
+{
+    const auto fail = [error](const char* message)
+    {
+        if (error != nullptr) *error = message;
+        return std::shared_ptr<const terrain::BakedGeologyRasters>{};
+    };
+    Reader r(payload.data(), payload.size());
+    u32 version = 0;
+    u32 resolution = 0;
+    u64 recipeHash = 0;
+    if (!r.Get(version) || !r.Get(resolution) || !r.Get(recipeHash))
+        return fail("Geology section header is truncated.");
+    if (version < 1U || version > terrain::BakedGeologyRasters::kFormatVersion)
+        return fail("Geology section has an unsupported version.");
+    if (resolution < 2U || resolution > 4096U)
+        return fail("Geology section resolution is invalid.");
+    const std::size_t stride = static_cast<std::size_t>(resolution) + 2U;
+    std::vector<f32> relief;
+    std::vector<f32> iceRelief;
+    std::vector<terrain::BakedGeologyProcessTexel> processes;
+    if (version >= 4U)
+    {
+        u32 tilesAcross = 0U;
+        u32 tileResolution = 0U;
+        u32 tileCount = 0U;
+        if (!r.Get(tilesAcross) || !r.Get(tileResolution) || !r.Get(tileCount))
+            return fail("Geology regional-tile header is truncated.");
+        const u32 expectedTilesAcross = GeologyTilesAcross(resolution);
+        const u32 expectedTileCount = 6U * expectedTilesAcross * expectedTilesAcross;
+        if (tilesAcross != expectedTilesAcross || tileCount != expectedTileCount ||
+            tileResolution != resolution / tilesAcross)
+            return fail("Geology regional-tile layout is invalid.");
+
+        const std::size_t expected = 6U * stride * stride;
+        relief.assign(expected, 0.0F);
+        iceRelief.assign(expected, 0.0F);
+        processes.resize(expected);
+        std::vector<u8> filled(expected, 0U);
+        std::vector<u8> seen(tileCount, 0U);
+        const std::size_t tileStride = static_cast<std::size_t>(tileResolution) + 2U;
+        const std::size_t tileTexels = tileStride * tileStride;
+        const std::size_t maxTileBytes = 16U + tileTexels * 92U;
+        for (u32 tileIndex = 0U; tileIndex < tileCount; ++tileIndex)
+        {
+            u8 encoding = 0U;
+            u64 tileSize = 0U;
+            u64 payloadSize = 0U;
+            u64 tileChecksum = 0U;
+            if (!r.Get(encoding) || !r.Get(tileSize) || !r.Get(payloadSize) ||
+                !r.Get(tileChecksum) || tileSize < 16U || tileSize > maxTileBytes ||
+                payloadSize > maxTileBytes * 2U ||
+                payloadSize > r.Remaining())
+                return fail("Geology regional tile is truncated or oversized.");
+            std::vector<char> encodedBytes;
+            if (!r.GetBytes(encodedBytes, static_cast<std::size_t>(payloadSize)))
+                return fail("Geology regional tile is truncated.");
+            std::vector<char> tileBytes;
+            if (encoding == 0U && payloadSize == tileSize)
+                tileBytes = std::move(encodedBytes);
+            else if (encoding == 1U && !DecompressTileBytes(
+                         encodedBytes, static_cast<std::size_t>(tileSize), tileBytes))
+                return fail("Geology regional tile compression is invalid.");
+            else if (encoding > 1U || (payloadSize != tileSize && encoding == 0U))
+                return fail("Geology regional tile encoding is unsupported.");
+            if (Fnv1a(tileBytes) != tileChecksum)
+                return fail("Geology regional tile failed its checksum.");
+            Reader tile(tileBytes.data(), tileBytes.size());
+            u32 face = 0U;
+            u32 tileX = 0U;
+            u32 tileY = 0U;
+            u32 encodedResolution = 0U;
+            if (!tile.Get(face) || !tile.Get(tileX) || !tile.Get(tileY) ||
+                !tile.Get(encodedResolution) || face >= 6U ||
+                tileX >= tilesAcross || tileY >= tilesAcross ||
+                encodedResolution != tileResolution)
+                return fail("Geology regional tile identity is invalid.");
+            const std::size_t identity =
+                (static_cast<std::size_t>(face) * tilesAcross + tileY) * tilesAcross + tileX;
+            if (seen[identity] != 0U)
+                return fail("Geology regional tile is duplicated.");
+            seen[identity] = 1U;
+            for (i32 localY = -1; localY <= static_cast<i32>(tileResolution); ++localY)
+            {
+                for (i32 localX = -1; localX <= static_cast<i32>(tileResolution); ++localX)
+                {
+                    f32 impactValue = 0.0F;
+                    f32 iceValue = 0.0F;
+                    terrain::BakedGeologyProcessTexel processValue{};
+                    if (!tile.Get(impactValue) || !tile.Get(iceValue) ||
+                        !ReadGeologyProcess(tile, processValue))
+                        return fail("Geology regional tile payload is truncated.");
+                    const i32 sourceX = static_cast<i32>(tileX * tileResolution) + localX;
+                    const i32 sourceY = static_cast<i32>(tileY * tileResolution) + localY;
+                    if (sourceX < -1 || sourceX > static_cast<i32>(resolution) ||
+                        sourceY < -1 || sourceY > static_cast<i32>(resolution))
+                        return fail("Geology regional tile halo exceeds the face bounds.");
+                    const u32 ownerX = sourceX < 0 ? 0U :
+                        sourceX >= static_cast<i32>(resolution)
+                            ? tilesAcross - 1U
+                            : static_cast<u32>(sourceX) / tileResolution;
+                    const u32 ownerY = sourceY < 0 ? 0U :
+                        sourceY >= static_cast<i32>(resolution)
+                            ? tilesAcross - 1U
+                            : static_cast<u32>(sourceY) / tileResolution;
+                    if (tileX != ownerX || tileY != ownerY) continue;
+                    const std::size_t target = GeologyIndex(resolution, face, sourceX, sourceY);
+                    if (filled[target] != 0U)
+                        return fail("Geology regional tiles overlap their canonical coverage.");
+                    filled[target] = 1U;
+                    relief[target] = impactValue;
+                    iceRelief[target] = iceValue;
+                    processes[target] = processValue;
+                }
+            }
+            if (tile.Remaining() != 0U)
+                return fail("Geology regional tile has trailing bytes.");
+        }
+        if (std::find(seen.begin(), seen.end(), 0U) != seen.end() ||
+            std::find(filled.begin(), filled.end(), 0U) != filled.end() ||
+            r.Remaining() != 0U)
+            return fail("Geology regional tiles do not cover the complete cube sphere.");
+        try
+        {
+            return std::make_shared<const terrain::BakedGeologyRasters>(
+                terrain::BakedGeologyRasters::Build(
+                    resolution, recipeHash, std::move(relief), std::move(iceRelief),
+                    std::move(processes)));
+        }
+        catch (const std::exception& exception)
+        {
+            if (error != nullptr) *error = exception.what();
+            return nullptr;
+        }
+    }
+    if (!r.GetArray(relief, 6U * stride * stride) ||
+        (version >= 2U && !r.GetArray(iceRelief, 6U * stride * stride)) ||
+        (version < 3U && r.Remaining() != 0U))
+        return fail("Geology section data is truncated or has trailing bytes.");
+    if (version >= 3U)
+    {
+        processes.resize(6U * stride * stride);
+        for (auto& value : processes)
+        {
+            if (!r.Get(value.excavationDepthMeters) || !r.Get(value.ejectaThicknessMeters) ||
+                !r.Get(value.debrisField) || !r.Get(value.rayField) ||
+                !r.Get(value.meltThicknessMeters) || !r.Get(value.brecciaField) ||
+                !r.Get(value.resurfacedMaterialFraction) ||
+                !r.Get(value.resurfacingThicknessMeters) ||
+                !r.Get(value.microImpactRoughnessMeters) ||
+                !r.Get(value.microImpactCoverage) || !r.Get(value.excavationCoverage) ||
+                !r.Get(value.formationAgeYears) || !r.Get(value.exposureAgeYears) ||
+                !r.Get(value.formationAgeOrder) || !r.Get(value.exposureAgeOrder) ||
+                !r.Get(value.affectingImpacts) || !r.Get(value.iceDamage) ||
+                !r.Get(value.fractureCoverage) || !r.Get(value.nearbySegments))
+                return fail("Geology process channels are truncated.");
+        }
+        if (r.Remaining() != 0U)
+            return fail("Geology section has trailing bytes.");
+    }
+    try
+    {
+        return std::make_shared<const terrain::BakedGeologyRasters>(
+            terrain::BakedGeologyRasters::Build(
+                resolution, recipeHash, std::move(relief), std::move(iceRelief),
+                std::move(processes)));
+    }
+    catch (const std::exception& exception)
+    {
+        if (error != nullptr) *error = exception.what();
         return nullptr;
     }
 }
@@ -336,6 +723,8 @@ void SavePlanetBake(
     {
         sections.push_back({kRiverTag, EncodeRivers(*contents.rivers)});
     }
+    if (contents.geology != nullptr)
+        sections.push_back({kGeologyTag, EncodeGeology(*contents.geology)});
 
     Writer file;
     for (const char c : kMagic)
@@ -483,6 +872,16 @@ std::optional<PlanetBakeContents> LoadPlanetBake(
                 {
                     *error = sectionError;
                 }
+                return std::nullopt;
+            }
+        }
+        else if (tag == kGeologyTag)
+        {
+            std::string sectionError;
+            contents.geology = DecodeGeology(payload, &sectionError);
+            if (contents.geology == nullptr)
+            {
+                if (error != nullptr) *error = sectionError;
                 return std::nullopt;
             }
         }

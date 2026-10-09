@@ -162,6 +162,10 @@ struct StudioTerrainLayerOptions
     // rays hit and multiplies by albedo / pi, so a physically correct diffuse bounce
     // (albedo x average radiance) needs pi here; lower values dim all gathered bounce light.
     f32 giIntensity{1.0F};
+    // Internal render resolution as a fraction of the viewport panel (per axis, 0.25..1). Below 1
+    // the view renders fewer pixels and the panel shows it scaled up (bilinear): roughly 40% less
+    // GPU time at 0.75. 1 = native.
+    f32 renderScale{1.0F};
     // Scales the TAA sub-pixel jitter (1 = full +-0.5 px, 0 = no jitter, which turns TAA into a
     // plain temporal filter). Lower values trade anti-aliasing for less visible shimmer.
     f32 taaJitterScale{1.0F};

@@ -1,5 +1,9 @@
 #include "StudioViewportInternals.hpp"
 
+#include <atomic>
+#include <exception>
+#include <optional>
+
 namespace orbit::studio_ui
 {
 using namespace viewport_detail;
@@ -874,10 +878,25 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
     const auto updateListStarted =
         std::chrono::steady_clock::now();
     lighting::RadianceResidencyStats radianceStats;
+    // The estimates run on the frame thread (terrain sampling dominates), so
+    // the per-frame count is capped to what fits a time budget rather than a
+    // fixed cell count: a loaded frame still hits its rate, and the cache
+    // simply converges over more frames.
+    constexpr f64 kRadianceEstimateBudgetMs = 1.2;
+    const u32 radianceUpdateBudget =
+        std::min(
+            lightingPlan.radianceCacheUpdates,
+            std::max<u32>(
+                8U,
+                static_cast<u32>(
+                    kRadianceEstimateBudgetMs /
+                    std::max(
+                        finalGather.radianceEstimateMsPerCell,
+                        0.005))));
     const auto radianceUpdates =
         finalGather.radianceResidency->BuildUpdateList(
             lightingView.cameraPositionInFrameMeters,
-            lightingPlan.radianceCacheUpdates,
+            radianceUpdateBudget,
             &radianceStats);
     if (cpuTimingRecorder)
     {
@@ -910,30 +929,122 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     radianceUpdates.size())
         });
 
-    for (const auto& update : radianceUpdates)
+    const auto estimateStarted = std::chrono::steady_clock::now();
+
+    // Cells are independent and their inputs (terrain source, proxy BVH,
+    // frame graph, lights) are read-only here, so they are estimated in
+    // parallel; the results are committed in order on this thread.
+    using RadianceEstimate = decltype(
+        lighting::EstimateRadianceCellWithSky(
+            radianceUpdates.front().key,
+            finalGather.radianceResidency->Config(),
+            lightingView,
+            directLight,
+            localLightGrid.lights,
+            &radianceVisibility,
+            radianceEstimateSettings,
+            emissiveVolumes));
+    std::vector<std::optional<RadianceEstimate>> estimates(
+        radianceUpdates.size());
+    std::vector<std::exception_ptr> estimateErrors(
+        radianceUpdates.size());
+
+    const auto estimateOne =
+        [&](const std::size_t index)
+        {
+            try
+            {
+                // The sky is estimated as its own channel (full strength,
+                // occluded by terrain and proxies) rather than folded into
+                // the one-bounce L1; direct lighting applies it as fill.
+                estimates[index] =
+                    lighting::EstimateRadianceCellWithSky(
+                        radianceUpdates[index].key,
+                        finalGather.radianceResidency->Config(),
+                        lightingView,
+                        directLight,
+                        localLightGrid.lights,
+                        &radianceVisibility,
+                        radianceEstimateSettings,
+                        emissiveVolumes);
+            }
+            catch (...)
+            {
+                estimateErrors[index] = std::current_exception();
+            }
+        };
+
+    if (radianceUpdates.size() >= 4U)
     {
-        // The sky is estimated as its own channel (full strength,
-        // occluded by terrain and proxies) rather than folded into the
-        // one-bounce L1; direct lighting applies it as fill.
-        const auto estimate =
-            lighting::EstimateRadianceCellWithSky(
-                update.key,
-                finalGather.radianceResidency->Config(),
-                lightingView,
-                directLight,
-                localLightGrid.lights,
-                &radianceVisibility,
-                radianceEstimateSettings,
-                emissiveVolumes);
+        if (radianceEstimatePool_ == nullptr)
+        {
+            radianceEstimatePool_ =
+                std::make_unique<jobs::JobSystem>(
+                    jobs::PoolWorkerCount(
+                        "ORBIT_RADIANCE_ESTIMATE_WORKERS", 3U, 2U),
+                    "RadianceEstimate");
+        }
+
+        // Dynamic distribution: workers and this thread pull indices.
+        std::atomic<std::size_t> nextIndex{0U};
+        const auto drain =
+            [&]
+            {
+                for (;;)
+                {
+                    const std::size_t index =
+                        nextIndex.fetch_add(1U, std::memory_order_relaxed);
+                    if (index >= radianceUpdates.size())
+                    {
+                        return;
+                    }
+                    estimateOne(index);
+                }
+            };
+
+        jobs::JobGroup group;
+        const std::size_t helpers = std::min<std::size_t>(
+            radianceUpdates.size() - 1U, 8U);
+        for (std::size_t helper = 0U; helper < helpers; ++helper)
+        {
+            radianceEstimatePool_->Submit(group, drain);
+        }
+        drain();
+        radianceEstimatePool_->Wait(group);
+    }
+    else
+    {
+        for (std::size_t index = 0U; index < radianceUpdates.size(); ++index)
+        {
+            estimateOne(index);
+        }
+    }
+
+    for (std::size_t index = 0U; index < radianceUpdates.size(); ++index)
+    {
+        if (estimateErrors[index] != nullptr)
+        {
+            std::rethrow_exception(estimateErrors[index]);
+        }
 
         static_cast<void>(
             finalGather.radianceResidency->CommitUpdate(
-                update.key,
-                estimate.indirect,
-                estimate.sky,
+                radianceUpdates[index].key,
+                estimates[index]->indirect,
+                estimates[index]->sky,
                 radianceEstimateSettings.diffuseTransportScale,
                 1U,
                 radianceSourceRevision));
+    }
+    if (!radianceUpdates.empty())
+    {
+        const f64 elapsedMs =
+            std::chrono::duration<f64, std::milli>(
+                std::chrono::steady_clock::now() - estimateStarted).count();
+        const f64 perCell =
+            elapsedMs / static_cast<f64>(radianceUpdates.size());
+        finalGather.radianceEstimateMsPerCell =
+            0.8 * finalGather.radianceEstimateMsPerCell + 0.2 * perCell;
     }
     recordComposeStage("gi_estimate");
 
@@ -1417,6 +1528,9 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
     // depth map (works without ray-query hardware); it is folded into
     // the same sun-visibility texture the proxy pass writes.
     std::optional<mesh_render::MeshShadowFrame> meshShadowFrame;
+    // The sun shadow map of this frame, for the glass caustics.
+    rhi::Texture* glassSunShadowMap = nullptr;
+    std::optional<render_graph::TextureHandle> glassSunShadowHandle;
     std::vector<mesh_render::MeshInstance> meshShadowInstances;
     if (!info.layers.bypassProxySunShadow &&
         !info.layers.bypassMeshSurfaces &&
@@ -1426,9 +1540,20 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         if (const auto meshShadowFound =
                 staticMeshPresentations_.find(info.id);
             meshShadowFound != staticMeshPresentations_.end() &&
-            !meshShadowFound->second.instances.empty())
+            (!meshShadowFound->second.instances.empty() ||
+             !meshShadowFound->second.glass.empty()))
         {
             meshShadowInstances = meshShadowFound->second.instances;
+            // Glass blocks the sun's direct beam like any body; the light it
+            // lets through returns as caustics (GlassCaustics).
+            for (const auto& glass : meshShadowFound->second.glass)
+            {
+                if (glass.model != nullptr && glass.castShadows)
+                {
+                    meshShadowInstances.push_back(
+                        {.model = glass.model, .rows = glass.rows});
+                }
+            }
             meshShadowFrame = mesh_render::BuildMeshShadowFrame(
                 meshShadowInstances,
                 studioDirectLight.directionBody,
@@ -1594,7 +1719,59 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                         .format = rhi::TextureFormat::D32_Float,
                         .initialState =
                             rhi::ResourceState::DepthWrite});
+                    mapTargets.skySignature = 0U;
+                    mapTargets.sunSignature = 0U;
                 }
+
+                // Signatures of the inputs the two maps are rendered from.
+                u64 skySignature = 1469598103934665603ULL;
+                u64 sunSignature = 1469598103934665603ULL;
+                const auto mix =
+                    [](u64& hash, const auto& value)
+                    {
+                        const auto* bytes =
+                            reinterpret_cast<const unsigned char*>(&value);
+                        for (std::size_t i = 0U; i < sizeof(value); ++i)
+                        {
+                            hash = (hash ^ bytes[i]) * 1099511628211ULL;
+                        }
+                    };
+                for (const auto& instance : meshShadowInstances)
+                {
+                    for (u64* hash : {&skySignature, &sunSignature})
+                    {
+                        mix(*hash, instance.model);
+                        mix(*hash, instance.rows);
+                    }
+                }
+                const auto skyUp =
+                    mesh_render::MeshLocalUp(
+                        *meshShadowFrame,
+                        view->Lighting().cameraPositionInFrameMeters);
+                for (u64* hash : {&skySignature, &sunSignature})
+                {
+                    mix(*hash, meshShadowFrame->center);
+                    mix(*hash, meshShadowFrame->radius);
+                    mix(*hash, meshShadowFrame->right);
+                    mix(*hash, meshShadowFrame->up);
+                    mix(*hash, meshShadowFrame->mapSize);
+                }
+                mix(skySignature, skyUp);
+                mix(sunSignature, meshShadowFrame->toSun);
+                // Streaming textures can change alpha-cut casters without
+                // touching any hashed input; refresh periodically.
+                {
+                    const u64 refreshEpoch =
+                        antiAliasingPresentations_[info.id].frameCounter / 64U;
+                    mix(skySignature, refreshEpoch);
+                    mix(sunSignature, refreshEpoch);
+                }
+                const bool skyMapStale =
+                    mapTargets.skySignature != skySignature;
+                const bool sunMapStale =
+                    mapTargets.sunSignature != sunSignature;
+                mapTargets.skySignature = skySignature;
+                mapTargets.sunSignature = sunSignature;
 
                 const auto skyColorHandle = graph.ImportTexture(
                     prefix + ".MeshSkyAtlas",
@@ -1608,6 +1785,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     *meshShadowFrame,
                     view->Lighting().cameraPositionInFrameMeters);
 
+                if (skyMapStale)
                 graph.AddPass(
                     prefix + ".MeshSkyMap",
                     {
@@ -1645,11 +1823,14 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     prefix + ".MeshShadowMap",
                     *mapTargets.color,
                     rhi::ResourceState::ShaderResource);
+                glassSunShadowMap = mapTargets.color.get();
+                glassSunShadowHandle = mapColorHandle;
                 const auto mapDepthHandle = graph.ImportTexture(
                     prefix + ".MeshShadowDepth",
                     *mapTargets.depth,
                     rhi::ResourceState::DepthWrite);
 
+                if (sunMapStale)
                 graph.AddPass(
                     prefix + ".MeshShadowMap",
                     {
@@ -1727,6 +1908,12 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                          .localUp = meshLocalUp},
                      shadowTexture = proxySunShadowTexture,
                      initialize = !proxiesReady,
+                     temporalIndex =
+                         info.layers.antiAliasing >= 2U
+                             ? static_cast<u32>(
+                                   antiAliasingPresentations_[info.id]
+                                       .frameCounter)
+                             : 0U,
                      width,
                      height,
                      lightingView](
@@ -1746,7 +1933,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                             lightingView,
                             frame,
                             skyFill,
-                            initialize);
+                            initialize,
+                            temporalIndex);
                     });
             }
 
@@ -2082,6 +2270,82 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 2U,
                 10U);
 
+        // Pass-need probe (see FinalGatherPresentation): read the slot the
+        // gather wrote framesInFlight frames ago, update the holds, rearm it.
+        if (finalGather.needStatsBuffers.size() != framesInFlight_)
+        {
+            finalGather.needStatsBuffers.clear();
+            finalGather.needStatsWritten.assign(framesInFlight_, 0U);
+            for (u32 slot = 0U; slot < framesInFlight_; ++slot)
+            {
+                auto buffer = device_->CreateBuffer({
+                    .sizeBytes = 16U,
+                    .usage = rhi::BufferUsage::Structured,
+                    .memory = rhi::MemoryUsage::HostVisible,
+                    .initialState = rhi::ResourceState::ShaderResource});
+                std::memset(buffer->Map(), 0, 16U);
+                buffer->Unmap();
+                finalGather.needStatsBuffers.push_back(std::move(buffer));
+            }
+        }
+        const u32 needSlot = frameIndex % framesInFlight_;
+        {
+            constexpr u32 kNeedHoldFrames = 90U;
+            constexpr f64 kSmoothFraction = 0.002;
+            constexpr f64 kUncoveredFraction = 0.01;
+            auto& needBuffer = *finalGather.needStatsBuffers[needSlot];
+            auto* counters = reinterpret_cast<u32*>(needBuffer.Map());
+            if (finalGather.needStatsWritten[needSlot] != 0U)
+            {
+                const f64 surfaces = static_cast<f64>(counters[0]);
+                if (surfaces > 256.0)
+                {
+                    if (static_cast<f64>(counters[1]) >
+                        kSmoothFraction * surfaces)
+                    {
+                        finalGather.reflectionsHold = kNeedHoldFrames;
+                    }
+                    if (static_cast<f64>(counters[2]) >
+                        kUncoveredFraction * surfaces)
+                    {
+                        finalGather.cacheFallbackHold = kNeedHoldFrames;
+                    }
+                    if (static_cast<f64>(counters[3]) >
+                        kSmoothFraction * surfaces)
+                    {
+                        finalGather.exactReflectionHold = kNeedHoldFrames;
+                    }
+                }
+                else
+                {
+                    // Nothing to judge from (sky only, or a tiny view).
+                    finalGather.reflectionsHold = kNeedHoldFrames;
+                    finalGather.cacheFallbackHold = kNeedHoldFrames;
+                    finalGather.exactReflectionHold = kNeedHoldFrames;
+                }
+            }
+            std::memset(counters, 0, 16U);
+            needBuffer.Unmap();
+            finalGather.needStatsWritten[needSlot] = 1U;
+            if (finalGather.reflectionsHold > 0U)
+            {
+                --finalGather.reflectionsHold;
+            }
+            if (finalGather.cacheFallbackHold > 0U)
+            {
+                --finalGather.cacheFallbackHold;
+            }
+            if (finalGather.exactReflectionHold > 0U)
+            {
+                --finalGather.exactReflectionHold;
+            }
+        }
+        auto* needStatsBuffer = finalGather.needStatsBuffers[needSlot].get();
+        const auto needStatsHandle = graph.ImportBuffer(
+            prefix + ".NeedStats",
+            *needStatsBuffer,
+            rhi::ResourceState::ShaderResource);
+
         graph.AddPass(
             prefix + ".ScreenSpaceFinalGather",
             {
@@ -2177,7 +2441,15 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                             Write
                 }
             },
+            {
+                {
+                    .buffer = needStatsHandle,
+                    .state = rhi::ResourceState::UnorderedAccess,
+                    .access = render_graph::Access::Write
+                }
+            },
             [this,
+             needStatsBuffer,
              color,
              lightingBaseRoughness,
              lightingNormalMetallic,
@@ -2203,9 +2475,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 lighting::SdfGatherInput sdfGather;
                 if (const auto& volume = meshSdfScene_.Volume();
                     useSdfGi && volume.ready &&
-                    volume.radiance != nullptr)
+                    volume.radiance != nullptr &&
+                    volume.distanceCorners != nullptr)
                 {
-                    sdfGather.distance = volume.distance;
+                    sdfGather.distance = volume.distanceCorners;
                     sdfGather.albedo = volume.albedo;
                     sdfGather.normal = volume.normal;
                     sdfGather.radiance = volume.radiance;
@@ -2244,11 +2517,15 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     particleLightGridForDirect,
                     gatherSettings,
                     sdfGather.distance != nullptr ? &sdfGather
-                                                  : nullptr);
+                                                  : nullptr,
+                    needStatsBuffer);
             });
 
+        // The fallback only fills pixels the gather could not cover; skip it
+        // while (almost) none are.
         if (radianceLevelCount > 0U &&
-            !info.layers.bypassRadianceCache)
+            !info.layers.bypassRadianceCache &&
+            finalGather.cacheFallbackHold > 0U)
         {
             graph.AddPass(
                 prefix + ".RadianceCacheFallback",
@@ -2472,8 +2749,12 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 }
             });
 
+        // Reflections only act on smooth or metallic pixels; skip the whole
+        // chain (hybrid resolve, exact compact/trace/resolve, copy-back)
+        // while none are on screen.
         if (radianceLevelCount > 0U &&
-            !info.layers.bypassHybridReflections)
+            !info.layers.bypassHybridReflections &&
+            finalGather.reflectionsHold > 0U)
         {
             lighting::HardwareRayQueryVisibilityBatch*
                 exactReflectionHardware = nullptr;
@@ -2484,7 +2765,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 proxyFound !=
                         visibilityProxyPresentations_.end() &&
                     proxyFound->second.hardware != nullptr &&
-                    proxyFound->second.hardware->Ready())
+                    proxyFound->second.hardware->Ready() &&
+                    finalGather.exactReflectionHold > 0U)
             {
                 exactReflectionHardware =
                     proxyFound->second.hardware.get();
@@ -2785,11 +3067,28 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                  lightingView,
                  lightingPlan,
                  lightingTimestamps,
-                 frameIndex](
+                 frameIndex,
+                 useSdfGi = !info.layers.bypassSdfGi](
                     rhi::CommandList& commands,
                     const render_graph::Resources&
                         resources)
                 {
+                    lighting::SdfGatherInput sdfReflection;
+                    if (const auto& volume = meshSdfScene_.Volume();
+                        useSdfGi && volume.ready &&
+                        volume.radiance != nullptr &&
+                        volume.distanceCorners != nullptr)
+                    {
+                        sdfReflection.distance = volume.distanceCorners;
+                        sdfReflection.albedo = volume.albedo;
+                        sdfReflection.normal = volume.normal;
+                        sdfReflection.radiance = volume.radiance;
+                        sdfReflection.originInFrameMeters =
+                            volume.originInFrameMeters;
+                        sdfReflection.voxelSize = volume.voxelSize;
+                        sdfReflection.dimensions = volume.dimensions;
+                    }
+
                     if (lightingTimestamps != nullptr)
                     {
                         lightingTimestamps->
@@ -2819,7 +3118,11 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                             height,
                             lightingView,
                             lightingPlan.
-                                reflectionScale);
+                                reflectionScale,
+                            {},
+                            sdfReflection.distance != nullptr
+                                ? &sdfReflection
+                                : nullptr);
                 });
 
             if (exactReflectionHardware != nullptr &&
@@ -3264,6 +3567,70 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     view->Camera(),
                     waterRenderer->CameraFrame());
 
+            // The sea is a sphere: from outside it, only view rays pointing
+            // more steeply down than the horizon (sin dip = sqrt(1 - (R/r)^2))
+            // can hit it. Skip the pass when no screen ray can.
+            bool seaMayBeVisible = true;
+            {
+                const auto& waterEye = view->Camera();
+                const math::Double3 eyePosition =
+                    waterEye.localPositionMeters;
+                const f64 seaRadius =
+                    terrainRuntime->planet.radiusMeters +
+                    nearFieldSeaLevelMeters;
+                const f64 eyeRadius = math::Length(eyePosition);
+                if (seaRadius > 1.0 && eyeRadius > seaRadius * 1.000001)
+                {
+                    const f64 ratio = seaRadius / eyeRadius;
+                    const f64 sinDip =
+                        std::sqrt(std::max(0.0, 1.0 - ratio * ratio));
+                    const math::Double3 localUp =
+                        eyePosition * (1.0 / eyeRadius);
+                    const math::Double3 eyeForward = math::Normalize(
+                        math::Double3{
+                            static_cast<f64>(waterEye.forward.x),
+                            static_cast<f64>(waterEye.forward.y),
+                            static_cast<f64>(waterEye.forward.z)});
+                    const math::Double3 eyeUpHint{
+                        static_cast<f64>(waterEye.up.x),
+                        static_cast<f64>(waterEye.up.y),
+                        static_cast<f64>(waterEye.up.z)};
+                    const math::Double3 eyeRight = math::Normalize(
+                        math::Cross(eyeForward, eyeUpHint));
+                    const math::Double3 eyeUp =
+                        math::Cross(eyeRight, eyeForward);
+                    const f64 tanHalf =
+                        std::tan(0.5 * static_cast<f64>(
+                            waterEye.verticalFovRadians));
+                    const f64 aspect =
+                        static_cast<f64>(width) /
+                        static_cast<f64>(std::max(height, 1U));
+                    // Margin of ~5 degrees covers the sampling grid spacing.
+                    constexpr f64 kMargin = 0.09;
+                    seaMayBeVisible = false;
+                    for (int iy = 0; iy <= 24 && !seaMayBeVisible; ++iy)
+                    {
+                        const f64 ny = 1.0 - 2.0 * iy / 24.0;
+                        for (int ix = 0; ix <= 40; ++ix)
+                        {
+                            const f64 nx = 2.0 * ix / 40.0 - 1.0;
+                            const math::Double3 direction =
+                                math::Normalize(
+                                    eyeForward +
+                                    eyeRight * (nx * aspect * tanHalf) +
+                                    eyeUp * (ny * tanHalf));
+                            if (math::Dot(direction, localUp) <
+                                -sinDip + kMargin)
+                            {
+                                seaMayBeVisible = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (seaMayBeVisible)
             graph.AddPass(
                 prefix + ".NearFieldWater",
                 {
@@ -3304,8 +3671,361 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         }
     }
 
+    // Emissive primitives light their surroundings analytically (sphere-light
+    // irradiance, SDF soft shadows) instead of through noisy GI rays.
+    if (!info.layers.bypassMeshSurfaces &&
+        !info.layers.bypassIndirectLighting &&
+        logicalTarget->mode != studio_session::ViewportMode::Debug)
+    {
+        if (const auto emissiveFound = staticMeshPresentations_.find(info.id);
+            emissiveFound != staticMeshPresentations_.end() &&
+            !emissiveFound->second.emitters.empty())
+        {
+            auto& emissivePresentation = emissiveFound->second;
+            if (emissivePresentation.emissiveLighting == nullptr ||
+                emissivePresentation.emissiveLighting->Width() != width ||
+                emissivePresentation.emissiveLighting->Height() != height)
+            {
+                emissivePresentation.emissiveLighting =
+                    device_->CreateTexture({
+                        .width = width,
+                        .height = height,
+                        .format = rhi::TextureFormat::RGBA16_Float,
+                        .initialState = rhi::ResourceState::ShaderResource,
+                        .allowUnorderedAccess = true});
+            }
+            auto* const lightingTarget =
+                emissivePresentation.emissiveLighting.get();
+            const auto lightingHandle = graph.ImportTexture(
+                prefix + ".EmissiveLighting",
+                *lightingTarget,
+                rhi::ResourceState::ShaderResource);
+
+            graph.AddPass(
+                prefix + ".EmissiveLights",
+                {
+                    {
+                        .texture = targets.surfaceBaseRoughness,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.surfaceNormalMetallic,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.surfaceEmissionClass,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state = rhi::ResourceState::DepthRead,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = lightingHandle,
+                        .state = rhi::ResourceState::UnorderedAccess,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [this,
+                 lights = emissiveFound->second.emitters,
+                 lightingTarget,
+                 lightingBaseRoughness,
+                 lightingNormalMetallic,
+                 lightingEmissionClass,
+                 lightingDepth,
+                 width,
+                 height,
+                 lightingView,
+                 useSdf = !info.layers.bypassSdfGi](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    lighting::SdfGatherInput sdfInput;
+                    if (const auto& volume = meshSdfScene_.Volume();
+                        useSdf && volume.ready &&
+                        volume.radiance != nullptr &&
+                        volume.distanceCorners != nullptr)
+                    {
+                        sdfInput.distance = volume.distanceCorners;
+                        sdfInput.albedo = volume.albedo;
+                        sdfInput.normal = volume.normal;
+                        sdfInput.radiance = volume.radiance;
+                        sdfInput.originInFrameMeters =
+                            volume.originInFrameMeters;
+                        sdfInput.voxelSize = volume.voxelSize;
+                        sdfInput.dimensions = volume.dimensions;
+                    }
+                    emissiveLightRenderer_.Light(
+                        commands,
+                        lights,
+                        *lightingTarget,
+                        *lightingBaseRoughness,
+                        *lightingNormalMetallic,
+                        *lightingEmissionClass,
+                        *lightingDepth,
+                        width,
+                        height,
+                        lightingView,
+                        sdfInput.distance != nullptr ? &sdfInput : nullptr);
+                });
+
+            graph.AddPass(
+                prefix + ".EmissiveLightsComposite",
+                {
+                    {
+                        .texture = lightingHandle,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [this, lightingTarget, color, width, height](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    emissiveLightRenderer_.Composite(
+                        commands, *lightingTarget, *color, width, height);
+                });
+        }
+    }
+
     recordComposeStage("gi");
     ComposeAtmospherePasses(context);
+
+    // Glass Primitives: sun caustics onto the receivers behind them, a copy of
+    // the lit scene, then the refracting bodies themselves over it. After the
+    // atmosphere so the sky and aerial perspective are part of what is seen
+    // through them.
+    if (!info.layers.bypassMeshSurfaces &&
+        logicalTarget->mode != studio_session::ViewportMode::Debug)
+    {
+        if (const auto glassFound = staticMeshPresentations_.find(info.id);
+            glassFound != staticMeshPresentations_.end() &&
+            !glassFound->second.glass.empty())
+        {
+            auto& glassPresentation = glassFound->second;
+            if (glassPresentation.glassBackdrop == nullptr ||
+                glassPresentation.glassBackdrop->Width() != width ||
+                glassPresentation.glassBackdrop->Height() != height)
+            {
+                glassPresentation.glassBackdrop = device_->CreateTexture({
+                    .width = width,
+                    .height = height,
+                    .format = rhi::TextureFormat::RGBA16_Float,
+                    .initialState = rhi::ResourceState::ShaderResource});
+            }
+            auto* const backdrop = glassPresentation.glassBackdrop.get();
+            const auto backdropHandle = graph.ImportTexture(
+                prefix + ".GlassBackdrop",
+                *backdrop,
+                rhi::ResourceState::ShaderResource);
+
+            mesh_render::GlassLighting glassLighting;
+            glassLighting.toSun = {
+                directLight.directionToLight.x,
+                directLight.directionToLight.y,
+                directLight.directionToLight.z};
+            if (studioDirectLight.direct.has_value())
+            {
+                glassLighting.sunIrradiance = {
+                    directLight.colorLinear.x * directLight.irradianceScale,
+                    directLight.colorLinear.y * directLight.irradianceScale,
+                    directLight.colorLinear.z * directLight.irradianceScale};
+                // Smooth cut-off as the sun passes the local horizon.
+                const auto& eye = view->Lighting().cameraPositionInFrameMeters;
+                const f64 eyeLength = math::Length(eye);
+                if (eyeLength > 1.0)
+                {
+                    const f64 sinElevation =
+                        (eye.x * directLight.directionToLight.x +
+                         eye.y * directLight.directionToLight.y +
+                         eye.z * directLight.directionToLight.z) /
+                        eyeLength;
+                    const f64 t =
+                        std::clamp((sinElevation + 0.02) / 0.07, 0.0, 1.0);
+                    glassLighting.sunVisibility =
+                        static_cast<f32>(t * t * (3.0 - 2.0 * t));
+                }
+            }
+            // Rays that leave the screen and find nothing in the mesh
+            // distance field either see the open sky.
+            constexpr f32 kInversePi = 0.31830988F;
+            glassLighting.environment = {
+                radianceEstimateSettings.skyIrradianceLinear.x * kInversePi,
+                radianceEstimateSettings.skyIrradianceLinear.y * kInversePi,
+                radianceEstimateSettings.skyIrradianceLinear.z * kInversePi};
+            {
+                const auto& eye = view->Lighting().cameraPositionInFrameMeters;
+                const f64 eyeLength = math::Length(eye);
+                if (eyeLength > 1.0)
+                {
+                    glassLighting.localUp = {
+                        static_cast<f32>(eye.x / eyeLength),
+                        static_cast<f32>(eye.y / eyeLength),
+                        static_cast<f32>(eye.z / eyeLength)};
+                }
+            }
+
+            std::vector<render_graph::TextureUse> causticUses{
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state = rhi::ResourceState::DepthRead,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.surfaceBaseRoughness,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.surfaceNormalMetallic,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.surfaceEmissionClass,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    }
+            };
+            if (glassSunShadowHandle.has_value())
+            {
+                causticUses.push_back({
+                    .texture = *glassSunShadowHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read});
+            }
+            graph.AddPass(
+                prefix + ".GlassCaustics",
+                causticUses,
+                [this,
+                 instances = glassFound->second.glass,
+                 color,
+                 lightingDepth,
+                 lightingBaseRoughness,
+                 lightingNormalMetallic,
+                 lightingEmissionClass,
+                 width,
+                 height,
+                 lightingView,
+                 glassLighting,
+                 sunShadowMap = glassSunShadowMap,
+                 shadowFrame = meshShadowFrame](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    glassSurfaceRenderer_.DrawCaustics(
+                        commands,
+                        instances,
+                        *color,
+                        *lightingDepth,
+                        *lightingBaseRoughness,
+                        *lightingNormalMetallic,
+                        *lightingEmissionClass,
+                        width,
+                        height,
+                        lightingView,
+                        glassLighting,
+                        sunShadowMap,
+                        shadowFrame.has_value() ? &*shadowFrame : nullptr);
+                });
+
+            graph.AddPass(
+                prefix + ".GlassBackdropCopy",
+                {
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = backdropHandle,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    }
+                },
+                [this, color, backdrop, width, height](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    glassSurfaceRenderer_.CopyBackdrop(
+                        commands, *color, *backdrop, width, height);
+                });
+
+            graph.AddPass(
+                prefix + ".Glass",
+                {
+                    {
+                        .texture = targets.color,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = backdropHandle,
+                        .state = rhi::ResourceState::ShaderResource,
+                        .access = render_graph::Access::Read
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state = rhi::ResourceState::DepthRead,
+                        .access = render_graph::Access::Read
+                    }
+                },
+                [this,
+                 instances = glassFound->second.glass,
+                 color,
+                 backdrop,
+                 lightingDepth,
+                 width,
+                 height,
+                 lightingView,
+                 glassLighting,
+                 useSdf = !info.layers.bypassSdfGi](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    lighting::SdfGatherInput sdfInput;
+                    if (const auto& volume = meshSdfScene_.Volume();
+                        useSdf && volume.ready &&
+                        volume.radiance != nullptr &&
+                        volume.distanceCorners != nullptr)
+                    {
+                        sdfInput.distance = volume.distanceCorners;
+                        sdfInput.albedo = volume.albedo;
+                        sdfInput.normal = volume.normal;
+                        sdfInput.radiance = volume.radiance;
+                        sdfInput.originInFrameMeters =
+                            volume.originInFrameMeters;
+                        sdfInput.voxelSize = volume.voxelSize;
+                        sdfInput.dimensions = volume.dimensions;
+                    }
+                    glassSurfaceRenderer_.DrawGlass(
+                        commands,
+                        instances,
+                        *color,
+                        *backdrop,
+                        *lightingDepth,
+                        width,
+                        height,
+                        lightingView,
+                        glassLighting,
+                        sdfInput.distance != nullptr ? &sdfInput : nullptr);
+                });
+        }
+    }
 
     // RenderView imports depth as DepthWrite on the next frame.
     // Shared direct lighting samples it read-only, so close this frame

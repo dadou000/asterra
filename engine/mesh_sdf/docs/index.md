@@ -19,10 +19,11 @@ invariants = [
   "Visibility Proxies (analytic boxes/spheres) and a 193x193 1 m terrain height patch around the first placed mesh are stamped into the field by MeshSdfScene::Update (SdfExtraGeometry); meshes win over them on surface voxels. The patch is resampled on the CPU only when the anchor moves 2 m or the terrain source revision changes. bypass_sdf_terrain / bypass_sdf_proxies leave them out for A/B.",
   "The volume gets a 16 m ring around the meshes when extras are present (2 m otherwise); terrain and proxies outside it are not represented.",
   "gi_intensity defaults to 1.0; larger values (e.g. pi) over-expose the whole GI and must be tuned with exposure in mind.",
+  "MeshSdfScene mirrors the finished merged distance volume as one uint4 of eight f16 trilinear corners per cell (SdfSceneVolume::distanceCorners), rebuilt after every merge/primitive/terrain stamp; only the final gather's trace reads it, the lighting and debug passes keep the f32 volume.",
 ]
 related = ["/authoring/static-mesh"]
 verify = ["ctest -R Orbit.MeshSdf"]
-verified = "8523e82c"
+verified = "1229ef74"
 +++
 
 Diagnose: set `sdf_debug_view` (1-5) via `view.terrain_layers_set` to inspect the field and stored radiance; compare `bypass_sdf_gi` true/false at the same pose.

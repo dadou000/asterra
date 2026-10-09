@@ -76,6 +76,22 @@ int main()
         const auto terrainObject = studio.World().Surfaces().TerrainObjectForBody(body);
         Check(terrainObject.has_value());
 
+        const std::string terrainId = terrainObject->ToString();
+        const auto impacts = Rpc(
+            studio, "terrain.impacts_get", "{\"terrain\":\"" + terrainId + "\"}");
+        Check(impacts.find("\"enabled\":false") != std::string::npos);
+        const auto clearedImpacts = Rpc(
+            studio, "terrain.impacts_set",
+            "{\"terrain\":\"" + terrainId + "\",\"history_toml\":\"\"}");
+        Check(clearedImpacts.find("\"enabled\":false") != std::string::npos);
+        const auto stratigraphy = Rpc(
+            studio, "terrain.stratigraphy_get", "{\"terrain\":\"" + terrainId + "\"}");
+        Check(stratigraphy.find("\"enabled\":false") != std::string::npos);
+        const auto clearedStratigraphy = Rpc(
+            studio, "terrain.stratigraphy_set",
+            "{\"terrain\":\"" + terrainId + "\",\"profile_toml\":\"\"}");
+        Check(clearedStratigraphy.find("\"enabled\":false") != std::string::npos);
+
         const auto* services = studio.World().Surfaces().ServicesForBody(body);
         Check(services != nullptr && services->TectonicBake() != nullptr);
         Check(SourceBake(studio, body) == services->TectonicBake());
@@ -155,11 +171,6 @@ int main()
         Check(SourceBake(studio, body) == after);
         Check(studio.TerrainBake().Status(*terrainObject)->activeRiverHash ==
               studio.TerrainBake().Status(*terrainObject)->currentRiverHash);
-    }
-
-    std::filesystem::remove_all(root);
-    return 0;
-}
 
         // The belt ridge relief is baked into the tectonic rasters, so editing it
         // persists and makes the plate bake stale.
@@ -173,3 +184,8 @@ int main()
         Check(ridgeStatus->currentRecipeHash != ridgeStatus->activeRecipeHash);
         Check(Rpc(studio, "terrain.tectonics_get", "{\"terrain\":\"" + terrainObject->ToString() + "\"}")
                   .find("\"belt_ridge_relief\":0.5") != std::string::npos);
+    }
+
+    std::filesystem::remove_all(root);
+    return 0;
+}

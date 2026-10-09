@@ -579,6 +579,16 @@ void StudioExpansionShell::DrawViewportDiagnosticsProperties(
                     layers.giIntensity = static_cast<f32>(giIntensity);
                     layersChanged = true;
                 }
+                f64 renderScale = static_cast<f64>(layers.renderScale);
+                if (context.SliderDouble(
+                        "Render scale##layer-render-scale",
+                        renderScale,
+                        0.25,
+                        1.0))
+                {
+                    layers.renderScale = static_cast<f32>(renderScale);
+                    layersChanged = true;
+                }
                 static constexpr std::array<std::string_view, 6> kSdfModes{
                     "Off", "Shaded", "Steps", "Distance", "Split (SDF | scene)",
                     "Surface radiance"};

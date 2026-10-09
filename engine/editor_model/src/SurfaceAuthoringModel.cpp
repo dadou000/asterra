@@ -1,4 +1,6 @@
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
+#include <orbit/terrain_geology/Stratigraphy.hpp>
 
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -837,9 +839,9 @@ terrain::TectonicFieldDesc SurfaceAuthoringModel::Tectonics(
     result.convergenceReferenceSpeed = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicConvergenceReferenceSpeed, result.convergenceReferenceSpeed);
     result.transformReferenceSpeed = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicTransformReferenceSpeed, result.transformReferenceSpeed);
     result.hotspotRadiusGrowthPerAge = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicHotspotRadiusGrowth, result.hotspotRadiusGrowthPerAge);
+    result.beltRidgeRelief = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicBeltRidgeRelief, result.beltRidgeRelief);
     return result;
 }
-    result.beltRidgeRelief = PropertyOr<f64>(*objects_, terrainObject, world_model::kTerrainTectonicBeltRidgeRelief, result.beltRidgeRelief);
 
 void SurfaceAuthoringModel::SetTectonics(
     const scene::ObjectId terrainObject,
@@ -898,9 +900,9 @@ void SurfaceAuthoringModel::SetTectonics(
         commands_->SetProperty(terrainObject, world_model::kTerrainTectonicOceanicBias, settings.oceanicPlateBiasMeters);
         commands_->SetProperty(terrainObject, world_model::kTerrainTectonicConvergenceReferenceSpeed, settings.convergenceReferenceSpeed);
         commands_->SetProperty(terrainObject, world_model::kTerrainTectonicTransformReferenceSpeed, settings.transformReferenceSpeed);
+        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicBeltRidgeRelief, settings.beltRidgeRelief);
         commands_->SetProperty(terrainObject, world_model::kTerrainTectonicHotspotRadiusGrowth, settings.hotspotRadiusGrowthPerAge);
         if (owns) commands_->CommitTransaction();
-        commands_->SetProperty(terrainObject, world_model::kTerrainTectonicBeltRidgeRelief, settings.beltRidgeRelief);
     }
     catch (...)
     {
@@ -909,6 +911,69 @@ void SurfaceAuthoringModel::SetTectonics(
     }
 }
 
+
+std::string SurfaceAuthoringModel::ImpactHistoryToml(
+    const scene::ObjectId terrainObject) const
+{
+    static_cast<void>(RequireTerrain(terrainObject));
+    return PropertyOr<std::string>(*objects_, terrainObject,
+        world_model::kTerrainImpactHistoryToml, std::string{});
+}
+
+void SurfaceAuthoringModel::SetImpactHistoryToml(
+    const scene::ObjectId terrainObject,
+    std::string toml)
+{
+    static_cast<void>(RequireTerrain(terrainObject));
+    if (!toml.empty())
+    {
+        static_cast<void>(terrain_impacts::ParseImpactFieldToml(toml));
+    }
+    const bool owns = !commands_->HasActiveTransaction();
+    if (owns) commands_->BeginTransaction("Edit Geological Event History");
+    try
+    {
+        commands_->SetProperty(terrainObject,
+            world_model::kTerrainImpactHistoryToml, std::move(toml));
+        if (owns) commands_->CommitTransaction();
+    }
+    catch (...)
+    {
+        if (owns && commands_->HasActiveTransaction())
+            commands_->RollbackTransaction();
+        throw;
+    }
+}
+
+std::string SurfaceAuthoringModel::StratigraphyToml(
+    const scene::ObjectId terrainObject) const
+{
+    static_cast<void>(RequireTerrain(terrainObject));
+    return PropertyOr<std::string>(*objects_, terrainObject,
+        world_model::kTerrainStratigraphyToml, std::string{});
+}
+
+void SurfaceAuthoringModel::SetStratigraphyToml(
+    const scene::ObjectId terrainObject,
+    std::string toml)
+{
+    static_cast<void>(RequireTerrain(terrainObject));
+    if (!toml.empty())
+        static_cast<void>(terrain_geology::ParseStratigraphyProfileToml(toml));
+    const bool owns = !commands_->HasActiveTransaction();
+    if (owns) commands_->BeginTransaction("Edit Geological Stratigraphy");
+    try
+    {
+        commands_->SetProperty(terrainObject,
+            world_model::kTerrainStratigraphyToml, std::move(toml));
+        if (owns) commands_->CommitTransaction();
+    }
+    catch (...)
+    {
+        if (owns && commands_->HasActiveTransaction()) commands_->RollbackTransaction();
+        throw;
+    }
+}
 
 std::optional<scene::ObjectId>
 SurfaceAuthoringModel::ProcessSettingsObject(

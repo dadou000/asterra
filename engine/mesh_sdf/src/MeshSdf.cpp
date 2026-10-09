@@ -677,6 +677,10 @@ MeshSdf BuildMeshSdf(
         materialBase[m] = baseMipFor(asset.materials[m].baseColorTexture.texture);
         materialEmissive[m] =
             emissiveMipFor(asset.materials[m].emissiveTexture.texture);
+        if (!asset.materials[m].emissiveInGi)
+        {
+            continue;
+        }
         for (const f32 c : asset.materials[m].emissiveFactor)
         {
             emissiveMax = std::max(emissiveMax, c);
@@ -800,9 +804,10 @@ MeshSdf BuildMeshSdf(
                         material.baseColorFactor[2] * texel[2],
                         1.0F);
 
-                    if (material.emissiveFactor[0] > 0.0F ||
-                        material.emissiveFactor[1] > 0.0F ||
-                        material.emissiveFactor[2] > 0.0F)
+                    if (material.emissiveInGi &&
+                        (material.emissiveFactor[0] > 0.0F ||
+                         material.emissiveFactor[1] > 0.0F ||
+                         material.emissiveFactor[2] > 0.0F))
                     {
                         std::array<f32, 4> glow{1.0F, 1.0F, 1.0F, 1.0F};
                         if (const MipImage* emissive =

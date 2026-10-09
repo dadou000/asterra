@@ -532,6 +532,7 @@ void StudioViewportRenderer::ComposeVolumePasses(
         if (outputGeneration < particleOutputGeneration_)
         {
             volumeParticleRenderer_.Reset();
+            particleEverSpawned_ = false;
             particleOutputGeneration_ = 0U;
             particleSimulationTimeValid_ = false;
             particlePresentationOriginMeters_ = {};
@@ -560,6 +561,11 @@ void StudioViewportRenderer::ComposeVolumePasses(
                     nextParticleOrigin);
             volumeParticleRenderer_.SetSpawns(
                 particleSpawns);
+            if (!particleSpawns.empty())
+            {
+                particleEverSpawned_ = true;
+                particleLastSpawn_ = std::chrono::steady_clock::now();
+            }
 
             if (particleSimulationTimeValid_)
             {
@@ -583,7 +589,13 @@ void StudioViewportRenderer::ComposeVolumePasses(
             advanceParticleState = true;
         }
 
-        if (particleOutputGeneration_ > 0U)
+        constexpr auto kParticleGrace = std::chrono::seconds(30);
+        const bool particlesMayExist =
+            particleEverSpawned_ &&
+            std::chrono::steady_clock::now() - particleLastSpawn_ <
+                kParticleGrace;
+
+        if (particleOutputGeneration_ > 0U && particlesMayExist)
         {
             const auto camera =
                 view->Camera();

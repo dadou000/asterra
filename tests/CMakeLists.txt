@@ -229,6 +229,31 @@ add_test(
     COMMAND OrbitTerrainGpuFieldTests
 )
 
+add_executable(OrbitTerrainGpuGeologyCompilerTests
+    TerrainGpuGeologyCompilerTests.cpp
+)
+
+target_link_libraries(OrbitTerrainGpuGeologyCompilerTests
+    PRIVATE
+        Orbit::RhiVulkan
+        Orbit::ShaderDxc
+        Orbit::TerrainGpu
+)
+
+target_compile_features(OrbitTerrainGpuGeologyCompilerTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainGpuGeologyCompilerTests)
+
+add_custom_command(TARGET OrbitTerrainGpuGeologyCompilerTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainGpuGeologyCompilerTests>"
+)
+
+add_test(
+    NAME Orbit.TerrainGpuGeologyCompiler
+    COMMAND OrbitTerrainGpuGeologyCompilerTests
+)
+
 add_executable(OrbitTerrainGpuRegionDeltaTests
     TerrainGpuRegionDeltaTests.cpp
 )
@@ -627,6 +652,7 @@ set_tests_properties(
     Orbit.RhiHostHazard
     Orbit.CloudLightVolume
     Orbit.TerrainGpuField
+    Orbit.TerrainGpuGeologyCompiler
     Orbit.TerrainGpuRegionDelta
     Orbit.HydrologyGpuDepressionFill
     Orbit.HydrologyGpuFlowAccumulation

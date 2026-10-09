@@ -50,6 +50,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioViewportDisplaySettings.cpp
     src/StudioViewportOverlayGeometry.cpp
     src/StudioViewportPresentation.cpp
+    src/StudioViewportPrimitives.cpp
     src/StudioViewportQuickCreate.cpp
     src/StudioViewportRenderUtilities.cpp
     src/StudioViewportSceneResolution.cpp
@@ -86,6 +87,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::CelestialRadiometry
         Orbit::Content
         Orbit::Core
+        Orbit::Jobs
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::Lighting

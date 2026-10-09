@@ -1,5 +1,9 @@
 #include <orbit/editor_ui/EditorUi.hpp>
 
+#include <orbit/profiler/Profiler.hpp>
+
+#include <optional>
+
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -3135,6 +3139,7 @@ void EditorUi::BeginFrame(
     platform::Window& window,
     const f64 deltaSeconds)
 {
+    ORBIT_PROFILE_SCOPE("Ui.BeginFrame");
     if (impl_->frameBegun)
     {
         throw std::logic_error(
@@ -3159,6 +3164,7 @@ void EditorUi::BeginFrame(
                 deltaSeconds,
                 1.0 / 1000.0));
 
+    ORBIT_PROFILE_SCOPE("Ui.input");
     const math::Double2 cursor =
         window.CursorPositionPixels();
 
@@ -3256,7 +3262,10 @@ void EditorUi::BeginFrame(
         ImGuiMod_Alt,
         alt);
 
-    ImGui::NewFrame();
+    {
+        ORBIT_PROFILE_SCOPE("Ui.NewFrame");
+        ImGui::NewFrame();
+    }
     impl_->frameBegun = true;
 }
 
@@ -3274,11 +3283,14 @@ void EditorUi::DrawStudioShell()
     const ImGuiViewport* mainViewport =
         ImGui::GetMainViewport();
 
+    std::optional<::orbit::profiler::Scope> shellSection;
+    shellSection.emplace("Ui.shell.canvas");
     // Wavelength-style navy radial canvas. The dockspace is pass-through, so
     // it shows in the gaps between panels and behind translucent panel glass.
     DrawWavelengthCanvas(
         *mainViewport);
 
+    shellSection.emplace("Ui.shell.dock");
     const ImGuiID mainDockspace =
         ImGui::DockSpaceOverViewport(
         0,
@@ -3297,6 +3309,7 @@ void EditorUi::DrawStudioShell()
             mainDockspace);
     }
 
+    shellSection.emplace("Ui.shell.menu");
     static constexpr std::array<
         const char*,
         11> menus{
@@ -3502,6 +3515,7 @@ void EditorUi::DrawStudioShell()
         ImGui::EndMainMenuBar();
     }
 
+    shellSection.emplace("Ui.shell.panels");
     PanelContext context(
         impl_->automationExpandTrees,
         impl_->automationTraceWidgets
@@ -3566,6 +3580,10 @@ void EditorUi::DrawStudioShell()
         impl_->panelVisible[index] = visible ? 1U : 0U;
         if (visible)
         {
+            ::orbit::profiler::Scope panelScope(
+                ::orbit::profiler::Enabled()
+                    ? ::orbit::profiler::Intern("Panel " + panel.title)
+                    : "Panel");
             panel.draw(context);
         }
 
@@ -3575,6 +3593,7 @@ void EditorUi::DrawStudioShell()
             open ? 1U : 0U;
     }
 
+    shellSection.emplace("Ui.shell.notifications");
     impl_->DrawNotifications(
         *mainViewport,
         ImGui::GetIO().DeltaTime);
@@ -3616,6 +3635,10 @@ bool EditorUi::DrawPanelFullscreen(const PanelId id)
         impl_->panelVisible[index] = visible ? 1U : 0U;
         if (visible)
         {
+            ::orbit::profiler::Scope panelScope(
+                ::orbit::profiler::Enabled()
+                    ? ::orbit::profiler::Intern("Panel " + panel.title)
+                    : "Panel");
             panel.draw(context);
         }
         ImGui::End();
@@ -3653,75 +3676,93 @@ void EditorUi::Render(
         return;
     }
 
-    impl_->BeginUploadSlot();
-    impl_->EnsureBuffers(
-        static_cast<std::size_t>(
-            drawData->TotalVtxCount),
-        static_cast<std::size_t>(
-            drawData->TotalIdxCount));
+    {
+    ORBIT_PROFILE_SCOPE("Ui.convert");
+    {
+        ORBIT_PROFILE_SCOPE("Ui.ensure");
+        impl_->BeginUploadSlot();
+        impl_->EnsureBuffers(
+            static_cast<std::size_t>(
+                drawData->TotalVtxCount),
+            static_cast<std::size_t>(
+                drawData->TotalIdxCount));
+    }
 
-    impl_->convertedVertices.clear();
-    impl_->convertedIndices.clear();
-
-    impl_->convertedVertices.reserve(
+    // Flat conversion into pre-sized arrays (no per-element growth checks).
+    impl_->convertedVertices.resize(
         static_cast<std::size_t>(
             drawData->TotalVtxCount));
-
-    impl_->convertedIndices.reserve(
+    impl_->convertedIndices.resize(
         static_cast<std::size_t>(
             drawData->TotalIdxCount));
 
-    for (int listIndex = 0;
-         listIndex < drawData->CmdListsCount;
-         ++listIndex)
     {
-        const ImDrawList* list =
-            drawData->CmdLists[listIndex];
+        ORBIT_PROFILE_SCOPE("Ui.verts");
+        constexpr f32 kInv255 = 1.0F / 255.0F;
+        UiVertex* outVertex =
+            impl_->convertedVertices.data();
+        u32* outIndex =
+            impl_->convertedIndices.data();
 
-        for (const ImDrawVert& vertex :
-             list->VtxBuffer)
+        for (int listIndex = 0;
+             listIndex < drawData->CmdListsCount;
+             ++listIndex)
         {
-            impl_->convertedVertices.push_back({
-                .position = {
-                    vertex.pos.x,
-                    vertex.pos.y
-                },
-                .uv = {
-                    vertex.uv.x,
-                    vertex.uv.y
-                },
-                .color =
-                    DecodeColor(
-                        vertex.col)
-            });
-        }
+            const ImDrawList* list =
+                drawData->CmdLists[listIndex];
 
-        for (const ImDrawIdx index :
-             list->IdxBuffer)
-        {
+            const ImDrawVert* in = list->VtxBuffer.Data;
+            const int vertexCount = list->VtxBuffer.Size;
+            for (int v = 0; v < vertexCount; ++v, ++outVertex)
+            {
+                const ImDrawVert& vertex = in[v];
+                const ImU32 c = vertex.col;
+                outVertex->position = {vertex.pos.x, vertex.pos.y};
+                outVertex->uv = {vertex.uv.x, vertex.uv.y};
+                outVertex->color = {
+                    static_cast<f32>(c & 0xFFU) * kInv255,
+                    static_cast<f32>((c >> 8U) & 0xFFU) * kInv255,
+                    static_cast<f32>((c >> 16U) & 0xFFU) * kInv255,
+                    static_cast<f32>((c >> 24U) & 0xFFU) * kInv255};
+            }
+
             // List-local index: DrawIndexed applies the list's base vertex,
             // so adding it here as well would offset every list after the
             // first twice.
-            impl_->convertedIndices.push_back(
-                static_cast<u32>(index));
+            const ImDrawIdx* inIdx = list->IdxBuffer.Data;
+            const int indexCount = list->IdxBuffer.Size;
+            for (int i = 0; i < indexCount; ++i)
+            {
+                outIndex[i] = static_cast<u32>(inIdx[i]);
+            }
+            outIndex += indexCount;
         }
-
     }
 
-    std::memcpy(
-        impl_->ActiveVertexBuffer().Map(),
-        impl_->convertedVertices.data(),
-        impl_->convertedVertices.size() *
-            sizeof(UiVertex));
-    impl_->ActiveVertexBuffer().Unmap();
+    {
+        ORBIT_PROFILE_SCOPE("Ui.upload");
+        void* vertexDestination = nullptr;
+        {
+            ORBIT_PROFILE_SCOPE("Ui.map");
+            vertexDestination = impl_->ActiveVertexBuffer().Map();
+        }
+        std::memcpy(
+            vertexDestination,
+            impl_->convertedVertices.data(),
+            impl_->convertedVertices.size() *
+                sizeof(UiVertex));
+        impl_->ActiveVertexBuffer().Unmap();
 
-    std::memcpy(
-        impl_->ActiveIndexBuffer().Map(),
-        impl_->convertedIndices.data(),
-        impl_->convertedIndices.size() *
-            sizeof(u32));
-    impl_->ActiveIndexBuffer().Unmap();
+        std::memcpy(
+            impl_->ActiveIndexBuffer().Map(),
+            impl_->convertedIndices.data(),
+            impl_->convertedIndices.size() *
+                sizeof(u32));
+        impl_->ActiveIndexBuffer().Unmap();
+    }
+    }
 
+    ORBIT_PROFILE_SCOPE("Ui.record");
     commands.SetRenderTarget(target);
     commands.SetViewport({
         .x = 0.0F,

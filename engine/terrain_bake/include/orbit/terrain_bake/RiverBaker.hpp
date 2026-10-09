@@ -10,8 +10,39 @@
 
 namespace orbit::terrain_bake
 {
+// Stream-power incision folded into the river bake: the same law the page
+// solver iterates (E = K * (A / Aref)^m * S^n * erodibility), run once on the
+// baked drainage tree together with the tectonic uplift forcing, and stored as
+// a relief change raster.
+struct RiverIncisionBakeOptions
+{
+    bool enabled{false};
+    u32 iterations{32};
+    f64 upliftCouplingPerIteration{0.001};
+    f64 incisionCoefficientMetersPerIteration{0.25};
+    f64 drainageExponent{0.5};
+    f64 slopeExponent{1.0};
+    f64 referenceDrainageAreaSquareMeters{1'000'000.0};
+    f64 ageErodibilityGain{0.6};
+    f64 ageUpliftDecay{0.35};
+    f64 minimumBedSlope{1.0e-5};
+    f64 maximumIncisionMetersPerIteration{25.0};
+
+    [[nodiscard]] bool IsValid() const noexcept
+    {
+        return iterations >= 1U && iterations <= 4096U &&
+               upliftCouplingPerIteration >= 0.0 &&
+               incisionCoefficientMetersPerIteration >= 0.0 &&
+               drainageExponent >= 0.0 && slopeExponent >= 0.0 &&
+               referenceDrainageAreaSquareMeters > 0.0 &&
+               ageErodibilityGain >= 0.0 && ageUpliftDecay >= 0.0 &&
+               minimumBedSlope > 0.0 && maximumIncisionMetersPerIteration >= 0.0;
+    }
+};
+
 struct RiverBakeOptions
 {
+    RiverIncisionBakeOptions incision{};
     // Hydrology grid cells per cube-face edge. Cell size is the finest river
     // the graph can resolve; narrower channels come from the baked width.
     u32 resolution{256};
@@ -25,7 +56,7 @@ struct RiverBakeOptions
     {
         return resolution >= 16U && resolution <= 1024U &&
                minimumDischargeCubicMetersPerSecond > 0.0 &&
-               annualRunoffMeters >= 0.0;
+               annualRunoffMeters >= 0.0 && incision.IsValid();
     }
 };
 

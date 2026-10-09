@@ -39,7 +39,8 @@ static_assert(sizeof(SampleRecord) == 32);
 // noise field" large.
 } // namespace
 
-// 0: procedural plates, 1: baked tectonics, 2: baked tectonics + a baked river.
+// 0: procedural plates, 1: baked tectonics, 2: baked tectonics + a baked river,
+// 3: baked tectonics + a baked stream-power incision raster.
 int RunCase(const int mode, f64* const maxDeltaOut)
 {
     const bool baked = mode >= 1;
@@ -112,6 +113,33 @@ int RunCase(const int mode, f64* const maxDeltaOut)
         if (riverCentreCarve < 10.0)
         {
             std::cerr << "The test channel must visibly cut the terrain on the CPU.\n";
+            return 1;
+        }
+    }
+    if (mode == 3)
+    {
+        // A smooth synthetic relief change (tens of metres) over a coarse grid,
+        // so the bilinear gutter lookup is what is being compared.
+        constexpr u32 kIncisionResolution = 8;
+        constexpr std::size_t kStride = kIncisionResolution + 2U;
+        std::vector<f32> gutter(6U * kStride * kStride);
+        for (std::size_t i = 0; i < gutter.size(); ++i)
+        {
+            gutter[i] = static_cast<f32>(30.0 + 12.0 * std::sin(0.37 * static_cast<f64>(i)));
+        }
+        desc.bakedRivers = std::make_shared<const terrain::BakedRiverNetwork>(
+            terrain::BakedRiverNetwork::Build(planet.radiusMeters, 1, {}, {}, kIncisionResolution, gutter));
+        auto dryDesc = desc;
+        dryDesc.bakedRivers.reset();
+        const terrain::AnalyticTerrainSource dry(planet, dryDesc);
+        const terrain::AnalyticTerrainSource wet(planet, desc);
+        const math::Double3 centre = frame.up;
+        const f64 change = wet.Sample({.unitDirection = centre, .footprintMeters = 50.0}).elevationMeters -
+            dry.Sample({.unitDirection = centre, .footprintMeters = 50.0}).elevationMeters;
+        std::printf("CPU incision change at the survey centre: %.2f m\n", change);
+        if (std::abs(change) < 1.0)
+        {
+            std::cerr << "The test incision must visibly change the CPU terrain.\n";
             return 1;
         }
     }
@@ -227,7 +255,7 @@ int RunCase(const int mode, f64* const maxDeltaOut)
 
     std::printf(
         "GPU vs CPU elevation (%s tectonics): mean |delta| = %.3f m, max |delta| = %.3f m over %u points\n",
-        mode == 2 ? "baked tectonics + river" : (baked ? "baked" : "procedural"), meanAbsElevationDelta, maxAbsElevationDelta, comparedCount);
+        mode == 3 ? "baked tectonics + incision" : mode == 2 ? "baked tectonics + river" : (baked ? "baked" : "procedural"), meanAbsElevationDelta, maxAbsElevationDelta, comparedCount);
 
     // The underlying 64-bit hash lattice is bit-exact (see
     // FieldGenerationCompute.hpp); the only source of divergence is
@@ -257,6 +285,7 @@ int main()
 {
     f64 bakedDelta = 0.0;
     f64 riverDelta = 0.0;
+    f64 incisionDelta = 0.0;
     if (const int procedural = RunCase(0, nullptr); procedural != 0)
     {
         return procedural;
@@ -268,6 +297,16 @@ int main()
     if (const int rivers = RunCase(2, &riverDelta); rivers != 0)
     {
         return rivers;
+    }
+    if (const int incision = RunCase(3, &incisionDelta); incision != 0)
+    {
+        return incision;
+    }
+    if (incisionDelta > bakedDelta + 1.0)
+    {
+        std::cerr << "GPU incision diverges from the CPU (" << incisionDelta << " m vs "
+                  << bakedDelta << " m without it).\n";
+        return 1;
     }
     // The GPU must cut the same channel as the CPU: a missing or misplaced
     // carve would add metres on top of the baked-case noise jitter.

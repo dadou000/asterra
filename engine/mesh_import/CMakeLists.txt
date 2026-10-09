@@ -1,5 +1,6 @@
 add_library(OrbitMeshImport STATIC
     src/GltfImporter.cpp
+    src/PrimitiveMesh.cpp
 )
 
 add_library(Orbit::MeshImport ALIAS OrbitMeshImport)
@@ -35,5 +36,22 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.MeshImport
         COMMAND OrbitMeshImportTests
+    )
+
+    add_executable(OrbitPrimitiveMeshTests
+        tests/PrimitiveMeshTests.cpp
+    )
+
+    target_link_libraries(OrbitPrimitiveMeshTests
+        PRIVATE
+            Orbit::MeshImport
+    )
+
+    target_compile_features(OrbitPrimitiveMeshTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitPrimitiveMeshTests)
+
+    add_test(
+        NAME Orbit.PrimitiveMesh
+        COMMAND OrbitPrimitiveMeshTests
     )
 endif()

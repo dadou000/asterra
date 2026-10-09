@@ -58,6 +58,8 @@
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/terrain_bake/TerrainBakeService.hpp>
+#include <orbit/terrain_gpu/GpuGeologyCompiler.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
@@ -127,6 +129,46 @@ namespace orbit::editor_app
 
 namespace
 {
+class StudioGeologyBakeBackend final : public orbit::terrain_bake::GeologyBakeBackend
+{
+public:
+    explicit StudioGeologyBakeBackend(
+        std::shared_ptr<const orbit::terrain_gpu::GpuGeologyCompiler> compiler)
+        : compiler_(std::move(compiler))
+    {
+    }
+
+    [[nodiscard]] orbit::terrain_bake::GeologyBakeProduct Compile(
+        const orbit::world::PlanetDefinition& planet,
+        const orbit::terrain::AnalyticTerrainDesc& desc,
+        const orbit::terrain::AnalyticTerrainDesc& previousDesc,
+        std::shared_ptr<const orbit::terrain::BakedGeologyRasters> previous,
+        const orbit::u32 resolution,
+        const orbit::u64 recipeHash,
+        const std::function<bool()>& isCancelled,
+        const std::function<void(orbit::u64, orbit::u64)>& reportProgress) const override
+    {
+        auto result = compiler_->Compile(
+            planet, desc, previousDesc, std::move(previous), resolution,
+            recipeHash, isCancelled, reportProgress);
+        return {
+            .rasters = std::move(result.rasters),
+            .samples = result.samples,
+            .eventRecords = result.eventRecords,
+            .tilesUpdated = result.tilesUpdated,
+            .samplesPerSecond = result.samplesPerSecond,
+            .eventRecordsPerSecond = result.eventRecordsPerSecond,
+            .transferBytes = result.transferBytes,
+            .dispatches = result.dispatches,
+            .fenceWaitMilliseconds = result.fenceWaitMilliseconds,
+            .gpuQueueMilliseconds = result.gpuQueueMilliseconds,
+            .gpuTimestampAvailable = result.gpuTimestampAvailable};
+    }
+
+private:
+    std::shared_ptr<const orbit::terrain_gpu::GpuGeologyCompiler> compiler_;
+};
+
 [[nodiscard]] orbit::u16 RpcPortFromEnvironment()
 {
     constexpr unsigned int defaultPort = 4320;
@@ -757,6 +799,11 @@ int orbit::editor_app::StudioApplication::Run(
 
         const orbit::shader::dxc::
             DxcShaderCompiler compiler;
+        auto geologyCompiler = std::make_shared<
+            orbit::terrain_gpu::GpuGeologyCompiler>(device, compiler);
+        studioSession.TerrainBake().SetGeologyBakeBackend(
+            std::make_shared<const StudioGeologyBakeBackend>(
+                std::move(geologyCompiler)));
 
         // The visible legacy preview now consumes UniverseComposition,
         // the same semantic-to-runtime derivation used by StudioSession.

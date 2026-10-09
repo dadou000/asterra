@@ -1,4 +1,11 @@
 #include "StudioViewportInternals.hpp"
+#include "StudioViewportPrimitives.hpp"
+
+#include <orbit/post_process/HumanEyeAdaptation.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace orbit::studio_ui
 {
@@ -32,6 +39,8 @@ StudioViewportRenderer::StudioViewportRenderer(
       proxySurfaceRenderer_(device, compiler),
       meshLibrary_(std::make_unique<mesh_render::MeshLibrary>(device)),
       meshSurfaceRenderer_(device, compiler),
+      glassSurfaceRenderer_(device, compiler),
+      emissiveLightRenderer_(device, compiler),
       meshSdfScene_(device, compiler),
       meshSdfDebugRenderer_(device, compiler),
       meshShadowMapRenderer_(device, compiler),
@@ -648,6 +657,8 @@ StudioViewportRenderer::ComposeBase(
         {
             auto& meshPresentation = staticMeshPresentations_[info.id];
             meshPresentation.instances.clear();
+            meshPresentation.glass.clear();
+            meshPresentation.emitters.clear();
             meshPresentation.requested = 0U;
             meshPresentation.hasAnchor = false;
 
@@ -676,6 +687,8 @@ StudioViewportRenderer::ComposeBase(
                                 .lexically_normal();
                         const auto& cameraInFrame =
                             view->Lighting().cameraPositionInFrameMeters;
+                        f64 nearestMeshDistance =
+                            std::numeric_limits<f64>::infinity();
 
                         for (const auto& mesh :
                              world_model::ResolveStaticMeshes(
@@ -726,6 +739,181 @@ StudioViewportRenderer::ComposeBase(
                                     placementRotation,
                                     mesh.uniformScale,
                                     placementOrigin - cameraInFrame)});
+
+                            // Distance from the camera to the mesh's
+                            // oriented bounding box (0 inside it).
+                            const math::Double3 local =
+                                math::TransformVector(
+                                    math::Transpose(placementRotation),
+                                    cameraInFrame - placementOrigin) *
+                                (1.0 / mesh.uniformScale);
+                            const auto& lo = model->BoundsMin();
+                            const auto& hi = model->BoundsMax();
+                            const f64 dx = std::max(
+                                {lo[0] - local.x, 0.0, local.x - hi[0]});
+                            const f64 dy = std::max(
+                                {lo[1] - local.y, 0.0, local.y - hi[1]});
+                            const f64 dz = std::max(
+                                {lo[2] - local.z, 0.0, local.z - hi[2]});
+                            nearestMeshDistance = std::min(
+                                nearestMeshDistance,
+                                std::sqrt(dx * dx + dy * dy + dz * dz) *
+                                    mesh.uniformScale);
+                        }
+
+                        // Primitives (box, sphere, cylinder, capsule, plane)
+                        // use the same instance path as imported meshes; their
+                        // geometry is generated at the authored size, so the
+                        // instance scale is 1. Glass is collected separately.
+                        for (const auto& primitive :
+                             world_model::ResolvePrimitives(
+                                 session.World().Objects(),
+                                 *meshBodyObject))
+                        {
+                            ++meshPresentation.requested;
+
+                            const auto request =
+                                MakePrimitiveModelRequest(primitive);
+                            const mesh_render::MeshModel* model =
+                                meshLibrary_->AcquireGenerated(
+                                    request.key, request.build);
+                            if (model == nullptr)
+                            {
+                                continue;
+                            }
+
+                            const auto placementRotation = math::Multiply(
+                                targetFromBody->rotation,
+                                EulerDegreesToRotation(
+                                    primitive.eulerDegrees));
+                            const auto placementOrigin = math::TransformPoint(
+                                *targetFromBody, primitive.positionMeters);
+                            const auto rows = mesh_render::MakeInstanceRows(
+                                placementRotation,
+                                1.0,
+                                placementOrigin - cameraInFrame);
+
+                            if (primitive.surface ==
+                                world_model::PrimitiveSurface::Glass)
+                            {
+                                const auto f = [](const f64 value)
+                                {
+                                    return static_cast<f32>(value);
+                                };
+                                // A plane becomes a thin pane so it refracts.
+                                const bool pane =
+                                    primitive.shape ==
+                                    world_model::PrimitiveShape::Plane;
+                                meshPresentation.glass.push_back({
+                                    .model = model,
+                                    .rows = rows,
+                                    .shape = static_cast<
+                                        mesh_render::GlassShape>(
+                                        primitive.shape),
+                                    .halfExtents =
+                                        {f(primitive.sizeMeters.x * 0.5),
+                                         pane
+                                             ? mesh_render::
+                                                   kGlassPaneHalfThicknessMeters
+                                             : f(primitive.sizeMeters.y * 0.5),
+                                         f(primitive.sizeMeters.z * 0.5)},
+                                    .tint = {f(primitive.color.x),
+                                             f(primitive.color.y),
+                                             f(primitive.color.z)},
+                                    .indexOfRefraction =
+                                        f(primitive.indexOfRefraction),
+                                    .caustics = primitive.caustics,
+                                    .castShadows = primitive.castShadows});
+                            }
+                            else
+                            {
+                                if (!meshPresentation.hasAnchor)
+                                {
+                                    meshPresentation.hasAnchor = true;
+                                    meshPresentation.anchorInFrame =
+                                        placementOrigin;
+                                    meshPresentation.targetFromBody =
+                                        *targetFromBody;
+                                }
+                                meshPresentation.instances.push_back(
+                                    {.model = model, .rows = rows});
+
+                                if (primitive.surface ==
+                                        world_model::PrimitiveSurface::Emissive &&
+                                    primitive.emissionNits > 0.0)
+                                {
+                                    const std::array<f32, 3> half{
+                                        static_cast<f32>(
+                                            primitive.sizeMeters.x * 0.5),
+                                        static_cast<f32>(
+                                            primitive.sizeMeters.y * 0.5),
+                                        static_cast<f32>(
+                                            primitive.sizeMeters.z * 0.5)};
+                                    const f32 radiance = static_cast<f32>(
+                                        primitive.emissionNits /
+                                        static_cast<f64>(
+                                            post_process::
+                                                kSceneLuminanceNitsPerUnit));
+                                    const auto relative =
+                                        placementOrigin - cameraInFrame;
+                                    meshPresentation.emitters.push_back({
+                                        .position =
+                                            {static_cast<f32>(relative.x),
+                                             static_cast<f32>(relative.y),
+                                             static_cast<f32>(relative.z)},
+                                        .radius =
+                                            mesh_render::EquivalentSphereRadius(
+                                                mesh_render::EmissiveSurfaceArea(
+                                                    static_cast<u32>(
+                                                        primitive.shape),
+                                                    half)),
+                                        .boundingRadius = std::sqrt(
+                                            half[0] * half[0] +
+                                            half[1] * half[1] +
+                                            half[2] * half[2]),
+                                        .radiance =
+                                            {static_cast<f32>(
+                                                 primitive.color.x) * radiance,
+                                             static_cast<f32>(
+                                                 primitive.color.y) * radiance,
+                                             static_cast<f32>(
+                                                 primitive.color.z) * radiance}});
+                                }
+                            }
+
+                            const math::Double3 local =
+                                math::TransformVector(
+                                    math::Transpose(placementRotation),
+                                    cameraInFrame - placementOrigin);
+                            const auto& lo = model->BoundsMin();
+                            const auto& hi = model->BoundsMax();
+                            const f64 dx = std::max(
+                                {lo[0] - local.x, 0.0, local.x - hi[0]});
+                            const f64 dy = std::max(
+                                {lo[1] - local.y, 0.0, local.y - hi[1]});
+                            const f64 dz = std::max(
+                                {lo[2] - local.z, 0.0, local.z - hi[2]});
+                            nearestMeshDistance = std::min(
+                                nearestMeshDistance,
+                                std::sqrt(dx * dx + dy * dy + dz * dz));
+                        }
+
+                        // The surface-safe near plane scales with altitude
+                        // above the terrain, which is blind to imported
+                        // meshes: a camera hovering metres from a building
+                        // would clip it away. Never let the near plane
+                        // reach into the nearest mesh.
+                        if (std::isfinite(nearestMeshDistance))
+                        {
+                            const auto meshNear = static_cast<f32>(
+                                std::max(nearestMeshDistance * 0.25, 0.02));
+                            auto& cameraState = view->Camera();
+                            cameraState.nearPlaneMeters = std::min(
+                                cameraState.nearPlaneMeters, meshNear);
+                            view->Lighting().nearPlaneMeters =
+                                std::min(
+                                    view->Lighting().nearPlaneMeters,
+                                    meshNear);
                         }
                     }
                 }

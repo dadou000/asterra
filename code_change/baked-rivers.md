@@ -32,7 +32,7 @@
 - Behaviour change: rivers below the bake threshold no longer appear in the
   river network (they remain in page drainage/lakes); meander/cutoff/threshold
   river settings only affect constraint pages.
-- Not done: folding stream-power incision into the bake (it still solves per
-  page, now without a halo from neighbours); live Studio check of the page path
+- Stream-power incision folded into the bake (see below).
+- Not done: live Studio check of the page path
   (Studio exited with "Cloud layer parameters are invalid" on focusing the
   scratch Earth project before pages could be inspected).

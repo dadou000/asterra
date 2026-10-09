@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/world_model/PrimitiveBinding.hpp>
 #include <orbit/editor_model/InspectorModel.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/schema/SchemaRegistry.hpp>
@@ -10,6 +11,7 @@
 #include <orbit/studio_ui/StudioTextDiagnosticsHud.hpp>
 #include <orbit/studio_ui/StudioViewportManipulatorUi.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
 
 #include <array>
 #include <chrono>
@@ -20,12 +22,18 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace orbit::content
 {
 class ContentService;
+}
+
+namespace orbit::editor_model
+{
+class SurfaceAuthoringModel;
 }
 
 namespace orbit::studio_ui
@@ -204,6 +212,22 @@ private:
     void RegisterShellBands(editor_ui::EditorUi& ui);
     void DrawSceneToolbar(editor_ui::PanelContext& context);
     void DrawPlanetToolbar(editor_ui::PanelContext& context);
+    void DrawTerrainProcessesToolbarBubble(
+        editor_ui::PanelContext& context,
+        editor_model::SurfaceAuthoringModel& terrainAuthoring,
+        scene::ObjectId terrain,
+        bool compact);
+    void DrawRiversToolbarBubble(
+        editor_ui::PanelContext& context,
+        editor_model::SurfaceAuthoringModel& terrainAuthoring,
+        scene::ObjectId terrain,
+        bool compact);
+    void DrawGeologicalToolbarBubbles(
+        editor_ui::PanelContext& context,
+        editor_model::SurfaceAuthoringModel& terrainAuthoring,
+        scene::ObjectId body,
+        scene::ObjectId terrain,
+        bool compact);
     void DrawCelestialToolbar(editor_ui::PanelContext& context);
 
     // Small "v" chip that opens a popover with the ordinary (non-advanced)
@@ -233,6 +257,12 @@ private:
     void CreateVisibilityProxyAtViewport(
         std::string_view id,
         bool box);
+    // Same operation as the primitive.create RPC (world_model::CreatePrimitive),
+    // placed five metres in front of the viewport camera.
+    void CreatePrimitiveAtViewport(
+        std::string_view id,
+        world_model::PrimitiveShape shape,
+        world_model::PrimitiveSurface surface);
 
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
@@ -259,6 +289,10 @@ private:
     bool propertyModifiedOnly_{false};
     std::vector<schema::PropertyId> pinnedProperties_;
     std::optional<schema::PropertyValue> copiedPropertyValue_;
+
+    std::unordered_map<scene::ObjectId, terrain_impacts::ImpactFieldDefinition>
+        impactHistoryDrafts_;
+    i32 craterHistoryPage_{0};
 
     StudioTerrainAuthoringTool terrainTool_{
         StudioTerrainAuthoringTool::Select};

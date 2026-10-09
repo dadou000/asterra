@@ -249,6 +249,7 @@ struct BodyBuildInputs
 
     terrain_geology::GeologicalMaterialLibrary geology;
     terrain_geology::RockTypeId defaultBedrock{};
+    std::shared_ptr<const terrain_geology::CompiledStratigraphyProfile> stratigraphy;
 
     surface_model::TerrainProcessService processes{};
     terrain_biome::BiomeService biomes;
@@ -411,8 +412,19 @@ using BundlePtr =
 [[nodiscard]] terrain_geology::RockTypeId
 ResolvedBedrock(
     const BodyBuildInputs& inputs,
-    const terrain::PlanetSurfacePosition& position)
+    const terrain::PlanetSurfacePosition& position,
+    const terrain::TerrainSample& sample)
 {
+    if (inputs.stratigraphy != nullptr)
+    {
+        terrain::PlanetSurfacePosition exposed = position;
+        exposed.radialOffsetMeters = sample.elevationMeters -
+            sample.impactProcesses.heightDeltaMeters -
+            sample.iceFractures.heightDeltaMeters -
+            sample.impactProcesses.excavationDepthMeters;
+        const auto layer = inputs.stratigraphy->SampleExposedLayer(inputs.planet, exposed);
+        if (layer.primaryMaterial.IsValid()) return layer.primaryMaterial;
+    }
     const auto authored =
         surface_authoring::
             EvaluateTerrainConstraintSet(
@@ -795,16 +807,19 @@ BuildDrainageHalo(
                 {
                     .bedrockHeightMeters =
                         static_cast<f32>(
-                            sample.
-                                elevationMeters),
+                            sample.elevationMeters -
+                            sample.impactProcesses.heightDeltaMeters -
+                            sample.iceFractures.heightDeltaMeters),
                     .referenceBedrockHeightMeters =
                         static_cast<f32>(
-                            sample.
-                                elevationMeters),
+                            sample.elevationMeters -
+                            sample.impactProcesses.heightDeltaMeters -
+                            sample.iceFractures.heightDeltaMeters),
                     .bedrockMaterial =
                         ResolvedBedrock(
                             inputs,
-                            position),
+                            position,
+                            sample),
                     .regolithMeters = 0.0F,
                     .soilMeters = 0.0F,
                     .sandMeters = 0.0F,
@@ -817,6 +832,25 @@ BuildDrainageHalo(
                             1.0F),
                     .temporaryScalar = 0.0F
                 });
+
+            if (sample.impactProcesses.affectingImpacts > 0U ||
+                sample.impactProcesses.ejectaThicknessMeters > 0.0 ||
+                sample.impactProcesses.meltThicknessMeters > 0.0 ||
+                sample.impactProcesses.brecciaField > 0.0 ||
+                sample.impactProcesses.resurfacedMaterialFraction > 0.0 ||
+                sample.impactProcesses.microImpactCoverage > 0.0 ||
+                sample.impactProcesses.resurfacingThicknessMeters > 0.0)
+            {
+                static_cast<void>(material->ApplyImpact(
+                    x, y, sample.impactProcesses, inputs.geology));
+            }
+            if (sample.iceFractures.damage > 0.0)
+            {
+                auto& materialCell = material->At(x, y);
+                materialCell.temporaryScalar = std::max(
+                    materialCell.temporaryScalar,
+                    static_cast<f32>(sample.iceFractures.damage));
+            }
         }
     }
 
@@ -1009,8 +1043,20 @@ void MergeSediment(
             &inputs.constraints,
             MacroGeologyDescFor(inputs.processes));
 
+    // With a baked incision field the macro stream-power solve already shaped
+    // the terrain source; only pages with authored height/uplift/protection/
+    // drainage constraints (which the bake does not model) still solve locally.
+    const bool incisionBaked =
+        inputs.source->Description().bakedRivers != nullptr &&
+        inputs.source->Description().bakedRivers->HasIncision() &&
+        inputs.constraints.height.constraints.empty() &&
+        inputs.constraints.uplift.constraints.empty() &&
+        inputs.constraints.protection.constraints.empty() &&
+        inputs.constraints.drainage.constraints.empty();
+
     if (inputs.processes.
-            streamPowerEnabled)
+            streamPowerEnabled &&
+        !incisionBaked)
     {
         const auto forcing =
             terrain_erosion::
@@ -2084,6 +2130,7 @@ CaptureInputs(
         services->Geology();
     result->defaultBedrock =
         services->DefaultBedrock();
+    result->stratigraphy = services->Stratigraphy();
     result->processes =
         services->Processes();
     const auto& seasonal = result->processes.hydraulic;

@@ -12,6 +12,7 @@
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/terrain_debug/TerrainDebugField.hpp>
 #include <orbit/terrain_debug/TerrainDebugSeam.hpp>
+#include <orbit/world_model/PrimitiveBinding.hpp>
 #include <orbit/world_model/VisibilityProxyBinding.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
@@ -232,5 +233,48 @@ void StudioViewportPanels::CreateVisibilityProxyAtViewport(
     status_ = box
         ? "Box visibility proxy created and selected."
         : "Sphere visibility proxy created and selected.";
+}
+
+void StudioViewportPanels::CreatePrimitiveAtViewport(
+    const std::string_view id,
+    const world_model::PrimitiveShape shape,
+    const world_model::PrimitiveSurface surface)
+{
+    if (!CanCreateAtViewport(id))
+    {
+        throw std::runtime_error(
+            "A targeted viewport is required to add a primitive.");
+    }
+
+    auto* renderView = views_->Find(id);
+    const auto* target = session_->Viewports().Find(id);
+    auto& world = session_->World();
+
+    const auto bodyObject =
+        world.Universe().ObjectForBody(
+            target->target->body);
+    if (!bodyObject.has_value())
+    {
+        throw std::runtime_error(
+            "Target body has no semantic object for primitive parenting.");
+    }
+
+    auto request = world_model::MakePrimitivePreset(shape, surface);
+    const auto& camera = renderView->Camera();
+    request.positionMeters = {
+        camera.localPositionMeters.x +
+            static_cast<f64>(camera.forward.x) * 5.0,
+        camera.localPositionMeters.y +
+            static_cast<f64>(camera.forward.y) * 5.0,
+        camera.localPositionMeters.z +
+            static_cast<f64>(camera.forward.z) * 5.0};
+
+    const auto created = world_model::CreatePrimitive(
+        world.Commands(), *bodyObject, request);
+
+    const std::array selected{created};
+    world.Selection().Set(
+        std::span<const scene::ObjectId>(selected));
+    status_ = request.name + " created and selected.";
 }
 } // namespace orbit::studio_ui

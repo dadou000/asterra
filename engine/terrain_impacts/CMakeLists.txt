@@ -15,7 +15,6 @@ target_link_libraries(OrbitTerrainImpacts
         Orbit::Core
         Orbit::Math
         Orbit::World
-        Orbit::Terrain
     PRIVATE
         tomlplusplus::tomlplusplus
 )

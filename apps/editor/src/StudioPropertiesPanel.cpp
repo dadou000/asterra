@@ -231,6 +231,14 @@ void StudioPropertiesPanel::Register()
                         f64 giIntensity = layers.giIntensity;
                         changed |= context.InputDouble(
                             "GI Intensity (0–16)", giIntensity);
+                        f64 renderScale = layers.renderScale;
+                        changed |= context.InputDouble(
+                            "Render scale (0.25–1)", renderScale);
+                        if (std::isfinite(renderScale))
+                        {
+                            layers.renderScale = static_cast<orbit::f32>(
+                                std::clamp(renderScale, 0.25, 1.0));
+                        }
                         changed |= context.Checkbox(
                             "GI Only View", layers.giOnlyView);
                         changed |= context.Checkbox(

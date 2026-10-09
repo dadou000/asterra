@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/terrain/BakedRivers.hpp>
+#include <orbit/terrain/BakedGeology.hpp>
 #include <orbit/terrain/BakedTectonics.hpp>
 
 #include <filesystem>
@@ -10,13 +11,13 @@
 
 namespace orbit::terrain_bake
 {
-// Everything a planet bake holds. One file, one container: the tectonic
-// rasters and the global river graph (own section, optional on load so older
-// files stay readable), so a planet's baked terrain structure is one artifact.
+// Everything a planet bake holds in one section container. River and geology
+// sections are optional on load so earlier bake artifacts remain readable.
 struct PlanetBakeContents
 {
     std::shared_ptr<const terrain::BakedTectonicRasters> tectonics;
     std::shared_ptr<const terrain::BakedRiverNetwork> rivers;
+    std::shared_ptr<const terrain::BakedGeologyRasters> geology;
 };
 
 // Section container: magic, version, then {tag, byte size, FNV-1a checksum,

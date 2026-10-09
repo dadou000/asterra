@@ -30,6 +30,8 @@ struct ScreenSpaceFinalGatherSettings
 // cannot resolve (see mesh_render::MeshSdfScene). Buffers are borrowed.
 struct SdfGatherInput
 {
+    // The corner-packed distance field (MeshSdfScene's distanceCorners), not
+    // the plain f32 volume.
     rhi::Buffer* distance{nullptr};
     rhi::Buffer* albedo{nullptr};
     rhi::Buffer* normal{nullptr};
@@ -64,7 +66,9 @@ public:
         bool historyCompatible,
         rhi::Buffer* particleLightGrid = nullptr,
         const ScreenSpaceFinalGatherSettings& settings = {},
-        const SdfGatherInput* sdf = nullptr);
+        const SdfGatherInput* sdf = nullptr,
+        // 4 uint counters (surface, smooth, uncovered, mirror-like pixels); nullptr = none.
+        rhi::Buffer* needStats = nullptr);
 
     void Combine(
         rhi::CommandList& commands,
@@ -86,5 +90,7 @@ private:
     std::unique_ptr<rhi::ComputePipeline> combinePipeline_;
     std::unique_ptr<rhi::Buffer> dummyParticleLightGrid_;
     std::unique_ptr<rhi::Buffer> dummySdf_;
+    // Frame counter feeding the per-frame sample rotation.
+    u32 frameCounter_{0U};
 };
 } // namespace orbit::lighting

@@ -173,6 +173,33 @@ void TerrainBodyServices::SetRiverBake(
     riverBake_ = std::move(bake);
 }
 
+const std::shared_ptr<const terrain::BakedGeologyRasters>&
+TerrainBodyServices::GeologicalBake() const noexcept
+{
+    return geologicalBake_;
+}
+
+void TerrainBodyServices::SetGeologicalBake(
+    std::shared_ptr<const terrain::BakedGeologyRasters> bake) noexcept
+{
+    geologicalBake_ = std::move(bake);
+}
+
+const std::shared_ptr<const terrain_geology::CompiledStratigraphyProfile>&
+TerrainBodyServices::Stratigraphy() const noexcept
+{
+    return stratigraphy_;
+}
+
+void TerrainBodyServices::SetStratigraphyProfile(
+    std::optional<terrain_geology::StratigraphyProfile> profile)
+{
+    stratigraphy_.reset();
+    if (profile.has_value())
+        stratigraphy_ = std::make_shared<const terrain_geology::CompiledStratigraphyProfile>(
+            std::move(*profile), geology_);
+}
+
 bool TerrainBodyServices::IsValid() const noexcept
 {
     return

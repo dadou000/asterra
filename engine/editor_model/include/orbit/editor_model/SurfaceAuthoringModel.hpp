@@ -169,6 +169,11 @@ public:
         scene::ObjectId terrain,
         const terrain::TectonicFieldDesc& settings);
 
+    [[nodiscard]] std::string ImpactHistoryToml(scene::ObjectId terrain) const;
+    void SetImpactHistoryToml(scene::ObjectId terrain, std::string toml);
+    [[nodiscard]] std::string StratigraphyToml(scene::ObjectId terrain) const;
+    void SetStratigraphyToml(scene::ObjectId terrain, std::string toml);
+
     [[nodiscard]] std::optional<scene::ObjectId>
     ProcessSettingsObject(
         scene::ObjectId terrain) const;

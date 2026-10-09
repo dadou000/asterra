@@ -48,7 +48,7 @@ struct BakedRiverCarve
 class BakedRiverNetwork
 {
 public:
-    static constexpr u32 kFormatVersion = 1;
+    static constexpr u32 kFormatVersion = 2;
     static constexpr u32 kBucketsPerFaceEdge = 64;
 
     BakedRiverNetwork() = default;
@@ -57,7 +57,9 @@ public:
         f64 planetRadiusMeters,
         u64 recipeHash,
         std::vector<BakedRiverNode> nodes,
-        std::vector<BakedRiverSegment> segments);
+        std::vector<BakedRiverSegment> segments,
+        u32 incisionResolution = 0,
+        std::vector<f32> incisionGutter = {});
 
     [[nodiscard]] bool Empty() const noexcept { return segments_.empty(); }
     [[nodiscard]] u64 RecipeHash() const noexcept { return recipeHash_; }
@@ -72,6 +74,17 @@ public:
         return segments_;
     }
     [[nodiscard]] std::size_t ByteSize() const noexcept;
+
+    // Baked stream-power relief change (metres, negative = incision) per cube
+    // face texel with a one-texel gutter, (res + 2)^2 per face, bilinear. Zero
+    // resolution means no incision field.
+    [[nodiscard]] bool HasIncision() const noexcept { return incisionResolution_ != 0U; }
+    [[nodiscard]] u32 IncisionResolution() const noexcept { return incisionResolution_; }
+    [[nodiscard]] const std::vector<f32>& IncisionGutter() const noexcept
+    {
+        return incisionGutter_;
+    }
+    [[nodiscard]] f32 IncisionDeltaMeters(const math::Double3& direction) const noexcept;
 
     // The channel to cut at `direction`. `footprintMeters` filters the cut
     // like every other terrain feature: a river narrower than the footprint
@@ -109,7 +122,19 @@ private:
     // 6 * kBucketsPerFaceEdge^2 buckets, {offset, count} pairs.
     std::vector<u32> bucketRanges_;
     std::vector<u32> bucketSegments_;
+    u32 incisionResolution_{0};
+    std::vector<f32> incisionGutter_;
 };
+
+// Index of texel (x, y) of a face in a gutter raster; x and y may be -1 or
+// resolution (the gutter).
+[[nodiscard]] constexpr std::size_t BakedGutterIndex(
+    const u32 resolution, const u32 face, const i32 x, const i32 y) noexcept
+{
+    const std::size_t stride = static_cast<std::size_t>(resolution) + 2U;
+    return (static_cast<std::size_t>(face) * stride + static_cast<std::size_t>(y + 1)) * stride +
+           static_cast<std::size_t>(x + 1);
+}
 
 // Channel half-width multiplier within which a reach affects terrain, shared
 // by the CPU query and the GPU generator.

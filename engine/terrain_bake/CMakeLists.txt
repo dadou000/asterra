@@ -17,6 +17,7 @@ target_link_libraries(OrbitTerrainBake
         Orbit::Core
         Orbit::Math
         Orbit::Terrain
+        Orbit::TerrainMacroGeology
         Orbit::World
 )
 

@@ -52,6 +52,7 @@ target_link_libraries(OrbitStudioSession
         Orbit::Paths
         Orbit::Rpc
         Orbit::SurfaceModel
+        Orbit::WorldModel
         Orbit::Terrain
         Orbit::TerrainBake
         Orbit::TerrainDebug

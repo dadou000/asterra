@@ -17,7 +17,7 @@ namespace orbit::terrain_gpu
 namespace
 {
 // Must match FieldGenerationCompute.hpp's kParam* indices exactly.
-constexpr u32 kParamCount = 57;
+constexpr u32 kParamCount = 60;
 
 constexpr u32 kPlateStrideFloats = 9;
 constexpr u32 kHotspotStrideFloats = 34;
@@ -115,6 +115,9 @@ constexpr u32 kPushConstantDwords = 40;
     storeUint(56, desc.bakedRivers != nullptr
         ? static_cast<u32>(desc.bakedRivers->Segments().size())
         : 0U);
+    storeUint(57, desc.bakedRivers != nullptr ? desc.bakedRivers->IncisionResolution() : 0U);
+    storeUint(58, desc.bakedGeology != nullptr ? desc.bakedGeology->Resolution() : 0U);
+    storeUint(59, desc.bakedGeology != nullptr ? desc.bakedGeology->LevelCount() : 0U);
 
     return result;
 }
@@ -324,7 +327,8 @@ GpuFieldGenerator::GpuFieldGenerator(
     // FieldGenerationCompute.hpp's RiverCarveDepth reads. A placeholder when
     // there is no network (the shader skips it on a zero segment count).
     std::vector<u32> riverWords;
-    if (desc.bakedRivers != nullptr && !desc.bakedRivers->Empty())
+    constexpr std::size_t kRiverRangeWordCount = 6U * 64U * 64U * 2U;
+    if (desc.bakedRivers != nullptr && (!desc.bakedRivers->Empty() || desc.bakedRivers->HasIncision()))
     {
         const terrain::BakedRiverNetwork& rivers = *desc.bakedRivers;
         riverWords = rivers.BucketRanges();
@@ -351,10 +355,19 @@ GpuFieldGenerator::GpuFieldGenerator(
             push(a.depthMeters);
             push(b.depthMeters);
         }
+        for (const f32 value : rivers.IncisionGutter())
+        {
+            push(value);
+        }
     }
     else
     {
-        riverWords.assign(4U, 0U);
+        riverWords.assign(desc.bakedGeology != nullptr ? kRiverRangeWordCount : 4U, 0U);
+    }
+    if (desc.bakedGeology != nullptr)
+    {
+        for (const f32 value : desc.bakedGeology->BuildGpuRelief())
+            riverWords.push_back(std::bit_cast<u32>(value));
     }
 
     paramsBuffer_ = CreateStaticBuffer(

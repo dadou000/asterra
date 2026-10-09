@@ -93,6 +93,13 @@ void StudioExpansionShell::DrawCreationMenus(editor_ui::PanelContext& context, b
         {
             builtin("Box",[this] { owner_->CreateVisibilityProxyAtViewport("studio.primary",true); });
             builtin("Sphere",[this] { owner_->CreateVisibilityProxyAtViewport("studio.primary",false); });
+            using world_model::PrimitiveShape;
+            using world_model::PrimitiveSurface;
+            builtin("Primitive Box",[this] { owner_->CreatePrimitiveAtViewport("studio.primary",PrimitiveShape::Box,PrimitiveSurface::Standard); });
+            builtin("Primitive Sphere",[this] { owner_->CreatePrimitiveAtViewport("studio.primary",PrimitiveShape::Sphere,PrimitiveSurface::Standard); });
+            builtin("Mirror Sphere",[this] { owner_->CreatePrimitiveAtViewport("studio.primary",PrimitiveShape::Sphere,PrimitiveSurface::Mirror); });
+            builtin("Glass Sphere",[this] { owner_->CreatePrimitiveAtViewport("studio.primary",PrimitiveShape::Sphere,PrimitiveSurface::Glass); });
+            builtin("Emissive Sphere",[this] { owner_->CreatePrimitiveAtViewport("studio.primary",PrimitiveShape::Sphere,PrimitiveSurface::Emissive); });
         }
         if (category == CreationCategory::Lighting)
         {

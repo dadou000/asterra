@@ -61,7 +61,9 @@ BakedRiverNetwork BakedRiverNetwork::Build(
     const f64 planetRadiusMeters,
     const u64 recipeHash,
     std::vector<BakedRiverNode> nodes,
-    std::vector<BakedRiverSegment> segments)
+    std::vector<BakedRiverSegment> segments,
+    const u32 incisionResolution,
+    std::vector<f32> incisionGutter)
 {
     if (!(planetRadiusMeters > 0.0))
     {
@@ -75,7 +77,22 @@ BakedRiverNetwork BakedRiverNetwork::Build(
         }
     }
 
+    if (incisionResolution != 0U)
+    {
+        const std::size_t stride = static_cast<std::size_t>(incisionResolution) + 2U;
+        if (incisionResolution > 4096U || incisionGutter.size() != 6U * stride * stride)
+        {
+            throw std::invalid_argument("The river incision raster has the wrong size.");
+        }
+    }
+    else
+    {
+        incisionGutter.clear();
+    }
+
     BakedRiverNetwork result;
+    result.incisionResolution_ = incisionResolution;
+    result.incisionGutter_ = std::move(incisionGutter);
     result.radius_ = planetRadiusMeters;
     result.recipeHash_ = recipeHash;
     result.nodes_ = std::move(nodes);
@@ -163,6 +180,11 @@ BakedRiverNetwork BakedRiverNetwork::Build(
     {
         hash = StableCombine64(hash, (static_cast<u64>(segment.upstream) << 32U) | segment.downstream);
     }
+    hash = StableCombine64(hash, incisionResolution);
+    for (const f32 value : result.incisionGutter_)
+    {
+        hash = StableCombine64(hash, std::bit_cast<u32>(value));
+    }
     result.contentHash_ = hash == 0U ? 1U : hash;
     return result;
 }
@@ -222,9 +244,34 @@ BakedRiverCarve BakedRiverNetwork::Sample(
     return best;
 }
 
+f32 BakedRiverNetwork::IncisionDeltaMeters(const math::Double3& direction) const noexcept
+{
+    if (incisionResolution_ == 0U)
+    {
+        return 0.0F;
+    }
+    const world::CubeCoordinate cube = world::UnitDirectionToCube(direction);
+    const u32 face = static_cast<u32>(cube.face);
+    const f64 resolution = static_cast<f64>(incisionResolution_);
+    const f64 fx = (cube.uv.x + 1.0) * 0.5 * resolution - 0.5;
+    const f64 fy = (cube.uv.y + 1.0) * 0.5 * resolution - 0.5;
+    const i32 last = static_cast<i32>(incisionResolution_);
+    const i32 x0 = std::clamp(static_cast<i32>(std::floor(fx)), -1, last - 1);
+    const i32 y0 = std::clamp(static_cast<i32>(std::floor(fy)), -1, last - 1);
+    const f32 tx = static_cast<f32>(std::clamp(fx - static_cast<f64>(x0), 0.0, 1.0));
+    const f32 ty = static_cast<f32>(std::clamp(fy - static_cast<f64>(y0), 0.0, 1.0));
+    const f32 a = incisionGutter_[BakedGutterIndex(incisionResolution_, face, x0, y0)];
+    const f32 b = incisionGutter_[BakedGutterIndex(incisionResolution_, face, x0 + 1, y0)];
+    const f32 c = incisionGutter_[BakedGutterIndex(incisionResolution_, face, x0, y0 + 1)];
+    const f32 d = incisionGutter_[BakedGutterIndex(incisionResolution_, face, x0 + 1, y0 + 1)];
+    const f32 top = a + (b - a) * tx;
+    return top + ((c + (d - c) * tx) - top) * ty;
+}
+
 std::size_t BakedRiverNetwork::ByteSize() const noexcept
 {
-    return nodes_.size() * sizeof(BakedRiverNode) +
+    return incisionGutter_.size() * sizeof(f32) +
+           nodes_.size() * sizeof(BakedRiverNode) +
            segments_.size() * sizeof(BakedRiverSegment) +
            (bucketRanges_.size() + bucketSegments_.size()) * sizeof(u32);
 }

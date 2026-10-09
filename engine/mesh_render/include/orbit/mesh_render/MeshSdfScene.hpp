@@ -31,6 +31,9 @@ struct SdfSceneVolume
     // Changes whenever the contents change (consumers invalidate caches).
     u64 revision{0U};
     rhi::Buffer* distance{nullptr};
+    // The same field repacked per cell as eight f16 trilinear corners (one
+    // uint4 per voxel) for the final gather's sphere trace.
+    rhi::Buffer* distanceCorners{nullptr};
     rhi::Buffer* albedo{nullptr};
     rhi::Buffer* normal{nullptr};   // world-space octahedral
     rhi::Buffer* emissive{nullptr}; // RGB8 * emissiveScale
@@ -130,12 +133,21 @@ private:
     std::unique_ptr<rhi::ComputePipeline> lightPipeline_;
     std::unique_ptr<rhi::ComputePipeline> primitivePipeline_;
     std::unique_ptr<rhi::ComputePipeline> terrainPipeline_;
+    std::unique_ptr<rhi::ComputePipeline> cornerPipeline_;
     std::unique_ptr<rhi::Buffer> radiance_;
     std::vector<std::unique_ptr<rhi::Buffer>> lightParameters_;
     std::vector<u64> lightParameterTicks_;
 
     SdfSceneVolume volume_;
+    // Light() input of the previous call (frame index excluded) and how many
+    // consecutive calls repeated it: once the multi-bounce term has settled
+    // (a full refresh cycle times the bounce depth) re-running it changes
+    // nothing, so the dispatch is skipped until an input or the volume changes.
+    SdfLightingInput lastLightInput_{};
+    u64 lastLightRevision_{0U};
+    u32 stableLightFrames_{0U};
     std::unique_ptr<rhi::Buffer> distance_;
+    std::unique_ptr<rhi::Buffer> distanceCorners_;
     std::unique_ptr<rhi::Buffer> albedo_;
     std::unique_ptr<rhi::Buffer> normal_;
     std::unique_ptr<rhi::Buffer> emissive_;

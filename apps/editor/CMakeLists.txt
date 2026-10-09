@@ -76,6 +76,7 @@ target_link_libraries(OrbitStudio
         Orbit::ShaderDxc
         Orbit::StudioSession
         Orbit::StudioUi
+        Orbit::TerrainGpu
         Orbit::Universe
         Orbit::WorldModel
         Orbit::VolumeFields

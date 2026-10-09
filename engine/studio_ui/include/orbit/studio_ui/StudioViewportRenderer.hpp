@@ -33,6 +33,8 @@
 #include <orbit/lighting/RepresentationLightingContinuity.hpp>
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
+#include <orbit/mesh_render/EmissiveLights.hpp>
+#include <orbit/mesh_render/GlassSurface.hpp>
 #include <orbit/mesh_render/MeshLibrary.hpp>
 #include <orbit/mesh_render/MeshSdfScene.hpp>
 #include <orbit/mesh_render/MeshShadow.hpp>
@@ -67,6 +69,8 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <orbit/jobs/JobSystem.hpp>
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -621,6 +625,9 @@ private:
         u64 lightingFingerprint{0U};
         lighting::EmissiveInvalidationTracker emissiveInvalidationTracker;
         std::unique_ptr<lighting::RadianceClipmapResidency> radianceResidency;
+        // Smoothed CPU cost of estimating one radiance cell (ms); sizes the
+        // per-frame update count so the estimates fit a fixed time budget.
+        f64 radianceEstimateMsPerCell{0.08};
         std::vector<std::unique_ptr<rhi::Buffer>> radianceCellsBuffers;
         std::vector<std::unique_ptr<rhi::Buffer>> radianceLevelsBuffers;
         std::unique_ptr<rhi::Texture> indirectA;
@@ -628,6 +635,16 @@ private:
         std::unique_ptr<rhi::Texture> metaA;
         std::unique_ptr<rhi::Texture> metaB;
         std::unique_ptr<rhi::Texture> scratch;
+        // Pass-need probe: the gather counts surface / smooth / low-coverage
+        // pixels into a small host-visible buffer per frame slot; the CPU reads
+        // a slot when it comes round again and lets passes whose inputs are
+        // absent (reflections, radiance-cache fallback) idle. The holds keep a
+        // pass running for a while after the last frame that needed it.
+        std::vector<std::unique_ptr<rhi::Buffer>> needStatsBuffers;
+        std::vector<u8> needStatsWritten;
+        u32 reflectionsHold{120U};
+        u32 cacheFallbackHold{120U};
+        u32 exactReflectionHold{120U};
     };
     struct VisibilityProxyPresentation
     {
@@ -645,6 +662,15 @@ private:
     struct StaticMeshPresentation
     {
         std::vector<mesh_render::MeshInstance> instances;
+        // Glass Primitives: refracting bodies drawn after lighting (see
+        // mesh_render::GlassSurfaceRenderer), never part of the surface buffer.
+        std::vector<mesh_render::GlassInstance> glass;
+        // Copy of the lit scene the glass pass refracts (recreated on resize).
+        std::unique_ptr<rhi::Texture> glassBackdrop;
+        // Emissive primitives as sphere lights, and the target their lighting
+        // is rendered into (recreated on resize).
+        std::vector<mesh_render::EmissiveLight> emitters;
+        std::unique_ptr<rhi::Texture> emissiveLighting;
         u32 requested{0U};
         // First placed mesh (frame coordinates) and the frame/body transform
         // of this view: where non-mesh geometry is gathered for the field.
@@ -703,7 +729,15 @@ private:
     lighting::ProxySurfaceRenderer proxySurfaceRenderer_;
     std::unique_ptr<mesh_render::MeshLibrary> meshLibrary_;
     mesh_render::MeshSurfaceRenderer meshSurfaceRenderer_;
+    mesh_render::GlassSurfaceRenderer glassSurfaceRenderer_;
+    mesh_render::EmissiveLightRenderer emissiveLightRenderer_;
     mesh_render::MeshSdfScene meshSdfScene_;
+    // Workers for the CPU radiance-cell estimates (created on first use).
+    std::unique_ptr<jobs::JobSystem> radianceEstimatePool_;
+    // The particle pass (simulation step + draw) only runs while particles can
+    // exist: after a spawn, for a grace period longer than any particle life.
+    bool particleEverSpawned_{false};
+    std::chrono::steady_clock::time_point particleLastSpawn_{};
     mesh_render::MeshSdfDebugRenderer meshSdfDebugRenderer_;
     // Scratch target of the SDF debug view, per view.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>>
@@ -737,6 +771,11 @@ private:
         // Sky-direction occlusion atlas (see mesh_render::MeshShadow.hpp).
         std::unique_ptr<rhi::Texture> skyColor;
         std::unique_ptr<rhi::Texture> skyDepth;
+        // Hash of everything the maps were last rendered from; unchanged
+        // inputs (a still camera, sun and meshes) leave the maps valid and
+        // their passes are not recorded.
+        u64 skySignature{0U};
+        u64 sunSignature{0U};
     };
     std::map<std::string, MeshShadowTargets, std::less<>> meshShadowTargets_;
     lighting::HybridReflectionRenderer hybridReflectionRenderer_;

@@ -1175,7 +1175,8 @@ ConstraintSetFor(
 
 [[nodiscard]] terrain::AnalyticTerrainDesc TerrainDescription(
     const scene::ObjectStore& objects,
-    const scene::ObjectId object)
+    const scene::ObjectId object,
+    const world::PlanetId planet)
 {
     terrain::AnalyticTerrainDesc result;
 
@@ -1226,6 +1227,19 @@ ConstraintSetFor(
         world_model::kTerrainDetailWavelengthMeters,
         40'000.0);
     result.detailOctaves = static_cast<u32>(octaves);
+    const std::string impactHistoryToml = PropertyOr<std::string>(
+        objects, object, world_model::kTerrainImpactHistoryToml, std::string{});
+    if (!impactHistoryToml.empty())
+    {
+        auto impactHistory = std::make_shared<terrain_impacts::ImpactFieldDefinition>(
+            terrain_impacts::ParseImpactFieldToml(impactHistoryToml));
+        if (impactHistory->planet != planet)
+        {
+            throw std::runtime_error(
+                "Terrain impact history belongs to a different planet.");
+        }
+        result.impactHistory = std::move(impactHistory);
+    }
     result.maximumElevationAboveSeaLevelMeters = PropertyOr<f64>(
         objects,
         object,
@@ -1253,6 +1267,7 @@ ConstraintSetFor(
     result.global.tectonic.convergenceReferenceSpeed = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicConvergenceReferenceSpeed, 0.4);
     result.global.tectonic.transformReferenceSpeed = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicTransformReferenceSpeed, 1.5);
     result.global.tectonic.hotspotRadiusGrowthPerAge = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicHotspotRadiusGrowth, 0.4);
+    result.global.tectonic.beltRidgeRelief = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicBeltRidgeRelief, 1.0);
     result.craters.enabled = PropertyOr<bool>(
         objects, object, world_model::kTerrainCratersEnabled, true);
     const i64 craterCount = PropertyOr<i64>(
@@ -1267,7 +1282,6 @@ ConstraintSetFor(
     result.craters.minimumRadiusMeters = PropertyOr<f64>(
         objects, object, world_model::kTerrainCraterMinimumRadiusMeters,
         4'000.0);
-    result.global.tectonic.beltRidgeRelief = PropertyOr<f64>(objects, object, world_model::kTerrainTectonicBeltRidgeRelief, 1.0);
     result.craters.maximumRadiusMeters = PropertyOr<f64>(
         objects, object, world_model::kTerrainCraterMaximumRadiusMeters,
         280'000.0);
@@ -1412,22 +1426,26 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
         // composed from the installed bake (possibly stale) so terrain never
         // regenerates plate fields while a rebake is pending.
         terrain::AnalyticTerrainDesc terrainDesc =
-            TerrainDescription(objects, object.id);
+            TerrainDescription(objects, object.id, planet->id);
         terrainDesc.global.bakedTectonics.reset();
         terrainDesc.bakedRivers.reset();
+        terrainDesc.bakedGeology.reset();
         TerrainBodyServices::BakeRecipe bakeRecipe{
             .planet = *planet,
             .desc = terrainDesc};
         std::shared_ptr<const terrain::BakedTectonicRasters> tectonicBake;
         std::shared_ptr<const terrain::BakedRiverNetwork> riverBake;
+        std::shared_ptr<const terrain::BakedGeologyRasters> geologicalBake;
         if (const auto previous = previousServices.find(*bodyId);
             previous != previousServices.end())
         {
             tectonicBake = previous->second->TectonicBake();
             riverBake = previous->second->RiverBake();
+            geologicalBake = previous->second->GeologicalBake();
         }
         terrainDesc.global.bakedTectonics = tectonicBake;
         terrainDesc.bakedRivers = riverBake;
+        terrainDesc.bakedGeology = geologicalBake;
 
         auto source =
             std::make_shared<terrain::AnalyticTerrainSource>(
@@ -1464,6 +1482,14 @@ SurfaceCompositionStats SurfaceComposition::Rebuild(
         services->SetRecipe(std::move(bakeRecipe));
         services->SetTectonicBake(std::move(tectonicBake));
         services->SetRiverBake(std::move(riverBake));
+        services->SetGeologicalBake(std::move(geologicalBake));
+        const std::string stratigraphyToml = PropertyOr<std::string>(
+            objects, object.id, world_model::kTerrainStratigraphyToml, std::string{});
+        services->SetStratigraphyProfile(
+            stratigraphyToml.empty()
+                ? std::nullopt
+                : std::optional<terrain_geology::StratigraphyProfile>{
+                    terrain_geology::ParseStratigraphyProfileToml(stratigraphyToml)});
 
         // Semantic policy is reconstructed from ObjectStore authority while
         // runtime-only cache/water state remains owned by the stable service.

@@ -3,6 +3,7 @@ add_library(OrbitTerrainGpu STATIC
     src/GpuErosion.cpp
     src/GpuFieldGenerator.cpp
     src/GpuFlowAccumulation.cpp
+    src/GpuGeologyCompiler.cpp
     src/GpuHydrologyRegion.cpp
     src/GpuPhysicalPageComposite.cpp
     src/PersistentGpuTerrainCache.cpp

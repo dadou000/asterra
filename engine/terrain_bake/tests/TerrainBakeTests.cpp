@@ -162,12 +162,50 @@ bool FileRoundTripIsExactAndCorruptionIsRejected()
 
     const auto dir = TempDirectory("roundtrip");
     const auto path = dir / "planet.orbitbake";
-    terrain_bake::SavePlanetBake(path, {.tectonics = bake});
+    bool ok = true;
+    // 128 texels per face is stored as four independently checksummed regional
+    // tiles per cube face, each with a one-texel halo.
+    std::vector<f32> relief(6U * 130U * 130U, 35.0F);
+    std::vector<f32> iceRelief(6U * 130U * 130U, 12.5F);
+    std::vector<terrain::BakedGeologyProcessTexel> processes(6U * 130U * 130U);
+    for (auto& process : processes)
+    {
+        process.excavationDepthMeters = 875.0F;
+        process.resurfacedMaterialFraction = 0.4F;
+        process.formationAgeYears = 900'000.0F;
+        process.exposureAgeYears = 12'500.0F;
+        process.formationAgeOrder = 14U;
+        process.exposureAgeOrder = 23U;
+        process.iceDamage = 0.65F;
+        process.fractureCoverage = 0.8F;
+    }
+    const auto geology = std::make_shared<const terrain::BakedGeologyRasters>(
+        terrain::BakedGeologyRasters::Build(
+            128U, 42U, std::move(relief), std::move(iceRelief), std::move(processes)));
+    ok &= Check(geology->LevelCount() == 4U,
+        "the compiled relief must contain a coarser scale-space level");
+    ok &= Check(geology->BuildGpuRelief().size() > geology->ReliefGutter().size(),
+        "the GPU payload must contain the complete relief pyramid");
+    terrain_bake::SavePlanetBake(path, {.tectonics = bake, .geology = geology});
 
     std::string error;
     auto loaded = terrain_bake::LoadPlanetBake(path, &error);
-    bool ok = Check(loaded.has_value() && loaded->tectonics != nullptr, "saved bake must load");
+    ok &= Check(loaded.has_value() && loaded->tectonics != nullptr, "saved bake must load");
     if (!ok) return false;
+    if (!Check(loaded->geology != nullptr, "the optional geology section must load")) return false;
+    ok &= Check(loaded->geology->ContentHash() == geology->ContentHash(),
+        "geology content hash must survive a round trip");
+    ok &= Check(std::abs(loaded->geology->ReliefDeltaMeters({0.0, 1.0, 0.0}) - 47.5F) < 1.0e-4F,
+        "geology relief must sample identically after load");
+    ok &= Check(std::abs(loaded->geology->IceDeltaMeters({0.0, 1.0, 0.0}, 0.0, 6'371'000.0) - 12.5F) < 1.0e-4F,
+        "the independent ice relief channel must survive a round trip");
+    const auto bakedProcess = loaded->geology->SampleProcesses({0.0, 1.0, 0.0});
+    ok &= Check(std::abs(bakedProcess.excavationDepthMeters - 875.0F) < 1.0e-4F &&
+                    std::abs(bakedProcess.exposureAgeYears - 12'500.0F) < 1.0e-3F &&
+                    bakedProcess.formationAgeOrder == 14U &&
+                    bakedProcess.exposureAgeOrder == 23U &&
+                    std::abs(bakedProcess.iceDamage - 0.65F) < 1.0e-4F,
+        "material, age and fracture channels must survive a geology bake round trip");
     ok &= Check(loaded->tectonics->ContentHash() == bake->ContentHash(), "content hash must survive a round trip");
     ok &= Check(loaded->tectonics->RecipeHash() == bake->RecipeHash(), "recipe hash must survive a round trip");
     for (u32 i = 0; i < 500; ++i)
@@ -411,6 +449,51 @@ bool ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure()
     }
     return ok;
 }
+
+bool ServiceRecompilesOnlyChangedImpactInfluence()
+{
+    const auto planet = MakePlanet();
+    auto history = terrain_impacts::ImpactFieldDefinition{
+        .id = {.high = 0x47454F4C4F475931ULL, .low = 1U},
+        .planet = planet.id,
+        .name = "Local incremental bake",
+        .seed = 17U,
+        .procedural = {.count = 0U},
+        .authoredImpacts = {{
+            .id = {.high = 0x494D504143543031ULL, .low = 1U},
+            .centerUnitDirection = {0.0, 1.0, 0.0},
+            .radiusMeters = 100'000.0,
+            .profile = terrain_impacts::CraterProfileKind::Simple,
+            .ageOrder = 1U}}};
+    auto desc = MakeDesc();
+    desc.impactHistory = std::make_shared<const terrain_impacts::ImpactFieldDefinition>(history);
+    const auto dir = TempDirectory("local_geology");
+    terrain_bake::TerrainBakeService service(dir);
+    const terrain_bake::BakeSettings settings{.resolution = 32, .autoRebake = true};
+    service.Observe(planet.id, planet, desc, settings);
+    bool ok = Check(Pump(service, [&]
+        { return service.Status(planet.id).state == terrain_bake::BakeState::Ready; }),
+        "the initial geological history bake completes");
+    if (!ok) return false;
+    const u64 fullRasterSamples = 6U * 34U * 34U;
+    const auto initial = service.Status(planet.id);
+    ok &= Check(initial.geologyProcessChannelsActive &&
+                    initial.geologyBakeSamples == fullRasterSamples,
+        "the first bake compiles all geological raster samples and process channels");
+
+    history.authoredImpacts.front().radiusMeters *= 1.2;
+    auto edited = desc;
+    edited.impactHistory = std::make_shared<const terrain_impacts::ImpactFieldDefinition>(history);
+    service.Observe(planet.id, planet, edited, settings);
+    ok &= Check(Pump(service, [&]
+        { return service.Status(planet.id).state == terrain_bake::BakeState::Ready; }),
+        "the changed crater compiles into a new geological bake");
+    const auto updated = service.Status(planet.id);
+    ok &= Check(updated.geologyBakeSamples > 0U &&
+                    updated.geologyBakeSamples < fullRasterSamples,
+        "a local crater edit resamples only its bounded influence in the bake grid");
+    return ok;
+}
 bool RiverBakeProducesAConsistentGraph()
 {
     const auto planet = MakePlanet();
@@ -464,7 +547,130 @@ bool RiverBakeProducesAConsistentGraph()
     ok &= Check(none != nullptr && none->Empty(), "no ocean, no rivers");
     return ok;
 }
+bool IncisionIsBakedAndConsumed()
+{
+    const auto planet = MakePlanet();
+    auto desc = MakeDesc();
+    desc.global.bakedTectonics = std::shared_ptr<const terrain::BakedTectonicRasters>(
+        terrain_bake::BakeTectonics(planet, desc, {.resolution = 64}));
+    terrain_bake::RiverBakeOptions off{.resolution = 64, .minimumDischargeCubicMetersPerSecond = 200.0};
+    auto on = off;
+    on.incision.enabled = true;
+
+    const auto without = terrain_bake::BakeRivers(planet, desc, off);
+    const auto with = terrain_bake::BakeRivers(planet, desc, on);
+    bool ok = Check(without != nullptr && with != nullptr, "both bakes complete");
+    if (!ok) return false;
+    ok &= Check(!without->HasIncision(), "disabled bake carries no incision");
+    ok &= Check(with->HasIncision() && with->IncisionResolution() == 64U, "enabled bake carries the raster");
+    ok &= Check(with->RecipeHash() != without->RecipeHash(), "the incision law is part of the river recipe");
+    ok &= Check(with->ContentHash() != without->ContentHash(), "the raster is part of the content hash");
+
+    f64 lowest = 0.0;
+    f64 highest = 0.0;
+    u32 nonzero = 0;
+    for (u32 i = 0; i < 20000; ++i)
+    {
+        const f32 delta = with->IncisionDeltaMeters(Fibonacci(i, 20000));
+        ok &= Check(std::isfinite(delta), "incision is finite");
+        lowest = std::min<f64>(lowest, delta);
+        highest = std::max<f64>(highest, delta);
+        nonzero += delta != 0.0F ? 1U : 0U;
+    }
+    std::printf("baked incision delta: %.2f .. %.2f m, %u/20000 non-zero\n", lowest, highest, nonzero);
+    ok &= Check(nonzero > 500U && lowest < -0.01, "land is incised somewhere");
+
+    // The source lowers land by the baked delta and leaves the ocean alone.
+    auto withDesc = desc;
+    withDesc.bakedRivers = with;
+    auto withoutDesc = desc;
+    withoutDesc.bakedRivers = without;
+    const terrain::AnalyticTerrainSource a(planet, withDesc);
+    const terrain::AnalyticTerrainSource b(planet, withoutDesc);
+    u32 lowered = 0;
+    for (u32 i = 0; i < 4000; ++i)
+    {
+        const auto d = Fibonacci(i, 4000);
+        const f64 ea = a.Sample({.unitDirection = d, .footprintMeters = 1000.0}).elevationMeters;
+        const f64 eb = b.Sample({.unitDirection = d, .footprintMeters = 1000.0}).elevationMeters;
+        if (eb <= desc.global.seaLevelMeters)
+        {
+            ok &= Check(ea == eb, "the ocean is untouched");
+        }
+        lowered += ea < eb - 0.01 ? 1U : 0U;
+    }
+    ok &= Check(lowered > 20U, "baked incision lowers land through the source");
+    ok &= Check(a.Revision() != b.Revision(), "installing the raster changes the terrain revision");
+
+    // File round trip keeps the raster bit for bit.
+    const auto dir = TempDirectory("incision");
+    terrain_bake::SavePlanetBake(dir / "p.orbitbake", {.tectonics = desc.global.bakedTectonics, .rivers = with});
+    std::string error;
+    const auto loaded = terrain_bake::LoadPlanetBake(dir / "p.orbitbake", &error);
+    ok &= Check(loaded.has_value() && loaded->rivers != nullptr, "river section reloads");
+    if (loaded.has_value() && loaded->rivers != nullptr)
+    {
+        ok &= Check(loaded->rivers->ContentHash() == with->ContentHash(), "round trip keeps the content hash");
+    }
+    return ok;
+}
 } // namespace
+
+bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
+{
+    const auto planet = MakePlanet();
+    const auto bake = terrain_bake::BakeTectonics(planet, MakeDesc(), {.resolution = 48});
+    if (!Check(bake != nullptr, "bake must complete")) return false;
+
+    // At least one plate must carry both oceanic and continental crust.
+    std::array<f32, terrain::kBakedTectonicMaxPlates> low;
+    std::array<f32, terrain::kBakedTectonicMaxPlates> high;
+    low.fill(1.0F);
+    high.fill(0.0F);
+    bool inRange = true;
+    f64 thicknessLow = 0.0, thicknessHigh = 0.0;
+    u32 nLow = 0, nHigh = 0;
+    for (u32 i = 0; i < 6000; ++i)
+    {
+        const auto t = bake->Sample(Fibonacci(i, 6000U));
+        const f32 f = t.Get(terrain::BakedTectonicLayer::ContinentalCrustFraction);
+        inRange &= f >= -0.001F && f <= 1.001F;
+        low[t.plate] = std::min(low[t.plate], f);
+        high[t.plate] = std::max(high[t.plate], f);
+        const f64 th = t.Get(terrain::BakedTectonicLayer::CrustThicknessKm);
+        if (f < 0.25F) { thicknessLow += th; ++nLow; }
+        else if (f > 0.75F) { thicknessHigh += th; ++nHigh; }
+    }
+    bool mixedPlate = false;
+    for (u32 p = 0; p < bake->PlateCount(); ++p)
+    {
+        mixedPlate |= low[p] < 0.3F && high[p] > 0.7F;
+    }
+    bool ok = Check(inRange, "continental crust fraction must stay within 0..1");
+    ok &= Check(mixedPlate, "one plate must be able to carry oceanic and continental crust");
+    ok &= Check(nLow > 0U && nHigh > 0U &&
+            thicknessHigh / nHigh > thicknessLow / nLow + 15.0,
+        "continental crust must be much thicker than oceanic crust");
+
+    // Changing a single texel anywhere must change the content hash.
+    auto layers = std::array<std::vector<u16>, terrain::kBakedTectonicLayerCount>{};
+    std::array<f32, terrain::kBakedTectonicLayerCount> minimum{}, maximum{};
+    for (u32 l = 0; l < terrain::kBakedTectonicLayerCount; ++l)
+    {
+        const auto id = static_cast<terrain::BakedTectonicLayer>(l);
+        layers[l] = bake->QuantizedLayer(id);
+        minimum[l] = bake->RangeMinimum(id);
+        maximum[l] = bake->RangeMaximum(id);
+    }
+    layers[3][layers[3].size() / 2U + 1U] ^= 1U;
+    const auto altered = terrain::BakedTectonicRasters::FromQuantized(
+        bake->Resolution(), bake->RecipeHash(), std::move(layers), minimum, maximum,
+        bake->PlateIds(), bake->NeighbourIds(), bake->PlateContinentalFlags(),
+        bake->PlateCount());
+    ok &= Check(altered.ContentHash() != bake->ContentHash(),
+        "a single changed texel must change the content hash");
+    return ok;
+}
 
 bool BoundariesAreNaturalisedAtBakeTime()
 {
@@ -747,69 +953,6 @@ int main()
     bool ok = true;
     ok &= BakeIsDeterministicAndResolutionConsistent();
     ok &= BakedFieldsAreContinuousAcrossCubeEdges();
-    ok &= FileRoundTripIsExactAndCorruptionIsRejected();
-    ok &= BakedTerrainTracksTheProceduralTerrain();
-    ok &= RecipeHashTracksOnlyBakedInputs();
-    ok &= RiverBakeProducesAConsistentGraph();
-    ok &= ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure();
-    return ok ? EXIT_SUCCESS : EXIT_FAILURE;
-}
-bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
-{
-    const auto planet = MakePlanet();
-    const auto bake = terrain_bake::BakeTectonics(planet, MakeDesc(), {.resolution = 48});
-    if (!Check(bake != nullptr, "bake must complete")) return false;
-
-    // At least one plate must carry both oceanic and continental crust.
-    std::array<f32, terrain::kBakedTectonicMaxPlates> low;
-    std::array<f32, terrain::kBakedTectonicMaxPlates> high;
-    low.fill(1.0F);
-    high.fill(0.0F);
-    bool inRange = true;
-    f64 thicknessLow = 0.0, thicknessHigh = 0.0;
-    u32 nLow = 0, nHigh = 0;
-    for (u32 i = 0; i < 6000; ++i)
-    {
-        const auto t = bake->Sample(Fibonacci(i, 6000U));
-        const f32 f = t.Get(terrain::BakedTectonicLayer::ContinentalCrustFraction);
-        inRange &= f >= -0.001F && f <= 1.001F;
-        low[t.plate] = std::min(low[t.plate], f);
-        high[t.plate] = std::max(high[t.plate], f);
-        const f64 th = t.Get(terrain::BakedTectonicLayer::CrustThicknessKm);
-        if (f < 0.25F) { thicknessLow += th; ++nLow; }
-        else if (f > 0.75F) { thicknessHigh += th; ++nHigh; }
-    }
-    bool mixedPlate = false;
-    for (u32 p = 0; p < bake->PlateCount(); ++p)
-    {
-        mixedPlate |= low[p] < 0.3F && high[p] > 0.7F;
-    }
-    bool ok = Check(inRange, "continental crust fraction must stay within 0..1");
-    ok &= Check(mixedPlate, "one plate must be able to carry oceanic and continental crust");
-    ok &= Check(nLow > 0U && nHigh > 0U &&
-            thicknessHigh / nHigh > thicknessLow / nLow + 15.0,
-        "continental crust must be much thicker than oceanic crust");
-
-    // Changing a single texel anywhere must change the content hash.
-    auto layers = std::array<std::vector<u16>, terrain::kBakedTectonicLayerCount>{};
-    std::array<f32, terrain::kBakedTectonicLayerCount> minimum{}, maximum{};
-    for (u32 l = 0; l < terrain::kBakedTectonicLayerCount; ++l)
-    {
-        const auto id = static_cast<terrain::BakedTectonicLayer>(l);
-        layers[l] = bake->QuantizedLayer(id);
-        minimum[l] = bake->RangeMinimum(id);
-        maximum[l] = bake->RangeMaximum(id);
-    }
-    layers[3][layers[3].size() / 2U + 1U] ^= 1U;
-    const auto altered = terrain::BakedTectonicRasters::FromQuantized(
-        bake->Resolution(), bake->RecipeHash(), std::move(layers), minimum, maximum,
-        bake->PlateIds(), bake->NeighbourIds(), bake->PlateContinentalFlags(),
-        bake->PlateCount());
-    ok &= Check(altered.ContentHash() != bake->ContentHash(),
-        "a single changed texel must change the content hash");
-    return ok;
-}
-
     ok &= CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel();
     ok &= BoundariesAreNaturalisedAtBakeTime();
     ok &= FaultsAreLinearNotWhorls();
@@ -817,3 +960,12 @@ bool CrustTypeIsIndependentOfPlatesAndHashCoversEveryTexel()
     ok &= BeltHeightDoesNotDependOnTheSampleFootprint();
     ok &= CollisionsEmergeAsLandAndArcsAsIslands();
     ok &= BeltsHaveStrikeAlignedRelief();
+    ok &= FileRoundTripIsExactAndCorruptionIsRejected();
+    ok &= BakedTerrainTracksTheProceduralTerrain();
+    ok &= RecipeHashTracksOnlyBakedInputs();
+    ok &= RiverBakeProducesAConsistentGraph();
+    ok &= IncisionIsBakedAndConsumed();
+    ok &= ServiceBakesRebakesAndKeepsTheRunningBakeOnFailure();
+    ok &= ServiceRecompilesOnlyChangedImpactInfluence();
+    return ok ? EXIT_SUCCESS : EXIT_FAILURE;
+}

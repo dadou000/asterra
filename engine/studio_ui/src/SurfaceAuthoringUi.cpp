@@ -2,13 +2,20 @@
 
 #include <orbit/editor_model/SurfaceAuthoringModel.hpp>
 #include <orbit/studio_session/StudioTerrainServiceStatus.hpp>
+#include <orbit/studio_session/StudioTerrainAuthoringInvalidation.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
+#include <orbit/terrain_geology/Stratigraphy.hpp>
+#include <orbit/world/Planet.hpp>
 
 #include <algorithm>
 #include <exception>
 #include <limits>
 #include <format>
+#include <memory>
+#include <stdexcept>
 #include <string_view>
+#include <utility>
 
 namespace orbit::studio_ui
 {
@@ -99,6 +106,50 @@ void DrawPreferenceBand(
     changed |= context.InputDouble(base + " Lower Falloff##m28-" + base + "-lower", band.lowerFalloff);
     changed |= context.InputDouble(base + " Upper Falloff##m28-" + base + "-upper", band.upperFalloff);
 }
+
+[[nodiscard]] std::string MakeImpactHistoryStarter(
+    const world::PlanetDefinition& planet,
+    const bool icy)
+{
+    auto definition = terrain_impacts::MakeMoonLikeImpactPreset(
+        planet.id,
+        terrain_impacts::ImpactFieldId::Random(),
+        planet.generationSeed);
+    definition.name = icy ? "Icy moon starter" : "Airless moon starter";
+    definition.surfaceAgeYears = 4.5e9;
+    if (icy)
+    {
+        definition.environment = terrain_impacts::SurfaceEnvironment::Icy;
+        auto fractures = std::make_shared<terrain_impacts::IceFractureDefinition>();
+        fractures->seed = planet.generationSeed ^ 0x4943594D4F4F4EULL;
+        fractures->ageOrder = 1U;
+        fractures->formationAgeYears = 2.0e8;
+        fractures->fractureCount = 96U;
+        definition.iceFractures = std::move(fractures);
+    }
+    return terrain_impacts::SerializeImpactFieldToml(definition);
+}
+
+[[nodiscard]] std::string MakeStratigraphyStarter(
+    const terrain_geology::GeologicalMaterialLibrary& materials)
+{
+    const auto available = materials.Materials();
+    if (available.empty())
+        throw std::runtime_error("Add a geological material to this planet before creating a stratigraphy profile.");
+
+    const std::size_t lowerIndex = available.size() > 1U ? 1U : 0U;
+    terrain_geology::StratigraphyProfile profile{
+        .id = terrain_geology::StratigraphyProfileId::Random(),
+        .name = "Two-layer crust starter",
+        .layers = {
+            {.material = available.front().id, .thicknessMeters = 1'200.0, .transitionBandMeters = 120.0},
+            {.material = available[lowerIndex].id, .thicknessMeters = 3'800.0, .transitionBandMeters = 250.0}
+        },
+        .basementMaterial = available.back().id
+    };
+    return terrain_geology::SerializeStratigraphyProfileToml(profile);
+}
+
 [[nodiscard]] std::string_view CubeFaceName(
     const world::CubeFace face) noexcept
 {
@@ -211,9 +262,9 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
         if (structureTree.open)
         {
             context.Text(
-                "Orbit generates a deterministic spherical plate field with continental/oceanic identity, rotation-driven convergent/divergent/transform boundaries, and mantle hotspots. These are procedural defaults today; this panel cannot author individual plates or inspect their map yet.");
+                "Orbit generates a deterministic spherical plate field with continental/oceanic identity, rotation-driven convergent/divergent/transform boundaries, and mantle hotspots.");
             context.Text(
-                "Macro uplift, drainage guidance, and geological constraints are editable below and feed terrain generation. Plate count, motion, crust structure, and boundary fields are not exposed here.");
+                "Open Planet > Tectonics to edit the plate recipe, bake policy and structural probe. The viewport's Tectonics layer shows plate identity and boundary activity.");
             context.TreePop();
         }
 
@@ -249,6 +300,151 @@ void SurfaceAuthoringUi::Draw(editor_ui::PanelContext& context)
         context.Text("- Fault / fold authored constraints");
         context.Text("- Impacts / craters");
         context.Text("- Authored geological features");
+        context.Separator();
+        context.Text("Chronological Impacts, Ejecta, Ice Fractures and Resurfacing");
+        if (impactHistoryDraftTerrain_ != selected->terrain)
+        {
+            if (impactHistoryDraftTerrain_)
+                impactHistoryDrafts_[impactHistoryDraftTerrain_] = impactHistoryDraft_;
+            impactHistoryDraftTerrain_ = selected->terrain;
+            const auto savedDraft = impactHistoryDrafts_.find(selected->terrain);
+            impactHistoryDraft_ = savedDraft != impactHistoryDrafts_.end()
+                ? savedDraft->second
+                : model.ImpactHistoryToml(selected->terrain);
+        }
+        context.Text("Start from a planet-aware example or edit the recipe directly. Examples and Reload Saved replace this unsaved draft; Save applies changes to terrain.");
+        if (context.Button("Airless Moon Example##m28-impact-airless-example"))
+        {
+            try
+            {
+                const auto body = world.Universe().BodyForObject(selected->body);
+                if (!body.has_value()) throw std::runtime_error("Selected terrain body is not active.");
+                const auto planet = world.Surfaces().Registry().SphericalPlanetDefinition(*body);
+                if (!planet.has_value()) throw std::runtime_error("Geological history requires a spherical planet.");
+                impactHistoryDraft_ = MakeImpactHistoryStarter(*planet, false);
+                status_ = "Airless moon example loaded into the draft. Review it, then save.";
+            }
+            catch (const std::exception& exception) { status_ = exception.what(); }
+        }
+        context.SameLine();
+        if (context.Button("Icy Moon Example##m28-impact-icy-example"))
+        {
+            try
+            {
+                const auto body = world.Universe().BodyForObject(selected->body);
+                if (!body.has_value()) throw std::runtime_error("Selected terrain body is not active.");
+                const auto planet = world.Surfaces().Registry().SphericalPlanetDefinition(*body);
+                if (!planet.has_value()) throw std::runtime_error("Geological history requires a spherical planet.");
+                impactHistoryDraft_ = MakeImpactHistoryStarter(*planet, true);
+                status_ = "Icy moon example loaded into the draft. Review it, then save.";
+            }
+            catch (const std::exception& exception) { status_ = exception.what(); }
+        }
+        if (context.Button("Reload Saved##m28-impact-reload"))
+        {
+            impactHistoryDraft_ = model.ImpactHistoryToml(selected->terrain);
+            impactHistoryDrafts_[selected->terrain] = impactHistoryDraft_;
+            status_ = "Geological history draft reloaded from the saved terrain data.";
+        }
+        static_cast<void>(context.InputTextMultiline(
+            "##m28-impact-history", impactHistoryDraft_, {0.0F, 180.0F}));
+        context.Text("TOML edits stay in this draft until Save. Validation errors appear in the status line; saving creates one undoable edit and queues only affected terrain regions where possible.");
+        context.Text("Tectonic renewals can set displacement_x/y/z and displacement_m; plate_motion=true uses a closed spherical boundary to move older structures with that plate.");
+        if (context.Button("Save Geological History##m28-impact-save"))
+        {
+            try
+            {
+                const auto body = world.Universe().BodyForObject(selected->body);
+                if (!body.has_value()) throw std::runtime_error("Selected terrain body is not active.");
+                const auto planet = world.Surfaces().Registry().SphericalPlanetDefinition(*body);
+                if (!planet.has_value()) throw std::runtime_error("Geological history requires a spherical planet.");
+                if (!impactHistoryDraft_.empty() &&
+                    terrain_impacts::ParseImpactFieldToml(impactHistoryDraft_).planet != planet->id)
+                    throw std::invalid_argument("Geological history belongs to a different planet.");
+                const std::string previousHistory = model.ImpactHistoryToml(selected->terrain);
+                std::vector<terrain_dependency::TerrainInvalidationRequest> invalidations;
+                const auto runtime = session->TerrainRuntime().Capture("studio.primary");
+                const u8 physicalPageLevel = runtime.has_value() && runtime->body == *body
+                    ? runtime->physicalPageLevel
+                    : 10U;
+                invalidations = studio_session::BuildImpactHistoryInvalidations(
+                    *planet, previousHistory, impactHistoryDraft_, physicalPageLevel);
+                model.SetImpactHistoryToml(selected->terrain, impactHistoryDraft_);
+                session->QueueTerrainInvalidations(invalidations);
+                impactHistoryDrafts_[selected->terrain] = impactHistoryDraft_;
+                status_ = std::format(
+                    "Geological event history saved; {} local terrain regions queued.",
+                    invalidations.size());
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
+        context.Separator();
+        context.Text("Stratigraphic Layers Exposed by Excavation");
+        if (stratigraphyDraftTerrain_ != selected->terrain)
+        {
+            if (stratigraphyDraftTerrain_)
+                stratigraphyDrafts_[stratigraphyDraftTerrain_] = stratigraphyDraft_;
+            stratigraphyDraftTerrain_ = selected->terrain;
+            const auto savedDraft = stratigraphyDrafts_.find(selected->terrain);
+            stratigraphyDraft_ = savedDraft != stratigraphyDrafts_.end()
+                ? savedDraft->second
+                : model.StratigraphyToml(selected->terrain);
+        }
+        context.Text("Layers use this planet's geological materials and are measured down from the exposed surface. Examples and Reload Saved replace this unsaved draft.");
+        if (context.Button("Load 2-Layer Example##m28-stratigraphy-example"))
+        {
+            try
+            {
+                const auto body = world.Universe().BodyForObject(selected->body);
+                if (!body.has_value()) throw std::runtime_error("Selected terrain body is not active.");
+                const auto* services = world.Surfaces().ServicesForBody(*body);
+                if (services == nullptr) throw std::runtime_error("Geology materials are not composed for this planet yet.");
+                stratigraphyDraft_ = MakeStratigraphyStarter(services->Geology());
+                status_ = "Two-layer example loaded into the draft. Review it, then save.";
+            }
+            catch (const std::exception& exception) { status_ = exception.what(); }
+        }
+        if (context.Button("Reload Saved##m28-stratigraphy-reload"))
+        {
+            stratigraphyDraft_ = model.StratigraphyToml(selected->terrain);
+            stratigraphyDrafts_[selected->terrain] = stratigraphyDraft_;
+            status_ = "Stratigraphy draft reloaded from the saved terrain data.";
+        }
+        static_cast<void>(context.InputTextMultiline(
+            "##m28-stratigraphy", stratigraphyDraft_, {0.0F, 150.0F}));
+        context.Text("Edit the profile in the draft, then Save to validate materials and queue the planet's material columns.");
+        if (context.Button("Save Stratigraphy##m28-stratigraphy-save"))
+        {
+            try
+            {
+                if (!stratigraphyDraft_.empty())
+                {
+                    const auto profile = terrain_geology::ParseStratigraphyProfileToml(stratigraphyDraft_);
+                    const auto body = world.Universe().BodyForObject(selected->body);
+                    if (!body.has_value()) throw std::runtime_error("Selected terrain body is not active.");
+                    const auto* services = world.Surfaces().ServicesForBody(*body);
+                    if (services == nullptr || !terrain_geology::ReferencesKnownMaterials(profile, services->Geology()))
+                        throw std::invalid_argument("Stratigraphy references a material not present on this body.");
+                }
+                const auto body = world.Universe().BodyForObject(selected->body);
+                if (!body.has_value()) throw std::runtime_error("Selected terrain body is not active.");
+                const auto planet = world.Surfaces().Registry().SphericalPlanetDefinition(*body);
+                if (!planet.has_value()) throw std::runtime_error("Stratigraphy requires a spherical planet.");
+                model.SetStratigraphyToml(selected->terrain, stratigraphyDraft_);
+                session->QueueTerrainInvalidation({
+                    .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+                    .scope = {.planet = planet->id, .global = true}});
+                stratigraphyDrafts_[selected->terrain] = stratigraphyDraft_;
+                status_ = "Stratigraphy saved; planet material columns queued for rebuild.";
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+            }
+        }
         context.Text(std::format("Semantic Geology Assets: {}", counts.geologyAssets));
         context.TreePop();
     }

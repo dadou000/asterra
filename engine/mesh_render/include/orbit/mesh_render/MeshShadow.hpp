@@ -179,7 +179,10 @@ public:
         const lighting::LightingView& view,
         const MeshShadowFrame& frame,
         const MeshSkyFill& sky,
-        bool initialize);
+        bool initialize,
+        // Varies the PCSS / sky-openness sample rotation per frame so TAA can
+        // average the penumbra noise; 0 keeps a fixed pattern (TAA off).
+        u32 temporalIndex = 0U);
 
 private:
     rhi::Device& device_;

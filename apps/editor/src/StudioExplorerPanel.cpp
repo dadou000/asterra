@@ -259,6 +259,7 @@ void StudioExplorerPanel::Register()
                 static constexpr std::string_view kObjectPayload = "ORBIT_OBJECT";
                 static constexpr std::array<ToolbarChoice, 3> kExplorerFilters{{
                     {"All", ToolbarIcon::Layers}, {"World", ToolbarIcon::World}, {"Assets", ToolbarIcon::Asset}}};
+                ORBIT_PROFILE_SCOPE("Explorer.body");
                 static_cast<void>(context.ToolbarChoices("explorer-filter", kExplorerFilters, explorerFilter, false));
                 context.MutedText("Search");
                 static_cast<void>(context.InputText("##explorer-search", explorerSearch, 2.0F));
@@ -303,6 +304,7 @@ void StudioExplorerPanel::Register()
                                 ObjectRecord&
                                     object)
                         {
+                            ORBIT_PROFILE_SCOPE("Explorer.node");
                             const std::string label =
                                 object.name +
                                 "##tree-" +
@@ -349,12 +351,29 @@ void StudioExplorerPanel::Register()
                                     StudioInspectorTargetKind::WorldSelection;
                             }
 
+                            // Building the action list is not free; only do
+                            // it for the node whose context menu is open.
+                            static std::optional<orbit::scene::ObjectId>
+                                menuObject;
+                            if (item.rightClicked)
+                            {
+                                menuObject = object.id;
+                            }
+                            const bool menuForThisObject =
+                                menuObject.has_value() &&
+                                *menuObject == object.id;
                             const auto objectMenu =
-                                presentActions(
-                                    "explorer",
-                                    orbit::editor_model::
-                                        CommandSurfaceKind::
-                                            ContextMenu);
+                                menuForThisObject
+                                    ? presentActions(
+                                          "explorer",
+                                          orbit::editor_model::
+                                              CommandSurfaceKind::
+                                                  ContextMenu)
+                                    : decltype(presentActions(
+                                          "explorer",
+                                          orbit::editor_model::
+                                              CommandSurfaceKind::
+                                                  ContextMenu)){};
 
                             if (context.BeginPopup(
                                     "ExplorerObjectMenu##" +
@@ -565,6 +584,10 @@ void StudioExplorerPanel::Register()
 
                                 context.EndPopup();
                             }
+                            else if (menuForThisObject)
+                            {
+                                menuObject.reset();
+                            }
 
                             if (const auto payload =
                                     context.
@@ -640,6 +663,7 @@ void StudioExplorerPanel::Register()
                             }
                         };
 
+                    ORBIT_PROFILE_SCOPE("Explorer.tree");
                     for (const auto& root :
                          explorer().Roots())
                     {

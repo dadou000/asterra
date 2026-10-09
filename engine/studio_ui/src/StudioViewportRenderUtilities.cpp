@@ -1,5 +1,9 @@
 #include "StudioViewportInternals.hpp"
 
+#include <algorithm>
+#include <array>
+#include <bit>
+
 namespace orbit::studio_ui::viewport_detail
 {
 
@@ -88,6 +92,42 @@ CelestialWorkKeyFor(
     constexpr f64 kReferenceIrradiance =
         1361.0;
 
+    // The projection walks the whole table (trig per texel) and the table only
+    // changes when the sky is rebuilt, so remember the result per sky view,
+    // keyed by the table's storage and a hash of strided texels.
+    struct CachedSummary
+    {
+        const celestial_atmosphere::AtmosphereSkyView* sky{nullptr};
+        const void* storage{nullptr};
+        std::size_t count{0U};
+        u64 hash{0U};
+        math::Float3 value{};
+    };
+    thread_local std::array<CachedSummary, 8U> cache{};
+    thread_local std::size_t cacheNext = 0U;
+
+    const auto& texels = sky->skyView.texels;
+    u64 hash = 1469598103934665603ULL;
+    const std::size_t stride =
+        std::max<std::size_t>(1U, texels.size() / 509U);
+    for (std::size_t i = 0U; i < texels.size(); i += stride)
+    {
+        for (const f32 component : {texels[i].x, texels[i].y, texels[i].z})
+        {
+            hash = (hash ^ std::bit_cast<u32>(component)) *
+                1099511628211ULL;
+        }
+    }
+
+    for (const auto& entry : cache)
+    {
+        if (entry.sky == sky && entry.storage == texels.data() &&
+            entry.count == texels.size() && entry.hash == hash)
+        {
+            return entry.value;
+        }
+    }
+
     const auto irradiance =
         celestial_atmosphere::EvaluateSkyIrradiance(
             celestial_atmosphere::
@@ -95,11 +135,14 @@ CelestialWorkKeyFor(
                     sky->skyView),
             {0.0, 0.0, 1.0});
 
-    return {
+    const math::Float3 value{
         static_cast<f32>(irradiance.x / kReferenceIrradiance),
         static_cast<f32>(irradiance.y / kReferenceIrradiance),
         static_cast<f32>(irradiance.z / kReferenceIrradiance)
     };
+    cache[cacheNext] = {sky, texels.data(), texels.size(), hash, value};
+    cacheNext = (cacheNext + 1U) % cache.size();
+    return value;
 }
 // The sky-view table depends smoothly on the observer's altitude, but it is keyed
 // by an exact hash of the radius and rebuilt on the CPU (about 22 ms), so a climb

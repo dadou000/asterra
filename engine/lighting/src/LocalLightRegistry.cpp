@@ -1,6 +1,7 @@
 #include <orbit/lighting/LocalLightRegistry.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
@@ -200,8 +201,13 @@ TiledLightGrid BuildTiledLightGrid(
     const u32 tileCount =
         result.tilesX * result.tilesY;
 
-    std::vector<std::vector<u32>>
-        tileLists(tileCount);
+    // Flat two-pass layout (count, then fill) instead of one heap vector per
+    // tile: a 4K viewport has ~11k tiles and a wide light covers all of them.
+    std::vector<std::array<i32, 5>>
+        lightTileRects;
+    lightTileRects.reserve(lights.size());
+    std::vector<u32>
+        tileCounts(tileCount, 0U);
 
     for (const LocalLight& source : lights)
     {
@@ -352,29 +358,28 @@ TiledLightGrid BuildTiledLightGrid(
             }
         }
 
+        lightTileRects.push_back(
+            {minTileX, minTileY, maxTileX, maxTileY,
+             static_cast<i32>(resolvedIndex)});
+
         for (i32 tileY = minTileY;
              tileY <= maxTileY;
              ++tileY)
         {
+            u32* row =
+                tileCounts.data() +
+                static_cast<std::size_t>(tileY) * result.tilesX;
             for (i32 tileX = minTileX;
                  tileX <= maxTileX;
                  ++tileX)
             {
-                auto& tile =
-                    tileLists[
-                        static_cast<u32>(tileY) *
-                            result.tilesX +
-                        static_cast<u32>(tileX)];
-
-                if (tile.size() >=
-                    config.maximumLightsPerTile)
+                u32& count = row[tileX];
+                if (count >= config.maximumLightsPerTile)
                 {
                     ++result.droppedAssignments;
                     continue;
                 }
-
-                tile.push_back(
-                    resolvedIndex);
+                ++count;
             }
         }
     }
@@ -389,13 +394,42 @@ TiledLightGrid BuildTiledLightGrid(
     {
         result.offsets[tile + 1U] =
             result.offsets[tile] +
-            static_cast<u32>(
-                tileLists[tile].size());
+            tileCounts[tile];
+    }
 
-        result.lightIndices.insert(
-            result.lightIndices.end(),
-            tileLists[tile].begin(),
-            tileLists[tile].end());
+    result.lightIndices.resize(
+        result.offsets[tileCount]);
+
+    // Refill in light order so each tile keeps the same first-N lights.
+    std::fill(
+        tileCounts.begin(),
+        tileCounts.end(),
+        0U);
+
+    for (const auto& rect : lightTileRects)
+    {
+        for (i32 tileY = rect[1];
+             tileY <= rect[3];
+             ++tileY)
+        {
+            for (i32 tileX = rect[0];
+                 tileX <= rect[2];
+                 ++tileX)
+            {
+                const u32 tile =
+                    static_cast<u32>(tileY) * result.tilesX +
+                    static_cast<u32>(tileX);
+                u32& count = tileCounts[tile];
+                if (count >= config.maximumLightsPerTile)
+                {
+                    continue;
+                }
+                result.lightIndices[
+                    result.offsets[tile] + count] =
+                    static_cast<u32>(rect[4]);
+                ++count;
+            }
+        }
     }
 
     return result;

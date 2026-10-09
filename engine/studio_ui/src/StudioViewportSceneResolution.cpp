@@ -530,6 +530,24 @@ CollectVolumeObjects(
 ResolveAuthoredEmissiveVolumes(
     const scene::ObjectStore& objects)
 {
+    // The resolve walks every object; the result is a pure function of the
+    // store, so reuse it until the store (or a live preview) changes.
+    struct Cache
+    {
+        const scene::ObjectStore* store{nullptr};
+        u64 revision{0U};
+        u64 previewRevision{0U};
+        bool valid{false};
+        std::vector<lighting::EmissiveVolumeSource> sources;
+    };
+    thread_local Cache cache;
+    if (cache.valid && cache.store == &objects &&
+        cache.revision == objects.Revision() &&
+        cache.previewRevision == objects.PreviewRevision())
+    {
+        return cache.sources;
+    }
+
     std::vector<lighting::EmissiveVolumeSource>
         result;
 
@@ -605,6 +623,11 @@ ResolveAuthoredEmissiveVolumes(
         }
     }
 
+    cache.store = &objects;
+    cache.revision = objects.Revision();
+    cache.previewRevision = objects.PreviewRevision();
+    cache.sources = result;
+    cache.valid = true;
     return result;
 }
 

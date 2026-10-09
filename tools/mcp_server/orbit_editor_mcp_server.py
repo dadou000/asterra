@@ -318,6 +318,7 @@ def orbit_view_terrain_layers_set(
     anti_aliasing: str | None = None,
     sdf_debug_view: int | None = None,
     gi_intensity: float | None = None,
+    render_scale: float | None = None,
     taa_jitter_scale: float | None = None,
     mesh_shadow_softness: float | None = None,
     cloud_volume_debug_altitude: float | None = None,
@@ -374,7 +375,7 @@ def orbit_view_terrain_layers_set(
     usable history (first frame, teleport, lens change, resize); all run on the HDR colour before
     exposure and tone mapping, and only in the lit view. taa_jitter_scale (0..1, default 1) scales the
     sub-pixel jitter; 0 disables the jitter (TAA becomes a plain temporal filter). bypass_sdf_terrain / bypass_sdf_proxies leave the terrain height patch / Visibility Proxies out of the mesh distance field (A/B what each adds to the GI fallback). bypass_sdf_gi skips the final gather's world-space fallback (rays the screen cannot resolve are traced
-    through the merged mesh distance field and read its lit surface voxels). gi_intensity (0-16, default pi = physically correct diffuse bounce; the gather multiplies its averaged
+    through the merged mesh distance field and read its lit surface voxels). render_scale (0.25-1, default 1: the view renders at this fraction of the panel/capture resolution per axis and is shown stretched; 0.75 costs roughly 45% fewer pixels), gi_intensity (0-16, default pi = physically correct diffuse bounce; the gather multiplies its averaged
     radiance by albedo / pi, so pi restores the energy) scales all gathered bounce light. sdf_debug_view (0-5)
     sphere traces the merged mesh distance field and shows it: 1 shaded, 2 step heat map, 3 distance,
     4 split (left half SDF, right half the scene), 5 the stored surface radiance (sun + sky + bounce), 0 off. mesh_shadow_softness
@@ -436,6 +437,7 @@ def orbit_view_terrain_layers_set(
         "anti_aliasing": anti_aliasing,
         "sdf_debug_view": sdf_debug_view,
         "gi_intensity": gi_intensity,
+        "render_scale": render_scale,
         "taa_jitter_scale": taa_jitter_scale,
         "mesh_shadow_softness": mesh_shadow_softness,
         "cloud_volume_debug_altitude": cloud_volume_debug_altitude,
@@ -693,6 +695,54 @@ _STATIC_MESH_ASSET = "4f524249-5453-4d48-4153-534554000001"
 _STATIC_MESH_POSITION = "4f524249-5453-4d48-504f-534954494f4e"
 _STATIC_MESH_EULER = "4f524249-5453-4d48-4555-4c4552000001"
 _STATIC_MESH_SCALE = "4f524249-5453-4d48-5343-414c45000001"
+
+
+@mcp.tool()
+def orbit_primitive_create(
+    position: list[float],
+    shape: str = "sphere",
+    surface: str = "standard",
+    parent_id: str | None = None,
+    name: str | None = None,
+    euler_degrees: list[float] | None = None,
+    size: list[float] | float | None = None,
+    color: list[float] | None = None,
+    roughness: float | None = None,
+    metallic: float | None = None,
+    ior: float | None = None,
+    caustics: bool | None = None,
+    emission_nits: float | None = None,
+) -> dict[str, Any]:
+    """Creates a visible Primitive in one undo step (`primitive.create`).
+    `shape` is box, sphere, cylinder, capsule or plane; `surface` is standard,
+    mirror (a perfect reflector), glass (refracts the scene, Fresnel
+    reflection, tinted by `color` per metre, and focuses sunlight into
+    caustics on nearby surfaces unless `caustics` is false) or emissive
+    (radiates `color` at `emission_nits` cd/m^2, default 100000, and lights
+    its surroundings through the distance-field GI). `position` is in
+    metres relative to the parent's frame; `parent_id` defaults to the primary
+    viewport's target body. `size` is the full dimensions ([x, y, z] or one
+    number); `ior` (1..3) applies to glass. Primitives only draw while the
+    viewport targets their body. Returns id, name, shape and surface."""
+    params: dict[str, Any] = {
+        "position": position,
+        "shape": shape,
+        "surface": surface,
+    }
+    optional = {
+        "parent": parent_id,
+        "name": name,
+        "euler_degrees": euler_degrees,
+        "size": size,
+        "color": color,
+        "roughness": roughness,
+        "metallic": metallic,
+        "ior": ior,
+        "caustics": caustics,
+        "emission_nits": emission_nits,
+    }
+    params.update({key: value for key, value in optional.items() if value is not None})
+    return _rpc("primitive.create", params)
 
 
 @mcp.tool()
@@ -1127,6 +1177,67 @@ def orbit_terrain_tectonics_get(terrain_id: str) -> dict[str, Any]:
     """Read the persisted procedural tectonics recipe for a terrain surface.
     Returns settings used by the Planet toolbar and analytic terrain generator."""
     return _rpc("terrain.tectonics_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_impacts_get(terrain_id: str) -> dict[str, Any]:
+    """Read the persisted chronological .orbitimpacts recipe, including
+    crater, ejecta, resurfacing-flow and ice-fracture authority. Tectonic
+    renewal events may include displacement_x/y/z and displacement_m to
+    advect older impact structures through the authored fault chronology."""
+    return _rpc("terrain.impacts_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_impacts_set(terrain_id: str, history_toml: str) -> dict[str, Any]:
+    """Persist a complete validated .orbitimpacts TOML recipe as one undoable
+    terrain edit and queue geology regeneration. Pass an empty string to clear
+    the recipe. See orbit_terrain_impacts_get for the current value."""
+    return _rpc(
+        "terrain.impacts_set",
+        {"terrain": terrain_id, "history_toml": history_toml},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_stratigraphy_get(terrain_id: str) -> dict[str, Any]:
+    """Read the saved .orbitstratigraphy profile used to resolve exposed bedrock."""
+    return _rpc("terrain.stratigraphy_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_stratigraphy_set(terrain_id: str, profile_toml: str) -> dict[str, Any]:
+    """Save or clear a validated material-resolved .orbitstratigraphy profile.
+    The same profile is used by the Surface Authoring panel and terrain pages."""
+    return _rpc(
+        "terrain.stratigraphy_set",
+        {"terrain": terrain_id, "profile_toml": profile_toml},
+    )
+
+
+@mcp.tool()
+def orbit_terrain_processes_get(terrain_id: str) -> dict[str, Any]:
+    """Read the Planet Terrain Processes bubble settings for stream power,
+    hydraulic, thermal, aeolian, glacial and coastal processes."""
+    return _rpc("terrain.processes_get", {"terrain": terrain_id})
+
+
+@mcp.tool()
+def orbit_terrain_processes_set(
+    terrain_id: str,
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Update supplied Terrain Processes bubble fields as one undoable edit
+    and queue terrain regeneration. Keys: stream_power_enabled,
+    stream_power_iterations, stream_incision_coefficient_meters_per_iteration,
+    hydraulic_enabled, hydraulic_iterations, hydraulic_time_step_seconds,
+    thermal_enabled, thermal_iterations, thermal_relaxation, aeolian_enabled,
+    aeolian_iterations, aeolian_capacity_coefficient, aeolian_time_step_seconds,
+    glacial_enabled, glacial_iterations, glacial_time_step_years,
+    glacial_maximum_temperature_c, coastal_enabled,
+    coastal_hydrodynamic_steps, coastal_cfl_number,
+    coastal_maximum_time_step_seconds."""
+    return _rpc("terrain.processes_set", {"terrain": terrain_id, **settings})
 
 
 @mcp.tool()
@@ -1669,6 +1780,8 @@ def orbit_viewport_navigate(
     move_forward: float = 0.0,
     move_up: float = 0.0,
     boost: bool = False,
+    steps: int = 1,
+    view_id: str = "studio.primary",
 ) -> dict[str, Any]:
     """Apply camera navigation to a viewport, like the right-mouse look +
     WASD/QE gesture. steps (default 1, up to 1200) repeats the step so one call
@@ -1682,6 +1795,8 @@ def orbit_viewport_navigate(
     return _rpc(
         "viewport.navigate",
         {
+            "id": view_id,
+            "steps": steps,
             "delta_seconds": delta_seconds,
             "mouse_dx": mouse_dx,
             "mouse_dy": mouse_dy,
@@ -1711,8 +1826,6 @@ def orbit_map_open(view_id: str = "studio.primary") -> dict[str, Any]:
 
 @mcp.tool()
 def orbit_map_status(view_id: str = "studio.primary") -> dict[str, Any]:
-    steps: int = 1,
-    view_id: str = "studio.primary",
     """Flat map state: active layer and the available layers, whether a terrain
     source is bound, rows_generated / rows_total, complete, and the camera
     marker as latitude/longitude in degrees (HUD convention; null if unknown)."""
@@ -1720,8 +1833,6 @@ def orbit_map_status(view_id: str = "studio.primary") -> dict[str, Any]:
 
 
 @mcp.tool()
-            "id": view_id,
-            "steps": steps,
 def orbit_map_layer_set(layer: str, view_id: str = "studio.primary") -> dict[str, Any]:
     """Choose what the flat map colours the planet by: elevation, biomes,
     temperature, precipitation, water_depth, tectonics (plate identity and
@@ -2078,42 +2189,6 @@ def orbit_time_step(seconds: float | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-def orbit_viewport_pose_get(view_id: str = "studio.primary") -> dict[str, Any]:
-    """Exact camera pose of a Studio perspective view: target body object id,
-    planet-fixed observer position, surface frame and look angles. Pass it to
-    orbit_viewport_pose_set to put the camera back."""
-    return _rpc("viewport.pose_get", {"id": view_id})
-
-
-@mcp.tool()
-def orbit_viewport_pose_set(
-    pose_json: str,
-    view_id: str = "studio.primary",
-) -> dict[str, Any]:
-    """Restore a pose returned by orbit_viewport_pose_get (as JSON text). The
-    view's target body must already be the pose's target_object (select it
-    first); otherwise restored is false."""
-    params = json.loads(pose_json)
-    if not isinstance(params, dict):
-        raise ValueError("pose_json must decode to a JSON object.")
-    params["id"] = view_id
-    return _rpc("viewport.pose_set", params)
-
-
-@mcp.tool()
-def orbit_planning_list() -> dict[str, Any]:
-    """List project implementation-plan bubbles, statuses, canvas positions, and schedule links."""
-    return _rpc("planning.list")
-
-
-@mcp.tool()
-def orbit_planning_create(title: str, description: str = "") -> dict[str, Any]:
-    """Add a floating idea bubble to the project's implementation plan."""
-    return _rpc("planning.create", {"title": title, "description": description})
-
-
-@mcp.tool()
-@mcp.tool()
 def orbit_viewport_fly_to(
     latitude_degrees: float,
     longitude_degrees: float,
@@ -2185,6 +2260,42 @@ def orbit_studio_process_info() -> dict[str, Any]:
     return _rpc("studio.process_info", {})
 
 
+@mcp.tool()
+def orbit_viewport_pose_get(view_id: str = "studio.primary") -> dict[str, Any]:
+    """Exact camera pose of a Studio perspective view: target body object id,
+    planet-fixed observer position, surface frame and look angles. Pass it to
+    orbit_viewport_pose_set to put the camera back."""
+    return _rpc("viewport.pose_get", {"id": view_id})
+
+
+@mcp.tool()
+def orbit_viewport_pose_set(
+    pose_json: str,
+    view_id: str = "studio.primary",
+) -> dict[str, Any]:
+    """Restore a pose returned by orbit_viewport_pose_get (as JSON text). The
+    view's target body must already be the pose's target_object (select it
+    first); otherwise restored is false."""
+    params = json.loads(pose_json)
+    if not isinstance(params, dict):
+        raise ValueError("pose_json must decode to a JSON object.")
+    params["id"] = view_id
+    return _rpc("viewport.pose_set", params)
+
+
+@mcp.tool()
+def orbit_planning_list() -> dict[str, Any]:
+    """List project implementation-plan bubbles, statuses, canvas positions, and schedule links."""
+    return _rpc("planning.list")
+
+
+@mcp.tool()
+def orbit_planning_create(title: str, description: str = "") -> dict[str, Any]:
+    """Add a floating idea bubble to the project's implementation plan."""
+    return _rpc("planning.create", {"title": title, "description": description})
+
+
+@mcp.tool()
 def orbit_planning_update(
     id: int,
     title: str | None = None,

@@ -203,12 +203,18 @@ float4 main(VSOutput input) : SV_Target0
     const float3 absorptionExtinction = g.absorptionE.xyz;
     const float irradiance = max(g.absorptionE.w, 0.0);
 
-    const float step = (tEnd - tStart) / float(kSteps);
+    // Short paths (every surface pixel of a near-field scene) need few steps:
+    // the medium barely changes over tens of metres. Steps stay at most ~300 m
+    // apart, which is far below the scale heights, and long paths keep the
+    // full count.
+    const uint steps =
+        clamp(uint(ceil((tEnd - tStart) / 300.0)) + 3u, 4u, kSteps);
+    const float step = (tEnd - tStart) / float(steps);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
 
     [loop]
-    for (uint i = 0u; i < kSteps; ++i)
+    for (uint i = 0u; i < steps; ++i)
     {
         const float t = tStart + (float(i) + 0.5) * step;
         const float3 position = origin + direction * t;

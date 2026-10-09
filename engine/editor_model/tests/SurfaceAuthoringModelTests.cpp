@@ -6,6 +6,7 @@
 #include <orbit/schema/SchemaRegistry.hpp>
 #include <orbit/selection/SelectionService.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
+#include <orbit/terrain_impacts/ImpactField.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <filesystem>
@@ -49,6 +50,35 @@ int main()
             rocky->terrain != terrainObject || rocky->bodyName != "Asterra")
         {
             return 1;
+        }
+
+        const std::string impactRecipe =
+            "id = \"4f524249544d30370000000000000001\"\n"
+            "planet = \"4f52424954504c4e0000000000000001\"\n"
+            "name = \"Persisted chronology\"\n";
+        model.SetImpactHistoryToml(terrainObject, impactRecipe);
+        if (model.ImpactHistoryToml(terrainObject) != impactRecipe)
+        {
+            return 80;
+        }
+        bool rejectedInvalidImpactRecipe = false;
+        try
+        {
+            model.SetImpactHistoryToml(terrainObject, "not valid TOML =");
+        }
+        catch (const std::exception&)
+        {
+            rejectedInvalidImpactRecipe = true;
+        }
+        if (!rejectedInvalidImpactRecipe ||
+            model.ImpactHistoryToml(terrainObject) != impactRecipe)
+        {
+            return 81;
+        }
+        model.SetImpactHistoryToml(terrainObject, {});
+        if (!model.ImpactHistoryToml(terrainObject).empty())
+        {
+            return 82;
         }
 
         auto relief = model.Relief(terrainObject);

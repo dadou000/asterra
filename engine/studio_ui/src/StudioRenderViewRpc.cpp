@@ -342,6 +342,7 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"gi_only_view", layers.giOnlyView},
         {"sdf_debug_view", static_cast<f64>(layers.sdfDebugView)},
         {"gi_intensity", static_cast<f64>(layers.giIntensity)},
+        {"render_scale", static_cast<f64>(layers.renderScale)},
         {"taa_jitter_scale", static_cast<f64>(layers.taaJitterScale)},
         {"mesh_shadow_softness", static_cast<f64>(layers.meshShadowSoftness)},
         {"anti_aliasing",
@@ -942,6 +943,17 @@ void RegisterStudioRenderViewRpc(
                     }
                     layers.giIntensity = std::clamp(
                         static_cast<f32>(giFound->second.AsNumber()), 0.0F, 16.0F);
+                }
+                if (const auto scaleFound = values.find("render_scale");
+                    scaleFound != values.end())
+                {
+                    if (!scaleFound->second.IsNumber())
+                    {
+                        throw rpc::Error(
+                            kInvalid, "render_scale must be a number 0.25..1.");
+                    }
+                    layers.renderScale = std::clamp(
+                        static_cast<f32>(scaleFound->second.AsNumber()), 0.25F, 1.0F);
                 }
                 if (const auto sdfFound = values.find("sdf_debug_view");
                     sdfFound != values.end())

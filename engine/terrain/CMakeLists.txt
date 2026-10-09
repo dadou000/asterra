@@ -1,5 +1,6 @@
 add_library(OrbitTerrain STATIC
     src/AnalyticTerrainSource.cpp
+    src/BakedGeology.cpp
     src/BakedRivers.cpp
     src/BakedTectonics.cpp
     src/GlobalTerrainFields.cpp
@@ -20,6 +21,7 @@ target_link_libraries(OrbitTerrain
         Orbit::Core
         Orbit::Math
         Orbit::World
+        Orbit::TerrainImpacts
 )
 
 target_compile_features(OrbitTerrain PUBLIC cxx_std_23)

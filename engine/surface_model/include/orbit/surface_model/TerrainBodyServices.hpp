@@ -2,6 +2,7 @@
 
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
 #include <orbit/terrain/BakedRivers.hpp>
+#include <orbit/terrain/BakedGeology.hpp>
 #include <orbit/terrain/BakedTectonics.hpp>
 #include <orbit/terrain_biome/BiomeService.hpp>
 #include <orbit/terrain_erosion/AeolianErosion.hpp>
@@ -11,6 +12,7 @@
 #include <orbit/terrain_erosion/StreamPowerErosion.hpp>
 #include <orbit/terrain_erosion/ThermalErosion.hpp>
 #include <orbit/terrain_geology/GeologicalMaterial.hpp>
+#include <orbit/terrain_geology/Stratigraphy.hpp>
 #include <orbit/terrain_gpu/PersistentGpuTerrainCache.hpp>
 #include <orbit/terrain_water/CoastalProcess.hpp>
 #include <orbit/terrain_water/WaterService.hpp>
@@ -135,12 +137,24 @@ public:
     void SetRiverBake(
         std::shared_ptr<const terrain::BakedRiverNetwork> bake) noexcept;
 
+    [[nodiscard]] const std::shared_ptr<const terrain::BakedGeologyRasters>&
+    GeologicalBake() const noexcept;
+    void SetGeologicalBake(
+        std::shared_ptr<const terrain::BakedGeologyRasters> bake) noexcept;
+
+    [[nodiscard]] const std::shared_ptr<const terrain_geology::CompiledStratigraphyProfile>&
+    Stratigraphy() const noexcept;
+    void SetStratigraphyProfile(
+        std::optional<terrain_geology::StratigraphyProfile> profile);
+
     [[nodiscard]] bool IsValid() const noexcept;
 
 private:
     std::optional<BakeRecipe> recipe_;
     std::shared_ptr<const terrain::BakedTectonicRasters> tectonicBake_;
     std::shared_ptr<const terrain::BakedRiverNetwork> riverBake_;
+    std::shared_ptr<const terrain::BakedGeologyRasters> geologicalBake_;
+    std::shared_ptr<const terrain_geology::CompiledStratigraphyProfile> stratigraphy_;
     universe::BodyId body_{};
     u64 instanceId_{0U};
     terrain_geology::GeologicalMaterialLibrary geology_{};

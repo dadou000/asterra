@@ -1,6 +1,7 @@
 #include <orbit/studio_session/StudioTerrainBakeController.hpp>
 
 #include <algorithm>
+#include <utility>
 
 namespace orbit::studio_session
 {
@@ -53,6 +54,7 @@ bool StudioTerrainBakeController::Tick()
     {
         service_ = std::make_unique<terrain_bake::TerrainBakeService>(
             root / "Bakes");
+        service_->SetGeologyBakeBackend(geologyBakeBackend_);
         root_ = root;
         lastTick_ = {};
     }
@@ -78,11 +80,34 @@ bool StudioTerrainBakeController::Tick()
         const auto& recipe = *services->Recipe();
         const auto& policy = services->Processes().bake;
         const bool known = service_->Knows(recipe.planet.id);
+
+        // Stream-power incision is part of the river bake: the persisted law
+        // is its recipe, so editing it restales the river section.
+        const auto& law = services->Processes().streamPower;
+        terrain_bake::RiverIncisionBakeOptions incision;
+        incision.enabled = services->Processes().streamPowerEnabled;
+        incision.iterations = law.iterations;
+        incision.upliftCouplingPerIteration = law.upliftCouplingPerIteration;
+        incision.incisionCoefficientMetersPerIteration = law.incisionCoefficientMetersPerIteration;
+        incision.drainageExponent = law.drainageExponent;
+        incision.slopeExponent = law.slopeExponent;
+        incision.referenceDrainageAreaSquareMeters = law.referenceDrainageAreaSquareMeters;
+        incision.ageErodibilityGain = law.ageErodibilityGain;
+        incision.ageUpliftDecay = law.ageUpliftDecay;
+        incision.minimumBedSlope = law.minimumBedSlope;
+        incision.maximumIncisionMetersPerIteration = law.maximumIncisionMetersPerIteration;
+        if (!incision.IsValid())
+        {
+            incision.enabled = false;
+        }
+
         service_->Observe(
             recipe.planet.id,
             recipe.planet,
             recipe.desc,
-            {.resolution = policy.resolution, .autoRebake = policy.autoRebake});
+            {.resolution = policy.resolution,
+             .autoRebake = policy.autoRebake,
+             .incision = incision});
 
         if (!known &&
             (service_->Active(recipe.planet.id) == nullptr ||
@@ -105,6 +130,7 @@ bool StudioTerrainBakeController::Tick()
             {
                 services->SetTectonicBake(completed.tectonics);
                 services->SetRiverBake(completed.rivers);
+                services->SetGeologicalBake(completed.geology);
                 installed = true;
             }
         }
@@ -147,5 +173,13 @@ void StudioTerrainBakeController::Cancel(const scene::ObjectId terrainObject)
     {
         service_->Cancel(*planet);
     }
+}
+
+void StudioTerrainBakeController::SetGeologyBakeBackend(
+    std::shared_ptr<const terrain_bake::GeologyBakeBackend> backend)
+{
+    geologyBakeBackend_ = std::move(backend);
+    if (service_ != nullptr)
+        service_->SetGeologyBakeBackend(geologyBakeBackend_);
 }
 } // namespace orbit::studio_session

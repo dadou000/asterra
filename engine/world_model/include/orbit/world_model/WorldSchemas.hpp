@@ -170,6 +170,41 @@ inline constexpr schema::PropertyId kPrimitiveCastShadows{
     .low = 0x4341535453484144ULL
 };
 
+inline constexpr schema::PropertyId kPrimitiveSurface{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x5355524641434501ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveColor{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x434f4c4f52000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveRoughness{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x524f554748000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveMetallic{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x4d4554414c000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveIor{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x494f520000000001ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveCaustics{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x4341555354494353ULL
+};
+
+inline constexpr schema::PropertyId kPrimitiveEmissionNits{
+    .high = 0x4f5242495450524dULL,
+    .low = 0x454d495353494f4eULL
+};
+
 // Imported triangle mesh (glTF/GLB) placed relative to its parent object's
 // frame: lit, textured and drawn through the deferred surface pass.
 // See docs/ORBIT_STATIC_MESH.md.
@@ -303,6 +338,16 @@ inline constexpr schema::PropertyId kTerrainMaximumElevationMeters{
     .low = 0x4d4158454c455641ULL
 };
 
+inline constexpr schema::PropertyId kTerrainImpactHistoryToml{
+    .high = 0x4f5242495447454fULL,
+    .low = 0x494d504143544831ULL
+};
+
+inline constexpr schema::PropertyId kTerrainStratigraphyToml{
+    .high = 0x4f5242495447454fULL,
+    .low = 0x5354524154413031ULL
+};
+
 inline constexpr schema::TypeId kRiverBasinConstraintType{
     .high = 0x4f52424954524956ULL,
     .low = 0x424153494e435354ULL
@@ -350,6 +395,8 @@ inline constexpr schema::PropertyId kTerrainTectonicConvergenceReferenceSpeed{
     .high = 0x4f52424954544543ULL, .low = 0x434f4e5652454653ULL};
 inline constexpr schema::PropertyId kTerrainTectonicTransformReferenceSpeed{
     .high = 0x4f52424954544543ULL, .low = 0x5452414e53524546ULL};
+inline constexpr schema::PropertyId kTerrainTectonicBeltRidgeRelief{
+    .high = 0x4f52424954544543ULL, .low = 0x42454c5452494447ULL};
 inline constexpr schema::PropertyId kTerrainTectonicHotspotRadiusGrowth{
     .high = 0x4f52424954544543ULL, .low = 0x484f545241444752ULL};
 
@@ -360,8 +407,6 @@ inline constexpr schema::PropertyId kTerrainCratersEnabled{
 
 inline constexpr schema::PropertyId kTerrainCraterCount{
     .high = 0x4f52424954544552ULL,
-inline constexpr schema::PropertyId kTerrainTectonicBeltRidgeRelief{
-    .high = 0x4f52424954544543ULL, .low = 0x42454c5452494447ULL};
     .low = 0x435241544552434eULL
 };
 

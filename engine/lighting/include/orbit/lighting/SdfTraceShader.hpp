@@ -38,6 +38,37 @@ float3 SdfUnpackOct(uint packed)
 
 // Trilinear distance at a position; outside the volume the distance to the
 // volume box is added so rays leave it cleanly.
+#ifdef SDF_DIST_CORNERS
+// Corner-packed variant: g_sdfDist holds one uint4 per voxel with that cell's
+// eight trilinear corners as f16 (x: c000|c100, y: c010|c110, z: c001|c101,
+// w: c011|c111), so a trace step is one 16-byte load instead of eight
+// scattered 4-byte ones.
+float2 SdfUnpackHalves(uint packed)
+{
+    return float2(f16tof32(packed & 0xFFFFu), f16tof32(packed >> 16));
+}
+
+float SdfDistance(float3 position)
+{
+    const int3 dims = SDF_DIMS;
+    const float3 gc = (position - SDF_ORIGIN) / SDF_VOXEL;
+    const float3 clamped = clamp(gc, 0.0, float3(dims - 1));
+    const float outside = length((gc - clamped) * SDF_VOXEL);
+    const int3 i0 = int3(floor(clamped));
+    const float3 f = clamped - float3(i0);
+
+    const uint4 packed = g_sdfDist[SdfIndex(i0)];
+    const float2 z0a = SdfUnpackHalves(packed.x);
+    const float2 z0b = SdfUnpackHalves(packed.y);
+    const float2 z1a = SdfUnpackHalves(packed.z);
+    const float2 z1b = SdfUnpackHalves(packed.w);
+
+    return outside + lerp(
+        lerp(lerp(z0a.x, z0a.y, f.x), lerp(z0b.x, z0b.y, f.x), f.y),
+        lerp(lerp(z1a.x, z1a.y, f.x), lerp(z1b.x, z1b.y, f.x), f.y),
+        f.z);
+}
+#else
 float SdfDistance(float3 position)
 {
     const int3 dims = SDF_DIMS;
@@ -62,6 +93,7 @@ float SdfDistance(float3 position)
         lerp(lerp(c001, c101, f.x), lerp(c011, c111, f.x), f.y),
         f.z);
 }
+#endif
 
 // Sphere traces from `origin` along `direction` for up to `maxDistance`.
 // Returns true with the hit point when a surface is reached.

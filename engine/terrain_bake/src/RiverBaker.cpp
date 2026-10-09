@@ -2,6 +2,7 @@
 
 #include <orbit/terrain/BakedTectonics.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
+#include <orbit/terrain_macro_geology/MacroGeologyField.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -60,6 +61,19 @@ u64 RiverBakeRecipeHash(
     hash = terrain::StableCombine64(
         hash, std::bit_cast<u64>(options.minimumDischargeCubicMetersPerSecond));
     hash = terrain::StableCombine64(hash, std::bit_cast<u64>(options.annualRunoffMeters));
+    const RiverIncisionBakeOptions& law = options.incision;
+    hash = terrain::StableCombine64(hash, law.enabled ? 1U : 0U);
+    if (law.enabled)
+    {
+        hash = terrain::StableCombine64(hash, law.iterations);
+        for (const f64 value : {law.upliftCouplingPerIteration, law.incisionCoefficientMetersPerIteration,
+                 law.drainageExponent, law.slopeExponent, law.referenceDrainageAreaSquareMeters,
+                 law.ageErodibilityGain, law.ageUpliftDecay, law.minimumBedSlope,
+                 law.maximumIncisionMetersPerIteration})
+        {
+            hash = terrain::StableCombine64(hash, std::bit_cast<u64>(value));
+        }
+    }
     return hash == 0U ? 1U : hash;
 }
 
@@ -80,6 +94,11 @@ std::shared_ptr<const terrain::BakedRiverNetwork> BakeRivers(
     const terrain::AnalyticTerrainSource source(planet, desc);
     const f64 seaLevel = desc.global.seaLevelMeters;
 
+    terrain_macro_geology::MacroGeologyDesc macroDesc{};
+    macroDesc.ageUpliftDecay = options.incision.ageUpliftDecay;
+    const terrain_macro_geology::MacroGeologyField macro(
+        planet, source.GlobalFields(), nullptr, macroDesc);
+
     const u32 resolution = options.resolution;
     const std::size_t cells =
         static_cast<std::size_t>(terrain::kBakedTectonicFaces) * resolution * resolution;
@@ -89,6 +108,8 @@ std::shared_ptr<const terrain::BakedRiverNetwork> BakeRivers(
     std::vector<math::Double3> direction(cells);
     std::vector<f32> elevation(cells);
     std::vector<f32> precipitation(cells);
+    std::vector<f32> uplift(options.incision.enabled ? cells : 0U);
+    std::vector<f32> age(options.incision.enabled ? cells : 0U);
     std::vector<f64> areaSquareMeters(cells);
     std::vector<i32> neighbors(cells * kNeighborCount, -1);
 
@@ -138,6 +159,13 @@ std::shared_ptr<const terrain::BakedRiverNetwork> BakeRivers(
                     .radialOffsetMeters = 0.0});
                 elevation[cell] = static_cast<f32>(sample.elevationMeters);
                 precipitation[cell] = std::clamp(sample.climate.precipitation, 0.0F, 1.0F);
+                if (options.incision.enabled)
+                {
+                    const auto geology = macro.Sample(terrain::CanonicalizeSurfacePosition({
+                        .planet = planet.id, .unitDirection = d}));
+                    uplift[cell] = static_cast<f32>(geology.upliftMeters);
+                    age[cell] = static_cast<f32>(std::clamp(geology.geologicalAge, 0.0, 1.0));
+                }
 
                 // Gnomonic cell solid angle: (2/R)^2 / (1 + u^2 + v^2)^(3/2).
                 const f64 u = (static_cast<f64>(x) + 0.5) / resolution * 2.0 - 1.0;
@@ -286,6 +314,106 @@ std::shared_ptr<const terrain::BakedRiverNetwork> BakeRivers(
         control->rowsDone.fetch_add(1U, std::memory_order_relaxed);
     }
 
+    // 3b. Stream-power incision on the drainage tree. Parents precede children
+    //     in the flood order, so each pass lowers a cell against its already
+    //     updated downstream neighbour, as the page solver does.
+    u32 incisionResolution = 0;
+    std::vector<f32> incisionGutter;
+    if (options.incision.enabled)
+    {
+        const RiverIncisionBakeOptions& law = options.incision;
+        std::vector<f64> area(cells, 0.0);
+        for (std::size_t c = 0; c < cells; ++c)
+        {
+            if (ocean[c] == 0U)
+            {
+                area[c] = areaSquareMeters[c];
+            }
+        }
+        for (auto it = order.rbegin(); it != order.rend(); ++it)
+        {
+            const std::size_t c = *it;
+            const i32 p = parent[c];
+            if (p >= 0 && ocean[c] == 0U)
+            {
+                area[static_cast<std::size_t>(p)] += area[c];
+            }
+        }
+
+        std::vector<f64> height(cells);
+        std::vector<f64> distance(cells, 1.0);
+        for (std::size_t c = 0; c < cells; ++c)
+        {
+            height[c] = static_cast<f64>(elevation[c]);
+            if (parent[c] >= 0)
+            {
+                const math::Double3 d = direction[c] - direction[static_cast<std::size_t>(parent[c])];
+                distance[c] = std::max(std::sqrt(math::Dot(d, d)) * planet.radiusMeters, 1.0);
+            }
+        }
+
+        for (u32 iteration = 0; iteration < law.iterations; ++iteration)
+        {
+            for (const u32 c : order)
+            {
+                const i32 p = parent[c];
+                if (p < 0 || ocean[c] != 0U)
+                {
+                    continue;
+                }
+                const f64 erodibility = 1.0 + law.ageErodibilityGain * static_cast<f64>(age[c]);
+                const f64 drop = height[c] - height[static_cast<std::size_t>(p)];
+                const f64 slope = std::max(drop / distance[c], law.minimumBedSlope);
+                f64 incision = law.incisionCoefficientMetersPerIteration *
+                    std::pow(area[c] / law.referenceDrainageAreaSquareMeters, law.drainageExponent) *
+                    std::pow(slope, law.slopeExponent) * erodibility;
+                incision = std::min(incision, law.maximumIncisionMetersPerIteration);
+                // Never cut below the downstream cell plus the minimum bed slope.
+                incision = std::min(incision, std::max(drop - law.minimumBedSlope * distance[c], 0.0));
+                height[c] += static_cast<f64>(uplift[c]) * law.upliftCouplingPerIteration - incision;
+            }
+            if (cancelled())
+            {
+                return nullptr;
+            }
+        }
+
+        incisionResolution = resolution;
+        const std::size_t stride = static_cast<std::size_t>(resolution) + 2U;
+        incisionGutter.assign(static_cast<std::size_t>(terrain::kBakedTectonicFaces) * stride * stride, 0.0F);
+        const auto deltaAt = [&](const std::size_t c)
+        {
+            return ocean[c] != 0U ? 0.0F : static_cast<f32>(height[c] - static_cast<f64>(elevation[c]));
+        };
+        for (u32 face = 0; face < terrain::kBakedTectonicFaces; ++face)
+        {
+            for (i32 y = -1; y <= static_cast<i32>(resolution); ++y)
+            {
+                for (i32 x = -1; x <= static_cast<i32>(resolution); ++x)
+                {
+                    std::size_t cell;
+                    if (x >= 0 && y >= 0 && x < static_cast<i32>(resolution) &&
+                        y < static_cast<i32>(resolution))
+                    {
+                        cell = (static_cast<std::size_t>(face) * resolution + y) * resolution + x;
+                    }
+                    else
+                    {
+                        const world::CubeCoordinate cube = world::UnitDirectionToCube(
+                            terrain::BakedTectonicTexelDirection(face, x, y, resolution));
+                        const f64 fres = static_cast<f64>(resolution);
+                        const u32 nx = static_cast<u32>(std::clamp(
+                            std::floor((cube.uv.x + 1.0) * 0.5 * fres), 0.0, fres - 1.0));
+                        const u32 ny = static_cast<u32>(std::clamp(
+                            std::floor((cube.uv.y + 1.0) * 0.5 * fres), 0.0, fres - 1.0));
+                        cell = (static_cast<std::size_t>(cube.face) * resolution + ny) * resolution + nx;
+                    }
+                    incisionGutter[terrain::BakedGutterIndex(resolution, face, x, y)] = deltaAt(cell);
+                }
+            }
+        }
+    }
+
     // 4. Extract the rivers: land cells above the discharge threshold, plus the
     //    ocean cell each river mouth empties into.
     std::vector<terrain::BakedRiverNode> nodes;
@@ -399,6 +527,7 @@ std::shared_ptr<const terrain::BakedRiverNetwork> BakeRivers(
     }
     return std::make_shared<const terrain::BakedRiverNetwork>(
         terrain::BakedRiverNetwork::Build(
-            planet.radiusMeters, recipeHash, std::move(nodes), std::move(segments)));
+            planet.radiusMeters, recipeHash, std::move(nodes), std::move(segments),
+            incisionResolution, std::move(incisionGutter)));
 }
 } // namespace orbit::terrain_bake

@@ -34,6 +34,7 @@
 #include <orbit/world_model/CelestialSchemas.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/world_model/LocalLightBinding.hpp>
+#include <orbit/world_model/PrimitiveBinding.hpp>
 #include <orbit/world_model/StaticMeshBinding.hpp>
 #include <orbit/world_model/VisibilityProxyBinding.hpp>
 #include <orbit/world_model/VolumeSchemas.hpp>

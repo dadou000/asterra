@@ -1,4 +1,6 @@
 add_library(OrbitMeshRender STATIC
+    src/EmissiveLights.cpp
+    src/GlassSurface.cpp
     src/MeshLibrary.cpp
     src/MeshSurface.cpp
     src/MeshShadow.cpp
@@ -44,5 +46,39 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.MeshRender
         COMMAND OrbitMeshRenderTests
+    )
+
+    add_executable(OrbitGlassSurfaceTests
+        tests/GlassSurfaceTests.cpp
+    )
+
+    target_link_libraries(OrbitGlassSurfaceTests
+        PRIVATE
+            Orbit::MeshRender
+    )
+
+    target_compile_features(OrbitGlassSurfaceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitGlassSurfaceTests)
+
+    add_test(
+        NAME Orbit.GlassSurface
+        COMMAND OrbitGlassSurfaceTests
+    )
+
+    add_executable(OrbitEmissiveLightsTests
+        tests/EmissiveLightsTests.cpp
+    )
+
+    target_link_libraries(OrbitEmissiveLightsTests
+        PRIVATE
+            Orbit::MeshRender
+    )
+
+    target_compile_features(OrbitEmissiveLightsTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitEmissiveLightsTests)
+
+    add_test(
+        NAME Orbit.EmissiveLights
+        COMMAND OrbitEmissiveLightsTests
     )
 endif()

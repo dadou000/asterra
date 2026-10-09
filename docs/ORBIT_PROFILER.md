@@ -63,6 +63,7 @@ The panel only does work while it is open. The same controls exist over RPC/MCP:
 - **Synthetic lanes**: `Frames` (one slice per frame), `Main loop phases` and `Main loop sub-phases` (the
   `studio.cpu_timings` phases), `Compose stages` (per-view compose stages), and two GPU lanes: `GPU passes` (GPU time
   of each render-graph pass) and `GPU frames` (first to last GPU timestamp of each frame). See *GPU timing* below.
+- **Editor UI scopes** on `Orbit.Main`: `Ui.BeginFrame` (with `Ui.NewFrame` nested), `Ui.shell.canvas|dock|menu|panels|notifications`, one `Panel <title>` slice per drawn panel, and in the draw submission `Ui.ensure`, `Ui.verts`, `Ui.upload`, `Ui.record`.
 - **`STALLED in …` instants** on the main thread: one per sampled stack during a stall. `args.stack` holds the
   symbolised call stack. Symbols need the PDB next to the exe — optimised builds emit one (`ORBIT_PROFILER_SYMBOLS`,
   default ON: `/Z7` objects and `/DEBUG` link).
