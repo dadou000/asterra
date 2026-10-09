@@ -288,7 +288,7 @@ struct ImpactInfluenceCap
     return terrain_impacts::ScaleImpactCraterRadiusMeters({
         .impactorDiameterMeters = impact.impactorDiameterMeters,
         .impactVelocityMetersPerSecond = impact.impactVelocityMetersPerSecond,
-        .impactAngleDegrees = std::max(impact.impactAngleDegrees, 0.1),
+        .impactAngleDegrees = impact.impactAngleDegrees,
         .impactorDensityKgPerCubicMeter = impact.impactorDensityKgPerCubicMeter,
         .targetDensityKgPerCubicMeter = definition.targetDensityKgPerCubicMeter,
         .surfaceGravityMetersPerSecondSquared = definition.surfaceGravityMetersPerSecondSquared,
@@ -300,7 +300,7 @@ struct ImpactInfluenceCap
     const terrain_impacts::ImpactFieldDefinition& definition)
 {
     const f64 radius = EffectiveImpactRadius(impact, definition);
-    const f64 extent = std::max(impact.ejectaExtentRadii, 1.0);
+    const f64 extent = impact.InfluenceExtentRadii();
     const f64 profileBound = 1.65 /
         std::max(1.0 - impact.shapeIrregularity, 0.75) * 1.65;
     const f64 main = profileBound * extent;

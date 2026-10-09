@@ -2,6 +2,7 @@
 
 #include <orbit/core/Types.hpp>
 #include <orbit/lighting/LightingView.hpp>
+#include <orbit/lighting/ReflectionScene.hpp>
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/mesh_render/MeshLibrary.hpp>
 #include <orbit/mesh_render/MeshShadow.hpp>
@@ -13,10 +14,14 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace orbit::mesh_render
 {
+// Runtime glass shader, exposed for headless compile validation.
+[[nodiscard]] std::string BuildGlassPixelShaderSource();
+
 // Shape ids match world_model::PrimitiveShape.
 enum class GlassShape : u32
 {
@@ -132,6 +137,8 @@ public:
         rhi::Device& device,
         const shader::Compiler& compiler);
 
+    void BeginFrame(u32 completedSlot, u32 framesInFlight);
+
     // Copies the lit scene into `backdrop` (same size and format) so the glass
     // pass can read what lies behind while writing the scene. `sceneColor`
     // in ShaderResource, `backdrop` in RenderTarget.
@@ -178,13 +185,14 @@ public:
         u32 height,
         const lighting::LightingView& view,
         const GlassLighting& lighting,
-        const lighting::SdfGatherInput* sdf = nullptr);
+        const lighting::SdfGatherInput* sdf = nullptr,
+        const lighting::ReflectionSceneInput* exact = nullptr);
 
 private:
     struct RetiredRecords
     {
         std::unique_ptr<rhi::Buffer> buffer;
-        u64 retireAtTick{0U};
+        u64 pendingFrames{0U};
     };
 
     // Instance records followed by `tail` (three float4s the shader reads
@@ -199,6 +207,6 @@ private:
     std::unique_ptr<rhi::GraphicsPipeline> glassPipeline_;
     std::vector<RetiredRecords> records_;
     std::unique_ptr<rhi::Buffer> dummySdf_;
-    u64 tick_{0U};
+    u64 pendingFramesMask_{~0ULL};
 };
 } // namespace orbit::mesh_render

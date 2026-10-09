@@ -136,6 +136,14 @@ struct StudioTerrainLayerOptions
     bool bypassAtmosphere{false};
     // Skips only the hybrid reflections stage (the final gather still runs); bypassIndirectLighting skips both.
     bool bypassHybridReflections{false};
+    // Smooth surfaces: one shared exact mesh scene for opaque reflections and
+    // analytic glass. Hardware is an optional traversal backend, same shading.
+    bool reflectionExactTriangles{true};
+    bool reflectionTemporal{true};
+    f32 reflectionMaximumRoughness{0.25F};
+    f32 reflectionDistanceMeters{40.0F};
+    u32 reflectionDebugView{0U}; // 0 scene, 1 radiance, 2 hit distance
+
     // Skips only the radiance-cache fallback that fills pixels the screen-space gather did not resolve.
     bool bypassRadianceCache{false};
     // Replaces the final gather's contribution with its coverage: red = confidence, green = gathered

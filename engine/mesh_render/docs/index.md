@@ -13,6 +13,7 @@ sources = [
 ]
 symbols = ["MeshLibrary", "MeshSurfaceRenderer"]
 invariants = [
+  "MeshLibrary retains validated opaque reflection triangles from the loader. MeshSdfScene caches a camera-relative preorder BVH alongside the merged field; both HybridReflectionRenderer and analytic glass consume it. Replacement triangle buffers and optional acceleration structures retire after all potentially referring frame slots complete, via BeginReflectionFrame called after slot fence wait.",
   "Loading only advances inside the MeshSurfaces pass, so that pass must run whenever a mesh is requested, even before any model is resident.",
   "Replaced or released models and staging buffers are retired after 24 pumps, never destroyed under in-flight frames.",
   "A failed reload keeps the previous model.",
@@ -22,9 +23,9 @@ invariants = [
   "The mesh sun shadow resolve takes a temporalIndex (the TAA frame counter while TAA is on, else 0) that shifts the pixel seed of the PCSS and sky-openness sampling every frame, so TAA averages the penumbra noise; with a fixed seed the pattern is identical every frame and shows up as frozen dithering along shadow edges.",
   "MeshLibrary::AcquireGenerated(key, build) loads a model from a generator instead of a file (the generator runs once on the loader thread, the key must encode all of its inputs, there is no hot-reload stat check, and the generator is dropped when the idle entry is released). See /authoring/primitives for the primitive and glass renderers.",
 ]
-related = ["/authoring/mesh-import"]
+related = ["/rendering/lighting/smooth-reflections", "/authoring/mesh-import"]
 verify = ["ctest -R Orbit.MeshRender"]
-verified = "1229ef74"
+verified = "f842a956"
 +++
 
 Diagnose: `mesh.status` shows loading / ready / failed with the error text; meshes only resolve under the viewport target body.

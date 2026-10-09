@@ -1,6 +1,7 @@
 #include <orbit/mesh_render/GlassSurface.hpp>
 
 #include <orbit/lighting/SdfTraceShader.hpp>
+#include <orbit/lighting/ReflectionTraceShader.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -8,12 +9,12 @@
 #include <cstring>
 #include <initializer_list>
 #include <string>
+#include <stdexcept>
 
 namespace orbit::mesh_render
 {
 namespace
 {
-constexpr u64 kRecordRetireTicks = 24U;
 constexpr u32 kGlassPushDwords = 28U;
 constexpr u32 kMinPhotonGrid = 96U;
 constexpr u32 kMaxPhotonGrid = 224U;
@@ -483,6 +484,7 @@ float4 SdfParams2() { return g_records[(uint)g.c5.w * 6u + 2u]; }
 #define SDF_VOXEL SdfParams0().w
 #define SDF_DIMS int3(SdfParams1().xyz)
 //SDF_TRACE_INCLUDE
+//REFLECTION_TRACE_INCLUDE
 
 // What a ray starting at p sees: the lit scene where the march meets the depth
 // buffer, the sky pixel it points at, the lit surface the distance field finds
@@ -490,7 +492,21 @@ float4 SdfParams2() { return g_records[(uint)g.c5.w * 6u + 2u]; }
 float3 EnvironmentTrace(float3 p, float3 dir)
 {
     float t;
-    if (MarchScene(p, dir, t))
+    const bool screenHit = MarchScene(p, dir, t);
+    if (ExactParams().w > 0.0)
+    {
+        const ReflectionHit exactHit = ReflectionTrace(p, dir, 0.001, 60.0);
+        if (exactHit.status == 1u && (!screenHit || exactHit.t <= t + 0.05))
+        {
+            float3 closer; float closerT;
+            const bool fieldCloser = SdfParams1().w > 0.5 &&
+                SdfTrace(p, dir, max(exactHit.t - 0.8*SDF_VOXEL, 0.001), closer, closerT);
+            if (fieldCloser && (!screenHit || closerT <= t))
+                return SdfFetchRadiance(closer, -dir);
+            if (!fieldCloser) return ReflectionShadeHit(exactHit, -dir, SdfParams1().w > 0.5);
+        }
+    }
+    if (screenHit)
     {
         const float3 q = ProjectPoint(p + dir * t);
         return g_backdrop.SampleLevel(g_backdropSampler, clamp(q.xy, 0.0, 0.9999), 0.0).rgb;
@@ -768,6 +784,21 @@ float4 main(PSInput input) : SV_Target0
     if (const auto at = source.find(marker); at != std::string::npos)
     {
         source.replace(at, marker.size(), lighting::kSdfTraceHlsl);
+        const std::string exactMarker = "//REFLECTION_TRACE_INCLUDE";
+        const auto exactAt = source.find(exactMarker);
+        if (exactAt != std::string::npos)
+        {
+            const std::string trace(lighting::kReflectionTraceHlsl);
+            const auto typesEnd = trace.find("bool ReflectionBox");
+            const std::string bindings = R"(
+[[vk::binding(5, 0)]] StructuredBuffer<ReflectionTriangle> g_reflectionTriangles;
+[[vk::binding(6, 0)]] StructuredBuffer<ReflectionNode> g_reflectionNodes;
+[[vk::binding(7, 0)]] StructuredBuffer<float4> g_reflectionLighting;
+float4 ExactParams() { return g_records[(uint)g.c5.w * 6u + 3u]; }
+#define REFLECTION_ORIGIN_COUNT ExactParams()
+)";
+            source.replace(exactAt, exactMarker.size(), trace.substr(0, typesEnd) + bindings + trace.substr(typesEnd));
+        }
     }
     return source;
 }
@@ -951,6 +982,12 @@ u32 GlassPhotonGrid(const f32 boundingRadiusMeters) noexcept
         static_cast<f32>(kMaxPhotonGrid)));
 }
 
+std::string BuildGlassPixelShaderSource()
+{
+    return Compose({kCommon, kTrace, kScene, kGlassPixel},
+        "#define DEPTH_BINDING 8\n#define BACKDROP_BINDING 9\n");
+}
+
 GlassSurfaceRenderer::GlassSurfaceRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
@@ -1013,15 +1050,13 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
     {
         const auto vs = compile(kFullscreenVertex, shader::Stage::Vertex);
         const auto ps = compile(
-            Compose(
-                {kCommon, kTrace, kScene, kGlassPixel},
-                "#define DEPTH_BINDING 5\n#define BACKDROP_BINDING 6\n"),
+            BuildGlassPixelShaderSource(),
             shader::Stage::Pixel);
         glassPipeline_ = device.CreateGraphicsPipeline({
             .vertexShader = view(vs),
             .pixelShader = view(ps),
             .pushConstantDwords = kGlassPushDwords,
-            .shaderResourceBuffers = 5U,
+            .shaderResourceBuffers = 8U,
             .sampledTextures = 2U,
             .topology = rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -1032,6 +1067,16 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
             .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
             .colorAttachmentCount = 1U});
     }
+}
+
+void GlassSurfaceRenderer::BeginFrame(const u32 completedSlot, const u32 framesInFlight)
+{
+    if (framesInFlight == 0U || framesInFlight > 64U || completedSlot >= framesInFlight)
+        throw std::invalid_argument("Invalid glass frame slot");
+    pendingFramesMask_ = framesInFlight == 64U ? ~0ULL : ((1ULL << framesInFlight) - 1ULL);
+    const u64 completed = 1ULL << completedSlot;
+    for (auto& r : records_) r.pendingFrames &= ~completed;
+    std::erase_if(records_, [](const auto& r) { return r.pendingFrames == 0U; });
 }
 
 rhi::Buffer& GlassSurfaceRenderer::UploadRecords(
@@ -1059,7 +1104,7 @@ rhi::Buffer& GlassSurfaceRenderer::UploadRecords(
     std::memcpy(buffer->Map(), floats.data(), floats.size() * sizeof(f32));
     buffer->Unmap();
 
-    records_.push_back({std::move(buffer), tick_ + kRecordRetireTicks});
+    records_.push_back({std::move(buffer), pendingFramesMask_});
     return *records_.back().buffer;
 }
 
@@ -1096,13 +1141,6 @@ void GlassSurfaceRenderer::DrawCaustics(
     rhi::Texture* const sunShadowMap,
     const MeshShadowFrame* const shadowFrame)
 {
-    ++tick_;
-    std::erase_if(
-        records_,
-        [this](const RetiredRecords& records)
-        {
-            return tick_ >= records.retireAtTick;
-        });
 
     const f32 sunPower = lighting.sunIrradiance[0] + lighting.sunIrradiance[1] +
                          lighting.sunIrradiance[2];
@@ -1177,7 +1215,8 @@ void GlassSurfaceRenderer::DrawGlass(
     const u32 height,
     const lighting::LightingView& view,
     const GlassLighting& lighting,
-    const lighting::SdfGatherInput* const sdf)
+    const lighting::SdfGatherInput* const sdf,
+    const lighting::ReflectionSceneInput* const exact)
 {
     if (glassPipeline_ == nullptr || width == 0U || height == 0U ||
         instances.empty())
@@ -1191,14 +1230,20 @@ void GlassSurfaceRenderer::DrawGlass(
     const math::Double3 sdfOrigin = sdfAvailable
         ? sdf->originInFrameMeters - view.cameraPositionInFrameMeters
         : math::Double3{};
-    const std::array<f32, kGlassTailFloats> sdfTail{
+    const bool exactAvailable = exact != nullptr && exact->triangles != nullptr &&
+        exact->nodes != nullptr && exact->nodeCount > 0U;
+    const auto exactOrigin = exactAvailable
+        ? exact->originInFrameMeters - view.cameraPositionInFrameMeters : math::Double3{};
+    const std::array<f32, kGlassTailFloats + 4U> sdfTail{
         static_cast<f32>(sdfOrigin.x), static_cast<f32>(sdfOrigin.y),
         static_cast<f32>(sdfOrigin.z), sdfAvailable ? sdf->voxelSize : 0.25F,
         sdfAvailable ? static_cast<f32>(sdf->dimensions[0]) : 1.0F,
         sdfAvailable ? static_cast<f32>(sdf->dimensions[1]) : 1.0F,
         sdfAvailable ? static_cast<f32>(sdf->dimensions[2]) : 1.0F,
         sdfAvailable ? 1.0F : 0.0F,
-        lighting.localUp[0], lighting.localUp[1], lighting.localUp[2], 0.0F};
+        lighting.localUp[0], lighting.localUp[1], lighting.localUp[2], 0.0F,
+        static_cast<f32>(exactOrigin.x), static_cast<f32>(exactOrigin.y),
+        static_cast<f32>(exactOrigin.z), exactAvailable ? static_cast<f32>(exact->nodeCount) : 0.0F};
 
     if (dummySdf_ == nullptr)
     {
@@ -1213,6 +1258,13 @@ void GlassSurfaceRenderer::DrawGlass(
     }
 
     rhi::Buffer& records = UploadRecords(instances, sdfTail);
+    const std::array<f32, 16U> exactLight{
+        lighting.toSun[0], lighting.toSun[1], lighting.toSun[2], 0.0F,
+        lighting.sunIrradiance[0], lighting.sunIrradiance[1], lighting.sunIrradiance[2], 0.0F,
+        lighting.environment[0] * 3.14159265F, lighting.environment[1] * 3.14159265F,
+        lighting.environment[2] * 3.14159265F, 0.0F,
+        lighting.localUp[0], lighting.localUp[1], lighting.localUp[2], 1024.0F};
+    rhi::Buffer& exactLighting = UploadRecords({}, exactLight);
     const GlassCamera camera = MakeGlassCamera(view, width, height);
 
     commands.SetRenderTarget(sceneColor);
@@ -1229,6 +1281,9 @@ void GlassSurfaceRenderer::DrawGlass(
     commands.SetGraphicsBuffer(2U, sdfAvailable ? *sdf->albedo : *dummySdf_);
     commands.SetGraphicsBuffer(3U, sdfAvailable ? *sdf->normal : *dummySdf_);
     commands.SetGraphicsBuffer(4U, sdfAvailable ? *sdf->radiance : *dummySdf_);
+    commands.SetGraphicsBuffer(5U, exactAvailable ? *exact->triangles : *dummySdf_);
+    commands.SetGraphicsBuffer(6U, exactAvailable ? *exact->nodes : *dummySdf_);
+    commands.SetGraphicsBuffer(7U, exactLighting);
     commands.SetGraphicsTexture(0U, depth);
     commands.SetGraphicsTexture(1U, backdrop);
 

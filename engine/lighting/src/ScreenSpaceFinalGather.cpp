@@ -829,7 +829,7 @@ void main(uint3 dispatchId : SV_DispatchThreadID, uint3 groupThread : SV_GroupTh
             // Visibly specular: mirror-like dielectrics or metals. A rough
             // dielectric reflects a few percent of an already blurred
             // environment, which the reflection passes do not need to add.
-            if (baseRoughness.a < 0.25 || normalMetallic.w > 0.3)
+            if (baseRoughness.a <= 0.25 || normalMetallic.w > 0.3)
             {
                 InterlockedAdd(s_need[1], 1u, needIgnored);
             }

@@ -332,6 +332,8 @@ ImpactFieldDefinition ParseImpactFieldToml(
                         *table,
                         "ray_count",
                         0),
+                .rayExtentRadii = OptionalFloat(*table, "ray_extent_radii", 0.0),
+                .rayIrregularity = OptionalFloat(*table, "ray_irregularity", 0.0),
                 .degradation =
                     OptionalFloat(
                         *table,
@@ -531,6 +533,8 @@ std::string SerializeImpactFieldToml(
             "ray_count",
             static_cast<i64>(
                 impact.rayCount));
+        table.insert("ray_extent_radii", impact.rayExtentRadii);
+        table.insert("ray_irregularity", impact.rayIrregularity);
         table.insert(
             "degradation",
             impact.degradation);

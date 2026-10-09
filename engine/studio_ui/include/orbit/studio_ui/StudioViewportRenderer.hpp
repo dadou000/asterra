@@ -22,7 +22,6 @@
 #include <orbit/lighting/EmissiveInvalidation.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
 #include <orbit/lighting/HybridReflectionRenderer.hpp>
-#include <orbit/lighting/ExactReflectionQueryRenderer.hpp>
 #include <orbit/lighting/LightingScheduler.hpp>
 #include <orbit/lighting/MaterialEmissionSurfaceOverride.hpp>
 #include <orbit/lighting/ProxySunShadow.hpp>
@@ -644,7 +643,6 @@ private:
         std::vector<u8> needStatsWritten;
         u32 reflectionsHold{120U};
         u32 cacheFallbackHold{120U};
-        u32 exactReflectionHold{120U};
     };
     struct VisibilityProxyPresentation
     {
@@ -779,7 +777,6 @@ private:
     };
     std::map<std::string, MeshShadowTargets, std::less<>> meshShadowTargets_;
     lighting::HybridReflectionRenderer hybridReflectionRenderer_;
-    lighting::ExactReflectionQueryRenderer exactReflectionQueryRenderer_;
     lighting::SurfaceDebugRenderer surfaceDebugRenderer_;
     StudioFlatMapRenderer flatMapRenderer_;
     post_process::LuminanceHistogramRenderer luminanceHistogramRenderer_;

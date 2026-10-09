@@ -1,4 +1,5 @@
 #include <orbit/mesh_render/MeshSdfScene.hpp>
+#include <orbit/mesh_render/ReflectionBvh.hpp>
 
 #include <orbit/lighting/SdfTraceShader.hpp>
 
@@ -776,6 +777,97 @@ MeshSdfScene::MeshSdfScene(
     cornerPipeline_ = make(kCornerShader, 3U);
 }
 
+void MeshSdfScene::BeginReflectionFrame(const u32 completedSlot, const u32 framesInFlight)
+{
+    if (framesInFlight == 0U || framesInFlight > 64U || completedSlot >= framesInFlight)
+        throw std::invalid_argument("Invalid reflection scene frame slot");
+    reflectionPendingFramesMask_ = framesInFlight == 64U ? ~0ULL : ((1ULL << framesInFlight) - 1ULL);
+    const u64 completed = 1ULL << completedSlot;
+    for (auto& r : retired_) r.pendingReflectionFrames &= ~completed;
+    std::erase_if(retired_, [this](const auto& r)
+        { return r.pendingReflectionFrames == 0U && tick_ >= r.retireAtTick; });
+}
+
+void MeshSdfScene::UpdateReflections(
+    const std::span<const MeshInstance> instances,
+    const math::Double3& camera)
+{
+    u64 signature = 0x95171ULL;
+    for (const auto& instance : instances)
+    {
+        if (instance.model == nullptr) continue;
+        signature = Mix(signature, reinterpret_cast<std::uintptr_t>(instance.model));
+        signature = Mix(signature, instance.model->Generation());
+        for (u32 i = 0; i < 12U; ++i)
+        {
+            const f64 v = instance.rows[i] +
+                (i == 3U ? camera.x : i == 7U ? camera.y : i == 11U ? camera.z : 0.0);
+            signature = Mix(signature, static_cast<u64>(std::llround(v * (i % 4U == 3U ? 1000.0 : 1.0e5))));
+        }
+    }
+    if (signature == reflectionSignature_ &&
+        math::Length(camera - reflections_.originInFrameMeters) < 1500.0) return;
+
+    std::vector<lighting::ReflectionTriangle> triangles;
+    for (const auto& instance : instances)
+    {
+        if (instance.model == nullptr) continue;
+        const auto& source = instance.model->ReflectionTriangles();
+        triangles.reserve(triangles.size() + source.size());
+        for (const auto& triangle : source)
+            triangles.push_back(TransformReflectionTriangle(triangle, instance.rows));
+    }
+    const auto bvh = BuildReflectionBvh(std::move(triangles));
+    const auto upload = [this](const auto& data) -> std::unique_ptr<rhi::Buffer>
+    {
+        if (data.empty()) return nullptr;
+        const u64 bytes = data.size() * sizeof(data[0]);
+        auto buffer = device_.CreateBuffer({.sizeBytes = bytes,
+            .usage = rhi::BufferUsage::Structured, .memory = rhi::MemoryUsage::HostVisible,
+            .initialState = rhi::ResourceState::ShaderResource});
+        std::memcpy(buffer->Map(), data.data(), static_cast<std::size_t>(bytes));
+        buffer->Unmap(); return buffer;
+    };
+    // Build the whole candidate before retiring either old buffer.
+    auto newTriangles = upload(bvh.triangles);
+    auto newNodes = upload(bvh.nodes);
+    std::unique_ptr<rhi::AccelerationStructure> acceleration;
+    if (device_.Capabilities().rayQuery && device_.Capabilities().accelerationStructures && !bvh.triangles.empty())
+    {
+        std::vector<rhi::AccelerationAabb> bounds;
+        bounds.reserve(bvh.triangles.size());
+        for (u32 i = 0U; i < bvh.triangles.size(); ++i)
+        {
+            const auto& t = bvh.triangles[i];
+            const math::Float3 p{t.p0.x, t.p0.y, t.p0.z};
+            const math::Float3 a{p.x+t.edge1.x, p.y+t.edge1.y, p.z+t.edge1.z};
+            const math::Float3 b{p.x+t.edge2.x, p.y+t.edge2.y, p.z+t.edge2.z};
+            // Give flat triangle bounds a small thickness for procedural AS traversal.
+            bounds.push_back({
+                {std::min({p.x,a.x,b.x})-1.0e-4F, std::min({p.y,a.y,b.y})-1.0e-4F, std::min({p.z,a.z,b.z})-1.0e-4F},
+                {std::max({p.x,a.x,b.x})+1.0e-4F, std::max({p.y,a.y,b.y})+1.0e-4F, std::max({p.z,a.z,b.z})+1.0e-4F}, i});
+        }
+        acceleration = device_.CreateAabbAccelerationStructure(bounds);
+    }
+    Retired old;
+    old.acceleration = std::move(reflectionAcceleration_);
+    old.retireAtTick = tick_;
+    old.pendingReflectionFrames = reflectionPendingFramesMask_;
+    if (reflectionTriangles_) old.buffers.push_back(std::move(reflectionTriangles_));
+    if (reflectionNodes_) old.buffers.push_back(std::move(reflectionNodes_));
+    if (!old.buffers.empty() || old.acceleration) retired_.push_back(std::move(old));
+    reflectionTriangles_ = std::move(newTriangles);
+    reflectionNodes_ = std::move(newNodes);
+    reflectionAcceleration_ = std::move(acceleration);
+    reflections_.acceleration = reflectionAcceleration_.get();
+    reflectionSignature_ = signature;
+    reflections_.triangles = reflectionTriangles_.get();
+    reflections_.nodes = reflectionNodes_.get();
+    reflections_.nodeCount = static_cast<u32>(bvh.nodes.size());
+    reflections_.originInFrameMeters = camera;
+    ++reflections_.revision;
+}
+
 void MeshSdfScene::Update(
     rhi::CommandList& commands,
     const std::span<const MeshInstance> instances,
@@ -785,7 +877,9 @@ void MeshSdfScene::Update(
     ++tick_;
     std::erase_if(
         retired_,
-        [this](const Retired& r) { return tick_ >= r.retireAtTick; });
+        [this](const Retired& r) { return tick_ >= r.retireAtTick && r.pendingReflectionFrames == 0U; });
+
+    UpdateReflections(instances, cameraInFrameMeters);
 
     struct Placed
     {
@@ -1184,6 +1278,10 @@ void MeshSdfScene::Light(
     rhi::CommandList& commands,
     const SdfLightingInput& input)
 {
+    reflections_.toSun = input.toSun;
+    reflections_.sunIrradiance = {input.sunIrradiance, input.sunIrradiance, input.sunIrradiance};
+    reflections_.skyIrradiance = input.skyIrradiance;
+    reflections_.localUp = input.up;
     if (!volume_.ready || lightPipeline_ == nullptr)
     {
         return;

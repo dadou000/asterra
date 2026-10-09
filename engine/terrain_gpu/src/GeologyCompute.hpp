@@ -10,10 +10,10 @@ struct EventPacket
     float4 b;   // impact east + rim ratio
     float4 c;   // impact north + simple/complex depth ratios
     float4 d;   // ejecta ratio/extent, ray strength/count
-    float4 e;   // degradation, age years, impact angle, azimuth
+    float4 e;   // degradation, age years, prepared elongation, azimuth cosine
     float4 f;   // irregularity, melt, breccia, multiring
-    float4 g;   // mass scale, phase, flow point count, flow width
-    float4 h;   // flow thickness, flow age, unused, unused
+    float4 g;   // mass scale, phase, azimuth sine/flow point count, flow width
+    float4 h;   // ray extent/flow thickness, ray irregularity/flow age, simple depth, influence cosine
 };
 
 struct SegmentPacket
@@ -123,6 +123,11 @@ float FeatureWeight(float diameter, float footprint)
     return SmoothUnit((diameter - lower) / (upper - lower));
 }
 
+bool AgeAtLeast(uint low, uint high, uint otherLow, uint otherHigh)
+{
+    return high > otherHigh || (high == otherHigh && low >= otherLow);
+}
+
 float3 CubeDirection(uint face, int x, int y, uint resolution)
 {
     const float u = ((float)x + 0.5) / (float)resolution * 2.0 - 1.0;
@@ -166,18 +171,13 @@ void ApplyImpact(inout ProcessState state, EventPacket event, float3 direction)
     const float radius = event.a.w;
     const float spectral = FeatureWeight(radius * 2.0, g_pc.footprint);
     if (spectral <= 0.0 || event.meta.w == 0xffffffffu) return;
-    const float shapeBound = 1.65 / max(1.0 - event.f.x, 0.75);
-    const float maxAngle = min(radius * max(1.0, event.d.y) * shapeBound /
-        g_pc.planetRadius, 3.14159265358979323846);
-    if (dot(event.a.xyz, direction) < cos(maxAngle)) return;
+    if (dot(event.a.xyz, direction) < event.h.w) return;
 
     const float2 offset = SurfaceOffset(event.a.xyz, event.b.xyz, event.c.xyz,
         direction, g_pc.planetRadius);
-    const float impactAngle = clamp(event.e.z, 0.0, 89.0) *
-        (3.14159265358979323846 / 180.0);
-    const float elongation = 1.0 + 0.65 * sin(impactAngle) * sin(impactAngle);
-    const float along = offset.x * cos(event.e.w) + offset.y * sin(event.e.w);
-    const float across = -offset.x * sin(event.e.w) + offset.y * cos(event.e.w);
+    const float elongation = event.e.z;
+    const float along = offset.x * event.e.w + offset.y * event.g.z;
+    const float across = -offset.x * event.g.z + offset.y * event.e.w;
     float x = sqrt((along / (radius * elongation)) * (along / (radius * elongation)) +
         (across / radius) * (across / radius));
     if (x > 1.0e-6 && event.f.x > 0.0)
@@ -187,7 +187,9 @@ void ApplyImpact(inout ProcessState state, EventPacket event, float3 direction)
             0.35 * cos(5.0 * angle - event.g.y * 0.7);
         x /= max(1.0 + event.f.x * noise, 0.75);
     }
-    if (x > event.d.y) return;
+    const float influenceExtent = max(event.d.y,
+        event.d.z > 0.0 && event.d.w > 0.0 ? event.h.x : 0.0);
+    if (x > influenceExtent) return;
 
     float degradationRate = 0.0012;
     if (g_pc.environment == 1) degradationRate = 0.012;
@@ -230,8 +232,10 @@ void ApplyImpact(inout ProcessState state, EventPacket event, float3 direction)
         }
     }
 
-    const float rim = radius * event.b.w * exp(-0.5 * ((x - 1.0) / 0.10) * ((x - 1.0) / 0.10));
-    if (event.f.w > 0.0 && radius >= 5.0 * g_pc.complexTransitionRadius && x >= 1.0)
+    const float rim = x <= event.d.y
+        ? radius * event.b.w * exp(-0.5 * ((x - 1.0) / 0.10) * ((x - 1.0) / 0.10)) : 0.0;
+    if (event.f.w > 0.0 && radius >= 5.0 * g_pc.complexTransitionRadius &&
+        x >= 1.0 && x <= event.d.y)
     {
         const float phase = (x - 1.0) * (2.0 * 3.14159265358979323846 / 1.35);
         craterDelta += radius * event.f.w * 0.012 * cos(phase) * exp(-(x - 1.0) * 0.45);
@@ -239,17 +243,25 @@ void ApplyImpact(inout ProcessState state, EventPacket event, float3 direction)
 
     float ejecta = 0.0;
     float ray = 0.0;
+    float angularRay = 0.0;
+    if (x >= 1.0 && event.d.z > 0.0 && event.d.w > 0.0)
+    {
+        const float azimuth = atan2(offset.y, offset.x);
+        const float distortion = event.h.y * (
+            0.65 * sin(3.0 * azimuth + x * 0.45 + event.g.y) +
+            0.35 * sin(5.0 * azimuth - x * 0.23 - event.g.y));
+        angularRay = event.d.z * pow(max(0.0,
+            cos((azimuth + distortion) * event.d.w + event.g.y)), 8.0);
+        if (event.h.x > 0.0 && x <= event.h.x)
+            ray = angularRay * (1.0 - SmoothUnit((x - 1.0) / max(event.h.x - 1.0, 1.0e-9)));
+    }
     if (x >= 1.0 && x <= event.d.y)
     {
         const float extent = saturate((x - 1.0) / max(event.d.y - 1.0, 1.0e-9));
         const float outerFade = 1.0 - SmoothUnit(extent);
         ejecta = radius * event.d.x * pow(max(x, 1.0), -3.0) * outerFade * event.g.x;
-        if (event.d.z > 0.0 && event.d.w > 0.0)
-        {
-            const float azimuth = atan2(offset.y, offset.x);
-            ray = event.d.z * pow(max(0.0, cos(azimuth * event.d.w + event.g.y)), 8.0);
-            ejecta *= 1.0 + ray;
-        }
+        if (event.h.x == 0.0) ray = angularRay;
+        ejecta *= 1.0 + angularRay;
     }
     const float impactHeight = (craterDelta + rim + ejecta) * preservation;
     const float coverage = x < 1.0
@@ -275,7 +287,7 @@ void ApplyImpact(inout ProcessState state, EventPacket event, float3 direction)
         state.formationHigh = event.meta.z;
         state.formationAgeYears = event.e.y;
     }
-    if (event.meta.y != 0u || event.meta.z != 0u || coverage > 0.01 || ejecta > 0.0)
+    if (coverage > 0.01 || ejecta > 0.0 || ray > 0.0)
     {
         state.exposureLow = event.meta.y;
         state.exposureHigh = event.meta.z;
@@ -323,12 +335,12 @@ void ApplyResurfacing(inout ProcessState state, EventPacket event, float3 direct
         state.ejecta *= retained;
         state.melt *= retained;
         state.resurfacingThickness *= retained;
+        state.rays *= retained;
         state.breccia = saturate(state.breccia * retained + 0.3 * coverage);
         state.debris = saturate(state.debris * retained + 0.16 * coverage);
-        state.ejecta = state.ejecta * retained + 0.04 * thickness * coverage;
+        state.ejecta += 0.04 * thickness * coverage;
         state.excavationCoverage = max(state.excavationCoverage, 0.22 * coverage);
-        if (event.meta.y > state.exposureLow ||
-            (event.meta.y == state.exposureLow && event.meta.z >= state.exposureHigh))
+        if (AgeAtLeast(event.meta.y, event.meta.z, state.exposureLow, state.exposureHigh))
         {
             state.exposureLow = event.meta.y;
             state.exposureHigh = event.meta.z;
@@ -346,8 +358,7 @@ void ApplyResurfacing(inout ProcessState state, EventPacket event, float3 direct
     state.rays *= retained;
     state.resurfacingThickness = state.resurfacingThickness * retained + thickness * coverage;
     state.resurfaced = saturate(state.resurfaced * retained + coverage);
-    if (event.meta.y > state.exposureLow ||
-        (event.meta.y == state.exposureLow && event.meta.z >= state.exposureHigh))
+    if (AgeAtLeast(event.meta.y, event.meta.z, state.exposureLow, state.exposureHigh))
     {
         state.exposureLow = event.meta.y;
         state.exposureHigh = event.meta.z;
@@ -401,7 +412,10 @@ void MainSample(uint3 dispatchId)
             g_pc.planetRadius * g_pc.planetRadius;
         const float expected = (float)g_pc.microImpactCount *
             g_pc.footprint * g_pc.footprint / max(surfaceArea, 1.0);
-        const float exposure = state.exposureAgeYears > 0.0
+        const bool hasExposure = state.exposureLow != 0u || state.exposureHigh != 0u ||
+            state.excavationCoverage > 0.01 || state.ejecta > 0.0 ||
+            state.resurfaced > 0.0 || state.rays > 0.0;
+        const float exposure = hasExposure
             ? state.exposureAgeYears : g_pc.surfaceAge;
         const float ageFraction = g_pc.surfaceAge > 0.0
             ? saturate(exposure / g_pc.surfaceAge) : 1.0;
@@ -456,8 +470,7 @@ void MainSample(uint3 dispatchId)
         }
     }
     const bool fracturesAfterSurface = iceDamage > 0.0 &&
-        (g_pc.iceAgeLow > state.exposureLow ||
-         (g_pc.iceAgeLow == state.exposureLow && g_pc.iceAgeHigh >= state.exposureHigh));
+        AgeAtLeast(g_pc.iceAgeLow, g_pc.iceAgeHigh, state.exposureLow, state.exposureHigh);
     const float fractureRetention = fracturesAfterSurface || iceDamage <= 0.0
         ? 1.0 : (1.0 - state.resurfaced) * (1.0 - state.excavationCoverage);
     if (fracturesAfterSurface)

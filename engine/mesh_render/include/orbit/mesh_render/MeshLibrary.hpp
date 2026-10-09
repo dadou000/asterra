@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/core/Types.hpp>
+#include <orbit/lighting/ReflectionScene.hpp>
 #include <orbit/mesh_import/MeshAsset.hpp>
 #include <orbit/mesh_sdf/MeshSdf.hpp>
 #include <orbit/rhi/Command.hpp>
@@ -143,6 +144,9 @@ public:
         return sdf_.distance != nullptr ? &sdf_ : nullptr;
     }
 
+    [[nodiscard]] const std::vector<lighting::ReflectionTriangle>&
+    ReflectionTriangles() const noexcept { return reflectionTriangles_; }
+
     // Monotonic: changes whenever the model's GPU resources are replaced.
     [[nodiscard]] u64 Generation() const noexcept
     {
@@ -167,6 +171,7 @@ private:
     std::unique_ptr<rhi::Buffer> vertices_;
     std::unique_ptr<rhi::Buffer> indices_;
     std::vector<Part> parts_;
+    std::vector<lighting::ReflectionTriangle> reflectionTriangles_;
     std::vector<Material> materials_;
     std::vector<TextureSlot> textures_;
     std::array<f64, 3> boundsMin_{};
@@ -229,6 +234,7 @@ private:
     {
         std::filesystem::path file;
         mesh_import::MeshAsset asset;
+        std::vector<lighting::ReflectionTriangle> reflectionTriangles;
         // Decoded pixels per (image, srgb) pair needed by the materials.
         std::map<std::pair<i32, bool>, LoadedImage> images;
         // Distance field + surface attributes, generated after the images are

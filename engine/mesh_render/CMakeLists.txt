@@ -5,6 +5,7 @@ add_library(OrbitMeshRender STATIC
     src/MeshSurface.cpp
     src/MeshShadow.cpp
     src/MeshSdfScene.cpp
+    src/ReflectionBvh.cpp
 )
 
 add_library(Orbit::MeshRender ALIAS OrbitMeshRender)
@@ -31,6 +32,18 @@ target_compile_features(OrbitMeshRender PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitMeshRender)
 
 if(BUILD_TESTING)
+    add_executable(OrbitReflectionBvhTests tests/ReflectionBvhTests.cpp)
+    target_link_libraries(OrbitReflectionBvhTests PRIVATE Orbit::MeshRender)
+    orbit_enable_warnings(OrbitReflectionBvhTests)
+    add_test(NAME Orbit.ReflectionBvh COMMAND OrbitReflectionBvhTests)
+
+    # Shader compilation needs DXC, but no Vulkan adapter (runs on hosted CI).
+    add_executable(OrbitReflectionShaderTests tests/ReflectionShaderTests.cpp)
+    target_link_libraries(OrbitReflectionShaderTests PRIVATE Orbit::MeshRender Orbit::ShaderDxc)
+    orbit_enable_warnings(OrbitReflectionShaderTests)
+    orbit_copy_dxc_runtime(OrbitReflectionShaderTests)
+    add_test(NAME Orbit.ReflectionShaders COMMAND OrbitReflectionShaderTests)
+
     add_executable(OrbitMeshRenderTests
         tests/MeshSurfaceTests.cpp
     )

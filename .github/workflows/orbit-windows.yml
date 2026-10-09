@@ -2,9 +2,9 @@ name: Orbit Windows
 
 on:
   push:
-    branches: [orbit, pre0.0.9-experimental]
+    branches: [orbit, pre0.0.9-experimental, cleanup/experimental-studio, feat/smooth-surface-reflections]
   pull_request:
-    branches: [orbit, pre0.0.9-experimental]
+    branches: [orbit, pre0.0.9-experimental, cleanup/experimental-studio]
   workflow_dispatch:
 
 concurrency:

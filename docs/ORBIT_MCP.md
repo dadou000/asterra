@@ -348,7 +348,7 @@ button row, and `view.surface_debug_*` below — all three drive the same
 | `orbit_atmosphere_presets()` / `orbit_atmosphere_solve(atmosphere_id)` / `orbit_atmosphere_apply_preset(atmosphere_id, preset)` | `atmosphere.presets` / `atmosphere.solve` / `atmosphere.apply_preset` (Celestial panel preset buttons and Solve; `atmosphere_id` is the atmosphere capability object, not the body; returns the solver report `events[]` with `derived` / `no_change` / `conflict` / `invalid_input`, `derived_count`, `has_conflict`, `has_invalid_input`; locked or explicit properties come back as conflicts, an unknown preset or a non-atmosphere object is a `-32602` error) |
 | `orbit_terrain_cache_stats(terrain_id, viewport="studio.primary")` | `terrain.cache_stats` (read-only; the persistent GPU cache statistics the Surface authoring panel and the cache overlay show: `cache{hits, misses, generations, insertions, evictions, resident_pages, resident_bytes, hit_rate_percent}`, `stationary{frames, cache_hits, cache_misses, hit_rate_percent}`, `physical_lod`, revisions; `terrain_id` is the terrain surface object; error 1004 when no world is open or the object has no terrain services; registered by `StudioSession` in `engine/studio_session/src/StudioTerrainStatusRpc.cpp`) |
 | `orbit_terrain_tectonics_get(terrain_id)` | `terrain.tectonics_get` (read-only; persisted procedural plate recipe used by the Planet toolbar and analytic terrain generator) |
-| `orbit_terrain_impacts_get(terrain_id)` / `orbit_terrain_impacts_set(terrain_id, history_toml)` | `terrain.impacts_get` / `terrain.impacts_set` (read or replace the persisted chronological `.orbitimpacts` recipe for crater, ejecta, resurfacing and ice-fracture events; tectonic-renewal records may include `displacement_x/y/z` and `displacement_m` to move older impact structures; `plate_motion=true` makes a closed spherical centerline move the older structures inside it as a regional plate; set validates, commits one undoable terrain edit, and queues bounded invalidation for local crater/flow changes or a full geology compile when tectonic slip can move historical features; empty recipe clears it; same authoring model as the Surface Authoring panel) |
+| `orbit_terrain_impacts_get(terrain_id)` / `orbit_terrain_impacts_set(terrain_id, history_toml)` | `terrain.impacts_get` / `terrain.impacts_set` (read or replace the persisted chronological `.orbitimpacts` recipe for crater, ejecta, resurfacing and ice-fracture events; crater records include `ray_extent_radii` (0 for legacy support, or >1 through 100) and `ray_irregularity` (0–1), with impact angles measured from the normal (0 vertical); tectonic-renewal records may include `displacement_x/y/z` and `displacement_m` to move older impact structures; `plate_motion=true` makes a closed spherical centerline move the older structures inside it as a regional plate; set validates, commits one undoable terrain edit, and queues bounded invalidation for local crater/flow changes or a full geology compile when tectonic slip can move historical features; empty recipe clears it; same authoring model as the Surface Authoring panel) |
 | `orbit_terrain_stratigraphy_get(terrain_id)` / `orbit_terrain_stratigraphy_set(terrain_id, profile_toml)` | `terrain.stratigraphy_get` / `terrain.stratigraphy_set` (read or replace the saved `.orbitstratigraphy` profile; set validates material identities against the body, commits one undoable terrain edit and invalidates its physical material columns; empty profile clears it; same authoring model as the Surface Authoring panel) |
 | `orbit_terrain_tectonics_sample(latitude_degrees?, longitude_degrees?, viewport="studio.primary")` | `terrain.tectonics_sample` (read-only planet structural layer at a point, or under the viewport observer when coordinates are omitted: `plate_id`, `neighbour_plate_id`, plate types, `boundary_type` (`none`/`convergent`/`divergent`/`transform`), `boundary_strength`, `convergence`/`divergence`/`transform` influences, `crust_thickness_km`, `crust_age` and `geological_age` (0 new, 1 ancient), `uplift_meters`, `subsidence_meters`, `stress`, `volcanism`. Derived analytically from the persisted tectonics recipe; same data as the Tectonics toolbar menu readout) |
 | `orbit_terrain_erosion_coupling_get(terrain_id)` | `terrain.erosion_coupling_get` (read-only; `age_erodibility_gain`, `age_uplift_decay`, `tectonic_drainage_guidance` persisted on the terrain process settings) |
@@ -487,10 +487,9 @@ Notes:
 Authored Visibility Proxies (`object.create` with type
 `4f524249-5456-4953-5052-4f5859000001`, shape box/sphere, body-local position
 and Euler rotation) are invisible lighting occluders. Besides the radiance cache
-and exact reflections they now shadow the **direct sun**: a compute pass
+and merged-SDF reflections they now shadow the **direct sun**: a compute pass
 (`ProxySunShadowRenderer`, `engine/lighting`) traces one hardware ray per visible
-pixel toward the star through the same acceleration structure the exact
-reflections use, writes a full-resolution visibility texture and
+pixel toward the star through the proxy acceleration structure, writes a full-resolution visibility texture and
 `DirectLightingRenderer` multiplies it into the stellar term next to the cloud
 shadow. Terrain and sky are not proxies, so only authored structures cast.
 
@@ -535,7 +534,7 @@ shadow. Terrain and sky are not proxies, so only authored structures cast.
   occluded rays on proxy walls. The renderer now rebuilds with a fresh origin
   once the camera is more than 1.5 km from it while within 20 km of the
   proxies (`ProxyGpuOriginIsStale`); farther away they are sub-pixel and are
-  left alone. The exact reflections share the same scene and benefit too.
+  left alone. Smooth reflections use the separate shared triangle scene and merged SDF.
 - Proxy shadows still do not darken terrain's own sky or bounce light: the
   radiance cache traces proxies for those, but only for pixels the screen-space
   gather leaves unresolved.
@@ -614,3 +613,22 @@ The RPC methods live in the Studio host (`apps/editor`, `engine/studio_ui`,
 `engine/editor_rpc`); saving those files takes the automatic Studio-generation
 handoff described in `ORBIT_HOT_ITERATION.md`. The MCP adapter is a plain Python
 script: restart the MCP server to pick up edits.
+
+## Smooth surface reflections
+
+The Lighting > Reflections inspector and `orbit_view_terrain_layers_set`
+(`view.terrain_layers_set`) edit the same per-view settings. The getter returns
+all five values:
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `reflection_exact_triangles` | `true` | Trace opaque imported/generated triangles for smooth reflections and analytic glass. Hardware selection follows the lighting plan; software BVH remains available. |
+| `reflection_temporal` | `true` | Independent reflected-radiance history with geometry, lighting, camera and edge rejection. |
+| `reflection_maximum_roughness` | `0.25` | Eligible receiver roughness, clamped to 0..1. |
+| `reflection_distance_meters` | `40` | Opaque reflection trace range, clamped to 0.1..1000 m. Glass retains its 60 m environment query. |
+| `reflection_debug_view` | `0` | 0 scene, 1 reflected radiance, 2 hit distance (40 m heatmap, magenta unresolved). |
+
+`bypass_hybrid_reflections` disables the opaque reflection stage; analytic glass
+remains independently composed. `bypass_sdf_gi` removes its approximate field
+fallback without disabling triangle queries. See
+`/rendering/lighting/smooth-reflections` for shading limits and GPU acceptance.

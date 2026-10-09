@@ -8,6 +8,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <orbit/lighting/LightingView.hpp>
+#include <orbit/lighting/ReflectionScene.hpp>
 
 #include <array>
 #include <memory>
@@ -104,6 +105,8 @@ public:
     // Rebuilds the global field when the instance set changed since the
     // previous call. Must be called outside a render pass. `instances` are
     // camera-relative as drawn; `cameraInFrameMeters` makes them frame-fixed.
+    void BeginReflectionFrame(u32 completedSlot, u32 framesInFlight);
+
     void Update(
         rhi::CommandList& commands,
         std::span<const MeshInstance> instances,
@@ -115,16 +118,30 @@ public:
     // previous radiance. Outside a render pass, after Update().
     void Light(rhi::CommandList& commands, const SdfLightingInput& input);
 
+    [[nodiscard]] const lighting::ReflectionSceneInput& Reflections() const noexcept
+    { return reflections_; }
+
     [[nodiscard]] const SdfSceneVolume& Volume() const noexcept
     {
         return volume_;
     }
 
 private:
+    void UpdateReflections(std::span<const MeshInstance> instances,
+                           const math::Double3& cameraInFrameMeters);
+    lighting::ReflectionSceneInput reflections_;
+    std::unique_ptr<rhi::Buffer> reflectionTriangles_;
+    std::unique_ptr<rhi::Buffer> reflectionNodes_;
+    u64 reflectionSignature_{0U};
+    u64 reflectionPendingFramesMask_{~0ULL};
+    std::unique_ptr<rhi::AccelerationStructure> reflectionAcceleration_;
+
     struct Retired
     {
         std::vector<std::unique_ptr<rhi::Buffer>> buffers;
+        std::unique_ptr<rhi::AccelerationStructure> acceleration;
         u64 retireAtTick{0U};
+        u64 pendingReflectionFrames{0U};
     };
 
     rhi::Device& device_;
