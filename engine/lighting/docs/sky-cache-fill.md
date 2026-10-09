@@ -24,7 +24,7 @@ invariants = [
   "The fill is albedo / pi * E(n) with E(n) = l0 * (1 + dot(gradient, n)), applied on every near-field surface independent of how confident the screen-space gather is.",
   "The fill is added to scene colour after the gather has read it and never into the gather's history, so it cannot accumulate frame to frame.",
   "Authored proxy surfaces keep their ray-traced sky fill instead of the cell fill (more accurate); they skip the cache entirely.",
-  "Reflections are unchanged: the hybrid and exact reflection shaders rebuild the legacy one-bounce sky from the new channel (2 * l0 * transport, old lobe weights); the cache fallback no longer carries a sky.",
+  "The hybrid reflection cache fallback rebuilds the legacy one-bounce sky from this channel (2 * l0 * transport, old lobe weights); triangle hits instead shade/reuse the shared surface field (see /rendering/lighting/smooth-reflections).",
   "bypass_sky_cache only disables the fill; the cache keeps estimating the channel.",
   "The fill is zero without sunlight (night side, space) and whenever the near-field indirect stack is off (planet seen from orbit, bypass_indirect_lighting).",
   "A cell layout change needs no content migration: a new generation starts with an empty cache that refills.",
@@ -35,7 +35,7 @@ verify = [
   "ctest -R Orbit.LightingRadianceEstimator.",
   "orbit_view_terrain_layers_set(bypass_sky_cache=true): shadowed and enclosed terrain areas go dark (sky fill off); back to false restores them.",
 ]
-verified = "b0a0de7f"
+verified = "f842a956"
 
 [[diagnose]]
 symptom = "cast shadows or enclosed spaces are black instead of sky-lit"

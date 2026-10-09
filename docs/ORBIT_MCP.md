@@ -479,10 +479,9 @@ Notes:
 Authored Visibility Proxies (`object.create` with type
 `4f524249-5456-4953-5052-4f5859000001`, shape box/sphere, body-local position
 and Euler rotation) are invisible lighting occluders. Besides the radiance cache
-and exact reflections they now shadow the **direct sun**: a compute pass
+and merged-SDF reflections they now shadow the **direct sun**: a compute pass
 (`ProxySunShadowRenderer`, `engine/lighting`) traces one hardware ray per visible
-pixel toward the star through the same acceleration structure the exact
-reflections use, writes a full-resolution visibility texture and
+pixel toward the star through the proxy acceleration structure, writes a full-resolution visibility texture and
 `DirectLightingRenderer` multiplies it into the stellar term next to the cloud
 shadow. Terrain and sky are not proxies, so only authored structures cast.
 
@@ -527,7 +526,7 @@ shadow. Terrain and sky are not proxies, so only authored structures cast.
   occluded rays on proxy walls. The renderer now rebuilds with a fresh origin
   once the camera is more than 1.5 km from it while within 20 km of the
   proxies (`ProxyGpuOriginIsStale`); farther away they are sub-pixel and are
-  left alone. The exact reflections share the same scene and benefit too.
+  left alone. Smooth reflections use the separate shared triangle scene and merged SDF.
 - Proxy shadows still do not darken terrain's own sky or bounce light: the
   radiance cache traces proxies for those, but only for pixels the screen-space
   gather leaves unresolved.
@@ -606,3 +605,22 @@ The RPC methods live in the Studio host (`apps/editor`, `engine/studio_ui`,
 `engine/editor_rpc`); saving those files takes the automatic Studio-generation
 handoff described in `ORBIT_HOT_ITERATION.md`. The MCP adapter is a plain Python
 script: restart the MCP server to pick up edits.
+
+## Smooth surface reflections
+
+The Lighting > Reflections inspector and `orbit_view_terrain_layers_set`
+(`view.terrain_layers_set`) edit the same per-view settings. The getter returns
+all five values:
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `reflection_exact_triangles` | `true` | Trace opaque imported/generated triangles for smooth reflections and analytic glass. Hardware selection follows the lighting plan; software BVH remains available. |
+| `reflection_temporal` | `true` | Independent reflected-radiance history with geometry, lighting, camera and edge rejection. |
+| `reflection_maximum_roughness` | `0.25` | Eligible receiver roughness, clamped to 0..1. |
+| `reflection_distance_meters` | `40` | Opaque reflection trace range, clamped to 0.1..1000 m. Glass retains its 60 m environment query. |
+| `reflection_debug_view` | `0` | 0 scene, 1 reflected radiance, 2 hit distance (40 m heatmap, magenta unresolved). |
+
+`bypass_hybrid_reflections` disables the opaque reflection stage; analytic glass
+remains independently composed. `bypass_sdf_gi` removes its approximate field
+fallback without disabling triangle queries. See
+`/rendering/lighting/smooth-reflections` for shading limits and GPU acceptance.
