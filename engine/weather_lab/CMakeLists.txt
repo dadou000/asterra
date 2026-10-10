@@ -5,6 +5,7 @@ find_package(Threads REQUIRED)
 
 add_library(OrbitWeatherLab STATIC
     src/CloudVolume.cpp
+    src/CloudLayers.cpp
     src/Thermo.cpp
     src/WxFormat.cpp
     src/FastStormSolver.cpp
@@ -19,7 +20,7 @@ target_include_directories(OrbitWeatherLab
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(OrbitWeatherLab PUBLIC Threads::Threads)
+target_link_libraries(OrbitWeatherLab PUBLIC Threads::Threads Orbit::CloudGenera)
 
 target_compile_features(OrbitWeatherLab PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitWeatherLab)
@@ -36,4 +37,11 @@ if(BUILD_TESTING)
     orbit_enable_warnings(OrbitWeatherLabTests)
 
     add_test(NAME Orbit.WeatherLab COMMAND OrbitWeatherLabTests)
+
+    add_executable(OrbitCloudLayersTests tests/CloudLayersTests.cpp)
+    target_link_libraries(OrbitCloudLayersTests PRIVATE Orbit::WeatherLab)
+    target_compile_features(OrbitCloudLayersTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCloudLayersTests)
+
+    add_test(NAME Orbit.CloudLayers COMMAND OrbitCloudLayersTests)
 endif()

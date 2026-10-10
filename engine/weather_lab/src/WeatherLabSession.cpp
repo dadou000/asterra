@@ -351,7 +351,9 @@ struct WeatherLabSession::Impl
         recording = false;
         if (!settings.recordPath.empty())
         {
-            std::vector<float> times(frameTimes.begin(), frameTimes.end());
+            std::vector<float> times;
+            times.reserve(frameTimes.size());
+            for (const auto t : frameTimes) times.push_back(static_cast<float>(t));
             std::string openError;
             if (!writer.Open(settings.recordPath, solver->MakeHeader(times), &openError))
             {

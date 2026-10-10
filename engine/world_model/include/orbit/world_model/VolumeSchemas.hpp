@@ -30,6 +30,16 @@ inline constexpr schema::PropertyId kVolumeEnabled{
     .high = 0x4f52424954564f4cULL, .low = 0x454e41424c454401ULL};
 inline constexpr schema::PropertyId kVolumePreset{
     .high = 0x4f52424954564f4cULL, .low = 0x5052455345540001ULL};
+// Project-relative path of a .orbitvol the Studio attaches to this Volume when
+// the world opens (a Weather Lab storm saved with volume.cache_save).
+inline constexpr schema::PropertyId kVolumeCachePath{
+    .high = 0x4f52424954564f4cULL, .low = 0x4341434845504154ULL};
+// What the baked cloud is, so the renderer lights and erodes it as that type:
+// 0 = storm (typed per sample by height and density); 1-10 are the cloud_genera
+// table in order: cirrus, cirrocumulus, cirrostratus, altocumulus, altostratus,
+// nimbostratus, stratocumulus, stratus, cumulus, cumulonimbus (10 acts as 0).
+inline constexpr schema::PropertyId kVolumeCloudType{
+    .high = 0x4f52424954564f4cULL, .low = 0x434c4f5544545950ULL};
 inline constexpr schema::PropertyId kVolumeCenterMeters{
     .high = 0x4f52424954564f4cULL, .low = 0x43454e5445520001ULL};
 inline constexpr schema::PropertyId kVolumeHalfExtentsMeters{
@@ -280,6 +290,8 @@ struct ResolvedVolumeDomain
     u64 fieldMask{0U};
     u32 resolution{64U};
     u32 surfaceLayers{4U};
+    // See kVolumeCloudType.
+    u32 cloudType{0U};
 
     bool renderEnabled{true};
     f32 extinctionScale{0.8F};

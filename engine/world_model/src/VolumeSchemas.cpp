@@ -49,6 +49,8 @@ void RegisterVolumeSchemas(
         .properties = {
             {.id=kVolumeEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
             {.id=kVolumePreset,.name="Preset",.kind=schema::PropertyKind::String,.defaultValue=std::string{"Empty"}},
+            {.id=kVolumeCachePath,.name="Baked Cache Path",.kind=schema::PropertyKind::String,.defaultValue=std::string{},.advanced=true},
+            {.id=kVolumeCloudType,.name="Cloud Type",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=10.0}},
             {.id=kVolumeCenterMeters,.name="Center",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
             {.id=kVolumeHalfExtentsMeters,.name="Half Extents",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{10.0,10.0,10.0}},
             {.id=kVolumeSolverPolicy,.name="Solver Policy",.kind=schema::PropertyKind::Integer,.defaultValue=i64{0},.range={.minimum=0.0,.maximum=3.0}},
@@ -167,6 +169,10 @@ ResolveVolumeDomain(
             std::clamp<i64>(
                 Read<i64>(objects, volume, kVolumeSurfaceLayers, 4),
                 1, 32)),
+        .cloudType = static_cast<u32>(
+            std::clamp<i64>(
+                Read<i64>(objects, volume, kVolumeCloudType, 0),
+                0, 10)),
         .renderEnabled =
             Read<bool>(
                 objects,
