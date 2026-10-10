@@ -1,4 +1,5 @@
 #include <orbit/celestial_clouds/CloudRenderer.hpp>
+#include <orbit/cloud_genera/CloudGenera.hpp>
 
 #include <algorithm>
 #include <array>
@@ -317,7 +318,8 @@ float SmoothRange(float a, float b, float x)
 
 )";
 
-constexpr const char* kCloudCommonB = R"(// Cloud type parameters, interpolated between anchor types along the type axis:
+constexpr const char* kCloudCommonB = R"(//@CLOUD_GENERA@
+// Cloud type parameters, interpolated between anchor types along the type axis:
 //   stratus .05, stratocumulus .2, nimbostratus .32, cumulus .5, cumulus congestus .72,
 //   cumulonimbus 1.0.
 // x: top of the cloud as a fraction of the (extended) shell, y: how much the cloud
@@ -400,6 +402,259 @@ float WallCloud(float4 column, float3 position, float radius, float footprint)
 )";
 
 constexpr const char* kCloudCommonE = R"(
+float HashCell(int2 c, uint k)
+{
+    uint h = uint(c.x) * 0x8da6b343u ^ uint(c.y) * 0xd8163841u ^ k * 0xcb1ab31fu;
+    h ^= h >> 16u;
+    h *= 0x7feb352du;
+    h ^= h >> 15u;
+    h *= 0x846ca68bu;
+    h ^= h >> 16u;
+    return float(h & 0xffffffu) / 16777216.0;
+}
+
+// Nearest feature point of a jittered grid (the generators' cellular noise):
+// distance (cell units), the cell, the vector from the point and a random value.
+void NearestCell(float2 p, out float best, out int2 bc, out float2 bd, out float br)
+{
+    const int2 ip = int2(floor(p));
+    best = 8.0;
+    bc = int2(0, 0);
+    bd = float2(0.0, 0.0);
+    br = 0.0;
+    [unroll]
+    for (int dy = -1; dy <= 1; ++dy)
+    {
+        [unroll]
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            const int2 c = ip + int2(dx, dy);
+            const float2 f = float2(c) + float2(HashCell(c, 0u), HashCell(c, 1u));
+            const float2 d = p - f;
+            const float dist = length(d);
+            if (dist < best)
+            {
+                best = dist;
+                bc = c;
+                bd = d;
+                br = HashCell(c, 2u);
+            }
+        }
+    }
+}
+
+// Middle-level cloud, drawn from the shared cloud genera table (the same bands and
+// extinctions as the Weather Lab layer volumes): altostratus under stratiform weather,
+// altocumulus under unstable air. It is driven by the weather columns, so it appears
+// where the model has cloud (or high cloud) and is absent in clear air.
+float MidDeck(float4 column, float3 up, float altitude, float footprint)
+{
+    const float4 asBand = kCloudGenusBand[5];
+    const float4 acBand = kCloudGenusBand[4];
+    if (altitude < asBand.x || altitude > acBand.y)
+    {
+        return 0.0;
+    }
+    const float cover = saturate(max(column.x * 0.9, column.y * 0.55));
+    if (cover <= 1.0e-3)
+    {
+        return 0.0;
+    }
+    const float lon = atan2(up.z, up.x) * g.shell.x;
+    const float lat = asin(clamp(up.y, -1.0, 1.0)) * g.shell.x;
+    const float stratiform = 1.0 - SmoothRange(0.28, 0.55, column.z);
+    const float patch = SampleNoise(float3(lon, lat, 6.0) / (kBaseVoxelMeters * 55.0) + 21.0).g;
+    const float present = SmoothRange(0.08, 0.45, cover) * SmoothRange(0.4, 0.62, patch);
+    if (present <= 0.0)
+    {
+        return 0.0;
+    }
+    float sigma = 0.0;
+    if (stratiform > 0.02)
+    {
+        // Altostratus: an even grey sheet.
+        const float t = saturate((altitude - asBand.x) / (asBand.y - asBand.x));
+        const float profile = SmoothRange(0.0, 0.3, t) * (1.0 - SmoothRange(0.6, 1.0, t));
+        const float grain = 0.75 + 0.5 * SampleNoise(float3(lon, lat, 3.0) / (kBaseVoxelMeters * 9.0) + 8.0).r;
+        sigma += stratiform * CloudSigma(5u, 0.55 * present * grain * profile);
+    }
+    if (stratiform < 0.98)
+    {
+        // Altocumulus: rounded cloudlets about a kilometre across with gaps.
+        // The Weather Lab altocumulus generator: cells in rows across the wind,
+        // flat based, each with its own top.
+        const float2 wind = float2(0.97, 0.23);
+        const float along = lon * wind.x + lat * wind.y;
+        const float across = -lon * wind.y + lat * wind.x;
+        const float bend = (SampleNoise(float3(lon, lat, 7.0) / (kBaseVoxelMeters * 13.0) + 2.0).g - 0.5) * 5.0;
+        const float rows = 0.5 + 0.5 * sin(along / 1900.0 * 6.2831853 + bend);
+        float dist;
+        int2 bc;
+        float2 bd;
+        float rnd;
+        NearestCell(float2(along / 1050.0, across / 720.0), dist, bc, bd, rnd);
+        float puff = SmoothRange(0.64, 0.2, dist) * (0.55 + 0.45 * rnd) * (0.4 + 0.6 * rows);
+        // Cells narrower than a pixel average out.
+        puff = lerp(puff, 0.3 * (0.4 + 0.6 * rows), SmoothRange(0.6, 2.5, footprint / 720.0));
+        const float h = saturate((altitude - acBand.x) / (acBand.y - acBand.x)) * 2.0 - 1.0;
+        const float top = -0.1 + 0.7 * rnd;
+        const float profile = SmoothRange(-1.0, -0.6, h) * (1.0 - SmoothRange(top - 0.35, top + 0.2, h));
+        const float lobes = 0.7 + 0.6 * SampleNoise(float3(lon, lat, altitude) / (kBaseVoxelMeters * 0.54) + 8.0).g;
+        sigma += (1.0 - stratiform) * CloudSigma(4u, 0.9 * present * puff * profile * lobes);
+    }
+    return sigma;
+}
+)" R"(
+// Low cloud from the same generator as the Weather Lab cumulus / stratocumulus
+// layers (engine/weather_lab CloudLayers.cpp): jittered cells, each cloud a flat
+// based core with a crown of overlapping lobes (smooth union), carved by
+// billows. 'strato' 0 is cumulus, 1 stratocumulus (wider, lower, fewer lobes).
+// Heights and extinction come from the shared genus table.
+float CumulusDeck(float4 column, float3 up, float altitude, float footprint, float strato)
+{
+    const float base = g.shell.y;
+    const float maxTall = lerp(3600.0, 1300.0, strato);
+    if (altitude < base || altitude > base + maxTall)
+    {
+        return 0.0;
+    }
+    const float lon = atan2(up.z, up.x) * g.shell.x;
+    const float lat = asin(clamp(up.y, -1.0, 1.0)) * g.shell.x;
+    const float cellSize = lerp(4200.0, 3300.0, strato);
+    float best;
+    int2 bc;
+    float2 bd;
+    float br;
+    NearestCell(float2(lon, lat) / cellSize, best, bc, bd, br);
+    // A cell is a cloud where the weather says there is cloud: more coverage
+    // switches on more cells.
+    const float active = SmoothRange(br * 0.85, br * 0.85 + 0.12, column.x);
+    if (active <= 0.0)
+    {
+        return 0.0;
+    }
+    const float radius = lerp(0.24, 0.4, br) * cellSize * lerp(1.0, 1.5, strato);
+    const float2 l = bd * cellSize;
+    const float lr = length(l);
+    if (lr > radius * 1.5)
+    {
+        return 0.0;
+    }
+    const float tall = (700.0 + 1500.0 * br) * (0.7 + 0.9 * SmoothRange(0.4, 0.8, column.z)) * lerp(1.0, 0.4, strato);
+    const float zRel = altitude - base;
+    if (zRel > tall * 1.25)
+    {
+        return 0.0;
+    }
+    const float coreR = radius * 0.8;
+    const float coreH = tall * 0.55;
+    const float coreD = sqrt(lr * lr / (coreR * coreR) + (zRel - coreH * 0.5) * (zRel - coreH * 0.5) / (coreH * coreH * 0.25));
+    float value = SmoothRange(1.2, 0.0, coreD);
+    [unroll]
+    for (uint i = 0u; i < 5u; ++i)
+    {
+        const float a = HashCell(bc, 10u + i) * 6.2831853;
+        const float spread = sqrt(HashCell(bc, 30u + i)) * radius * 0.62;
+        const float rise = 0.3 + 0.62 * HashCell(bc, 50u + i);
+        const float lobeR = radius * 1.3 * lerp(0.3, 0.38, strato) * (1.15 - 0.5 * rise) * (0.8 + 0.4 * HashCell(bc, 70u + i));
+        const float2 lc = float2(cos(a), sin(a)) * spread * (1.0 - 0.55 * rise);
+        const float cz = tall * rise * 0.85;
+        const float3 delta = float3(l - lc, zRel - cz);
+        const float d = length(delta) / lobeR;
+        const float lobe = SmoothRange(1.0, 0.0, d);
+        value = 1.0 - (1.0 - value) * (1.0 - lobe);
+    }
+    // Flat base, then billows eat the outline: filtered out once a pixel is
+    // wider than they are.
+    value *= SmoothRange(0.0, 0.06 * tall + 20.0, zRel);
+    // The renderer's cumulus look (variant 7): ridged billows at two scales,
+    // the fine one (about 120 m) carving the creased cauliflower surface.
+    const float4 n = SampleNoise(float3(lon, lat, altitude) / (kBaseVoxelMeters * 0.42) + 16.0);
+    const float4 n2 = SampleNoise(float3(lon, lat, altitude) / (kBaseVoxelMeters * 0.17) + 31.0);
+    const float coarse = 0.5 * (1.0 - abs(2.0 * n.r - 1.0)) + 0.5 * (1.0 - abs(2.0 * n.g - 1.0));
+    const float fineRidge = 0.6 * (1.0 - abs(2.0 * n2.r - 1.0)) + 0.4 * (1.0 - abs(2.0 * n2.g - 1.0));
+    const float blur = SmoothRange(0.3, 1.0, footprint / (294.0 * 0.9));
+    const float fine = SmoothRange(0.3, 1.0, footprint / (119.0 * 0.9));
+    float billow = lerp(0.45 * coarse + 0.55 * fineRidge, 0.5, fine * 0.8);
+    billow = lerp(billow, 0.5, blur);
+    // The baked noise sits close to 0.5: stretch it so the billows really carve.
+    billow = saturate(0.5 + (billow - 0.5) * 3.2);
+    const float density = saturate((value - (1.0 - billow) * 0.85) * 2.6);
+    const float d = density * active;
+    return lerp(CloudSigma(9u, d), CloudSigma(7u, d), strato);
+}
+)" R"(
+// Stratus from the Weather Lab generator (CloudLayers.cpp Stratus): a low,
+// smooth, uniform sheet, mottled, with a ragged hazy base. Height band from the
+// shared genus table (thickness only; the shell base is its base here).
+// The baked noise sits close to 0.5: stretch it about the middle.
+float Stretch(float v, float k)
+{
+    return saturate(0.5 + (v - 0.5) * k);
+}
+
+float StratusDeck(float4 column, float3 up, float altitude, float footprint)
+{
+    const float4 band = kCloudGenusBand[8];
+    const float thickness = band.y - band.x;
+    const float base = g.shell.y;
+    if (altitude < base || altitude > base + thickness)
+    {
+        return 0.0;
+    }
+    const float lon = atan2(up.z, up.x) * g.shell.x;
+    const float lat = asin(clamp(up.y, -1.0, 1.0)) * g.shell.x;
+    const float c = column.x;
+    const float4 big = SampleNoise(float3(lon, lat, 9.0) / (kBaseVoxelMeters * 43.0) + 71.0);
+    const float sheet = Stretch(0.6 * big.g + 0.4 * big.b, 2.5);
+    const float mask = SmoothRange(0.36 - 0.3 * c, 0.56 - 0.3 * c, sheet);
+    if (mask <= 0.0)
+    {
+        return 0.0;
+    }
+    const float h = (altitude - base) / thickness * 2.0 - 1.0;
+    const float mottleBlur = SmoothRange(0.3, 1.0, footprint / (4200.0 * 0.9));
+    const float4 m = SampleNoise(float3(lon, lat, altitude) / (kBaseVoxelMeters * 6.0) + 72.0);
+    const float mottle = 0.75 + 0.5 * lerp(Stretch(0.5 * m.r + 0.3 * m.g + 0.2 * m.b, 3.0), 0.5, mottleBlur);
+    const float rag = Stretch(SampleNoise(float3(lon, lat, 2.0) / (kBaseVoxelMeters * 2.1) + 73.0).g, 3.0);
+    const float baseFade = SmoothRange(-1.0, -0.35 + 0.5 * rag, h);
+    return CloudSigma(8u, 0.75 * mask * mottle * baseFade * (1.0 - SmoothRange(0.55, 1.0, h)));
+}
+
+// Nimbostratus from the generator (CloudLayers.cpp Nimbostratus): a deep, dark,
+// even deck with ragged scud hanging under it.
+float NimbostratusDeck(float4 column, float3 up, float altitude, float footprint)
+{
+    const float4 band = kCloudGenusBand[6];
+    const float thickness = band.y - band.x;
+    const float base = g.shell.y;
+    if (altitude < base || altitude > base + thickness)
+    {
+        return 0.0;
+    }
+    const float lon = atan2(up.z, up.x) * g.shell.x;
+    const float lat = asin(clamp(up.y, -1.0, 1.0)) * g.shell.x;
+    const float c = column.x;
+    const float4 big = SampleNoise(float3(lon, lat, 6.0) / (kBaseVoxelMeters * 74.0) + 51.0);
+    const float sheet = Stretch(0.6 * big.g + 0.4 * big.b, 2.5);
+    const float mask = SmoothRange(0.34 - 0.28 * c, 0.52 - 0.28 * c, sheet);
+    if (mask <= 0.0)
+    {
+        return 0.0;
+    }
+    const float h = (altitude - base) / thickness * 2.0 - 1.0;
+    // The underside sags and lifts by hundreds of metres: a ragged base, not a flat plane.
+    const float sag = Stretch(SampleNoise(float3(lon, lat, 4.0) / (kBaseVoxelMeters * 5.0) + 54.0).g, 3.0);
+    const float body = SmoothRange(-0.8 + 0.7 * sag, -0.3 + 0.7 * sag, h) * (1.0 - SmoothRange(0.62, 0.95, h));
+    const float shredBlur = SmoothRange(0.3, 1.0, footprint / (1900.0 * 0.9));
+    const float4 sh = SampleNoise(float3(lon, lat, altitude * 4.5) / (kBaseVoxelMeters * 2.7) + 52.0);
+    const float shreds = lerp(Stretch(0.5 * sh.r + 0.3 * sh.g + 0.2 * sh.b, 3.2), 0.5, shredBlur);
+    const float scud = SmoothRange(0.42, 0.62, shreds) * SmoothRange(-1.0, -0.85, h) * (1.0 - SmoothRange(-0.5, -0.1, h));
+    const float4 mo = SampleNoise(float3(lon, lat, altitude) / (kBaseVoxelMeters * 13.0) + 53.0);
+    const float mottle = 0.55 + 0.9 * Stretch(0.5 * mo.r + 0.3 * mo.g + 0.2 * mo.b, 3.0);
+    return CloudSigma(6u, saturate(mask * (0.9 * body * mottle + 0.55 * scud)));
+}
+)" R"(
 // Extinction (1/m) at a point: the main cloud (type dependent profile, taper and
 // erosion) plus the high layer (cirrus and cumulonimbus anvil outflow).
 // 'footprint' is the metres one sample covers; it filters the noise so far
@@ -421,6 +676,35 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
     const float towerness = SmoothRange(0.55, 0.95, column.z);
     const float altitude = radius - g.shell.x;
     const float3 up = position / max(radius, 1.0);
+    const float t = column.z;
+    const float wNimbo = SmoothRange(0.25, 0.29, t) * (1.0 - SmoothRange(0.36, 0.42, t));
+    // Nimbostratus swallows the mid-level cloud: the system is one deep deck.
+    const float midSigma = MidDeck(column, up, altitude, footprint) * (1.0 - wNimbo);
+    // Stratus .05, stratocumulus .2, nimbostratus .32, cumulus .5 and congestus
+    // .72 on the type axis are drawn by the shared generators (CloudLayers.cpp);
+    // only cumulonimbus keeps the type-axis tower model.
+    const float wStratus = 1.0 - SmoothRange(0.08, 0.14, t);
+    const float wStrato = SmoothRange(0.12, 0.16, t) * (1.0 - SmoothRange(0.24, 0.28, t));
+    const float wCumulus = SmoothRange(0.38, 0.46, t) * (1.0 - SmoothRange(0.78, 0.9, t));
+    const float lowMix = saturate(wStratus + wStrato + wNimbo + wCumulus);
+    const float mainWeight = 1.0 - lowMix;
+    float lowSigma = 0.0;
+    if (wStratus > 0.001)
+    {
+        lowSigma += wStratus * StratusDeck(column, up, altitude, footprint);
+    }
+    if (wStrato > 0.001)
+    {
+        lowSigma += wStrato * CumulusDeck(column, up, altitude, footprint, 1.0);
+    }
+    if (wNimbo > 0.001)
+    {
+        lowSigma += wNimbo * NimbostratusDeck(column, up, altitude, footprint);
+    }
+    if (wCumulus > 0.001)
+    {
+        lowSigma += wCumulus * CumulusDeck(column, up, altitude, footprint, 0.0);
+    }
     // A tower grows with its age: low and cauliflower-topped while young, full height
     // when mature.
     const float ageGrowth = SmoothRange(0.0, 0.55, gMature);
@@ -439,11 +723,11 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
     const float hc = (h - 0.70 + mammatus) / 0.2;   // high layer: 0.70-0.90 of the shell
     // Cheap rejection before any noise fetch: above the cloud top (plus the dome
     // bump allowance) and outside the high layer there is nothing to sample.
-    const bool mainPossible = column.x > 1.0e-4 && h <= topFrac * 1.15 + 0.3;
+    const bool mainPossible = column.x > 1.0e-4 && mainWeight > 0.001 && h <= topFrac * 1.15 + 0.3;
     const bool highPossible = column.y > 1.0e-4 && hc > 0.0 && hc < 1.0;
     if (!mainPossible && !highPossible)
     {
-        return 0.0;
+        return midSigma + lowSigma;
     }
     // Towers (congestus, cumulonimbus) get noise stretched vertically so their billows
     // read as tall turrets instead of round puffs.
@@ -543,8 +827,12 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         const float rainBase = 1.0 + 1.2 * column.w * (1.0 - SmoothRange(0.0, 0.35, hn));
         // Real storm clouds are far denser than fair-weather cumulus (the reference
         // clouds use 0.006-0.012 per metre); towers shade themselves hard.
-        sigma += g.lod.z * saturate(column.x) / thickness * profile * shape * 1.7 * g.optics.w * rainBase
-            * lerp(1.0, 12.0, towerness) * lerp(gDensity, gDensityFar, SmoothRange(kFarFadeStart, kFarFadeEnd, footprint)) * density;
+        // Cumulonimbus: the same extinction model as every other genus (table extinction,
+        // shared boost). 'profile' is normalised to unit integral; the density wants its
+        // 0-1 shape, and gDensity (8 for the planet) is the lab / weather density scale.
+        const float profileFlat = profile * (lerp(0.69, 0.87, towerness) * topFrac * topVariation);
+        const float towerDensity = lerp(gDensity, gDensityFar, SmoothRange(kFarFadeStart, kFarFadeEnd, footprint)) * 0.5;
+        sigma += mainWeight * CloudSigma(10u, saturate(saturate(column.x) * profileFlat * shape * rainBase * towerDensity * density));
     }
 
     // ---- high cloud: cirrus fibres and cumulonimbus anvil ----
@@ -599,11 +887,37 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         // haze); filtering removes the moire rings the narrow fibres alias into.
         const float meanThin = 0.53 * pow(saturate(column.y), 1.6);
         shape = lerp(shape, lerp(meanThin, column.y * 0.75, highTower), max(baseBlend, fibreBlend));
-        // Thin cirrus is translucent (peak optical depth about 0.7); an anvil is thick ice.
-        const float peak = lerp(0.2, 9.0 * gHighDensity, highTower);
-        sigma += peak * column.y / thickness * profile * shape * 1.7;
+)" R"(
+        // Genus of the high deck (shared with the Weather Lab layers): fibres are cirrus, patches of
+        // smooth veil are cirrostratus, patches of tiny grains cirrocumulus. An anvil stays an anvil.
+        float veilMix;
+        float grainMix;
+        {
+            const float kindN = SampleNoise(float3(lon, lat, 11.0) / (kBaseVoxelMeters * 60.0) + 5.0).b;
+            const float veil = SmoothRange(0.40, 0.52, kindN) * (1.0 - SmoothRange(0.60, 0.72, kindN)) * (1.0 - highTower);
+            const float grains = SmoothRange(0.68, 0.80, kindN) * (1.0 - highTower);
+            veilMix = veil;
+            grainMix = grains;
+            const float veilShape = saturate(0.35 + 0.5 * SampleNoise(float3(lon, lat, 2.0) / (kBaseVoxelMeters * 6.0)).g);
+            const float4 grainNoise = SampleNoise(float3(lon, lat, altitude / 2.0) / (kBaseVoxelMeters * 0.45) + 3.0);
+            const float grainFilter = SmoothRange(0.3, 1.0, footprint / (kBaseVoxelMeters * 0.45 * 0.9));
+            const float grainShape = lerp(SmoothRange(0.5, 0.7, 0.6 * grainNoise.g + 0.4 * grainNoise.b), 0.45, grainFilter);
+            shape = lerp(shape, veilShape, veil);
+            shape = lerp(shape, grainShape, grains);
+        }
+        // High cloud through the same extinction model: cirrus, cirrostratus and
+        // cirrocumulus use their own table extinction and generator amplitude; an anvil is
+        // dense ice (cumulonimbus extinction, scaled by the anvil density).
+        const float flatProfile = profile * lerp(0.0802, 0.164 * (1.0 - lift), highTower);
+        const float gate = saturate(column.y * 2.4);
+        const float cirrusAmp = lerp(lerp(0.5, 0.2, veilMix), 0.75, grainMix);
+        const float cirrusD = cirrusAmp * gate * flatProfile * shape;
+        const float cirrusSigma = lerp(lerp(CloudSigma(1u, cirrusD), CloudSigma(3u, cirrusD), veilMix),
+            CloudSigma(2u, cirrusD), grainMix);
+        const float anvilSigma = CloudSigma(10u, saturate(0.012 * gHighDensity * gate * flatProfile * shape));
+        sigma += lerp(cirrusSigma, anvilSigma, highTower);
     }
-    return sigma;
+    return sigma + midSigma + lowSigma;
 }
 
 )";
@@ -1292,7 +1606,10 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             const float4 estimateType = TypeParams(column.z);
             const float heightFraction = saturate(h / max(estimateType.x, 0.05));
             const float slant = 1.0 / clamp(dot(position / max(radius, 1.0), sun), 0.2, 1.0);
-            const float estimate = g.lod.z * column.x * 0.55 * (1.0 - heightFraction) * slant;
+            // Far away the optical depth towards the sun is the real density integrated
+            // through a few altitude slabs (not a per-type guess), so every deck - cumulus
+            // heads, a thick nimbostratus - shades itself by what is really above it.
+            const float estimate = AltitudeSunTau(position, sun, 5u);
             sunDepth = lerp(sunDepth, estimate, farBlend);
         }
         const float skyFacing = saturate(dot(position / max(radius, 1.0), sun) * 0.5 + 0.5);
@@ -1678,19 +1995,30 @@ constexpr const char* kShadowMain = R"(float4 main(VSOutput input) : SV_Target0
 }
 )";
 
+[[nodiscard]] std::string WithGenera(std::string source)
+{
+    const std::string marker = "//@CLOUD_GENERA@";
+    const auto at = source.find(marker);
+    if (at != std::string::npos)
+    {
+        source.replace(at, marker.size(), cloud_genera::CloudGeneraHlsl());
+    }
+    return source;
+}
+
 [[nodiscard]] std::string MarchSource()
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kMarchMain + kMarchGodrays;
+    return WithGenera(std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kMarchMain + kMarchGodrays);
 }
 
 [[nodiscard]] std::string ShadowSource()
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kDepthBindings + kShadowMain;
+    return WithGenera(std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kDepthBindings + kShadowMain);
 }
 
 [[nodiscard]] std::string VolumeSource()
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kVolumeCompute;
+    return WithGenera(std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kVolumeCompute);
 }
 
 

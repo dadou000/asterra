@@ -20,6 +20,7 @@ target_link_libraries(
     PUBLIC
         Orbit::CelestialAppearance
         Orbit::CelestialAtmosphere
+        Orbit::CloudGenera
         Orbit::Core
         Orbit::Math
         Orbit::RHI
