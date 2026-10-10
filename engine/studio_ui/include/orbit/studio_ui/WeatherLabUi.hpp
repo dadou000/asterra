@@ -16,7 +16,10 @@ namespace orbit::studio_ui
 class WeatherLabUi
 {
 public:
-    WeatherLabUi(weather_lab::WeatherLabSession& session, WeatherLabView& view);
+    WeatherLabUi(
+        weather_lab::WeatherLabSession& session,
+        WeatherLabView& view,
+        WeatherLabVolumeSink volumeSink = {});
 
     void Register(editor_ui::EditorUi& ui);
 
@@ -31,6 +34,7 @@ private:
     void DrawSettings(editor_ui::PanelContext& context);
     void DrawPlayback(editor_ui::PanelContext& context);
     void DrawViews(editor_ui::PanelContext& context);
+    void DrawVolume(editor_ui::PanelContext& context);
     void DrawMetrics(editor_ui::PanelContext& context);
     void DrawSlice(
         editor_ui::PanelContext& context,
@@ -46,5 +50,10 @@ private:
     std::string recordPathText_;
     std::string message_;
     i32 presetIndex_{0};
+    WeatherLabVolumeSink volumeSink_;
+    std::string volumeMessage_;
+    WeatherLabVolumeResult volumeResult_;
+    bool volumeHaveResult_{false};
+    u64 lastVolumeKey_{0U};
 };
 } // namespace orbit::studio_ui

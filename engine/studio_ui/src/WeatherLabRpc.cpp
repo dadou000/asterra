@@ -209,7 +209,11 @@ constexpr i64 kBadParams = -32602;
         {"section_row", static_cast<i64>(v.sectionRow)},
         {"column_field", v.columnField},
         {"show_metrics", v.showMetrics},
-        {"show_comparison", v.showComparison}});
+        {"show_comparison", v.showComparison},
+        {"volume_id", v.volumeId},
+        {"volume_auto", v.volumeAuto},
+        {"volume_gain", static_cast<f64>(v.volumeGain)},
+        {"volume_up_axis", VolumeUpAxisName(v.volumeUpAxis)}});
 }
 
 [[nodiscard]] Value PlaybackToValue(
@@ -225,6 +229,11 @@ constexpr i64 kBadParams = -32602;
         {"metric_rows", static_cast<i64>(metricRows)}});
 }
 
+[[nodiscard]] Value HalfExtentsToValue(const f64 (&e)[3])
+{
+    return Value(Value::Object{{"x", e[0]}, {"y", e[1]}, {"z", e[2]}});
+}
+
 void ThrowIfError(const std::string& error)
 {
     if (!error.empty())
@@ -234,10 +243,45 @@ void ThrowIfError(const std::string& error)
 }
 } // namespace
 
+std::string PushStormVolume(
+    WeatherLabSession& session,
+    const WeatherLabView& view,
+    const WeatherLabVolumeSink& sink,
+    WeatherLabVolumeResult* result,
+    CloudVolumeGrid* pushed)
+{
+    if (!sink)
+    {
+        return "volumes are not available in this host";
+    }
+    if (view.volumeId.empty())
+    {
+        return "set a Volume object id first (weather_lab.view volume_id)";
+    }
+    const CloudVolumeGrid grid = session.GetCloudVolume(
+        view.source,
+        {.gainPerGramPerKg = view.volumeGain, .upAxis = view.volumeUpAxis});
+    if (!grid.valid)
+    {
+        return grid.error;
+    }
+    WeatherLabVolumeResult outcome = sink(view.volumeId, &grid);
+    if (result != nullptr)
+    {
+        *result = outcome;
+    }
+    if (pushed != nullptr)
+    {
+        *pushed = grid;
+    }
+    return outcome.error;
+}
+
 void RegisterWeatherLabRpc(
     rpc::Dispatcher& dispatcher,
     WeatherLabSession& session,
-    WeatherLabView& view)
+    WeatherLabView& view,
+    WeatherLabVolumeSink volumeSink)
 {
     dispatcher.Register(
         {
@@ -526,8 +570,11 @@ void RegisterWeatherLabRpc(
                 "Gets or sets what the Weather Lab panel shows. Fields (all "
                 "optional): source ('live' | 'playback'), plan_field, "
                 "plan_height_m, section_field, section_row (-1 = strongest "
-                "updraft), column_field, show_metrics, show_comparison. "
-                "Returns the view.",
+                "updraft), column_field, show_metrics, show_comparison, and "
+                "the storm-volume settings volume_id (a Volume object), "
+                "volume_auto (re-push as the storm advances), volume_gain "
+                "(density per g/kg of condensate) and volume_up_axis ('x' | "
+                "'y' | 'z'). Returns the view.",
             .mutating = true
         },
         [&view](const Value& params)
@@ -544,8 +591,105 @@ void RegisterWeatherLabRpc(
             if (const auto v = Number(o, "section_row")) { next.sectionRow = static_cast<i32>(*v); }
             if (const auto v = Boolean(o, "show_metrics")) { next.showMetrics = *v; }
             if (const auto v = Boolean(o, "show_comparison")) { next.showComparison = *v; }
+            if (const auto v = Text(o, "volume_id")) { next.volumeId = *v; }
+            if (const auto v = Boolean(o, "volume_auto")) { next.volumeAuto = *v; }
+            if (const auto v = Number(o, "volume_gain"))
+            {
+                if (*v <= 0.0 || *v > 100.0)
+                {
+                    throw rpc::Error(kBadParams, "volume_gain must be in (0, 100].");
+                }
+                next.volumeGain = static_cast<f32>(*v);
+            }
+            if (const auto v = Text(o, "volume_up_axis"))
+            {
+                if (!ParseVolumeUpAxis(*v, next.volumeUpAxis))
+                {
+                    throw rpc::Error(kBadParams, "volume_up_axis must be 'x', 'y' or 'z'.");
+                }
+            }
             view = std::move(next);
             return ViewToValue(view);
+        });
+
+    dispatcher.Register(
+        {
+            .name = "weather_lab.volume",
+            .description =
+                "Shows the storm's cloud and rain water as a Studio Volume "
+                "object through its baked-cache path (separate from the "
+                "planet cloud renderer). First create a Volume object, set "
+                "its Representation mode to Baked and size it to the "
+                "recommended_half_extents_m this call returns, then "
+                "action 'push' (volume_id, gain, up_axis, source optional; "
+                "they update the view) converts the displayed storm "
+                "(condensate -> density 1-exp(-gain*g/kg)) and attaches it; "
+                "'clear' detaches it. Set volume_auto in weather_lab.view to "
+                "keep re-pushing while the panel is open. The grid is "
+                "stretched over the volume's own extents; up_axis says which "
+                "volume axis is vertical. Returns the push summary.",
+            .mutating = true
+        },
+        [&session, &view, volumeSink](const Value& params)
+        {
+            const auto& o = Params(params);
+            const std::string action = OneOf(o, "action", {"push", "clear"}, "");
+            if (action.empty())
+            {
+                throw rpc::Error(kBadParams, "action must be 'push' or 'clear'.");
+            }
+            if (const auto v = Text(o, "volume_id")) { view.volumeId = *v; }
+            if (const auto v = Number(o, "gain"))
+            {
+                if (*v <= 0.0 || *v > 100.0)
+                {
+                    throw rpc::Error(kBadParams, "gain must be in (0, 100].");
+                }
+                view.volumeGain = static_cast<f32>(*v);
+            }
+            if (const auto v = Text(o, "up_axis"))
+            {
+                if (!ParseVolumeUpAxis(*v, view.volumeUpAxis))
+                {
+                    throw rpc::Error(kBadParams, "up_axis must be 'x', 'y' or 'z'.");
+                }
+            }
+            if (Text(o, "source").has_value())
+            {
+                view.source = OneOf(o, "source", {"live", "playback"}, "live") == "live"
+                    ? DisplaySource::Live : DisplaySource::Playback;
+            }
+            if (!volumeSink)
+            {
+                throw rpc::Error(kInvalid, "volumes are not available in this host.");
+            }
+            if (view.volumeId.empty())
+            {
+                throw rpc::Error(kBadParams, "volume_id is required.");
+            }
+            if (action == "clear")
+            {
+                const WeatherLabVolumeResult cleared = volumeSink(view.volumeId, nullptr);
+                ThrowIfError(cleared.error);
+                view.volumeAuto = false;
+                return Value(Value::Object{{"volume_id", view.volumeId}, {"cleared", true}});
+            }
+            WeatherLabVolumeResult result;
+            CloudVolumeGrid grid;
+            ThrowIfError(PushStormVolume(session, view, volumeSink, &result, &grid));
+            return Value(Value::Object{
+                {"volume_id", view.volumeId},
+                {"time_s", grid.time},
+                {"resolution", Value(Value::Array{
+                    static_cast<i64>(grid.resolutionX),
+                    static_cast<i64>(grid.resolutionY),
+                    static_cast<i64>(grid.resolutionZ)})},
+                {"max_condensate_g_kg", static_cast<f64>(grid.maxCondensateGramsPerKg)},
+                {"up_axis", VolumeUpAxisName(view.volumeUpAxis)},
+                {"representation_mode", result.representationMode},
+                {"representation_ok", result.representationOk},
+                {"current_half_extents_m", HalfExtentsToValue(result.currentHalfExtents)},
+                {"recommended_half_extents_m", HalfExtentsToValue(result.recommendedHalfExtents)}});
         });
 }
 } // namespace orbit::studio_ui

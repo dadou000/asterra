@@ -425,6 +425,11 @@ VolumeCacheData BakeVolumeCache(
     return cache;
 }
 
+void FinalizeVolumeCache(VolumeCacheData& cache) noexcept
+{
+    cache.payloadFingerprint = PayloadFingerprint(cache.density, cache.emission);
+}
+
 bool SaveVolumeCache(
     const std::string_view path,
     const VolumeCacheData& cache,

@@ -85,6 +85,7 @@
 #include <orbit/studio_ui/SystemViewUi.hpp>
 #include <orbit/studio_ui/VolumeAuthoringUi.hpp>
 #include <orbit/studio_ui/WeatherLabUi.hpp>
+#include <orbit/studio_ui/WeatherLabVolumeBridge.hpp>
 #include <orbit/studio_ui/WorldDocumentsUi.hpp>
 #include <orbit/universe/BodyRegistry.hpp>
 #include <orbit/universe/ReferenceSurface.hpp>
@@ -1345,14 +1346,22 @@ int orbit::editor_app::StudioApplication::Run(
         // both driving one session (docs/ORBIT_MCP.md).
         orbit::weather_lab::WeatherLabSession weatherLabSession;
         orbit::studio_ui::WeatherLabView weatherLabView;
+        const auto weatherLabVolumeSink =
+            orbit::studio_ui::MakeWeatherLabVolumeSink(
+                [&studioSession]() -> const orbit::scene::ObjectStore*
+                {
+                    return &studioSession.World().Objects();
+                });
         orbit::studio_ui::WeatherLabUi weatherLabUi(
             weatherLabSession,
-            weatherLabView);
+            weatherLabView,
+            weatherLabVolumeSink);
         weatherLabUi.Register(ui);
         orbit::studio_ui::RegisterWeatherLabRpc(
             rpcHost.Dispatcher(),
             weatherLabSession,
-            weatherLabView);
+            weatherLabView,
+            weatherLabVolumeSink);
 
         // Simulation transport (Simulate / Pause / Step) and time.* RPC, both
         // driving the one Studio clock that moves the planets, the sun and the

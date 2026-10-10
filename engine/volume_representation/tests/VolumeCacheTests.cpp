@@ -125,4 +125,34 @@ void RunVolumeCacheTests()
 
     std::error_code ec;
     std::filesystem::remove(path, ec);
+
+    // A cache filled by a simulation (not baked) with unequal axis resolutions
+    // becomes valid for Save/Load once FinalizeVolumeCache stamps its payload.
+    {
+        VolumeCacheData sim;
+        sim.descriptor.resolutionX = 4U;
+        sim.descriptor.resolutionY = 3U;
+        sim.descriptor.resolutionZ = 2U;
+        sim.descriptor.fieldMask = static_cast<u64>(world_model::VolumeField::Density);
+        sim.descriptor.centerMeters = {0.0, 0.0, 0.0};
+        sim.descriptor.halfExtentsMeters = {2.0, 1.5, 1.0};
+        sim.density.assign(24U, 0.0F);
+        sim.density[(1U * 3U + 2U) * 4U + 3U] = 0.75F; // x=3 y=2 z=1
+        FinalizeVolumeCache(sim);
+        CheckCache(sim.payloadFingerprint != 0U);
+        // The far corner samples exactly the written cell; the origin is clear.
+        CheckCache(SampleVolumeCacheDensity(sim, 1.0, 1.0, 1.0) == 0.75F);
+        CheckCache(SampleVolumeCacheDensity(sim, 0.0, 0.0, 0.0) == 0.0F);
+
+        const auto simPath = std::filesystem::temp_directory_path() /
+            "orbit_simulated_volume_cache_test.orbitvol";
+        std::string simError;
+        CheckCache(SaveVolumeCache(simPath.string(), sim, &simError));
+        const auto reloaded = LoadVolumeCache(simPath.string());
+        CheckCache(static_cast<bool>(reloaded));
+        CheckCache(reloaded.cache->density == sim.density);
+        CheckCache(reloaded.cache->descriptor.resolutionZ == 2U);
+        std::error_code simEc;
+        std::filesystem::remove(simPath, simEc);
+    }
 }

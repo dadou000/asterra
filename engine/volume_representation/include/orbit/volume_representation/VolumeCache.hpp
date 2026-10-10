@@ -87,6 +87,11 @@ struct VolumeCacheLoadResult
     std::span<const world_model::ResolvedVolumeInput> inputs,
     const VolumeCacheBakeSettings& settings = {});
 
+// Recomputes payloadFingerprint after the density/emission arrays were filled
+// by something other than BakeVolumeCache (for example a simulation), so
+// SaveVolumeCache / IsVolumeCacheCurrent treat the cache as valid.
+void FinalizeVolumeCache(VolumeCacheData& cache) noexcept;
+
 [[nodiscard]] bool SaveVolumeCache(
     std::string_view path,
     const VolumeCacheData& cache,

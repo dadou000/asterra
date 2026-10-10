@@ -20,6 +20,10 @@ sources = [
   "engine/weather_lab/src/StormMetrics.cpp",
   "engine/weather_lab/include/orbit/weather_lab/WeatherLabSession.hpp",
   "engine/weather_lab/include/orbit/weather_lab/SliceColor.hpp",
+  "engine/weather_lab/include/orbit/weather_lab/CloudVolume.hpp",
+  "engine/weather_lab/src/CloudVolume.cpp",
+  "engine/studio_ui/include/orbit/studio_ui/WeatherLabVolumeBridge.hpp",
+  "engine/studio_ui/src/WeatherLabVolumeBridge.cpp",
   "engine/weather_lab/src/WeatherLabSession.cpp",
   "engine/studio_ui/include/orbit/studio_ui/WeatherLabRpc.hpp",
   "engine/studio_ui/include/orbit/studio_ui/WeatherLabUi.hpp",
@@ -29,7 +33,7 @@ sources = [
   "engine/weather_lab/CMakeLists.txt",
   "tools/weather_lab/cm1_lab.py",
 ]
-symbols = ["FastStormSolver", "BuildSupercellBaseState", "WxReader", "WxWriter", "ComputeStormMetrics", "WeatherLabSession", "WeatherLabUi", "RegisterWeatherLabRpc", "SliceColor"]
+symbols = ["FastStormSolver", "BuildSupercellBaseState", "WxReader", "WxWriter", "ComputeStormMetrics", "WeatherLabSession", "WeatherLabUi", "RegisterWeatherLabRpc", "SliceColor", "BuildCloudVolumeGrid", "MakeWeatherLabVolumeSink"]
 applies_to = ["engine/weather_lab/**", "tools/weather_lab/**", "engine/studio_ui/src/WeatherLab*", "engine/studio_ui/include/orbit/studio_ui/WeatherLab*"]
 invariants = [
   "Pure C++23 with no engine dependencies: the module configures, builds and tests on any host, so storm numerics can be verified without Studio or a GPU.",
@@ -41,6 +45,7 @@ invariants = [
   ".orbitwx is the single interchange format for CM1 exports and fast-core output, so StormMetrics compares both models with the same definitions. Frame data is float32, x fastest then y then z, frame-major; truncated files keep their complete frames.",
   "WeatherLabSession is the one owner of the live run: the Weather Lab panel (WeatherLabUi) and every weather_lab.* RPC/MCP method call it, so a button and an agent do exactly the same thing. The panel owns no simulation logic; its view state (WeatherLabView) is edited by the panel and weather_lab.view, and any slice can be requested directly with weather_lab.slice.",
   "The solver steps on the session's own compute thread, never the UI or RPC thread. It publishes display snapshots about four times a second; GetSlice reads the last snapshot under a short lock, so queries never wait on a step. Settings are frozen while a live run exists (Configure fails; Reset first). The suite is ThreadSanitizer clean.",
+  "The storm reaches the viewport through an ordinary Studio Volume object in its Baked representation mode: BuildCloudVolumeGrid turns condensate into density 1-exp(-gain*g/kg) (axis-remapped to the volume's up axis, tested) and WeatherLabVolumeBridge attaches it as a VolumeCacheData in VolumeCaches(), the same registry the Volumes panel bakes and imports into. It is separate from the planet cloud renderer (celestial_clouds) and never edits the world: the volume's mode and size are the user's (the push reports what is still needed). The cache is stretched over the volume's own extents, so size it to recommended_half_extents_m for a one-to-one storm.",
   "Frame sampling lands exactly on the sample times (steps are shortened to hit them), so a recorded .orbitwx and a rerun with the same settings produce identical metrics (tested).",
   "Rain evaporation and fall speed use the SI forms from CM1's kessler.F. The Klemp-Wilhelmson constants in g/m^3 units under-evaporate by ~100x and removed the cold pool (measured 0.4 K vs CM1's 7 K); keep the SI forms.",
 ]
@@ -89,12 +94,24 @@ perturbation, vorticity, wind speed or total condensate; the metrics lines and t
 reference. Every control has a `weather_lab.*` method (`status`, `configure`, `control`, `playback`, `metrics`, `compare`,
 `slice`, `view`) and an `orbit_weather_lab_*` MCP tool (docs/ORBIT_MCP.md).
 
+## Storm in the viewport (separate Volume)
+
+1. Create a Volume object (Create menu) and, in its properties, set **Representation mode = Baked** and its half extents to
+   the values the push returns (a 128 km storm domain is 64000 x 10000 x 64000 m with Y up).
+2. In the Weather Lab panel open **Storm as a Volume object**, paste the Volume's object id, pick which axis is up, and press
+   **Push to Volume**; tick *Keep updating* to follow the run while the panel is open. Over RPC: `weather_lab.volume`
+   (`push` / `clear`) and the `volume_*` fields of `weather_lab.view`.
+3. Raise *Density per g/kg* if the cloud is too thin; it is `1 - exp(-gain * condensate)`.
+
+Nothing here touches `celestial_clouds`; feeding the planet cloud renderer is a later, shader-level change.
+
 ## Hot iteration
 
 - Saving a solver, session or panel source (.cpp/.hpp under engine/weather_lab or engine/studio_ui) is native code in a fast
   module with no reload boundary yet, so the central classifier takes the automatic native/generation fallback. The live run
   lives in the old generation's memory and does not survive the handoff; because runs are deterministic, `Reset` + `Start`
   (or the recorded `.orbitwx`) reproduces it. A failed build leaves the running generation, and its run, untouched.
+- Pushing a new storm into the volume is a data refresh, not a rebuild: the volume pass re-samples the attached cache every frame.
 - Saving a `.orbitwx` or other data file needs no rebuild: `weather_lab.playback load` re-reads it.
 - Saving `tools/weather_lab/cm1_lab.py` needs nothing from Studio; it is an offline harness.
 - There are no shaders or GPU resources yet (the panel draws with CPU canvases), so nothing needs deferred GPU retirement. The

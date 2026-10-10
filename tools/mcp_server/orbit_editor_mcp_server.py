@@ -1083,10 +1083,17 @@ def orbit_weather_lab_view(
     column_field: str | None = None,
     show_metrics: bool | None = None,
     show_comparison: bool | None = None,
+    volume_id: str | None = None,
+    volume_auto: bool | None = None,
+    volume_gain: float | None = None,
+    volume_up_axis: str | None = None,
 ) -> dict[str, Any]:
     """Get or set what the Weather Lab panel shows (source 'live' | 'playback',
     the three slice fields, the map height and section row, metrics and
-    comparison visibility). With no arguments just returns the view."""
+    comparison visibility) and the storm-volume settings (volume_id of a Volume
+    object, volume_auto to keep re-pushing as the storm advances while the panel
+    is open, volume_gain, volume_up_axis 'x' | 'y' | 'z'). With no arguments just
+    returns the view."""
     params: dict[str, Any] = {
         key: value
         for key, value in {
@@ -1094,6 +1101,8 @@ def orbit_weather_lab_view(
             "plan_height_m": plan_height_m, "section_field": section_field,
             "section_row": section_row, "column_field": column_field,
             "show_metrics": show_metrics, "show_comparison": show_comparison,
+            "volume_id": volume_id, "volume_auto": volume_auto,
+            "volume_gain": volume_gain, "volume_up_axis": volume_up_axis,
         }.items()
         if value is not None
     }
@@ -2853,3 +2862,27 @@ if hasattr(mcp, "resource"):
 
 if __name__ == "__main__":
     mcp.run()
+
+
+@mcp.tool()
+def orbit_weather_lab_volume(
+    action: str,
+    volume_id: str | None = None,
+    gain: float | None = None,
+    up_axis: str | None = None,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Show the storm's cloud and rain water as a Studio Volume object through
+    its baked-cache path (separate from the planet cloud renderer). Create a Volume
+    object first, set its Representation mode to Baked and size it to the
+    recommended_half_extents_m this returns, then action 'push' converts the
+    displayed storm (density = 1 - exp(-gain * condensate g/kg)) and attaches it;
+    'clear' detaches it. up_axis ('x' | 'y' | 'z') says which volume axis is
+    vertical (default y); source is 'live' or 'playback'. Returns the push summary
+    including whether the volume is in Baked mode."""
+    params: dict[str, Any] = {"action": action}
+    for key, value in {"volume_id": volume_id, "gain": gain, "up_axis": up_axis,
+                       "source": source}.items():
+        if value is not None:
+            params[key] = value
+    return _rpc("weather_lab.volume", params)

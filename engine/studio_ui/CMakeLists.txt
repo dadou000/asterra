@@ -27,6 +27,7 @@ add_library(OrbitStudioUi STATIC
     src/SystemViewUi.cpp
     src/VolumeAuthoringUi.cpp
     src/WeatherLabRpc.cpp
+    src/WeatherLabVolumeBridge.cpp
     src/WeatherLabUi.cpp
     src/StudioViewContinuity.cpp
     src/StudioViewportCamera.cpp

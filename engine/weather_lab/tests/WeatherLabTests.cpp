@@ -1,5 +1,6 @@
 #include <orbit/weather_lab/FastStormSolver.hpp>
 #include <orbit/weather_lab/StormMetrics.hpp>
+#include <orbit/weather_lab/CloudVolume.hpp>
 #include <orbit/weather_lab/SliceColor.hpp>
 #include <orbit/weather_lab/Thermo.hpp>
 #include <orbit/weather_lab/WeatherLabSession.hpp>
@@ -309,6 +310,48 @@ void TestSliceColors()
     Check(SliceColor(sequential, 99.0F) == high);
     Check(IsSignedField("zvort") && !IsSignedField("qr"));
 }
+
+void TestCloudVolumeMapping()
+{
+    WxHeader h;
+    h.nx = 4; h.ny = 3; h.nz = 5; h.dx = 1000.0F; h.dy = 2000.0F;
+    for (std::uint32_t k = 0; k < h.nz; ++k) { h.centreHeight.push_back(250.0F + 500.0F * static_cast<float>(k)); }
+    std::vector<float> q(h.CellCount(), 0.0F);
+    // One cloudy cell: x=3, y=1, z=4 (the top layer), 4 g/kg.
+    q[(4U * 3U + 1U) * 4U + 3U] = 0.004F;
+
+    CloudVolumeRequest r;
+    r.gainPerGramPerKg = 0.5F;
+    r.upAxis = VolumeUpAxis::Z;
+    CloudVolumeGrid z = BuildCloudVolumeGrid(h, q, r);
+    Check(z.valid && z.resolutionX == 4U && z.resolutionY == 3U && z.resolutionZ == 5U);
+    Check(z.sizeX == 4000.0 && z.sizeY == 6000.0 && z.sizeZ == 2500.0);
+    Check(std::fabs(z.maxCondensateGramsPerKg - 4.0F) < 1.0e-4F);
+    const float expected = 1.0F - std::exp(-2.0F);
+    Check(std::fabs(z.density[(4U * 3U + 1U) * 4U + 3U] - expected) < 1.0e-5F);
+
+    // Y-up swaps the vertical into the middle axis: cache (x, y, z) = sim (x, z, y).
+    r.upAxis = VolumeUpAxis::Y;
+    CloudVolumeGrid y = BuildCloudVolumeGrid(h, q, r);
+    Check(y.resolutionX == 4U && y.resolutionY == 5U && y.resolutionZ == 3U);
+    Check(y.sizeY == 2500.0 && y.sizeZ == 6000.0);
+    Check(std::fabs(y.density[(1U * 5U + 4U) * 4U + 3U] - expected) < 1.0e-5F);
+
+    // X-up: cache (x, y, z) = sim (z, x, y).
+    r.upAxis = VolumeUpAxis::X;
+    CloudVolumeGrid x = BuildCloudVolumeGrid(h, q, r);
+    Check(x.resolutionX == 5U && x.resolutionY == 4U && x.resolutionZ == 3U);
+    Check(std::fabs(x.density[(1U * 4U + 3U) * 5U + 4U] - expected) < 1.0e-5F);
+
+    // Density stays in [0,1], the rest of the grid is clear, bad input is rejected.
+    float sum = 0.0F;
+    for (const float d : y.density) { Check(d >= 0.0F && d <= 1.0F); sum += d; }
+    Check(std::fabs(sum - expected) < 1.0e-5F);
+    Check(!BuildCloudVolumeGrid(h, std::vector<float>(3, 0.0F), r).valid);
+    VolumeUpAxis parsed = VolumeUpAxis::Z;
+    Check(ParseVolumeUpAxis("y", parsed) && parsed == VolumeUpAxis::Y);
+    Check(!ParseVolumeUpAxis("w", parsed));
+}
 } // namespace
 
 int main()
@@ -320,6 +363,7 @@ int main()
     TestStormInitiates();
     TestDeterministicAcrossThreadCounts();
     TestFormatRoundTripAndMetrics();
+    TestCloudVolumeMapping();
     TestSliceColors();
     TestSessionLifecycle();
     TestSessionPauseStepAndConfigure();

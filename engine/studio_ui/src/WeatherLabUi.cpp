@@ -8,6 +8,7 @@
 #include <cmath>
 #include <format>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace orbit::studio_ui
@@ -27,6 +28,7 @@ constexpr std::array<std::string_view, 2> kPresetLabels{
     "Quick: 2 km, 64x64x40 (validated)",
     "Standard: 1 km, 128x128x40 (experimental)"};
 constexpr std::array<std::string_view, 2> kSourceLabels{"Live run", "Playback"};
+constexpr std::array<std::string_view, 3> kAxisLabels{"X is up", "Y is up", "Z is up"};
 constexpr std::array<std::string_view, 5> kGridSizes{"16", "32", "64", "128", "256"};
 
 [[nodiscard]] math::Float4 ToColor(const std::array<f32, 4>& c)
@@ -93,9 +95,11 @@ void ApplyPreset(WeatherLabSettings& s, const i32 preset)
 }
 } // namespace
 
-WeatherLabUi::WeatherLabUi(WeatherLabSession& session, WeatherLabView& view)
+WeatherLabUi::WeatherLabUi(
+    WeatherLabSession& session, WeatherLabView& view, WeatherLabVolumeSink volumeSink)
     : session_(&session)
     , view_(&view)
+    , volumeSink_(std::move(volumeSink))
 {
 }
 
@@ -118,6 +122,26 @@ void WeatherLabUi::Register(editor_ui::EditorUi& ui)
 
 void WeatherLabUi::Draw(PanelContext& context)
 {
+    // Keep an attached storm volume following the displayed storm. This runs
+    // only while the panel is drawn.
+    if (view_->volumeAuto && volumeSink_)
+    {
+        const WeatherLabStatus status = session_->Status();
+        const f64 shown = view_->source == weather_lab::DisplaySource::Live
+            ? status.simTime : status.playbackTime;
+        const u64 key = static_cast<u64>(shown * 1000.0)
+            ^ (static_cast<u64>(status.playbackFrame) << 40U)
+            ^ (view_->source == weather_lab::DisplaySource::Live ? 1ULL : 2ULL);
+        if (key != lastVolumeKey_)
+        {
+            lastVolumeKey_ = key;
+            volumeMessage_ = PushStormVolume(*session_, *view_, volumeSink_);
+            if (!volumeMessage_.empty())
+            {
+                view_->volumeAuto = false;
+            }
+        }
+    }
     if (!draftLoaded_)
     {
         draft_ = session_->Settings();
@@ -127,6 +151,7 @@ void WeatherLabUi::Draw(PanelContext& context)
     DrawSettings(context);
     DrawPlayback(context);
     DrawViews(context);
+    DrawVolume(context);
     DrawMetrics(context);
 }
 
@@ -388,6 +413,55 @@ void WeatherLabUi::DrawViews(PanelContext& context)
     (void)FieldCombo(context, "Column maximum field##weather-column-field", view_->columnField);
     DrawSlice(context, "weather-column", session_->GetSlice(column), {mapSize, mapSize});
     context.Separator();
+}
+
+void WeatherLabUi::DrawVolume(PanelContext& context)
+{
+    if (!context.Section("Storm as a Volume object", false))
+    {
+        return;
+    }
+    context.MutedText(
+        "Shows the storm's cloud and rain water through a Volume object's baked-cache path, separate from the planet clouds. "
+        "Create a Volume, set its Representation mode to Baked, size it to the extents shown below, then push.");
+    (void)context.InputText("Volume object id##weather-volume-id", view_->volumeId);
+    i32 axis = static_cast<i32>(view_->volumeUpAxis);
+    if (context.Combo("Volume up axis##weather-volume-axis", kAxisLabels, axis, 120.0F))
+    {
+        view_->volumeUpAxis = static_cast<weather_lab::VolumeUpAxis>(axis);
+    }
+    f64 gain = static_cast<f64>(view_->volumeGain);
+    if (context.SliderDouble("Density per g/kg##weather-volume-gain", gain, 0.05, 4.0))
+    {
+        view_->volumeGain = static_cast<f32>(gain);
+    }
+    if (context.PrimaryButton("Push to Volume##weather-volume-push"))
+    {
+        volumeMessage_ = PushStormVolume(*session_, *view_, volumeSink_, &volumeResult_);
+        volumeHaveResult_ = volumeMessage_.empty();
+    }
+    context.SameLine();
+    if (context.Button("Detach##weather-volume-clear") && volumeSink_ && !view_->volumeId.empty())
+    {
+        volumeMessage_ = volumeSink_(view_->volumeId, nullptr).error;
+        view_->volumeAuto = false;
+        volumeHaveResult_ = false;
+    }
+    (void)context.Checkbox("Keep updating while the panel is open##weather-volume-auto", view_->volumeAuto);
+    if (!volumeMessage_.empty())
+    {
+        context.ErrorText(volumeMessage_);
+    }
+    if (volumeHaveResult_)
+    {
+        const auto& r = volumeResult_;
+        context.KeyValue("Representation mode",
+            r.representationOk ? r.representationMode : r.representationMode + " (set to Baked for the cloud to draw)");
+        context.KeyValue("Volume half extents (m)", std::format("{:.0f} x {:.0f} x {:.0f}",
+            r.currentHalfExtents[0], r.currentHalfExtents[1], r.currentHalfExtents[2]));
+        context.KeyValue("Storm fits at (m)", std::format("{:.0f} x {:.0f} x {:.0f}",
+            r.recommendedHalfExtents[0], r.recommendedHalfExtents[1], r.recommendedHalfExtents[2]));
+    }
 }
 
 void WeatherLabUi::DrawMetrics(PanelContext& context)

@@ -13,8 +13,9 @@ sources = [
   "engine/volume_representation/include/orbit/volume_representation/VolumeRepresentation.hpp",
   "engine/volume_representation/CMakeLists.txt",
 ]
-symbols = ["VolumeCacheBakeSettings", "VolumeOutputSettings", "VolumeOutputRuntimeDiagnostics", "VolumeRepresentationSettings"]
+symbols = ["FinalizeVolumeCache", "VolumeCacheBakeSettings", "VolumeOutputSettings", "VolumeOutputRuntimeDiagnostics", "VolumeRepresentationSettings"]
 invariants = [
+  "A VolumeCacheData filled by something other than BakeVolumeCache (the Weather Lab storm, /world/weather-lab) must call FinalizeVolumeCache so its payload checksum is valid for Save/Load; axis resolutions may differ and the data is stretched over the volume's own extents.",
   "Object is semantic identity; the host runtime resolves its frame-space position through an actor/transform adapter, so this module depends on no game-specific transform type.",
   "Volume outputs advance exactly once per authored Volume from simulation time, not render/UI cadence; at M38 a current M37 cache is the CPU-readable authority and stale caches are rejected rather than silently emitting from authored state that no longer matches the world.",
   "The volume layer owns only the transport-neutral classification of a surface deposit; material and render systems decide how each channel changes BRDF, albedo, thermal state or particles.",

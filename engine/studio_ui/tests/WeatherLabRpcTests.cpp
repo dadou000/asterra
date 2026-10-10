@@ -75,7 +75,37 @@ int main()
     rpc::Dispatcher dispatcher;
     weather_lab::WeatherLabSession session;
     studio_ui::WeatherLabView view;
-    studio_ui::RegisterWeatherLabRpc(dispatcher, session, view);
+
+    // A fake Volume host: only the id "11111111-1111-1111-1111-111111111111" is a Volume.
+    const std::string volumeId = "11111111-1111-1111-1111-111111111111";
+    int attached = 0;
+    int detached = 0;
+    weather_lab::CloudVolumeGrid lastGrid;
+    const studio_ui::WeatherLabVolumeSink sink =
+        [&](const std::string& id, const weather_lab::CloudVolumeGrid* grid)
+    {
+        studio_ui::WeatherLabVolumeResult result;
+        if (id != volumeId)
+        {
+            result.error = "object " + id + " is not a Volume";
+            return result;
+        }
+        result.representationMode = "Auto";
+        result.representationOk = false;
+        result.currentHalfExtents[0] = 10.0;
+        if (grid == nullptr)
+        {
+            ++detached;
+            return result;
+        }
+        ++attached;
+        lastGrid = *grid;
+        result.recommendedHalfExtents[0] = grid->sizeX * 0.5;
+        result.recommendedHalfExtents[1] = grid->sizeY * 0.5;
+        result.recommendedHalfExtents[2] = grid->sizeZ * 0.5;
+        return result;
+    };
+    studio_ui::RegisterWeatherLabRpc(dispatcher, session, view, sink);
 
     // Every method is registered; read-only ones are not flagged mutating.
     std::size_t registered = 0;
@@ -91,7 +121,7 @@ int main()
             Check(method.mutating != readOnly);
         }
     }
-    Check(registered == 8U);
+    Check(registered == 9U);
 
     Reply status = Call(dispatcher, "weather_lab.status");
     Check(status.Ok());
@@ -158,8 +188,31 @@ int main()
     Check(!Call(dispatcher, "weather_lab.view", R"({"column_field":"nope"})").Ok());
     Check(view.columnField == "condensate");
 
+    // Storm -> Volume: needs an id that is a Volume, a storm to convert, and
+    // reports what the volume still needs.
+    Check(!Call(dispatcher, "weather_lab.volume", R"({"action":"push"})").Ok());
+    Check(!Call(dispatcher, "weather_lab.volume", R"({"action":"push","volume_id":"not-a-volume"})").Ok());
+    Check(!Call(dispatcher, "weather_lab.volume", R"({"action":"push","volume_id":")" + volumeId + R"(","gain":0})").Ok());
+    Reply pushed = Call(dispatcher, "weather_lab.volume",
+        R"({"action":"push","volume_id":")" + volumeId + R"(","up_axis":"y","gain":0.8})");
+    Check(pushed.Ok());
+    Check(attached == 1 && lastGrid.valid && lastGrid.resolutionY == 40U);   // y is up: cache y = layers
+    Check(pushed.Result().Find("representation_ok")->AsBool() == false);
+    Check(pushed.Result().Find("recommended_half_extents_m")->Find("x")->AsNumber() == 32000.0); // 16 cells x 4 km / 2
+    Check(pushed.Result().Find("resolution")->AsArray().size() == 3U);
+    Check(view.volumeId == volumeId && view.volumeUpAxis == weather_lab::VolumeUpAxis::Y);
+    Check(Call(dispatcher, "weather_lab.volume", R"({"action":"clear"})").Ok() && detached == 1);
+    // The same operation is what the panel's button and auto-update call.
+    view.volumeAuto = true;
+    Check(studio_ui::PushStormVolume(session, view, sink).empty() && attached == 2);
+    Check(!studio_ui::PushStormVolume(session, view, {}).empty());
+    Check(Call(dispatcher, "weather_lab.view", R"({"volume_gain":2,"volume_up_axis":"z"})").Ok());
+    Check(view.volumeGain == 2.0F && view.volumeUpAxis == weather_lab::VolumeUpAxis::Z);
+    Check(!Call(dispatcher, "weather_lab.view", R"({"volume_up_axis":"w"})").Ok());
+
     Check(Call(dispatcher, "weather_lab.control", R"({"action":"reset"})").Ok());
     Check(Call(dispatcher, "weather_lab.status").Result().Find("state")->AsString() == "idle");
+    Check(!Call(dispatcher, "weather_lab.volume", R"({"action":"push","volume_id":")" + volumeId + R"("})").Ok()); // no storm
 
     std::cout << "Weather lab RPC tests passed\n";
     return 0;

@@ -4,6 +4,7 @@
 find_package(Threads REQUIRED)
 
 add_library(OrbitWeatherLab STATIC
+    src/CloudVolume.cpp
     src/Thermo.cpp
     src/WxFormat.cpp
     src/FastStormSolver.cpp

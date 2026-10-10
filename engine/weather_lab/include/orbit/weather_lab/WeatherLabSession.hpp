@@ -1,5 +1,6 @@
 #pragma once
 
+#include <orbit/weather_lab/CloudVolume.hpp>
 #include <orbit/weather_lab/FastStormSolver.hpp>
 #include <orbit/weather_lab/StormMetrics.hpp>
 
@@ -158,6 +159,11 @@ public:
     [[nodiscard]] std::vector<ComparisonRow> Compare() const;
 
     [[nodiscard]] Slice GetSlice(const SliceRequest& request) const;
+
+    // The live (or playback) condensate as a volume-cache density grid, for a
+    // Studio Volume object. Reads the last published snapshot.
+    [[nodiscard]] CloudVolumeGrid GetCloudVolume(
+        DisplaySource source, const CloudVolumeRequest& request) const;
 
 private:
     struct Impl;

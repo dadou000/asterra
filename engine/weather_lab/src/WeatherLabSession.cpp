@@ -839,3 +839,32 @@ Slice WeatherLabSession::GetSlice(const SliceRequest& request) const
         request);
 }
 } // namespace orbit::weather_lab
+
+namespace orbit::weather_lab
+{
+CloudVolumeGrid WeatherLabSession::GetCloudVolume(
+    const DisplaySource source, const CloudVolumeRequest& request) const
+{
+    WxHeader header;
+    std::vector<float> condensate;
+    double time = 0.0;
+    {
+        std::lock_guard lock(impl_->mutex);
+        const DisplayFields& d = source == DisplaySource::Live
+            ? impl_->liveDisplay : impl_->playbackDisplay;
+        if (!d.valid)
+        {
+            CloudVolumeGrid none;
+            none.error = source == DisplaySource::Live
+                ? "no live run yet (Start or Step first)" : "no playback loaded";
+            return none;
+        }
+        header = d.header;
+        condensate = d.fields.at("condensate");
+        time = d.time;
+    }
+    CloudVolumeGrid grid = BuildCloudVolumeGrid(header, condensate, request);
+    grid.time = time;
+    return grid;
+}
+} // namespace orbit::weather_lab
