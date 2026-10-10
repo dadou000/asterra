@@ -135,6 +135,9 @@ public:
     void Detach(
         scene::ObjectId volume) noexcept;
 
+    // Every Volume with an attached cache, in object-id order.
+    [[nodiscard]] std::vector<scene::ObjectId> AttachedVolumes() const;
+
     void RemoveMissing(
         const scene::ObjectStore& objects);
 

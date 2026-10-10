@@ -2,8 +2,11 @@
 #include "StudioViewportPrimitives.hpp"
 
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
+#include <orbit/studio_ui/StudioVolumeCaches.hpp>
+#include <orbit/volume_representation/VolumeCache.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <limits>
 
@@ -254,6 +257,70 @@ StudioViewportRenderer::ComposeBase(
         }
         selectedVolume = world_model::ResolveVolumeDomain(
             session.World().Objects(), volumeObject);
+    }
+
+    // Re-attach saved baked caches (Weather Lab storms) after a project open.
+    if (snapshot.hasWorld)
+    {
+        static u32 cacheSyncCounter = 0U;
+        if ((cacheSyncCounter++ % 30U) == 0U)
+        {
+            std::string syncLog;
+            static_cast<void>(studio_ui::SyncVolumeCaches(
+                session.World().Objects(),
+                session.World().Project().RootDirectory(),
+                &syncLog));
+            if (!syncLog.empty())
+            {
+                std::fputs(syncLog.c_str(), stderr);
+            }
+        }
+    }
+
+    // Only one Volume is simulated and drawn at a time and it follows the
+    // selection, which would make a baked cache (the Weather Lab storm) vanish
+    // the moment anything else is selected. With no Volume selected, keep
+    // drawing the first Baked Volume that has a cache attached.
+    if (!selectedVolume.has_value() && volumeFields_ != nullptr &&
+        snapshot.hasWorld)
+    {
+        for (const auto volume :
+             volume_representation::VolumeCaches().AttachedVolumes())
+        {
+            const auto domain = world_model::ResolveVolumeDomain(
+                session.World().Objects(), volume);
+            if (domain.has_value() &&
+                domain->representationMode ==
+                    world_model::VolumeRepresentationMode::Baked)
+            {
+                selectedVolume = domain;
+                break;
+            }
+        }
+    }
+
+    // The cloud layers around a storm: every other Baked volume with a cache.
+    std::vector<world_model::ResolvedVolumeDomain> layerVolumes;
+    if (volumeFields_ != nullptr && snapshot.hasWorld)
+    {
+        for (const auto volume :
+             volume_representation::VolumeCaches().AttachedVolumes())
+        {
+            if (selectedVolume.has_value() && volume == selectedVolume->object)
+            {
+                continue;
+            }
+            const auto domain = world_model::ResolveVolumeDomain(
+                session.World().Objects(), volume);
+            if (domain.has_value() && domain->enabled &&
+                domain->renderEnabled &&
+                domain->representationMode ==
+                    world_model::VolumeRepresentationMode::Baked &&
+                layerVolumes.size() < 8U)
+            {
+                layerVolumes.push_back(*domain);
+            }
+        }
     }
 
     for (const auto& info : catalog)
@@ -3304,6 +3371,9 @@ StudioViewportRenderer::ComposeBase(
             sharedRadianceCellsHandle, sharedRadianceLevelsHandle,
             sharedRadianceLevelCount, snapshot, atTime, studioDirectLight,
             recordComposeStage);
+
+        ComposeVolumeLayerPasses(graph, session, view, info, targets, prefix,
+            layerVolumes, studioDirectLight);
 
         // Mesh distance-field debug view: sphere traces the merged field and
         // shows it in place of (or beside) the rasterised scene.

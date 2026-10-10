@@ -2480,6 +2480,104 @@ def orbit_viewport_pose_set(
 
 
 @mcp.tool()
+def orbit_volume_cache_save(id: str, path: str | None = None) -> dict[str, Any]:
+    """Save the cache attached to a Volume (for example a Weather Lab storm pushed
+    with orbit_weather_lab_volume) as a .orbitvol under the project and store its
+    project-relative path in the Volume's Baked Cache Path, so the Studio
+    re-attaches it whenever the project opens. path defaults to
+    Content/Volumes/<id>.orbitvol. One undoable property edit."""
+    params: dict[str, Any] = {"id": id}
+    if path is not None:
+        params["path"] = path
+    return _rpc("volume.cache_save", params)
+
+
+@mcp.tool()
+def orbit_volume_look_variant(variant: int | None = None) -> dict[str, Any]:
+    """Get or set the look variant of generated cloud layers: 0-7 forces one (bit 0
+    domain warp + finer octave, bit 1 ridged noise, bit 2 high-contrast lighting),
+    8 (default) is auto: each genus uses its own look from the cloud_genera table.
+    A live shader A/B switch."""
+    params: dict[str, Any] = {}
+    if variant is not None:
+        params["variant"] = variant
+    return _rpc("volume.look_variant", params)
+
+
+@mcp.tool()
+def orbit_volume_generate_layer(
+    id: str,
+    kind: str,
+    place: bool = False,
+    save: bool = False,
+    ground_position: list[float] | None = None,
+    seed: int = 1,
+    coverage: float = 0.55,
+    density: float = 1.0,
+    wind: list[float] | None = None,
+    half_extent_xy: float | None = None,
+    style: int = 0,
+) -> dict[str, Any]:
+    """Fill a Volume with a procedural cloud layer and attach it as its baked
+    cache. kind: cirrus | cirrocumulus | cirrostratus | altocumulus |
+    altostratus | nimbostratus | stratocumulus | stratus | cumulus. place=True also configures the Volume as that layer
+    (Baked, Cloud Type, resolution 256, half extents, extinction, and, with
+    ground_position (a body-local point on the ground under it), the centre at
+    the kind's default height). save=True stores the cache under the project so
+    the layer returns when it opens. coverage 0-1, density scales the baked
+    density, wind is the [x, y] the ice is drawn out along."""
+    params: dict[str, Any] = {
+        "id": id, "kind": kind, "place": place, "save": save,
+        "seed": seed, "coverage": coverage, "density": density, "style": style,
+    }
+    if ground_position is not None:
+        params["ground_position"] = ground_position
+    if wind is not None:
+        params["wind"] = wind
+    if half_extent_xy is not None:
+        params["half_extent_xy"] = half_extent_xy
+    return _rpc("volume.generate_layer", params)
+
+
+@mcp.tool()
+def orbit_volume_cache_load(id: str) -> dict[str, Any]:
+    """Attach the .orbitvol named by a Volume's Baked Cache Path now (the Studio
+    also does this when the project opens), replacing any attached cache."""
+    return _rpc("volume.cache_load", {"id": id})
+
+
+@mcp.tool()
+def orbit_spawn_list() -> dict[str, Any]:
+    """List every Spawn Location object (id, body, name, enabled, body-local
+    position, eye height, yaw/pitch degrees) and which one is the project spawn:
+    the first enabled one, where the camera lands whenever the project opens."""
+    return _rpc("spawn.list")
+
+
+@mcp.tool()
+def orbit_spawn_go(id: str | None = None, view_id: str = "studio.primary") -> dict[str, Any]:
+    """Move the camera to a Spawn Location (the project spawn when id is
+    omitted), the way the project-open spawn does: focus the spawn's body, land
+    on the terrain below its position at its eye height, then its yaw and pitch.
+    went=false means the body or its terrain is still loading; retry."""
+    params: dict[str, Any] = {"view_id": view_id}
+    if id is not None:
+        params["id"] = id
+    return _rpc("spawn.go", params)
+
+
+@mcp.tool()
+def orbit_spawn_set_here(name: str | None = None, view_id: str = "studio.primary") -> dict[str, Any]:
+    """Make the camera's current spot the project spawn: updates the project
+    spawn (or creates a Spawn Location under the view's target body) with the
+    camera's body-local position, height above the terrain, yaw and pitch."""
+    params: dict[str, Any] = {"view_id": view_id}
+    if name is not None:
+        params["name"] = name
+    return _rpc("spawn.set_here", params)
+
+
+@mcp.tool()
 def orbit_planning_list() -> dict[str, Any]:
     """List project implementation-plan bubbles, statuses, canvas positions, and schedule links."""
     return _rpc("planning.list")

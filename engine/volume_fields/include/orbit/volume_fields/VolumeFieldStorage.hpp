@@ -117,6 +117,56 @@ public:
     Recenter(
         math::Double3 centerMeters);
 
+    // Offset of the tile/cell grid from the world origin. The live solver keeps
+    // it zero so cells stay world-aligned while the window follows the camera.
+    // A static (baked/procedural) volume sets it to its own minimum corner so
+    // its tiles cover exactly the domain instead of a window shifted by up to
+    // one tile. Changing it re-derives residency.
+    // smoothSampling also asks the raymarch for trilinear field reads with
+    // procedural edge detail (static volumes only; the live solver's cells are
+    // read nearest).
+    void SetGridAnchor(math::Double3 anchorMeters, bool smoothSampling = false);
+
+    [[nodiscard]] bool SmoothSampling() const noexcept
+    {
+        return smoothSampling_;
+    }
+
+    // Box around the cells of a static volume that actually hold density,
+    // filled while the field is uploaded. The raymarch only walks rays
+    // through it, so the empty rest of a 100 km domain costs nothing.
+    void SetOccupiedBounds(math::Double3 minimumMeters, math::Double3 maximumMeters)
+    {
+        occupiedMinimum_ = minimumMeters;
+        occupiedMaximum_ = maximumMeters;
+        hasOccupiedBounds_ = true;
+    }
+
+    void ClearOccupiedBounds() noexcept
+    {
+        hasOccupiedBounds_ = false;
+    }
+
+    [[nodiscard]] bool HasOccupiedBounds() const noexcept
+    {
+        return hasOccupiedBounds_;
+    }
+
+    [[nodiscard]] const math::Double3& OccupiedMinimum() const noexcept
+    {
+        return occupiedMinimum_;
+    }
+
+    [[nodiscard]] const math::Double3& OccupiedMaximum() const noexcept
+    {
+        return occupiedMaximum_;
+    }
+
+    [[nodiscard]] const math::Double3& GridAnchor() const noexcept
+    {
+        return gridAnchorMeters_;
+    }
+
     void MarkAllResidentTilesValid();
 
     [[nodiscard]] u32 InvalidateBounds(
@@ -166,6 +216,11 @@ private:
     u32 tilesY_{0U};
     u32 tilesZ_{0U};
     math::Double3 centerMeters_{};
+    math::Double3 gridAnchorMeters_{};
+    bool smoothSampling_{false};
+    bool hasOccupiedBounds_{false};
+    math::Double3 occupiedMinimum_{};
+    math::Double3 occupiedMaximum_{};
     math::Double3 halfExtentsMeters_{
         10.0, 10.0, 10.0};
     u64 fieldMask_{0U};

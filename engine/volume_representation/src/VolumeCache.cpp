@@ -699,6 +699,17 @@ void VolumeCacheRegistry::Detach(const scene::ObjectId volume) noexcept
     caches_.erase(volume);
 }
 
+std::vector<scene::ObjectId> VolumeCacheRegistry::AttachedVolumes() const
+{
+    std::vector<scene::ObjectId> volumes;
+    volumes.reserve(caches_.size());
+    for (const auto& item : caches_)
+    {
+        volumes.push_back(item.first);
+    }
+    return volumes;
+}
+
 void VolumeCacheRegistry::RemoveMissing(const scene::ObjectStore& objects)
 {
     std::erase_if(caches_, [&objects](const auto& item)

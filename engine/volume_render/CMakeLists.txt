@@ -15,6 +15,7 @@ target_include_directories(OrbitVolumeRender
 
 target_link_libraries(OrbitVolumeRender
     PUBLIC
+        Orbit::CloudGenera
         Orbit::Core
         Orbit::Lighting
         Orbit::Math

@@ -382,6 +382,25 @@ MarkAllResidentTilesValid()
     UpdateResidencyUpload();
 }
 
+void VolumeFieldStorage::SetGridAnchor(
+    const math::Double3 anchorMeters,
+    const bool smoothSampling)
+{
+    smoothSampling_ = smoothSampling;
+    if (!smoothSampling)
+    {
+        hasOccupiedBounds_ = false;
+    }
+    if (anchorMeters.x == gridAnchorMeters_.x &&
+        anchorMeters.y == gridAnchorMeters_.y &&
+        anchorMeters.z == gridAnchorMeters_.z)
+    {
+        return;
+    }
+    gridAnchorMeters_ = anchorMeters;
+    static_cast<void>(Recenter(centerMeters_));
+}
+
 u32 VolumeFieldStorage::InvalidateBounds(
     const world_model::VolumeInvalidationBounds& bounds)
 {
@@ -408,30 +427,30 @@ u32 VolumeFieldStorage::InvalidateBounds(
     const TileCoord minimum{
         static_cast<i32>(
             std::floor(
-                bounds.minimumMeters.x /
+                (bounds.minimumMeters.x - gridAnchorMeters_.x) /
                 tileSize.x)),
         static_cast<i32>(
             std::floor(
-                bounds.minimumMeters.y /
+                (bounds.minimumMeters.y - gridAnchorMeters_.y) /
                 tileSize.y)),
         static_cast<i32>(
             std::floor(
-                bounds.minimumMeters.z /
+                (bounds.minimumMeters.z - gridAnchorMeters_.z) /
                 tileSize.z))
     };
 
     const TileCoord maximum{
         static_cast<i32>(
             std::floor(
-                bounds.maximumMeters.x /
+                (bounds.maximumMeters.x - gridAnchorMeters_.x) /
                 tileSize.x)),
         static_cast<i32>(
             std::floor(
-                bounds.maximumMeters.y /
+                (bounds.maximumMeters.y - gridAnchorMeters_.y) /
                 tileSize.y)),
         static_cast<i32>(
             std::floor(
-                bounds.maximumMeters.z /
+                (bounds.maximumMeters.z - gridAnchorMeters_.z) /
                 tileSize.z))
     };
 
@@ -960,11 +979,14 @@ VolumeFieldStorage::DesiredTileCoords(
 
     const math::Double3 minimum{
         centerMeters.x -
-            halfExtentsMeters_.x,
+            halfExtentsMeters_.x -
+            gridAnchorMeters_.x,
         centerMeters.y -
-            halfExtentsMeters_.y,
+            halfExtentsMeters_.y -
+            gridAnchorMeters_.y,
         centerMeters.z -
-            halfExtentsMeters_.z
+            halfExtentsMeters_.z -
+            gridAnchorMeters_.z
     };
 
     const TileCoord origin{

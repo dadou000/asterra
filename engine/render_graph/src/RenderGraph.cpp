@@ -258,7 +258,9 @@ void RenderGraph::AddPass(
                 second)
         {
             throw std::invalid_argument(
-                "A render pass may declare each texture only once.");
+                "A render pass may declare each texture only once (pass '" +
+                std::string(name) + "', texture " +
+                std::to_string(use.texture.index) + ").");
         }
     }
 
@@ -274,7 +276,9 @@ void RenderGraph::AddPass(
                 second)
         {
             throw std::invalid_argument(
-                "A render pass may declare each buffer only once.");
+                "A render pass may declare each buffer only once (pass '" +
+                std::string(name) + "', buffer " +
+                std::to_string(use.buffer.index) + ").");
         }
     }
 

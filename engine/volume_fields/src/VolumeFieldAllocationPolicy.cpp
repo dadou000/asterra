@@ -76,10 +76,20 @@ VolumeFieldStorage& VolumeFieldStorageService::Ensure(
                 volume_representation::
                     ResolvedRepresentation::Coarse;
 
+        // A baked cache is authored data at its own resolution, so it keeps
+        // the authored field resolution instead of the 8^3 passive aggregate
+        // (which turned a storm into a few 16 km blocks).
+        const bool baked =
+            policy.representation ==
+                volume_representation::
+                    ResolvedRepresentation::Baked;
+
         const u32 requested =
             coarse
                 ? policy.coarseResolution
-                : policy.passiveResolution;
+                : baked
+                    ? domain.resolution
+                    : policy.passiveResolution;
 
         adjusted.resolution =
             std::min(

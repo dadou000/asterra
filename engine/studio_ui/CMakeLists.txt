@@ -18,6 +18,8 @@ add_library(OrbitStudioUi STATIC
     src/StudioFlatMap.cpp
     src/StudioFlatMapRpc.cpp
     src/StudioRenderViewRpc.cpp
+    src/StudioSpawn.cpp
+    src/StudioVolumeCaches.cpp
     src/StudioRenderViewSet.cpp
     src/StudioSurfacePicking.cpp
     src/StudioTerrainDiagnosticOverlayGeometry.cpp
@@ -409,6 +411,46 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.WeatherLabRpc
         COMMAND OrbitWeatherLabRpcTests
+    )
+
+    add_executable(OrbitStudioSpawnTests
+        tests/StudioSpawnTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioSpawnTests
+        PRIVATE
+            Orbit::StudioUi
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioSpawnTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioSpawnTests)
+
+    add_test(
+        NAME Orbit.StudioSpawn
+        COMMAND OrbitStudioSpawnTests
+    )
+
+    add_executable(OrbitStudioVolumeCachesTests
+        tests/StudioVolumeCachesTests.cpp
+    )
+
+    target_link_libraries(OrbitStudioVolumeCachesTests
+        PRIVATE
+            Orbit::StudioUi
+            Orbit::Commands
+            Orbit::Documents
+            Orbit::WorldModel
+    )
+
+    target_compile_features(OrbitStudioVolumeCachesTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStudioVolumeCachesTests)
+
+    add_test(
+        NAME Orbit.StudioVolumeCaches
+        COMMAND OrbitStudioVolumeCachesTests
     )
 
     add_executable(OrbitProfilerModelTests

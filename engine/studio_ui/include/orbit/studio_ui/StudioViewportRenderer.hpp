@@ -467,6 +467,34 @@ private:
     void ComposeAtmospherePasses(StudioLightingPassContext& context);
 
 
+    // Sun light a static cloud volume receives: the atmosphere-filtered sun
+    // colour at the bottom and top of the volume and the atmosphere LUTs.
+    struct VolumeSunLighting
+    {
+        math::Float3 bottom{1.0F, 1.0F, 1.0F};
+        math::Float3 top{1.0F, 1.0F, 1.0F};
+        volume_render::VolumeAtmosphereLuts luts{};
+    };
+
+    [[nodiscard]] VolumeSunLighting ResolveVolumeSunLighting(
+        std::string_view viewId,
+        const studio_session::ViewportTargetState* logicalTarget,
+        const world_model::ResolvedVolumeDomain& domain,
+        const math::Float3& sunDirection) const;
+
+    // The other Baked volumes with a cache (the cloud layers around a storm)
+    // after the primary one: each has its own field storage and is drawn over
+    // the scene like the primary volume, without solver or authoring overlays.
+    void ComposeVolumeLayerPasses(
+        render_graph::RenderGraph& graph,
+        studio_session::StudioSession& session,
+        render_view::RenderView* view,
+        const StudioRenderViewInfo& info,
+        const render_view::ImportedTargets& targets,
+        const std::string& prefix,
+        const std::vector<world_model::ResolvedVolumeDomain>& layers,
+        const viewport_detail::ResolvedStudioDirectLight& studioDirectLight);
+
     void ComposeVolumePasses(
         render_graph::RenderGraph& graph,
         StudioRenderViewSet& views,

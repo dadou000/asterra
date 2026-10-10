@@ -18,6 +18,13 @@
 
 namespace orbit::volume_render
 {
+// Look variant of the generated cloud layers (0-7): bit 0 domain warp + finer
+// octave, bit 1 ridged noise, bit 2 high-contrast lighting. For live
+// comparison of shader techniques; 8 (the default) is auto: each genus uses
+// the look chosen for it in the cloud_genera table.
+void SetCloudLookVariant(u32 variant) noexcept;
+[[nodiscard]] u32 CloudLookVariant() noexcept;
+
 enum class VolumeRenderDebugMode : u8
 {
     Composite = 0U,
@@ -114,6 +121,18 @@ BuildEmissiveVolumeSource(
     const world_model::ResolvedVolumeDomain& domain,
     f32 emissionAuthorityScalar) noexcept;
 
+// The body atmosphere LUTs the planet clouds light themselves with: the sun
+// transmittance at any height and the multiple-scattering term. Null textures
+// mean "no atmosphere": static volumes then fall back to the sun colours the
+// caller computed.
+struct VolumeAtmosphereLuts
+{
+    rhi::Texture* transmittance{nullptr};
+    rhi::Texture* multiScattering{nullptr};
+    f32 bottomRadiusMeters{0.0F};
+    f32 topRadiusMeters{0.0F};
+};
+
 class UniversalVolumeRenderer
 {
 public:
@@ -152,7 +171,9 @@ public:
         render_graph::BufferHandle radianceLevels,
         u32 radianceLevelCount,
         render_graph::BufferHandle particleLightGrid,
-        bool resetHistory);
+        bool resetHistory,
+        math::Float3 stellarColorTop = {1.0F, 1.0F, 1.0F},
+        const VolumeAtmosphereLuts& atmosphereLuts = {});
 
     // Available to the M36 policy wrapper; this is the unchanged M35 backend.
     [[nodiscard]] VolumeRenderDiagnostics
@@ -178,7 +199,9 @@ public:
         render_graph::BufferHandle radianceLevels,
         u32 radianceLevelCount,
         render_graph::BufferHandle particleLightGrid,
-        bool resetHistory);
+        bool resetHistory,
+        math::Float3 stellarColorTop = {1.0F, 1.0F, 1.0F},
+        const VolumeAtmosphereLuts& atmosphereLuts = {});
 
 private:
     class Impl;

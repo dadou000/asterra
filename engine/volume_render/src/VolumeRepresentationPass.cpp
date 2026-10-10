@@ -2,6 +2,7 @@
 #include <orbit/volume_representation/VolumeCache.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -355,11 +356,72 @@ void AddProceduralFieldUpload(
                     1U))
     };
 
+    // A baked cache is static data: refilling and re-uploading the whole field
+    // every frame (67 MB at 256^3) is only needed when its inputs change. The
+    // field buffers persist between frames, so an unchanged key skips both.
+    if (domain.representationMode ==
+        world_model::VolumeRepresentationMode::Baked)
+    {
+        if (const auto* cache =
+                volume_representation::VolumeCaches().Find(domain.object);
+            cache != nullptr)
+        {
+            u64 key = 0xcbf29ce484222325ULL;
+            const auto mix = [&key](const u64 value)
+            {
+                key ^= value + 0x9e3779b97f4a7c15ULL + (key << 6U) + (key >> 2U);
+            };
+            const auto mixDouble = [&mix](const f64 value)
+            {
+                mix(std::bit_cast<u64>(value));
+            };
+            mix(cache->payloadFingerprint);
+            mix(cache->density.size());
+            mixDouble(domain.centerMeters.x);
+            mixDouble(domain.centerMeters.y);
+            mixDouble(domain.centerMeters.z);
+            mixDouble(domain.halfExtentsMeters.x);
+            mixDouble(domain.halfExtentsMeters.y);
+            mixDouble(domain.halfExtentsMeters.z);
+            mixDouble(storage.GridAnchor().x);
+            mixDouble(storage.GridAnchor().y);
+            mixDouble(storage.GridAnchor().z);
+            mix(diagnostics.resolutionX);
+            mix(diagnostics.resolutionY);
+            mix(diagnostics.resolutionZ);
+            mix(tileEdge);
+            mix(densityInfo->sizeBytes);
+            mix(emissionHandle.IsValid() ? 1U : 0U);
+            u64 residentCount = 0U;
+            for (const auto& tile : tiles)
+            {
+                if (tile.resident)
+                {
+                    ++residentCount;
+                    mix(static_cast<u64>(tile.slot));
+                }
+            }
+            mix(residentCount);
+
+            static std::map<scene::ObjectId, u64> uploaded;
+            const auto found = uploaded.find(domain.object);
+            if (found != uploaded.end() && found->second == key)
+            {
+                return;
+            }
+            uploaded.insert_or_assign(domain.object, key);
+        }
+    }
+
     std::vector<f32> densityValues(
         static_cast<std::size_t>(
             densityInfo->sizeBytes /
             sizeof(f32)),
         0.0F);
+
+    constexpr f64 kOccupiedDensity = 0.004;
+    math::Double3 occupiedMinimum{1.0e300, 1.0e300, 1.0e300};
+    math::Double3 occupiedMaximum{-1.0e300, -1.0e300, -1.0e300};
 
     std::vector<f32> emissionValues;
 
@@ -407,21 +469,25 @@ void AddProceduralFieldUpload(
                         continue;
                     }
 
+                    // Tile coordinates are absolute on the world-aligned cell
+                    // grid (VolumeFieldStorage tiles start at
+                    // floor(minimum / tileSize), and the raymarch shader reads
+                    // floor(position / tileSize)), not offsets from the
+                    // domain minimum. Offsetting by the minimum only worked
+                    // for a volume centred on the origin.
+                    const math::Double3 gridAnchor = storage.GridAnchor();
                     const math::Double3 worldPosition{
-                        domain.centerMeters.x -
-                            domain.halfExtentsMeters.x +
+                        gridAnchor.x +
                         (static_cast<f64>(tile.coord.x) *
                              tileEdge +
                          static_cast<f64>(x) + 0.5) *
                             cellSize.x,
-                        domain.centerMeters.y -
-                            domain.halfExtentsMeters.y +
+                        gridAnchor.y +
                         (static_cast<f64>(tile.coord.y) *
                              tileEdge +
                          static_cast<f64>(y) + 0.5) *
                             cellSize.y,
-                        domain.centerMeters.z -
-                            domain.halfExtentsMeters.z +
+                        gridAnchor.z +
                         (static_cast<f64>(tile.coord.z) *
                              tileEdge +
                          static_cast<f64>(z) + 0.5) *
@@ -438,6 +504,18 @@ void AddProceduralFieldUpload(
                         static_cast<std::size_t>(
                             physicalIndex)] =
                                 sample.density;
+
+                    if (sample.density > kOccupiedDensity)
+                    {
+                        occupiedMinimum = {
+                            std::min(occupiedMinimum.x, worldPosition.x),
+                            std::min(occupiedMinimum.y, worldPosition.y),
+                            std::min(occupiedMinimum.z, worldPosition.z)};
+                        occupiedMaximum = {
+                            std::max(occupiedMaximum.x, worldPosition.x),
+                            std::max(occupiedMaximum.y, worldPosition.y),
+                            std::max(occupiedMaximum.z, worldPosition.z)};
+                    }
 
                     if (!emissionValues.empty() &&
                         physicalIndex <
@@ -538,6 +616,24 @@ void AddProceduralFieldUpload(
             emissionValues);
     }
 
+    if (occupiedMaximum.x >= occupiedMinimum.x)
+    {
+        // A cell centre holds density: the cloud reaches half a cell past it,
+        // and the trilinear read another half, so pad by two cells.
+        storage.SetOccupiedBounds(
+            {occupiedMinimum.x - 2.0 * cellSize.x,
+             occupiedMinimum.y - 2.0 * cellSize.y,
+             occupiedMinimum.z - 2.0 * cellSize.z},
+            {occupiedMaximum.x + 2.0 * cellSize.x,
+             occupiedMaximum.y + 2.0 * cellSize.y,
+             occupiedMaximum.z + 2.0 * cellSize.z});
+    }
+    else
+    {
+        // Nothing to draw: an empty box, so no ray enters it.
+        storage.SetOccupiedBounds({0.0, 0.0, 0.0}, {0.0, 0.0, 0.0});
+    }
+
     storage.MarkAllResidentTilesValid();
 }
 } // namespace
@@ -561,7 +657,9 @@ void UniversalVolumeRenderer::AddPasses(
     const render_graph::BufferHandle radianceLevels,
     const u32 radianceLevelCount,
     const render_graph::BufferHandle particleLightGrid,
-    const bool resetHistory)
+    const bool resetHistory,
+    const math::Float3 stellarColorTop,
+    const VolumeAtmosphereLuts& atmosphereLuts)
 {
     const auto& runtime =
         Settings(domain.object);
@@ -676,6 +774,17 @@ void UniversalVolumeRenderer::AddPasses(
          decision.representation ==
              ResolvedRepresentation::Baked);
 
+    if (ownsSharedVolumeFields)
+    {
+        // A static aggregate lays its tile grid on its own minimum corner; a
+        // live volume keeps the world-aligned grid its solver scrolls through.
+        storage.SetGridAnchor(
+            proceduralAggregate
+                ? renderDomain.centerMeters - renderDomain.halfExtentsMeters
+                : math::Double3{},
+            proceduralAggregate);
+    }
+
     if (proceduralAggregate && ownsSharedVolumeFields)
     {
         AddProceduralFieldUpload(
@@ -743,7 +852,9 @@ void UniversalVolumeRenderer::AddPasses(
         radianceLevels,
         radianceLevelCount,
         particleLightGrid,
-        resetHistory);
+        resetHistory,
+        stellarColorTop,
+        atmosphereLuts);
 }
 
 VolumeRenderDiagnostics

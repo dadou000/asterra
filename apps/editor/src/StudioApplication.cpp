@@ -78,6 +78,8 @@
 #include <orbit/studio_ui/ProjectSettingsUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewRpc.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_ui/StudioSpawn.hpp>
+#include <orbit/studio_ui/StudioVolumeCaches.hpp>
 #include <orbit/studio_ui/StudioViewContinuity.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
@@ -1434,6 +1436,13 @@ int orbit::editor_app::StudioApplication::Run(
         orbit::studio_ui::RegisterStudioRenderViewRpc(
             rpcHost.Dispatcher(),
             studioViews);
+        orbit::studio_ui::RegisterVolumeCacheRpc(
+            rpcHost.Dispatcher(),
+            studioSession);
+        orbit::studio_ui::RegisterStudioSpawnRpc(
+            rpcHost.Dispatcher(),
+            studioViews,
+            studioSession);
         orbit::studio_ui::RegisterStudioFlatMapRpc(
             rpcHost.Dispatcher(),
             studioViews);
