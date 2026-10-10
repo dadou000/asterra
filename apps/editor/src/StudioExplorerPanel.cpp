@@ -176,6 +176,7 @@ void StudioExplorerPanel::Register()
                         if (type == kPointLightType) return ToolbarIcon::PointLight;
                         if (type == kSpotLightType) return ToolbarIcon::SpotLight;
                         if (type == kVisibilityProxyType) return ToolbarIcon::Visibility;
+                        if (type == kSpawnLocationType) return ToolbarIcon::Frame;
                         if (type == kPrimitiveType) return ToolbarIcon::Box;
                         return ToolbarIcon::Procedural;
                     };
@@ -431,7 +432,8 @@ void StudioExplorerPanel::Register()
                                         kAccretionFlowCapabilityType,
                                         kPointLightType,
                                         kSpotLightType,
-                                        kVisibilityProxyType};
+                                        kVisibilityProxyType,
+                                        kSpawnLocationType};
                                     std::erase_if(
                                         addTypes,
                                         [&](const orbit::schema::TypeId type)

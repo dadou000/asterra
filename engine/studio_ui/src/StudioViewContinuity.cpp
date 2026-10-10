@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/StudioViewContinuity.hpp>
 
 #include <orbit/math/Vector.hpp>
+#include <orbit/studio_ui/StudioSpawn.hpp>
 
 #include <array>
 #include <charconv>
@@ -281,9 +282,10 @@ void StudioViewContinuity::Bind(
         lastWritten_ = SerializeViewContinuity(*pending_);
     }
 
-    // Nothing remembered: nothing to wait for, start saving straight away.
+    // Nothing remembered and no Spawn Location: nothing to wait for, start saving straight away.
     if (!pending_->pose.has_value() &&
-        !pending_->simulationMicroseconds.has_value())
+        !pending_->simulationMicroseconds.has_value() &&
+        !FindProjectSpawn(session.World().Objects()).has_value())
     {
         pending_.reset();
         restored_ = true;
@@ -307,6 +309,23 @@ bool StudioViewContinuity::TryRestore(
                 time::SimulationTime{*pending_->simulationMicroseconds});
         }
         timeApplied_ = true;
+    }
+
+    // A project that authors a Spawn Location always opens there; the
+    // remembered camera only applies to projects without one. Not ready yet
+    // (target body or terrain runtime still loading) retries until the grace
+    // period ends.
+    if (const auto spawn = FindProjectSpawn(session.World().Objects());
+        spawn.has_value())
+    {
+        try
+        {
+            return GoToSpawn(views, session, viewId_, *spawn);
+        }
+        catch (const std::exception&)
+        {
+            // A spawn without a usable position falls back to the saved pose.
+        }
     }
 
     if (!pending_->pose.has_value())

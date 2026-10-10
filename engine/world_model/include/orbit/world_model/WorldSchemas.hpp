@@ -128,6 +128,39 @@ inline constexpr schema::TypeId kVisibilityProxyType{
     .low = 0x50524f5859000001ULL
 };
 
+// Spawn Location: where Studio puts the camera when the project opens. A child
+// of a celestial body; the position is body-local like a Visibility Proxy's.
+// See docs: /editor/spawn-location.
+inline constexpr schema::TypeId kSpawnLocationType{
+    .high = 0x4f5242495453504eULL,
+    .low = 0x4c4f434154000001ULL
+};
+
+inline constexpr schema::PropertyId kSpawnLocationEnabled{
+    .high = 0x4f5242495453504eULL,
+    .low = 0x454e41424c454401ULL
+};
+
+inline constexpr schema::PropertyId kSpawnLocationPositionMeters{
+    .high = 0x4f5242495453504eULL,
+    .low = 0x504f534954494f01ULL
+};
+
+inline constexpr schema::PropertyId kSpawnLocationYawDegrees{
+    .high = 0x4f5242495453504eULL,
+    .low = 0x5941570000000001ULL
+};
+
+inline constexpr schema::PropertyId kSpawnLocationEyeHeightMeters{
+    .high = 0x4f5242495453504eULL,
+    .low = 0x4559450000000001ULL
+};
+
+inline constexpr schema::PropertyId kSpawnLocationPitchDegrees{
+    .high = 0x4f5242495453504eULL,
+    .low = 0x5049544348000001ULL
+};
+
 // Scene geometry primitive: a visible box/sphere/cylinder/capsule/plane whose
 // placement is relative to its parent object's frame. See docs/ORBIT_PRIMITIVES.md.
 inline constexpr schema::TypeId kPrimitiveType{

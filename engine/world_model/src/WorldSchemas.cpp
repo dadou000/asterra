@@ -1017,6 +1017,19 @@ void RegisterSchemas(
     });
 
     schemas.RegisterType({
+        .id = kSpawnLocationType,
+        .displayName = "Spawn Location",
+        .category = "World / Spawn",
+        .properties = {
+            {.id=kSpawnLocationEnabled,.name="Enabled",.kind=schema::PropertyKind::Boolean,.defaultValue=true},
+            {.id=kSpawnLocationPositionMeters,.name="Body-local Position",.kind=schema::PropertyKind::Vector3,.unit="m",.defaultValue=math::Double3{}},
+            {.id=kSpawnLocationEyeHeightMeters,.name="Eye Height",.kind=schema::PropertyKind::Float,.unit="m",.defaultValue=2.0,.range={.minimum=0.0}},
+            {.id=kSpawnLocationYawDegrees,.name="Yaw",.kind=schema::PropertyKind::Float,.unit="deg",.defaultValue=0.0},
+            {.id=kSpawnLocationPitchDegrees,.name="Pitch",.kind=schema::PropertyKind::Float,.unit="deg",.defaultValue=0.0,.range={.minimum=-89.0,.maximum=89.0}}
+        }
+    });
+
+    schemas.RegisterType({
         .id = kPrimitiveType,
         .displayName = "Primitive",
         .category = "Scene / Geometry",
