@@ -231,12 +231,19 @@ def known_exposure(out: pathlib.Path, scene: str):
     return json.loads(path.read_text(encoding="utf-8")).get(scene) if path.exists() else None
 
 
-def adapt_and_pin(spec: dict, scene: str, out: pathlib.Path):
+def exposure_fixed(spec: dict, scene) -> bool:
+    """Per scene override of the spec's `fixed_exposure` (default true): freeze the eye where consistency matters, let it adapt
+    where the view changes enough (a descent from orbit to the ground, day to night) that a frozen exposure would saturate."""
+    return bool(scene.get("fixed_exposure", spec.get("fixed_exposure", True))) if isinstance(scene, dict) else bool(spec.get("fixed_exposure", True))
+
+
+def adapt_and_pin(spec: dict, scene: str, out: pathlib.Path, scene_spec: dict | None = None):
     """Eye adaptation off, for comparisons: let the eye settle on the baseline's view of this scene, then freeze exposure there.
 
     Auto-exposure would otherwise compensate part of the very brightness change an A/B is looking for, and it drifts over seconds
     during a motion path. `"fixed_exposure": false` in the spec keeps the adaptation."""
-    if not spec.get("fixed_exposure", True):
+    if not exposure_fixed(spec, scene_spec if scene_spec is not None else {}):
+        unpin_exposure()   # a previous scene's pin must not linger
         return None
     unpin_exposure()
     capture_converged(out / "_exposure_tmp.png", spec.get("converge_eps", 0.08), 1.0, 30.0, spec.get("poll_step", 0.5))
@@ -267,10 +274,12 @@ def run_variant(label: str, env_vars: dict, spec: dict, exe: pathlib.Path, out: 
     (out / label).mkdir(parents=True, exist_ok=True)
     for scene in spec["scenes"]:
         set_scene(scene, radius)
-        if spec.get("fixed_exposure", True):
+        if not exposure_fixed(spec, scene):
+            unpin_exposure()
+        else:
             known = known_exposure(out, scene["name"])
             if known is None:
-                adapt_and_pin(spec, scene["name"], out)   # the baseline run: adapt, freeze, remember
+                adapt_and_pin(spec, scene["name"], out, scene)   # the baseline run: adapt, freeze, remember
             else:
                 unpin_exposure()
                 pin_exposure(known)                        # every other variant: the baseline's exposure
@@ -442,7 +451,7 @@ def run_motion_scene(spec, scene, order, baseline, radius, rounds, out, images, 
             raise RuntimeError(f"clouds.set_defines({text!r}): {reply['error']}")
 
     use(baseline)
-    adapt_and_pin(spec, name, out)
+    adapt_and_pin(spec, name, out, scene)
     print(f"  reference path for {name}: {int(motion.get('steps', 24))} converged poses", flush=True)
     reference = reference_pass(scene, motion, radius, tmp, spec)
     for r in range(rounds):
@@ -530,11 +539,13 @@ def run_in_process(spec: dict, exe: pathlib.Path, out: pathlib.Path, order: list
             run_motion_scene(spec, scene, order, baseline, radius, rounds, out, images, control, frame_rounds, motion_rounds)
             continue
         set_scene(scene, radius)
-        if spec.get("fixed_exposure", True):
+        if exposure_fixed(spec, scene):
             reply = rpc("clouds.set_defines", {"defines": variants[baseline].get("env", {}).get("ORBIT_CLOUD_DEFINES", "")})
             if reply.get("error"):
                 raise RuntimeError(f"clouds.set_defines: {reply['error']}")
-            adapt_and_pin(spec, name, out)
+            adapt_and_pin(spec, name, out, scene)
+        else:
+            unpin_exposure()
         for r in range(rounds):
             for v in (order if r % 2 == 0 else list(reversed(order))):
                 define_text = variants[v].get("env", {}).get("ORBIT_CLOUD_DEFINES", "")
