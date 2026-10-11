@@ -18,8 +18,9 @@ sources = [
   "engine/lighting/include/orbit/lighting/HybridReflectionRenderer.hpp",
   "engine/lighting/include/orbit/lighting/ReflectionScene.hpp",
   "engine/lighting/include/orbit/lighting/Visibility.hpp",
+  "engine/lighting/include/orbit/lighting/TransientLights.hpp",
 ]
-symbols = ["DirectLightingRenderer", "HybridReflectionRenderer", "ScreenSpaceFinalGatherRenderer", "RadianceClipmapConfig", "GpuRadianceCell"]
+symbols = ["TransientLightsFromFlash", "DirectLightingRenderer", "HybridReflectionRenderer", "ScreenSpaceFinalGatherRenderer", "RadianceClipmapConfig", "GpuRadianceCell"]
 invariants = [
   "Occlusion for lighting is answered through the shared visibility registry (terrain, authored proxies, analytic bodies); do not add a parallel occlusion path for one effect.",
   "The near-field indirect stack is off when the planet is seen from orbit and whenever bypass_indirect_lighting is set; fills that depend on it vanish with it.",
@@ -29,6 +30,7 @@ invariants = [
   "Lighting library sources (estimator, cell layout, shaders) hot-reload through the automatic Studio-generation handoff; embedded HLSL compiles at startup so a failed shader leaves the running generation alive.",
   "The screen-space final gather traces ONE ray per pixel (the four pixels of a 2x2 quad take four different directions) and reconstructs each pixel from its 3x3 neighbourhood in groupshared memory with depth/normal bilateral weights; per-pixel cost is therefore independent of the old four-ray budget. While the camera is still (history reusable) the sample pattern rotates every frame and the temporal weight is at least 0.94; in motion the pattern is fixed so noise does not shimmer.",
   "The gather's world-space fallback sphere-traces the corner-packed f16 distance mirror (MeshSdfScene::distanceCorners, SDF_DIST_CORNERS in SdfTraceShader.hpp), one uint4 load per step; SdfGatherInput::distance must be that mirror, not the plain f32 volume.",
+  "TransientLightsFromFlash (TransientLights.hpp) converts a DischargeGraph into at most maxLights ordinary LocalLights for one exposure window: clusters are energy-preserving (sum of flux / efficacy x exposure = graph energy in the window), flux is energy / exposure x luminousEfficacyOfRadiation (assumed 150 lm/W, then divided by the scene's 683 lm/W like any local light), range is where illuminance falls to minimumIlluminanceLux, and a 30 microsecond stroke inside a 16 ms window deposits all its energy. A 300 kJ stroke gives about 220 lux at 1 km. Cloud light injection is NOT built: only surfaces see these lights today.",
   "BuildTiledLightGrid uses flat count-then-fill arrays (no per-tile heap vectors): tiles keep the strongest lights (flux x luminance / squared camera distance, ties in submission order); when a tile overflows its last slot holds one shared proxy point light carrying the dropped lights' summed flux at their flux-weighted centroid (TiledLightGrid::proxyLights, stableId has kProxyLightIdBit), so droppedAssignments counts assignments represented by a proxy, not lost energy. TiledLightGridConfig::aggregateOverflow = false restores first-N truncation. Spot cone shaping is not preserved inside a proxy (isotropic point).",
   "The final gather's edit of the earlier invariant: it traces ONE ray per 2x2 QUAD (not per pixel). Each thread picks a pixel of its quad (a different one every frame while the camera is still), traces one ray, and every pixel of the quad is rebuilt from the 3x3 quad neighbourhood with bilinear-style spatial weights times normal/depth bilateral weights, so the tracing cost does not scale with pixel count.",
   "The gather's 3x3 reconstruction suppresses fireflies: a neighbourhood sample whose luminance exceeds 4x the weighted mean of the others (plus a small floor) is scaled down to that level before filtering, so one ray that hits a bright SDF voxel is not spread into a blob. It trades a little energy (about 2% mean frame brightness in the atrium) for removing the dominant speckle.",
@@ -41,8 +43,9 @@ verify = [
   "ctest -R Orbit.Lighting (the lighting tests registered in engine/lighting/CMakeLists.txt).",
   "orbit_view_terrain_layers_get lists every bypass_* flag; all must be false in normal use.",
   "ctest -R Orbit.LightingLocalLightRegistry (capped-tile ordering and dropped counts).",
+  "ctest -R Orbit.LightingTransientLights (energy preservation, bounded budget, tile-grid flux).",
 ]
-verified = "f842a956"
+verified = "62d3cc6"
 
 [routes]
 "cache cells, residency, dark slabs, relighting, 96-byte cell" = "radiance-cache"

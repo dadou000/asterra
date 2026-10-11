@@ -1081,6 +1081,19 @@ u32 GlassPhotonGrid(const f32 boundingRadiusMeters) noexcept
         static_cast<f32>(kMaxPhotonGrid)));
 }
 
+u32 GlassPhotonGrid(const f32 boundingRadiusMeters, const f32 screenDiameterPixels) noexcept
+{
+    const u32 sizeBased = GlassPhotonGrid(boundingRadiusMeters);
+    if (!(screenDiameterPixels > 0.0F))
+    {
+        return sizeBased;
+    }
+    const f32 wanted = std::ceil(screenDiameterPixels * static_cast<f32>(kGlassPhotonsPerPixel));
+    const u32 needed = static_cast<u32>(std::clamp(
+        wanted, static_cast<f32>(kGlassPhotonGridFloor), static_cast<f32>(kMaxPhotonGrid)));
+    return std::min(sizeBased, needed);
+}
+
 std::string BuildGlassPixelShaderSource()
 {
     return Compose({kCommon, kTrace, kScene, kGlassPixel},
@@ -1339,7 +1352,13 @@ void GlassSurfaceRenderer::DrawCaustics(
             instance.halfExtents[0] * instance.halfExtents[0] +
             instance.halfExtents[1] * instance.halfExtents[1] +
             instance.halfExtents[2] * instance.halfExtents[2]);
-        grids.push_back(GlassPhotonGrid(radius));
+        // Off screen (nullopt) keeps the full size-based budget: the caustic can still land on screen.
+        f32 screenPixels = 0.0F;
+        if (const auto rect = GlassScreenBounds(instance, camera, width, height))
+        {
+            screenPixels = static_cast<f32>(std::max(rect->right - rect->left, rect->bottom - rect->top));
+        }
+        grids.push_back(GlassPhotonGrid(radius, screenPixels));
         photonBases.push_back(photonTotal);
         photonTotal += grids.back() * grids.back();
     }

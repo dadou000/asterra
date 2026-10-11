@@ -125,6 +125,13 @@ inline constexpr u32 kGlassRecordFloats = 24U;
 // bounding radius; more for larger bodies, bounded for cost.
 [[nodiscard]] u32 GlassPhotonGrid(f32 boundingRadiusMeters) noexcept;
 
+// Photon grid for a body that covers `screenDiameterPixels` on screen: never fewer than kGlassPhotonsPerPixel photons
+// per pixel across the body (the density the size-based grid already gives at its smallest), never more than the
+// size-based grid, and not below kGlassPhotonGridFloor. screenDiameterPixels <= 0 means "unknown": the size-based grid.
+inline constexpr u32 kGlassPhotonsPerPixel = 2U;
+inline constexpr u32 kGlassPhotonGridFloor = 32U;
+[[nodiscard]] u32 GlassPhotonGrid(f32 boundingRadiusMeters, f32 screenDiameterPixels) noexcept;
+
 // Refractive glass (analytic shapes, two-sided refraction with total internal
 // reflection, Fresnel reflection, Beer-Lambert absorption) drawn over the lit
 // scene, plus photon-splatted sun caustics on the receivers behind it. Both

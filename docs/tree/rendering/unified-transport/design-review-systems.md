@@ -55,3 +55,12 @@ needs a GPU and an art decision. Hardware ray queries need an RHI change first: 
   neutralised +-390 C (unphysical, fixed with a charge budget), and a strongly charged storm held more than the budget around a single cell so flashes never started (fixed with a minimum channel
   extent and by capping the charge actually removed). Flash counts then rose monotonically with updraft (4 / 27 / 78 in 15 minutes at 8 / 18 / 30 m/s).
 - My first updraft sweep decreased with updraft because the synthetic storm held condensate fixed while only transport changed: the model was behaving, the experiment was wrong.
+
+## Finding 9: caustic photon budget followed physical size only; lightning light has a bounded path
+
+- `GlassPhotonGrid` chose 96..224 photons per side from the body's size alone, so a glass covering nine pixels still traced 9,216 photons. The new view-dependent rule keeps at least two photons
+  per pixel across the body (the density the old grid already had at its worst case), floors at 32 and never exceeds the old grid; off-screen bodies keep the full budget. Unit tests pin monotonicity,
+  bounds and the density rule. Not seen rendered.
+- `TransientLightsFromFlash` (lighting) turns a flash graph into at most N local lights per exposure window with the energy preserved, so lightning reaches surfaces through the existing tiled-light path, including its
+  overflow aggregation. A 300 kJ stroke gives about 220 lux at 1 km under the assumed 150 lm/W. Clouds cannot see these lights yet: that needs a light list bound into the cloud march, which I did not build
+  without a GPU to check descriptor layouts.
