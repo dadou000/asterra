@@ -14,60 +14,67 @@ namespace
 [[nodiscard]] std::vector<celestial_clouds::CloudRenderer::PointLight> GatherCloudPointLights(
     studio_session::StudioSession& session,
     const std::optional<universe::BodyId>& body,
-    const math::Double3& cameraPositionMeters)
+    const math::Double3& cameraPositionMeters,
+    const std::vector<lighting::LocalLight>& transientLights)
 {
     using Light = celestial_clouds::CloudRenderer::PointLight;
-    std::vector<Light> result;
-    if (!body.has_value())
+    struct Source
     {
-        return result;
+        f64 flux;
+        math::Double3 position;
+        math::Double3 color;
+        f64 score;
+    };
+    std::vector<Source> sources;
+    const auto add = [&](const f64 flux, const math::Double3& position, const math::Double3& color) {
+        if (!(flux > 0.0))
+        {
+            return;
+        }
+        const math::Double3 delta = position - cameraPositionMeters;
+        sources.push_back({flux, position, color, flux / std::max(math::Dot(delta, delta), 25.0)});
+    };
+    if (body.has_value())
+    {
+        const auto root = session.World().Universe().ObjectForBody(*body);
+        for (const auto& light : world_model::ResolveAuthoredLocalLights(session.World().Objects(), root))
+        {
+            add(light.luminousFluxLumens, light.positionMeters, light.colorLinear);
+        }
     }
-    const auto root = session.World().Universe().ObjectForBody(*body);
-    const auto authored = world_model::ResolveAuthoredLocalLights(session.World().Objects(), root);
-    if (authored.empty())
+    // Lightning and other transient emitters are ordinary local lights to the cloud march as well.
+    for (const auto& light : transientLights)
+    {
+        add(light.luminousFluxLumens, light.positionInFrameMeters,
+            {light.colorLinear.x, light.colorLinear.y, light.colorLinear.z});
+    }
+    std::vector<Light> result;
+    if (sources.empty())
     {
         return result;
     }
     constexpr f64 kLumensPerWatt = 683.0;
     constexpr f64 kFourPi = 12.566370614359172;
-    struct Scored
-    {
-        const world_model::AuthoredLocalLight* light;
-        f64 score;
-    };
-    std::vector<Scored> scored;
-    scored.reserve(authored.size());
-    for (const auto& light : authored)
-    {
-        if (!(light.luminousFluxLumens > 0.0))
-        {
-            continue;
-        }
-        const math::Double3 delta = light.positionMeters - cameraPositionMeters;
-        scored.push_back({&light, light.luminousFluxLumens / std::max(math::Dot(delta, delta), 25.0)});
-    }
-    const std::size_t kept = std::min<std::size_t>(scored.size(), celestial_clouds::CloudRenderer::kMaxPointLights - 1U);
-    std::partial_sort(scored.begin(), scored.begin() + static_cast<std::ptrdiff_t>(kept), scored.end(),
-                      [](const Scored& a, const Scored& b) { return a.score > b.score; });
+    const std::size_t kept = std::min<std::size_t>(sources.size(), celestial_clouds::CloudRenderer::kMaxPointLights - 1U);
+    std::partial_sort(sources.begin(), sources.begin() + static_cast<std::ptrdiff_t>(kept), sources.end(),
+                      [](const Source& a, const Source& b) { return a.score > b.score; });
     const auto toLight = [&](const f64 flux, const math::Double3& position, const math::Double3& color) {
         const f64 scale = flux / kLumensPerWatt / kFourPi / kStudioReferenceIrradianceWattsPerSquareMeter;
         return Light{position, {static_cast<f32>(color.x * scale), static_cast<f32>(color.y * scale), static_cast<f32>(color.z * scale)}};
     };
     for (std::size_t i = 0; i < kept; ++i)
     {
-        const auto& l = *scored[i].light;
-        result.push_back(toLight(l.luminousFluxLumens, l.positionMeters, l.colorLinear));
+        result.push_back(toLight(sources[i].flux, sources[i].position, sources[i].color));
     }
-    if (scored.size() > kept)
+    if (sources.size() > kept)
     {
         f64 flux = 0.0;
         math::Double3 centroid{}, color{};
-        for (std::size_t i = kept; i < scored.size(); ++i)
+        for (std::size_t i = kept; i < sources.size(); ++i)
         {
-            const auto& l = *scored[i].light;
-            flux += l.luminousFluxLumens;
-            centroid = centroid + l.positionMeters * l.luminousFluxLumens;
-            color = color + l.colorLinear * l.luminousFluxLumens;
+            flux += sources[i].flux;
+            centroid = centroid + sources[i].position * sources[i].flux;
+            color = color + sources[i].color * sources[i].flux;
         }
         result.push_back(toLight(flux, centroid / flux, color / flux));
     }
@@ -441,13 +448,22 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
             std::vector<celestial_clouds::CloudRenderer::PointLight> pointLights;
             if (cloudRenderer_.PointLightsEnabled())
             {
+                lighting::CameraPlacement flashPlacement;
+                flashPlacement.positionMeters = {
+                    static_cast<f64>(cloudView.cameraPositionMeters.x),
+                    static_cast<f64>(cloudView.cameraPositionMeters.y),
+                    static_cast<f64>(cloudView.cameraPositionMeters.z)};
+                flashPlacement.forward = {cloudView.forward.x, cloudView.forward.y, cloudView.forward.z};
+                flashPlacement.up = {cloudView.up.x, cloudView.up.y, cloudView.up.z};
+                const auto flashLights = TransientFlashLights(flashPlacement);
                 pointLights = GatherCloudPointLights(
                     context.session,
                     logicalTarget->target.has_value() ? std::optional<universe::BodyId>(logicalTarget->target->body) : std::nullopt,
                     math::Double3{
                         static_cast<f64>(cloudView.cameraPositionMeters.x),
                         static_cast<f64>(cloudView.cameraPositionMeters.y),
-                        static_cast<f64>(cloudView.cameraPositionMeters.z)});
+                        static_cast<f64>(cloudView.cameraPositionMeters.z)},
+                    flashLights);
             }
 
             graph.AddPass(

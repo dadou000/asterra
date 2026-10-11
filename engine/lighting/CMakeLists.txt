@@ -2,6 +2,7 @@ add_library(OrbitLighting STATIC
     src/SurfaceData.cpp
     src/LocalLightRegistry.cpp
     src/TransientLights.cpp
+    src/TransientFlashRegistry.cpp
     src/CityLightTree.cpp
     src/SurfaceDebugRenderer.cpp
     src/LightingView.cpp
@@ -73,6 +74,10 @@ if(BUILD_TESTING)
 
     add_executable(OrbitLightingTransientLightsTests
         tests/TransientLightsTests.cpp
+    )
+
+    add_executable(OrbitLightingTransientFlashRegistryTests
+        tests/TransientFlashRegistryTests.cpp
     )
 
     add_executable(OrbitLightingCityLightTreeTests
@@ -200,6 +205,14 @@ if(BUILD_TESTING)
     target_compile_features(
         OrbitLightingTransientLightsTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitLightingTransientLightsTests)
+
+    target_link_libraries(OrbitLightingTransientFlashRegistryTests
+        PRIVATE
+            Orbit::Lighting
+    )
+    target_compile_features(
+        OrbitLightingTransientFlashRegistryTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightingTransientFlashRegistryTests)
 
     target_link_libraries(OrbitLightingCityLightTreeTests
         PRIVATE
@@ -522,6 +535,11 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.LightingCityLightTree
         COMMAND OrbitLightingCityLightTreeTests
+    )
+
+    add_test(
+        NAME Orbit.LightingTransientFlashRegistry
+        COMMAND OrbitLightingTransientFlashRegistryTests
     )
 
     add_test(

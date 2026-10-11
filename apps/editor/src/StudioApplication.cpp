@@ -80,6 +80,7 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewContinuity.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
+#include <orbit/studio_ui/LightningRpc.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/SystemViewUi.hpp>
@@ -1353,6 +1354,16 @@ int orbit::editor_app::StudioApplication::Run(
             rpcHost.Dispatcher(),
             weatherLabSession,
             weatherLabView);
+
+        // Lightning flashes owned by the main viewport renderer; lit by the tiled-light pass and the cloud pass.
+        orbit::studio_ui::RegisterLightningRpc(
+            rpcHost.Dispatcher(),
+            {
+                [&studioViewportRenderer](const orbit::lighting::FlashRequest& request)
+                { return studioViewportRenderer.FireLightning(request); },
+                [&studioViewportRenderer] { return studioViewportRenderer.LightningStatus(); },
+                [&studioViewportRenderer] { studioViewportRenderer.ClearLightning(); }
+            });
 
         // Simulation transport (Simulate / Pause / Step) and time.* RPC, both
         // driving the one Studio clock that moves the planets, the sun and the

@@ -178,6 +178,15 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         });
     }
 
+    {
+        lighting::CameraPlacement placement;
+        placement.positionMeters = lightingView.cameraPositionInFrameMeters;
+        placement.forward = {lightingView.forward.x, lightingView.forward.y, lightingView.forward.z};
+        placement.up = {lightingView.up.x, lightingView.up.y, lightingView.up.z};
+        const auto flashLights = TransientFlashLights(placement);
+        localLights.insert(localLights.end(), flashLights.begin(), flashLights.end());
+    }
+
     const lighting::TiledLightGrid
         localLightGrid =
             lighting::BuildTiledLightGrid(

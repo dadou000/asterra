@@ -32,6 +32,7 @@
 #include <orbit/lighting/RepresentationLightingContinuity.hpp>
 #include <orbit/lighting/ScreenSpaceFinalGather.hpp>
 #include <orbit/lighting/SoftwareProxyVisibility.hpp>
+#include <orbit/lighting/TransientFlashRegistry.hpp>
 #include <orbit/mesh_render/EmissiveLights.hpp>
 #include <orbit/mesh_render/GlassSurface.hpp>
 #include <orbit/mesh_render/MeshLibrary.hpp>
@@ -71,6 +72,7 @@
 #include <orbit/jobs/JobSystem.hpp>
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -374,6 +376,11 @@ public:
         const shader::Compiler& compiler,
         u32 framesInFlight = 1U);
 
+    // Lightning flashes lighting the scene (RPC `lightning.*`). Thread-safe: the RPC thread fires, the render thread reads.
+    u64 FireLightning(const lighting::FlashRequest& request);
+    [[nodiscard]] std::vector<lighting::FlashStatus> LightningStatus() const;
+    void ClearLightning();
+
     // True while far terrain patches are still being built, so the host can
     // keep rendering at full rate until the view has finished refining.
     [[nodiscard]] bool HasPendingTerrainWork() const noexcept
@@ -464,6 +471,9 @@ public:
 
 private:
     void ComposeLightingPasses(StudioLightingPassContext& context);
+    // Lights of the flashes alive now, in the lighting frame. Both the tiled-light pass and the cloud pass call this.
+    [[nodiscard]] std::vector<lighting::LocalLight> TransientFlashLights(const lighting::CameraPlacement& camera);
+    [[nodiscard]] static f64 FlashClockSeconds();
     void ComposeAtmospherePasses(StudioLightingPassContext& context);
 
 
@@ -710,6 +720,8 @@ private:
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     celestial_atmosphere::AtmosphereRenderer atmosphereRenderer_;
     celestial_clouds::CloudRenderer cloudRenderer_;
+    mutable std::mutex transientFlashMutex_;
+    lighting::TransientFlashRegistry transientFlashes_;
     editor_ui::PathPreviewRenderer pathRenderer_;
     SurfaceVolumeDebugRenderer surfaceVolumeDebugRenderer_;
     volume_render::UniversalVolumeRenderer universalVolumeRenderer_;

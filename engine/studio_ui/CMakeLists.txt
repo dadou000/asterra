@@ -22,6 +22,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioSurfacePicking.cpp
     src/StudioTerrainDiagnosticOverlayGeometry.cpp
     src/StudioTerrainOverlayGeometry.cpp
+    src/LightningRpc.cpp
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
@@ -391,6 +392,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioViewContinuity
         COMMAND OrbitStudioViewContinuityTests
+    )
+
+    add_executable(OrbitLightningRpcTests
+        tests/LightningRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitLightningRpcTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitLightningRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitLightningRpcTests)
+
+    add_test(
+        NAME Orbit.LightningRpc
+        COMMAND OrbitLightningRpcTests
     )
 
     add_executable(OrbitWeatherLabRpcTests

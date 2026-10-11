@@ -32,6 +32,39 @@ namespace
 }
 } // namespace
 
+f64 StudioViewportRenderer::FlashClockSeconds()
+{
+    return std::chrono::duration<f64>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+u64 StudioViewportRenderer::FireLightning(const lighting::FlashRequest& request)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    return transientFlashes_.Fire(request, FlashClockSeconds());
+}
+
+std::vector<lighting::FlashStatus> StudioViewportRenderer::LightningStatus() const
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    return transientFlashes_.Status(FlashClockSeconds());
+}
+
+void StudioViewportRenderer::ClearLightning()
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    transientFlashes_.Clear();
+}
+
+std::vector<lighting::LocalLight> StudioViewportRenderer::TransientFlashLights(const lighting::CameraPlacement& camera)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    if (transientFlashes_.Empty())
+    {
+        return {};
+    }
+    return transientFlashes_.LightsForWindow(FlashClockSeconds(), camera, lighting::TransientLightParams{});
+}
+
 StudioViewportRenderer::StudioViewportRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler,

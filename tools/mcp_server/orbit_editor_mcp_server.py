@@ -1074,6 +1074,50 @@ def orbit_weather_lab_slice(
 
 
 @mcp.tool()
+def orbit_lightning_fire(
+    distance_m: float | None = None,
+    lateral_m: float | None = None,
+    height_m: float | None = None,
+    energy_j: float | None = None,
+    strokes: int | None = None,
+    stroke_spacing_s: float | None = None,
+    seed: int | None = None,
+    base_m: list[float] | None = None,
+) -> dict[str, Any]:
+    """Fire one lightning flash that lights the scene (and the clouds when the
+    viewport runs with ORBIT_CLOUD_POINT_LIGHTS=1). By default the channel stands
+    distance_m (3000) ahead of the camera and lateral_m to its right, rising
+    height_m (6000); pass base_m=[x, y, z] in the lighting frame to place it
+    absolutely. energy_j is the optical energy (3e5), strokes 1-8 (3). The flash
+    lasts about 0.25 s after its last stroke, so capture a screenshot right
+    after firing. Returns the flash id."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "distance_m": distance_m, "lateral_m": lateral_m,
+            "height_m": height_m, "energy_j": energy_j, "strokes": strokes,
+            "stroke_spacing_s": stroke_spacing_s, "seed": seed,
+            "base_m": base_m,
+        }.items()
+        if value is not None
+    }
+    return _rpc("lightning.fire", params)
+
+
+@mcp.tool()
+def orbit_lightning_status() -> dict[str, Any]:
+    """Live lightning flashes: id, whether a frame has resolved the position,
+    age, time left and base position."""
+    return _rpc("lightning.status")
+
+
+@mcp.tool()
+def orbit_lightning_clear() -> dict[str, Any]:
+    """Remove every live lightning flash."""
+    return _rpc("lightning.clear")
+
+
+@mcp.tool()
 def orbit_weather_lab_view(
     source: str | None = None,
     plan_field: str | None = None,
