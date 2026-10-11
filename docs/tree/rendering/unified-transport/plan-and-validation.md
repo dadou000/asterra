@@ -57,4 +57,28 @@ supercell lightning; 300 km storm complex with secondary discharges (bounded wor
 glass sphere versus window; caustics under stable sunlight; extreme timewarp across weather systems (no backlog, deterministic); camera cut and
 floating-origin transition (cache ownership and invalidation).
 
+## Scenario status (2026-10-11, HEAD 8a4a98db; on-screen unless noted)
+
+| # | Scenario | Status |
+| --- | --- | --- |
+| 1 | Orbit-to-ground descent through clouds | Partly: 1590 km to 6 km keeps the same clouds with the filtered far field (`/rendering/unified-transport/design-review`). Not run through a deck. |
+| 2 | Cumulonimbus from several angles | Not run. |
+| 3 | Hidden cloud shadows a visible one | By construction only: light-volume voxels are pure functions of position and sun. Not run with two clouds. |
+| 4 | Sun behind a mountain above the astronomical horizon | Not run. |
+| 5 | Two stars | Gap in code: `DominantDirectLightingAtBody` keeps only the strongest emitter, and every pass reads one `directionBody`. |
+| 6 | Night city under overcast | Gap: `CityLightTree` is not on the live light path and the world has no city content. |
+| 7 | Humid clear vs dusty dry | Gap: aerosol growth (`HygroscopicGrowthFactor`) has no consumer; haze is the fixed Mie profile. |
+| 8 | Internal supercell lightning | Partly: authored and flash lights reach the cloud march (checked in a daytime cloud); the night look is not verified. |
+| 9 | 300 km storm complex, bounded workload | Not run; the cloud pass takes at most 16 lights. |
+| 10 | Strong inversion mirage | Gap: only the planetary sun/sky table exists. |
+| 11 | Thick glass sphere vs window | Gap: no thin-pane path. |
+| 12 | Caustics under stable sun | Partly: compute pre-pass exists; no photon reuse across frames. |
+| 13 | Extreme timewarp | **Pass.** Same absolute time gives the same image in two launches (0.03/255 at +30 days, +1 year, +10 years), different times give different weather (21 to 47/255 apart), frame time stays 6 to 11 ms after a 10-year jump (`tools/ab_specs/timewarp.json`). The first scene after launch needs the weather pre-spin (about 45 s). |
+| 14 | Camera cut and floating origin | Partly: after a 1590 km to 25 km jump the frame is 13.6/255 from converged at 1 s and 0.07 at 8 s, identical with the light volume off, so it is not the volume; the cause is not isolated. |
+
+Corrections table: the glass "backdrop copy when no glass is visible" item is not a gap. With the glass sphere out of view none of the glass passes
+appear in the GPU pass list (they are culled with the instances). The Clouds march is the dominant frame cost in sky views (about 9 of 13 ms in a
+single profiler snapshot). Changing its step constants does not help without thinning distant clouds (review `R-20261011-181752-8a4a98db`);
+the spec's hierarchical empty-space skipping is the way to cut it.
+
 Measure per-pass GPU time, density evaluations, ray steps, BVH visits, cache-hit ratios, invalidated bricks, memory traffic and background compute.
