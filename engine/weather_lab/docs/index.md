@@ -55,8 +55,8 @@ verified = "f4a2dc6"
 
 [routes]
 "how the experiment was run, results, what is next" = "sc01"
-"global weather system plan, tiers, cloud layers, role of CM1" = "global-system-plan"
-"global weather phases, gates, timewarp, open decisions" = "global-system-phases"
+"storm domain plan: 500 km nested domain, cell budget, cloud layers, role of CM1" = "global-system-plan"
+"storm domain phases, gates, timewarp, open decisions" = "global-system-phases"
 +++
 
 The weather lab exists to answer one question before any weather is integrated into Orbit: how much of a CM1 supercell survives
