@@ -12,14 +12,16 @@ surfaces and clouds their reddened sunlight, and the sky view is projected to sp
 Authoring (pressure/composition -> coefficients) is a separate provenance-aware solver in world_model."""
 keywords = ["atmosphere", "sky", "scattering", "rayleigh", "mie", "transmittance", "limb", "aerial perspective", "haze", "sunset", "atmosphere capability", "bypass_atmosphere"]
 sources = [
+  "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/AtmosphereRefraction.hpp",
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/Atmosphere.hpp",
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/AtmosphereRenderer.hpp",
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/SkyIrradiance.hpp",
   "engine/world_model/include/orbit/world_model/CelestialAtmosphereBinding.hpp",
   "engine/studio_ui/src/StudioViewportRenderer.cpp",
 ]
-symbols = ["AtmosphereParameters", "AtmosphereRenderer", "GpuAtmosphereLuts", "ResolveAtmosphereBody", "SunTransmittanceAt"]
+symbols = ["RefractDirection", "AtmosphereParameters", "AtmosphereRenderer", "GpuAtmosphereLuts", "ResolveAtmosphereBody", "SunTransmittanceAt"]
 invariants = [
+  "AtmosphereRefraction.hpp derives refraction from AtmosphereParameters alone: radius = bottomRadiusMeters, scale height = rayleighScaleHeightMeters, surface refractivity = 2.78e-4 x (green Rayleigh scattering / 13.558e-6), which assumes an Earth-like gas (Rayleigh ~ N a^2, refractivity ~ N a). RefractDirection rotates a true direction toward the local vertical by the table's bending in the vertical plane; an object hidden even after refraction, an observer in space or a ducting atmosphere get the true direction back. NOTHING CALLS IT YET: the sun direction (ResolveStudioDirectLight, body-level) is observer independent, so refraction must be applied once in StudioViewportRenderer after the observer is known and every consumer (direct light, proxy sun shadow, glass, SunTransmittanceAt's cos zenith, sky and Sun disc) must read that one refracted direction; refracting at a single call site leaves shadows and the disc up to 0.5 degrees off the light near the horizon.",
   "The Atmosphere capability is the only persistent atmosphere authority: there is exactly one enabled Physical Scattering capability per body (duplicates are rejected) and ResolveAtmosphereBody maps it to AtmosphereParameters. Do not add a second atmosphere representation or cache.",
   "Nothing Earth-specific is baked into the runtime: body radius, atmosphere radius, density profiles, scattering coefficients and LUT resolutions are explicit inputs (the struct defaults are only an Earth-like starting point).",
   "The body reference radius is the lower atmosphere boundary; altitude is measured from bottomRadiusMeters.",
@@ -36,7 +38,7 @@ verify = [
   "ctest -R Orbit.CelestialAtmosphere (Atmosphere and SkyIrradiance tests), Orbit.CelestialAtmosphereBinding and Orbit.AtmospherePropertySolver.",
   "orbit_view_terrain_layers_set(bypass_atmosphere=true): the sky, haze and limb disappear; restoring false brings them back without a restart.",
 ]
-verified = "1229ef74"
+verified = "e9932bc"
 
 [routes]
 "how the LUTs are built, fingerprints, what invalidates what, sky view, limb" = "lut-pipeline"

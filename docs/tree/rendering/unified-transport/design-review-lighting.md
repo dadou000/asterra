@@ -49,5 +49,8 @@ verified = "6614c30"
   Derived facts reproduced: horizon refraction ~35 arcminutes, a setting Sun ~15 percent flattened, horizon dip reduced by ~7 percent. My first guess in the header, "0.4-0.6 flattening", was wrong; the numbers corrected it.
 - Bug found by running other planets: a Venus-class atmosphere (gradient steeper than the planet's curvature) traps horizon rays; the table now reports ducting instead of producing nonsense. An earlier version also used `acos`
   instead of `asin` for the grazing-ray angle and silently truncated every row at the horizon.
+- Also built: `celestial_atmosphere::RefractionAtmosphereFor / RefractionTableFor / RefractDirection` derive the table from `AtmosphereParameters` (no new authored property) and rotate a true direction to the
+  apparent one (a sun 0.3 degrees below the horizon is still seen; 1 degree below is not; a Venus-class atmosphere returns the true direction). Wiring hazard found while preparing it: `directionBody` is body-level and
+  observer independent, while refraction depends on the local vertical, so it must be applied once after the observer is known and read by every consumer, or shadows and the disc disagree with the light.
 - Not done: nothing consumes the table yet. Wiring the apparent Sun direction into the sun disc, shadows and the atmosphere LUT, and exposing surface refractivity as an authored/derived atmosphere property
   (which needs a schema property and RPC/MCP parity), are the next steps.
