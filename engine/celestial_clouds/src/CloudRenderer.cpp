@@ -115,6 +115,12 @@ static float gCloudDistance = 1.0e9;
 #ifndef CLOUD_EMPTY_SKIP
 #define CLOUD_EMPTY_SKIP 4.0
 #endif
+// 1: once a sample's footprint has saturated the far-field blend (baseBlend = 1) the point-sampled noise shape is not
+// used any more (the filtered table replaces it), so skip those noise fetches and use the noise mean for the one
+// remaining dependence, the height variation of the cloud top. 0 = the shipped path.
+#ifndef CLOUD_FAR_EARLYOUT
+#define CLOUD_FAR_EARLYOUT 0
+#endif
 static const uint kMaxSteps = uint(CLOUD_MAX_STEPS);
 // Transmittance below which the march stops and the pixel counts as opaque.
 static const float kOpaqueCutoff = 0.004;
@@ -466,9 +472,14 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
     // limit); fading from 0.5 cells left features right at the limit, which showed as a regular
     // lattice of pebbles (strongest from orbit, where one march pixel spans ~900 m).
     const float baseBlend = SmoothRange(0.2, 0.9, footprint / baseFeature);
-    float baseMix =
-        0.6 * SampleNoise(shapePosition / kBaseVoxelMeters).r +
-        0.4 * SampleNoise(rotated / (kBaseVoxelMeters * 2.6) + 5.0).r;
+#if CLOUD_FAR_EARLYOUT
+    const bool farMean = baseBlend >= 1.0;
+#else
+    const bool farMean = false;
+#endif
+    float baseMix = farMean ? 0.5 :
+        (0.6 * SampleNoise(shapePosition / kBaseVoxelMeters).r +
+         0.4 * SampleNoise(rotated / (kBaseVoxelMeters * 2.6) + 5.0).r);
     const float coarseMix = baseMix;   // without the billow octave (the anvil uses this)
     // Billow octave (cells of 0.4-1.7 km): lobes on the silhouette, so towers read as
     // cauliflower instead of smooth columns. Filtered out once a pixel covers them.
@@ -521,7 +532,7 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         // eat its interior), so the silhouette is lumpy at 200-800 m. Without this a
         // small cloud is a smooth blob wherever the base noise has a single peak.
         float erosionValue = 0.5;
-        if (detailAmount > 0.0)
+        if (detailAmount > 0.0 && !farMean)
         {
             const float4 d0 = SampleNoise(rotated / detailMeters + 17.0);
             erosionValue = 0.5 * d0.g + 0.3 * d0.b + 0.2 * d0.a;
