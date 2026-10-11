@@ -1,6 +1,7 @@
 #include "StudioViewportInternals.hpp"
 #include "StudioViewportPrimitives.hpp"
 
+#include <orbit/celestial_atmosphere/AtmosphereRefraction.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 
 #include <algorithm>
@@ -10,6 +11,26 @@
 namespace orbit::studio_ui
 {
 using namespace viewport_detail;
+
+namespace
+{
+// ORBIT_REFRACT_SUN=1 turns on atmospheric refraction of the sun direction (applied where studioDirectLight is resolved). Read once.
+[[nodiscard]] bool RefractSunEnabled()
+{
+    static const bool enabled = [] {
+        char* value = nullptr;
+        std::size_t length = 0;
+        bool on = false;
+        if (_dupenv_s(&value, &length, "ORBIT_REFRACT_SUN") == 0 && value != nullptr)
+        {
+            on = value[0] == '1';
+            std::free(value);
+        }
+        return on;
+    }();
+    return enabled;
+}
+} // namespace
 
 StudioViewportRenderer::StudioViewportRenderer(
     rhi::Device& device,
@@ -1169,6 +1190,45 @@ StudioViewportRenderer::ComposeBase(
                     (north * std::cos(azimuth) + east * std::sin(azimuth)) * std::cos(elevation);
                 studioDirectLight.directionBody = {
                     static_cast<f32>(sun.x), static_cast<f32>(sun.y), static_cast<f32>(sun.z)};
+            }
+        }
+
+        // ORBIT_REFRACT_SUN=1 (read once, default off): the sun is seen, lit and shadowed along its APPARENT direction,
+        // lifted toward the observer's zenith by atmospheric refraction (about 29 arcminutes at the horizon, so a sunset
+        // lasts a few minutes longer and the disc sits higher). directionBody is the single sun direction every consumer
+        // below reads (atmosphere pass and sky, direct light, proxy shadow, glass, clouds), so refracting it once here
+        // keeps them consistent. Uses the previous frame's atmosphere presentation for the parameters, so the first frame
+        // is unrefracted; skipped under the cloud-lab sun override and for observers outside the atmosphere.
+        if (RefractSunEnabled() && studioDirectLight.direct.has_value() &&
+            !(info.layers.cloudLab.enabled && info.layers.cloudLab.overrideSun))
+        {
+            if (const auto presentation = atmospherePresentations_.find(info.id);
+                presentation != atmospherePresentations_.end())
+            {
+                const auto& parameters = presentation->second.parameters;
+                const math::Double3 position = view->Camera().localPositionMeters;
+                const f64 radius = math::Length(position);
+                const f64 altitude = radius - parameters.bottomRadiusMeters;
+                if (radius > 1.0 && altitude >= 0.0 &&
+                    altitude < parameters.topRadiusMeters - parameters.bottomRadiusMeters)
+                {
+                    const math::Double3 trueDirection = math::Normalize(math::Double3{
+                        static_cast<f64>(studioDirectLight.directionBody.x),
+                        static_cast<f64>(studioDirectLight.directionBody.y),
+                        static_cast<f64>(studioDirectLight.directionBody.z)});
+                    const auto apparent = celestial_atmosphere::RefractDirection(
+                        celestial_atmosphere::RefractionTableFor(parameters),
+                        position / radius,
+                        trueDirection,
+                        altitude);
+                    if (apparent.visible)
+                    {
+                        studioDirectLight.directionBody = {
+                            static_cast<f32>(apparent.direction.x),
+                            static_cast<f32>(apparent.direction.y),
+                            static_cast<f32>(apparent.direction.z)};
+                    }
+                }
             }
         }
 

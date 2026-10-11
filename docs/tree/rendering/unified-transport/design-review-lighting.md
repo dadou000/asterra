@@ -52,7 +52,8 @@ verified = "6614c30"
 - Also built: `celestial_atmosphere::RefractionAtmosphereFor / RefractionTableFor / RefractDirection` derive the table from `AtmosphereParameters` (no new authored property) and rotate a true direction to the
   apparent one (a sun 0.3 degrees below the horizon is still seen; 1 degree below is not; a Venus-class atmosphere returns the true direction). Wiring hazard found while preparing it: `directionBody` is body-level and
   observer independent, while refraction depends on the local vertical, so it must be applied once after the observer is known and read by every consumer, or shadows and the disc disagree with the light.
-- Not done: nothing consumes the table yet. Wiring the apparent Sun direction into the sun disc, shadows and the atmosphere LUT, and exposing surface refractivity as an authored/derived atmosphere property
+- Wired (opt-in, unverified on screen): `ORBIT_REFRACT_SUN=1` refracts `studioDirectLight.directionBody` once in `StudioViewportRenderer`; every consumer I could find reads that struct, so the sky, light, shadow, glass and clouds agree.
+- Not done: the sun disc drawn by the far-body pass (from orbit) is not refracted, and nothing verifies the look. Wiring the apparent Sun direction into the sun disc, shadows and the atmosphere LUT, and exposing surface refractivity as an authored/derived atmosphere property
   (which needs a schema property and RPC/MCP parity), are the next steps.
 
 ## Finding 12: the timewarp invariant already holds; the weather map just runs fast
