@@ -1,0 +1,326 @@
+{
+ "id": "R-20261011-183129-a98d6125",
+ "rubric": "v1",
+ "council": {
+  "title": "Cloud far-field early-out: replicate with launch order reversed (default-on build vs old noise path)",
+  "question": "Does the early-out keep its saving when the new path is launched first and the old path second, so launch-order drift works against it?",
+  "chosen": "new_default",
+  "verdict": "Confirmed. With the order reversed the early-out is still faster where far samples dominate: orbit deck 12.70 ms vs 13.91 for the old path (a repeat of the new path measured 11.73), cumulus_far 17.28 vs 18.92 (repeat 18.02); neutral in sky_cumulus (16.73 vs 16.58, repeat 15.97) and orbit_400km (16.81 vs 16.96, repeat 16.18). The image difference is the same tiny size as in the first run (orbit deck 0.16/255 mean with 314 pixels over 12, 400 km 0.12 with 121) and invisible. Keep CLOUD_FAR_EARLYOUT=1 as the default; the old path stays one define away.",
+  "lenses": [
+   {
+    "name": "Ruthless Shader Artist",
+    "findings": "No visible change in any of the four scenes, same as the first run.",
+    "ratings": {
+     "new_default": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "reference quality"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "clean"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "natural"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "none seen in stills"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "horizon bank intact"
+      ]
+     },
+     "old_noise": {
+      "shape_fidelity": [
+       8,
+       "medium",
+       "indistinguishable"
+      ],
+      "lighting": [
+       8,
+       "medium",
+       "same"
+      ],
+      "colour_exposure": [
+       8,
+       "medium",
+       "same"
+      ],
+      "artifacts": [
+       8,
+       "medium",
+       "same"
+      ],
+      "scale_depth": [
+       8,
+       "medium",
+       "same"
+      ]
+     }
+    }
+   },
+   {
+    "name": "GPU Engineer",
+    "findings": "The saving appears in the views where most samples are far (orbit, long horizon rays) and is unresolved against drift where samples are mostly near. Machine drift in this session was larger (16 to 17 ms frames against 12 to 13 ms earlier) and went the other way with launch order, which is why a reversed-order replicate was worth running. Whole-frame time only."
+   },
+   {
+    "name": "Minimalist / Anti-Overengineering Guardian",
+    "findings": "Two independent runs in opposite launch orders agree; a few lines, no new state. Accept as the default."
+   }
+  ],
+  "disagreements": [],
+  "hypotheses": [
+   "The remaining Clouds cost in orbit is the second extinction evaluation and the sun optical depth per far sample, and the marching of far empty columns (untested)."
+  ],
+  "verified_facts": [
+   "Reversed-order replicate: early-out faster in orbit_deck (-1.2 ms vs the old path) and cumulus_far (-1.6 ms), neutral elsewhere; image differences 0.07 to 0.16/255 mean."
+  ],
+  "open_issues": [
+   "Whole-frame time only; no per-pass timer.",
+   "Stills cannot show temporal stability.",
+   "No storm or dense-deck scene."
+  ],
+  "recommended_changes": [
+   "Keep the early-out default on.",
+   "Next saving: cheaper far samples beyond the noise (sun depth, second extinction) and hierarchical skipping of far empty columns."
+  ],
+  "completed_changes": [
+   "CLOUD_FAR_EARLYOUT default flipped to 1.",
+   "tools/ab_specs/cloud_far_early_replicate.json."
+  ]
+ },
+ "run": {
+  "baseline": "new_default",
+  "seconds": 2.5,
+  "provenance": {
+   "commit": "a98d6125a5e13188dbb331e10fcb59bb5027905d",
+   "branch": "0.1.1-Harmony",
+   "dirty_files": [],
+   "exe": "C:\\Users\\david\\Documents\\GitHub\\asterra\\Orbit.exe",
+   "exe_sha256": "3c0485f1c75a38dd7bc54e9264f398e451a62527d962e07ef4e32a4d955def0a",
+   "exe_mtime": "2026-10-11 18:27:55",
+   "gpu": "NVIDIA GeForce RTX 4090",
+   "date": "2026-10-11 18:31:28"
+  },
+  "variants": {
+   "new_default": {},
+   "old_noise": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_FAR_EARLYOUT=0"
+   }
+  },
+  "spec": {
+   "_comment": "Replicate of cloud_far_early with the launch order reversed: the default build (early-out on) is launched first, the old noise path second, so the upward launch-order drift now works against the new path. Needs the default-on build.",
+   "world": "Worlds/Main.orbitworld",
+   "body": "Earth",
+   "baseline": "new_default",
+   "controls": 1,
+   "variants": {
+    "new_default": {
+     "env": {}
+    },
+    "old_noise": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_FAR_EARLYOUT=0"
+     }
+    }
+   },
+   "scenes": [
+    {
+     "name": "sky_cumulus",
+     "time_microseconds": 18070405751,
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 20
+     }
+    },
+    {
+     "name": "cumulus_far",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 0,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "orbit_deck",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 1500
+     }
+    },
+    {
+     "name": "orbit_400km",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 400
+     }
+    }
+   ],
+   "project": "x"
+  },
+  "scenes": {
+   "sky_cumulus": {
+    "noise": [
+     {
+      "mean": 0.0787,
+      "max": 40.0,
+      "px_over": 113
+     }
+    ],
+    "variants": {
+     "old_noise": {
+      "mean": 0.0721,
+      "max": 41.0,
+      "px_over": 94
+     }
+    },
+    "frame_ms": {
+     "new_default": 16.73,
+     "old_noise": 16.58
+    },
+    "frame_ms_drift": [
+     -0.76
+    ],
+    "image_sha256": {
+     "new_default": "c8dec406f11b28da462a8df8d3f872090899c669fdec555efb2ecda103d0b1b3",
+     "old_noise": "72ba039e7ffbd3e47bc140d81a3d429a27ff54a8b40cb41e830495fd7aab2197"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_far": {
+    "noise": [
+     {
+      "mean": 0.0743,
+      "max": 26.0,
+      "px_over": 222
+     }
+    ],
+    "variants": {
+     "old_noise": {
+      "mean": 0.0716,
+      "max": 28.0,
+      "px_over": 168
+     }
+    },
+    "frame_ms": {
+     "new_default": 17.28,
+     "old_noise": 18.92
+    },
+    "frame_ms_drift": [
+     0.74
+    ],
+    "image_sha256": {
+     "new_default": "437a1e4f83a252bf31620192dd9f367e83d53340b955b88d991456deee08d4a8",
+     "old_noise": "c0fead227bd71920780a5647557f5b5e9125dade94a2fc0a1627b8cfe3462996"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_deck": {
+    "noise": [
+     {
+      "mean": 0.0343,
+      "max": 52.0,
+      "px_over": 270
+     }
+    ],
+    "variants": {
+     "old_noise": {
+      "mean": 0.1612,
+      "max": 44.0,
+      "px_over": 314
+     }
+    },
+    "frame_ms": {
+     "new_default": 12.7,
+     "old_noise": 13.91
+    },
+    "frame_ms_drift": [
+     -0.97
+    ],
+    "image_sha256": {
+     "new_default": "f9f6d8b232a7e89f16a8afd614a8f2e8665022062ff4d34cc3f0055f0122c338",
+     "old_noise": "c325ce8cb1e0f7c2ffa3774790c7073f8291ecb7f695cb446f740ddfde3d8a4b"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_400km": {
+    "noise": [
+     {
+      "mean": 0.0369,
+      "max": 23.0,
+      "px_over": 22
+     }
+    ],
+    "variants": {
+     "old_noise": {
+      "mean": 0.1213,
+      "max": 28.0,
+      "px_over": 121
+     }
+    },
+    "frame_ms": {
+     "new_default": 16.81,
+     "old_noise": 16.96
+    },
+    "frame_ms_drift": [
+     -0.63
+    ],
+    "image_sha256": {
+     "new_default": "cfe2040a1a787b00b75ad507db41e8a5c5a3228b9af8cb4fa172a9c59c1b073b",
+     "old_noise": "7bc3706fe8bfdf9e11ac5d5ba3923203622ccc1fd5532b4d57591debb090de69"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   }
+  }
+ },
+ "images": "full-resolution PNGs stay outside git (see run.scenes[*].image_sha256 and the capture folder at C:\\Users\\david\\AppData\\Local\\Temp\\claude\\C--Users-david-Documents-GitHub-asterra\\8929e869-7edf-4e5e-9d35-85da2894e8c6\\scratchpad\\ab_early_rep); sheet.png here is a downscaled contact sheet (top row variants, bottom row 5x difference vs baseline)"
+}
