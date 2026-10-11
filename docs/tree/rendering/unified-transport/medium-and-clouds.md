@@ -24,8 +24,8 @@ invariants = [
 
 ## Implementation status
 
-Done (CPU, opt-in on GPU): the far-field bias is measured and `CloudFarField` plus `TransmittanceStats` replace the coverage blend behind `ORBIT_CLOUD_FILTERED_FAR`
-(default off, see `/rendering/unified-transport/design-review`). `OpticalHierarchy` and the kappa-Kohler aerosol growth exist in `/rendering/unified-transport/core` with
+Done (CPU, on by default on GPU): the far-field bias is measured and `CloudFarField` plus `TransmittanceStats` replace the coverage blend by default
+(on; `ORBIT_CLOUD_FILTERED_FAR=0` restores the old far field, see `/rendering/unified-transport/design-review`). `OpticalHierarchy` and the kappa-Kohler aerosol growth exist in `/rendering/unified-transport/core` with
 no renderer consumer. Not done: the shared `SampleMedium` service, humidity-driven haze in the atmosphere passes, removal of the cloud's private aerial perspective,
 the camera-independent light volume, the sample-jitter repair and any curved 2D / 2.5D cloud form.
 

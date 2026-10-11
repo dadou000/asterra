@@ -73,13 +73,13 @@ buffer layout are unchanged because a proxy is an ordinary entry; spot cone shap
 
 ## Integration status of Finding 2
 
-Implemented behind `ORBIT_CLOUD_FILTERED_FAR=1` (default off, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the
+Implemented and now the default (`ORBIT_CLOUD_FILTERED_FAR=0` restores the old blend and fade, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the
 cloud noise using `TransmittanceStats`, the shader blends to it by `baseBlend`, and all four `Extinction()` callers pass their step length. Verified: the three
 shader variants compile with `glslangValidator` with the flag off and on; the table builder and the CPU twin of the shader lookup pass
 `CloudFarFieldTests` (off-lattice error 0.012 against an independent estimate). Verified on screen (2026-10-11, same camera and sim time, flag off vs on; a second flag-off launch differed by 0.03/255, on vs off by 26/255): from 1590 km and 400 km the old
 near-complete grey overcast becomes sparse cloud over clear sea with a sun glint; the two images converge at 100 km (mean difference 4.7/255) and are identical at 25 km and 6 km (0.31, 0.01). So the shipping far field was
 the source of the thin-haze overcast, as Finding 1 predicts. Still not verified: the HLSL lookup numerically (only
-the CPU twin), frame time, and whether `gStep` is the right K for the god-ray march. Turning it on removes the old thin-haze look from orbit by design, which needs an art decision.
+the CPU twin), frame time, and whether `gStep` is the right K for the god-ray march. The default was flipped after this check: frame time showed no measurable cost (on/off within 1 ms at 400, 100 and 25 km, two interleaved rounds), and a fresh launch with no flag renders identically to the earlier flag-on images (0.04/255) while `=0` matches the old images (0.03/255). The old thin-haze look from orbit is gone by design; still to do: remove the old blend and fade code once nobody needs the A/B switch.
 
 ## Not yet done
 

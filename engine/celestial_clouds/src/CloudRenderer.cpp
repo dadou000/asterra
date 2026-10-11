@@ -2185,16 +2185,17 @@ CloudRenderer::CloudRenderer(
     const shader::Compiler& compiler)
     : device_(&device)
 {
-    // ORBIT_CLOUD_FILTERED_FAR=1 replaces the far-field shape blend and density fade with the footprint-filtered
-    // transmittance table (see CloudFarField.hpp). Off by default until it has been reviewed on screen.
+    // The footprint-filtered transmittance table (see CloudFarField.hpp) replaces the far-field shape blend and density
+    // fade, so a cloud keeps its extent at any distance. On by default (checked on screen against the old far field);
+    // ORBIT_CLOUD_FILTERED_FAR=0 restores the old blend and fade for A/B comparison.
     const auto noise = BakeCloudNoise();
-    bool filteredFar = false;
+    bool filteredFar = true;
     {
         char* flag = nullptr;
         std::size_t flagLength = 0;
         if (_dupenv_s(&flag, &flagLength, "ORBIT_CLOUD_FILTERED_FAR") == 0 && flag != nullptr)
         {
-            filteredFar = flag[0] == '1';
+            filteredFar = flag[0] != '0';
             std::free(flag);
         }
     }
