@@ -388,6 +388,48 @@ void StudioViewportPanel::Register()
                           primaryView->DisplayColor(),
                           imageSize);
 
+                // Cloud split view: a draggable divider with an A / B label either side. While it is grabbed the press is not a
+                // selection click.
+                if (studioViewportRenderer.CloudSplitEnabled())
+                {
+                    const orbit::f32 shownWidth = scaledRender ? available.width : imageSize.width;
+                    const orbit::f32 shownHeight = scaledRender ? available.height : imageSize.height;
+                    const orbit::f32 dividerX = studioViewportRenderer.CloudSplitPosition() * shownWidth;
+                    const auto pointer = context.LastItemPointer();
+                    if (pointer.pressed && std::fabs(pointer.position.x - dividerX) < 10.0F)
+                    {
+                        cloudSplitGrabbed = true;
+                    }
+                    if (!pointer.down)
+                    {
+                        cloudSplitGrabbed = false;
+                    }
+                    if (cloudSplitGrabbed && shownWidth > 1.0F)
+                    {
+                        (void)studioViewportRenderer.SetCloudSplit(
+                            true,
+                            studioViewportRenderer.CloudSplitDefines(),
+                            std::clamp(pointer.position.x / shownWidth, 0.02F, 0.98F));
+                        interaction.clicked = false;
+                        interaction.doubleClicked = false;
+                    }
+                    const auto shorten = [](const std::string& text)
+                    {
+                        return text.empty() ? std::string("shipped") : text.substr(0, 56);
+                    };
+                    const orbit::math::Float4 handle{1.0F, 1.0F, 1.0F, cloudSplitGrabbed ? 1.0F : 0.85F};
+                    const std::array<orbit::editor_ui::OverlayDisc, 1> grip{
+                        orbit::editor_ui::OverlayDisc{{dividerX, shownHeight * 0.5F}, 7.0F, handle, true}};
+                    context.OverlayShapesOnLastItem({}, grip);
+                    context.OverlayLabelOnLastItem(
+                        {8.0F, std::max(shownHeight - 30.0F, 0.0F)}, {1.0F, 1.0F, 1.0F, 1.0F},
+                        "A  " + shorten(studioViewportRenderer.CloudShaderDefines()));
+                    context.OverlayLabelOnLastItem(
+                        {std::min(dividerX + 10.0F, std::max(shownWidth - 120.0F, 0.0F)), std::max(shownHeight - 30.0F, 0.0F)},
+                        {1.0F, 1.0F, 1.0F, 1.0F},
+                        "B  " + shorten(studioViewportRenderer.CloudSplitDefines()));
+                }
+
                 // Move / Rotate / Scale handles of the selected object.
                 // While they own the pointer the press is not a
                 // selection or path-placement click.

@@ -336,6 +336,43 @@ void StudioPropertiesPanel::Register()
                         if (std::isfinite(resolution)) layers.cloudResolutionScale = static_cast<orbit::f32>(std::clamp(resolution, 0.25, 1.0));
                         if (std::isfinite(godrays)) layers.cloudGodrayStrength = static_cast<orbit::f32>(std::clamp(godrays, 0.0, 2.0));
                         drawBypass("Cloud Shadows", layers.bypassCloudShadow);
+
+                        // Split view: the left of the viewport uses the cloud defines in use, the right these. The same operation
+                        // as clouds.split_set; the divider is dragged in the viewport.
+                        context.Separator();
+                        context.Text("Cloud Split View (A | B)");
+                        static std::string splitDefines;
+                        static bool splitDefinesSeeded = false;
+                        static std::string splitError;
+                        if (!splitDefinesSeeded)
+                        {
+                            splitDefines = studioViewportRenderer.CloudSplitDefines();
+                            splitDefinesSeeded = true;
+                        }
+                        bool splitOn = studioViewportRenderer.CloudSplitEnabled();
+                        if (context.Checkbox("Split View", splitOn))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, studioViewportRenderer.CloudSplitPosition());
+                        }
+                        (void)context.InputText("B Defines", splitDefines);
+                        if (context.Button("Apply B Defines"))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, studioViewportRenderer.CloudSplitPosition());
+                        }
+                        f64 splitPosition = studioViewportRenderer.CloudSplitPosition();
+                        if (context.SliderDouble("Divider", splitPosition, 0.02, 0.98))
+                        {
+                            splitError = studioViewportRenderer.SetCloudSplit(
+                                splitOn, splitDefines, static_cast<orbit::f32>(splitPosition));
+                        }
+                        context.MutedText(
+                            "A = Cloud Lighting defines in use (clouds.set_defines), B = the defines above, e.g. CLOUD_CHECKERBOARD=2;CLOUD_CB_CLAMP=1. Drag the white divider in the viewport.");
+                        if (!splitError.empty())
+                        {
+                            context.ErrorText("Split error: " + splitError);
+                        }
                     }
                     if (showSurface)
                     {
