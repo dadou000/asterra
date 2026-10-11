@@ -14,6 +14,7 @@ sources = [
   "engine/storm_electrification/include/orbit/storm_electrification/Electrification.hpp",
   "engine/storm_electrification/include/orbit/storm_electrification/LeaderSimulation.hpp",
   "engine/storm_electrification/include/orbit/storm_electrification/FlashSchedule.hpp",
+  "engine/storm_electrification/include/orbit/storm_electrification/WarmRainAdapter.hpp",
   "engine/storm_electrification/CMakeLists.txt",
 ]
 symbols = ["ChargeGrid", "StepElectrification", "TryFlash", "FlashSchedule", "MaxBreakdownRatio"]
@@ -21,7 +22,7 @@ invariants = [
   "ChargeGrid::SolvePotential solves -div(eps0 grad phi) = rho by conjugate gradients with 0 V on every face of the block; the grounded planes sit half a cell outside the first and last cell centres. A charged slab between grounded walls matches the analytic parabola to 1 %.",
   "Charge lives on two carriers (ice, lofted; graupel, falling). StepElectrification charging is neutral by construction (graupel gains what ice loses) and vertical upwind transport is conservative: total charge + charge out through the top + charge delivered to the ground is constant.",
   "Graupel charges negative warmer than reversalTemperatureK (258.15 K) and positive colder, smoothly over reversalWidthK; no charging above freezing or without supercooled liquid. All magnitudes (chargingEfficiency, thresholds, energies) are order-of-magnitude defaults, not fitted.",
-  "The FastStormSolver has no ice phase, so StormFields.graupel / ice / liquid must be supplied by the caller (for example derived from supercooled cloud and rain above the freezing level). Charge is transported vertically only.",
+  "The FastStormSolver has no ice phase, so StormFields.graupel / ice / liquid must be supplied by the caller (for example derived from supercooled cloud and rain above the freezing level). Charge is transported vertically only. WarmRainAdapter.hpp (StormFieldsFromWarmRain) is that caller-side proxy: rain colder than 268 K is half graupel and half snow, cloud water colder than 253 K is ice, between that and 0 C it is supercooled liquid. It places the charging regions; it does not set their strength.",
   "TryFlash starts at the cell with the highest |E| / (initiationField * exp(-z / scaleHeight)) when that is >= 1; the channel is an equipotential that grows into neighbours whose potential differs by more than propagationField * density factor per cell, with probability proportional to the excess. Connecting to the ground pins the channel at 0 V.",
   "A flash stops growing when the neutralisable charge near the channel reaches maxFlashCharge (once minChannelCells exist), when growth stagnates, or at maxChannelCells; it never neutralises more than maxFlashCharge of either polarity. An ungrounded flash removes exactly equal positive and negative charge; a grounded flash delivers the net to the ground (FlashResult::groundCharge) and the grid's total changes by exactly that.",
   "A flash is only accepted if it lowers the field energy: the neutralisation is tried at full strength and halved (from a snapshot of the charge) up to three times; if none lowers the energy the grid is restored and no flash happens. Without this, 1 in 61 large cloud-to-cloud flashes slightly raised the energy because the second-order term of moving ~25 C over a large channel beat the first-order dissipation.",
@@ -62,7 +63,7 @@ air and their fall speeds. `ChargeGrid::SolvePotential` gives the field; when `M
 ## Known gaps
 
 - There is no lower positive charge pocket, so the storm is a dipole, not a tripole; a lower pocket (graupel charging positive at low liquid water, or melting-level effects) is not modelled.
-- Charge moves vertically only and the solver has no ice, so a real FastStormSolver storm cannot drive it yet. The channel potential is fixed rather than re-solved as it grows.
+- Charge moves vertically only. A real FastStormSolver storm (64x64x40 at 500 m) driven through the ice proxy does electrify once mature (no flash at 10 min; ratio 1.03 and 8 flashes in 900 s at 20 min, 94 at 25 min, ratio 15 at 35 min, field snapshots held frozen), but the ice phase is assumed and the strength is untuned (ctest -R Orbit.WarmRainAdapter, ~55 s). The channel potential is fixed rather than re-solved as it grows.
 - No leader branching physics beyond the stochastic growth; sprites, megaflashes and superbolts are not modelled. Nothing consumes the flash graph in a renderer: the transient-lighting injection
   (bounded GPU cost, higher-order scattering response) is not built.
 - No RPC/MCP exposure, which `AGENTS.md` requires before this is reachable from Studio.

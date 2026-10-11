@@ -49,8 +49,7 @@ needs a GPU and an art decision. Hardware ray queries need an RHI change first: 
 
 ## Finding 8: lightning had nothing to stand on, and two defects only simulation exposed
 
-- The storm solver (`FastStormSolver`) is warm-rain Kessler: no ice, no graupel. The spec's "the weather solver supplies ice and graupel" is not true today, so
-  `/rendering/unified-transport/storm-electrification` takes ice, graupel and supercooled liquid as caller-supplied fields.
+- The storm solver (`FastStormSolver`) is warm-rain Kessler: no ice, no graupel. The spec's "the weather solver supplies ice and graupel" is not true today; `StormFieldsFromWarmRain` now derives a temperature-based ice proxy and the solver's mature storm electrifies through it (assumed, untuned). `/rendering/unified-transport/storm-electrification` still takes ice, graupel and supercooled liquid as caller-supplied fields.
 - Building the flash simulation exposed two defects that unit-level reasoning would have missed: with the channel held at a fixed potential every flash filled the entire channel cap and
   neutralised +-390 C (unphysical, fixed with a charge budget), and a strongly charged storm held more than the budget around a single cell so flashes never started (fixed with a minimum channel
   extent and by capping the charge actually removed). Flash counts then rose monotonically with updraft (then 0 / 15 / 62 in 15 minutes at 8 / 18 / 30 m/s with the final realistic fixture).
