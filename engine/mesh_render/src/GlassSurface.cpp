@@ -496,7 +496,9 @@ float3 EnvironmentTrace(float3 p, float3 dir)
     const bool screenHit = MarchScene(p, dir, t);
     if (ExactParams().w > 0.0)
     {
-        const ReflectionHit exactHit = ReflectionTrace(p, dir, 0.001, 60.0);
+        // Only a hit not farther than the screen hit (+0.05) is used below, so the walk never needs to look farther:
+        // same result, fewer nodes (the shader culls with the running nearest hit, but only once it has found one).
+        const ReflectionHit exactHit = ReflectionTrace(p, dir, 0.001, screenHit ? min(t + 0.05, 60.0) : 60.0);
         if (exactHit.status == 1u && (!screenHit || exactHit.t <= t + 0.05))
         {
             float3 closer; float closerT;

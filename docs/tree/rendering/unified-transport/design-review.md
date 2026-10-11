@@ -79,6 +79,13 @@ glass traces per caster at the maximum 224 x 224 grid (3 x 6 x 224^2). A compute
 `glslangValidator`, the legacy pixel shader's SPIR-V is byte-identical to before the refactor, the legacy vertex shader keeps the same bindings, and the C++ passes a
 syntax check. Not verified: any run on a GPU (descriptor layout, barriers, image equivalence, speedup). See `/authoring/primitives`.
 
+## Finding 6: glass optics are cheap; the environment queries are the cost
+
+The spec proposes a separate optics pass and a thin-pane fast path. In the code, `TraceGlass` is already only two analytic spans and a refraction for a slab, so a thin-pane
+path has little to remove. The two `EnvironmentTrace` calls per pixel are the real cost. What can be removed exactly is small: bounding the BVH walk by the screen hit
+(done, 8 % fewer node visits on a synthetic room, identical results). Cutting more means lowering fidelity for low-Fresnel reflections, which is a visible trade-off and
+needs a GPU and an art decision. Hardware ray queries need an RHI change first: only compute pipelines can bind an acceleration structure today.
+
 ## Integration status of Finding 2
 
 Implemented behind `ORBIT_CLOUD_FILTERED_FAR=1` (default off, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the
