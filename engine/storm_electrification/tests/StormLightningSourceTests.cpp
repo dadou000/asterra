@@ -67,6 +67,15 @@ int main()
     Check(!big.empty(), "a strong storm flashes within 40 simulated minutes");
     Check(big.size() == manyCount && one.SimulatedSeconds() == many.SimulatedSeconds(), "call granularity does not change the result");
 
+    // A bounded call does bounded work and drops the surplus instead of owing it to the next call.
+    {
+        StormLightningSource bounded = Make();
+        (void)bounded.Advance(10.0, 4);   // 200 simulated seconds due, 4 steps allowed
+        Check(bounded.SimulatedSeconds() == 20.0, "maxSteps bounds the work of one call");
+        (void)bounded.Advance(0.25, 4);   // one step due now; no backlog from before
+        Check(bounded.SimulatedSeconds() == 25.0, "the dropped backlog is not repaid later");
+    }
+
     // Flashes lie inside the domain, carry energy, and are time-ordered.
     const double size = one.DomainSizeMeters();
     bool inside = true, ordered = true, energetic = true;

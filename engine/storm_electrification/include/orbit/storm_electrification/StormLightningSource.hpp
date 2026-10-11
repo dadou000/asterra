@@ -31,7 +31,9 @@ public:
 
     // Advances by `wallSeconds` of wall time (= wallSeconds * timeScale simulated). Whole steps only; the remainder
     // carries over, so many tiny calls and one large call give the same result.
-    std::vector<FlashResult> Advance(double wallSeconds);
+    // `maxSteps` > 0 bounds the work of one call: when more steps are due, the surplus is dropped (the storm falls behind
+    // its requested pace instead of stalling the caller, so the next call never starts further behind).
+    std::vector<FlashResult> Advance(double wallSeconds, std::uint32_t maxSteps = 0);
 
     [[nodiscard]] double SimulatedSeconds() const { return simulated_; }
     [[nodiscard]] double MaxBreakdownRatio() const;

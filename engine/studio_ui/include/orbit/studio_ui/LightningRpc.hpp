@@ -2,6 +2,7 @@
 
 #include <orbit/lighting/TransientFlashRegistry.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
+#include <orbit/studio_ui/StormLightningController.hpp>
 
 #include <functional>
 #include <vector>
@@ -15,6 +16,10 @@ struct LightningHost
     std::function<u64(const lighting::FlashRequest&)> fire;
     std::function<std::vector<lighting::FlashStatus>()> status;
     std::function<void()> clear;
+    // Weather Lab driven lightning (StormLightningController). Empty string from stormStart = started.
+    std::function<std::string(const StormLightningRequest&)> stormStart;
+    std::function<void()> stormStop;
+    std::function<StormLightningStatus()> stormStatus;
 };
 
 // lightning.fire / lightning.status / lightning.clear: fire a lightning flash that lights the scene and the clouds, list

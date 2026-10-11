@@ -279,6 +279,7 @@ struct WeatherLabSession::Impl
     std::size_t residentBytes = 0;
     std::vector<StormMetrics> liveMetrics;
     DisplayFields liveDisplay;
+    StormSnapshot liveSnapshot;
     std::vector<double> frameTimes;
     std::size_t nextFrame = 0;
     double baseThetaMean = 0.0;
@@ -408,8 +409,23 @@ struct WeatherLabSession::Impl
                 (void)s.WriteFrame(writer);
             }
         }
+        StormSnapshot snapshot;
+        snapshot.valid = true;
+        snapshot.time = now;
+        snapshot.nx = header.nx;
+        snapshot.ny = header.ny;
+        snapshot.nz = header.nz;
+        snapshot.dx = header.dx;
+        snapshot.dz = header.centreHeight.size() > 1U ? header.centreHeight[1] - header.centreHeight[0] : 0.0F;
+        snapshot.theta = raw["th"];
+        snapshot.w = raw["w"];
+        snapshot.qc = raw["qc"];
+        snapshot.qr = raw["qr"];
+        snapshot.levelExner = s.Base().exner;
+        snapshot.levelDensity = s.Base().density;
         std::lock_guard lock(mutex);
         liveDisplay = std::move(display);
+        liveSnapshot = std::move(snapshot);
         diagnostics = s.Diagnostics();
         if (frame)
         {
@@ -644,6 +660,7 @@ void WeatherLabSession::Reset()
     impl_->residentBytes = 0;
     impl_->liveMetrics.clear();
     impl_->liveDisplay = {};
+    impl_->liveSnapshot = {};
     impl_->nextFrame = 0;
 }
 
@@ -828,6 +845,12 @@ std::vector<ComparisonRow> WeatherLabSession::Compare() const
         }
     }
     return rows;
+}
+
+StormSnapshot WeatherLabSession::LiveSnapshot() const
+{
+    std::lock_guard lock(impl_->mutex);
+    return impl_->liveSnapshot;
 }
 
 Slice WeatherLabSession::GetSlice(const SliceRequest& request) const

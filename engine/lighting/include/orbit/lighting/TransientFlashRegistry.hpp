@@ -36,6 +36,16 @@ struct CameraPlacement
     math::Double3 up{0.0, 1.0, 0.0};
 };
 
+// A fixed place in the world for flashes whose graph is in storm coordinates (x right, y forward, z up from the ground,
+// the storm domain spanning [0, domainMeters) horizontally). Resolved once, at the first frame after it is set, then
+// kept so the storm does not follow the camera.
+struct StormAnchor
+{
+    f64 distanceMeters{12000.0};   // from the camera to the domain centre, along the flattened forward direction
+    f64 lateralMeters{0.0};
+    f64 domainMeters{32000.0};
+};
+
 struct FlashStatus
 {
     u64 id{0U};
@@ -52,6 +62,12 @@ public:
     u64 Fire(const FlashRequest& request, f64 nowSeconds);
     // Adds an externally simulated flash already placed in the lighting frame. `graph` time zero is `nowSeconds`.
     u64 Add(optical_transport::DischargeGraph graph, const math::Double3& originMeters, f64 nowSeconds, f64 lifetimeSeconds);
+
+    // Sets (or moves) the storm anchor; flashes added with AddStormFlash are placed against it.
+    void SetStormAnchor(const StormAnchor& anchor);
+    [[nodiscard]] bool HasStormAnchor() const { return anchorRequested_; }
+    // Adds a flash in storm coordinates. Its lifetime is the end of its last pulse plus a short tail.
+    u64 AddStormFlash(optical_transport::DischargeGraph graph, f64 nowSeconds);
 
     // Resolves pending placements, drops expired flashes, and returns the lights for [nowSeconds, +exposure).
     [[nodiscard]] std::vector<LocalLight> LightsForWindow(
@@ -76,8 +92,13 @@ private:
         optical_transport::DischargeGraph graph{optical_transport::FlashKind::CloudToGround};
         f64 startSeconds{0.0};
         f64 lifetimeSeconds{0.0};
+        bool stormCoordinates{false};   // graph awaits the storm anchor
     };
     std::vector<Flash> flashes_;
+    StormAnchor anchor_;
+    bool anchorRequested_{false};
+    bool anchorResolved_{false};
+    math::Double3 anchorOrigin_{}, anchorRight_{1.0, 0.0, 0.0}, anchorUp_{0.0, 1.0, 0.0}, anchorForward_{0.0, 0.0, 1.0};
     u64 nextId_{1U};
 };
 } // namespace orbit::lighting

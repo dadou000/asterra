@@ -23,6 +23,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioTerrainDiagnosticOverlayGeometry.cpp
     src/StudioTerrainOverlayGeometry.cpp
     src/LightningRpc.cpp
+    src/StormLightningController.cpp
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
     src/SystemViewUi.cpp
@@ -94,6 +95,8 @@ target_link_libraries(OrbitStudioUi
         Orbit::EditorModel
         Orbit::EditorUi
         Orbit::Lighting
+        Orbit::StormElectrification
+        Orbit::WeatherLab
         Orbit::MeshRender
         Orbit::Platform
         Orbit::PostProcess
@@ -392,6 +395,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StudioViewContinuity
         COMMAND OrbitStudioViewContinuityTests
+    )
+
+    add_executable(OrbitStormLightningControllerTests
+        tests/StormLightningControllerTests.cpp
+    )
+
+    target_link_libraries(OrbitStormLightningControllerTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStormLightningControllerTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStormLightningControllerTests)
+
+    add_test(
+        NAME Orbit.StormLightningController
+        COMMAND OrbitStormLightningControllerTests
     )
 
     add_executable(OrbitLightningRpcTests

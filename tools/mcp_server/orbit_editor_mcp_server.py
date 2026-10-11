@@ -1112,6 +1112,45 @@ def orbit_lightning_status() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_lightning_storm_start(
+    distance_m: float | None = None,
+    lateral_m: float | None = None,
+    time_scale: float | None = None,
+) -> dict[str, Any]:
+    """Turn the Weather Lab's live storm into lightning. Needs a live Weather Lab
+    sample with square cells (orbit_weather_lab_configure nx=64, ny=64, nz=40,
+    dx=500, dz=500, then orbit_weather_lab_control start or step) and a storm
+    that has matured (about 20+ simulated minutes; use step). The ice phase is
+    derived from temperature, an assumption. Electrification runs at time_scale
+    simulated seconds per wall second (default 20) on a frozen snapshot; flashes
+    appear at a fixed spot distance_m (12000) ahead of the camera. Poll
+    orbit_lightning_storm_status."""
+    params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "distance_m": distance_m, "lateral_m": lateral_m,
+            "time_scale": time_scale,
+        }.items()
+        if value is not None
+    }
+    return _rpc("lightning.storm_start", params)
+
+
+@mcp.tool()
+def orbit_lightning_storm_stop() -> dict[str, Any]:
+    """Stop the Weather Lab driven lightning."""
+    return _rpc("lightning.storm_stop")
+
+
+@mcp.tool()
+def orbit_lightning_storm_status() -> dict[str, Any]:
+    """Weather Lab driven lightning: running, simulated seconds, flashes so far,
+    breakdown_ratio (strongest field over the breakdown field; 1 or more means it
+    is flashing) and the storm domain size."""
+    return _rpc("lightning.storm_status")
+
+
+@mcp.tool()
 def orbit_lightning_clear() -> dict[str, Any]:
     """Remove every live lightning flash."""
     return _rpc("lightning.clear")

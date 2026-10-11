@@ -17,12 +17,19 @@ double StormLightningSource::MaxBreakdownRatio() const
     return storm_electrification::MaxBreakdownRatio(grid_, params_.leader);
 }
 
-std::vector<FlashResult> StormLightningSource::Advance(const double wallSeconds)
+std::vector<FlashResult> StormLightningSource::Advance(const double wallSeconds, const std::uint32_t maxSteps)
 {
     std::vector<FlashResult> out;
     carry_ += std::max(wallSeconds, 0.0) * params_.timeScale;
+    std::uint32_t taken = 0;
     while (carry_ >= params_.stepSeconds)
     {
+        if (maxSteps > 0U && taken == maxSteps)
+        {
+            carry_ = std::min(carry_, params_.stepSeconds * 0.5);   // drop the backlog
+            break;
+        }
+        ++taken;
         carry_ -= params_.stepSeconds;
         StepElectrification(grid_, fields_, params_.electrification, params_.stepSeconds);
         simulated_ += params_.stepSeconds;

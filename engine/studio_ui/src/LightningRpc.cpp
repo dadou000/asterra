@@ -108,6 +108,60 @@ void RegisterLightningRpc(rpc::Dispatcher& dispatcher, LightningHost host)
 
     dispatcher.Register(
         {
+            .name = "lightning.storm_start",
+            .description =
+                "Turns the Weather Lab's live storm into lightning. Needs a live Weather Lab sample (weather_lab.control start "
+                "or step) with square cells (dx = dz, for example nx=ny=64, nz=40, dx=dz=500). The ice phase is derived from "
+                "temperature (an assumption), the electrification runs on a worker thread at `time_scale` simulated seconds "
+                "per wall second (default 20) on a frozen snapshot, and each flash is placed against a fixed spot "
+                "`distance_m` (default 12000) ahead of the camera and `lateral_m` to its right, fixed at the first frame. "
+                "A young storm takes minutes of simulated time to flash. Restarting takes a fresh snapshot.",
+            .mutating = true
+        },
+        [host](const Value& params)
+        {
+            const auto& o = Params(params);
+            StormLightningRequest request;
+            if (const auto v = Number(o, "distance_m", 1.0, 1.0e6)) { request.distanceMeters = *v; }
+            if (const auto v = Number(o, "lateral_m", -1.0e6, 1.0e6)) { request.lateralMeters = *v; }
+            if (const auto v = Number(o, "time_scale", 1.0, 1000.0)) { request.timeScale = *v; }
+            const std::string error = host.stormStart ? host.stormStart(request) : "storm lightning is not available";
+            if (!error.empty())
+            {
+                throw rpc::Error(1100, error);
+            }
+            return Value::Object{{"started", true}};
+        });
+
+    dispatcher.Register(
+        {
+            .name = "lightning.storm_stop",
+            .description = "Stops the Weather Lab driven lightning (flashes already alive finish).",
+            .mutating = true
+        },
+        [host](const Value&)
+        {
+            if (host.stormStop) { host.stormStop(); }
+            return Value::Object{{"stopped", true}};
+        });
+
+    dispatcher.Register(
+        {
+            .name = "lightning.storm_status",
+            .description = "Weather Lab driven lightning: running, simulated seconds, flashes so far, the strongest field "
+                           "as a multiple of the breakdown field (1 or more = flashing), and the storm domain size in metres.",
+            .mutating = false
+        },
+        [host](const Value&)
+        {
+            const StormLightningStatus s = host.stormStatus ? host.stormStatus() : StormLightningStatus{};
+            return Value::Object{
+                {"running", s.running}, {"simulated_s", s.simulatedSeconds}, {"flashes", static_cast<f64>(s.flashes)},
+                {"breakdown_ratio", s.breakdownRatio}, {"domain_m", s.domainMeters}};
+        });
+
+    dispatcher.Register(
+        {
             .name = "lightning.clear",
             .description = "Removes every live lightning flash.",
             .mutating = true

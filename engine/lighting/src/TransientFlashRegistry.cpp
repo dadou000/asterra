@@ -83,6 +83,33 @@ u64 TransientFlashRegistry::Fire(const FlashRequest& request, const f64 nowSecon
     return flashes_.back().id;
 }
 
+void TransientFlashRegistry::SetStormAnchor(const StormAnchor& anchor)
+{
+    anchor_ = anchor;
+    anchorRequested_ = true;
+    anchorResolved_ = false;
+}
+
+u64 TransientFlashRegistry::AddStormFlash(optical_transport::DischargeGraph graph, const f64 nowSeconds)
+{
+    f64 end = 0.0;
+    for (const auto& segment : graph.Segments())
+    {
+        for (const auto& pulse : segment.pulses)
+        {
+            end = std::max(end, pulse.startTime + pulse.duration);
+        }
+    }
+    Flash flash;
+    flash.id = nextId_++;
+    flash.graph = std::move(graph);
+    flash.startSeconds = nowSeconds;
+    flash.lifetimeSeconds = end + kTailSeconds;
+    flash.stormCoordinates = true;
+    flashes_.push_back(std::move(flash));
+    return flashes_.back().id;
+}
+
 u64 TransientFlashRegistry::Add(
     optical_transport::DischargeGraph graph, const math::Double3& originMeters, const f64 nowSeconds, const f64 lifetimeSeconds)
 {
@@ -102,10 +129,46 @@ std::vector<LocalLight> TransientFlashRegistry::LightsForWindow(
 {
     std::erase_if(flashes_, [&](const Flash& f) { return nowSeconds - f.startSeconds > f.lifetimeSeconds; });
 
+    if (anchorRequested_ && !anchorResolved_)
+    {
+        const math::Double3 up = Normalized(camera.up, {0.0, 1.0, 0.0});
+        math::Double3 forward = camera.forward - up * math::Dot(camera.forward, up);
+        forward = Normalized(forward, Normalized(math::Cross(up, {1.0, 0.0, 0.0}), {0.0, 0.0, 1.0}));
+        const math::Double3 right = Normalized(math::Cross(up, forward), {1.0, 0.0, 0.0});
+        anchorUp_ = up;
+        anchorForward_ = forward;
+        anchorRight_ = right;
+        // The domain's horizontal centre lands at the requested spot; local (0, 0) is a corner half a domain back and left.
+        anchorOrigin_ = camera.positionMeters + forward * (anchor_.distanceMeters - anchor_.domainMeters * 0.5) +
+                        right * (anchor_.lateralMeters - anchor_.domainMeters * 0.5);
+        anchorResolved_ = true;
+    }
+
     std::vector<LocalLight> all;
     for (Flash& flash : flashes_)
     {
-        if (!flash.placed)
+        if (flash.stormCoordinates)
+        {
+            if (!flash.placed && anchorResolved_)
+            {
+                for (std::size_t i = 0; i < flash.graph.Segments().size(); ++i)
+                {
+                    optical_transport::Segment& segment = flash.graph.At(static_cast<std::int32_t>(i));
+                    for (double* p : {segment.from, segment.to})
+                    {
+                        const math::Double3 world = anchorRight_ * p[0] + anchorForward_ * p[1] + anchorUp_ * p[2];
+                        p[0] = world.x; p[1] = world.y; p[2] = world.z;
+                    }
+                }
+                flash.origin = anchorOrigin_;
+                flash.placed = true;
+            }
+            if (!flash.placed)
+            {
+                continue;
+            }
+        }
+        else if (!flash.placed)
         {
             const math::Double3 up = Normalized(camera.up, {0.0, 1.0, 0.0});
             math::Double3 forward = camera.forward - up * math::Dot(camera.forward, up);

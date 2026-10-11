@@ -55,6 +55,18 @@ void StudioViewportRenderer::ClearLightning()
     transientFlashes_.Clear();
 }
 
+void StudioViewportRenderer::SetLightningStormAnchor(const lighting::StormAnchor& anchor)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    transientFlashes_.SetStormAnchor(anchor);
+}
+
+u64 StudioViewportRenderer::AddLightningStormFlash(optical_transport::DischargeGraph graph)
+{
+    const std::scoped_lock lock(transientFlashMutex_);
+    return transientFlashes_.AddStormFlash(std::move(graph), FlashClockSeconds());
+}
+
 std::vector<lighting::LocalLight> StudioViewportRenderer::TransientFlashLights(const lighting::CameraPlacement& camera)
 {
     const std::scoped_lock lock(transientFlashMutex_);

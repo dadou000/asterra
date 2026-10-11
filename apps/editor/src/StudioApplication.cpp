@@ -81,6 +81,7 @@
 #include <orbit/studio_ui/StudioViewContinuity.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
 #include <orbit/studio_ui/LightningRpc.hpp>
+#include <orbit/studio_ui/StormLightningController.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 #include <orbit/studio_ui/SurfaceAuthoringUi.hpp>
 #include <orbit/studio_ui/SystemViewUi.hpp>
@@ -1356,13 +1357,25 @@ int orbit::editor_app::StudioApplication::Run(
             weatherLabView);
 
         // Lightning flashes owned by the main viewport renderer; lit by the tiled-light pass and the cloud pass.
+        orbit::studio_ui::StormLightningController stormLightning(
+            weatherLabSession,
+            {
+                [&studioViewportRenderer](const orbit::lighting::StormAnchor& anchor)
+                { studioViewportRenderer.SetLightningStormAnchor(anchor); },
+                [&studioViewportRenderer](orbit::optical_transport::DischargeGraph graph)
+                { (void)studioViewportRenderer.AddLightningStormFlash(std::move(graph)); }
+            });
         orbit::studio_ui::RegisterLightningRpc(
             rpcHost.Dispatcher(),
             {
                 [&studioViewportRenderer](const orbit::lighting::FlashRequest& request)
                 { return studioViewportRenderer.FireLightning(request); },
                 [&studioViewportRenderer] { return studioViewportRenderer.LightningStatus(); },
-                [&studioViewportRenderer] { studioViewportRenderer.ClearLightning(); }
+                [&studioViewportRenderer] { studioViewportRenderer.ClearLightning(); },
+                [&stormLightning](const orbit::studio_ui::StormLightningRequest& request)
+                { return stormLightning.Start(request); },
+                [&stormLightning] { stormLightning.Stop(); },
+                [&stormLightning] { return stormLightning.Status(); }
             });
 
         // Simulation transport (Simulate / Pause / Step) and time.* RPC, both

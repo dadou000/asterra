@@ -99,6 +99,36 @@ int main()
     for (int i = 0; i < 8; ++i) { many.Fire(request, 0.0); }
     Check(many.LightsForWindow(0.0, camera, params).size() <= params.maxLights, "budget holds across flashes");
 
+    // Storm anchor: a flash in storm coordinates is placed against a fixed spot and does not follow the camera.
+    {
+        optical_transport::DischargeGraph graph(optical_transport::FlashKind::CloudToGround);
+        optical_transport::Segment seg;
+        seg.from[0] = 16000.0; seg.from[1] = 16000.0; seg.from[2] = 0.0;
+        seg.to[0] = 16000.0; seg.to[1] = 16000.0; seg.to[2] = 1000.0;
+        seg.conductivity = 1.0;
+        graph.AddSegment(seg);
+        graph.Reactivate(0, {0.0, 1.0e-4, 1.0e5});
+        TransientFlashRegistry storm;
+        const u64 early = storm.AddStormFlash(graph, 0.0);
+        Check(early != 0U && storm.LightsForWindow(0.0, camera, params).empty(), "a storm flash without an anchor is not lit");
+        StormAnchor anchor;   // 12 km ahead, domain 32 km
+        storm.SetStormAnchor(anchor);
+        const auto lights = storm.LightsForWindow(0.0, camera, params);
+        Check(!lights.empty(), "once anchored the flash is lit");
+        if (!lights.empty())
+        {
+            const auto& p = lights.front().positionInFrameMeters;
+            Check(std::abs(p.x - 1000.0) < 1.0 && std::abs(p.z - 15000.0) < 1.0 && p.y > 2000.0 && p.y < 3000.0,
+                  "the domain centre lands 12 km ahead of the camera, channel rising along up");
+        }
+        CameraPlacement far = camera;
+        far.positionMeters = {-90000.0, 0.0, 0.0};
+        const auto again = storm.LightsForWindow(0.0, far, params);
+        Check(!again.empty() && std::abs(again.front().positionInFrameMeters.x - 1000.0) < 1.0, "the anchor does not follow the camera");
+        const auto status = storm.Status(0.0).front();
+        Check(status.remainingSeconds > 0.2 && status.remainingSeconds < 0.5, "lifetime is the last pulse plus a short tail");
+    }
+
     std::printf(failures == 0 ? "TransientFlashRegistry tests passed\n" : "%d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

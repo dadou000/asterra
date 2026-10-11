@@ -380,6 +380,8 @@ public:
     u64 FireLightning(const lighting::FlashRequest& request);
     [[nodiscard]] std::vector<lighting::FlashStatus> LightningStatus() const;
     void ClearLightning();
+    void SetLightningStormAnchor(const lighting::StormAnchor& anchor);
+    u64 AddLightningStormFlash(optical_transport::DischargeGraph graph);
 
     // True while far terrain patches are still being built, so the host can
     // keep rendering at full rate until the view has finished refining.
