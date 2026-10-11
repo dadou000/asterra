@@ -131,6 +131,29 @@ static float gCloudDistance = 1.0e9;
 #ifndef CLOUD_SUN_VOLUME
 #define CLOUD_SUN_VOLUME 0
 #endif
+// Profiling stubs (all 0 = the shipped shader). They change the image on purpose: each removes one part of the march so the
+// Clouds pass time it frees (tools/orbit_ab.py in_process, gpu_passes) attributes the cost. Not for production.
+// 1: the march returns a heat map of the steps each pixel took (blue few, cyan, yellow, red, white = the whole budget).
+// Column coverage at or below which the march treats a column as empty and leaps over it (CLOUD_EMPTY_SKIP). The shipped value
+// 1e-4 means 'exactly empty'; real weather has tiny nonzero coverage nearly everywhere, where the noise rarely makes any cloud.
+#ifndef CLOUD_EMPTY_COVERAGE
+#define CLOUD_EMPTY_COVERAGE 1.0e-4
+#endif
+#ifndef CLOUD_PROF_STEPVIS
+#define CLOUD_PROF_STEPVIS 0
+#endif
+#ifndef CLOUD_PROF_CHEAPNOISE
+#define CLOUD_PROF_CHEAPNOISE 0
+#endif
+#ifndef CLOUD_PROF_NOSUNDEPTH
+#define CLOUD_PROF_NOSUNDEPTH 0
+#endif
+#ifndef CLOUD_PROF_NOOCTAVES
+#define CLOUD_PROF_NOOCTAVES 0
+#endif
+#ifndef CLOUD_PROF_NOAERIAL
+#define CLOUD_PROF_NOAERIAL 0
+#endif
 #ifndef CLOUD_FAR_EARLYOUT
 #define CLOUD_FAR_EARLYOUT 1
 #endif
@@ -294,6 +317,9 @@ float4 NoiseVoxel(int3 c)
 // Trilinear lookup of the tileable noise; p is in voxel units.
 float4 SampleNoise(float3 p)
 {
+#if CLOUD_PROF_CHEAPNOISE
+    return frac(sin(dot(p, float3(12.9898, 78.233, 37.719)) + float4(0.0, 1.7, 3.1, 4.9)) * 43758.5453);
+#endif
     const float3 fl = floor(p);
     // Smoothstep weights: plain linear interpolation of the baked noise shows its
     // voxel lattice as axis-aligned blocks on cloud tops.
@@ -1297,9 +1323,11 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     float weightSum = 0.0;
     float distanceSum = 0.0;
 
+    uint stepsTaken = 0u;
     [loop]
     for (uint i = 0u; i < kMaxSteps && cursor < tEnd && transmittance > kOpaqueCutoff; ++i)
     {
+        ++stepsTaken;
         const float stepLength = min(max(max(kBaseStep, cursor * g.lod.x * kFootprintStep), (cursor - tStart) * growth), kMaxStep);
         const float cursorBefore = cursor;
         // The jitter must stay inside the interval this sample actually represents. Inside
@@ -1350,7 +1378,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float relief = lerp(1.0, gRelief, SmoothRange(150.0, 900.0, t));
         if (sigma <= 0.0)
         {
-            if (column.x <= 1.0e-4 && column.y <= 1.0e-4 && fineSteps == 0u)
+            if (column.x <= CLOUD_EMPTY_COVERAGE && column.y <= CLOUD_EMPTY_COVERAGE && fineSteps == 0u)
             {
                 // Nothing here: leap ahead instead of marching empty space finely.
                 // Only the most recent leap can hide a cloud edge: the sample it
@@ -1384,7 +1412,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         // Thin samples (cirrus, cloud edges) contribute little: reuse the last full sun
         // march of this ray instead of marching again for each of them.
         const bool thinSample = sigma * actualStep < 0.02;
-        if (farBlend < 1.0 && !(thinSample && cachedValid))
+        if (CLOUD_PROF_NOSUNDEPTH == 0 && farBlend < 1.0 && !(thinSample && cachedValid))
         {
             // Jittered over most of a step: without jitter the six sun-march steps show as terraces
             // on cloud flanks. The grain it adds is averaged out by the temporal resolve.
@@ -1423,6 +1451,9 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float multiDepth = 1.6 * sqrt(sunDepth);
         float multiScatter = 0.0;
         float octave = 1.0;
+#if CLOUD_PROF_NOOCTAVES
+        multiScatter = 0.3;
+#else
         [unroll]
         for (uint n = 0u; n < 4u; ++n)
         {
@@ -1431,6 +1462,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
                 exp(-multiDepth * 0.8 * octave);
             octave *= 0.5;
         }
+#endif
         const float multi = singlePhase * 12.0 * exp(-sunDepth * 1.6) + 0.35 * multiScatter;
         // Sky light from above: tops of towers and billows catch it, the inside and the base
         // do not (the cloud's own optical depth above the sample shades it).
@@ -1481,7 +1513,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     // Aerial perspective over the camera-to-cloud distance (the cloud is composited after
     // the atmosphere pass, which only knows the terrain/sky behind it): attenuate the cloud
     // by the air in front of it and add the single-scattered in-scatter of that stretch.
-    if (weightSum > 1.0e-4 && g.atmR.w > 0.0)
+    if (CLOUD_PROF_NOAERIAL == 0 && weightSum > 1.0e-4 && g.atmR.w > 0.0)
     {
         // Same single + multiple scattering integral as the atmosphere pass (sun transmittance
         // and multi-scattering LUTs sampled per step), so a cloud fades into exactly the haze
@@ -1523,6 +1555,16 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         }
         radiance = radiance * aerial + (1.0 - transmittance) * inscatter;
     }
+#if CLOUD_PROF_STEPVIS
+    {
+        const float x = saturate(float(stepsTaken) / float(kMaxSteps)) * 4.0;
+        float3 heat = lerp(float3(0.0, 0.0, 0.3), float3(0.0, 1.0, 1.0), saturate(x));
+        heat = lerp(heat, float3(1.0, 1.0, 0.0), saturate(x - 1.0));
+        heat = lerp(heat, float3(1.0, 0.0, 0.0), saturate(x - 2.0));
+        heat = lerp(heat, float3(1.0, 1.0, 1.0), saturate(x - 3.0));
+        return float4(heat * max(irradiance, 1.0e-3), 0.0);
+    }
+#endif
     return float4(radiance, transmittance);
 }
 )";

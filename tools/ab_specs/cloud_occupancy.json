@@ -1,0 +1,25 @@
+{
+  "_comment": "Is the Clouds march limited by shader complexity (registers/occupancy) rather than by any one stage? Stubs removed together vs alone. Images change on purpose; read the Clouds GPU ms.",
+  "mode": "in_process",
+  "rounds": 2,
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "shipped",
+  "gpu_passes": ["Clouds"],
+  "gpu_window_ms": 1500,
+  "variants": {
+    "shipped":        {"env": {"ORBIT_CLOUD_DEFINES": ""}},
+    "sun_oct_aerial": {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_PROF_NOSUNDEPTH=1;CLOUD_PROF_NOOCTAVES=1;CLOUD_PROF_NOAERIAL=1"}},
+    "oct_aerial":     {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_PROF_NOOCTAVES=1;CLOUD_PROF_NOAERIAL=1"}},
+    "sun_aerial":     {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_PROF_NOSUNDEPTH=1;CLOUD_PROF_NOAERIAL=1"}},
+    "sun_oct":        {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_PROF_NOSUNDEPTH=1;CLOUD_PROF_NOOCTAVES=1"}}
+  },
+  "scenes": [
+    {"name": "sky_cumulus", "time_microseconds": 18070405751, "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 42, "yaw_deg": 0, "pitch_deg": 20}},
+    {"name": "cumulus_far", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 0, "pitch_deg": 8}},
+    {"name": "cumulus_near", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.05157, "lon_deg": 0.03666, "alt_m": 2600, "yaw_deg": 35.3, "pitch_deg": 21.74}}
+  ]
+}
