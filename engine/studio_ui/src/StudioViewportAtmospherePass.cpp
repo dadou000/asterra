@@ -325,21 +325,39 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
             }
             auto* cloudVolume = cloudVolumeSlot.get();
             const f32 cloudVolumeDebug = info.layers.cloudVolumeDebugAltitude;
-            // Temporal reuse of the march (CLOUD_CHECKERBOARD=1): the march target is half the cloud size in each dimension and the
+            // Split view (clouds.split_set): the left of the viewport is marched with the shipped defines (variant 0), the right
+            // with the compare defines (variant 1); each is scissored to its half and resolved against its own history.
+            // Temporal reuse of the march (CLOUD_CHECKERBOARD=1/2): the march target is smaller than the cloud size and the
             // resolved history keeps the full size, so the cloud size is made even.
-            const bool cloudCheckerboard = cloudRenderer_.CheckerboardEnabled();
+            const u32 variantCount = cloudRenderer_.CompareActive() ? 2U : 1U;
+            const f32 splitPosition =
+                variantCount == 2U ? std::clamp(cloudRenderer_.ComparePosition(), 0.02F, 0.98F) : 1.0F;
+            const bool anyCheckerboard = cloudRenderer_.CheckerboardEnabled() ||
+                (variantCount == 2U && cloudRenderer_.CompareCheckerboardMode() != 0U);
             u32 cloudWidth = std::max(
                 1U, static_cast<u32>(std::ceil(static_cast<f32>(width) * cloudScale)));
             u32 cloudHeight = std::max(
                 1U, static_cast<u32>(std::ceil(static_cast<f32>(height) * cloudScale)));
-            if (cloudCheckerboard)
+            if (anyCheckerboard)
             {
                 cloudWidth += cloudWidth & 1U;
                 cloudHeight += cloudHeight & 1U;
             }
-            const u32 marchWidth = cloudCheckerboard ? cloudWidth / 2U : cloudWidth;
-            const u32 marchHeight = cloudCheckerboard && cloudRenderer_.CheckerboardMode() != 2U ? cloudHeight / 2U : cloudHeight;
-            auto& cloudTarget = cloudTargets_[info.id];
+            std::vector<celestial_clouds::CloudRenderer::PointLight> pointLights;
+            std::vector<render_graph::TextureHandle> cloudHandles;
+            std::vector<render_graph::TextureHandle> resolvedHandles;
+            std::vector<rhi::Texture*> resolvedTextures;
+            for (u32 variant = 0U; variant < variantCount; ++variant)
+            {
+            const std::string variantKey = variant == 0U ? info.id : info.id + ".B";
+            const std::string variantPrefix = variant == 0U ? prefix : prefix + ".B";
+            const u32 checkerboardMode =
+                variant == 0U ? cloudRenderer_.CheckerboardMode() : cloudRenderer_.CompareCheckerboardMode();
+            const u32 marchWidth = checkerboardMode != 0U ? cloudWidth / 2U : cloudWidth;
+            const u32 marchHeight = checkerboardMode == 1U ? cloudHeight / 2U : cloudHeight;
+            const f32 regionLeft = variant == 0U ? 0.0F : splitPosition;
+            const f32 regionRight = variant == 0U ? splitPosition : 1.0F;
+            auto& cloudTarget = cloudTargets_[variantKey];
             if (cloudTarget == nullptr ||
                 cloudTarget->Width() != marchWidth ||
                 cloudTarget->Height() != marchHeight)
@@ -352,13 +370,13 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
             }
             auto* cloudTexture = cloudTarget.get();
             const auto cloudHandle = graph.ImportTexture(
-                prefix + ".CloudTarget",
+                variantPrefix + ".CloudTarget",
                 *cloudTexture,
                 rhi::ResourceState::ShaderResource);
 
             // Temporal accumulation: the march is resolved against last frame's
             // result into one of two persistent targets (see CloudRenderer::Resolve).
-            auto& temporal = cloudTemporal_[info.id];
+            auto& temporal = cloudTemporal_[variantKey];
             const bool temporalOn = info.layers.cloudTemporal;
             if (temporal.resolved[0] == nullptr ||
                 temporal.resolved[0]->Width() != cloudWidth ||
@@ -400,6 +418,12 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                 // The cloud changed under the history (lab placed or edited).
                 temporal.valid = false;
             }
+            if (temporal.splitPosition != splitPosition)
+            {
+                // The drawn region moved: the history outside the old one was never marched.
+                temporal.valid = false;
+                temporal.splitPosition = splitPosition;
+            }
             const u32 writeIndex = temporal.writeIndex;
             auto* resolvedTexture = temporal.resolved[writeIndex].get();
             auto* historyTexture = temporal.resolved[1U - writeIndex].get();
@@ -407,11 +431,11 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
             const auto previousView = temporal.previous;
             const u32 cloudFrame = temporal.frame++;
             const auto resolvedHandle = graph.ImportTexture(
-                prefix + ".CloudResolved",
+                variantPrefix + ".CloudResolved",
                 *resolvedTexture,
                 rhi::ResourceState::ShaderResource);
             const auto historyHandle = graph.ImportTexture(
-                prefix + ".CloudHistory",
+                variantPrefix + ".CloudHistory",
                 *historyTexture,
                 rhi::ResourceState::ShaderResource);
 
@@ -419,6 +443,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
             // pass timer reports it separately from the ray march. It declares
             // the same cloud target as the march, which keeps it ordered
             // before it; the recorded commands are unchanged.
+            if (variant == 0U)
+            {
             graph.AddPass(
                 prefix + ".CloudLightVolume",
                 {
@@ -453,10 +479,10 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         cloudFrame,
                         cloudLightVolume);
                 });
+            }
 
             // Authored lights that scatter into the clouds (ORBIT_CLOUD_POINT_LIGHTS=1, off by default).
-            std::vector<celestial_clouds::CloudRenderer::PointLight> pointLights;
-            if (cloudRenderer_.PointLightsEnabled())
+            if (variant == 0U && cloudRenderer_.PointLightsEnabled())
             {
                 lighting::CameraPlacement flashPlacement;
                 flashPlacement.positionMeters = {
@@ -476,8 +502,28 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                     flashLights);
             }
 
+            cloudHandles.push_back(cloudHandle);
+            if (variant == 1U)
+            {
+                // Orders the second march after the light volume update, which only declares the first cloud target.
+                graph.AddPass(
+                    variantPrefix + ".CloudsOrder",
+                    {
+                        {
+                            .texture = cloudHandles.front(),
+                            .state = rhi::ResourceState::ShaderResource,
+                            .access = render_graph::Access::Read
+                        },
+                        {
+                            .texture = cloudHandle,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        }
+                    },
+                    [](rhi::CommandList&, const render_graph::Resources&) {});
+            }
             graph.AddPass(
-                prefix + ".Clouds",
+                variantPrefix + ".Clouds",
                 {
                     {
                         .texture = targets.depth,
@@ -506,7 +552,10 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                  cloudFrame,
                  cloudGodrays,
                  cloudVolumeDebug,
-                 cloudVolume](
+                 cloudVolume,
+                 variant,
+                 regionLeft,
+                 regionRight](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -527,11 +576,14 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         cloudFrame,
                         cloudGodrays,
                         cloudVolumeDebug,
-                        pointLights);
+                        pointLights,
+                        variant,
+                        regionLeft,
+                        regionRight);
                 });
 
             graph.AddPass(
-                prefix + ".CloudsResolve",
+                variantPrefix + ".CloudsResolve",
                 {
                     {
                         .texture = cloudHandle,
@@ -560,7 +612,10 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                  nowView,
                  previousView,
                  historyValid,
-                 cloudFrame](
+                 cloudFrame,
+                 variant,
+                 regionLeft,
+                 regionRight](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -580,19 +635,60 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         previousView,
                         historyValid,
                         0.2F,
-                        cloudFrame);
+                        cloudFrame,
+                        variant,
+                        regionLeft,
+                        regionRight);
                 });
 
             temporal.previous = nowView;
             temporal.previousLab = cloudLab;
             temporal.valid = true;
             temporal.writeIndex = 1U - writeIndex;
+            resolvedHandles.push_back(resolvedHandle);
+            resolvedTextures.push_back(resolvedTexture);
+            }
 
+            if (variantCount == 2U)
+            {
+                graph.AddPass(
+                    prefix + ".CloudsComposite",
+                    {
+                        {
+                            .texture = resolvedHandles[0],
+                            .state = rhi::ResourceState::ShaderResource,
+                            .access = render_graph::Access::Read
+                        },
+                        {
+                            .texture = resolvedHandles[1],
+                            .state = rhi::ResourceState::ShaderResource,
+                            .access = render_graph::Access::Read
+                        },
+                        {
+                            .texture = targets.color,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        }
+                    },
+                    [this,
+                     left = resolvedTextures[0],
+                     right = resolvedTextures[1],
+                     color,
+                     width,
+                     height,
+                     splitPosition](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        cloudRenderer_.CompositeSplit(commands, *left, *right, *color, width, height, splitPosition);
+                    });
+            }
+            else
             graph.AddPass(
                 prefix + ".CloudsComposite",
                 {
                     {
-                        .texture = resolvedHandle,
+                        .texture = resolvedHandles.front(),
                         .state = rhi::ResourceState::ShaderResource,
                         .access = render_graph::Access::Read
                     },
@@ -603,7 +699,7 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                     }
                 },
                 [this,
-                 resolvedTexture,
+                 resolvedTexture = resolvedTextures.front(),
                  color,
                  width,
                  height](

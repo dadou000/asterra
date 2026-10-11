@@ -1174,6 +1174,30 @@ def orbit_clouds_set_defines(defines: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_clouds_split_get() -> dict[str, Any]:
+    """The cloud split view: enabled, defines (the right half's) and position
+    (0..1)."""
+    return _rpc("clouds.split_get")
+
+
+@mcp.tool()
+def orbit_clouds_split_set(enabled: bool, defines: str = "", position: float | None = None) -> dict[str, Any]:
+    """Split-screen view of the cloud march: the left of the viewport renders
+    with the defines in use (orbit_clouds_set_defines), the right with
+    `defines`, divided at `position` (0..1 of the width, default 0.5; a white
+    line marks it). Only the march and temporal resolve take `defines`
+    (CLOUD_CHECKERBOARD=1|2, CLOUD_CHECKERBOARD_WEIGHT, CLOUD_CB_CLAMP,
+    CLOUD_RESOLVE_WEIGHT, CLOUD_MAX_STEPS, ...). Each half is marched on its own,
+    so the Clouds GPU time is the sum of the two halves. enabled=false returns
+    to the single view. Returns enabled, defines, position and error (empty on
+    success)."""
+    params: dict[str, Any] = {"enabled": enabled, "defines": defines}
+    if position is not None:
+        params["position"] = position
+    return _rpc("clouds.split_set", params)
+
+
+@mcp.tool()
 def orbit_lightning_clear() -> dict[str, Any]:
     """Remove every live lightning flash."""
     return _rpc("lightning.clear")

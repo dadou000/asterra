@@ -1903,22 +1903,50 @@ struct VSOutput
 [[vk::binding(0, 0)]] [[vk::combinedImageSampler]] Texture2D g_clouds;
 [[vk::binding(0, 0)]] [[vk::combinedImageSampler]] SamplerState g_cloudsSampler;
 
+#ifndef CLOUD_SPLIT
+#define CLOUD_SPLIT 0
+#endif
+#if CLOUD_SPLIT
+// Split view: pixels left of s.split.x show cloud target A, the rest target B; a white line marks the divider.
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] Texture2D g_cloudsB;
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] SamplerState g_cloudsBSampler;
+struct SplitConstants { float4 split; };
+[[vk::push_constant]] SplitConstants s;
+static bool gUseB = false;
+float4 SampleClouds(float2 uv)
+{
+    return gUseB ? g_cloudsB.SampleLevel(g_cloudsBSampler, uv, 0) : g_clouds.SampleLevel(g_cloudsSampler, uv, 0);
+}
+#else
+float4 SampleClouds(float2 uv)
+{
+    return g_clouds.SampleLevel(g_cloudsSampler, uv, 0);
+}
+#endif
+
 // Alpha blend turns (L / (1 - T), 1 - T) into L + T * scene.
 float4 main(VSOutput input) : SV_Target0
 {
+#if CLOUD_SPLIT
+    if (abs(input.position.x - s.split.x) < 1.5)
+    {
+        return float4(1.0, 1.0, 1.0, 1.0);
+    }
+    gUseB = input.position.x >= s.split.x;
+#endif
     // Four bilinear taps a half texel off-centre: a 3x3 tent filter that hides
     // the march's per-pixel grain at the cost of a single pass.
     uint cloudWidth, cloudHeight;
     g_clouds.GetDimensions(cloudWidth, cloudHeight);
     const float2 o = 0.5 / float2(cloudWidth, cloudHeight);
     const float4 tent = 0.25 * (
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2(-o.x, -o.y), 0) +
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2( o.x, -o.y), 0) +
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2(-o.x,  o.y), 0) +
-        g_clouds.SampleLevel(g_cloudsSampler, input.uv + float2( o.x,  o.y), 0));
+        SampleClouds(input.uv + float2(-o.x, -o.y)) +
+        SampleClouds(input.uv + float2( o.x, -o.y)) +
+        SampleClouds(input.uv + float2(-o.x,  o.y)) +
+        SampleClouds(input.uv + float2( o.x,  o.y)));
     // Mostly tent: with the march's stratified jitter it averages the grain away; the
     // march target is already reduced resolution, so edges stay as sharp as they were.
-    const float4 c = lerp(g_clouds.SampleLevel(g_cloudsSampler, input.uv, 0), tent, 0.8);
+    const float4 c = lerp(SampleClouds(input.uv), tent, 0.8);
     // c.rgb can be negative: the in-scatter the atmosphere pass added for air that sits in
     // cloud shadow is taken back out (god rays). Alpha blending can only reach it through a
     // non-zero alpha, so clear air gets a tiny floor (0.1% of the scene) to carry it.
@@ -2424,6 +2452,28 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentCount = 1U});
 
 
+    const auto compositeSplitPixel = compiler.Compile({
+        .source = std::string("#define CLOUD_SPLIT 1\n") + kCompositePixelShader,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false});
+    compositeSplitPipeline_ = device.CreateGraphicsPipeline({
+        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+        .pixelShader = {.data = compositeSplitPixel.bytecode.data(), .size = compositeSplitPixel.bytecode.size()},
+        .vertexAttributes = {},
+        .vertexStrideBytes = 0U,
+        .pushConstantDwords = 4U,
+        .shaderResourceBuffers = 0U,
+        .sampledTextures = 2U,
+        .topology = rhi::PrimitiveTopology::TriangleList,
+        .fillMode = rhi::FillMode::Solid,
+        .cullMode = rhi::CullMode::None,
+        .blendMode = rhi::BlendMode::Alpha,
+        .depthTest = false,
+        .depthWrite = false,
+        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+        .colorAttachmentCount = 1U});
+
     if (const std::string error = RebuildShaderPipelines(defineText); !error.empty())
     {
         throw std::runtime_error("Cloud shader compile failed: " + error);
@@ -2469,6 +2519,14 @@ namespace
     return prefix;
 }
 } // namespace
+
+u32 CloudRenderer::CheckerboardModeOf(const std::string& defineText)
+{
+    // 1: a quarter of the pixels per frame, 2: half (a checkerboard)
+    const std::size_t found = defineText.find("CLOUD_CHECKERBOARD=");
+    const char mode = found != std::string::npos && found + 19U < defineText.size() ? defineText[found + 19U] : '0';
+    return mode == '1' ? 1U : (mode == '2' ? 2U : 0U);
+}
 
 std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
 {
@@ -2573,15 +2631,81 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
         volumePipeline_ = std::move(volumePipeline);
         defines_ = defineText;
         // CLOUD_CHECKERBOARD=1 changes the size of the march target, which the pass code must follow.
-        const std::size_t found = defineText.find("CLOUD_CHECKERBOARD=");
-        const char mode = found != std::string::npos && found + 19U < defineText.size() ? defineText[found + 19U] : '0';
-        checkerboard_ = mode == '1' ? 1U : (mode == '2' ? 2U : 0U);   // 1: a quarter of the pixels per frame, 2: half (a checkerboard)
+        checkerboard_ = CheckerboardModeOf(defineText);
         return {};
     }
     catch (const std::exception& exception)
     {
         return exception.what();
     }
+}
+
+std::string CloudRenderer::SetCompareDefines(const std::string& defineText, const f32 position)
+{
+    comparePosition_ = std::clamp(position, 0.02F, 0.98F);
+    try
+    {
+        if (!compareActive_ || defineText != definesB_)
+        {
+            const std::string sourcePrefix = DefinePrefix(defineText);
+            const std::string marchPrefix = sourcePrefix + (pointLights_
+                ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
+                : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");
+            const auto vertex = compiler_->Compile({
+                .source = kVertexShader, .entryPoint = "main", .stage = shader::Stage::Vertex, .debug = false});
+            const auto marchPixel = compiler_->Compile({
+                .source = MarchSource(marchPrefix, farField_), .entryPoint = "main", .stage = shader::Stage::Pixel, .debug = false});
+            auto marchPipeline = device_->CreateGraphicsPipeline({
+                .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+                .pixelShader = {.data = marchPixel.bytecode.data(), .size = marchPixel.bytecode.size()},
+                .vertexAttributes = {},
+                .vertexStrideBytes = 0U,
+                .pushConstantDwords = 64U,
+                .shaderResourceBuffers = pointLights_ ? 4U : 3U,
+                .sampledTextures = 3U,
+                .topology = rhi::PrimitiveTopology::TriangleList,
+                .fillMode = rhi::FillMode::Solid,
+                .cullMode = rhi::CullMode::None,
+                .blendMode = rhi::BlendMode::Opaque,
+                .depthTest = false,
+                .depthWrite = false,
+                .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+                .colorAttachmentCount = 1U});
+            const auto resolvePixel = compiler_->Compile({
+                .source = sourcePrefix + kResolvePixelShader, .entryPoint = "main", .stage = shader::Stage::Pixel, .debug = false});
+            auto resolvePipeline = device_->CreateGraphicsPipeline({
+                .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+                .pixelShader = {.data = resolvePixel.bytecode.data(), .size = resolvePixel.bytecode.size()},
+                .vertexAttributes = {},
+                .vertexStrideBytes = 0U,
+                .pushConstantDwords = 28U,
+                .shaderResourceBuffers = 0U,
+                .sampledTextures = 2U,
+                .topology = rhi::PrimitiveTopology::TriangleList,
+                .fillMode = rhi::FillMode::Solid,
+                .cullMode = rhi::CullMode::None,
+                .blendMode = rhi::BlendMode::Opaque,
+                .depthTest = false,
+                .depthWrite = false,
+                .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+                .colorAttachmentCount = 1U});
+            pipelineB_ = std::move(marchPipeline);
+            resolvePipelineB_ = std::move(resolvePipeline);
+            definesB_ = defineText;
+            checkerboardB_ = CheckerboardModeOf(defineText);
+        }
+        compareActive_ = true;
+        return {};
+    }
+    catch (const std::exception& exception)
+    {
+        return exception.what();
+    }
+}
+
+void CloudRenderer::ClearCompare()
+{
+    compareActive_ = false;
 }
 
 std::string CloudRenderer::SetShaderDefines(const std::string& defineText)
@@ -2780,7 +2904,10 @@ void CloudRenderer::Draw(
     const u32 frameIndex,
     const f32 godrayStrength,
     const f32 volumeDebugAltitude,
-    const std::span<const PointLight> pointLights)
+    const std::span<const PointLight> pointLights,
+    const u32 variant,
+    const f32 regionLeft,
+    const f32 regionRight)
 {
     if (width == 0U || height == 0U || field.LayerCount() == 0U ||
         field.FaceResolution() < 2U)
@@ -2813,10 +2940,11 @@ void CloudRenderer::Draw(
         .width = static_cast<f32>(target.Width()), .height = static_cast<f32>(target.Height()),
         .minDepth = 0.0F, .maxDepth = 1.0F});
     commands.SetScissor({
-        .left = 0, .top = 0,
-        .right = static_cast<i32>(target.Width()), .bottom = static_cast<i32>(target.Height())});
+        .left = static_cast<i32>(std::lround(regionLeft * static_cast<f32>(target.Width()))), .top = 0,
+        .right = static_cast<i32>(std::lround(regionRight * static_cast<f32>(target.Width()))),
+        .bottom = static_cast<i32>(target.Height())});
 
-    commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsPipeline(variant == 1U && pipelineB_ ? *pipelineB_ : *pipeline_);
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
@@ -3071,7 +3199,10 @@ void CloudRenderer::Resolve(
     const CloudResolveView& previous,
     const bool historyValid,
     const f32 currentWeight,
-    const u32 frameIndex)
+    const u32 frameIndex,
+    const u32 variant,
+    const f32 regionLeft,
+    const f32 regionRight)
 {
     if (width == 0U || height == 0U)
     {
@@ -3111,9 +3242,9 @@ void CloudRenderer::Resolve(
         .width = static_cast<f32>(width), .height = static_cast<f32>(height),
         .minDepth = 0.0F, .maxDepth = 1.0F});
     commands.SetScissor({
-        .left = 0, .top = 0,
-        .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
-    commands.SetGraphicsPipeline(*resolvePipeline_);
+        .left = static_cast<i32>(std::lround(regionLeft * static_cast<f32>(width))), .top = 0,
+        .right = static_cast<i32>(std::lround(regionRight * static_cast<f32>(width))), .bottom = static_cast<i32>(height)});
+    commands.SetGraphicsPipeline(variant == 1U && resolvePipelineB_ ? *resolvePipelineB_ : *resolvePipeline_);
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsTexture(0, current);
     commands.SetGraphicsTexture(1, history);
@@ -3142,6 +3273,36 @@ void CloudRenderer::Composite(
         .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
     commands.SetGraphicsPipeline(*compositePipeline_);
     commands.SetGraphicsTexture(0, clouds);
+    commands.Draw(6);
+}
+
+void CloudRenderer::CompositeSplit(
+    rhi::CommandList& commands,
+    rhi::Texture& cloudsLeft,
+    rhi::Texture& cloudsRight,
+    rhi::Texture& target,
+    const u32 width,
+    const u32 height,
+    const f32 position)
+{
+    if (width == 0U || height == 0U)
+    {
+        return;
+    }
+
+    commands.SetRenderTarget(target);
+    commands.SetViewport({
+        .x = 0.0F, .y = 0.0F,
+        .width = static_cast<f32>(width), .height = static_cast<f32>(height),
+        .minDepth = 0.0F, .maxDepth = 1.0F});
+    commands.SetScissor({
+        .left = 0, .top = 0,
+        .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
+    commands.SetGraphicsPipeline(*compositeSplitPipeline_);
+    const std::array<u32, 4> constants{Bits(position * static_cast<f32>(width)), 0U, 0U, 0U};
+    commands.SetGraphicsConstants(constants);
+    commands.SetGraphicsTexture(0, cloudsLeft);
+    commands.SetGraphicsTexture(1, cloudsRight);
     commands.Draw(6);
 }
 } // namespace orbit::celestial_clouds

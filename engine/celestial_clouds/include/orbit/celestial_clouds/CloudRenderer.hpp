@@ -102,6 +102,16 @@ public:
     // string; on error the previous shaders stay in use. Safe between frames: the replaced pipelines are retired by the RHI.
     [[nodiscard]] std::string SetShaderDefines(const std::string& defines);
     [[nodiscard]] const std::string& ShaderDefines() const noexcept { return defines_; }
+
+    // Split view (clouds.split_set): the left of the viewport shows the march with ShaderDefines(), the right a march and resolve
+    // compiled with these defines (the shadow and light-volume shaders stay as they are). `position` is the divider, 0..1 of the
+    // viewport width. Returns the compile error or an empty string; on error the split stays as it was.
+    [[nodiscard]] std::string SetCompareDefines(const std::string& defines, f32 position);
+    void ClearCompare();
+    [[nodiscard]] bool CompareActive() const noexcept { return compareActive_; }
+    [[nodiscard]] const std::string& CompareDefines() const noexcept { return definesB_; }
+    [[nodiscard]] f32 ComparePosition() const noexcept { return comparePosition_; }
+    [[nodiscard]] u32 CompareCheckerboardMode() const noexcept { return checkerboardB_; }
     // True while CLOUD_CHECKERBOARD=1: the march target is half the cloud size in each dimension (one pixel of every 2x2 block per frame).
     [[nodiscard]] bool CheckerboardEnabled() const noexcept { return checkerboard_ != 0U; }
     // 2 while CLOUD_CHECKERBOARD=2: half the pixels per frame, the march target is half the width and the full height.
@@ -136,7 +146,10 @@ public:
         // > 0 draws a horizontal slice of the sun light volume at this altitude (m) as a heatmap.
         f32 volumeDebugAltitude = 0.0F,
         // Ignored unless PointLightsEnabled().
-        std::span<const PointLight> pointLights = {});
+        std::span<const PointLight> pointLights = {},
+        u32 variant = 0U,        // 1: the split view's second march (SetCompareDefines)
+        f32 regionLeft = 0.0F,   // the part of the target drawn, as fractions of its width
+        f32 regionRight = 1.0F);
 
     [[nodiscard]] std::unique_ptr<LightVolume> CreateLightVolume() const;
 
@@ -196,7 +209,10 @@ public:
         const CloudResolveView& previous,
         bool historyValid,
         f32 currentWeight,
-        u32 frameIndex = 0U);
+        u32 frameIndex = 0U,
+        u32 variant = 0U,
+        f32 regionLeft = 0.0F,
+        f32 regionRight = 1.0F);
 
     // Blends the reduced-resolution result over 'target' (scene colour):
     // scene * T + L, bilinearly upsampled.
@@ -207,13 +223,33 @@ public:
         u32 width,
         u32 height);
 
+    // The split view's composite: cloud target `cloudsLeft` left of `position` (0..1 of the width), `cloudsRight` right of it, and a
+    // white divider line.
+    void CompositeSplit(
+        rhi::CommandList& commands,
+        rhi::Texture& cloudsLeft,
+        rhi::Texture& cloudsRight,
+        rhi::Texture& target,
+        u32 width,
+        u32 height,
+        f32 position);
+
 private:
+    [[nodiscard]] static u32 CheckerboardModeOf(const std::string& defineText);
     // Compiles the march, shadow and volume shaders and swaps them in; returns an error text or an empty string.
     [[nodiscard]] std::string RebuildShaderPipelines(const std::string& defineText);
     const shader::Compiler* compiler_{nullptr};
     std::string farField_;
     std::string defines_;
     u32 checkerboard_{0U};
+    // Split view: the second march/resolve pair, and the composite that shows both.
+    bool compareActive_{false};
+    f32 comparePosition_{0.5F};
+    std::string definesB_;
+    u32 checkerboardB_{0U};
+    std::unique_ptr<rhi::GraphicsPipeline> pipelineB_;
+    std::unique_ptr<rhi::GraphicsPipeline> resolvePipelineB_;
+    std::unique_ptr<rhi::GraphicsPipeline> compositeSplitPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> compositePipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> resolvePipeline_;

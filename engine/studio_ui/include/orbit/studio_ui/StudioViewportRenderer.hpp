@@ -382,6 +382,11 @@ public:
     // an empty string (the previous shaders stay in use on error).
     std::string SetCloudShaderDefines(const std::string& defines);
     [[nodiscard]] const std::string& CloudShaderDefines() const noexcept;
+    // Split view of the cloud march (clouds.split_set): left of `position` with CloudShaderDefines(), right with `defines`.
+    std::string SetCloudSplit(bool enabled, const std::string& defines, f32 position);
+    [[nodiscard]] bool CloudSplitEnabled() const noexcept;
+    [[nodiscard]] const std::string& CloudSplitDefines() const noexcept;
+    [[nodiscard]] f32 CloudSplitPosition() const noexcept;
     [[nodiscard]] std::vector<lighting::FlashStatus> LightningStatus() const;
     void ClearLightning();
     void SetLightningStormAnchor(const lighting::StormAnchor& anchor);
@@ -851,6 +856,7 @@ private:
         u32 frame{0U};
         celestial_clouds::CloudRenderer::CloudResolveView previous{};
         celestial_clouds::CloudLab previousLab{};
+        f32 splitPosition{-1.0F};   // the split divider the history was resolved for
     };
     std::map<std::string, CloudTemporal, std::less<>> cloudTemporal_;
     // One sun light volume per view: it is tied to that view's camera.

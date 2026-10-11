@@ -1385,7 +1385,16 @@ int orbit::editor_app::StudioApplication::Run(
             {
                 [&studioViewportRenderer] { return studioViewportRenderer.CloudShaderDefines(); },
                 [&studioViewportRenderer](const std::string& defines)
-                { return studioViewportRenderer.SetCloudShaderDefines(defines); }
+                { return studioViewportRenderer.SetCloudShaderDefines(defines); },
+                [&studioViewportRenderer]
+                {
+                    return orbit::studio_ui::CloudSplitState{
+                        studioViewportRenderer.CloudSplitEnabled(),
+                        studioViewportRenderer.CloudSplitDefines(),
+                        studioViewportRenderer.CloudSplitPosition()};
+                },
+                [&studioViewportRenderer](const bool enabled, const std::string& defines, const orbit::f32 position)
+                { return studioViewportRenderer.SetCloudSplit(enabled, defines, position); }
             });
 
         // Simulation transport (Simulate / Pause / Step) and time.* RPC, both

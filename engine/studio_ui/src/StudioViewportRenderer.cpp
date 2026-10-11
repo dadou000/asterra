@@ -59,6 +59,31 @@ const std::string& StudioViewportRenderer::CloudShaderDefines() const noexcept
     return cloudRenderer_.ShaderDefines();
 }
 
+std::string StudioViewportRenderer::SetCloudSplit(const bool enabled, const std::string& defines, const f32 position)
+{
+    if (!enabled)
+    {
+        cloudRenderer_.ClearCompare();
+        return {};
+    }
+    return cloudRenderer_.SetCompareDefines(defines, position);
+}
+
+bool StudioViewportRenderer::CloudSplitEnabled() const noexcept
+{
+    return cloudRenderer_.CompareActive();
+}
+
+const std::string& StudioViewportRenderer::CloudSplitDefines() const noexcept
+{
+    return cloudRenderer_.CompareDefines();
+}
+
+f32 StudioViewportRenderer::CloudSplitPosition() const noexcept
+{
+    return cloudRenderer_.ComparePosition();
+}
+
 void StudioViewportRenderer::ClearLightning()
 {
     const std::scoped_lock lock(transientFlashMutex_);
