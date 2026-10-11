@@ -70,6 +70,24 @@ if(BUILD_TESTING)
     )
 
     add_executable(
+        OrbitCelestialWeatherTimewarpTests
+        tests/WeatherTimewarpTests.cpp
+    )
+    target_link_libraries(
+        OrbitCelestialWeatherTimewarpTests
+        PRIVATE
+            Orbit::CelestialClouds
+    )
+    target_compile_features(
+        OrbitCelestialWeatherTimewarpTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialWeatherTimewarpTests)
+    add_test(
+        NAME Orbit.CelestialWeatherTimewarp
+        COMMAND OrbitCelestialWeatherTimewarpTests
+    )
+
+    add_executable(
         OrbitCelestialCloudFarFieldTests
         tests/CloudFarFieldTests.cpp
     )

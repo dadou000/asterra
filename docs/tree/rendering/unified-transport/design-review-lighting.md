@@ -54,3 +54,10 @@ verified = "6614c30"
   observer independent, while refraction depends on the local vertical, so it must be applied once after the observer is known and read by every consumer, or shadows and the disc disagree with the light.
 - Not done: nothing consumes the table yet. Wiring the apparent Sun direction into the sun disc, shadows and the atmosphere LUT, and exposing surface refractivity as an authored/derived atmosphere property
   (which needs a schema property and RPC/MCP parity), are the next steps.
+
+## Finding 12: the timewarp invariant already holds; the weather map just runs fast
+
+Audit of the spec's "query weather at absolute simulation time, no backlog": `EvaluateWeather` is a pure analytic function of direction and absolute seconds, so it holds by construction, and
+measurement confirms it numerically: valid at every epoch up to 1e10 s (about 317 years), no precision loss (mean coverage change per second 1.37e-5 at t = 0 and at t = 1e10), no drift of global cover, circulation structure intact.
+What the audit did find is pace: patterns reshuffle in about half a day (correlation 0.96 after 1 hour, 0.32 after 1 day) and the storm-track waves propagate at ~60 m/s against 10-15 m/s in nature. That is an authoring
+choice recorded in `/rendering/clouds`, not changed here.

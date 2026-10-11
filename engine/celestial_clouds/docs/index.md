@@ -10,6 +10,7 @@ macro-globe composite, a per-pixel ray-marched cloud shell for clipmap/near-fiel
 texture read by direct lighting. Near-field clouds and shadows share the per-view `clouds` toggle."""
 keywords = ["clouds", "cloud field", "weather", "ray march", "cloud shadow", "cumulonimbus", "stratus", "cloud type", "volumetric", "orbital weather"]
 sources = [
+  "engine/celestial_clouds/tests/WeatherTimewarpTests.cpp",
   "engine/celestial_clouds/include/orbit/celestial_clouds/CloudField.hpp",
   "engine/celestial_clouds/include/orbit/celestial_clouds/CloudRenderer.hpp",
   "engine/celestial_clouds/include/orbit/celestial_clouds/WeatherModel.hpp",
@@ -19,6 +20,8 @@ sources = [
 ]
 symbols = ["CloudFieldProduct", "GpuCloudFieldProduct", "CloudLayerField", "CloudTexel", "WeatherClimate", "CloudRenderer"]
 invariants = [
+  "EvaluateWeather is a pure function of (direction, absolute seconds, parameters, climate): valid and finite at any epoch tested up to 1e10 s (about 317 years), identical on repeat, as smooth in time at t = 1e10 s as at t = 0 (mean coverage change 1.37e-5 per second at both) and with no drift of global cover (0.367-0.387 across epochs) or loss of circulation structure; timewarp therefore needs no stepping through skipped time (pinned by WeatherTimewarpTests).",
+  "Pace of the weather map is fast compared with nature, by authoring: everything drifts through a noise dimension at evolve = 1.5e-5 per second (the pattern is 0.96 correlated after one hour and about 0.32 after a day, a floor set by the fixed latitude bands) and the baroclinic wave phase advances at 6 x evolve, i.e. waves travel ~60 m/s at 52 degrees latitude where real synoptic waves move 10-15 m/s. Fine at 1x; at high timewarp clouds morph rather than drift for days. Slowing the rates ~5-8x is a one-line change but changes the look of every session, so it is left as an art decision.",
   "The cloud field is built once per body on the GPU and shared: the orbital globe composite and the ray-marched shell read the same field, so both views agree on where the weather is.",
   "CloudRenderer draws only when the view uses the clipmap (full_clipmap) or has no macro globe; clouds are never composited twice.",
   "Turning the view's `clouds` flag off stops the ray march and the cloud shadow; the cloud field itself is still built and used for shadows and orbital globes.",
@@ -33,7 +36,7 @@ verify = [
   "orbit_view_text_diagnostics: the `clouds` object (layer count, mean coverage and optical depth, time bucket, GPU residency) is absent when the body has no cloud layer.",
   "Clouds-on vs clouds-off captures at 0.8, 3, 8, 60 and 2,000 km differ only by clouds and their shadow.",
 ]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "69bafa8"
 
 [routes]
 "how the near-field cloud march works, why it is blurry/striped/slow" = "raymarch"
