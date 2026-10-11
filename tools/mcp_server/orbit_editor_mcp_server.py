@@ -1164,8 +1164,10 @@ def orbit_clouds_set_defines(defines: str) -> dict[str, Any]:
     a march tunable can be A/B-compared without relaunching Studio. Tunables:
     CLOUD_FAR_EARLYOUT, CLOUD_JITTER_FIX, CLOUD_INCLOUD_STEP_SCALE,
     CLOUD_MAX_STEPS, CLOUD_SCHEDULE_STEPS, CLOUD_FOOTPRINT_STEP,
-    CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP, CLOUD_SUN_FAR_START, CLOUD_SUN_FAR_END,
-    CLOUD_SUN_VOLUME. Returns the defines in use, compile_ms and error (empty
+    CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP, CLOUD_EMPTY_COVERAGE, CLOUD_SUN_FAR_START,
+    CLOUD_SUN_FAR_END, CLOUD_SUN_VOLUME, CLOUD_RESOLVE_WEIGHT (temporal resolve
+    current-frame weight 0..1, unset = 0.2) and the CLOUD_PROF_* profiling
+    stubs. Returns the defines in use, compile_ms and error (empty
     on success; on a compile error the previous shaders stay in use). Allow a
     second or two for the image to converge afterwards."""
     return _rpc("clouds.set_defines", {"defines": defines})

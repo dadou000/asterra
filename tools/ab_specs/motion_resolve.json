@@ -1,0 +1,83 @@
+{
+  "_comment": "Motion capture validation: the cloud resolve's history weight (shipped 0.2 = about five frames of averaging) against 0.1, 0.4 and 1.0 (no history). Each scene pans the camera across the cloud field one step per rendered frame; every in-motion frame is compared (after an exposure-gain correction) with a converged still at the same pose (the reference path, baseline shaders) inside box_rel, and a static camera gives the flicker. Expect flicker to fall with more history, and a faster pan to raise the error.",
+  "mode": "in_process",
+  "rounds": 2,
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "shipped",
+  "changed_pixel_threshold": 12,
+  "variants": {
+    "shipped": {
+      "env": {
+        "ORBIT_CLOUD_DEFINES": ""
+      }
+    },
+    "w10": {
+      "env": {
+        "ORBIT_CLOUD_DEFINES": "CLOUD_RESOLVE_WEIGHT=0.1"
+      }
+    },
+    "w40": {
+      "env": {
+        "ORBIT_CLOUD_DEFINES": "CLOUD_RESOLVE_WEIGHT=0.4"
+      }
+    },
+    "w100": {
+      "env": {
+        "ORBIT_CLOUD_DEFINES": "CLOUD_RESOLVE_WEIGHT=1.0"
+      }
+    }
+  },
+  "scenes": [
+    {
+      "name": "pan_slow",
+      "time_microseconds": 18070405751,
+      "local_time_seconds": 43200,
+      "pose": {
+        "kind": "surface",
+        "lat_deg": 5.0,
+        "lon_deg": 0.0,
+        "alt_m": 1200,
+        "yaw_deg": -6,
+        "pitch_deg": 8
+      },
+      "motion": {
+        "kind": "pan",
+        "per_step": 0.25,
+        "steps": 24,
+        "frames_per_step": 1
+      },
+      "box_rel": [
+        0.0,
+        0.25,
+        1.0,
+        0.6
+      ]
+    },
+    {
+      "name": "pan_fast",
+      "local_time_seconds": 43200,
+      "pose": {
+        "kind": "surface",
+        "lat_deg": 5.0,
+        "lon_deg": 0.0,
+        "alt_m": 1200,
+        "yaw_deg": -12,
+        "pitch_deg": 8
+      },
+      "motion": {
+        "kind": "pan",
+        "per_step": 1.0,
+        "steps": 24,
+        "frames_per_step": 1
+      },
+      "box_rel": [
+        0.0,
+        0.25,
+        1.0,
+        0.6
+      ]
+    }
+  ],
+  "ghost_threshold": 3
+}

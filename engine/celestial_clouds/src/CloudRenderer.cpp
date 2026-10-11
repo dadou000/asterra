@@ -1912,6 +1912,9 @@ float4 main(VSOutput input) : SV_Target0
 // is compensated as well as rotation; the history is clamped to the current 3x3
 // neighbourhood so changing weather and disocclusion never leave ghosts.
 constexpr const char* kResolvePixelShader = R"(
+#ifndef CLOUD_RESOLVE_WEIGHT
+#define CLOUD_RESOLVE_WEIGHT -1.0
+#endif
 struct VSOutput
 {
     float4 position : SV_Position;
@@ -2011,7 +2014,9 @@ float4 main(VSOutput input) : SV_Target0
         return current;
     }
     history = clamp(history, lo, hi);
-    return lerp(history, current, r.params.x);
+    // CLOUD_RESOLVE_WEIGHT >= 0 overrides the caller's weight (developer hook: ORBIT_CLOUD_DEFINES / clouds.set_defines).
+    const float currentWeight = CLOUD_RESOLVE_WEIGHT >= 0.0 ? CLOUD_RESOLVE_WEIGHT : r.params.x;
+    return lerp(history, current, currentWeight);
 }
 )";
 
@@ -2338,27 +2343,6 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
-    const auto resolvePixel = compiler.Compile({
-        .source = kResolvePixelShader,
-        .entryPoint = "main",
-        .stage = shader::Stage::Pixel,
-        .debug = false});
-    resolvePipeline_ = device.CreateGraphicsPipeline({
-        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
-        .pixelShader = {.data = resolvePixel.bytecode.data(), .size = resolvePixel.bytecode.size()},
-        .vertexAttributes = {},
-        .vertexStrideBytes = 0U,
-        .pushConstantDwords = 28U,
-        .shaderResourceBuffers = 0U,
-        .sampledTextures = 2U,
-        .topology = rhi::PrimitiveTopology::TriangleList,
-        .fillMode = rhi::FillMode::Solid,
-        .cullMode = rhi::CullMode::None,
-        .blendMode = rhi::BlendMode::Opaque,
-        .depthTest = false,
-        .depthWrite = false,
-        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
-        .colorAttachmentCount = 1U});
 
     if (const std::string error = RebuildShaderPipelines(defineText); !error.empty())
     {
@@ -2481,8 +2465,30 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
         .shaderResourceBuffers = 3U,
         .storageTextures = 0U,
         .sampledTextures = 0U});
+        const auto resolvePixel = compiler_->Compile({
+            .source = sourcePrefix + kResolvePixelShader,
+            .entryPoint = "main",
+            .stage = shader::Stage::Pixel,
+            .debug = false});
+        auto resolvePipeline = device_->CreateGraphicsPipeline({
+            .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+            .pixelShader = {.data = resolvePixel.bytecode.data(), .size = resolvePixel.bytecode.size()},
+            .vertexAttributes = {},
+            .vertexStrideBytes = 0U,
+            .pushConstantDwords = 28U,
+            .shaderResourceBuffers = 0U,
+            .sampledTextures = 2U,
+            .topology = rhi::PrimitiveTopology::TriangleList,
+            .fillMode = rhi::FillMode::Solid,
+            .cullMode = rhi::CullMode::None,
+            .blendMode = rhi::BlendMode::Opaque,
+            .depthTest = false,
+            .depthWrite = false,
+            .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+            .colorAttachmentCount = 1U});
         // Everything compiled: swap. The old pipelines are retired by the RHI once the GPU is done with them.
         pipeline_ = std::move(marchPipeline);
+        resolvePipeline_ = std::move(resolvePipeline);
         shadowPipeline_ = std::move(shadowPipeline);
         volumePipeline_ = std::move(volumePipeline);
         defines_ = defineText;

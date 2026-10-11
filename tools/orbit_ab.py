@@ -261,6 +261,198 @@ def set_scene(scene: dict, radius: float) -> None:
     apply_pose(scene["pose"], radius)
 
 
+def shrink(image: np.ndarray, k: int = 4) -> np.ndarray:
+    """Box-average by k: motion metrics run on this so a path of 24 frames stays in memory."""
+    height, width, _ = image.shape
+    return image[: height // k * k, : width // k * k].reshape(height // k, k, width // k, k, 3).mean(axis=(1, 3))
+
+
+def crop_box(image: np.ndarray, scene: dict) -> np.ndarray:
+    """scene["box_rel"] = [x0, y0, x1, y1] in 0..1 restricts the motion metrics to a region (the cloud band, not the sea)."""
+    box = scene.get("box_rel")
+    if not box:
+        return image
+    height, width, _ = image.shape
+    return image[int(box[1] * height): int(box[3] * height), int(box[0] * width): int(box[2] * width)]
+
+
+def aligned_error(frame: np.ndarray, reference: np.ndarray, threshold: float) -> tuple[float, float, float]:
+    """Mean abs error, share of pixels over `threshold` and the exposure gain, after scaling the frame to the reference's mean.
+
+    Auto-exposure adapts over seconds while the path runs; without this the error is dominated by the adaptation state the
+    previous variant left behind (visible as a decay over the first steps of every curve), not by the temporal technique.
+    """
+    gain = float(reference.mean() / max(float(frame.mean()), 1.0e-6))
+    diff = np.abs(frame * gain - reference)
+    return float(diff.mean()), float((diff.max(axis=2) > threshold).mean()), abs(gain - 1.0)
+
+
+def frames_now() -> int:
+    return int(rpc("profiler.status").get("frames", 0))
+
+
+def wait_frames(count: int, timeout: float = 2.0) -> int:
+    """Block until the renderer has finished `count` more frames; returns how many passed."""
+    start = frames_now()
+    deadline = time.time() + timeout
+    while frames_now() < start + count and time.time() < deadline:
+        time.sleep(0.003)
+    return frames_now() - start
+
+
+def motion_pose(pose: dict, motion: dict, i: int, radius: float) -> dict:
+    """The camera pose at path step i. Surface poses: pan / pitch (degrees per step), ascend (metres per step) or move (metres per
+    step along the heading, at constant altitude). Approach poses: alt_km changes by per_step per step (negative descends)."""
+    p = dict(pose)
+    per = float(motion.get("per_step", 0.5))
+    kind = motion.get("kind", "pan")
+    if p.get("kind", "surface") == "approach":
+        p["alt_km"] = float(p["alt_km"]) + per * i
+        return p
+    if kind == "pan":
+        p["yaw_deg"] = float(p.get("yaw_deg", 0.0)) + per * i
+    elif kind == "pitch":
+        p["pitch_deg"] = float(p.get("pitch_deg", 0.0)) + per * i
+    elif kind == "ascend":
+        p["alt_m"] = float(p["alt_m"]) + per * i
+    elif kind == "move":
+        up = lat_lon_up(p["lat_deg"], p["lon_deg"])
+        north, east = surface_frame(up)
+        yaw = math.radians(float(p.get("yaw_deg", 0.0)))
+        moved = up * (radius + float(p["alt_m"])) + (math.cos(yaw) * north + math.sin(yaw) * east) * per * i
+        moved /= np.linalg.norm(moved)
+        p["lat_deg"] = math.degrees(math.asin(moved[1]))
+        p["lon_deg"] = math.degrees(math.atan2(-moved[2], moved[0]))
+    else:
+        raise ValueError(f"unknown motion kind {kind!r}")
+    return p
+
+
+def reference_pass(scene: dict, motion: dict, radius: float, tmp: pathlib.Path, spec: dict) -> list[np.ndarray]:
+    """What each pose should look like with all the history in the world: wait `reference_settle` frames at the pose, then
+    average `reference_frames` consecutive frames (so the reference's own temporal noise is negligible). Stopping at the first
+    stable full-frame mean is not enough: the cloud band is a small part of the frame and keeps converging after that."""
+    settle = int(spec.get("reference_settle", 60))
+    count = int(spec.get("reference_frames", 6))
+    frames = []
+    for i in range(int(motion.get("steps", 24))):
+        apply_pose(motion_pose(scene["pose"], motion, i, radius), radius)
+        wait_frames(settle, timeout=settle / 20.0 + 3.0)
+        stack = []
+        for _ in range(count):
+            wait_frames(1)
+            stack.append(crop_box(shrink(grab(tmp)), scene))
+        frames.append(np.mean(np.stack(stack), axis=0))
+    return frames
+
+
+def motion_pass(scene: dict, motion: dict, radius: float, tmp: pathlib.Path, spec: dict):
+    """The path in motion: the pose advances every `frames_per_step` rendered frames and the frame is grabbed right after."""
+    steps = int(motion.get("steps", 24))
+    per = int(motion.get("frames_per_step", 1))
+    apply_pose(scene["pose"], radius)
+    wait_frames(int(spec.get("warmup_frames", 150)), timeout=15.0)   # a fixed count: a slow history (weight 0.1) needs more than "stable mean"
+    frames, since, middle = [], [], None
+    for i in range(steps):
+        apply_pose(motion_pose(scene["pose"], motion, i, radius), radius)
+        before = frames_now()
+        wait_frames(per)
+        image = grab(tmp)
+        since.append(frames_now() - before)
+        frames.append(crop_box(shrink(image), scene))
+        if i == steps // 2:
+            middle = image
+    recent = rpc("profiler.status").get("recent_frame_ms") or []
+    return frames, middle, since, round(float(np.median(recent)), 2) if recent else 0.0
+
+
+def flicker_pass(scene: dict, radius: float, tmp: pathlib.Path, spec: dict, count: int = 10) -> float:
+    """Static camera, consecutive frames: mean over pixels of the standard deviation (0..255) = temporal noise."""
+    apply_pose(scene["pose"], radius)
+    wait_frames(int(spec.get("warmup_frames", 150)), timeout=15.0)
+    stack = []
+    for _ in range(count):
+        wait_frames(1)
+        stack.append(crop_box(shrink(grab(tmp)), scene))
+    return round(float(np.mean(np.std(np.stack(stack), axis=0))), 4)
+
+
+def run_motion_scene(spec, scene, order, baseline, radius, rounds, out, images, control, frame_rounds, motion_rounds):
+    """Motion protocol for one scene across every variant (rounds interleaved), against a baseline-shader reference path."""
+    variants = spec["variants"]
+    name = scene["name"]
+    motion = scene["motion"]
+    threshold = float(spec.get("ghost_threshold", 3))
+    tmp = out / "_motion_tmp.png"
+    set_scene(scene, radius)
+
+    def use(v: str) -> None:
+        text = variants[v].get("env", {}).get("ORBIT_CLOUD_DEFINES", "")
+        reply = rpc("clouds.set_defines", {"defines": text})
+        if reply.get("error"):
+            raise RuntimeError(f"clouds.set_defines({text!r}): {reply['error']}")
+
+    use(baseline)
+    print(f"  reference path for {name}: {int(motion.get('steps', 24))} converged poses", flush=True)
+    reference = reference_pass(scene, motion, radius, tmp, spec)
+    for r in range(rounds):
+        for v in (order if r % 2 == 0 else list(reversed(order))):
+            use(v)
+            frames, middle, since, ms = motion_pass(scene, motion, radius, tmp, spec)
+            flicker = flicker_pass(scene, radius, tmp, spec)
+            scored = [aligned_error(f, g, threshold) for f, g in zip(frames, reference)]
+            err = [s[0] for s in scored]
+            ghost = [s[1] for s in scored]
+            record = {"err_mean": round(float(np.mean(err[1:])), 4), "err_max": round(float(np.max(err[1:])), 4),
+                      "ghost_frac": round(float(np.mean(ghost[1:])), 5), "flicker": flicker,
+                      "exposure_drift": round(float(np.mean([s[2] for s in scored])), 4),
+                      "frames_until_grab": round(float(np.mean(since)), 2), "err_by_step": [round(e, 3) for e in err]}
+            motion_rounds[v].setdefault(name, []).append(record)
+            frame_rounds[v].setdefault(name, []).append(ms)
+            if r == 0:
+                images[v][name] = middle
+                Image.fromarray(middle.astype("uint8")).save(out / v / f"{name}.png")
+            elif r == 1 and v == baseline:
+                control[name] = middle
+            print(f"  r{r} {v:12s} {name:18s} motion err {record['err_mean']:6.3f}/255 (max {record['err_max']:6.3f}) "
+                  f"ghost {100 * record['ghost_frac']:5.2f}%  flicker {flicker:6.3f}  exposure drift {100 * record['exposure_drift']:4.2f}%  frame {ms} ms",
+                  flush=True)
+    return reference
+
+
+def summarise_motion(rounds_by_variant: dict) -> dict:
+    """Mean over rounds of each metric; `spread` is max - min over rounds for err_mean (the metric's own noise)."""
+    out = {}
+    for name, rows in rounds_by_variant.items():
+        out[name] = {"err_mean": round(float(np.mean([r["err_mean"] for r in rows])), 4),
+                     "err_max": round(float(np.mean([r["err_max"] for r in rows])), 4),
+                     "ghost_frac": round(float(np.mean([r["ghost_frac"] for r in rows])), 5),
+                     "flicker": round(float(np.mean([r["flicker"] for r in rows])), 4),
+                     "exposure_drift": round(float(np.mean([r["exposure_drift"] for r in rows])), 4),
+                     "frames_until_grab": round(float(np.mean([r["frames_until_grab"] for r in rows])), 2),
+                     "err_spread": round(float(max(r["err_mean"] for r in rows) - min(r["err_mean"] for r in rows)), 4),
+                     "err_by_step": [round(float(np.mean([r["err_by_step"][i] for r in rows])), 3) for i in range(len(rows[0]["err_by_step"]))]}
+    return out
+
+
+def motion_plot(out: pathlib.Path, scene: str, summary: dict) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    figure, axes = plt.subplots(1, 2, figsize=(11, 3.6), gridspec_kw={"width_ratios": [3, 1.4]})
+    for v, entry in summary.items():
+        axes[0].plot(entry["err_by_step"], label=f"{v} (mean {entry['err_mean']:.2f})")
+    axes[0].set_title(f"{scene}: error of each in-motion frame vs the converged pose (/255)")
+    axes[0].set_xlabel("path step")
+    axes[0].legend(fontsize=7)
+    axes[1].bar(range(len(summary)), [e["flicker"] for e in summary.values()])
+    axes[1].set_xticks(range(len(summary)), list(summary), rotation=60, fontsize=7)
+    axes[1].set_title("static flicker (std /255)")
+    figure.tight_layout()
+    figure.savefig(out / f"motion_{scene}.png", dpi=90)
+    plt.close(figure)
+
+
 def run_in_process(spec: dict, exe: pathlib.Path, out: pathlib.Path, order: list[str], baseline: str):
     """One Studio launch for every variant: clouds.set_defines swaps the cloud shader defines in place.
 
@@ -281,8 +473,12 @@ def run_in_process(spec: dict, exe: pathlib.Path, out: pathlib.Path, order: list
     gpu_rounds: dict[str, dict[str, list]] = {v: {} for v in order}
     for v in order:
         (out / v).mkdir(parents=True, exist_ok=True)
+    motion_rounds: dict[str, dict[str, list]] = {v: {} for v in order}
     for scene in spec["scenes"]:
         name = scene["name"]
+        if scene.get("motion"):
+            run_motion_scene(spec, scene, order, baseline, radius, rounds, out, images, control, frame_rounds, motion_rounds)
+            continue
         set_scene(scene, radius)
         for r in range(rounds):
             for v in (order if r % 2 == 0 else list(reversed(order))):
@@ -312,8 +508,10 @@ def run_in_process(spec: dict, exe: pathlib.Path, out: pathlib.Path, order: list
             rows = gpu_rounds[v].get(n, [])
             gpu_mean[n] = {p: round(float(np.mean([row[p] for row in rows])), 3) for p in rows[0]} if rows else {}
         frame[v] = {"frame_ms": {n: round(float(np.mean(frame_rounds[v][n])), 2) for n in names}, "gpu_ms": gpu_mean,
-                    "rounds_ms": {n: frame_rounds[v][n] for n in names}}
+                    "rounds_ms": {n: frame_rounds[v][n] for n in names}, "motion": summarise_motion(motion_rounds[v])}
     spread = {n: round(max(frame_rounds[baseline][n]) - min(frame_rounds[baseline][n]), 2) for n in names}
+    if rounds < 2 or len(control) < len(names):
+        return images, frame, []   # one round: no repeat of the baseline to serve as the noise floor
     control_name = f"{baseline}_control1"
     images[control_name] = control
     frame[control_name] = {"frame_ms": {n: round(frame[baseline]["frame_ms"][n] + spread[n], 2) for n in names}, "gpu_ms": {},
@@ -438,6 +636,8 @@ def cmd_run(args) -> int:
         entry = {"noise": [metrics(images[baseline][name], images[c][name], box, threshold) for c in controls]}
         entry["variants"] = {v: metrics(images[baseline][name], images[v][name], box, threshold) for v in order[1:]}
         entry["frame_ms"] = {v: frame[v]["frame_ms"][name] for v in order}
+        if any(name in frame[v].get("motion", {}) for v in order):
+            entry["motion"] = {v: frame[v]["motion"][name] for v in order if name in frame[v].get("motion", {})}
         entry["gpu_pass_ms"] = {v: frame[v]["gpu_ms"].get(name, {}) for v in order}
         entry["gpu_pass_ms_repeat"] = [frame[c]["gpu_ms"].get(name, {}) for c in controls]
         # Launch-to-launch drift (GPU clocks, order): the same build measured again. Cost differences below it are not resolved.
@@ -445,9 +645,17 @@ def cmd_run(args) -> int:
         entry["image_sha256"] = {v: sha256(out / v / f"{name}.png") for v in order}
         entry["resolution"] = list(images[baseline][name].shape[:2])
         report["scenes"][name] = entry
+    for name, entry in report["scenes"].items():
+        if entry.get("motion"):
+            motion_plot(out, name, entry["motion"])
     (out / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     make_sheet(out, order, [s["name"] for s in spec["scenes"]], images, baseline)
     print(f"\nbaseline={baseline}  total {report['seconds']} s  ->  {out}")
+    for name, entry in report["scenes"].items():
+        for v, m in (entry.get("motion") or {}).items():
+            floor = (entry["motion"].get(baseline) or {}).get("err_spread", 0.0)
+            print(f"  motion {name:16s} {v:12s} err {m['err_mean']:7.3f} (max {m['err_max']:7.3f}) ghost {100 * m['ghost_frac']:6.2f}% "
+                  f"flicker {m['flicker']:7.3f}  exposure drift {100 * m['exposure_drift']:5.2f}%  [baseline err spread over rounds {floor:.3f}]")
     for name, entry in report["scenes"].items():
         noise = max((n.get("mean", 0.0) for n in entry["noise"]), default=0.0)
         noise_px = max((n.get("px_over", 0) for n in entry["noise"]), default=0)

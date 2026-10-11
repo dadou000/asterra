@@ -29,8 +29,9 @@ void RegisterCloudShaderRpc(rpc::Dispatcher& dispatcher, CloudShaderHost host)
                 "Recompiles the cloud march, shadow and volume shaders with `defines` (\"NAME=VALUE;NAME=VALUE\", an empty "
                 "string restores the shipped shaders) so a march tunable can be changed without relaunching. Tunables: "
                 "CLOUD_FAR_EARLYOUT, CLOUD_JITTER_FIX, CLOUD_INCLOUD_STEP_SCALE, CLOUD_MAX_STEPS, CLOUD_SCHEDULE_STEPS, "
-                "CLOUD_FOOTPRINT_STEP, CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP, CLOUD_SUN_FAR_START, CLOUD_SUN_FAR_END, "
-                "CLOUD_SUN_VOLUME. Returns `defines` in use, `compile_ms` and `error` (empty on success; on a compile error "
+                "CLOUD_FOOTPRINT_STEP, CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP, CLOUD_EMPTY_COVERAGE, CLOUD_SUN_FAR_START, "
+                "CLOUD_SUN_FAR_END, CLOUD_SUN_VOLUME, CLOUD_RESOLVE_WEIGHT (the temporal resolve's current-frame weight, 0 to 1; "
+                "unset = 0.2) and the CLOUD_PROF_* profiling stubs. Returns `defines` in use, `compile_ms` and `error` (empty on success; on a compile error "
                 "the previous shaders stay in use). Give the image a second or two to converge after a change (temporal "
                 "history and the light volume refresh).",
             .mutating = true

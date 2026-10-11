@@ -67,7 +67,31 @@ score with `docs/reviews/RUBRIC.md` (null = N/A), keep hypotheses apart from ver
 variants that differ by those defines can be compared this way; env flags read once at startup (`ORBIT_REFRACT_SUN`, `ORBIT_CLOUD_POINT_LIGHTS`, ...) need the relaunch mode.
 Set `gpu_passes` (for example `["Clouds"]`) and `gpu_window_ms` for per-pass GPU time.
 
+## Motion capture
+
+A scene with a `motion` block (`kind` pan, pitch, ascend or move: degrees or metres `per_step`; for an `approach` pose, `alt_km` per step; `steps`;
+`frames_per_step`) is run as a camera path in `in_process` mode, for judging temporal techniques that stills cannot show. For each variant:
+warm up a fixed `warmup_frames` (default 150), advance the pose every `frames_per_step` rendered frames (synchronised on the profiler frame counter) and grab each frame;
+then a static camera is grabbed for ten consecutive frames. Reference = the baseline shaders at every pose of the path after `reference_settle` frames,
+averaged over `reference_frames` frames (a stop-at-stable-mean reference is not converged in the cloud band and shows up as an error that decays with path step).
+`box_rel` ([x0, y0, x1, y1] in 0..1) limits the metrics to a region such as the cloud band. Reported per variant (mean of the rounds):
+
+| Metric | Meaning |
+| --- | --- |
+| `err_mean`, `err_max` | mean absolute error of each in-motion frame against the reference, after scaling the frame to the reference's mean (auto-exposure adapts over seconds), /255 |
+| `ghost_frac` | share of pixels over `ghost_threshold` (default 3/255); lag at cloud edges AND temporal noise both count |
+| `flicker` | static camera, mean over pixels of the standard deviation over ten consecutive frames, /255 (temporal noise) |
+| `exposure_drift` | mean absolute exposure gain applied |
+| `err_spread` | the baseline's max-min of `err_mean` over rounds: the metric's own noise |
+
+`motion_<scene>.png` plots the error by step and the flicker bars. Read the two together: more history lowers flicker and mean error (less noise) while raising the
+share of pixels off by lag, so a variant is judged on both. Limits: `frames_until_grab` includes the screenshot's own latency (about 13 frames) so "one frame since the
+pose change" is not guaranteed, only that every variant gets the same protocol; error mixes noise and lag; the shape along the path follows the content the camera sweeps over.
+Validation (`tools/ab_specs/motion_resolve.json`, history weight 0.1 / 0.2 shipped / 0.4 / 1.0): flicker rises with the current-frame weight (0.049 / 0.059 / 0.077 / 0.124 in
+the slow pan), the error of the fast pan is about twice the slow one for the shipped weight (0.20 vs 0.11), and the baseline's error spread over rounds is 0.001 to 0.006. A smoke run
+(8 steps, two variants, one round) takes about a minute; the full validation about nine.
+
 ## Developer hook
 
-`ORBIT_CLOUD_DEFINES="NAME=VALUE;NAME=VALUE"` becomes `#define` lines in every cloud shader at startup, and `clouds.set_defines` (MCP `orbit_clouds_set_defines`) does the same in the running Studio. Tunables today: `CLOUD_FAR_EARLYOUT`, `CLOUD_JITTER_FIX`, `CLOUD_INCLOUD_STEP_SCALE`, `CLOUD_MAX_STEPS`, `CLOUD_SCHEDULE_STEPS`, `CLOUD_FOOTPRINT_STEP`, `CLOUD_BASE_STEP`, `CLOUD_EMPTY_SKIP`, `CLOUD_SUN_FAR_START`, `CLOUD_SUN_FAR_END`, `CLOUD_SUN_VOLUME`. Add a tunable by guarding it with `#ifndef` and a default
+`ORBIT_CLOUD_DEFINES="NAME=VALUE;NAME=VALUE"` becomes `#define` lines in every cloud shader at startup, and `clouds.set_defines` (MCP `orbit_clouds_set_defines`) does the same in the running Studio. Tunables today: `CLOUD_FAR_EARLYOUT`, `CLOUD_JITTER_FIX`, `CLOUD_INCLOUD_STEP_SCALE`, `CLOUD_MAX_STEPS`, `CLOUD_SCHEDULE_STEPS`, `CLOUD_FOOTPRINT_STEP`, `CLOUD_BASE_STEP`, `CLOUD_EMPTY_SKIP`, `CLOUD_EMPTY_COVERAGE`, `CLOUD_SUN_FAR_START`, `CLOUD_SUN_FAR_END`, `CLOUD_SUN_VOLUME`, `CLOUD_RESOLVE_WEIGHT` and the `CLOUD_PROF_*` profiling stubs. Add a tunable by guarding it with `#ifndef` and a default
 that equals the shipped behaviour.
