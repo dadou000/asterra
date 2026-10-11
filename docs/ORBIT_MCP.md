@@ -384,6 +384,25 @@ Type and property IDs are stable GUIDs; `schema.catalog` lists all of them with
 kind, unit, default, `advanced` and `read_only`. Use `transaction.begin` /
 `commit` to make a multi-property edit one undo step.
 
+### Authored point and spot lights
+
+There is no dedicated light tool: create the light with `object.create` (type `4f524249-544c-4954-504f-494e54000001` for a point light,
+`4f524249-544c-4954-5350-4f5400000001` for a spot light) and set its properties with `property.set`. A new light has **no properties set**, so it
+sits at the origin of its parent with the defaults below. Set at least position, intensity and range:
+
+| Property | Id | Default | Notes |
+| --- | --- | --- | --- |
+| Position (m, Vector3) | `4f524249-544c-5052-504f-534954494f4e` | origin of the parent | In the parent's frame (a light parented to a planet takes body-fixed metres). |
+| Intensity (lumens) | `4f524249-544c-5052-4c55-4d454e530001` | 800 point, 1200 spot | Must be > 0 or the light is ignored. |
+| Range (m) | `4f524249-544c-5052-5241-4e4745000001` | **12 point, 20 spot** | Must be > 0. The tiled surface lighting ignores any surface farther than this from the light, so a default light does nothing to a floor 15 m away (2e6 lm at 15 m changed nothing; at range 200 m the same light changed the floor by 22/255 mean). |
+| Color (linear, Vector3) | `4f524249-544c-5052-434f-4c4f52000001` | 1, 1, 1 | |
+| Enabled | `4f524249-544c-5052-454e-41424c454401` | true | |
+| Direction, inner cone, outer cone (spot only) | `4f524249-544c-5052-4449-52454354494f`, `...-494e-4e4552434f4e`, `...-4f55-544552434f4e` | (0,-1,0), 22.5, 35 degrees | Cone shaping is ignored when the light is fed to the clouds. |
+
+With `ORBIT_CLOUD_POINT_LIGHTS=1` the same lights also scatter into the clouds; that path uses flux and position only and ignores Range. Each
+`property.set` is a world edit: it stalls the viewport for a few seconds and resets the fly-camera pitch, so re-apply the camera pose before a
+capture.
+
 ## Recipe: a single Moon-equivalent planet in a new project
 
 Empty worlds have no objects, so the hierarchy is World -> Celestial System ->
