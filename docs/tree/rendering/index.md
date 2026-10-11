@@ -34,6 +34,7 @@ related = ["/editor/viewport"]
 "CPU profiler, GPU timing, Perfetto trace" = "/legacy/orbit-profiler"
 "standing water, near-field water pass" = "/legacy/standing-water-rendering"
 "planets seen from orbit, rings, stars, orbits" = "/celestial"
+"proposed weather/optics/light-transport architecture, cloud LOD, lightning, mirages, glass caustics" = "unified-transport"
 +++
 
 Rendering module families (each is `engine/<name>/`):
