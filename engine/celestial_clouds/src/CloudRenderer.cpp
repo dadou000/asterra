@@ -84,11 +84,8 @@ struct Constants
 // 0.3 growing, 0.6 mature with anvil, 0.9 dissipating; and its density multiplier.
 static float gMature = 0.6;
 static float gDensity = 1.0;
-// Density used for distant samples (footprint > ~150 m): natural storms are dense up close
-// but a continent-wide convective region must stay translucent from orbit.
-static float gDensityFar = 1.0;
 // Length (m) of the march step the next Extinction() sample stands for. The filtered far field
-// (ORBIT_CLOUD_FILTERED_FAR) needs it to turn the sample into a step transmittance; 0 = point sample.
+// needs it to turn the sample into a step transmittance; 0 = point sample.
 static float gStep = 0.0;
 // Surface relief of the last sample (set by Extinction): crevices between billows read darker.
 static float gRelief = 1.0;
@@ -98,12 +95,6 @@ static float gAnvilGate = 1.0;
 // Anvil optical-depth multiplier: a lab storm is a thick anvil; whole-planet anvils are
 // hundreds of km wide and must stay translucent or they fog the planet.
 static float gHighDensity = 1.0;
-// Pixel footprint (m) over which the near-field cloud density fades to the thin far-field
-// weather density. A pixel is ~2.2 mrad at the default resolution, so 100 m is about 45 km:
-// clouds seen at ordinary flying distances stay opaque (starting the fade at 40 m, ~18 km,
-// let the terrain and horizon show through clouds 20-60 km away).
-static const float kFarFadeStart = 100.0;
-static const float kFarFadeEnd = 400.0;
 // Opacity-weighted distance of the cloud along the ray the march just traced (1e9 = none);
 // the god-ray pass reads it to know which air lies behind the cloud.
 static float gCloudDistance = 1.0e9;
@@ -197,7 +188,6 @@ float4 ColumnData(float3 d)
 {
     gMature = 0.6;
     gDensity = 1.0;
-    gDensityFar = 1.0;
     gRelief = 1.0;
     gAnvilGate = 1.0;
     gHighDensity = g.labLife.z;
@@ -249,10 +239,9 @@ float4 ColumnData(float3 d)
     // translucent (a 6 km storm is thick, a 300 km convective region is not solid).
     // Near the camera a cumulus interior is opaque (extinction 0.01-0.05 per metre: you
     // see a few tens of metres into it). At 1.0 the interior was translucent: sky showed
-    // through it and the per-pixel march jitter read as grain. The factor fades to
-    // gDensityFar with the pixel footprint (see Extinction), so distant weather is unchanged.
+    // through it and the per-pixel march jitter read as grain. Distance does not change it:
+    // the far field is filtered by FarFieldTransmittance (see Extinction), not thinned.
     gDensity = 8.0;
-    gDensityFar = 0.4;
     gAnvilGate = smoothstep(0.02, 0.25, coverage);
     gHighDensity = 0.03;
     // Faint planet-wide cirrus (coverage below ~0.1) is not worth a layer: it would only
@@ -526,9 +515,6 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         // threshold against a reduced coverage so the iso-surface sits inside the mass.
         const float skinCoverage = coverage * lerp(1.0, 0.88, towerness);
         float shape = saturate(type.w * (shifted - (1.0 - skinCoverage)) / max(skinCoverage, 0.05));
-#if !ORBIT_CLOUD_FILTERED_FAR
-        shape = lerp(shape, coverage, baseBlend);
-#endif
         if (detailAmount > 0.0 && shape > 0.0)
         {
             const float erosion = erosionValue;
@@ -550,7 +536,6 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         const float rainBase = 1.0 + 1.2 * column.w * (1.0 - SmoothRange(0.0, 0.35, hn));
         // Real storm clouds are far denser than fair-weather cumulus (the reference
         // clouds use 0.006-0.012 per metre); towers shade themselves hard.
-#if ORBIT_CLOUD_FILTERED_FAR
         // Extinction of this sample for shape 1; the sample's own value is unit * shape.
         const float unitSigma = g.lod.z * saturate(column.x) / thickness * profile * 1.7 * g.optics.w * rainBase
             * lerp(1.0, 12.0, towerness) * gDensity * density;
@@ -564,10 +549,6 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
             mainSigma = -log(max(lerp(nearT, farT, baseBlend), 1.0e-6)) / gStep;
         }
         sigma += mainSigma;
-#else
-        sigma += g.lod.z * saturate(column.x) / thickness * profile * shape * 1.7 * g.optics.w * rainBase
-            * lerp(1.0, 12.0, towerness) * lerp(gDensity, gDensityFar, SmoothRange(kFarFadeStart, kFarFadeEnd, footprint)) * density;
-#endif
     }
 
     // ---- high cloud: cirrus fibres and cumulonimbus anvil ----
@@ -812,7 +793,6 @@ float4 LabColumn(float3 d)
     const float sheetShare = sheet / max(high, 1.0e-4);
     gMature = dominant > 0.02 ? dominantAge : anvilAge;
     gDensity = g.labLife.z;
-    gDensityFar = g.labLife.z;
     return float4(g.labParams.y * coverage, high, lerp(g.labParams.x, 0.0, sheetShare), g.labParams.w * coverage);
 }
 )";
@@ -2185,20 +2165,9 @@ CloudRenderer::CloudRenderer(
     const shader::Compiler& compiler)
     : device_(&device)
 {
-    // The footprint-filtered transmittance table (see CloudFarField.hpp) replaces the far-field shape blend and density
-    // fade, so a cloud keeps its extent at any distance. On by default (checked on screen against the old far field);
-    // ORBIT_CLOUD_FILTERED_FAR=0 restores the old blend and fade for A/B comparison.
+    // The footprint-filtered transmittance table (see CloudFarField.hpp) is the only far field: a cloud keeps its extent at
+    // any distance instead of fading to weather coverage.
     const auto noise = BakeCloudNoise();
-    bool filteredFar = true;
-    {
-        char* flag = nullptr;
-        std::size_t flagLength = 0;
-        if (_dupenv_s(&flag, &flagLength, "ORBIT_CLOUD_FILTERED_FAR") == 0 && flag != nullptr)
-        {
-            filteredFar = flag[0] != '0';
-            std::free(flag);
-        }
-    }
     // ORBIT_CLOUD_POINT_LIGHTS=1 (default off) lets up to 16 point lights scatter into the clouds. It adds a fourth shader
     // buffer to the march pipeline, which shifts that pipeline's texture bindings by one; the other pipelines are unchanged.
     {
@@ -2210,15 +2179,13 @@ CloudRenderer::CloudRenderer(
             std::free(flag);
         }
     }
-    const std::string sourcePrefix =
-        std::string("#define ORBIT_CLOUD_FILTERED_FAR ") + (filteredFar ? "1" : "0") + "\n";
+    const std::string sourcePrefix;
     const std::string marchPrefix = sourcePrefix + (pointLights_
         ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
         : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");
     const std::string otherPrefix = sourcePrefix +
         "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n";
-    const std::string farField =
-        filteredFar ? FarFieldShaderBlock(BuildFarFieldLut(noise, kNoiseGrid)) : std::string();
+    const std::string farField = FarFieldShaderBlock(BuildFarFieldLut(noise, kNoiseGrid));
     const auto vertex = compiler.Compile({
         .source = kVertexShader,
         .entryPoint = "main",

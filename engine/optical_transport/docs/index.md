@@ -55,7 +55,7 @@ docs = ["/rendering/unified-transport"]
 
 ## Status
 
-Everything here is a CPU reference implementation with unit tests. Consumers so far: `TransmittanceStats` (`CloudFarField`, on by default, `ORBIT_CLOUD_FILTERED_FAR=0` disables), `RefractionTable` (`celestial_atmosphere`, flag `ORBIT_REFRACT_SUN`),
+Everything here is a CPU reference implementation with unit tests. Consumers so far: `TransmittanceStats` (`CloudFarField`, always on), `RefractionTable` (`celestial_atmosphere`, flag `ORBIT_REFRACT_SUN`),
 `EmitterTree` (`CityLightTree`) and `DischargeGraph` (storm lightning and `TransientFlashRegistry`). `CacheStamp`, `OpticalHierarchy`, the aerosol growth,
 `DiskTransmission`, `BendRay` and `CloudRepresentation` have no consumer, so most of the proposal's rendering behaviour does not exist. It is the numerical core the GPU implementations are meant to match.
 

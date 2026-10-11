@@ -2,8 +2,8 @@
 """Compile-check the cloud shaders embedded in CloudRenderer.cpp without a Windows build.
 
 Extracts the raw-string HLSL pieces, assembles the march/shadow/volume sources exactly like MarchSource() & co.,
-builds the filtered-far-field table with the real noise bake, and runs glslangValidator (-D, Vulkan 1.3) on both
-values of ORBIT_CLOUD_FILTERED_FAR. This checks syntax and types only; DXC may differ and nothing is rendered.
+builds the filtered-far-field table with the real noise bake, and runs glslangValidator (-D, Vulkan 1.3) on the
+filtered-far-field variants. This checks syntax and types only; DXC may differ and nothing is rendered.
 
     python tools/check_cloud_shaders.py        (needs g++ and glslangValidator: apt install glslang-tools)
 """
@@ -58,12 +58,12 @@ def main() -> int:
         subprocess.run([str(tmp / "gen"), str(tmp / "far.hlsl")], check=True)
         far = (tmp / "far.hlsl").read_text()
         bad = 0
-        for flag in (0, 1):
+        for flag in (1,):   # the filtered far field is the only variant now
             for lights in (0, 1):
                 for name, (keys, stage) in variants.items():
                     if lights and name != "march":
                         continue   # only the march pipeline gains the light buffer and shifted bindings
-                    text = f"#define ORBIT_CLOUD_FILTERED_FAR {flag}\n" + (BINDINGS_ON if lights else BINDINGS_OFF) + "".join(
+                    text = (BINDINGS_ON if lights else BINDINGS_OFF) + "".join(
                         (far if flag else "") if k == "FAR" else lits[k] for k in keys)
                     path = tmp / f"{name}{flag}{lights}.hlsl"
                     path.write_text(text)

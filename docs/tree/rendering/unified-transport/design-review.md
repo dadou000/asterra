@@ -14,7 +14,7 @@ sources = [
   "engine/lighting/src/LocalLightRegistry.cpp",
   "engine/celestial_clouds/src/CloudRenderer.cpp",
 ]
-symbols = ["TransmittanceStats", "BuildTiledLightGrid", "gDensityFar", "kFarFadeStart"]
+symbols = ["TransmittanceStats", "BuildTiledLightGrid", "FarFieldTransmittance"]
 invariants = [
   "Measurements here were made on the CPU by porting the shader's noise bake and base-shape threshold; no GPU was available, so the numbers in the findings are not rendered-image or frame-time results. Only the Integration status paragraph reports an on-screen check.",
   "Coverage is not occupied fraction: for the baked cumulus shape, coverage 0.2 fills 2 % of the area and coverage 0.8 fills 95 %, so any model that treats coverage as the fraction of sky covered is biased in both directions.",
@@ -74,14 +74,14 @@ buffer layout are unchanged because a proxy is an ordinary entry; spot cone shap
 
 ## Integration status of Finding 2
 
-Implemented and now the default (`ORBIT_CLOUD_FILTERED_FAR=0` restores the old blend and fade, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the
+Implemented and now the only far field (the old blend, fade and the `ORBIT_CLOUD_FILTERED_FAR` switch were removed, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the
 cloud noise using `TransmittanceStats`, the shader blends to it by `baseBlend`, and all four `Extinction()` callers pass their step length. Verified: the three
 shader variants compile with `glslangValidator` with the flag off and on; the table builder and the CPU twin of the shader lookup pass
 `CloudFarFieldTests` (off-lattice error 0.012 against an independent estimate). Verified on screen (2026-10-11, same camera and sim time, flag off vs on; a second flag-off launch differed by 0.03/255, on vs off by 26/255): from 1590 km and 400 km the old
 near-complete grey overcast becomes sparse cloud over clear sea with a sun glint; the two images converge at 100 km (mean difference 4.7/255) and are identical at 25 km and 6 km (0.31, 0.01). So the shipping far field was
 the source of the thin-haze overcast, as Finding 1 predicts. Still not verified: the HLSL lookup numerically (only
-the CPU twin), frame time, and whether `gStep` is the right K for the god-ray march. The default was flipped after this check: frame time showed no measurable cost (on/off within 1 ms at 400, 100 and 25 km, two interleaved rounds), and a fresh launch with no flag renders identically to the earlier flag-on images (0.04/255) while `=0` matches the old images (0.03/255). The old thin-haze look from orbit is gone by design; still to do: remove the old blend and fade code once nobody needs the A/B switch.
+the CPU twin), frame time, and whether `gStep` is the right K for the god-ray march. The default was flipped, and later the old path removed, after this check: frame time showed no measurable cost (on/off within 1 ms at 400, 100 and 25 km, two interleaved rounds), and a fresh launch with no flag renders identically to the earlier flag-on images (0.04/255) while `=0` matched the old images (0.03/255). After removing the old code the render is unchanged (0.03 to 0.05/255 at 1590, 400 and 100 km). The old thin-haze look from orbit is gone by design.
 
 ## Not yet done
 
-Removing the old blend and fade code now that the flag is the default (and `=0` is only an A/B switch); a rendered approach sequence at ground level under a deck.
+A rendered approach sequence at ground level under a deck.

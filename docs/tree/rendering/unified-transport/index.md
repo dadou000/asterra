@@ -10,7 +10,7 @@ mirages, glass and caustics. Partly implemented: a CPU reference core, a lightni
 keywords = ["architecture", "weather", "optical medium", "radiance cache", "light transport", "lightning", "refraction", "glass", "caustics", "cloud lod", "many lights", "proposal"]
 related = ["/rendering/clouds", "/rendering/atmosphere", "/rendering/lighting", "/rendering/volumes"]
 verify = [
-  "python tools/run_cpu_tests.py builds and runs every CPU-only test of this work on Linux (10 groups, ~75 s; storm electrification is ~30 s of it); python tools/check_cloud_shaders.py and python tools/check_glass_shaders.py compile-check the embedded HLSL. None of them runs a GPU. The flags ORBIT_CLOUD_FILTERED_FAR (now default on), ORBIT_GLASS_CAUSTIC_COMPUTE, ORBIT_REFRACT_SUN and ORBIT_CLOUD_POINT_LIGHTS were each checked on screen once on 2026-10-11 (see the Implementation status section); the cloud look, tuning and frame time beyond one glass sphere are not.",
+  "python tools/run_cpu_tests.py builds and runs every CPU-only test of this work on Linux (10 groups, ~75 s; storm electrification is ~30 s of it); python tools/check_cloud_shaders.py and python tools/check_glass_shaders.py compile-check the embedded HLSL. None of them runs a GPU. The flags The cloud far field (now the only one) and the flags ORBIT_GLASS_CAUSTIC_COMPUTE, ORBIT_REFRACT_SUN and ORBIT_CLOUD_POINT_LIGHTS were each checked on screen once on 2026-10-11 (see the Implementation status section); the cloud look, tuning and frame time beyond one glass sphere are not.",
 ]
 invariants = [
   "The camera cannot change the physical atmosphere: cloud density, humidity, charge and light transport are independent of view distance.",
@@ -75,7 +75,7 @@ reports both its saving and the error it introduces; no speedup is assumed befor
 
 ## Implementation status
 
-Each flag below was A/B-tested on screen on 2026-10-11 (RTX 4090, Release build of f39887e2, relaunch per flag, identical sim time and camera, a second flag-off launch as the determinism control). `ORBIT_CLOUD_FILTERED_FAR` is now ON by default (`=0` restores the old far field); wired but off by default: `ORBIT_GLASS_CAUSTIC_COMPUTE`, `ORBIT_REFRACT_SUN`,
+Each flag below was A/B-tested on screen on 2026-10-11 (RTX 4090, Release build of f39887e2, relaunch per flag, identical sim time and camera, a second flag-off launch as the determinism control). The filtered cloud far field is always on (the old blend and the `ORBIT_CLOUD_FILTERED_FAR` switch were removed); wired but off by default: `ORBIT_GLASS_CAUSTIC_COMPUTE`, `ORBIT_REFRACT_SUN`,
 `ORBIT_CLOUD_POINT_LIGHTS`; all four behave as designed (details and numbers in `design-review`, `design-review-systems`, `design-review-lighting`, `design-review-refraction`). Wired and always on: tiled-light overflow proxies, limb-darkened eclipse fractions, the view-dependent caustic photon budget and the
 lightning RPC/MCP (`lightning.*`, see `docs/ORBIT_MCP.md`). Not built: `SampleMedium`, optical-hierarchy and aerosol consumers, the radiance cache and dependency
 invalidation, curved/2.5D cloud forms, glass through `VisibilityRegistry`, local mirages, the render scheduler and the 14 validation scenarios (`plan-and-validation`).
