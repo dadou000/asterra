@@ -18,6 +18,7 @@ invariants = [
   "Every variant runs in a freshly launched Studio whose environment holds exactly that variant's ORBIT_* variables; every Orbit* process is killed first, because a hot-generation child (OrbitStudio_hot_*) survives killing Orbit and keeps the RPC port and the old environment.",
   "A difference only counts against the noise floor: the baseline is launched again as a control, and a variant is DIFFERENT if its mean difference exceeds both 3x and noise+0.05 of the control, or its changed-pixel count exceeds 3x the control's plus 500 (a mean alone hides a thinned cloud bank). Frame-time deltas are compared with the control's frame-time drift (about 1.2 to 1.4 ms on the dev machine).",
   "Captures are taken at convergence (two consecutive screenshots within converge_eps), not after a fixed sleep; the sim clock is pinned per scene.",
+  "Eye adaptation is frozen by default (`fixed_exposure`, default true): the harness lets the eye settle on the baseline's view of a scene, then sets display.eye min_exposure_scale = max_exposure_scale to that value (session-only, nothing persisted). Every other variant is pinned to the BASELINE's exposure for that scene (exposure.json in the output folder, also kept in report.json), so adaptation cannot hide a brightness change and cannot drift during a motion path. `\"fixed_exposure\": false` keeps the adaptation.",
   "A council review is immutable (id R-<date>-<time>-<commit>), records the commit and the dirty files, the exe hash, GPU, per-scene image hashes, the measured metrics and the lenses' findings and rubric scores; subjective scores never replace measured values.",
   "ORBIT_CLOUD_DEFINES (startup) and clouds.set_defines (runtime) are developer hooks: their defaults must reproduce the shipped shader path.",
   "in_process mode alternates variant order per round (A B C, then C B A); the baseline's round-to-round frame-time spread is the drift, and a profiler pass time comes from ONE snapshot of the panel's rolling window with freeze_on_hitch off (a frozen panel returns the same snapshot for every scene, and two snapshots cannot be subtracted).",
@@ -81,7 +82,7 @@ averaged over `reference_frames` frames (a stop-at-stable-mean reference is not 
 | `err_mean`, `err_max` | mean absolute error of each in-motion frame against the reference, after scaling the frame to the reference's mean (auto-exposure adapts over seconds), /255 |
 | `ghost_frac` | share of pixels over `ghost_threshold` (default 3/255); lag at cloud edges AND temporal noise both count |
 | `flicker` | static camera, mean over pixels of the standard deviation over ten consecutive frames, /255 (temporal noise) |
-| `exposure_drift` | mean absolute exposure gain applied |
+| `exposure_drift` | mean absolute exposure gain applied (about 0.01 to 0.04 percent with the exposure frozen; 0.3 to 0.9 percent while the eye was adapting) |
 | `err_spread` | the baseline's max-min of `err_mean` over rounds: the metric's own noise |
 
 `motion_<scene>.png` plots the error by step and the flicker bars. Read the two together: more history lowers flicker and mean error (less noise) while raising the

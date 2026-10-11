@@ -198,6 +198,54 @@ def load_variant(label: str, spec: dict, out: pathlib.Path):
     return {n: np.asarray(Image.open(out / label / f"{n}.png").convert("RGB"), dtype=np.float32) for n in names}, frame_ms
 
 
+def eye_exposure() -> float:
+    return float(rpc("display.eye_get")["state"]["exposure_scale"])
+
+
+def unpin_exposure() -> None:
+    """Back to the eye adaptation's own bounds (the HumanEyeAdaptationConfig defaults); the settings are session-only."""
+    rpc("display.eye_set", {"min_exposure_scale": 1.0 / 4096.0, "max_exposure_scale": 4096.0})
+
+
+def pin_exposure(value: float) -> float:
+    """Freeze exposure: min = max = value (min is lowered first so min <= max holds at every call). Returns the exposure now live."""
+    rpc("display.eye_set", {"min_exposure_scale": 1.0e-8})
+    rpc("display.eye_set", {"max_exposure_scale": value})
+    rpc("display.eye_set", {"min_exposure_scale": value})
+    time.sleep(0.4)
+    live = eye_exposure()
+    if abs(live - value) > 0.01 * value:
+        print(f"  warning: exposure {live:.6g} is not the pinned {value:.6g}", flush=True)
+    return live
+
+
+def record_exposure(out: pathlib.Path, scene: str, value: float) -> None:
+    path = out / "exposure.json"
+    known = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    known[scene] = value
+    path.write_text(json.dumps(known, indent=1), encoding="utf-8")
+
+
+def known_exposure(out: pathlib.Path, scene: str):
+    path = out / "exposure.json"
+    return json.loads(path.read_text(encoding="utf-8")).get(scene) if path.exists() else None
+
+
+def adapt_and_pin(spec: dict, scene: str, out: pathlib.Path):
+    """Eye adaptation off, for comparisons: let the eye settle on the baseline's view of this scene, then freeze exposure there.
+
+    Auto-exposure would otherwise compensate part of the very brightness change an A/B is looking for, and it drifts over seconds
+    during a motion path. `"fixed_exposure": false` in the spec keeps the adaptation."""
+    if not spec.get("fixed_exposure", True):
+        return None
+    unpin_exposure()
+    capture_converged(out / "_exposure_tmp.png", spec.get("converge_eps", 0.08), 1.0, 30.0, spec.get("poll_step", 0.5))
+    value = pin_exposure(eye_exposure())
+    record_exposure(out, scene, value)
+    print(f"  exposure pinned for {scene}: {value:.6g}", flush=True)
+    return value
+
+
 def run_variant(label: str, env_vars: dict, spec: dict, exe: pathlib.Path, out: pathlib.Path) -> tuple[dict[str, np.ndarray], dict]:
     project = pathlib.Path(spec["project"]).resolve()
     launch(exe, project, env_vars)
@@ -218,13 +266,14 @@ def run_variant(label: str, env_vars: dict, spec: dict, exe: pathlib.Path, out: 
         profiler_for_passes(spec)
     (out / label).mkdir(parents=True, exist_ok=True)
     for scene in spec["scenes"]:
-        if "time_microseconds" in scene:
-            rpc("time.set", {"playing": False, "time_microseconds": scene["time_microseconds"]})
-        if "local_time_seconds" in scene:
-            rpc("time.set", {"playing": False, "local_time_seconds": float(scene["local_time_seconds"])})
-        if scene.get("layers"):
-            rpc("view.terrain_layers_set", {"id": "studio.primary", **scene["layers"]})
-        apply_pose(scene["pose"], radius)
+        set_scene(scene, radius)
+        if spec.get("fixed_exposure", True):
+            known = known_exposure(out, scene["name"])
+            if known is None:
+                adapt_and_pin(spec, scene["name"], out)   # the baseline run: adapt, freeze, remember
+            else:
+                unpin_exposure()
+                pin_exposure(known)                        # every other variant: the baseline's exposure
         image, used = capture_converged(out / label / f"{scene['name']}.png", spec.get("converge_eps", 0.08),
                                         scene.get("min_wait", 1.5), scene.get("max_wait", 45.0), spec.get("poll_step", 0.6))
         images[scene["name"]] = image
@@ -393,6 +442,7 @@ def run_motion_scene(spec, scene, order, baseline, radius, rounds, out, images, 
             raise RuntimeError(f"clouds.set_defines({text!r}): {reply['error']}")
 
     use(baseline)
+    adapt_and_pin(spec, name, out)
     print(f"  reference path for {name}: {int(motion.get('steps', 24))} converged poses", flush=True)
     reference = reference_pass(scene, motion, radius, tmp, spec)
     for r in range(rounds):
@@ -480,6 +530,11 @@ def run_in_process(spec: dict, exe: pathlib.Path, out: pathlib.Path, order: list
             run_motion_scene(spec, scene, order, baseline, radius, rounds, out, images, control, frame_rounds, motion_rounds)
             continue
         set_scene(scene, radius)
+        if spec.get("fixed_exposure", True):
+            reply = rpc("clouds.set_defines", {"defines": variants[baseline].get("env", {}).get("ORBIT_CLOUD_DEFINES", "")})
+            if reply.get("error"):
+                raise RuntimeError(f"clouds.set_defines: {reply['error']}")
+            adapt_and_pin(spec, name, out)
         for r in range(rounds):
             for v in (order if r % 2 == 0 else list(reversed(order))):
                 define_text = variants[v].get("env", {}).get("ORBIT_CLOUD_DEFINES", "")
@@ -621,6 +676,8 @@ def cmd_run(args) -> int:
     baseline = spec.get("baseline", next(iter(variants)))
     order = [baseline] + [v for v in variants if v != baseline]
     started = time.time()
+    if not args.resume and (out / "exposure.json").exists():
+        (out / "exposure.json").unlink()
     try:
         if spec.get("mode") == "in_process":
             images, frame, controls = run_in_process(spec, exe, out, order, baseline)
@@ -630,7 +687,8 @@ def cmd_run(args) -> int:
         kill_orbit()
     threshold = float(spec.get("changed_pixel_threshold", 12))
     report = {"baseline": baseline, "seconds": round(time.time() - started, 1), "provenance": provenance(exe),
-              "variants": {v: variants[v].get("env", {}) for v in order}, "spec": spec, "scenes": {}}
+              "variants": {v: variants[v].get("env", {}) for v in order}, "spec": spec, "scenes": {},
+              "exposure_scale": json.loads((out / "exposure.json").read_text(encoding="utf-8")) if (out / "exposure.json").exists() else {}}
     for scene in spec["scenes"]:
         name, box = scene["name"], scene.get("box")
         entry = {"noise": [metrics(images[baseline][name], images[c][name], box, threshold) for c in controls]}
