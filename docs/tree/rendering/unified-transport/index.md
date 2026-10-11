@@ -76,6 +76,7 @@ reports both its saving and the error it introduces; no speedup is assumed befor
 - `light-and-lightning`: stars, many lights, radiance caches, electrification, transient lighting.
 - `refraction-and-glass`: mirages, hybrid visibility, glass and caustics.
 - `plan-and-validation`: current-code corrections, phased order, scenarios.
+- `design-review-systems`: glass, caustics, eclipses, visibility and lightning findings.
 - `design-review`: measured findings that adjust the proposal (cloud far-field bias, linear transmittance filtering, light overflow fix).
 - `storm-electrification`: CPU reference for charging, the electric field, leader flashes and a timewarp-safe flash schedule.
 - `core`: the CPU reference library (`engine/optical_transport`) implementing the numerical core; renderers do not use it yet.
