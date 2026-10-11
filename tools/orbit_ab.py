@@ -331,8 +331,13 @@ def cmd_run(args) -> int:
     print(f"\nbaseline={baseline}  total {report['seconds']} s  ->  {out}")
     for name, entry in report["scenes"].items():
         noise = max((n.get("mean", 0.0) for n in entry["noise"]), default=0.0)
+        noise_px = max((n.get("px_over", 0) for n in entry["noise"]), default=0)
         for v, m in entry["variants"].items():
-            verdict = "DIFFERENT" if m.get("mean", 0.0) > max(3.0 * noise, noise + 0.05) else "same as noise"
+            # A mean hides a localised change (a thinned cloud bank is a few percent of the frame), so the changed-pixel
+            # count against the repeat launch counts too.
+            by_mean = m.get("mean", 0.0) > max(3.0 * noise, noise + 0.05)
+            by_pixels = m.get("px_over", 0) > 3 * noise_px + 500
+            verdict = "DIFFERENT" if (by_mean or by_pixels) else "same as noise"
             print(f"  {name:18s} {v:10s} mean {m.get('mean')}  max {m.get('max')}  px>{threshold:g}: {m.get('px_over')}  (noise mean {noise:.3f})  {verdict}  frame {entry['frame_ms'][v]} vs {entry['frame_ms'][baseline]} ms (drift of the same build: {entry['frame_ms_drift']})")
     return 0
 

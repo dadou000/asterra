@@ -17,7 +17,7 @@ sources = [
 symbols = ["ORBIT_CLOUD_DEFINES", "CLOUD_JITTER_FIX", "CLOUD_INCLOUD_STEP_SCALE", "ThinLayerStepCap"]
 invariants = [
   "Every variant runs in a freshly launched Studio whose environment holds exactly that variant's ORBIT_* variables; every Orbit* process is killed first, because a hot-generation child (OrbitStudio_hot_*) survives killing Orbit and keeps the RPC port and the old environment.",
-  "A difference only counts against the noise floor: the baseline is launched again as a control, and a variant is DIFFERENT only if its mean difference exceeds both 3x and noise+0.05 of the control. Frame-time deltas are compared with the control's frame-time drift (about 1.2 to 1.4 ms on the dev machine).",
+  "A difference only counts against the noise floor: the baseline is launched again as a control, and a variant is DIFFERENT if its mean difference exceeds both 3x and noise+0.05 of the control, or its changed-pixel count exceeds 3x the control's plus 500 (a mean alone hides a thinned cloud bank). Frame-time deltas are compared with the control's frame-time drift (about 1.2 to 1.4 ms on the dev machine).",
   "Captures are taken at convergence (two consecutive screenshots within converge_eps), not after a fixed sleep; the sim clock is pinned per scene.",
   "A council review is immutable (id R-<date>-<time>-<commit>), records the commit and the dirty files, the exe hash, GPU, per-scene image hashes, the measured metrics and the lenses' findings and rubric scores; subjective scores never replace measured values.",
   "ORBIT_CLOUD_DEFINES is a developer hook: its defaults must reproduce the shipped shader path.",

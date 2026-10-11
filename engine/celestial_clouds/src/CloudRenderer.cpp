@@ -98,25 +98,42 @@ static float gHighDensity = 1.0;
 // Opacity-weighted distance of the cloud along the ray the march just traced (1e9 = none);
 // the god-ray pass reads it to know which air lies behind the cloud.
 static float gCloudDistance = 1.0e9;
-static const uint kMaxSteps = 224u;
+// March cost constants. ORBIT_CLOUD_DEFINES="CLOUD_MAX_STEPS=160;..." overrides them for A/B work (see tools/orbit_ab.py);
+// the defaults are the shipped values.
+#ifndef CLOUD_MAX_STEPS
+#define CLOUD_MAX_STEPS 224
+#endif
+#ifndef CLOUD_SCHEDULE_STEPS
+#define CLOUD_SCHEDULE_STEPS 140
+#endif
+#ifndef CLOUD_FOOTPRINT_STEP
+#define CLOUD_FOOTPRINT_STEP 0.5
+#endif
+#ifndef CLOUD_BASE_STEP
+#define CLOUD_BASE_STEP 60.0
+#endif
+#ifndef CLOUD_EMPTY_SKIP
+#define CLOUD_EMPTY_SKIP 4.0
+#endif
+static const uint kMaxSteps = uint(CLOUD_MAX_STEPS);
 // Transmittance below which the march stops and the pixel counts as opaque.
 static const float kOpaqueCutoff = 0.004;
 // The geometric step schedule is solved to cross the segment in this many steps,
 // leaving the rest of kMaxSteps for the fine steps taken inside cloud. Solving it
 // for all of kMaxSteps let in-cloud steps near the camera use up the budget before
 // a ray reached distant cloud (they vanished from altitude).
-static const uint kScheduleSteps = 140u;
+static const uint kScheduleSteps = uint(CLOUD_SCHEDULE_STEPS);
 // Smallest step as a fraction of the footprint of one pixel at the sample distance:
 // finer than that cannot be seen. Without it a camera far from the shell (orbit)
 // marched empty space in 60 m steps for pixels hundreds of metres wide.
-static const float kFootprintStep = 0.5;
+static const float kFootprintStep = CLOUD_FOOTPRINT_STEP;
 // Inside cloud the step is at least this fraction of the schedule step, so a dense
 // deck does not spend the whole budget before the distance is covered.
 static const float kInCloudScheduleFraction = 0.35;
-static const float kBaseStep = 60.0;
+static const float kBaseStep = CLOUD_BASE_STEP;
 static const float kAdaptiveStep = 0.006;
 static const float kMaxStep = 12000.0;
-static const float kEmptySkip = 4.0;
+static const float kEmptySkip = CLOUD_EMPTY_SKIP;
 static const float kBaseVoxelMeters = 700.0;   // 22 km noise period
 static const float kDetailVoxelMeters = 78.0;  // 2.5 km noise period at detailScale 14
 static const uint kShadowSteps = 16u;
