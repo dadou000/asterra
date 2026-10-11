@@ -79,6 +79,6 @@ floating-origin transition (cache ownership and invalidation).
 Corrections table: the glass "backdrop copy when no glass is visible" item is not a gap. With the glass sphere out of view none of the glass passes
 appear in the GPU pass list (they are culled with the instances). The Clouds march is the dominant frame cost in sky views (about 9 of 13 ms in a
 single profiler snapshot). Changing its step constants does not help without thinning distant clouds (review `R-20261011-181752-8a4a98db`);
-the spec's hierarchical empty-space skipping is the way to cut it. The cost attribution (review `R-20261011-190655-8f9c9165` series, step heat map) showed empty sky pixels run 110 to 224 of 224 march steps, no per-stage or per-column test frees any of it, and the missing piece is an occupancy test on the noise itself.
+the spec's hierarchical empty-space skipping is the way to cut it. The cost attribution (review `R-20261011-190655-8f9c9165` series, step heat map) showed empty sky pixels run 110 to 224 of 224 march steps, no per-stage or per-column test frees any of it, and an exact height-band leap made the pass slower, so the next lever is temporal reuse of the march rather than a hierarchy (see the raymarch block).
 
 Measure per-pass GPU time, density evaluations, ray steps, BVH visits, cache-hit ratios, invalidated bricks, memory traffic and background compute.
