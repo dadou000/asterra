@@ -1,0 +1,617 @@
+{
+ "id": "R-20261011-190655-8f9c9165",
+ "rubric": "v1",
+ "council": {
+  "title": "Clouds cost: sun optical-depth LOD range and a light-volume estimate",
+  "question": "Is the near-sample six-step sun march what the Clouds pass spends its time on? Does moving its fade range closer, or replacing the crude far estimate by the cached light volume, save time or change the image?",
+  "chosen": "baseline",
+  "verdict": "No. Moving the sun-march fade range closer (near70: 20 to 70 instead of 45 to 140) or replacing the column estimate by the light-volume value (volume, volume70, volume40) leaves the Clouds pass at 8.68 to 9.12 ms against 8.68 ms in the first scene, and whole-frame times inside 0.3 to 1 ms, so the sun march is not where the time goes. The volume estimate also changes 25k to 50k pixels (the cached tau is not the column estimate it replaces), with no accuracy claim to show for it. Keep the shipped constants. The remaining Clouds cost is the march itself (steps, per-sample column and extinction lookups) and the per-pixel aerial perspective.",
+  "lenses": [
+   {
+    "name": "GPU Engineer",
+    "findings": "Clouds pass in sky_cumulus: baseline 8.68 ms, volume 8.68, near70 9.12, volume70 8.68, volume40 8.70 (one repeat launch 8.56). Cutting the exact sun march to a quarter of its range changed nothing, so it is not dominant. The per-pass numbers for cumulus_lowsun and orbit_deck in this run are not valid: the profiler panel froze on a hitch and returned the same snapshot twice (fixed in the harness afterwards: freeze_on_hitch off)."
+   },
+   {
+    "name": "Minimalist / Anti-Overengineering Guardian",
+    "findings": "Four variants, zero saving, visible pixel changes for the volume estimate: reject all and do not touch the sun march."
+   },
+   {
+    "name": "Ruthless Shader Artist",
+    "findings": "I did not zoom into this run. The pixel counts (25k to 50k changed for the volume estimate, 2k to 9k for near70) are enough to say the variants are not free, and since none saves time there is nothing to weigh them against.",
+    "ratings": {
+     "baseline": {
+      "shape_fidelity": [
+       8,
+       "low",
+       "reference, not re-inspected"
+      ],
+      "lighting": [
+       8,
+       "low",
+       "reference"
+      ],
+      "colour_exposure": [
+       8,
+       "low",
+       "reference"
+      ],
+      "artifacts": [
+       8,
+       "low",
+       "reference"
+      ],
+      "scale_depth": [
+       8,
+       "low",
+       "reference"
+      ]
+     }
+    }
+   }
+  ],
+  "disagreements": [],
+  "hypotheses": [
+   "The Clouds cost is the march steps and per-sample lookups plus aerial perspective (untested; the next attribution experiment should disable pieces behind defines).",
+   "The volume estimate differs from the column estimate by more than the column estimate's own error (not measured against the exact march)."
+  ],
+  "verified_facts": [
+   "sky_cumulus Clouds pass: 8.68 / 8.68 / 9.12 / 8.68 / 8.70 ms for baseline / volume / near70 / volume70 / volume40.",
+   "Changed pixels over 12: volume 35k, near70 9k, volume70 46k, volume40 51k in sky_cumulus; none within noise.",
+   "The profiler panel freezes on a hitch and then returns a frozen snapshot (fixed in tools/orbit_ab.py)."
+  ],
+  "open_issues": [
+   "GPU pass numbers for the last two scenes of this run are invalid (frozen snapshot).",
+   "Images were not inspected zoomed.",
+   "Cost attribution inside the march is still open."
+  ],
+  "recommended_changes": [
+   "Leave the sun march alone.",
+   "Attribute the Clouds cost with define-gated stubs of the march parts using the in-process harness mode."
+  ],
+  "completed_changes": [
+   "CLOUD_SUN_FAR_START, CLOUD_SUN_FAR_END and CLOUD_SUN_VOLUME tunables (defaults unchanged)."
+  ]
+ },
+ "run": {
+  "baseline": "baseline",
+  "seconds": 550.7,
+  "provenance": {
+   "commit": "8f9c91650fef78d5afc4be41cccdbbcff6014510",
+   "branch": "0.1.1-Harmony",
+   "dirty_files": [
+    "ngine/celestial_clouds/src/CloudRenderer.cpp",
+    "tools/orbit_ab.py",
+    "tools/ab_specs/cloud_sun_cost.json"
+   ],
+   "exe": "C:\\Users\\david\\Documents\\GitHub\\asterra\\Orbit.exe",
+   "exe_sha256": "45cd5cc68170c4c94d4b181117d0a763f1d8dd0711e5f8bcf563d9b89185f862",
+   "exe_mtime": "2026-10-11 18:51:18",
+   "gpu": "NVIDIA GeForce RTX 4090",
+   "date": "2026-10-11 19:00:37"
+  },
+  "variants": {
+   "baseline": {},
+   "volume": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1"
+   },
+   "near70": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_FAR_START=20.0;CLOUD_SUN_FAR_END=70.0"
+   },
+   "volume70": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1;CLOUD_SUN_FAR_START=20.0;CLOUD_SUN_FAR_END=70.0"
+   },
+   "volume40": {
+    "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1;CLOUD_SUN_FAR_START=10.0;CLOUD_SUN_FAR_END=40.0"
+   }
+  },
+  "spec": {
+   "_comment": "Near-sample cost: the six-step sun march fades to an estimate beyond a footprint range. Variants move that range closer and/or replace the crude column estimate by the cached light volume. Per-pass GPU ms of Clouds comes from one profiler snapshot over a 3 s window.",
+   "world": "Worlds/Main.orbitworld",
+   "body": "Earth",
+   "baseline": "baseline",
+   "controls": 1,
+   "gpu_passes": [
+    "Clouds",
+    "CloudShadow"
+   ],
+   "gpu_window_ms": 3000,
+   "variants": {
+    "baseline": {
+     "env": {}
+    },
+    "volume": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1"
+     }
+    },
+    "near70": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_FAR_START=20.0;CLOUD_SUN_FAR_END=70.0"
+     }
+    },
+    "volume70": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1;CLOUD_SUN_FAR_START=20.0;CLOUD_SUN_FAR_END=70.0"
+     }
+    },
+    "volume40": {
+     "env": {
+      "ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1;CLOUD_SUN_FAR_START=10.0;CLOUD_SUN_FAR_END=40.0"
+     }
+    }
+   },
+   "scenes": [
+    {
+     "name": "sky_cumulus",
+     "time_microseconds": 18070405751,
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 42,
+      "yaw_deg": 0,
+      "pitch_deg": 20
+     }
+    },
+    {
+     "name": "cumulus_far",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 0,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "cumulus_near",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.05157,
+      "lon_deg": 0.03666,
+      "alt_m": 2600,
+      "yaw_deg": 35.3,
+      "pitch_deg": 21.74
+     }
+    },
+    {
+     "name": "cumulus_lowsun",
+     "local_time_seconds": 63600,
+     "pose": {
+      "kind": "surface",
+      "lat_deg": 5.0,
+      "lon_deg": 0.0,
+      "alt_m": 1200,
+      "yaw_deg": 40,
+      "pitch_deg": 8
+     }
+    },
+    {
+     "name": "orbit_deck",
+     "local_time_seconds": 43200,
+     "pose": {
+      "kind": "approach",
+      "target": {
+       "lat_deg": 5.3045,
+       "lon_deg": 0.0
+      },
+      "origin": {
+       "lat_deg": 0,
+       "lon_deg": 0,
+       "alt_km": 1590.95
+      },
+      "alt_km": 1500
+     }
+    }
+   ],
+   "project": "C:/Users/david/AppData/Local/Temp/claude/C--Users-david-Documents-GitHub-asterra/8929e869-7edf-4e5e-9d35-85da2894e8c6/scratchpad/proj"
+  },
+  "scenes": {
+   "sky_cumulus": {
+    "noise": [
+     {
+      "mean": 0.0589,
+      "max": 26.0,
+      "px_over": 194
+     }
+    ],
+    "variants": {
+     "volume": {
+      "mean": 0.2186,
+      "max": 49.0,
+      "px_over": 35044
+     },
+     "near70": {
+      "mean": 0.1262,
+      "max": 76.0,
+      "px_over": 9348
+     },
+     "volume70": {
+      "mean": 0.3004,
+      "max": 95.0,
+      "px_over": 46050
+     },
+     "volume40": {
+      "mean": 0.3935,
+      "max": 113.0,
+      "px_over": 50617
+     }
+    },
+    "frame_ms": {
+     "baseline": 13.47,
+     "volume": 13.7,
+     "near70": 13.12,
+     "volume70": 13.23,
+     "volume40": 13.12
+    },
+    "gpu_pass_ms": {
+     "baseline": {
+      "Clouds": 8.678,
+      "CloudShadow": 0.244
+     },
+     "volume": {
+      "Clouds": 8.683,
+      "CloudShadow": 0.23
+     },
+     "near70": {
+      "Clouds": 9.115,
+      "CloudShadow": 0.245
+     },
+     "volume70": {
+      "Clouds": 8.678,
+      "CloudShadow": 0.252
+     },
+     "volume40": {
+      "Clouds": 8.696,
+      "CloudShadow": 0.232
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {
+      "Clouds": 8.56,
+      "CloudShadow": 0.345
+     }
+    ],
+    "frame_ms_drift": [
+     0.07
+    ],
+    "image_sha256": {
+     "baseline": "e45e6090620516796056ec1ef44adf9963275f5525a50c03bb03616eed63e6a9",
+     "volume": "cf5056229be532a8085c5b6d3787be298273692fbe44ddd1a0f95bebfd925f48",
+     "near70": "c8d72da695fb37375146c5da418ba2dadd7f53786f66dac16198efb34ecde798",
+     "volume70": "b973f366a2cbbdc14f5d018517f74c063d45e97ec916db7ee84e09f02ca0cc4e",
+     "volume40": "6ca10b8c2dd59e9b07bad1782fddd4a0549a30e387c4fe86293d8980307e3240"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_far": {
+    "noise": [
+     {
+      "mean": 0.0387,
+      "max": 28.0,
+      "px_over": 348
+     }
+    ],
+    "variants": {
+     "volume": {
+      "mean": 0.2032,
+      "max": 34.0,
+      "px_over": 36251
+     },
+     "near70": {
+      "mean": 0.0891,
+      "max": 63.0,
+      "px_over": 7274
+     },
+     "volume70": {
+      "mean": 2.0909,
+      "max": 83.0,
+      "px_over": 31778
+     },
+     "volume40": {
+      "mean": 2.2165,
+      "max": 109.0,
+      "px_over": 36616
+     }
+    },
+    "frame_ms": {
+     "baseline": 14.43,
+     "volume": 15.09,
+     "near70": 14.13,
+     "volume70": 14.01,
+     "volume40": 13.97
+    },
+    "gpu_pass_ms": {
+     "baseline": {
+      "Clouds": 9.19,
+      "CloudShadow": 0.542
+     },
+     "volume": {
+      "Clouds": 9.134,
+      "CloudShadow": 0.46
+     },
+     "near70": {
+      "Clouds": 9.323,
+      "CloudShadow": 0.485
+     },
+     "volume70": {
+      "Clouds": 9.307,
+      "CloudShadow": 0.502
+     },
+     "volume40": {
+      "Clouds": 8.759,
+      "CloudShadow": 0.467
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {
+      "Clouds": 9.533,
+      "CloudShadow": 0.618
+     }
+    ],
+    "frame_ms_drift": [
+     -0.04
+    ],
+    "image_sha256": {
+     "baseline": "3b608d4c7df2722184d784e1452abbda6a22b8885111bdaf599bb3dbd9d95e8b",
+     "volume": "7a2af92fda02eb35a5d114c7d0f4ef422060eb885e8c60b47885ff6bfbf1a78c",
+     "near70": "1521f95d81f62047755ddfd720959fe2fb0426181fd595ab7ac57f7aa99f75bb",
+     "volume70": "d21adf2b5d8bea04fc5027c96b2cad2a2c8143a9dac5dbccfa4cd3f85f5553a3",
+     "volume40": "8472bc7747ff15497cf6b7d9dff01c706c0e8bbc39524217ffa139665d492354"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_near": {
+    "noise": [
+     {
+      "mean": 0.0411,
+      "max": 36.0,
+      "px_over": 230
+     }
+    ],
+    "variants": {
+     "volume": {
+      "mean": 0.1712,
+      "max": 54.0,
+      "px_over": 25521
+     },
+     "near70": {
+      "mean": 0.0473,
+      "max": 49.0,
+      "px_over": 1925
+     },
+     "volume70": {
+      "mean": 0.1904,
+      "max": 55.0,
+      "px_over": 29084
+     },
+     "volume40": {
+      "mean": 0.2252,
+      "max": 109.0,
+      "px_over": 31073
+     }
+    },
+    "frame_ms": {
+     "baseline": 18.38,
+     "volume": 18.0,
+     "near70": 17.42,
+     "volume70": 18.54,
+     "volume40": 18.2
+    },
+    "gpu_pass_ms": {
+     "baseline": {
+      "Clouds": 13.13,
+      "CloudShadow": 0.49
+     },
+     "volume": {
+      "Clouds": 12.432,
+      "CloudShadow": 0.291
+     },
+     "near70": {
+      "Clouds": 13.072,
+      "CloudShadow": 0.389
+     },
+     "volume70": {
+      "Clouds": 12.939,
+      "CloudShadow": 0.321
+     },
+     "volume40": {
+      "Clouds": 12.906,
+      "CloudShadow": 0.316
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {
+      "Clouds": 12.81,
+      "CloudShadow": 0.451
+     }
+    ],
+    "frame_ms_drift": [
+     -0.05
+    ],
+    "image_sha256": {
+     "baseline": "5d531d81b28dcec03d74cb955ae4e1ad0c54dc94aaf17b02c1b9eae3508bed1e",
+     "volume": "455084c06edeb44251e567dfdfc9893884fb3287a98545e3562415f052261c0e",
+     "near70": "fc7e3ef9325cfac0a3f75614868829aaeac0e98e75f23200c44f80f61694a58e",
+     "volume70": "cea5c7cd027ab54553d0b4c7b367b22aa7416d0197dcb009a25fe35949c26709",
+     "volume40": "1975be6fb7c572d9d49abd22a62171bbeade31f62975af28f6752cf99a613c5b"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "cumulus_lowsun": {
+    "noise": [
+     {
+      "mean": 0.0651,
+      "max": 3.0,
+      "px_over": 0
+     }
+    ],
+    "variants": {
+     "volume": {
+      "mean": 0.0489,
+      "max": 2.0,
+      "px_over": 0
+     },
+     "near70": {
+      "mean": 0.0687,
+      "max": 3.0,
+      "px_over": 0
+     },
+     "volume70": {
+      "mean": 0.0617,
+      "max": 2.0,
+      "px_over": 0
+     },
+     "volume40": {
+      "mean": 0.0808,
+      "max": 5.0,
+      "px_over": 0
+     }
+    },
+    "frame_ms": {
+     "baseline": 12.04,
+     "volume": 11.86,
+     "near70": 11.82,
+     "volume70": 11.85,
+     "volume40": 12.08
+    },
+    "gpu_pass_ms": {
+     "baseline": {
+      "Clouds": 13.13,
+      "CloudShadow": 0.49
+     },
+     "volume": {
+      "Clouds": 7.091,
+      "CloudShadow": 0.287
+     },
+     "near70": {
+      "Clouds": 7.766,
+      "CloudShadow": 0.405
+     },
+     "volume70": {
+      "Clouds": 8.03,
+      "CloudShadow": 0.292
+     },
+     "volume40": {
+      "Clouds": 7.499,
+      "CloudShadow": 0.279
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {
+      "Clouds": 7.895,
+      "CloudShadow": 0.411
+     }
+    ],
+    "frame_ms_drift": [
+     0.22
+    ],
+    "image_sha256": {
+     "baseline": "7963e0d6768651dd0f61b8031deddc56fa671a7270c46d92ef925d1bec0de2fc",
+     "volume": "0bb8a60525f5b0d5c0484607af4290b2deb96f7d334683b39b0f8912236190ce",
+     "near70": "393f8bc21a72545dd697b6d75feabd40e14f0511b10f4015a4e2e878c1de5933",
+     "volume70": "83374d4553c13b69bb39d96f7eea90574c852891ffc89d64b63cf5c569c19f14",
+     "volume40": "af17cd82fb2d75bf249eb6971f347991a7d0fc90ea0c59f67d738344643303c7"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   },
+   "orbit_deck": {
+    "noise": [
+     {
+      "mean": 0.0338,
+      "max": 46.0,
+      "px_over": 205
+     }
+    ],
+    "variants": {
+     "volume": {
+      "mean": 0.0697,
+      "max": 43.0,
+      "px_over": 262
+     },
+     "near70": {
+      "mean": 0.0377,
+      "max": 43.0,
+      "px_over": 260
+     },
+     "volume70": {
+      "mean": 0.0608,
+      "max": 43.0,
+      "px_over": 125
+     },
+     "volume40": {
+      "mean": 0.0684,
+      "max": 41.0,
+      "px_over": 279
+     }
+    },
+    "frame_ms": {
+     "baseline": 8.87,
+     "volume": 8.96,
+     "near70": 8.91,
+     "volume70": 9.11,
+     "volume40": 9.25
+    },
+    "gpu_pass_ms": {
+     "baseline": {
+      "Clouds": 13.13,
+      "CloudShadow": 0.49
+     },
+     "volume": {
+      "Clouds": 7.091,
+      "CloudShadow": 0.287
+     },
+     "near70": {
+      "Clouds": 7.766,
+      "CloudShadow": 0.405
+     },
+     "volume70": {
+      "Clouds": 8.03,
+      "CloudShadow": 0.292
+     },
+     "volume40": {
+      "Clouds": 7.499,
+      "CloudShadow": 0.279
+     }
+    },
+    "gpu_pass_ms_repeat": [
+     {
+      "Clouds": 7.895,
+      "CloudShadow": 0.411
+     }
+    ],
+    "frame_ms_drift": [
+     0.28
+    ],
+    "image_sha256": {
+     "baseline": "f135a7d38bf5e8e00d29dfc89bdae576982b891f21328d06fff1d18070d093c5",
+     "volume": "236229964e87522feb6c5da98ff5b1a939a50ccc05341b253a0070196eb76b51",
+     "near70": "2ab09b1203c887a0e6fddb30eb1184fe85e32ab3899acb3b3b2c0554ac8c1749",
+     "volume70": "d923fde088ff543a9493ae272f355793c59c82866cc880fe776936d7a95cefa2",
+     "volume40": "c2e71a545eea7702aba62c0b793de4018dad84b535f201e4bc49835bc677d6d5"
+    },
+    "resolution": [
+     1261,
+     2232
+    ]
+   }
+  }
+ },
+ "images": "full-resolution PNGs stay outside git (see run.scenes[*].image_sha256 and the capture folder at C:\\Users\\david\\AppData\\Local\\Temp\\claude\\C--Users-david-Documents-GitHub-asterra\\8929e869-7edf-4e5e-9d35-85da2894e8c6\\scratchpad\\ab_sun); sheet.png here is a downscaled contact sheet (top row variants, bottom row 5x difference vs baseline)"
+}
