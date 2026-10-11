@@ -40,6 +40,8 @@ TESTS = {
     "storm_warm_rain": [E + "storm_electrification/src/*.cpp", E + "optical_transport/src/DischargeGraph.cpp",
                         E + "weather_lab/src/FastStormSolver.cpp", E + "weather_lab/src/Thermo.cpp", E + "weather_lab/src/WxFormat.cpp",
                         E + "storm_electrification/tests/WarmRainAdapterTests.cpp"],
+    "storm_lightning_source": [E + "storm_electrification/src/*.cpp", E + "optical_transport/src/DischargeGraph.cpp",
+                               E + "storm_electrification/tests/StormLightningSourceTests.cpp"],
     "lighting_city_light_tree": [E + "lighting/src/CityLightTree.cpp", E + "lighting/src/LocalLightRegistry.cpp",
                                  E + "lighting/src/LightingView.cpp", E + "optical_transport/src/EmitterTree.cpp",
                                  E + "lighting/tests/CityLightTreeTests.cpp"],

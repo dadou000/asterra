@@ -4,6 +4,7 @@ add_library(OrbitStormElectrification STATIC
     src/FlashSchedule.cpp
     src/LeaderSimulation.cpp
     src/WarmRainAdapter.cpp
+    src/StormLightningSource.cpp
 )
 
 add_library(
@@ -92,5 +93,26 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.WarmRainAdapter
         COMMAND OrbitWarmRainAdapterTests
+    )
+
+    add_executable(
+        OrbitStormLightningSourceTests
+        tests/StormLightningSourceTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitStormLightningSourceTests
+        PRIVATE
+            Orbit::StormElectrification
+    )
+
+    target_compile_features(
+        OrbitStormLightningSourceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitStormLightningSourceTests)
+
+    add_test(
+        NAME Orbit.StormLightningSource
+        COMMAND OrbitStormLightningSourceTests
     )
 endif()
