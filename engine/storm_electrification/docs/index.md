@@ -24,6 +24,7 @@ invariants = [
   "The FastStormSolver has no ice phase, so StormFields.graupel / ice / liquid must be supplied by the caller (for example derived from supercooled cloud and rain above the freezing level). Charge is transported vertically only.",
   "TryFlash starts at the cell with the highest |E| / (initiationField * exp(-z / scaleHeight)) when that is >= 1; the channel is an equipotential that grows into neighbours whose potential differs by more than propagationField * density factor per cell, with probability proportional to the excess. Connecting to the ground pins the channel at 0 V.",
   "A flash stops growing when the neutralisable charge near the channel reaches maxFlashCharge (once minChannelCells exist), when growth stagnates, or at maxChannelCells; it never neutralises more than maxFlashCharge of either polarity. An ungrounded flash removes exactly equal positive and negative charge; a grounded flash delivers the net to the ground (FlashResult::groundCharge) and the grid's total changes by exactly that.",
+  "A flash is only accepted if it lowers the field energy: the neutralisation is tried at full strength and halved (from a snapshot of the charge) up to three times; if none lowers the energy the grid is restored and no flash happens. Without this, 1 in 61 large cloud-to-cloud flashes slightly raised the energy because the second-order term of moving ~25 C over a large channel beat the first-order dissipation.",
   "Every flash lowers the field energy; the same grid, seed and flash index reproduce the same flash bit for bit; a different seed grows a different channel.",
   "The DischargeGraph of a cloud-to-ground flash carries a faint leader pulse on every segment and a return-stroke wave up the grounded path at returnStrokeSpeed radiating returnStrokeEnergy; intracloud and cloud-to-cloud flashes have no return stroke. EnergyInWindow integrates microsecond pulses fully into a frame-length exposure and ClusterEmission preserves the energy within a bounded cluster count.",
   "FlashSchedule is an inhomogeneous Poisson process evaluated by unit-intensity strata hashed from (seed, stratum): any window gives the same flashes however it is split, a window a year ahead costs only its own strata, and the mean count over seeds equals the integrated rate.",
@@ -33,7 +34,7 @@ depends_on = ["/rendering/unified-transport/core"]
 verify = [
   "g++ -std=c++23 -O2 -Iengine/storm_electrification/include -Iengine/optical_transport/include engine/storm_electrification/src/*.cpp engine/optical_transport/src/DischargeGraph.cpp engine/storm_electrification/tests/StormElectrificationTests.cpp (about 25 s); the repo CMake targets Windows only: ctest -R Orbit.StormElectrification there.",
 ]
-verified = "da8beb7"
+verified = "052ee04"
 
 [[diagnose]]
 symptom = "a strongly charged storm never flashes (field ratio keeps rising)"
@@ -53,14 +54,14 @@ air and their fall speeds. `ChargeGrid::SolvePotential` gives the field; when `M
 
 ## What the tests show
 
-- Flash count in 15 minutes for a synthetic supercell at 8 / 18 / 30 m/s peak updraft: 4 / 27 / 78 (condensate scaled with the updraft). Stronger storms flash more, superlinearly.
+- With supercooled liquid limited to warmer than about -20 C (colder, an updraft is glaciated and has no riming charge), the default synthetic storm builds a normal dipole: 23 C each, centroids 2.5 km apart, main negative at about 265 K (-8 C), positive above it. Letting liquid reach -28 C instead puts negative ice aloft; that was a fixture error, not a model error.
+- First breakdown after about 6 minutes of charging at 25 m/s; flash count in 15 minutes at 8 / 18 / 30 m/s peak updraft (condensate scaled with the updraft): 0 / 15 / 62. Stronger storms flash more, superlinearly.
 - A vigorous storm separates about 2 C per second and each flash neutralises about 25 C (the configured budget), giving several flashes per minute: the right order of magnitude, not a calibration.
 - A synthetic low positive pocket under a negative layer produces a cloud-to-ground flash that lowers about 5 C of negative charge to the ground.
 
 ## Known gaps
 
-- The default synthetic storm's polarity layering is not a textbook tripole: the reversal at colder temperature puts negative ice aloft above a positive middle layer. The sign model is
-  a smooth reversal at a fixed temperature, without the liquid-water dependence of the laboratory charging curves. Treat the layering as uncalibrated.
+- There is no lower positive charge pocket, so the storm is a dipole, not a tripole; a lower pocket (graupel charging positive at low liquid water, or melting-level effects) is not modelled.
 - Charge moves vertically only and the solver has no ice, so a real FastStormSolver storm cannot drive it yet. The channel potential is fixed rather than re-solved as it grows.
 - No leader branching physics beyond the stochastic growth; sprites, megaflashes and superbolts are not modelled. Nothing consumes the flash graph in a renderer: the transient-lighting injection
   (bounded GPU cost, higher-order scattering response) is not built.

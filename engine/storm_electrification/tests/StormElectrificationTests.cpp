@@ -50,7 +50,10 @@ StormFields MakeStorm(const ChargeGrid& g, double peakUpdraft)
                 const double strength = peakUpdraft / 25.0;
                 f.graupel[c] = static_cast<float>(cold ? 2.0e-3 * column * strength : 0.0);
                 f.ice[c] = static_cast<float>((cold ? 1.0e-3 : 0.0) * std::exp(-r * r / (2.0 * 6000.0 * 6000.0)) * (veryCold ? 2.0 : 1.0) * strength);
-                f.liquid[c] = static_cast<float>((temperature < 273.15 && temperature > 245.0) ? 1.0e-3 * column * std::min(1.0, strength) : 0.0);
+                // Supercooled liquid exists from freezing down to about -20 C and thins with temperature; colder than that an
+                // updraft is glaciated, so there is no riming charge there. (Letting liquid reach -28 C puts negative ice aloft.)
+                const double liquidFraction = std::clamp((temperature - 253.0) / (273.15 - 253.0), 0.0, 1.0);
+                f.liquid[c] = static_cast<float>(1.5e-3 * column * std::min(1.0, strength) * liquidFraction);
             }
     return f;
 }
@@ -187,6 +190,32 @@ int main()
         Check(std::abs(g.TotalCharge() + ground - before) < 1.0e-9 * std::abs(before), "delivered plus remaining equals the initial charge exactly");
     }
 
+    // --- charge layering of the default synthetic storm: a normal dipole (positive above negative), main negative in the
+    // mixed-phase region between about -5 and -20 C, centroids a few kilometres apart, net charge zero.
+    {
+        ChargeGrid g(40, 40, 28, 600.0);
+        const StormFields storm = MakeStorm(g, 25.0);
+        const ElectrificationParams params;
+        for (int step = 0; step < 30; ++step) StepElectrification(g, storm, params, 5.0);
+        double positive = 0.0, negative = 0.0, zPositive = 0.0, zNegative = 0.0;
+        double negativeTemperature = 0.0;
+        for (std::uint32_t k = 0; k < g.Nz(); ++k)
+        {
+            double layer = 0.0;
+            for (std::uint32_t j = 0; j < g.Ny(); ++j)
+                for (std::uint32_t i = 0; i < g.Nx(); ++i) layer += g.SpaceCharge(g.Index(i, j, k));
+            layer *= std::pow(g.Spacing(), 3);
+            if (layer > 0.0) { positive += layer; zPositive += layer * g.Height(k); }
+            else { negative += layer; zNegative += layer * g.Height(k); negativeTemperature += layer * (300.0 - 6.5e-3 * g.Height(k)); }
+        }
+        const double separation = zPositive / positive - zNegative / negative;
+        const double negativeT = negativeTemperature / negative;
+        std::printf("layering: %.1f C each, centroid separation %.0f m, negative centroid at %.0f K\n", positive, separation, negativeT);
+        Check(positive > 5.0 && Near(positive, -negative, 1.0e-6), "the storm separates charge into equal and opposite halves");
+        Check(separation > 1500.0 && separation < 4500.0, "the charge centres are 1.5 to 4.5 km apart");
+        Check(negativeT > 255.0 && negativeT < 270.0, "the main negative charge sits in the mixed-phase region (-18 to -3 C)");
+    }
+
     // --- one flash: threshold, conservation, energy, determinism.
     {
         ChargeGrid g(48, 48, 32, 500.0);
@@ -195,13 +224,24 @@ int main()
         LeaderParams leader;
         // Before the storm has charged no flash can start.
         Check(!TryFlash(g, leader, 0.0, 0).occurred, "no flash in an uncharged cloud");
-        for (int step = 0; step < 60; ++step) StepElectrification(g, storm, electrification, 5.0);
-        g.SolvePotential();
+        // Charge until the field first reaches the initiation threshold (at most 20 minutes of storm time).
+        const auto chargeUntilBreakdown = [&](ChargeGrid& target) {
+            double seconds = 0.0;
+            for (; seconds < 1200.0; seconds += 5.0)
+            {
+                StepElectrification(target, storm, electrification, 5.0);
+                target.SolvePotential();
+                if (MaxBreakdownRatio(target, leader) >= 1.0) break;
+            }
+            return seconds;
+        };
+        const double chargingTime = chargeUntilBreakdown(g);
+        std::printf("first breakdown after %.0f s of charging\n", chargingTime);
         const double ratio = MaxBreakdownRatio(g, leader);
-        Check(ratio >= 1.0, "five minutes of charging reaches the initiation threshold");
+        Check(ratio >= 1.0 && chargingTime > 60.0 && chargingTime < 1200.0, "a storm reaches the initiation threshold after minutes of charging, not instantly");
         ChargeGrid copy = g;
         const double totalBefore = g.TotalCharge();
-        const FlashResult flash = TryFlash(g, leader, 300.0, 7);
+        const FlashResult flash = TryFlash(g, leader, chargingTime, 7);
         Check(flash.occurred && flash.channelCells >= 3, "a flash starts and grows a channel");
         Check(flash.kind == FlashKind::IntraCloud, "a flash confined aloft is intracloud");
         Check(std::abs(g.TotalCharge() - totalBefore) < 1.0e-9 * flash.positiveRemoved, "an ungrounded flash conserves charge exactly");
@@ -210,14 +250,15 @@ int main()
         Check(flash.energyAfter < flash.energyBefore, "a flash dissipates field energy");
         Check(flash.graph.Segments().size() + 1 == flash.channelCells, "one segment per added cell");
         // Determinism: same grid, seed and index give the same channel; another seed differs.
-        const FlashResult again = TryFlash(copy, leader, 300.0, 7);
+        const FlashResult again = TryFlash(copy, leader, chargingTime, 7);
         Check(again.channelCells == flash.channelCells && again.graph.Segments().size() == flash.graph.Segments().size() &&
                   again.graph.EnergyInWindow(0.0, 1000.0) == flash.graph.EnergyInWindow(0.0, 1000.0),
               "same seed and flash index reproduce the same flash");
-        ChargeGrid other = [&] { ChargeGrid c(48, 48, 32, 500.0); for (int s = 0; s < 60; ++s) StepElectrification(c, storm, electrification, 5.0); return c; }();
+        ChargeGrid other(48, 48, 32, 500.0);
+        chargeUntilBreakdown(other);
         LeaderParams reseeded = leader;
         reseeded.seed = 99;
-        const FlashResult different = TryFlash(other, reseeded, 300.0, 7);
+        const FlashResult different = TryFlash(other, reseeded, chargingTime, 7);
         const auto fingerprint = [](const FlashResult& r) {
             double sum = 0.0;
             for (const auto& s : r.graph.Segments()) sum += s.to[0] * 1.0 + s.to[1] * 3.0 + s.to[2] * 7.0 + s.formedAt;

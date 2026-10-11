@@ -255,48 +255,72 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                         continue;
                     near[grid.Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), static_cast<std::uint32_t>(z))] = 1;
                 }
-    double removablePositive = 0.0, removableNegative = 0.0;
-    for (std::size_t c = 0; c < grid.CellCount(); ++c)
+    // A flash must dissipate field energy. Removing equal charge from a high- and a low-potential region does so to first
+    // order, but with a large charge moved over a large channel the second-order term can win, so the neutralisation is
+    // tried at full strength and halved (from a snapshot) until the energy drops; if it never does, no flash happens.
+    const std::vector<double> iceBefore = grid.IceCharge(), graupelBefore = grid.GraupelCharge();
+    bool accepted = false;
+    for (int attempt = 0; attempt < 4 && !accepted; ++attempt)
     {
-        if (!near[c]) continue;
-        for (const double q : {grid.IceCharge()[c], grid.GraupelCharge()[c]})
+        const double strength = std::pow(0.5, attempt);
+        grid.IceCharge() = iceBefore;
+        grid.GraupelCharge() = graupelBefore;
+        out.positiveRemoved = 0.0;
+        out.negativeRemoved = 0.0;
+        const double fraction = p.neutralizationFraction * strength;
+        double removablePositive = 0.0, removableNegative = 0.0;
+        for (std::size_t c = 0; c < grid.CellCount(); ++c)
         {
-            (q > 0.0 ? removablePositive : removableNegative) += std::abs(q) * p.neutralizationFraction * cellVolume;
+            if (!near[c]) continue;
+            for (const double q : {grid.IceCharge()[c], grid.GraupelCharge()[c]})
+            {
+                (q > 0.0 ? removablePositive : removableNegative) += std::abs(q) * fraction * cellVolume;
+            }
         }
-    }
-    double scalePositive = 1.0, scaleNegative = 1.0;
-    if (!grounded)
-    {
-        const double common = std::min(removablePositive, removableNegative);
-        scalePositive = removablePositive > 0.0 ? common / removablePositive : 0.0;
-        scaleNegative = removableNegative > 0.0 ? common / removableNegative : 0.0;
-    }
-    // Never neutralise more than the flash budget of either polarity, whatever the local charge density.
-    if (removablePositive > p.maxFlashCharge) scalePositive = std::min(scalePositive, p.maxFlashCharge / removablePositive);
-    if (removableNegative > p.maxFlashCharge) scaleNegative = std::min(scaleNegative, p.maxFlashCharge / removableNegative);
-    if (!grounded)
-    {
-        // Keep the two polarities equal after capping so an ungrounded flash still conserves charge exactly.
-        const double positive = removablePositive * scalePositive, negative = removableNegative * scaleNegative;
-        const double common = std::min(positive, negative);
-        scalePositive = positive > 0.0 ? scalePositive * common / positive : 0.0;
-        scaleNegative = negative > 0.0 ? scaleNegative * common / negative : 0.0;
-    }
-    for (std::size_t c = 0; c < grid.CellCount(); ++c)
-    {
-        if (!near[c]) continue;
-        for (std::vector<double>* carrier : {&grid.IceCharge(), &grid.GraupelCharge()})
+        double scalePositive = 1.0, scaleNegative = 1.0;
+        if (!grounded)
         {
-            double& q = (*carrier)[c];
-            const double scale = q > 0.0 ? scalePositive : scaleNegative;
-            const double removed = q * p.neutralizationFraction * scale;
-            q -= removed;
-            (removed > 0.0 ? out.positiveRemoved : out.negativeRemoved) += std::abs(removed) * cellVolume;
+            const double common = std::min(removablePositive, removableNegative);
+            scalePositive = removablePositive > 0.0 ? common / removablePositive : 0.0;
+            scaleNegative = removableNegative > 0.0 ? common / removableNegative : 0.0;
         }
+        // Never neutralise more than the flash budget of either polarity, whatever the local charge density.
+        if (removablePositive > p.maxFlashCharge) scalePositive = std::min(scalePositive, p.maxFlashCharge / removablePositive);
+        if (removableNegative > p.maxFlashCharge) scaleNegative = std::min(scaleNegative, p.maxFlashCharge / removableNegative);
+        if (!grounded)
+        {
+            // Keep the two polarities equal after capping so an ungrounded flash still conserves charge exactly.
+            const double positive = removablePositive * scalePositive, negative = removableNegative * scaleNegative;
+            const double common = std::min(positive, negative);
+            scalePositive = positive > 0.0 ? scalePositive * common / positive : 0.0;
+            scaleNegative = negative > 0.0 ? scaleNegative * common / negative : 0.0;
+        }
+        for (std::size_t c = 0; c < grid.CellCount(); ++c)
+        {
+            if (!near[c]) continue;
+            for (std::vector<double>* carrier : {&grid.IceCharge(), &grid.GraupelCharge()})
+            {
+                double& q = (*carrier)[c];
+                const double scale = q > 0.0 ? scalePositive : scaleNegative;
+                const double removed = q * fraction * scale;
+                q -= removed;
+                (removed > 0.0 ? out.positiveRemoved : out.negativeRemoved) += std::abs(removed) * cellVolume;
+            }
+        }
+        grid.SolvePotential();
+        out.energyAfter = grid.FieldEnergy();
+        accepted = out.energyAfter < out.energyBefore;
+    }
+    if (!accepted)
+    {
+        grid.IceCharge() = iceBefore;
+        grid.GraupelCharge() = graupelBefore;
+        grid.SolvePotential();
+        out.positiveRemoved = out.negativeRemoved = 0.0;
+        out.energyAfter = out.energyBefore;
+        return out;   // the channel could not be made to dissipate energy: nothing happened
     }
     out.groundCharge = out.positiveRemoved - out.negativeRemoved;   // net charge taken out of the cloud
-    grid.SolvePotential();
-    out.energyAfter = grid.FieldEnergy();
     out.occurred = true;
     out.startTime = startTime;
     return out;

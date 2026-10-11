@@ -53,5 +53,8 @@ needs a GPU and an art decision. Hardware ray queries need an RHI change first: 
   `/rendering/unified-transport/storm-electrification` takes ice, graupel and supercooled liquid as caller-supplied fields.
 - Building the flash simulation exposed two defects that unit-level reasoning would have missed: with the channel held at a fixed potential every flash filled the entire channel cap and
   neutralised +-390 C (unphysical, fixed with a charge budget), and a strongly charged storm held more than the budget around a single cell so flashes never started (fixed with a minimum channel
-  extent and by capping the charge actually removed). Flash counts then rose monotonically with updraft (4 / 27 / 78 in 15 minutes at 8 / 18 / 30 m/s).
+  extent and by capping the charge actually removed). Flash counts then rose monotonically with updraft (then 0 / 15 / 62 in 15 minutes at 8 / 18 / 30 m/s with the final realistic fixture).
 - My first updraft sweep decreased with updraft because the synthetic storm held condensate fixed while only transport changed: the model was behaving, the experiment was wrong.
+
+- Follow-up calibration (the "inverted layering" gap): the model was right and the fixture wrong. Supercooled liquid below about -20 C does not exist in an updraft; with it removed the storm builds a normal dipole
+  (23 C, centroids 2.5 km apart, main negative at -8 C). Re-running with the realistic fixture also exposed a real defect: 1 flash in 61 raised the field energy, so a flash is now accepted only if it lowers it.
