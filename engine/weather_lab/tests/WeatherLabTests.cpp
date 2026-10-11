@@ -233,6 +233,107 @@ void TestNesting()
     Check(difference > 1.0e-3);
 }
 
+void TestSpongeTrackingAndAdaptiveNest()
+{
+    // Lateral sponge: rain placed in the edge band decays faster than in the fully periodic run.
+    FastStormConfig open = SmallConfig();
+    open.lateralSpongeCells = 6;
+    FastStormConfig closed = SmallConfig();
+    FastStormSolver sOpen(open);
+    FastStormSolver sClosed(closed);
+    const std::size_t bandCell = (static_cast<std::size_t>(5) * 32U + 16U) * 32U + 1U;   // level 5, column x = 1
+    const std::size_t centreCell = (static_cast<std::size_t>(5) * 32U + 16U) * 32U + 16U;
+    sOpen.MutableState().qr[bandCell] = 1.0e-3F;
+    sClosed.MutableState().qr[bandCell] = 1.0e-3F;
+    sOpen.MutableState().qr[centreCell] = 1.0e-3F;
+    sClosed.MutableState().qr[centreCell] = 1.0e-3F;
+    for (int i = 0; i < 4; ++i)
+    {
+        (void)sOpen.Step(12.0F);
+        (void)sClosed.Step(12.0F);
+    }
+    std::vector<float> ro, rc;
+    sOpen.CopyField("qr", ro);
+    sClosed.CopyField("qr", rc);
+    Check(ro[bandCell] < 0.92F * rc[bandCell]);           // absorbed in the band (about 13 percent in 48 s)
+    Check(std::fabs(ro[centreCell] - rc[centreCell]) < 0.2F * rc[centreCell] + 1.0e-9F);   // the interior is not
+
+    // Storm-following frame: starting from a frame that does not move with the storm, the tracker moves it toward the storm.
+    FastStormConfig tracked = SmallConfig();
+    tracked.frameU = 0.0F;
+    tracked.frameV = 0.0F;
+    tracked.trackStorm = true;
+    tracked.trackSeconds = 240.0F;
+    FastStormSolver follower(tracked);
+    follower.Advance(3000.0);
+    Check(follower.Config().frameU > 3.0F);
+    Check(std::isfinite(follower.Diagnostics().maxUpdraft) && follower.Diagnostics().maxUpdraft > 10.0F);
+
+    // Adaptive child: absent before the storm, created once the updraft passes the threshold, and shrunk by the budget.
+    NestConfig adaptive = SmallNest();
+    adaptive.adaptive = true;
+    adaptive.maxChildCells = 20000;   // a 32 x 32 x 40 child (40960 cells) does not fit: it is halved to 16 x 16 x 40
+    Check(NestedStormSolver::Validate(adaptive).empty());
+    NestedStormSolver nest(adaptive);
+    Check(!nest.HasChild());
+    nest.Advance(300.0);
+    Check(!nest.HasChild());
+    nest.Advance(1500.0);
+    Check(nest.HasChild());
+    Check(nest.ChildCreations() == 1U);
+    Check(nest.BudgetCoarsenings() == 1U);
+    Check(nest.ChildCells() == 8U);
+    Check(nest.TotalCells() == 32ULL * 32U * 40U + 16ULL * 16U * 40U);
+    Check(std::fabs(nest.Child().Diagnostics().time - nest.Parent().Diagnostics().time) < 1.0e-3);
+    Check(nest.Child().Diagnostics().maxDivergence < 1.0e-5F);
+    NestConfig bad = adaptive;
+    bad.releaseUpdraft = bad.createUpdraft;
+    Check(!NestedStormSolver::Validate(bad).empty());
+}
+
+void TestOutflowDoesNotWrap()
+{
+    // A 2 K pulse of potential temperature at 14 km leaves through the east edge (the wind there is faster than the frame). In a fully
+    // periodic domain it comes back in at the west edge; with the lateral sponge it is absorbed and does not.
+    const auto run = [](const bool sponge)
+    {
+        FastStormConfig c;
+        c.nx = 256;
+        c.ny = 4;
+        c.nz = 40;
+        c.threads = 2;
+        c.bubble.amplitude = 0.0F;
+        c.lateralSpongeCells = sponge ? 16U : 0U;
+        FastStormSolver solver(c);
+        const FastStormState s = solver.MutableState();
+        const std::uint32_t k = 28;
+        for (std::uint32_t j = 0; j < c.ny; ++j)
+        {
+            for (std::uint32_t i = 236; i < 244; ++i)
+            {
+                s.theta[(static_cast<std::size_t>(k) * c.ny + j) * c.nx + i] += 2.0F;
+            }
+        }
+        solver.Advance(4000.0);
+        std::vector<float> theta;
+        solver.CopyField("th", theta);
+        const BaseState& base = solver.Base();
+        float west = 0.0F;   // x from 40 km to 200 km: outside the west sponge band, well away from the pulse's exit
+        for (std::uint32_t j = 0; j < c.ny; ++j)
+        {
+            for (std::uint32_t i = 20; i < 100; ++i)
+            {
+                west = std::max(west, std::fabs(theta[(static_cast<std::size_t>(k) * c.ny + j) * c.nx + i] - base.theta[k]));
+            }
+        }
+        return west;
+    };
+    const float periodic = run(false);
+    const float open = run(true);
+    Check(periodic > 0.03F);             // it wrapped (the pulse disperses into gravity waves: about 0.07 K measured)
+    Check(open < 0.02F * periodic);      // the sponge absorbed it (about 0.0004 K measured)
+}
+
 void TestDeterministicAcrossThreadCounts()
 {
     FastStormConfig a = SmallConfig();
@@ -441,6 +542,8 @@ int main()
     TestStormInitiates();
     TestIceScheme();
     TestNesting();
+    TestSpongeTrackingAndAdaptiveNest();
+    TestOutflowDoesNotWrap();
     TestDeterministicAcrossThreadCounts();
     TestFormatRoundTripAndMetrics();
     TestSliceColors();

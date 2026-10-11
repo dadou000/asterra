@@ -257,6 +257,11 @@ struct FastStormSolver::Impl
 
     FastStormDiagnostics diag;
     FastStormHook hook;
+    // Storm tracking state.
+    float trackTimer = 0.0F;
+    bool trackHasPrevious = false;
+    double trackPreviousX = 0.0;
+    double trackPreviousY = 0.0;
 
     explicit Impl(const FastStormConfig& config);
 
@@ -278,6 +283,8 @@ struct FastStormSolver::Impl
     void IceProcesses(float dt, float p, float exner, float rho, float& th, float& vapor, float& cloud, float& rain,
         float& ice, float& snow, float& graupel) const;
     void Forcing(float dt);
+    void LateralSponge(float dt);
+    void TrackStorm(float dt);
     void Mix(std::vector<float>& field, const std::vector<float>& baseByLevel,
         std::uint32_t levels, std::uint32_t firstLevel, float dt);
     void Project(float dt);
@@ -347,6 +354,8 @@ FastStormSolver::Impl::Impl(const FastStormConfig& config)
 void FastStormSolver::Impl::Reset()
 {
     diag = {};
+    trackTimer = 0.0F;
+    trackHasPrevious = false;
     std::fill(w.begin(), w.end(), 0.0F);
     std::fill(rainAccumulation.begin(), rainAccumulation.end(), 0.0F);
     std::fill(qc.begin(), qc.end(), 0.0F);
@@ -746,6 +755,13 @@ void FastStormSolver::Impl::Microphysics(const float dt)
                 float snow = cfg.ice ? qs[idx] : 0.0F;
                 float graupel = cfg.ice ? qg[idx] : 0.0F;
                 const float heat = kLv / (kCp * exner);
+
+                // Activity mask: clear, unsaturated air with no condensate has nothing to do (most of a large domain).
+                if (cloud <= 0.0F && rain <= 0.0F && ice <= 0.0F && snow <= 0.0F && graupel <= 0.0F
+                    && vapor <= 0.98F * SaturationMixingRatio(p, th * exner))
+                {
+                    continue;
+                }
 
                 for (int iteration = 0; iteration < 2; ++iteration)
                 {
@@ -1270,6 +1286,8 @@ float FastStormSolver::Impl::Step(const float requested)
             diag.time + dt, dt);
     }
 
+    LateralSponge(dt);   // before the projection, so the divergence it introduces is removed
+
     t = Clock::now();
     Project(dt);
     diag.timings.projectionMs = MillisecondsSince(t);
@@ -1278,8 +1296,128 @@ float FastStormSolver::Impl::Step(const float requested)
     ++diag.steps;
     diag.lastTimeStep = dt;
     UpdateDiagnostics();
+    TrackStorm(dt);
     diag.timings.totalMs = MillisecondsSince(t0);
     return dt;
+}
+
+void FastStormSolver::Impl::LateralSponge(const float dt)
+{
+    const auto width = static_cast<std::int32_t>(cfg.lateralSpongeCells);
+    if (width <= 0)
+    {
+        return;
+    }
+    const auto nx = static_cast<std::int32_t>(cfg.nx);
+    const auto ny = static_cast<std::int32_t>(cfg.ny);
+    const std::size_t plane = static_cast<std::size_t>(cfg.nx) * cfg.ny;
+    ParallelFor(threads, cfg.nz, [&](const std::uint32_t begin, const std::uint32_t end)
+    {
+        for (std::uint32_t k = begin; k < end; ++k)
+        {
+            for (std::int32_t j = 0; j < ny; ++j)
+            {
+                const std::int32_t dj = std::min(j, ny - 1 - j);
+                for (std::int32_t i = 0; i < nx; ++i)
+                {
+                    if (dj >= width && i == width)
+                    {
+                        i = nx - width - 1;   // skip the free interior of this row
+                        continue;
+                    }
+                    const std::int32_t d = std::min(std::min(i, nx - 1 - i), dj);
+                    if (d >= width)
+                    {
+                        continue;
+                    }
+                    const float ramp = std::cos(0.5F * static_cast<float>(kPi) * static_cast<float>(d) / static_cast<float>(width));
+                    const float a = 1.0F - std::exp(-dt * cfg.lateralSpongeRate * ramp * ramp);
+                    const std::size_t idx = static_cast<std::size_t>(k) * plane + static_cast<std::size_t>(j) * cfg.nx
+                        + static_cast<std::size_t>(i);
+                    u[idx] += a * (base.windU[k] - u[idx]);
+                    v[idx] += a * (base.windV[k] - v[idx]);
+                    theta[idx] += a * (base.theta[k] - theta[idx]);
+                    if (k > 0U)
+                    {
+                        w[idx] -= a * w[idx];   // w face k (the lower face of cell k)
+                    }
+                    if (cfg.moisture)
+                    {
+                        qv[idx] += a * (base.vapor[k] - qv[idx]);
+                        qc[idx] -= a * qc[idx];
+                        qr[idx] -= a * qr[idx];
+                        if (cfg.ice)
+                        {
+                            qi[idx] -= a * qi[idx];
+                            qs[idx] -= a * qs[idx];
+                            qg[idx] -= a * qg[idx];
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+void FastStormSolver::Impl::TrackStorm(const float dt)
+{
+    if (!cfg.trackStorm)
+    {
+        return;
+    }
+    trackTimer += dt;
+    if (trackTimer < cfg.trackSeconds)
+    {
+        return;
+    }
+    const float interval = trackTimer;
+    trackTimer = 0.0F;
+    const std::uint32_t kw = std::min(cfg.nz - 1U, std::max(1U, static_cast<std::uint32_t>(3000.0F / cfg.dz + 0.5F)));
+    const std::size_t plane = static_cast<std::size_t>(cfg.nx) * cfg.ny;
+    const double lx = static_cast<double>(cfg.nx) * cfg.dx;
+    const double ly = static_cast<double>(cfg.ny) * cfg.dy;
+    const double cx = 0.5 * lx;
+    const double cy = 0.5 * ly;
+    double weight = 0.0;
+    double sx = 0.0;
+    double sy = 0.0;
+    for (std::uint32_t j = 0; j < cfg.ny; ++j)
+    {
+        for (std::uint32_t i = 0; i < cfg.nx; ++i)
+        {
+            const float value = w[static_cast<std::size_t>(kw) * plane + static_cast<std::size_t>(j) * cfg.nx + i];
+            if (value > 12.0F)
+            {
+                weight += value;
+                sx += value * ((i + 0.5) * cfg.dx - cx);
+                sy += value * ((j + 0.5) * cfg.dy - cy);
+            }
+        }
+    }
+    if (weight <= 0.0)
+    {
+        trackHasPrevious = false;
+        return;
+    }
+    const double x = cx + sx / weight;
+    const double y = cy + sy / weight;
+    if (trackHasPrevious)
+    {
+        // Velocity of the storm relative to the grid, plus a pull of its centroid back to the centre over about 3 intervals.
+        const double vx = (x - trackPreviousX) / interval;
+        const double vy = (y - trackPreviousY) / interval;
+        const double pull = 1.0 / (3.0 * cfg.trackSeconds);
+        const double wantU = cfg.frameU + vx + (x - cx) * pull;
+        const double wantV = cfg.frameV + vy + (y - cy) * pull;
+        // Half the correction, limited to 1.5 m/s per update: a split storm moves the centroid abruptly, the frame must not follow.
+        const double stepU = std::clamp(0.5 * (wantU - cfg.frameU), -1.5, 1.5);
+        const double stepV = std::clamp(0.5 * (wantV - cfg.frameV), -1.5, 1.5);
+        cfg.frameU = static_cast<float>(cfg.frameU + stepU);
+        cfg.frameV = static_cast<float>(cfg.frameV + stepV);
+    }
+    trackHasPrevious = true;
+    trackPreviousX = x;
+    trackPreviousY = y;
 }
 
 std::size_t FastStormSolver::Impl::Bytes() const
@@ -1355,6 +1493,14 @@ FastStormState FastStormSolver::MutableState()
 }
 
 void FastStormSolver::SetPreProjectionHook(FastStormHook hook) { impl_->hook = std::move(hook); }
+
+void FastStormSolver::SetTime(const double seconds) { impl_->diag.time = seconds; }
+
+void FastStormSolver::SetFrame(const float u, const float v)
+{
+    impl_->cfg.frameU = u;
+    impl_->cfg.frameV = v;
+}
 
 void FastStormSolver::MarkInitialState()
 {

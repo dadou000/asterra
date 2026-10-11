@@ -59,6 +59,10 @@ FastStormConfig ConfigFrom(const Options& o)
     c.bubble.amplitude = static_cast<float>(Number(o, "bubble", c.bubble.amplitude));
     c.moisture = Number(o, "moisture", 1.0) != 0.0;
     c.ice = Number(o, "ice", 0.0) != 0.0;
+    c.lateralSpongeCells = static_cast<std::uint32_t>(Number(o, "sponge", 0.0));
+    c.lateralSpongeRate = static_cast<float>(Number(o, "sponge-rate", c.lateralSpongeRate));
+    c.trackStorm = Number(o, "track", 0.0) != 0.0;
+    c.trackSeconds = static_cast<float>(Number(o, "track-seconds", c.trackSeconds));
     c.massFixer = Number(o, "mass-fixer", 1.0) != 0.0;
     c.horizontalMixing = static_cast<float>(Number(o, "kh", c.horizontalMixing));
     c.verticalMixing = static_cast<float>(Number(o, "kv", c.verticalMixing));
@@ -151,6 +155,11 @@ int Nest(const Options& o)
     nc.relaxSeconds = static_cast<float>(Number(o, "relax-seconds", nc.relaxSeconds));
     nc.feedback = Number(o, "feedback", 0.0) != 0.0;
     nc.feedbackSeconds = static_cast<float>(Number(o, "feedback-seconds", nc.feedbackSeconds));
+    nc.adaptive = Number(o, "adaptive", 0.0) != 0.0;
+    nc.createUpdraft = static_cast<float>(Number(o, "create-updraft", nc.createUpdraft));
+    nc.releaseUpdraft = static_cast<float>(Number(o, "release-updraft", nc.releaseUpdraft));
+    nc.releaseHoldSeconds = static_cast<float>(Number(o, "release-hold", nc.releaseHoldSeconds));
+    nc.maxChildCells = static_cast<std::uint32_t>(Number(o, "max-child-cells", 0.0));
     if (const std::string problem = NestedStormSolver::Validate(nc); !problem.empty())
     {
         std::cerr << "invalid nest: " << problem << '\n';
@@ -170,10 +179,15 @@ int Nest(const Options& o)
     const auto childOut = o.find("out");
     const auto parentOut = o.find("parent-out");
     std::string error;
-    if (childOut != o.end() && !childWriter.Open(childOut->second, nest.Child().MakeHeader(times), &error))
+    bool childOpen = false;
+    if (childOut != o.end() && nest.HasChild())
     {
-        std::cerr << error << '\n';
-        return 2;
+        if (!childWriter.Open(childOut->second, nest.Child().MakeHeader(times), &error))
+        {
+            std::cerr << error << '\n';
+            return 2;
+        }
+        childOpen = true;
     }
     if (parentOut != o.end() && !parentWriter.Open(parentOut->second, nest.Parent().MakeHeader(times), &error))
     {
@@ -182,33 +196,70 @@ int Nest(const Options& o)
     }
     const auto write = [&]
     {
-        if (childOut != o.end()) { (void)nest.Child().WriteFrame(childWriter); }
+        if (childOpen && nest.HasChild()) { (void)nest.Child().WriteFrame(childWriter); }
         if (parentOut != o.end()) { (void)nest.Parent().WriteFrame(parentWriter); }
     };
     write();
-    std::printf("nest: parent %ux%ux%u at %.0f m, child %ux%u at %.0f m (%u parent cells, %.0f%% of the child relaxed), %s\n",
-        nc.parent.nx, nc.parent.ny, nc.parent.nz, static_cast<double>(nc.parent.dx),
-        nest.Child().Config().nx, nest.Child().Config().ny, static_cast<double>(nest.Child().Config().dx), nc.cells,
-        100.0 * nest.RelaxedFraction(), nc.feedback ? "two-way" : "one-way");
+    const FastStormConfig& pc = nc.parent;
+    std::printf("nest: parent %ux%ux%u at %.0f m (%.0f km square)%s%s, child %ux%u cells of parent at 1/%u, %s%s\n",
+        pc.nx, pc.ny, pc.nz, static_cast<double>(pc.dx), pc.nx * static_cast<double>(pc.dx) / 1000.0,
+        pc.lateralSpongeCells > 0U ? ", lateral sponge" : "", pc.trackStorm ? ", storm-following frame" : "",
+        nc.cells, nc.cells, nc.ratio, nc.feedback ? "two-way" : "one-way", nc.adaptive ? ", adaptive" : "");
+    // Condensate that has reached the upstream and the downstream quarter of the domain (a wrapping outflow shows up upstream).
+    const auto strips = [&](float& upstream, float& downstream)
+    {
+        std::vector<float> total(static_cast<std::size_t>(pc.nx) * pc.ny * pc.nz, 0.0F);
+        std::vector<float> field;
+        for (const char* name : {"qc", "qr", "qi", "qs", "qg"})
+        {
+            nest.Parent().CopyField(name, field);
+            for (std::size_t i = 0; i < total.size(); ++i) { total[i] += field[i]; }
+        }
+        upstream = 0.0F;
+        downstream = 0.0F;
+        for (std::size_t i = 0; i < total.size(); ++i)
+        {
+            const std::uint32_t x = static_cast<std::uint32_t>(i % pc.nx);
+            if (x < pc.nx / 4U) { upstream = std::max(upstream, total[i]); }
+            if (x >= pc.nx * 3U / 4U) { downstream = std::max(downstream, total[i]); }
+        }
+        upstream *= 1000.0F;
+        downstream *= 1000.0F;
+    };
     const auto start = std::chrono::steady_clock::now();
+    std::uint64_t cellStepSum = 0;
+    std::uint64_t stepsTaken = 0;
     for (std::size_t f = 1; f < frames; ++f)
     {
+        const std::uint64_t stepsBefore = nest.Parent().Diagnostics().steps;
         nest.Advance(every);
+        const std::uint64_t newSteps = nest.Parent().Diagnostics().steps - stepsBefore;
+        cellStepSum += nest.TotalCells() * newSteps;
+        stepsTaken += newSteps;
+        if (!childOpen && childOut != o.end() && nest.HasChild())
+        {
+            (void)childWriter.Open(childOut->second, nest.Child().MakeHeader(times), &error);
+            childOpen = true;
+        }
         write();
         const auto& dp = nest.Parent().Diagnostics();
-        const auto& dc = nest.Child().Diagnostics();
-        std::printf("t=%6.1f min  parent wmax=%5.1f  child wmax=%5.1f wmin=%6.1f  child div=%.1e  sub-steps/step=%.1f\n",
-            dp.time / 60.0, static_cast<double>(dp.maxUpdraft), static_cast<double>(dc.maxUpdraft),
-            static_cast<double>(dc.maxDowndraft), static_cast<double>(dc.maxDivergence), nest.SubStepRatio());
+        float upstream = 0.0F, downstream = 0.0F;
+        strips(upstream, downstream);
+        std::printf("t=%6.1f min  wmax=%5.1f  frame=(%5.1f,%5.1f)  child=%s%u  cells=%.2fM  cond up/down [g/kg]=%.3f/%.3f  div=%.1e\n",
+            dp.time / 60.0, static_cast<double>(dp.maxUpdraft), static_cast<double>(nest.Parent().Config().frameU),
+            static_cast<double>(nest.Parent().Config().frameV), nest.HasChild() ? "" : "none ",
+            nest.HasChild() ? nest.ChildCells() : 0U, static_cast<double>(nest.TotalCells()) / 1.0e6,
+            static_cast<double>(upstream), static_cast<double>(downstream), static_cast<double>(dp.maxDivergence));
         std::fflush(stdout);
     }
     childWriter.Close();
     parentWriter.Close();
     const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-    const double cells = static_cast<double>(nc.parent.nx) * nc.parent.ny * nc.parent.nz
-        + static_cast<double>(nest.Child().Config().nx) * nest.Child().Config().ny * nest.Child().Config().nz;
-    std::printf("simulated %.0f s in %.2f s wall: %.1fx real time, %.2f M cells in total\n",
-        nest.Parent().Diagnostics().time, wall, nest.Parent().Diagnostics().time / wall, cells / 1.0e6);
+    std::printf("simulated %.0f s in %.2f s wall: %.1fx real time; mean %.2f M cells per step; child created %u time(s), "
+                "budget coarsened it %u time(s)\n",
+        nest.Parent().Diagnostics().time, wall, nest.Parent().Diagnostics().time / wall,
+        static_cast<double>(cellStepSum) / static_cast<double>(std::max<std::uint64_t>(stepsTaken, 1U)) / 1.0e6,
+        nest.ChildCreations(), nest.BudgetCoarsenings());
     return 0;
 }
 

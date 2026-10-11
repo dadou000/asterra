@@ -27,6 +27,15 @@ struct NestConfig
     float relaxSeconds = 10.0F;      // relaxation time at the outer edge
     bool feedback = false;           // two-way: child averages back into the parent interior
     float feedbackSeconds = 120.0F;  // nudging time of the parent toward the child average
+
+    // Adaptive child: it is created (centred on the main updraft) when the parent's peak updraft reaches `createUpdraft` and
+    // released after the peak stays below `releaseUpdraft` for `releaseHoldSeconds` (hysteresis). `maxChildCells` caps the child's
+    // 3-D cell count: when `cells` would exceed it the child is made smaller instead (coarsening, never a longer step); 0 = no cap.
+    bool adaptive = false;
+    float createUpdraft = 8.0F;
+    float releaseUpdraft = 3.0F;
+    float releaseHoldSeconds = 900.0F;
+    std::uint32_t maxChildCells = 0;
 };
 
 class NestedStormSolver
@@ -43,7 +52,16 @@ public:
     void Advance(double seconds);
 
     [[nodiscard]] FastStormSolver& Parent();
+    // The child exists from the start unless `adaptive`; Child() requires HasChild().
+    [[nodiscard]] bool HasChild() const;
     [[nodiscard]] FastStormSolver& Child();
+    // Current child extent in parent cells (0 without a child), how many times a child was created, and how often the budget
+    // made it smaller than `cells`.
+    [[nodiscard]] std::uint32_t ChildCells() const;
+    [[nodiscard]] std::uint32_t ChildCreations() const;
+    [[nodiscard]] std::uint32_t BudgetCoarsenings() const;
+    // Cells in the parent plus the child (the number the cost scales with).
+    [[nodiscard]] std::uint64_t TotalCells() const;
     [[nodiscard]] const NestConfig& Config() const;
     // Child steps taken per parent step on average, and the share of the child's cells that are relaxed (not free).
     [[nodiscard]] double SubStepRatio() const;
