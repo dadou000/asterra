@@ -6,6 +6,7 @@ add_library(OrbitOpticalTransport STATIC
     src/EmitterTree.cpp
     src/OpticalHierarchy.cpp
     src/StellarVisibility.cpp
+    src/TransmittanceStats.cpp
 )
 
 add_library(

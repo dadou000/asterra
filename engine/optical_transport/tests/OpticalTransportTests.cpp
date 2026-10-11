@@ -5,6 +5,7 @@
 #include <orbit/optical_transport/EmitterTree.hpp>
 #include <orbit/optical_transport/OpticalHierarchy.hpp>
 #include <orbit/optical_transport/StellarVisibility.hpp>
+#include <orbit/optical_transport/TransmittanceStats.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -285,6 +286,50 @@ int main()
         limb.distance = 300000.0;
         Check(EstimateErrors(CloudForm::CurvedSheet, limb).limb > EstimateErrors(CloudForm::CurvedSheet, cirrus).limb,
               "flat-layer error grows toward the limb");
+    }
+
+    // --- transmittance statistics (Laplace samples): linear in the channels, accurate across K
+    {
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        // A clumpy footprint: ~45% empty, the rest a skewed range of in-cloud depths (like a thresholded noise field).
+        std::vector<double> depths(60000);
+        for (double& d : depths) { const double x = u(rng); d = x < 0.45 ? 0.0 : std::pow(u(rng), 2.2); }
+        const TransmittanceStats stats = FromSamples(depths);
+        double worstLaplace = 0.0, worstMean = 0.0;
+        for (const double k : {0.2, 0.7, 1.5, 4.0, 9.0, 20.0, 40.0})
+        {
+            double truth = 0.0;
+            for (const double d : depths) truth += std::exp(-k * d);
+            truth /= static_cast<double>(depths.size());
+            worstLaplace = std::max(worstLaplace, std::abs(stats.Transmittance(k) - truth));
+            worstMean = std::max(worstMean, std::abs(std::exp(-k * stats.meanDepth) - truth));
+        }
+        Check(worstLaplace < 0.03, "four Laplace channels reconstruct transmittance within 0.03 over K = 0.2..40");
+        Check(worstMean > 5.0 * worstLaplace, "mean-depth filtering is several times worse than the Laplace channels");
+        Check(stats.EffectiveDepth(8.0) < 8.0 * stats.meanDepth, "effective depth is below the mean depth (Jensen)");
+        Check(Near(stats.meanDepth, [&] { double s = 0; for (double d : depths) s += d; return s / depths.size(); }(), 1e-9), "mass conserved");
+
+        // Box-filter mip: blending four child footprints equals computing the parent from all samples.
+        std::vector<TransmittanceStats> children;
+        std::vector<double> weights;
+        for (int c = 0; c < 4; ++c)
+        {
+            const std::span<const double> part(depths.data() + c * 15000, 15000);
+            children.push_back(FromSamples(part));
+            weights.push_back(1.0);
+        }
+        const TransmittanceStats parent = Blend(children, weights);
+        for (int j = 0; j < kLaplaceChannels; ++j) Check(Near(parent.channel[j], stats.channel[j], 1e-12), "mip blend of channels is exact");
+
+        Check(FromSamples({}).Transmittance(5.0) == 1.0, "empty footprint is fully transparent");
+        const std::vector<double> solid(100, 1.0);
+        Check(Near(FromSamples(solid).Transmittance(2.0), std::exp(-2.0), 1e-9), "homogeneous footprint reproduces Beer-Lambert");
+        Check(stats.Transmittance(0.0) == 1.0, "zero scale transmits everything");
+        bool monotone = true;
+        double last = 1.0;
+        for (double k = 0.05; k < 60.0; k *= 1.2) { const double t = stats.Transmittance(k); monotone = monotone && t <= last + 1e-9; last = t; }
+        Check(monotone, "transmittance is monotone in K");
     }
 
     if (failures == 0) std::printf("OpticalTransport: all tests passed\n");

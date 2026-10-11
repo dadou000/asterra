@@ -1,5 +1,6 @@
 #include <orbit/lighting/LocalLightRegistry.hpp>
 
+#include <cmath>
 #include <vector>
 
 int main()
@@ -56,9 +57,21 @@ int main()
         return 2;
     }
 
-    // Many overlapping lights with a small per-tile cap: each covered tile
-    // keeps the first lights in submission order and the rest are counted as
-    // dropped; offsets stay a consistent prefix sum.
+    // Energy listed for one tile: individual lights plus proxies (a proxy carries
+    // the summed flux of the lights it replaced).
+    const auto tileFlux = [](const TiledLightGrid& grid, const orbit::u32 tile)
+    {
+        double sum = 0.0;
+        for (orbit::u32 i = grid.offsets[tile]; i < grid.offsets[tile + 1U]; ++i)
+        {
+            sum += grid.lights[grid.lightIndices[i]].luminousFluxLumens;
+        }
+        return sum;
+    };
+
+    // Many overlapping lights with a small per-tile cap: strongest-first (equal
+    // scores keep submission order), the last slot of an overflowing tile holds
+    // one proxy with the dropped flux; offsets stay a consistent prefix sum.
     std::vector<LocalLight> crowd(10U, light);
     for (std::size_t i = 0U; i < crowd.size(); ++i)
     {
@@ -79,7 +92,9 @@ int main()
     if (capped.offsets.size() != 65U ||
         capped.offsets.front() != 0U ||
         capped.offsets.back() != capped.lightIndices.size() ||
-        capped.lights.size() != crowd.size())
+        capped.proxyLights != 1U ||
+        capped.lights.size() != crowd.size() + 1U ||
+        (capped.lights.back().stableId & kProxyLightIdBit) == 0U)
     {
         return 3;
     }
@@ -98,19 +113,91 @@ int main()
             continue;
         }
         ++coveredTiles;
-        for (orbit::u32 slot = 0U; slot < end - begin; ++slot)
+        if (end - begin != 3U ||
+            capped.lightIndices[begin] != 0U ||
+            capped.lightIndices[begin + 1U] != 1U ||
+            capped.lightIndices[begin + 2U] != capped.lights.size() - 1U)
         {
-            if (capped.lightIndices[begin + slot] != slot)
-            {
-                return 5;
-            }
+            return 5;
+        }
+        if (std::abs(tileFlux(capped, tile) - 10000.0) > 1.0)
+        {
+            return 6;   // flux must be conserved, not truncated
         }
     }
 
     if (coveredTiles == 0U ||
-        capped.droppedAssignments != coveredTiles * 7U)
+        capped.droppedAssignments != coveredTiles * 8U)
     {
-        return 6;
+        return 7;
+    }
+
+    // The old policy kept the first lights in submission order, so a strong
+    // light submitted after a crowd of weak ones vanished. It must now survive
+    // in every tile it covers, and the total flux must still be conserved.
+    std::vector<LocalLight> crowdThenStrong(200U, light);
+    for (std::size_t i = 0U; i < crowdThenStrong.size(); ++i)
+    {
+        crowdThenStrong[i].stableId = 1000U + i;
+        crowdThenStrong[i].luminousFluxLumens = 1.0F;
+    }
+    LocalLight strong = light;
+    strong.stableId = 7U;
+    strong.luminousFluxLumens = 50000.0F;
+    crowdThenStrong.push_back(strong);
+
+    const auto mixed =
+        BuildTiledLightGrid(
+            crowdThenStrong,
+            view,
+            128U,
+            128U,
+            {
+                .tileSizePixels = 16U,
+                .maximumLightsPerTile = 8U
+            });
+
+    for (orbit::u32 tile = 0U; tile < 64U; ++tile)
+    {
+        const orbit::u32 begin = mixed.offsets[tile];
+        const orbit::u32 end = mixed.offsets[tile + 1U];
+        if (end == begin)
+        {
+            continue;
+        }
+        bool hasStrong = false;
+        for (orbit::u32 i = begin; i < end; ++i)
+        {
+            hasStrong = hasStrong ||
+                mixed.lights[mixed.lightIndices[i]].stableId == 7U;
+        }
+        if (!hasStrong)
+        {
+            return 8;
+        }
+        if (std::abs(tileFlux(mixed, tile) - 50200.0) > 1.0)
+        {
+            return 9;
+        }
+    }
+
+    // aggregateOverflow = false keeps the legacy first-N truncation.
+    const auto legacy =
+        BuildTiledLightGrid(
+            crowd,
+            view,
+            128U,
+            128U,
+            {
+                .tileSizePixels = 16U,
+                .maximumLightsPerTile = 3U,
+                .aggregateOverflow = false
+            });
+    if (legacy.proxyLights != 0U ||
+        legacy.lights.size() != crowd.size() ||
+        legacy.droppedAssignments != coveredTiles * 7U)
+    {
+        return 10;
     }
 
     return 0;
