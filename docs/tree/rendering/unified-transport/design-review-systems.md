@@ -14,12 +14,12 @@ sources = [
 ]
 symbols = ["CausticPhotonRecord", "SampledObscuration", "TryFlash"]
 invariants = [
-  "Counts in this block (903,168 vs 150,528 glass traces, 8 percent fewer BVH node visits) come from the code and a CPU port, not from GPU timings; no GPU was available.",
-  "Nothing here has been seen on screen or run on a GPU; see each linked card for what was and was not verified.",
+  "Counts in this block (903,168 vs 150,528 glass traces, 8 percent fewer BVH node visits) come from the code and a CPU port, not from GPU timings.",
+  "Only the Finding 5 note reports an on-screen check (2026-10-11); see each linked card for what was and was not verified.",
 ]
 related = ["/rendering/unified-transport/design-review", "/authoring/primitives", "/celestial/lighting", "/rendering/unified-transport/storm-electrification"]
 depends_on = ["/rendering/unified-transport/design-review"]
-verified = "1d3603b"
+verified = "f39887e"
 +++
 
 ## Finding 5: the caustic photon redundancy is real and exactly as large as the spec said
@@ -28,7 +28,8 @@ verified = "1d3603b"
 glass traces per caster at the maximum 224 x 224 grid (3 x 6 x 224^2). A compute pre-pass (`ORBIT_GLASS_CAUSTIC_COMPUTE=1`, default off) traces each photon once
 (150,528) and the splat vertex shader reads the stored record. Counts come from the code, not from a GPU timing. Verified: all five shader variants compile with
 `glslangValidator`, the legacy pixel shader's SPIR-V is byte-identical to before the refactor, the legacy vertex shader keeps the same bindings, and the C++ passes a
-syntax check. Not verified: any run on a GPU (descriptor layout, barriers, image equivalence, speedup). See `/authoring/primitives`.
+syntax check. Verified on a GPU (2026-10-11): a 6 m glass sphere over a white floor in sun gives an equivalent caustic with the flag on (mean difference 0.021/255, 427 pixels above 12; two flag-off runs differ by 0.004, 7 pixels), and the frame was
+*not* faster: median 10.8 ms vs 10.5 ms flag off (twice each), about +0.3 ms for one sphere at a small caustic grid, so the redundancy saving shows up only at large grids or several casters (not measured). See `/authoring/primitives`.
 
 ## Finding 6: glass optics are cheap; the environment queries are the cost
 

@@ -26,7 +26,7 @@ invariants = [
 ## Implementation status
 
 Done: finite-disc eclipses with limb darkening; `CityLightTree` (per-receiver cut, CPU-measured, not yet on the live light path); tiled-light overflow proxies;
-`TransientFlashRegistry` feeding the tiled lights, and the clouds behind `ORBIT_CLOUD_POINT_LIGHTS` (unverified on a GPU); storm electrification
+`TransientFlashRegistry` feeding the tiled lights, and the clouds behind `ORBIT_CLOUD_POINT_LIGHTS` (checked on screen with an authored light and gathered flash lights, 2026-10-11); storm electrification
 (`/rendering/unified-transport/storm-electrification`) driven from the Weather Lab storm, reachable through `lightning.*` RPC and `orbit_lightning_*` MCP tools.
 Not done: terrain-horizon stellar visibility, several independent stars in the cloud renderer, world-space radiance caches with dependency invalidation, a cached
 higher-order scattering response for flashes, the render scheduler, sprites and megaflashes.

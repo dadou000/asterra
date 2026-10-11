@@ -10,7 +10,7 @@ mirages, glass and caustics. Partly implemented: a CPU reference core, a lightni
 keywords = ["architecture", "weather", "optical medium", "radiance cache", "light transport", "lightning", "refraction", "glass", "caustics", "cloud lod", "many lights", "proposal"]
 related = ["/rendering/clouds", "/rendering/atmosphere", "/rendering/lighting", "/rendering/volumes"]
 verify = [
-  "python tools/run_cpu_tests.py builds and runs every CPU-only test of this work on Linux (10 groups, ~75 s; storm electrification is ~30 s of it); python tools/check_cloud_shaders.py and python tools/check_glass_shaders.py compile-check the embedded HLSL. None of them runs a GPU: the opt-in flags ORBIT_CLOUD_FILTERED_FAR, ORBIT_GLASS_CAUSTIC_COMPUTE, ORBIT_REFRACT_SUN and ORBIT_CLOUD_POINT_LIGHTS are unverified on screen.",
+  "python tools/run_cpu_tests.py builds and runs every CPU-only test of this work on Linux (10 groups, ~75 s; storm electrification is ~30 s of it); python tools/check_cloud_shaders.py and python tools/check_glass_shaders.py compile-check the embedded HLSL. None of them runs a GPU. The opt-in flags ORBIT_CLOUD_FILTERED_FAR, ORBIT_GLASS_CAUSTIC_COMPUTE, ORBIT_REFRACT_SUN and ORBIT_CLOUD_POINT_LIGHTS were each checked on screen once on 2026-10-11 (see the Implementation status section); the cloud look, tuning and frame time beyond one glass sphere are not.",
 ]
 invariants = [
   "The camera cannot change the physical atmosphere: cloud density, humidity, charge and light transport are independent of view distance.",
@@ -75,8 +75,8 @@ reports both its saving and the error it introduces; no speedup is assumed befor
 
 ## Implementation status
 
-Nothing below has run on a GPU or been seen on screen. Wired but off by default: `ORBIT_CLOUD_FILTERED_FAR`, `ORBIT_GLASS_CAUSTIC_COMPUTE`, `ORBIT_REFRACT_SUN`,
-`ORBIT_CLOUD_POINT_LIGHTS`. Wired and always on: tiled-light overflow proxies, limb-darkened eclipse fractions, the view-dependent caustic photon budget and the
+Each flag below was A/B-tested on screen on 2026-10-11 (RTX 4090, Release build of f39887e2, relaunch per flag, identical sim time and camera, a second flag-off launch as the determinism control). Wired but off by default: `ORBIT_CLOUD_FILTERED_FAR`, `ORBIT_GLASS_CAUSTIC_COMPUTE`, `ORBIT_REFRACT_SUN`,
+`ORBIT_CLOUD_POINT_LIGHTS`; all four behave as designed (details and numbers in `design-review`, `design-review-systems`, `design-review-lighting`, `design-review-refraction`). Wired and always on: tiled-light overflow proxies, limb-darkened eclipse fractions, the view-dependent caustic photon budget and the
 lightning RPC/MCP (`lightning.*`, see `docs/ORBIT_MCP.md`). Not built: `SampleMedium`, optical-hierarchy and aerosol consumers, the radiance cache and dependency
 invalidation, curved/2.5D cloud forms, glass through `VisibilityRegistry`, local mirages, the render scheduler and the 14 validation scenarios (`plan-and-validation`).
 
@@ -86,7 +86,8 @@ invalidation, curved/2.5D cloud forms, glass through `VisibilityRegistry`, local
 - `light-and-lightning`: stars, many lights, radiance caches, electrification, transient lighting.
 - `refraction-and-glass`: mirages, hybrid visibility, glass and caustics.
 - `plan-and-validation`: current-code corrections, phased order, scenarios.
-- `design-review-lighting`: photon budget, transient and city lights, refraction findings.
+- `design-review-lighting`: photon budget, transient and city lights, cloud light injection findings.
+- `design-review-refraction`: planetary refraction table, ducting limit, refracted sun and its on-screen check.
 - `design-review-systems`: glass, caustics, eclipses, visibility and lightning findings.
 - `design-review`: measured findings that adjust the proposal (cloud far-field bias, linear transmittance filtering, light overflow fix).
 - `storm-electrification`: CPU reference for charging, the electric field, leader flashes and a timewarp-safe flash schedule.

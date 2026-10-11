@@ -27,7 +27,7 @@ invariants = [
 Done: planetary `RefractionTable` applied to the sun direction behind `ORBIT_REFRACT_SUN`; the caustic compute pre-pass behind `ORBIT_GLASS_CAUSTIC_COMPUTE`; the view-dependent photon
 budget; the glass BVH trace bounded by the screen hit. `VisibilityRegistry` already has hit/miss/unresolved semantics but glass does not call it. Not done: local
 inversions, mirages and heat shimmer (`BendRay` has no consumer), masked offscreen refracted visibility, separate glass optics, a thin-pane path, tile classification,
-removing the backdrop copy, hardware ray queries (needs an RHI change). The flags are unverified on a GPU.
+removing the backdrop copy, hardware ray queries (needs an RHI change). Both flags were checked on screen on 2026-10-11 (`/rendering/unified-transport/design-review-refraction`, `design-review-systems`); the glass pre-pass cost about +0.3 ms for one sphere.
 
 ## Known hotspots (from source inspection, not GPU timings)
 

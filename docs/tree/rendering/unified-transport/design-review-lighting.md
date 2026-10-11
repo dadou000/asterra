@@ -1,24 +1,23 @@
 +++
 path = "/rendering/unified-transport/design-review-lighting"
-title = "Design review part 3: photon budget, city lights and refraction (measured)"
+title = "Design review part 3: photon budget, city lights and cloud light injection (measured)"
 kind = "concept"
 status = "experimental"
 summary = """
 Third part of the proposal review: the view-dependent caustic photon budget and transient lightning lights, the receiver-based cut over very large light sets with CPU timings at a million lamps, \
-and planetary refraction derived from radius, surface refractivity and scale height with its validation and ducting limit."""
-keywords = ["design review", "photon budget", "city lights", "light cut", "refraction", "ducting", "horizon", "measurements"]
+and cloud light injection. Refraction moved to design-review-refraction."""
+keywords = ["design review", "photon budget", "city lights", "light cut", "cloud lights", "measurements"]
 sources = [
   "engine/lighting/include/orbit/lighting/CityLightTree.hpp",
   "engine/lighting/include/orbit/lighting/TransientLights.hpp",
-  "engine/optical_transport/include/orbit/optical_transport/Refraction.hpp",
 ]
-symbols = ["CityLightTree", "TransientLightsFromFlash", "RefractionTable"]
+symbols = ["CityLightTree", "TransientLightsFromFlash"]
 invariants = [
-  "All numbers here are CPU measurements or calculations; nothing was run on a GPU or seen on screen.",
+  "The numbers in the findings are CPU measurements or calculations. Only the cloud-light status note reports an on-screen check (2026-10-11).",
 ]
-related = ["/rendering/unified-transport/design-review", "/rendering/unified-transport/design-review-systems", "/celestial/lighting"]
+related = ["/rendering/unified-transport/design-review", "/rendering/unified-transport/design-review-systems", "/rendering/unified-transport/design-review-refraction", "/celestial/lighting"]
 depends_on = ["/rendering/unified-transport/design-review"]
-verified = "6614c30"
+verified = "f39887e"
 +++
 
 ## Finding 9: caustic photon budget followed physical size only; lightning light has a bounded path
@@ -40,22 +39,6 @@ verified = "6614c30"
   3.8 km away is 99.8 % off at a surface that has merged away its own lamps. This is why the cut must be per receiver region; a camera-centred global light list would be wrong for far ground. Two defects were found while testing: the first
   accuracy numbers were vacuous (wrong receiver normal gave zero reference light) and the nearest leaves were never expanded because the tree selection consumed the whole budget.
 
-## Finding 11: refraction needs a table, not ray marching, for the sky; the engine has none at all
-
-- The atmosphere docs list "no atmospheric refraction" as an intentional limit, and nothing in the engine bends the Sun or the horizon. The spec's curved-ray machinery is only needed for local layers.
-  Planetary refraction is a smooth function of elevation and observer altitude, so `RefractionTable` precomputes it (50 ms to build) from radius, surface refractivity and scale height,
-  which the atmosphere solver already has for every authored planet; surface refractivity follows from the same number density and composition factor it uses for Rayleigh scattering.
-- Validation against the standard Earth formula: within 2.1 % below 2 degrees and 5.9 % above (the standard formulas themselves embed a refractivity about 6 % above the physical 2.78e-4 at 550 nm).
-  Derived facts reproduced: horizon refraction ~35 arcminutes, a setting Sun ~15 percent flattened, horizon dip reduced by ~7 percent. My first guess in the header, "0.4-0.6 flattening", was wrong; the numbers corrected it.
-- Bug found by running other planets: a Venus-class atmosphere (gradient steeper than the planet's curvature) traps horizon rays; the table now reports ducting instead of producing nonsense. An earlier version also used `acos`
-  instead of `asin` for the grazing-ray angle and silently truncated every row at the horizon.
-- Also built: `celestial_atmosphere::RefractionAtmosphereFor / RefractionTableFor / RefractDirection` derive the table from `AtmosphereParameters` (no new authored property) and rotate a true direction to the
-  apparent one (a sun 0.3 degrees below the horizon is still seen; 1 degree below is not; a Venus-class atmosphere returns the true direction). Wiring hazard found while preparing it: `directionBody` is body-level and
-  observer independent, while refraction depends on the local vertical, so it must be applied once after the observer is known and read by every consumer, or shadows and the disc disagree with the light.
-- Wired (opt-in, unverified on screen): `ORBIT_REFRACT_SUN=1` refracts `studioDirectLight.directionBody` once in `StudioViewportRenderer`; every consumer I could find reads that struct, so the sky, light, shadow, glass, clouds and the sun disc drawn by the atmosphere pass agree.
-- Not done: the sun disc drawn by the far-body pass (from orbit) is not refracted, and nothing verifies the look. Wiring the apparent Sun direction into the sun disc, shadows and the atmosphere LUT, and exposing surface refractivity as an authored/derived atmosphere property
-  (which needs a schema property and RPC/MCP parity), are the next steps.
-
 ## Finding 12: the timewarp invariant already holds; the weather map just runs fast
 
 Audit of the spec's "query weather at absolute simulation time, no backlog": `EvaluateWeather` is a pure analytic function of direction and absolute seconds, so it holds by construction, and
@@ -69,4 +52,4 @@ I had declined to build it because I thought I could not know (1) whether lighti
 `LightingView::cameraPositionInFrameMeters` is `Camera().localPositionMeters`, the same body-centric position the cloud view uses; and the glass renderer's `BeginFrame` ring (frames-in-flight mask) is a pattern CloudRenderer can copy exactly.
 Built behind `ORBIT_CLOUD_POINT_LIGHTS=1` (see `/rendering/clouds/raymarch`): a fourth shader buffer, a light term that mirrors the sun's scattering formula, authored lights as the producer (reduced to 16 with the energy of the rest aggregated).
 Verified: all cloud shader variants compile; with the flag off the three cloud shaders' SPIR-V is byte-identical to the previous commit; the light-enabled variant's bindings (buffers 0-3, textures 4-6) match the pipeline the C++ creates;
-the C++ passes -fsyntax-only. Not verified: any run. The flash photometry is consistent (a 300 kJ stroke is ~200 lux at 1 km, ~231 scene-sr of intensity) but the cloud look, the 150 m diffusion length and the gain are untuned. Lightning has a producer: `lighting::TransientFlashRegistry` (canned channel with return strokes, or any simulated `DischargeGraph` via `Add`) feeds the tiled-light pass and the cloud march through `StudioViewportRenderer::TransientFlashLights`; fire one with RPC `lightning.fire` / MCP `orbit_lightning_fire`. Unverified on screen; 'up' is camera up. `lightning.storm_start` drives it from the Weather Lab (needs dx = dz).
+the C++ passes -fsyntax-only. Verified on screen (2026-10-11): an authored 1e11 lm light inside a cloud brightens a halo on exactly that cloud (2892 pixels brighter, 20 darker; noise 18/255), and 13-14 flash lights per frame reach the cloud pass while a flash is live (a daytime flash changed the cloud only marginally). Not verified: the night look. The flash photometry is consistent (a 300 kJ stroke is ~200 lux at 1 km, ~231 scene-sr of intensity) but the cloud look, the 150 m diffusion length and the gain are untuned. Lightning has a producer: `lighting::TransientFlashRegistry` (canned channel with return strokes, or any simulated `DischargeGraph` via `Add`) feeds the tiled-light pass and the cloud march through `StudioViewportRenderer::TransientFlashLights`; fire one with RPC `lightning.fire` / MCP `orbit_lightning_fire`. Unverified on screen; 'up' is camera up. `lightning.storm_start` drives it from the Weather Lab (needs dx = dz).
