@@ -64,7 +64,8 @@ buffer layout are unchanged because a proxy is an ordinary entry; spot cone shap
 ## Finding 4: items that are smaller or already present
 
 - The cloud light volume (cached optical depth toward the sun, with a settle-skip) already exists; the proposed "directional cumulative optical depth" is a refinement,
-  not a gap. It is camera-centred, which conflicts with the camera-independence goal and is the real follow-up.
+  not a gap. It is a camera-windowed cache, not a camera-dependent one: each voxel is `AltitudeSunTau(origin, sun)` of its own world position (nothing reads the camera), and the lattice re-anchors only after 250 km of
+  camera travel. Measured on screen (2026-10-11, volume on vs `cloud_light_volume=false`, pose and sim time pinned): mean difference 0.05/255 at 400 km (noise floor 0.04), 0.03 at 100 km, 0.69 at 25 km with 672 of 3.6 Mpx above 12 and faint concentric rings at the cascade boundaries around the camera. The 13/255 error one second after a camera jump is the same with the volume off, so it is not the volume (eye adaptation or temporal resolve).
 - Horizon refraction from `AirRefractivity` plus Snell's law in spherical shells reproduces standard values (23.5' at 1 degree above the horizon, 17.8' at 2,
   9.7' at 5, 5.2' at 10, 1.65' at 30), about 7 px at 1 degree for a 60 degree, 1080p view. It is a smooth function of elevation and observer height, so a lookup table
   serves the sun and sky. Ducting needs a lapse rate steeper than about -0.11 K/m (gradient equal to Earth's curvature), so curved-ray work is only needed in thin
@@ -83,5 +84,4 @@ the CPU twin), frame time, and whether `gStep` is the right K for the god-ray ma
 
 ## Not yet done
 
-A rendered approach sequence comparing flag off and on; frame-time measurement; a camera-independent replacement for the camera-centred light volume;
-removing the old blend and fade once the flag is the default.
+Removing the old blend and fade code now that the flag is the default (and `=0` is only an A/B switch); a rendered approach sequence at ground level under a deck.
