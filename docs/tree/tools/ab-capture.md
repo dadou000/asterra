@@ -4,8 +4,7 @@ title = "A/B capture harness and visual council reviews"
 kind = "playbook"
 status = "experimental"
 summary = """
-tools/orbit_ab.py relaunches Studio once per variant (env flags), pins world, clock and camera, captures converged frames over RPC, runs a determinism control, and writes \
-a report and contact sheet; its council command persists a rubric-scored review under docs/reviews/. ORBIT_CLOUD_DEFINES lets cloud shader tunables be A/B-tested without a rebuild."""
+tools/orbit_ab.py compares renderer variants on screen: it pins world, clock and camera, captures converged frames over RPC, and writes a report and contact sheet; its council command persists a rubric-scored review under docs/reviews/. Two modes: relaunch Studio per variant (any env flag), or in_process (one launch, cloud shader tunables swapped with clouds.set_defines, rounds interleaved so drift cancels). tools/build_studio.ps1 is the 15 s inner-loop build."""
 keywords = ["ab test", "screenshot", "capture", "council", "visual review", "flag", "ORBIT_CLOUD_DEFINES", "noise floor", "determinism", "frame time"]
 sources = [
   "tools/orbit_ab.py",
@@ -20,7 +19,9 @@ invariants = [
   "A difference only counts against the noise floor: the baseline is launched again as a control, and a variant is DIFFERENT if its mean difference exceeds both 3x and noise+0.05 of the control, or its changed-pixel count exceeds 3x the control's plus 500 (a mean alone hides a thinned cloud bank). Frame-time deltas are compared with the control's frame-time drift (about 1.2 to 1.4 ms on the dev machine).",
   "Captures are taken at convergence (two consecutive screenshots within converge_eps), not after a fixed sleep; the sim clock is pinned per scene.",
   "A council review is immutable (id R-<date>-<time>-<commit>), records the commit and the dirty files, the exe hash, GPU, per-scene image hashes, the measured metrics and the lenses' findings and rubric scores; subjective scores never replace measured values.",
-  "ORBIT_CLOUD_DEFINES is a developer hook: its defaults must reproduce the shipped shader path.",
+  "ORBIT_CLOUD_DEFINES (startup) and clouds.set_defines (runtime) are developer hooks: their defaults must reproduce the shipped shader path.",
+  "in_process mode alternates variant order per round (A B C, then C B A); the baseline's round-to-round frame-time spread is the drift, and a profiler pass time comes from ONE snapshot of the panel's rolling window with freeze_on_hitch off (a frozen panel returns the same snapshot for every scene, and two snapshots cannot be subtracted).",
+  "tools/build_studio.ps1 builds only OrbitStudio (no configure, OrbitBuild, OrbitPlayer or packaging) and stops every Orbit* process first; editing engine source while Studio runs starts a hot handoff instead.",
 ]
 related = ["/editor/mcp-rpc", "/rendering/clouds/raymarch", "/rendering/unified-transport"]
 verify = [
@@ -48,6 +49,8 @@ python tools/orbit_ab.py council <out DIR> findings.json
 python tools/orbit_ab.py history [--scene NAME]
 ```
 
+Speed: a 24-capture comparison (4 shader variants x 3 scenes x 2 rounds) takes 174 s in one launch, each capture converging in about 2.4 s; the relaunch mode needs a ~25 s launch plus 7 to 13 s per scene per variant and a repeat launch for noise. Build: `powershell -File tools/build_studio.ps1` took 15 s for a one-file change (build_orbit.bat configures, builds three targets and packages).
+
 A spec lists variants (env vars), scenes (clock, pose `surface` or `approach`, optional view layers and a pixel box) and `controls`. `--resume` reuses variants
 already captured in `--out`. Outputs: `<out>/<variant>/<scene>.png`, `report.json` and `sheet.png` (top row variants, bottom row 5x difference against the baseline).
 
@@ -57,8 +60,14 @@ Judge `sheet.png` and zoomed crops with the lenses in `CLAUDE.md` (Shader Artist
 score with `docs/reviews/RUBRIC.md` (null = N/A), keep hypotheses apart from verified facts, then persist with `council`. The first review is
 `docs/reviews/R-20261011-175457-44e64759`: five cloud-march sampling variants, verdict keep the baseline.
 
+## In-process mode
+
+`"mode": "in_process"` with `rounds` (default 2): one launch, then for each scene and round every variant's `ORBIT_CLOUD_DEFINES` is sent with `clouds.set_defines`
+(about 1 s to recompile the march, shadow and volume shaders; a compile error fails the run and the previous shaders stay in place). Only
+variants that differ by those defines can be compared this way; env flags read once at startup (`ORBIT_REFRACT_SUN`, `ORBIT_CLOUD_POINT_LIGHTS`, ...) need the relaunch mode.
+Set `gpu_passes` (for example `["Clouds"]`) and `gpu_window_ms` for per-pass GPU time.
+
 ## Developer hook
 
-`ORBIT_CLOUD_DEFINES="NAME=VALUE;NAME=VALUE"` becomes `#define` lines in every cloud shader at startup. Tunables today: `CLOUD_JITTER_FIX` (1 clamps the sample
-jitter to the thin-layer step cap) and `CLOUD_INCLOUD_STEP_SCALE` (multiplies the in-cloud step). Add a tunable by guarding it with `#ifndef` and a default
+`ORBIT_CLOUD_DEFINES="NAME=VALUE;NAME=VALUE"` becomes `#define` lines in every cloud shader at startup, and `clouds.set_defines` (MCP `orbit_clouds_set_defines`) does the same in the running Studio. Tunables today: `CLOUD_FAR_EARLYOUT`, `CLOUD_JITTER_FIX`, `CLOUD_INCLOUD_STEP_SCALE`, `CLOUD_MAX_STEPS`, `CLOUD_SCHEDULE_STEPS`, `CLOUD_FOOTPRINT_STEP`, `CLOUD_BASE_STEP`, `CLOUD_EMPTY_SKIP`, `CLOUD_SUN_FAR_START`, `CLOUD_SUN_FAR_END`, `CLOUD_SUN_VOLUME`. Add a tunable by guarding it with `#ifndef` and a default
 that equals the shipped behaviour.

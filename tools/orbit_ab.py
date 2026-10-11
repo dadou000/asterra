@@ -154,6 +154,23 @@ def grab(path: pathlib.Path) -> np.ndarray:
     return np.asarray(Image.open(path).convert("RGB"), dtype=np.float32)
 
 
+def profiler_for_passes(spec: dict) -> None:
+    """Live window of gpu_window_ms and no freeze on hitch: a frozen panel returns the same snapshot for every scene."""
+    rpc("profiler.panel_set", {"window_ms": float(spec.get("gpu_window_ms", 2000)), "freeze_on_hitch": False, "paused": False})
+
+
+def gpu_pass_ms(names: list[str], window_ms: float) -> dict[str, float]:
+    """Average GPU ms per frame of the named passes over the profiler's last `window_ms`, from ONE snapshot.
+
+    profiler.snapshot's top_gpu_passes is limited to the panel's visible time range (a rolling window), so two snapshots
+    cannot be subtracted (that gave negative times); one snapshot taken after the window has filled with the current scene
+    is a valid average. Passes outside the top list read as 0.
+    """
+    time.sleep(window_ms / 1000.0 + 0.5)
+    rows = {row["name"].split(".")[-1]: row for row in rpc("profiler.snapshot").get("top_gpu_passes", [])}
+    return {n: round(rows[n]["total_ms"] / max(rows[n]["count"], 1), 3) if n in rows else 0.0 for n in names}
+
+
 def capture_converged(path: pathlib.Path, eps: float, min_wait: float, max_wait: float, step: float) -> tuple[np.ndarray, float]:
     """Screenshots until two consecutive frames agree within eps (mean abs, 0..255); returns the frame and seconds used."""
     start = time.time()
@@ -176,11 +193,12 @@ def load_variant(label: str, spec: dict, out: pathlib.Path):
     names = [scene["name"] for scene in spec["scenes"]]
     if not meta.exists() or not all((out / label / f"{n}.png").exists() for n in names):
         return None
-    frame_ms = json.loads(meta.read_text(encoding="utf-8"))
+    loaded = json.loads(meta.read_text(encoding="utf-8"))
+    frame_ms = loaded if "frame_ms" in loaded and "gpu_ms" in loaded else {"frame_ms": loaded, "gpu_ms": {}}
     return {n: np.asarray(Image.open(out / label / f"{n}.png").convert("RGB"), dtype=np.float32) for n in names}, frame_ms
 
 
-def run_variant(label: str, env_vars: dict, spec: dict, exe: pathlib.Path, out: pathlib.Path) -> tuple[dict[str, np.ndarray], dict[str, float]]:
+def run_variant(label: str, env_vars: dict, spec: dict, exe: pathlib.Path, out: pathlib.Path) -> tuple[dict[str, np.ndarray], dict]:
     project = pathlib.Path(spec["project"]).resolve()
     launch(exe, project, env_vars)
     rpc("studio.panel_focus", {"title": "Viewport"})
@@ -195,6 +213,9 @@ def run_variant(label: str, env_vars: dict, spec: dict, exe: pathlib.Path, out: 
     time.sleep(6.0)
     images: dict[str, np.ndarray] = {}
     frame_ms: dict[str, float] = {}
+    gpu_ms: dict[str, dict] = {}
+    if spec.get("gpu_passes"):
+        profiler_for_passes(spec)
     (out / label).mkdir(parents=True, exist_ok=True)
     for scene in spec["scenes"]:
         if "time_microseconds" in scene:
@@ -205,13 +226,99 @@ def run_variant(label: str, env_vars: dict, spec: dict, exe: pathlib.Path, out: 
             rpc("view.terrain_layers_set", {"id": "studio.primary", **scene["layers"]})
         apply_pose(scene["pose"], radius)
         image, used = capture_converged(out / label / f"{scene['name']}.png", spec.get("converge_eps", 0.08),
-                                        scene.get("min_wait", 3.0), scene.get("max_wait", 45.0), 2.0)
+                                        scene.get("min_wait", 1.5), scene.get("max_wait", 45.0), spec.get("poll_step", 0.6))
         images[scene["name"]] = image
         recent = rpc("profiler.status").get("recent_frame_ms") or []
         frame_ms[scene["name"]] = round(float(np.median(recent)), 2) if recent else 0.0
-        print(f"  {label:10s} {scene['name']:18s} converged in {used:4.1f} s  frame {frame_ms[scene["name"]]:6.2f} ms", flush=True)
-    (out / label / "frame_ms.json").write_text(json.dumps(frame_ms), encoding="utf-8")
-    return images, frame_ms
+        if spec.get("gpu_passes"):
+            gpu_ms[scene["name"]] = gpu_pass_ms(spec["gpu_passes"], float(spec.get("gpu_window_ms", 2000)))
+        print(f"  {label:10s} {scene['name']:18s} converged in {used:4.1f} s  frame {frame_ms[scene["name"]]:6.2f} ms  gpu {gpu_ms.get(scene["name"], "")}", flush=True)
+    (out / label / "frame_ms.json").write_text(json.dumps({"frame_ms": frame_ms, "gpu_ms": gpu_ms}), encoding="utf-8")
+    return images, {"frame_ms": frame_ms, "gpu_ms": gpu_ms}
+
+
+def prepare_session(spec: dict) -> float:
+    """World, body, selection; returns the body radius."""
+    rpc("studio.panel_focus", {"title": "Viewport"})
+    world = spec.get("world")
+    if world and world not in rpc("world.active").get("path", ""):
+        rpc("world.open", {"path": world})
+        time.sleep(15.0)
+    body = find_object(spec.get("body", "Earth"))
+    rpc("selection.set", {"ids": [body]})
+    rpc("viewport.focus_body")
+    time.sleep(2.5)
+    return float(spec.get("radius_m", 6371000.0))
+
+
+def set_scene(scene: dict, radius: float) -> None:
+    if "time_microseconds" in scene:
+        rpc("time.set", {"playing": False, "time_microseconds": scene["time_microseconds"]})
+    if "local_time_seconds" in scene:
+        rpc("time.set", {"playing": False, "local_time_seconds": float(scene["local_time_seconds"])})
+    if scene.get("layers"):
+        rpc("view.terrain_layers_set", {"id": "studio.primary", **scene["layers"]})
+    apply_pose(scene["pose"], radius)
+
+
+def run_in_process(spec: dict, exe: pathlib.Path, out: pathlib.Path, order: list[str], baseline: str):
+    """One Studio launch for every variant: clouds.set_defines swaps the cloud shader defines in place.
+
+    Rounds alternate direction (A B C, then C B A) so launch-order and thermal drift is spread evenly over the variants, and
+    the baseline's own round-to-round spread is the noise floor (no relaunch needed). Only variants that differ by
+    ORBIT_CLOUD_DEFINES can be compared this way; flags read once at startup need the relaunch mode.
+    """
+    variants = spec["variants"]
+    base_env = {k: v for k, v in variants[baseline].get("env", {}).items() if k != "ORBIT_CLOUD_DEFINES"}
+    launch(exe, pathlib.Path(spec["project"]).resolve(), base_env)
+    radius = prepare_session(spec)
+    if spec.get("gpu_passes"):
+        profiler_for_passes(spec)
+    rounds = int(spec.get("rounds", 2))
+    images: dict[str, dict] = {v: {} for v in order}
+    control: dict[str, np.ndarray] = {}
+    frame_rounds: dict[str, dict[str, list]] = {v: {} for v in order}
+    gpu_rounds: dict[str, dict[str, list]] = {v: {} for v in order}
+    for v in order:
+        (out / v).mkdir(parents=True, exist_ok=True)
+    for scene in spec["scenes"]:
+        name = scene["name"]
+        set_scene(scene, radius)
+        for r in range(rounds):
+            for v in (order if r % 2 == 0 else list(reversed(order))):
+                define_text = variants[v].get("env", {}).get("ORBIT_CLOUD_DEFINES", "")
+                reply = rpc("clouds.set_defines", {"defines": define_text})
+                if reply.get("error"):
+                    raise RuntimeError(f"clouds.set_defines({define_text!r}): {reply['error']}")
+                path = out / v / (f"{name}.png" if r == 0 else f"{name}_r{r}.png")
+                image, used = capture_converged(path, spec.get("converge_eps", 0.08), scene.get("min_wait", 1.0),
+                                                scene.get("max_wait", 30.0), spec.get("poll_step", 0.5))
+                time.sleep(0.6)
+                recent = rpc("profiler.status").get("recent_frame_ms") or []
+                frame_rounds[v].setdefault(name, []).append(round(float(np.median(recent)), 2) if recent else 0.0)
+                if spec.get("gpu_passes"):
+                    gpu_rounds[v].setdefault(name, []).append(gpu_pass_ms(spec["gpu_passes"], float(spec.get("gpu_window_ms", 2000))))
+                if r == 0:
+                    images[v][name] = image
+                elif r == 1 and v == baseline:
+                    control[name] = image
+                print(f"  r{r} {v:12s} {name:18s} converged in {used:4.1f} s  frame {frame_rounds[v][name][-1]:6.2f} ms"
+                      + (f"  gpu {gpu_rounds[v][name][-1]}" if spec.get("gpu_passes") else ""), flush=True)
+    names = [s["name"] for s in spec["scenes"]]
+    frame = {}
+    for v in order:
+        gpu_mean = {}
+        for n in names:
+            rows = gpu_rounds[v].get(n, [])
+            gpu_mean[n] = {p: round(float(np.mean([row[p] for row in rows])), 3) for p in rows[0]} if rows else {}
+        frame[v] = {"frame_ms": {n: round(float(np.mean(frame_rounds[v][n])), 2) for n in names}, "gpu_ms": gpu_mean,
+                    "rounds_ms": {n: frame_rounds[v][n] for n in names}}
+    spread = {n: round(max(frame_rounds[baseline][n]) - min(frame_rounds[baseline][n]), 2) for n in names}
+    control_name = f"{baseline}_control1"
+    images[control_name] = control
+    frame[control_name] = {"frame_ms": {n: round(frame[baseline]["frame_ms"][n] + spread[n], 2) for n in names}, "gpu_ms": {},
+                           "rounds_ms": {}}
+    return images, frame, [control_name]
 
 
 def metrics(a: np.ndarray, b: np.ndarray, box: list[int] | None, threshold: float) -> dict:
@@ -277,6 +384,33 @@ def provenance(exe: pathlib.Path) -> dict:
             "gpu": gpu, "date": time.strftime("%Y-%m-%d %H:%M:%S")}
 
 
+def run_relaunch(spec: dict, exe: pathlib.Path, out: pathlib.Path, order: list[str], baseline: str, resume: bool):
+    """One Studio launch per variant (any env var can differ) plus the repeat-launch controls."""
+    variants = spec["variants"]
+    images: dict[str, dict] = {}
+    frame: dict[str, dict] = {}
+    for label in order:
+        cached = load_variant(label, spec, out) if resume else None
+        if cached:
+            print(f"[{label}] reused from {out / label}", flush=True)
+            images[label], frame[label] = cached
+            continue
+        print(f"[{label}] env={variants[label].get('env', {})}", flush=True)
+        images[label], frame[label] = run_variant(label, variants[label].get("env", {}), spec, exe, out)
+    controls = []
+    for i in range(int(spec.get("controls", 1))):
+        name = f"{baseline}_control{i + 1}"
+        cached = load_variant(name, spec, out) if resume else None
+        if cached:
+            print(f"[{name}] reused", flush=True)
+            images[name], frame[name] = cached
+        else:
+            print(f"[{name}] noise control", flush=True)
+            images[name], frame[name] = run_variant(name, variants[baseline].get("env", {}), spec, exe, out)
+        controls.append(name)
+    return images, frame, controls
+
+
 def cmd_run(args) -> int:
     spec = json.loads(pathlib.Path(args.spec).read_text(encoding="utf-8"))
     spec["project"] = args.project or os.environ.get("ORBIT_AB_PROJECT") or spec.get("project")
@@ -288,29 +422,12 @@ def cmd_run(args) -> int:
     variants: dict = spec["variants"]
     baseline = spec.get("baseline", next(iter(variants)))
     order = [baseline] + [v for v in variants if v != baseline]
-    images: dict[str, dict] = {}
-    frame: dict[str, dict] = {}
     started = time.time()
     try:
-        for label in order:
-            cached = load_variant(label, spec, out) if args.resume else None
-            if cached:
-                print(f"[{label}] reused from {out / label}", flush=True)
-                images[label], frame[label] = cached
-                continue
-            print(f"[{label}] env={variants[label].get('env', {})}", flush=True)
-            images[label], frame[label] = run_variant(label, variants[label].get("env", {}), spec, exe, out)
-        controls = []
-        for i in range(int(spec.get("controls", 1))):
-            name = f"{baseline}_control{i + 1}"
-            cached = load_variant(name, spec, out) if args.resume else None
-            if cached:
-                print(f"[{name}] reused", flush=True)
-                images[name], frame[name] = cached
-            else:
-                print(f"[{name}] noise control", flush=True)
-                images[name], frame[name] = run_variant(name, variants[baseline].get("env", {}), spec, exe, out)
-            controls.append(name)
+        if spec.get("mode") == "in_process":
+            images, frame, controls = run_in_process(spec, exe, out, order, baseline)
+        else:
+            images, frame, controls = run_relaunch(spec, exe, out, order, baseline, args.resume)
     finally:
         kill_orbit()
     threshold = float(spec.get("changed_pixel_threshold", 12))
@@ -320,9 +437,11 @@ def cmd_run(args) -> int:
         name, box = scene["name"], scene.get("box")
         entry = {"noise": [metrics(images[baseline][name], images[c][name], box, threshold) for c in controls]}
         entry["variants"] = {v: metrics(images[baseline][name], images[v][name], box, threshold) for v in order[1:]}
-        entry["frame_ms"] = {v: frame[v][name] for v in order}
+        entry["frame_ms"] = {v: frame[v]["frame_ms"][name] for v in order}
+        entry["gpu_pass_ms"] = {v: frame[v]["gpu_ms"].get(name, {}) for v in order}
+        entry["gpu_pass_ms_repeat"] = [frame[c]["gpu_ms"].get(name, {}) for c in controls]
         # Launch-to-launch drift (GPU clocks, order): the same build measured again. Cost differences below it are not resolved.
-        entry["frame_ms_drift"] = [round(frame[c][name] - frame[baseline][name], 2) for c in controls]
+        entry["frame_ms_drift"] = [round(frame[c]["frame_ms"][name] - frame[baseline]["frame_ms"][name], 2) for c in controls]
         entry["image_sha256"] = {v: sha256(out / v / f"{name}.png") for v in order}
         entry["resolution"] = list(images[baseline][name].shape[:2])
         report["scenes"][name] = entry
@@ -339,6 +458,8 @@ def cmd_run(args) -> int:
             by_pixels = m.get("px_over", 0) > 3 * noise_px + 500
             verdict = "DIFFERENT" if (by_mean or by_pixels) else "same as noise"
             print(f"  {name:18s} {v:10s} mean {m.get('mean')}  max {m.get('max')}  px>{threshold:g}: {m.get('px_over')}  (noise mean {noise:.3f})  {verdict}  frame {entry['frame_ms'][v]} vs {entry['frame_ms'][baseline]} ms (drift of the same build: {entry['frame_ms_drift']})")
+            if entry.get("gpu_pass_ms", {}).get(v):
+                print(f"{'':30s} gpu passes ms: {entry['gpu_pass_ms'][v]} vs baseline {entry['gpu_pass_ms'][baseline]} (repeat launch {entry['gpu_pass_ms_repeat']})")
     return 0
 
 

@@ -9,6 +9,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <memory>
+#include <string>
 #include <span>
 #include <vector>
 
@@ -95,6 +96,12 @@ public:
     // so per-frame light buffers are retired only after the GPU is done with them (same contract as the glass renderer).
     void BeginFrame(u32 completedSlot, u32 framesInFlight);
     [[nodiscard]] bool PointLightsEnabled() const noexcept { return pointLights_; }
+
+    // Developer hook (see tools/orbit_ab.py): the march, shadow and volume shaders are recompiled with
+    // "NAME=VALUE;NAME=VALUE" as #define lines (tunables such as CLOUD_MAX_STEPS). Returns the compile error, or an empty
+    // string; on error the previous shaders stay in use. Safe between frames: the replaced pipelines are retired by the RHI.
+    [[nodiscard]] std::string SetShaderDefines(const std::string& defines);
+    [[nodiscard]] const std::string& ShaderDefines() const noexcept { return defines_; }
 
     CloudRenderer(const CloudRenderer&) = delete;
     CloudRenderer& operator=(const CloudRenderer&) = delete;
@@ -196,6 +203,11 @@ public:
         u32 height);
 
 private:
+    // Compiles the march, shadow and volume shaders and swaps them in; returns an error text or an empty string.
+    [[nodiscard]] std::string RebuildShaderPipelines(const std::string& defineText);
+    const shader::Compiler* compiler_{nullptr};
+    std::string farField_;
+    std::string defines_;
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> compositePipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> resolvePipeline_;

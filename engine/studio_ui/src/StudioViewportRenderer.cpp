@@ -49,6 +49,16 @@ std::vector<lighting::FlashStatus> StudioViewportRenderer::LightningStatus() con
     return transientFlashes_.Status(FlashClockSeconds());
 }
 
+std::string StudioViewportRenderer::SetCloudShaderDefines(const std::string& defines)
+{
+    return cloudRenderer_.SetShaderDefines(defines);
+}
+
+const std::string& StudioViewportRenderer::CloudShaderDefines() const noexcept
+{
+    return cloudRenderer_.ShaderDefines();
+}
+
 void StudioViewportRenderer::ClearLightning()
 {
     const std::scoped_lock lock(transientFlashMutex_);

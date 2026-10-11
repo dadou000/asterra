@@ -23,6 +23,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioTerrainDiagnosticOverlayGeometry.cpp
     src/StudioTerrainOverlayGeometry.cpp
     src/LightningRpc.cpp
+    src/CloudShaderRpc.cpp
     src/StormLightningController.cpp
     src/SurfaceAuthoringUi.cpp
     src/SurfaceVolumeDebugRenderer.cpp
@@ -412,6 +413,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.StormLightningController
         COMMAND OrbitStormLightningControllerTests
+    )
+
+    add_executable(OrbitCloudShaderRpcTests
+        tests/CloudShaderRpcTests.cpp
+    )
+
+    target_link_libraries(OrbitCloudShaderRpcTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitCloudShaderRpcTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCloudShaderRpcTests)
+
+    add_test(
+        NAME Orbit.CloudShaderRpc
+        COMMAND OrbitCloudShaderRpcTests
     )
 
     add_executable(OrbitLightningRpcTests

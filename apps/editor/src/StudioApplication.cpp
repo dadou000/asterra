@@ -80,6 +80,7 @@
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_ui/StudioViewContinuity.hpp>
 #include <orbit/studio_ui/StudioViewportPanels.hpp>
+#include <orbit/studio_ui/CloudShaderRpc.hpp>
 #include <orbit/studio_ui/LightningRpc.hpp>
 #include <orbit/studio_ui/StormLightningController.hpp>
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
@@ -1376,6 +1377,15 @@ int orbit::editor_app::StudioApplication::Run(
                 { return stormLightning.Start(request); },
                 [&stormLightning] { stormLightning.Stop(); },
                 [&stormLightning] { return stormLightning.Status(); }
+            });
+
+        // Cloud shader tunables at runtime (clouds.set_defines): A/B comparisons without a relaunch.
+        orbit::studio_ui::RegisterCloudShaderRpc(
+            rpcHost.Dispatcher(),
+            {
+                [&studioViewportRenderer] { return studioViewportRenderer.CloudShaderDefines(); },
+                [&studioViewportRenderer](const std::string& defines)
+                { return studioViewportRenderer.SetCloudShaderDefines(defines); }
             });
 
         // Simulation transport (Simulate / Pause / Step) and time.* RPC, both

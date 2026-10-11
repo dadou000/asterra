@@ -1151,6 +1151,27 @@ def orbit_lightning_storm_status() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_clouds_get_defines() -> dict[str, Any]:
+    """The cloud shader defines in use ("NAME=VALUE;NAME=VALUE", empty = the
+    shipped shaders)."""
+    return _rpc("clouds.get_defines")
+
+
+@mcp.tool()
+def orbit_clouds_set_defines(defines: str) -> dict[str, Any]:
+    """Recompile the cloud march, shadow and volume shaders with `defines`
+    ("NAME=VALUE;NAME=VALUE"; an empty string restores the shipped shaders), so
+    a march tunable can be A/B-compared without relaunching Studio. Tunables:
+    CLOUD_FAR_EARLYOUT, CLOUD_JITTER_FIX, CLOUD_INCLOUD_STEP_SCALE,
+    CLOUD_MAX_STEPS, CLOUD_SCHEDULE_STEPS, CLOUD_FOOTPRINT_STEP,
+    CLOUD_BASE_STEP, CLOUD_EMPTY_SKIP, CLOUD_SUN_FAR_START, CLOUD_SUN_FAR_END,
+    CLOUD_SUN_VOLUME. Returns the defines in use, compile_ms and error (empty
+    on success; on a compile error the previous shaders stay in use). Allow a
+    second or two for the image to converge afterwards."""
+    return _rpc("clouds.set_defines", {"defines": defines})
+
+
+@mcp.tool()
 def orbit_lightning_clear() -> dict[str, Any]:
     """Remove every live lightning flash."""
     return _rpc("lightning.clear")

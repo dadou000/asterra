@@ -119,6 +119,18 @@ static float gCloudDistance = 1.0e9;
 // used any more (the filtered table replaces it), so skip those noise fetches and use the noise mean for the one
 // remaining dependence, the height variation of the cloud top. 1 is the default (council review R-20261011-182716-2c7c9797);
 // ORBIT_CLOUD_DEFINES=CLOUD_FAR_EARLYOUT=0 restores the noise fetches for A/B.
+// Footprint range (m, at the sample distance times the pixel angle) over which the exact six-step sun march fades to the
+// estimate of the sun optical depth. CLOUD_SUN_VOLUME=1 makes that estimate the cached light volume's value (when the
+// sample is inside its cascades) instead of the column formula.
+#ifndef CLOUD_SUN_FAR_START
+#define CLOUD_SUN_FAR_START 45.0
+#endif
+#ifndef CLOUD_SUN_FAR_END
+#define CLOUD_SUN_FAR_END 140.0
+#endif
+#ifndef CLOUD_SUN_VOLUME
+#define CLOUD_SUN_VOLUME 0
+#endif
 #ifndef CLOUD_FAR_EARLYOUT
 #define CLOUD_FAR_EARLYOUT 1
 #endif
@@ -1367,7 +1379,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float h = saturate((radius - g.shell.x - g.shell.y) / max(g.shell.z - g.shell.y, 1.0));
         // Far away the exact sun march is wasted (the billows are filtered anyway):
         // blend to a column estimate of the optical depth above this point.
-        const float farBlend = SmoothRange(45.0, 140.0, t * g.lod.x);
+        const float farBlend = SmoothRange(CLOUD_SUN_FAR_START, CLOUD_SUN_FAR_END, t * g.lod.x);
         float sunDepth = cachedSunDepth;
         // Thin samples (cirrus, cloud edges) contribute little: reuse the last full sun
         // march of this ray instead of marching again for each of them.
@@ -1392,7 +1404,14 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             const float4 estimateType = TypeParams(column.z);
             const float heightFraction = saturate(h / max(estimateType.x, 0.05));
             const float slant = 1.0 / clamp(dot(position / max(radius, 1.0), sun), 0.2, 1.0);
-            const float estimate = g.lod.z * column.x * 0.55 * (1.0 - heightFraction) * slant;
+            float estimate = g.lod.z * column.x * 0.55 * (1.0 - heightFraction) * slant;
+#if CLOUD_SUN_VOLUME
+            float cachedTau;
+            if (VolumeTau(position, cachedTau))
+            {
+                estimate = cachedTau;
+            }
+#endif
             sunDepth = lerp(sunDepth, estimate, farBlend);
         }
         const float skyFacing = saturate(dot(position / max(radius, 1.0), sun) * 0.5 + 0.5);
@@ -2237,71 +2256,24 @@ CloudRenderer::CloudRenderer(
         }
     }
     // Developer hook: ORBIT_CLOUD_DEFINES="NAME=VALUE;NAME=VALUE" becomes #define lines in every cloud shader, so a march
-    // tunable can be A/B-tested without a rebuild (see tools/orbit_ab.py). Names are restricted to [A-Za-z0-9_].
-    std::string sourcePrefix;
+    // tunable can be A/B-tested without a rebuild (see tools/orbit_ab.py); clouds.set_defines changes it at runtime.
+    compiler_ = &compiler;
+    std::string defineText;
     {
         char* defines = nullptr;
         std::size_t definesLength = 0;
         if (_dupenv_s(&defines, &definesLength, "ORBIT_CLOUD_DEFINES") == 0 && defines != nullptr)
         {
-            const std::string list(defines);
+            defineText = defines;
             std::free(defines);
-            std::size_t begin = 0;
-            while (begin <= list.size())
-            {
-                std::size_t end = list.find(';', begin);
-                if (end == std::string::npos)
-                {
-                    end = list.size();
-                }
-                const std::string item = list.substr(begin, end - begin);
-                const std::size_t eq = item.find('=');
-                const std::string name = item.substr(0, eq);
-                const bool valid = !name.empty() &&
-                    name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos;
-                if (valid)
-                {
-                    sourcePrefix += "#define " + name + " " + (eq == std::string::npos ? std::string("1") : item.substr(eq + 1)) + "\n";
-                }
-                begin = end + 1;
-            }
         }
     }
-    const std::string marchPrefix = sourcePrefix + (pointLights_
-        ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
-        : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");
-    const std::string otherPrefix = sourcePrefix +
-        "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n";
-    const std::string farField = FarFieldShaderBlock(BuildFarFieldLut(noise, kNoiseGrid));
+    farField_ = FarFieldShaderBlock(BuildFarFieldLut(noise, kNoiseGrid));
     const auto vertex = compiler.Compile({
         .source = kVertexShader,
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const std::string marchSource = MarchSource(marchPrefix, farField);
-    const auto pixel = compiler.Compile({
-        .source = marchSource,
-        .entryPoint = "main",
-        .stage = shader::Stage::Pixel,
-        .debug = false});
-
-    pipeline_ = device.CreateGraphicsPipeline({
-        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
-        .pixelShader = {.data = pixel.bytecode.data(), .size = pixel.bytecode.size()},
-        .vertexAttributes = {},
-        .vertexStrideBytes = 0U,
-        .pushConstantDwords = 64U,
-        .shaderResourceBuffers = pointLights_ ? 4U : 3U,
-        .sampledTextures = 3U,
-        .topology = rhi::PrimitiveTopology::TriangleList,
-        .fillMode = rhi::FillMode::Solid,
-        .cullMode = rhi::CullMode::None,
-        .blendMode = rhi::BlendMode::Opaque,
-        .depthTest = false,
-        .depthWrite = false,
-        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
-        .colorAttachmentCount = 1U});
-
     const auto compositePixel = compiler.Compile({
         .source = kCompositePixelShader,
         .entryPoint = "main",
@@ -2346,13 +2318,99 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
+    if (const std::string error = RebuildShaderPipelines(defineText); !error.empty())
+    {
+        throw std::runtime_error("Cloud shader compile failed: " + error);
+    }
+    noise_ = device.CreateBuffer({
+        .sizeBytes = static_cast<u64>(noise.size() * sizeof(f32)),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!noise_)
+    {
+        throw std::runtime_error("Failed to allocate cloud noise volume.");
+    }
+    std::memcpy(noise_->Map(), noise.data(), noise.size() * sizeof(f32));
+    noise_->Unmap();
+}
+
+namespace
+{
+// "A=1;B=2" -> "#define A 1\n#define B 2\n". A name without a value defines 1; names are restricted to [A-Za-z0-9_].
+[[nodiscard]] std::string DefinePrefix(const std::string& list)
+{
+    std::string prefix;
+    std::size_t begin = 0;
+    while (begin <= list.size())
+    {
+        std::size_t end = list.find(';', begin);
+        if (end == std::string::npos)
+        {
+            end = list.size();
+        }
+        const std::string item = list.substr(begin, end - begin);
+        const std::size_t eq = item.find('=');
+        const std::string name = item.substr(0, eq);
+        const bool valid = !name.empty() &&
+            name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos;
+        if (valid)
+        {
+            prefix += "#define " + name + " " + (eq == std::string::npos ? std::string("1") : item.substr(eq + 1)) + "\n";
+        }
+        begin = end + 1;
+    }
+    return prefix;
+}
+} // namespace
+
+std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
+{
+    try
+    {
+        const std::string sourcePrefix = DefinePrefix(defineText);
+        const std::string marchPrefix = sourcePrefix + (pointLights_
+            ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
+            : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");
+        const std::string otherPrefix = sourcePrefix +
+            "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n";
+        const std::string& farField = farField_;
+        const auto vertex = compiler_->Compile({
+            .source = kVertexShader,
+            .entryPoint = "main",
+            .stage = shader::Stage::Vertex,
+            .debug = false});
+    const std::string marchSource = MarchSource(marchPrefix, farField);
+    const auto pixel = compiler_->Compile({
+        .source = marchSource,
+        .entryPoint = "main",
+        .stage = shader::Stage::Pixel,
+        .debug = false});
+
+    auto marchPipeline = device_->CreateGraphicsPipeline({
+        .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
+        .pixelShader = {.data = pixel.bytecode.data(), .size = pixel.bytecode.size()},
+        .vertexAttributes = {},
+        .vertexStrideBytes = 0U,
+        .pushConstantDwords = 64U,
+        .shaderResourceBuffers = pointLights_ ? 4U : 3U,
+        .sampledTextures = 3U,
+        .topology = rhi::PrimitiveTopology::TriangleList,
+        .fillMode = rhi::FillMode::Solid,
+        .cullMode = rhi::CullMode::None,
+        .blendMode = rhi::BlendMode::Opaque,
+        .depthTest = false,
+        .depthWrite = false,
+        .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+        .colorAttachmentCount = 1U});
+
     const std::string shadowSource = ShadowSource(otherPrefix, farField);
-    const auto shadowPixel = compiler.Compile({
+    const auto shadowPixel = compiler_->Compile({
         .source = shadowSource,
         .entryPoint = "main",
         .stage = shader::Stage::Pixel,
         .debug = false});
-    shadowPipeline_ = device.CreateGraphicsPipeline({
+    auto shadowPipeline = device_->CreateGraphicsPipeline({
         .vertexShader = {.data = vertex.bytecode.data(), .size = vertex.bytecode.size()},
         .pixelShader = {.data = shadowPixel.bytecode.data(), .size = shadowPixel.bytecode.size()},
         .vertexAttributes = {},
@@ -2370,28 +2428,37 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentCount = 1U});
 
     const std::string volumeSource = VolumeSource(otherPrefix, farField);
-    const auto volumeShader = compiler.Compile({
+    const auto volumeShader = compiler_->Compile({
         .source = volumeSource,
         .entryPoint = "main",
         .stage = shader::Stage::Compute,
         .debug = false});
-    volumePipeline_ = device.CreateComputePipeline({
+    auto volumePipeline = device_->CreateComputePipeline({
         .computeShader = {.data = volumeShader.bytecode.data(), .size = volumeShader.bytecode.size()},
         .pushConstantDwords = 64U,
         .shaderResourceBuffers = 3U,
         .storageTextures = 0U,
         .sampledTextures = 0U});
-    noise_ = device.CreateBuffer({
-        .sizeBytes = static_cast<u64>(noise.size() * sizeof(f32)),
-        .usage = rhi::BufferUsage::Structured,
-        .memory = rhi::MemoryUsage::HostVisible,
-        .initialState = rhi::ResourceState::ShaderResource});
-    if (!noise_)
-    {
-        throw std::runtime_error("Failed to allocate cloud noise volume.");
+        // Everything compiled: swap. The old pipelines are retired by the RHI once the GPU is done with them.
+        pipeline_ = std::move(marchPipeline);
+        shadowPipeline_ = std::move(shadowPipeline);
+        volumePipeline_ = std::move(volumePipeline);
+        defines_ = defineText;
+        return {};
     }
-    std::memcpy(noise_->Map(), noise.data(), noise.size() * sizeof(f32));
-    noise_->Unmap();
+    catch (const std::exception& exception)
+    {
+        return exception.what();
+    }
+}
+
+std::string CloudRenderer::SetShaderDefines(const std::string& defineText)
+{
+    if (defineText == defines_)
+    {
+        return {};
+    }
+    return RebuildShaderPipelines(defineText);
 }
 
 CloudRenderer::~CloudRenderer() = default;

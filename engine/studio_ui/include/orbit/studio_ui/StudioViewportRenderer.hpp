@@ -378,6 +378,10 @@ public:
 
     // Lightning flashes lighting the scene (RPC `lightning.*`). Thread-safe: the RPC thread fires, the render thread reads.
     u64 FireLightning(const lighting::FlashRequest& request);
+    // Cloud shader tunables at runtime (clouds.set_defines): recompiles the cloud shaders; returns the compile error or
+    // an empty string (the previous shaders stay in use on error).
+    std::string SetCloudShaderDefines(const std::string& defines);
+    [[nodiscard]] const std::string& CloudShaderDefines() const noexcept;
     [[nodiscard]] std::vector<lighting::FlashStatus> LightningStatus() const;
     void ClearLightning();
     void SetLightningStormAnchor(const lighting::StormAnchor& anchor);

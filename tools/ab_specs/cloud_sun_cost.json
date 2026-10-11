@@ -1,0 +1,29 @@
+{
+  "_comment": "Near-sample cost: the six-step sun march fades to an estimate beyond a footprint range. Variants move that range closer and/or replace the crude column estimate by the cached light volume. Per-pass GPU ms of Clouds comes from one profiler snapshot over a 3 s window.",
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "baseline",
+  "controls": 1,
+  "gpu_passes": ["Clouds", "CloudShadow"],
+  "gpu_window_ms": 3000,
+  "variants": {
+    "baseline":   {"env": {}},
+    "volume":     {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1"}},
+    "near70":     {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_SUN_FAR_START=20.0;CLOUD_SUN_FAR_END=70.0"}},
+    "volume70":   {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1;CLOUD_SUN_FAR_START=20.0;CLOUD_SUN_FAR_END=70.0"}},
+    "volume40":   {"env": {"ORBIT_CLOUD_DEFINES": "CLOUD_SUN_VOLUME=1;CLOUD_SUN_FAR_START=10.0;CLOUD_SUN_FAR_END=40.0"}}
+  },
+  "scenes": [
+    {"name": "sky_cumulus", "time_microseconds": 18070405751, "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 42, "yaw_deg": 0, "pitch_deg": 20}},
+    {"name": "cumulus_far", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 0, "pitch_deg": 8}},
+    {"name": "cumulus_near", "local_time_seconds": 43200,
+     "pose": {"kind": "surface", "lat_deg": 5.05157, "lon_deg": 0.03666, "alt_m": 2600, "yaw_deg": 35.3, "pitch_deg": 21.74}},
+    {"name": "cumulus_lowsun", "local_time_seconds": 63600,
+     "pose": {"kind": "surface", "lat_deg": 5.0, "lon_deg": 0.0, "alt_m": 1200, "yaw_deg": 40, "pitch_deg": 8}},
+    {"name": "orbit_deck", "local_time_seconds": 43200,
+     "pose": {"kind": "approach", "target": {"lat_deg": 5.3045, "lon_deg": 0.0},
+              "origin": {"lat_deg": 0, "lon_deg": 0, "alt_km": 1590.95}, "alt_km": 1500}}
+  ]
+}
