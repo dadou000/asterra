@@ -71,7 +71,16 @@ buffer layout are unchanged because a proxy is an ordinary entry; spot cone shap
   near-surface inversion or superadiabatic layers.
 - Lighting already has an emissive hierarchy (`EmissiveHierarchy`); a city-light tree should extend it, not duplicate it.
 
+## Integration status of Finding 2
+
+Implemented behind `ORBIT_CLOUD_FILTERED_FAR=1` (default off, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the
+cloud noise using `TransmittanceStats`, the shader blends to it by `baseBlend`, and all four `Extinction()` callers pass their step length. Verified: the three
+shader variants compile with `glslangValidator` with the flag off and on; the table builder and the CPU twin of the shader lookup pass
+`CloudFarFieldTests` (off-lattice error 0.012 against an independent estimate). Not verified: the HLSL lookup numerically (only
+the CPU twin), DXC compilation, the image from orbit and during descent, frame time, and whether `gStep` is the right K for the god-ray march.
+Turning it on removes the old thin-haze look from orbit by design, which needs an art decision.
+
 ## Not yet done
 
-Wiring `TransmittanceStats` and a coverage lookup into the cloud shader (replacing the shape blend and density fade), verified against the CPU probe and a
-rendered approach sequence; measuring frame time of any of this; a camera-independent replacement for the camera-centred light volume.
+A rendered approach sequence comparing flag off and on; frame-time measurement; a camera-independent replacement for the camera-centred light volume;
+removing the old blend and fade once the flag is the default.

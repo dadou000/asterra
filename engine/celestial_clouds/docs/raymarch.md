@@ -13,10 +13,11 @@ keywords = ["ray march", "cloud shape", "billow", "noise", "step", "empty space 
 sources = [
   "engine/celestial_clouds/src/CloudRenderer.cpp",
   "engine/celestial_clouds/include/orbit/celestial_clouds/CloudRenderer.hpp",
+  "engine/celestial_clouds/src/CloudFarField.cpp",
   "engine/studio_ui/src/StudioViewportRenderer.cpp",
   "docs/ORBIT_PERFORMANCE.md",
 ]
-symbols = ["kMaxSteps", "kBaseStep", "kEmptySkip", "kOpaqueCutoff", "kInCloudScheduleFraction", "kFootprintStep"]
+symbols = ["FarFieldTransmittance", "gStep", "kMaxSteps", "kBaseStep", "kEmptySkip", "kOpaqueCutoff", "kInCloudScheduleFraction", "kFootprintStep"]
 invariants = [
   "Three unit-integral vertical profiles (thin low stratus, flat-based rounded cumulus, full-height tower with a denser anvil top) are blended by cloudType so the column optical depth is preserved.",
   "Billows come from one baked 32^3 tileable cellular-noise volume (R base shape, G/B/A erosion octaves; a 16-byte voxel = one fetch), sampled at two non-aligned scales (one rotated) so the lattice never reads as a grid.",
@@ -26,11 +27,13 @@ invariants = [
   "The march target is half resolution by default (cloud_resolution_scale = 0.5), bounded by the nearest full-resolution depth, and is composited with an alpha blend (L/(1-T), 1-T -> L + T*scene) and bilinear upsampling, without a scene copy.",
   "Erosion noise is used only at moderate range (25-60 km in the original design) and never in the sun march; sun colour comes from the atmosphere transmittance LUT sampled once per pixel.",
   "Lighting is three scattering octaves (energy, extinction and anisotropy halved each time) plus an isotropic multiple-scatter floor and a height-dependent ambient.",
+  "ORBIT_CLOUD_FILTERED_FAR=1 (read once at CloudRenderer construction; default off) compiles the filtered far field into all three cloud shaders: the shape-to-coverage blend and the gDensity->gDensityFar fade are removed and Extinction() blends, by baseBlend, from the point-sampled step transmittance exp(-sigma*gStep) to FarFieldTransmittance(skinCoverage, hardness, unitSigma*gStep), a table generated from the baked noise (CloudFarField.cpp). Every Extinction() caller must set gStep to the length the sample stands for; gStep = 0 keeps point sampling. CPU reference: EvaluateFarFieldTransmittance. Status: compiled with glslangValidator, unit-tested on CPU, NOT yet seen on screen - the look from orbit is denser and more patchy than the old translucent haze by design.",
   "The shader is an embedded string in CloudRenderer.cpp: saving it rebuilds the target and takes the automatic generation handoff.",
 ]
 related = ["/rendering/clouds/shadows-and-light-volume"]
 depends_on = ["/rendering/clouds"]
 verify = [
+  "python tools/check_cloud_shaders.py compile-checks the embedded cloud shaders (flag off and on) with glslangValidator on Linux; syntax and types only, not DXC and not rendered.",
   "Frame-time average with clouds on vs off at 8 km (Release, Earth): original numbers were +0.7 ms looking at the horizon and +1.65 ms looking down; a regression beyond that needs an explanation.",
   "Side-on grazing clouds at the horizon are sharp, not striped or see-through.",
 ]

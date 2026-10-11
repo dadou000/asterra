@@ -1,5 +1,7 @@
 #include <orbit/celestial_clouds/CloudRenderer.hpp>
 
+#include <orbit/celestial_clouds/CloudFarField.hpp>
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -85,6 +87,9 @@ static float gDensity = 1.0;
 // Density used for distant samples (footprint > ~150 m): natural storms are dense up close
 // but a continent-wide convective region must stay translucent from orbit.
 static float gDensityFar = 1.0;
+// Length (m) of the march step the next Extinction() sample stands for. The filtered far field
+// (ORBIT_CLOUD_FILTERED_FAR) needs it to turn the sample into a step transmittance; 0 = point sample.
+static float gStep = 0.0;
 // Surface relief of the last sample (set by Extinction): crevices between billows read darker.
 static float gRelief = 1.0;
 // 1 where the high layer is a cumulonimbus anvil (lab cloud, or natural weather directly
@@ -521,7 +526,9 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         // threshold against a reduced coverage so the iso-surface sits inside the mass.
         const float skinCoverage = coverage * lerp(1.0, 0.88, towerness);
         float shape = saturate(type.w * (shifted - (1.0 - skinCoverage)) / max(skinCoverage, 0.05));
+#if !ORBIT_CLOUD_FILTERED_FAR
         shape = lerp(shape, coverage, baseBlend);
+#endif
         if (detailAmount > 0.0 && shape > 0.0)
         {
             const float erosion = erosionValue;
@@ -543,8 +550,24 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         const float rainBase = 1.0 + 1.2 * column.w * (1.0 - SmoothRange(0.0, 0.35, hn));
         // Real storm clouds are far denser than fair-weather cumulus (the reference
         // clouds use 0.006-0.012 per metre); towers shade themselves hard.
+#if ORBIT_CLOUD_FILTERED_FAR
+        // Extinction of this sample for shape 1; the sample's own value is unit * shape.
+        const float unitSigma = g.lod.z * saturate(column.x) / thickness * profile * 1.7 * g.optics.w * rainBase
+            * lerp(1.0, 12.0, towerness) * gDensity * density;
+        float mainSigma = unitSigma * shape;
+        if (gStep > 0.0 && baseBlend > 0.0)
+        {
+            // The noise is no longer resolved by the pixel: replace the point sample by the average of exp(-K s)
+            // over the noise distribution (K = unit extinction x step), blended in as the footprint grows.
+            const float farT = FarFieldTransmittance(skinCoverage, type.w, unitSigma * gStep);
+            const float nearT = exp(-mainSigma * gStep);
+            mainSigma = -log(max(lerp(nearT, farT, baseBlend), 1.0e-6)) / gStep;
+        }
+        sigma += mainSigma;
+#else
         sigma += g.lod.z * saturate(column.x) / thickness * profile * shape * 1.7 * g.optics.w * rainBase
             * lerp(1.0, 12.0, towerness) * lerp(gDensity, gDensityFar, SmoothRange(kFarFadeStart, kFarFadeEnd, footprint)) * density;
+#endif
     }
 
     // ---- high cloud: cirrus fibres and cumulonimbus anvil ----
@@ -654,6 +677,7 @@ float SunOpticalDepth(float3 position, float3 sun, float outer, float footprint,
         const float stepLength = min(marches[i], max(sunT1 - travelled, 0.0));
         const float3 samplePosition = position + sun * (travelled + (0.15 + 0.7 * jit) * stepLength);
         const float radius = length(samplePosition);
+        gStep = stepLength;
         lastSigma = Extinction(ColumnData(samplePosition / max(radius, 1.0)), samplePosition, radius, max(0.7 * stepLength, footprint));
         depth += lastSigma * stepLength;
         travelled += stepLength;
@@ -691,6 +715,7 @@ float AltitudeSunTau(float3 origin, float3 sun, uint slabs)
         const float pathLength = s1 - previousExit;
         const float3 p = origin + sun * (previousExit + 0.5 * pathLength);
         const float r = length(p);
+        gStep = pathLength;
         tau += Extinction(ColumnData(p / max(r, 1.0)), p, r, max(0.7 * pathLength, 120.0)) * pathLength;
         previousExit = s1;
     }
@@ -1231,6 +1256,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         }
         cursor = cursorBefore + stepCap;
         gRelief = 1.0;
+        gStep = stepCap;
         const float sigma = Extinction(column, position, radius, t * g.lod.x);
         // Relief (crevices between billows) is fine, high-contrast noise. When the camera is
         // inside or against the cloud a pixel sees one random point of it, so the relief shows
@@ -1447,6 +1473,7 @@ float SunVisibility(float3 position, float3 sun)
     {
         const float3 samplePosition = position + sun * (segmentStart + (float(i) + 0.5) * stepLength);
         const float sampleRadius = length(samplePosition);
+        gStep = stepLength;
         opticalDepth +=
             Extinction(ColumnData(samplePosition / max(sampleRadius, 1.0)), samplePosition, sampleRadius, stepLength) *
             stepLength;
@@ -1678,19 +1705,21 @@ constexpr const char* kShadowMain = R"(float4 main(VSOutput input) : SV_Target0
 }
 )";
 
-[[nodiscard]] std::string MarchSource()
+// The far-field block (lookup table + FarFieldTransmittance) goes between the type tables and the extinction
+// function; `farField` is empty unless the filtered far field is enabled, and `prefix` defines the switch.
+[[nodiscard]] std::string MarchSource(const std::string& prefix, const std::string& farField)
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kMarchMain + kMarchGodrays;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kMarchMain + kMarchGodrays;
 }
 
-[[nodiscard]] std::string ShadowSource()
+[[nodiscard]] std::string ShadowSource(const std::string& prefix, const std::string& farField)
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kDepthBindings + kShadowMain;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kDepthBindings + kShadowMain;
 }
 
-[[nodiscard]] std::string VolumeSource()
+[[nodiscard]] std::string VolumeSource(const std::string& prefix, const std::string& farField)
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kVolumeCompute;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kVolumeCompute;
 }
 
 
@@ -2111,12 +2140,29 @@ CloudRenderer::CloudRenderer(
     const shader::Compiler& compiler)
     : device_(&device)
 {
+    // ORBIT_CLOUD_FILTERED_FAR=1 replaces the far-field shape blend and density fade with the footprint-filtered
+    // transmittance table (see CloudFarField.hpp). Off by default until it has been reviewed on screen.
+    const auto noise = BakeCloudNoise();
+    bool filteredFar = false;
+    {
+        char* flag = nullptr;
+        std::size_t flagLength = 0;
+        if (_dupenv_s(&flag, &flagLength, "ORBIT_CLOUD_FILTERED_FAR") == 0 && flag != nullptr)
+        {
+            filteredFar = flag[0] == '1';
+            std::free(flag);
+        }
+    }
+    const std::string sourcePrefix =
+        std::string("#define ORBIT_CLOUD_FILTERED_FAR ") + (filteredFar ? "1" : "0") + "\n";
+    const std::string farField =
+        filteredFar ? FarFieldShaderBlock(BuildFarFieldLut(noise, kNoiseGrid)) : std::string();
     const auto vertex = compiler.Compile({
         .source = kVertexShader,
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const std::string marchSource = MarchSource();
+    const std::string marchSource = MarchSource(sourcePrefix, farField);
     const auto pixel = compiler.Compile({
         .source = marchSource,
         .entryPoint = "main",
@@ -2184,7 +2230,7 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
-    const std::string shadowSource = ShadowSource();
+    const std::string shadowSource = ShadowSource(sourcePrefix, farField);
     const auto shadowPixel = compiler.Compile({
         .source = shadowSource,
         .entryPoint = "main",
@@ -2207,7 +2253,7 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
-    const std::string volumeSource = VolumeSource();
+    const std::string volumeSource = VolumeSource(sourcePrefix, farField);
     const auto volumeShader = compiler.Compile({
         .source = volumeSource,
         .entryPoint = "main",
@@ -2219,7 +2265,6 @@ CloudRenderer::CloudRenderer(
         .shaderResourceBuffers = 3U,
         .storageTextures = 0U,
         .sampledTextures = 0U});
-    const auto noise = BakeCloudNoise();
     noise_ = device.CreateBuffer({
         .sizeBytes = static_cast<u64>(noise.size() * sizeof(f32)),
         .usage = rhi::BufferUsage::Structured,

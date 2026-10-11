@@ -1,4 +1,5 @@
 add_library(OrbitCelestialClouds STATIC
+    src/CloudFarField.cpp
     src/CloudField.cpp
     src/CloudRenderer.cpp
     src/WeatherModel.cpp
@@ -22,6 +23,7 @@ target_link_libraries(
         Orbit::CelestialAtmosphere
         Orbit::Core
         Orbit::Math
+        Orbit::OpticalTransport
         Orbit::RHI
         Orbit::Shader
         Orbit::Terrain
@@ -65,5 +67,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.CelestialClouds
         COMMAND OrbitCelestialCloudTests
+    )
+
+    add_executable(
+        OrbitCelestialCloudFarFieldTests
+        tests/CloudFarFieldTests.cpp
+    )
+    target_link_libraries(
+        OrbitCelestialCloudFarFieldTests
+        PRIVATE
+            Orbit::CelestialClouds
+    )
+    target_compile_features(
+        OrbitCelestialCloudFarFieldTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitCelestialCloudFarFieldTests)
+    add_test(
+        NAME Orbit.CelestialCloudFarField
+        COMMAND OrbitCelestialCloudFarFieldTests
     )
 endif()
