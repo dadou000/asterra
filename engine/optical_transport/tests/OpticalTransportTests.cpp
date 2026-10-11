@@ -246,18 +246,6 @@ int main()
             for (const auto& c : clusters) sum += c.energy;
             Check(Near(sum, 5.0e4 + 100.0 + 8.0e3, 1e-9) && clusters.size() <= cap, "clustering is bounded and energy preserving");
         }
-        // Poisson: a point charge produces a field falling off with distance, and symmetric potential.
-        PoissonGrid grid;
-        grid.nx = grid.ny = grid.nz = 17;
-        grid.spacing = 100.0;
-        grid.chargeDensity.assign(17 * 17 * 17, 0.0);
-        grid.chargeDensity[(8 * 17 + 8) * 17 + 8] = 1.0e-8;
-        SolvePoisson(grid, 400);
-        const double centre = grid.potential[(8 * 17 + 8) * 17 + 8];
-        const double offset = grid.potential[(8 * 17 + 8) * 17 + 12];
-        Check(centre > offset && offset > 0.0, "potential peaks at the charge");
-        Check(Near(grid.potential[(8 * 17 + 8) * 17 + 4], offset, 1e-6), "potential is symmetric");
-        Check(MaxFieldMagnitude(grid) > 0.0, "field computed from potential");
     }
 
     // --- cloud representation LOD

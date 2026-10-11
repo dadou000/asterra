@@ -96,6 +96,15 @@ needs a GPU and an art decision. Hardware ray queries need an RHI change first: 
   independent planar quadrature, wired from the emitter's stellar appearance. A stale header comment that claimed multiplicative composition was corrected.
 - **Cloud light volume, emissive hierarchy:** exist (see Finding 4).
 
+## Finding 8: lightning had nothing to stand on, and two defects only simulation exposed
+
+- The storm solver (`FastStormSolver`) is warm-rain Kessler: no ice, no graupel. The spec's "the weather solver supplies ice and graupel" is not true today, so
+  `/rendering/unified-transport/storm-electrification` takes ice, graupel and supercooled liquid as caller-supplied fields.
+- Building the flash simulation exposed two defects that unit-level reasoning would have missed: with the channel held at a fixed potential every flash filled the entire channel cap and
+  neutralised +-390 C (unphysical, fixed with a charge budget), and a strongly charged storm held more than the budget around a single cell so flashes never started (fixed with a minimum channel
+  extent and by capping the charge actually removed). Flash counts then rose monotonically with updraft (4 / 27 / 78 in 15 minutes at 8 / 18 / 30 m/s).
+- My first updraft sweep decreased with updraft because the synthetic storm held condensate fixed while only transport changed: the model was behaving, the experiment was wrong.
+
 ## Integration status of Finding 2
 
 Implemented behind `ORBIT_CLOUD_FILTERED_FAR=1` (default off, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the

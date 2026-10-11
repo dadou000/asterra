@@ -1,0 +1,305 @@
+#include "orbit/storm_electrification/LeaderSimulation.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <unordered_map>
+#include <vector>
+
+namespace orbit::storm_electrification
+{
+
+namespace
+{
+using optical_transport::FlashKind;
+using optical_transport::Pulse;
+using optical_transport::Segment;
+
+// SplitMix64: a small, well-mixed generator so flash `n` of seed `s` is reproducible without any shared state.
+struct Rng
+{
+    std::uint64_t state;
+    std::uint64_t Next()
+    {
+        std::uint64_t z = (state += 0x9E3779B97F4A7C15ULL);
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        return z ^ (z >> 31);
+    }
+    double Uniform() { return static_cast<double>(Next() >> 11) * (1.0 / 9007199254740992.0); }
+};
+
+double DensityFactor(const LeaderParams& p, double height) { return std::exp(-height / p.densityScaleHeight); }
+
+struct Cell { std::uint32_t i, j, k; };
+}
+
+double MaxBreakdownRatio(const ChargeGrid& g, const LeaderParams& p, std::uint32_t* bi, std::uint32_t* bj, std::uint32_t* bk)
+{
+    double best = 0.0;
+    for (std::uint32_t k = 0; k < g.Nz(); ++k)
+    {
+        const double threshold = p.initiationField * DensityFactor(p, g.Height(k));
+        for (std::uint32_t j = 0; j < g.Ny(); ++j)
+            for (std::uint32_t i = 0; i < g.Nx(); ++i)
+            {
+                const double ratio = g.FieldMagnitude(i, j, k) / threshold;
+                if (ratio > best)
+                {
+                    best = ratio;
+                    if (bi) { *bi = i; *bj = j; *bk = k; }
+                }
+            }
+    }
+    return best;
+}
+
+FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, std::uint64_t flashIndex)
+{
+    FlashResult out;
+    grid.SolvePotential();
+    std::uint32_t si = 0, sj = 0, sk = 0;
+    if (MaxBreakdownRatio(grid, p, &si, &sj, &sk) < 1.0)
+    {
+        return out;
+    }
+    out.energyBefore = grid.FieldEnergy();
+    Rng rng{p.seed * 0x2545F4914F6CDD1DULL + flashIndex * 0x9E3779B97F4A7C15ULL + 12345ULL};
+
+    const double h = grid.Spacing();
+    const auto key = [&](const Cell& c) { return static_cast<std::uint64_t>(grid.Index(c.i, c.j, c.k)); };
+    const auto centre = [&](const Cell& c, double v[3]) { v[0] = (c.i + 0.5) * h; v[1] = (c.j + 0.5) * h; v[2] = (c.k + 0.5) * h; };
+
+    // Channel bookkeeping: cell -> segment index of the segment that created it (root has parent -1).
+    std::vector<Cell> channel{{si, sj, sk}};
+    std::unordered_map<std::uint64_t, std::int32_t> segmentOf;
+    segmentOf[key(channel[0])] = -1;
+    double channelPotential = grid.Potential()[grid.Index(si, sj, sk)];
+    double groundTime = 0.0;
+    std::int32_t groundSegment = -1;
+
+    optical_transport::DischargeGraph graph(FlashKind::IntraCloud);
+    const auto addCellSegment = [&](const Cell& parent, const Cell& cell, double time) {
+        Segment s;
+        centre(parent, s.from);
+        centre(cell, s.to);
+        s.parent = segmentOf[key(parent)];
+        s.formedAt = time;
+        s.conductivity = 1.0;
+        const double length = h;
+        s.pulses.push_back({time, h / p.leaderSpeed, p.leaderEnergyPerMeter * length});
+        const std::int32_t index = graph.AddSegment(std::move(s));
+        segmentOf[key(cell)] = index;
+        return index;
+    };
+
+    // Charge the channel could neutralise, by polarity, counted once per cell of the neighbourhood it touches.
+    std::vector<unsigned char> counted(grid.CellCount(), 0);
+    double reachablePositive = 0.0, reachableNegative = 0.0;
+    const double cellVolume = h * h * h;
+    const long radius = static_cast<long>(p.neutralizationRadiusCells);
+    const auto touch = [&](const Cell& c) {
+        for (long dz = -radius; dz <= radius; ++dz)
+            for (long dy = -radius; dy <= radius; ++dy)
+                for (long dx = -radius; dx <= radius; ++dx)
+                {
+                    const long x = static_cast<long>(c.i) + dx, y = static_cast<long>(c.j) + dy, z = static_cast<long>(c.k) + dz;
+                    if (x < 0 || y < 0 || z < 0 || x >= static_cast<long>(grid.Nx()) || y >= static_cast<long>(grid.Ny()) ||
+                        z >= static_cast<long>(grid.Nz()))
+                        continue;
+                    const std::size_t cell = grid.Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), static_cast<std::uint32_t>(z));
+                    if (counted[cell]) continue;
+                    counted[cell] = 1;
+                    for (const double q : {grid.IceCharge()[cell], grid.GraupelCharge()[cell]})
+                        (q > 0.0 ? reachablePositive : reachableNegative) += std::abs(q) * p.neutralizationFraction * cellVolume;
+                }
+    };
+    touch(channel[0]);
+    bool grounded = false;
+    // An ungrounded channel neutralises equal amounts of both polarities, so the smaller one limits it; a grounded
+    // channel delivers its net charge to the ground, so either polarity reaching the budget is enough.
+    const auto budgetReached = [&] {
+        if (channel.size() < p.minChannelCells) return false;
+        return (grounded ? std::max(reachablePositive, reachableNegative) : std::min(reachablePositive, reachableNegative)) >=
+               p.maxFlashCharge;
+    };
+
+    // Growth rounds: every round each tip may extend; the channel front moves at leaderSpeed.
+    double time = startTime;
+    std::uint32_t round = 0;
+    const int d[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    std::uint32_t idleRounds = 0;
+    while (channel.size() < p.maxChannelCells && !budgetReached() && idleRounds < p.stagnationRounds)
+    {
+        const double reachedBefore = reachablePositive + reachableNegative;
+        struct Candidate { Cell cell; Cell parent; double weight; };
+        std::vector<Candidate> candidates;
+        std::unordered_map<std::uint64_t, std::size_t> best;
+        for (const Cell& c : channel)
+        {
+            for (const auto& dir : d)
+            {
+                const long x = static_cast<long>(c.i) + dir[0], y = static_cast<long>(c.j) + dir[1], z = static_cast<long>(c.k) + dir[2];
+                if (x < 1 || y < 1 || z < 0 || x >= static_cast<long>(grid.Nx()) - 1 || y >= static_cast<long>(grid.Ny()) - 1 ||
+                    z >= static_cast<long>(grid.Nz()) - 1)
+                    continue;
+                const Cell n{static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), static_cast<std::uint32_t>(z)};
+                if (segmentOf.count(key(n))) continue;
+                const double phi = grid.Potential()[grid.Index(n.i, n.j, n.k)];
+                const double threshold = p.propagationField * DensityFactor(p, grid.Height(n.k));
+                // Positive end extends toward lower potential, negative end toward higher: either way the potential
+                // step across the new cell must beat the propagation field.
+                const double excess = std::abs(phi - channelPotential) / h - threshold;
+                if (excess <= 0.0) continue;
+                const auto found = best.find(key(n));
+                if (found == best.end())
+                {
+                    best[key(n)] = candidates.size();
+                    candidates.push_back({n, c, excess});
+                }
+                else if (excess > candidates[found->second].weight)
+                {
+                    candidates[found->second].parent = c;
+                }
+            }
+        }
+        if (candidates.empty()) break;
+        // Extend by a bounded number of cells per round chosen proportionally to their excess field.
+        const std::size_t picks = std::max<std::size_t>(1, std::min<std::size_t>(candidates.size(), 1 + channel.size() / 8));
+        for (std::size_t n = 0; n < picks && !candidates.empty(); ++n)
+        {
+            double total = 0.0;
+            for (const auto& c : candidates) total += c.weight;
+            double r = rng.Uniform() * total;
+            std::size_t chosen = 0;
+            for (; chosen + 1 < candidates.size(); ++chosen)
+            {
+                r -= candidates[chosen].weight;
+                if (r <= 0.0) break;
+            }
+            const Candidate pick = candidates[chosen];
+            candidates.erase(candidates.begin() + static_cast<std::ptrdiff_t>(chosen));
+            if (segmentOf.count(key(pick.cell))) continue;
+            const std::int32_t index = addCellSegment(pick.parent, pick.cell, time);
+            channel.push_back(pick.cell);
+            touch(pick.cell);
+            if (!grounded && static_cast<double>(pick.cell.k) < p.groundContactHeight)
+            {
+                grounded = true;
+                groundTime = time;
+                groundSegment = index;
+                channelPotential = 0.0;   // a connection to the ground pins the whole channel at 0 V
+            }
+        }
+        idleRounds = (reachablePositive + reachableNegative > reachedBefore) ? 0 : idleRounds + 1;
+        ++round;
+        time += h / p.leaderSpeed;
+    }
+    out.channelCells = static_cast<std::uint32_t>(channel.size());
+    out.endTime = time;
+    if (channel.size() < 3)
+    {
+        return out;   // the field exceeded threshold but no channel could propagate: no flash
+    }
+
+    // Classification and the bright stage.
+    double lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300};
+    for (const Cell& c : channel)
+    {
+        double v[3];
+        centre(c, v);
+        for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], v[a]); hi[a] = std::max(hi[a], v[a]); }
+    }
+    const double span = std::max(hi[0] - lo[0], hi[1] - lo[1]);
+    out.kind = grounded ? FlashKind::CloudToGround : (span > p.crossCloudSpanMeters ? FlashKind::CloudToCloud : FlashKind::IntraCloud);
+    optical_transport::DischargeGraph bright(out.kind);
+    for (const auto& s : graph.Segments()) bright.AddSegment(s);
+    if (grounded)
+    {
+        // Return stroke: a current wave up the path from the ground contact to the root at returnStrokeSpeed.
+        std::vector<std::int32_t> path;
+        for (std::int32_t s = groundSegment; s >= 0; s = bright.Segments()[static_cast<std::size_t>(s)].parent) path.push_back(s);
+        double pathLength = h * static_cast<double>(path.size());
+        const double perMeter = p.returnStrokeEnergy / std::max(pathLength, h);
+        double travelled = 0.0;
+        for (const std::int32_t s : path)
+        {
+            bright.Reactivate(s, {out.endTime + travelled / p.returnStrokeSpeed, p.pulseDuration, perMeter * h});
+            travelled += h;
+        }
+        (void)groundTime;
+    }
+    else
+    {
+        // No return stroke: the channel is bright where it conducts, fading as it forms (every cell glows as it is made
+        // and again a little later when the opposite polarity reaches it).
+        const double lateTime = out.endTime;
+        for (std::size_t s = 0; s < bright.Segments().size(); ++s)
+        {
+            bright.Reactivate(static_cast<std::int32_t>(s), {lateTime + 1.0e-4 * rng.Uniform(), p.pulseDuration, p.intracloudEnergyPerMeter * h});
+        }
+    }
+    out.graph = std::move(bright);
+
+    // Neutralisation near the channel. Positive and negative charge are removed in equal amounts unless the channel
+    // is grounded, in which case the imbalance is delivered to the ground.
+    std::vector<unsigned char> near(grid.CellCount(), 0);
+    const long r = radius;
+    for (const Cell& c : channel)
+        for (long dz = -r; dz <= r; ++dz)
+            for (long dy = -r; dy <= r; ++dy)
+                for (long dx = -r; dx <= r; ++dx)
+                {
+                    const long x = static_cast<long>(c.i) + dx, y = static_cast<long>(c.j) + dy, z = static_cast<long>(c.k) + dz;
+                    if (x < 0 || y < 0 || z < 0 || x >= static_cast<long>(grid.Nx()) || y >= static_cast<long>(grid.Ny()) ||
+                        z >= static_cast<long>(grid.Nz()))
+                        continue;
+                    near[grid.Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), static_cast<std::uint32_t>(z))] = 1;
+                }
+    double removablePositive = 0.0, removableNegative = 0.0;
+    for (std::size_t c = 0; c < grid.CellCount(); ++c)
+    {
+        if (!near[c]) continue;
+        for (const double q : {grid.IceCharge()[c], grid.GraupelCharge()[c]})
+        {
+            (q > 0.0 ? removablePositive : removableNegative) += std::abs(q) * p.neutralizationFraction * cellVolume;
+        }
+    }
+    double scalePositive = 1.0, scaleNegative = 1.0;
+    if (!grounded)
+    {
+        const double common = std::min(removablePositive, removableNegative);
+        scalePositive = removablePositive > 0.0 ? common / removablePositive : 0.0;
+        scaleNegative = removableNegative > 0.0 ? common / removableNegative : 0.0;
+    }
+    // Never neutralise more than the flash budget of either polarity, whatever the local charge density.
+    if (removablePositive > p.maxFlashCharge) scalePositive = std::min(scalePositive, p.maxFlashCharge / removablePositive);
+    if (removableNegative > p.maxFlashCharge) scaleNegative = std::min(scaleNegative, p.maxFlashCharge / removableNegative);
+    if (!grounded)
+    {
+        // Keep the two polarities equal after capping so an ungrounded flash still conserves charge exactly.
+        const double positive = removablePositive * scalePositive, negative = removableNegative * scaleNegative;
+        const double common = std::min(positive, negative);
+        scalePositive = positive > 0.0 ? scalePositive * common / positive : 0.0;
+        scaleNegative = negative > 0.0 ? scaleNegative * common / negative : 0.0;
+    }
+    for (std::size_t c = 0; c < grid.CellCount(); ++c)
+    {
+        if (!near[c]) continue;
+        for (std::vector<double>* carrier : {&grid.IceCharge(), &grid.GraupelCharge()})
+        {
+            double& q = (*carrier)[c];
+            const double scale = q > 0.0 ? scalePositive : scaleNegative;
+            const double removed = q * p.neutralizationFraction * scale;
+            q -= removed;
+            (removed > 0.0 ? out.positiveRemoved : out.negativeRemoved) += std::abs(removed) * cellVolume;
+        }
+    }
+    out.groundCharge = out.positiveRemoved - out.negativeRemoved;   // net charge taken out of the cloud
+    grid.SolvePotential();
+    out.energyAfter = grid.FieldEnergy();
+    out.occurred = true;
+    out.startTime = startTime;
+    return out;
+}
+
+} // namespace orbit::storm_electrification

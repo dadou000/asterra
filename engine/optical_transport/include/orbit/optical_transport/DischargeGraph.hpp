@@ -74,17 +74,4 @@ private:
     std::vector<Segment> segments_;
 };
 
-// Electric potential from charge density in a uniform grid via Jacobi relaxation of div(eps grad phi) = -rho with
-// constant eps (a Poisson solve) and grounded boundaries; returns field magnitude max, for breakdown tests.
-struct PoissonGrid
-{
-    std::uint32_t nx = 0, ny = 0, nz = 0;
-    double spacing = 1.0;  // m
-    double permittivity = 8.8541878128e-12;
-    std::vector<double> chargeDensity;  // C/m^3
-    std::vector<double> potential;      // V
-};
-void SolvePoisson(PoissonGrid& grid, int iterations);
-double MaxFieldMagnitude(const PoissonGrid& grid);
-
 } // namespace orbit::optical_transport

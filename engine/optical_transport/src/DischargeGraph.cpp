@@ -102,41 +102,4 @@ void DischargeGraph::Reactivate(std::int32_t index, Pulse pulse)
     segments_[static_cast<std::size_t>(index)].pulses.push_back(pulse);
 }
 
-void SolvePoisson(PoissonGrid& g, int iterations)
-{
-    const std::size_t n = static_cast<std::size_t>(g.nx) * g.ny * g.nz;
-    g.potential.assign(n, 0.0);
-    std::vector<double> next(n, 0.0);
-    auto idx = [&](std::uint32_t x, std::uint32_t y, std::uint32_t z) { return (static_cast<std::size_t>(z) * g.ny + y) * g.nx + x; };
-    const double h2 = g.spacing * g.spacing;
-    for (int it = 0; it < iterations; ++it)
-    {
-        for (std::uint32_t z = 1; z + 1 < g.nz; ++z)
-            for (std::uint32_t y = 1; y + 1 < g.ny; ++y)
-                for (std::uint32_t x = 1; x + 1 < g.nx; ++x)
-                {
-                    const double neighbours = g.potential[idx(x - 1, y, z)] + g.potential[idx(x + 1, y, z)] + g.potential[idx(x, y - 1, z)] +
-                                              g.potential[idx(x, y + 1, z)] + g.potential[idx(x, y, z - 1)] + g.potential[idx(x, y, z + 1)];
-                    next[idx(x, y, z)] = (neighbours + h2 * g.chargeDensity[idx(x, y, z)] / g.permittivity) / 6.0;
-                }
-        g.potential.swap(next);
-    }
-}
-
-double MaxFieldMagnitude(const PoissonGrid& g)
-{
-    double best = 0.0;
-    auto idx = [&](std::uint32_t x, std::uint32_t y, std::uint32_t z) { return (static_cast<std::size_t>(z) * g.ny + y) * g.nx + x; };
-    for (std::uint32_t z = 1; z + 1 < g.nz; ++z)
-        for (std::uint32_t y = 1; y + 1 < g.ny; ++y)
-            for (std::uint32_t x = 1; x + 1 < g.nx; ++x)
-            {
-                const double ex = (g.potential[idx(x + 1, y, z)] - g.potential[idx(x - 1, y, z)]) / (2.0 * g.spacing);
-                const double ey = (g.potential[idx(x, y + 1, z)] - g.potential[idx(x, y - 1, z)]) / (2.0 * g.spacing);
-                const double ez = (g.potential[idx(x, y, z + 1)] - g.potential[idx(x, y, z - 1)]) / (2.0 * g.spacing);
-                best = std::max(best, std::sqrt(ex * ex + ey * ey + ez * ez));
-            }
-    return best;
-}
-
 } // namespace orbit::optical_transport
