@@ -11,6 +11,9 @@ struct ApparentDisc
 {
     math::Double3 centerFromObserverMeters{};
     f64 radiusMeters{1.0};
+    // Linear limb-darkening coefficient u of a SOURCE disc, I(mu) = 1 - u (1 - mu). 0 = uniformly bright.
+    // Eclipse fractions are then shares of emitted light, not of projected area.
+    f64 limbDarkening{0.0};
 };
 
 struct OccultationResult
@@ -37,10 +40,9 @@ struct MultiOccluderResult
     u32 contributingOccluders{0};
 };
 
-// Conservative independent-disc composition. Exact pairwise source-disc
-// overlaps are evaluated; combined visibility is multiplicative so overlapping
-// occluder shadows are never double-subtracted. M20 keeps this deterministic
-// and bounded; a later arbitrary-disc-union solver can replace only this seam.
+// Visibility of the source behind several occluders. One contributing occluder on a uniform source is analytic;
+// otherwise the UNION of the projected occluder discs is integrated by deterministic equal-area sampling of the
+// source disc (8192 samples), weighted by limb darkening, so overlapping occluders are not double-counted.
 [[nodiscard]] MultiOccluderResult CombinedOccultation(
     const ApparentDisc& source,
     const std::vector<ApparentDisc>& occluders);

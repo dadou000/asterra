@@ -86,6 +86,16 @@ path has little to remove. The two `EnvironmentTrace` calls per pixel are the re
 (done, 8 % fewer node visits on a synthetic room, identical results). Cutting more means lowering fidelity for low-Fresnel reflections, which is a visible trade-off and
 needs a GPU and an art decision. Hardware ray queries need an RHI change first: only compute pipelines can bind an acceleration structure today.
 
+## Finding 7: more of the spec already exists than it assumed
+
+- **Hybrid visibility service:** `VisibilityRegistry` (lighting) already returns Hit / Miss / Unresolved with per-query confidence and a `terminal` flag, selects providers by
+  stated guarantees, and has screen-space, analytic, terrain-heightfield, software-proxy and hardware-ray-query backends. The gap is consumers: glass runs its own tracing in
+  the shader instead of asking it.
+- **Finite stellar disc and eclipses:** `FiniteDiscOccultation` / `CombinedOccultation` already integrate the union of occluder discs over the source disc, and mesh shadows
+  use PCSS sized by the Sun's angular radius. The real gap was limb darkening: eclipse fractions were shares of area. Fixed (`ApparentDisc::limbDarkening`), tested against an
+  independent planar quadrature, wired from the emitter's stellar appearance. A stale header comment that claimed multiplicative composition was corrected.
+- **Cloud light volume, emissive hierarchy:** exist (see Finding 4).
+
 ## Integration status of Finding 2
 
 Implemented behind `ORBIT_CLOUD_FILTERED_FAR=1` (default off, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the
