@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numbers>
+#include <queue>
 
 namespace orbit::optical_transport
 {
@@ -184,6 +185,53 @@ EmitterTree::Estimate EmitterTree::Evaluate(const double receiver[3], const doub
         ++out.sourcesEvaluated;
     }
     return out;
+}
+
+double EmitterTree::AngleAt(std::uint32_t index, const double viewer[3]) const
+{
+    const Node& n = nodes_[index];
+    double extent = 0.0, nearSq = 0.0;
+    for (int k = 0; k < 3; ++k)
+    {
+        const double e = n.boundsMax[k] - n.boundsMin[k];
+        extent += e * e;
+        const double lo = n.boundsMin[k] - viewer[k], hi = n.boundsMax[k] - viewer[k];
+        const double nearest = (lo > 0.0) ? lo : (hi < 0.0 ? -hi : 0.0);
+        nearSq += nearest * nearest;
+    }
+    return nearSq <= 0.0 ? 3.14159265 : std::sqrt(extent) / std::sqrt(nearSq);
+}
+
+std::vector<std::uint32_t> EmitterTree::SelectCut(const double viewer[3], double maxAngleRadians, std::size_t maxNodes) const
+{
+    std::vector<std::uint32_t> cut;
+    if (nodes_.empty() || maxNodes == 0) return cut;
+    const auto angle = [&](std::uint32_t index) { return AngleAt(index, viewer); };
+    struct Item { double angle; std::uint32_t node; };
+    const auto lessAngle = [](const Item& a, const Item& b) { return a.angle < b.angle; };
+    std::priority_queue<Item, std::vector<Item>, decltype(lessAngle)> open(lessAngle);
+    open.push({angle(0), 0});
+    std::vector<std::uint32_t> done;
+    while (!open.empty())
+    {
+        const Item top = open.top();
+        const Node& n = nodes_[top.node];
+        const bool canSplit = n.left >= 0 && top.angle > maxAngleRadians && done.size() + open.size() + 1 <= maxNodes;
+        open.pop();
+        if (!canSplit)
+        {
+            done.push_back(top.node);
+            // Everything still open has a smaller angle; if none can split further they all finish here too.
+            if (top.angle <= maxAngleRadians || done.size() + open.size() + 1 > maxNodes)
+            {
+                while (!open.empty()) { done.push_back(open.top().node); open.pop(); }
+            }
+            continue;
+        }
+        open.push({angle(static_cast<std::uint32_t>(n.left)), static_cast<std::uint32_t>(n.left)});
+        open.push({angle(static_cast<std::uint32_t>(n.right)), static_cast<std::uint32_t>(n.right)});
+    }
+    return done;
 }
 
 double EmitterTree::ExactIrradiance(const double receiver[3], const double normal[3]) const

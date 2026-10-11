@@ -8,6 +8,7 @@ namespace orbit::optical_transport
 
 struct Emitter
 {
+    std::uint32_t id = 0;         // caller's index, preserved when the tree reorders its emitters
     double position[3] = {0, 0, 0};
     double power = 0.0;       // radiant power, W (spectral weighting is a per-channel multiple of this)
     double axis[3] = {0, -1, 0};  // emission axis for a cosine-lobe emitter
@@ -47,6 +48,16 @@ public:
         double powerAccounted = 0.0;  // always the full emitter power: nothing is dropped
     };
     Estimate Evaluate(const double receiver[3], const double normal[3], double relativeTolerance) const;
+
+    // View-dependent cut: a set of nodes such that every emitter lies in exactly one selected node (so total power is
+    // preserved by construction). Starting from the root, the node that subtends the largest angle at `viewer`
+    // (diameter / distance, radians) is split first, until every node subtends at most `maxAngleRadians` or the cut
+    // holds `maxNodes` nodes. Returns node indices.
+    std::vector<std::uint32_t> SelectCut(const double viewer[3], double maxAngleRadians, std::size_t maxNodes) const;
+
+    const Emitter& EmitterAt(std::size_t sortedIndex) const { return emitters_[sortedIndex]; }
+    // Angle (radians) the node's diagonal subtends at `viewer`, measured from its nearest point; pi when inside it.
+    double AngleAt(std::uint32_t node, const double viewer[3]) const;
 
     // Exact sum over all individual emitters, for reference.
     double ExactIrradiance(const double receiver[3], const double normal[3]) const;

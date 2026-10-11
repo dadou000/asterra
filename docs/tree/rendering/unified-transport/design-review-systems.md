@@ -64,3 +64,13 @@ needs a GPU and an art decision. Hardware ray queries need an RHI change first: 
 - `TransientLightsFromFlash` (lighting) turns a flash graph into at most N local lights per exposure window with the energy preserved, so lightning reaches surfaces through the existing tiled-light path, including its
   overflow aggregation. A 300 kJ stroke gives about 220 lux at 1 km under the assumed 150 lm/W. Clouds cannot see these lights yet: that needs a light list bound into the cloud march, which I did not build
   without a GPU to check descriptor layouts.
+
+## Finding 10: the existing emissive hierarchy is sound but is for surfaces; discrete lights had no scalable path
+
+- `EmissiveHierarchy` (quadtree over emissive surface radiance) was checked for the one way it could silently lose energy, the node cap in `SelectEmissiveHierarchy`: the invariant `selected + stack <= max`
+  guarantees every subtree is eventually selected, so it cannot. It does not cover discrete emitters such as street lamps and windows.
+- For those the flat `LocalLight` list scales with the light count every frame. Measured on the CPU with a square grid of downward lamps: at 1,000,000 lamps `BuildTiledLightGrid` takes 4.2 s and folds 26.8 million
+  assignments into proxies; a 2,048-light cut from the new `CityLightTree` takes 0.35 ms to select (tree build 1.3 s once) and the tiled grid built from it 1.9 ms.
+- Accuracy is excellent for the receiver the cut was made for (0.13 % under the lamps, 0.25 % for cloud bases 1.5 to 5 km up with only 256 lights standing in for 130,000) and terrible elsewhere: a cut made for a place
+  3.8 km away is 99.8 % off at a surface that has merged away its own lamps. This is why the cut must be per receiver region; a camera-centred global light list would be wrong for far ground. Two defects were found while testing: the first
+  accuracy numbers were vacuous (wrong receiver normal gave zero reference light) and the nearest leaves were never expanded because the tree selection consumed the whole budget.
