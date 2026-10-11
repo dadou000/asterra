@@ -56,6 +56,7 @@ FastStormConfig ConfigFrom(const Options& o)
     c.maxCourant = static_cast<float>(Number(o, "courant", c.maxCourant));
     c.bubble.amplitude = static_cast<float>(Number(o, "bubble", c.bubble.amplitude));
     c.moisture = Number(o, "moisture", 1.0) != 0.0;
+    c.ice = Number(o, "ice", 0.0) != 0.0;
     c.massFixer = Number(o, "mass-fixer", 1.0) != 0.0;
     c.horizontalMixing = static_cast<float>(Number(o, "kh", c.horizontalMixing));
     c.verticalMixing = static_cast<float>(Number(o, "kv", c.verticalMixing));

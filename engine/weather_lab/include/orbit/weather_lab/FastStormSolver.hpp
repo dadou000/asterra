@@ -57,6 +57,9 @@ struct FastStormConfig
     float maxCourant = 1.2F;
     AdvectionScheme advection = AdvectionScheme::MonotoneCubic;
     bool moisture = true;
+    // Single-moment ice: cloud ice (qi), snow (qs) and graupel (qg) with deposition, freezing, riming, melting, sublimation and
+    // latent heat of fusion. Off = the warm-rain Kessler core.
+    bool ice = false;
     bool massFixer = true;
 
     // Explicit second-order mixing (m^2/s) on every prognostic field.
@@ -120,8 +123,10 @@ public:
     [[nodiscard]] const FastStormDiagnostics& Diagnostics() const;
 
     // Field names accepted by CopyField / exported by WriteFrame:
-    //   th qv qc qr u v w zvort   (all at cell centres, x fastest)
+    //   th qv qc qr u v w zvort   (all at cell centres, x fastest); qi qs qg are also accepted (zero without ice)
     [[nodiscard]] static const std::vector<std::string>& ExportFields();
+    // The fields WriteFrame writes for this run: ExportFields(), plus qi qs qg when the ice scheme is on.
+    [[nodiscard]] std::vector<std::string> ActiveExportFields() const;
     void CopyField(const std::string& name, std::vector<float>& out) const;
     [[nodiscard]] WxHeader MakeHeader(
         const std::vector<float>& times) const;

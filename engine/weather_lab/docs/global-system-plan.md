@@ -20,6 +20,7 @@ invariants = [
   "The simulated domain is a limited area (up to about 500 km square, 20 km deep) placed on the planet; outside it the analytic WeatherModel supplies the boundary and the sky. There is no global solver in this plan.",
   "Every resolution level reads and writes the same state variables (theta, qv, qc, qi, qr, u, v, w, p', aerosol, charge), so a nest is initialised by interpolation and returns its tendencies by averaging, never by translation between models.",
   "Cost is bounded by construction: refinement is limited to a cell budget, and when the budget is exceeded the finest level coarsens instead of the frame time growing.",
+  "The system is fully integrated in the engine: everything that runs (dynamics, nesting, microphysics including ice, the cloud link) is C++ and Vulkan compute in this repository, with no CM1, Python, NetCDF or Docker at runtime. External tools (CM1 in Docker, cm1_lab.py) exist only as test oracles and for offline reference data.",
   "CM1 is the validation oracle and an offline bake source; it is not the runtime solver.",
   "LOD cannot create or destroy clouds: the renderer's cloud layers are derived from the solver state; the analytic map is the initial condition, the boundary and the fallback.",
 ]

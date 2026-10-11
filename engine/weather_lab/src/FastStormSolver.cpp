@@ -240,8 +240,10 @@ struct FastStormSolver::Impl
 
     // Prognostic state (u,v at x/y faces, w at z faces, rest at centres).
     std::vector<float> u, v, w, theta, qv, qc, qr;
+    std::vector<float> qi, qs, qg;   // cloud ice, snow, graupel (only with cfg.ice)
     // Double buffers for semi-Lagrangian advection.
     std::vector<float> u2, v2, w2, theta2, qv2, qc2, qr2;
+    std::vector<float> qi2, qs2, qg2;
     std::vector<float> phi;
     std::vector<float> divergence;
     std::vector<float> rainAccumulation; // kg/m^2 per column
@@ -270,6 +272,10 @@ struct FastStormSolver::Impl
     void FixMass(const std::vector<float>& before, std::vector<float>& after);
     double ColumnMass(const std::vector<float>& q) const;
     void Microphysics(float dt);
+    // One cell of the single-moment ice scheme (called after the warm-rain processes): freezing, nucleation and deposition,
+    // riming, autoconversion, melting and sublimation, with the latent heats of sublimation and fusion applied to theta.
+    void IceProcesses(float dt, float p, float exner, float rho, float& th, float& vapor, float& cloud, float& rain,
+        float& ice, float& snow, float& graupel) const;
     void Forcing(float dt);
     void Mix(std::vector<float>& field, const std::vector<float>& baseByLevel,
         std::uint32_t levels, std::uint32_t firstLevel, float dt);
@@ -299,6 +305,13 @@ FastStormSolver::Impl::Impl(const FastStormConfig& config)
     }
     w.assign(faceCells, 0.0F);
     w2.assign(faceCells, 0.0F);
+    if (cfg.ice)
+    {
+        for (auto* f : {&qi, &qs, &qg, &qi2, &qs2, &qg2})
+        {
+            f->assign(cells, 0.0F);
+        }
+    }
     rainAccumulation.assign(static_cast<std::size_t>(cfg.nx) * cfg.ny, 0.0F);
 
     fftX.Prepare(cfg.nx);
@@ -337,6 +350,10 @@ void FastStormSolver::Impl::Reset()
     std::fill(rainAccumulation.begin(), rainAccumulation.end(), 0.0F);
     std::fill(qc.begin(), qc.end(), 0.0F);
     std::fill(qr.begin(), qr.end(), 0.0F);
+    for (auto* f : {&qi, &qs, &qg})
+    {
+        std::fill(f->begin(), f->end(), 0.0F);
+    }
     const WarmBubble& b = cfg.bubble;
     const double cx = 0.5 * cfg.nx * cfg.dx;
     const double cy = 0.5 * cfg.ny * cfg.dy;
@@ -508,6 +525,12 @@ void FastStormSolver::Impl::Advect(const float dt)
         scalars.push_back({{qv.data(), nx, ny, nz}, qv2.data()});
         scalars.push_back({{qc.data(), nx, ny, nz}, qc2.data()});
         scalars.push_back({{qr.data(), nx, ny, nz}, qr2.data()});
+        if (cfg.ice)
+        {
+            scalars.push_back({{qi.data(), nx, ny, nz}, qi2.data()});
+            scalars.push_back({{qs.data(), nx, ny, nz}, qs2.data()});
+            scalars.push_back({{qg.data(), nx, ny, nz}, qg2.data()});
+        }
     }
     run(0.5F, 0.5F, 0.5F, nz, scalars);
 
@@ -516,6 +539,12 @@ void FastStormSolver::Impl::Advect(const float dt)
         FixMass(qv, qv2);
         FixMass(qc, qc2);
         FixMass(qr, qr2);
+        if (cfg.ice)
+        {
+            FixMass(qi, qi2);
+            FixMass(qs, qs2);
+            FixMass(qg, qg2);
+        }
     }
     u.swap(u2);
     v.swap(v2);
@@ -526,6 +555,12 @@ void FastStormSolver::Impl::Advect(const float dt)
         qv.swap(qv2);
         qc.swap(qc2);
         qr.swap(qr2);
+        if (cfg.ice)
+        {
+            qi.swap(qi2);
+            qs.swap(qs2);
+            qg.swap(qg2);
+        }
     }
 }
 
@@ -561,6 +596,130 @@ void FastStormSolver::Impl::FixMass(
     }
 }
 
+void FastStormSolver::Impl::IceProcesses(
+    const float dt, const float p, const float exner, const float rho, float& th, float& vapor, float& cloud,
+    float& rain, float& ice, float& snow, float& graupel) const
+{
+    using namespace thermo;
+    const float heatF = kLf / (kCp * exner);
+    const float heatS = kLs / (kCp * exner);
+    float temperature = th * exner;
+    constexpr float kFreeze = 273.15F;
+
+    // Homogeneous freezing below -40 C: all cloud water to ice, all rain to graupel.
+    if (temperature < 233.15F)
+    {
+        ice += cloud;
+        graupel += rain;
+        th += heatF * (cloud + rain);
+        cloud = 0.0F;
+        rain = 0.0F;
+        temperature = th * exner;
+    }
+    const float supercool = kFreeze - temperature;
+
+    // Heterogeneous freezing of cloud water (to ice) and rain (to graupel), faster the colder it is.
+    if (supercool > 5.0F)
+    {
+        const float tauCloud = std::clamp(2000.0F * std::exp(-0.35F * (supercool - 5.0F)), 20.0F, 2000.0F);
+        const float frozenCloud = cloud * (1.0F - std::exp(-dt / tauCloud));
+        const float tauRain = std::clamp(120.0F * std::exp(-0.3F * (supercool - 5.0F)), 10.0F, 120.0F);
+        const float frozenRain = rain * (1.0F - std::exp(-dt / tauRain));
+        cloud -= frozenCloud;
+        ice += frozenCloud;
+        rain -= frozenRain;
+        graupel += frozenRain;
+        th += heatF * (frozenCloud + frozenRain);
+        temperature = th * exner;
+    }
+
+    if (temperature < kFreeze)
+    {
+        // Nucleation then deposition to ice saturation (this is the Bergeron process: ice grows while supercooled water,
+        // held near liquid saturation by the adjustment, gives up vapour).
+        const float qvi = SaturationMixingRatioIce(p, temperature);
+        if (ice + snow + graupel < 1.0e-8F && temperature < 263.15F && vapor > 1.05F * qvi)
+        {
+            ice += 1.0e-7F;
+            vapor -= 1.0e-7F;
+            th += heatS * 1.0e-7F;
+        }
+        const float totalIce = ice + snow + graupel;
+        if (totalIce > 0.0F)
+        {
+            const float denominator = 1.0F + kLs * kLs * qvi / (kCp * kRv * temperature * temperature);
+            const float excess = (vapor - qvi) / denominator;
+            const float rate = std::min(1.0F, dt / 300.0F);
+            if (excess > 0.0F)
+            {
+                const float deposited = std::min(excess * rate, vapor);
+                // Growth goes mostly to the cloud ice (and so to snow by autoconversion); snow and graupel take their share.
+                const float shareIce = ice / totalIce;
+                ice += deposited * std::max(shareIce, 0.5F);
+                snow += deposited * (1.0F - std::max(shareIce, 0.5F));
+                vapor -= deposited;
+                th += heatS * deposited;
+            }
+            else
+            {
+                // Sublimation of snow and graupel (and cloud ice) in subsaturated air.
+                // Sublimation is slower than deposition (a 900 s relaxation): faster values over-cool the downdraft air.
+                const float wanted = std::min(-excess * std::min(1.0F, dt / 900.0F), totalIce);
+                const float fromGraupel = std::min(graupel, wanted * graupel / totalIce);
+                const float fromSnow = std::min(snow, wanted * snow / totalIce);
+                const float fromIce = std::min(ice, wanted - fromGraupel - fromSnow);
+                graupel -= fromGraupel;
+                snow -= fromSnow;
+                ice -= fromIce;
+                const float taken = fromGraupel + fromSnow + fromIce;
+                vapor += taken;
+                th -= heatS * taken;
+            }
+            temperature = th * exner;
+        }
+
+        // Cloud ice to snow once it is big enough.
+        const float toSnow = std::min(dt * 1.0e-3F * std::max(ice - 1.0e-4F, 0.0F), ice);
+        ice -= toSnow;
+        snow += toSnow;
+
+        // Riming: snow and graupel collect supercooled cloud water (frozen on contact), and collect rain.
+        const float rimeSnow = std::min(dt * 1.0F * cloud * std::pow(std::max(snow, 0.0F), 0.875F), cloud);
+        cloud -= rimeSnow;
+        snow += rimeSnow;
+        const float rimeGraupel = std::min(dt * 3.0F * cloud * std::pow(std::max(graupel, 0.0F), 0.875F), cloud);
+        cloud -= rimeGraupel;
+        graupel += rimeGraupel;
+        const float collectedRain = std::min(dt * 0.5F * rain * std::pow(std::max(snow + graupel, 0.0F), 0.875F), rain);
+        rain -= collectedRain;
+        graupel += collectedRain;
+        th += heatF * (rimeSnow + rimeGraupel + collectedRain);
+        // Heavily rimed snow becomes graupel.
+        const float toGraupel = std::min(dt * 1.0e-3F * std::max(snow - 2.0e-3F, 0.0F) * (cloud > 5.0e-4F ? 1.0F : 0.2F), snow);
+        snow -= toGraupel;
+        graupel += toGraupel;
+    }
+    else if (ice + snow + graupel > 0.0F)
+    {
+        // Melting, limited by the heat available above freezing (the air cools as it supplies the latent heat).
+        const float excessHeat = (temperature - kFreeze) / heatF;   // kg/kg of ice that could melt
+        float budget = excessHeat;
+        const float meltIce = std::min(ice, budget);
+        ice -= meltIce;
+        cloud += meltIce;
+        budget -= meltIce;
+        const float meltSnow = std::min(snow, std::min(budget, snow * std::min(1.0F, dt / 60.0F) + 1.0e-9F));
+        snow -= meltSnow;
+        rain += meltSnow;
+        budget -= meltSnow;
+        const float meltGraupel = std::min(graupel, std::min(budget, graupel * std::min(1.0F, dt / 120.0F) + 1.0e-9F));
+        graupel -= meltGraupel;
+        rain += meltGraupel;
+        th -= heatF * (meltIce + meltSnow + meltGraupel);
+    }
+    (void)rho;
+}
+
 void FastStormSolver::Impl::Microphysics(const float dt)
 {
     using namespace thermo;
@@ -582,6 +741,9 @@ void FastStormSolver::Impl::Microphysics(const float dt)
                 float vapor = qv[idx];
                 float cloud = qc[idx];
                 float rain = qr[idx];
+                float ice = cfg.ice ? qi[idx] : 0.0F;
+                float snow = cfg.ice ? qs[idx] : 0.0F;
+                float graupel = cfg.ice ? qg[idx] : 0.0F;
                 const float heat = kLv / (kCp * exner);
 
                 for (int iteration = 0; iteration < 2; ++iteration)
@@ -629,50 +791,80 @@ void FastStormSolver::Impl::Microphysics(const float dt)
                         th -= heat * taken;
                     }
                 }
+                if (cfg.ice)
+                {
+                    IceProcesses(dt, p, exner, rho, th, vapor, cloud, rain, ice, snow, graupel);
+                    qi[idx] = ice;
+                    qs[idx] = snow;
+                    qg[idx] = graupel;
+                }
                 theta[idx] = th;
                 qv[idx] = vapor;
                 qc[idx] = cloud;
                 qr[idx] = rain;
             }
 
-            // Rain sedimentation: conservative upwind, subcycled to its CFL.
-            float maxFall = 0.0F;
-            auto fallSpeed = [&](const std::uint32_t k, const float rain)
+            // Sedimentation: conservative upwind, subcycled to each species' CFL.
+            const auto sediment = [&](std::vector<float>& field, const auto& fallSpeed)
+            {
+                float maxFall = 0.0F;
+                for (std::uint32_t k = 0; k < cfg.nz; ++k)
+                {
+                    maxFall = std::max(maxFall,
+                        fallSpeed(k, field[static_cast<std::size_t>(k) * columns + col]));
+                }
+                if (maxFall <= 0.0F)
+                {
+                    return;
+                }
+                const auto substeps = static_cast<std::uint32_t>(
+                    std::ceil(maxFall * dt / (0.9F * cfg.dz)));
+                const float sub = dt / static_cast<float>(substeps);
+                for (std::uint32_t s = 0; s < substeps; ++s)
+                {
+                    for (std::uint32_t k = 0; k < cfg.nz; ++k)
+                    {
+                        const float q = field[static_cast<std::size_t>(k) * columns + col];
+                        flux[k] = base.density[k] * q * fallSpeed(k, q);
+                    }
+                    flux[cfg.nz] = 0.0F;
+                    for (std::uint32_t k = 0; k < cfg.nz; ++k)
+                    {
+                        const std::size_t idx = static_cast<std::size_t>(k) * columns + col;
+                        field[idx] = std::max(field[idx]
+                            + sub * (flux[k + 1U] - flux[k])
+                                / (base.density[k] * cfg.dz), 0.0F);
+                    }
+                    rainAccumulation[col] += sub * flux[0];
+                }
+            };
+            sediment(qr, [&](const std::uint32_t k, const float rain)
             {
                 const float r = base.density[k] * std::max(rain, 0.0F);
                 return r > 0.0F
                     ? 14.34F * std::pow(r, 0.1346F)
                         * std::sqrt(base.density[0] / base.density[k])
                     : 0.0F;
-            };
-            for (std::uint32_t k = 0; k < cfg.nz; ++k)
+            });
+            if (cfg.ice)
             {
-                maxFall = std::max(maxFall,
-                    fallSpeed(k, qr[static_cast<std::size_t>(k) * columns + col]));
-            }
-            if (maxFall <= 0.0F)
-            {
-                continue;
-            }
-            const auto substeps = static_cast<std::uint32_t>(
-                std::ceil(maxFall * dt / (0.9F * cfg.dz)));
-            const float sub = dt / static_cast<float>(substeps);
-            for (std::uint32_t s = 0; s < substeps; ++s)
-            {
-                for (std::uint32_t k = 0; k < cfg.nz; ++k)
+                // Cloud ice drifts down, snow falls near 1 m/s, graupel 3 to 10 m/s (power laws of rho*q, density corrected).
+                sediment(qi, [&](const std::uint32_t k, const float q)
                 {
-                    const float rain = qr[static_cast<std::size_t>(k) * columns + col];
-                    flux[k] = base.density[k] * rain * fallSpeed(k, rain);
-                }
-                flux[cfg.nz] = 0.0F;
-                for (std::uint32_t k = 0; k < cfg.nz; ++k)
+                    return q > 0.0F ? 0.3F * std::sqrt(base.density[0] / base.density[k]) : 0.0F;
+                });
+                sediment(qs, [&](const std::uint32_t k, const float q)
                 {
-                    const std::size_t idx = static_cast<std::size_t>(k) * columns + col;
-                    qr[idx] = std::max(qr[idx]
-                        + sub * (flux[k + 1U] - flux[k])
-                            / (base.density[k] * cfg.dz), 0.0F);
-                }
-                rainAccumulation[col] += sub * flux[0];
+                    const float r = base.density[k] * std::max(q, 0.0F);
+                    return r > 0.0F ? std::min(1.1F * std::pow(r * 1000.0F, 0.11F), 2.0F)
+                        * std::sqrt(base.density[0] / base.density[k]) : 0.0F;
+                });
+                sediment(qg, [&](const std::uint32_t k, const float q)
+                {
+                    const float r = base.density[k] * std::max(q, 0.0F);
+                    return r > 0.0F ? std::min(5.0F * std::pow(r * 1000.0F, 0.2F), 12.0F)
+                        * std::sqrt(base.density[0] / base.density[k]) : 0.0F;
+                });
             }
         }
     });
@@ -760,7 +952,8 @@ void FastStormSolver::Impl::Forcing(const float dt)
                     buoyancy[side] = kGravity
                         * ((theta[idx] - base.theta[level]) / base.theta[level]
                             + 0.608F * (qv[idx] - base.vapor[level])
-                            - qc[idx] - qr[idx]);
+                            - qc[idx] - qr[idx]
+                            - (cfg.ice ? qi[idx] + qs[idx] + qg[idx] : 0.0F));
                 }
                 w[static_cast<std::size_t>(k) * plane + c] +=
                     dt * 0.5F * (buoyancy[0] + buoyancy[1]);
@@ -803,6 +996,12 @@ void FastStormSolver::Impl::Forcing(const float dt)
         Mix(qv, base.vapor, cfg.nz, 0U, dt);
         Mix(qc, {}, cfg.nz, 0U, dt);
         Mix(qr, {}, cfg.nz, 0U, dt);
+        if (cfg.ice)
+        {
+            Mix(qi, {}, cfg.nz, 0U, dt);
+            Mix(qs, {}, cfg.nz, 0U, dt);
+            Mix(qg, {}, cfg.nz, 0U, dt);
+        }
     }
 }
 
@@ -985,7 +1184,8 @@ double FastStormSolver::Impl::TotalWater() const
         for (std::size_t c = 0; c < plane; ++c)
         {
             const std::size_t idx = static_cast<std::size_t>(k) * plane + c;
-            layer += static_cast<double>(qv[idx]) + qc[idx] + qr[idx];
+            layer += static_cast<double>(qv[idx]) + qc[idx] + qr[idx]
+                + (cfg.ice ? static_cast<double>(qi[idx]) + qs[idx] + qg[idx] : 0.0);
         }
         total += layer * base.density[k] * cfg.dz * cellArea;
     }
@@ -1078,7 +1278,7 @@ std::size_t FastStormSolver::Impl::Bytes() const
 {
     std::size_t bytes = 0;
     for (const auto* f : {&u, &v, &w, &theta, &qv, &qc, &qr, &u2, &v2, &w2,
-             &theta2, &qv2, &qc2, &qr2, &phi, &divergence,
+             &theta2, &qv2, &qc2, &qr2, &qi, &qs, &qg, &qi2, &qs2, &qg2, &phi, &divergence,
              &rainAccumulation, &scratchCentre})
     {
         bytes += f->capacity() * sizeof(float);
@@ -1153,6 +1353,16 @@ const std::vector<std::string>& FastStormSolver::ExportFields()
     return fields;
 }
 
+std::vector<std::string> FastStormSolver::ActiveExportFields() const
+{
+    std::vector<std::string> fields = ExportFields();
+    if (impl_->cfg.ice)
+    {
+        fields.insert(fields.end(), {"qi", "qs", "qg"});
+    }
+    return fields;
+}
+
 void FastStormSolver::CopyField(
     const std::string& name, std::vector<float>& out) const
 {
@@ -1165,6 +1375,9 @@ void FastStormSolver::CopyField(
     else if (name == "qv") { out = s.qv; }
     else if (name == "qc") { out = s.qc; }
     else if (name == "qr") { out = s.qr; }
+    else if (name == "qi") { if (s.cfg.ice) { out = s.qi; } }
+    else if (name == "qs") { if (s.cfg.ice) { out = s.qs; } }
+    else if (name == "qg") { if (s.cfg.ice) { out = s.qg; } }
     else if (name == "u" || name == "v" || name == "w" || name == "zvort")
     {
         for (std::uint32_t k = 0; k < nz; ++k)
@@ -1221,13 +1434,13 @@ WxHeader FastStormSolver::MakeHeader(const std::vector<float>& times) const
     header.moveV = impl_->cfg.frameV;
     header.centreHeight = impl_->base.centreHeight;
     header.times = times;
-    header.fields = ExportFields();
+    header.fields = ActiveExportFields();
     return header;
 }
 
 bool FastStormSolver::WriteFrame(WxWriter& writer) const
 {
-    const auto& names = ExportFields();
+    const auto names = ActiveExportFields();
     std::vector<std::vector<float>> data(names.size());
     std::vector<const float*> pointers;
     for (std::size_t f = 0; f < names.size(); ++f)

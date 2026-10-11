@@ -112,6 +112,51 @@ void TestStormInitiates()
     Check(*std::max_element(qr.begin(), qr.end()) > 1.0e-3F);
 }
 
+void TestIceScheme()
+{
+    FastStormConfig c = SmallConfig();
+    c.ice = true;
+    FastStormSolver solver(c);
+    solver.Advance(2400.0);
+    const FastStormDiagnostics& d = solver.Diagnostics();
+    // The storm still initiates, and total water (now including cloud ice, snow and graupel) stays conserved.
+    Check(d.maxUpdraft > 15.0F);
+    Check(std::fabs(d.totalWater - d.initialTotalWater) < 1.0e-4 * d.initialTotalWater);
+    // Ice forms in the cold anvil and graupel/snow reach substantial mixing ratios; nothing is negative or non-finite.
+    float maxIce = 0.0F, maxSnow = 0.0F, maxGraupel = 0.0F;
+    for (const char* name : {"qi", "qs", "qg"})
+    {
+        std::vector<float> q;
+        solver.CopyField(name, q);
+        for (const float value : q)
+        {
+            Check(std::isfinite(value) && value >= 0.0F);
+        }
+        const float top = *std::max_element(q.begin(), q.end());
+        (name[1] == 'i' ? maxIce : name[1] == 's' ? maxSnow : maxGraupel) = top;
+    }
+    Check(maxIce > 1.0e-5F);
+    Check(maxSnow > 1.0e-5F || maxGraupel > 1.0e-5F);
+    // The export list gains the ice fields only when the scheme is on.
+    const auto fields = solver.ActiveExportFields();
+    Check(std::find(fields.begin(), fields.end(), "qg") != fields.end());
+    Check(FastStormSolver(SmallConfig()).ActiveExportFields().size() == FastStormSolver::ExportFields().size());
+
+    // Deterministic across thread counts with ice on.
+    FastStormConfig a = c;
+    a.threads = 1;
+    FastStormConfig b = c;
+    b.threads = 4;
+    FastStormSolver sa(a);
+    FastStormSolver sb(b);
+    sa.Advance(600.0);
+    sb.Advance(600.0);
+    std::vector<float> ga, gb;
+    sa.CopyField("qs", ga);
+    sb.CopyField("qs", gb);
+    Check(ga == gb);
+}
+
 void TestDeterministicAcrossThreadCounts()
 {
     FastStormConfig a = SmallConfig();
@@ -318,6 +363,7 @@ int main()
     TestRestAtmosphereStaysAtRest();
     TestProjectionAndWaterBudget();
     TestStormInitiates();
+    TestIceScheme();
     TestDeterministicAcrossThreadCounts();
     TestFormatRoundTripAndMetrics();
     TestSliceColors();
