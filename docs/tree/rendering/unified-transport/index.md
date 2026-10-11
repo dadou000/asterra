@@ -76,3 +76,4 @@ reports both its saving and the error it introduces; no speedup is assumed befor
 - `light-and-lightning`: stars, many lights, radiance caches, electrification, transient lighting.
 - `refraction-and-glass`: mirages, hybrid visibility, glass and caustics.
 - `plan-and-validation`: current-code corrections, phased order, scenarios.
+- `core`: the CPU reference library (`engine/optical_transport`) implementing the numerical core; renderers do not use it yet.
