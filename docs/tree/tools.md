@@ -15,6 +15,7 @@ related = ["/editor/mcp-rpc", "/docs-system", "/foundation/hot-reload"]
 "a real reloadable module (eye adaptation)" = "eye-adaptation-module"
 "Studio MCP server, RPC methods" = "/editor/mcp-rpc"
 "docs MCP server, docs CLI" = "/docs-system"
+"compare two renderer settings on screen, council visual review" = "ab-capture"
 +++
 
 `tools/` contains: `mcp_server/orbit_editor_mcp_server.py` (Studio over JSON-RPC, port 4320), `mcp_server/orbit_docs_mcp_server.py` (this documentation tree), `orbit_docs_cli.py`, `render_terrain_survey.py` and

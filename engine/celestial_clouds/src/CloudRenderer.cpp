@@ -1089,6 +1089,49 @@ float3 PointLightSource(float3 position, float3 origin, float3 direction, float 
 #endif
 )";
 
+// Step cap for the thin high layer plus the march tunables. CLOUD_JITTER_FIX and CLOUD_INCLOUD_STEP_SCALE default to the
+// shipped behaviour; ORBIT_CLOUD_DEFINES="NAME=VALUE;..." overrides them at startup for A/B and council experiments.
+constexpr const char* kThinLayerCap = R"(
+#ifndef CLOUD_JITTER_FIX
+#define CLOUD_JITTER_FIX 0
+#endif
+#ifndef CLOUD_INCLOUD_STEP_SCALE
+#define CLOUD_INCLOUD_STEP_SCALE 1.0
+#endif
+
+// Thin high layer (cirrus / anvil, 0.70-0.90 of the shell): a coarse step can hop straight across it, which bands it.
+// Land the step on the layer edge and take at least 8 steps across its thickness while inside.
+float ThinLayerStepCap(float3 position, float radius, float3 direction, float stepLength, float t, float4 column)
+{
+    float stepCap = stepLength;
+    if (column.y > 0.01)
+    {
+        const float layerThickness = max(g.shell.z - g.shell.y, 1.0);
+        const float heightFraction = (radius - g.shell.x - g.shell.y) / layerThickness;
+        const float slope = dot(direction, position / max(radius, 1.0)) / layerThickness;
+        const float absSlope = max(abs(slope), 1.0e-7);
+        if (heightFraction >= 0.70 && heightFraction <= 0.90)
+        {
+            // Vertical advance of at most 1/8 of the layer, and never more than a few hundred metres: a near-horizontal
+            // ray inside a thin dense slab (an anvil seen edge-on) otherwise takes km-long steps and bands the slab.
+            // The anvil thins towards its rim (down to ~45 % of the layer), so take the 8 steps across the thinnest
+            // part, or the thin sheet is hit by 1-2 samples.
+            const float thin = lerp(0.45, 1.0, saturate(column.y * 1.5)) * 0.5;
+            stepCap = min(stepLength, min(0.2 * thin / absSlope / 8.0, 300.0 + 0.012 * t));
+        }
+        else if (heightFraction < 0.70 && slope > 0.0)
+        {
+            stepCap = min(stepLength, (0.70 - heightFraction) / slope + 20.0);
+        }
+        else if (heightFraction > 0.90 && slope < 0.0)
+        {
+            stepCap = min(stepLength, (0.90 - heightFraction) / slope + 20.0);
+        }
+    }
+    return stepCap;
+}
+)";
+
 constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
 {
     // Output: premultiplied in-scattered radiance (rgb) and transmittance (a),
@@ -1226,9 +1269,22 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         // in-cloud step below, which a coarse schedule step stretches (kInCloudScheduleFraction).
         // A narrower span puts the samples of neighbouring rays at nearly the same depths, which
         // shows as horizontal terraces on cloud flanks once the temporal resolve has converged.
-        const float inCloudSpan = max(clamp(75.0 + 0.006 * cursor, 75.0, kMaxStep), kInCloudScheduleFraction * stepLength);
+        const float inCloudSpan = max(CLOUD_INCLOUD_STEP_SCALE * clamp(75.0 + 0.006 * cursor, 75.0, kMaxStep), kInCloudScheduleFraction * stepLength);
         const float jitterSpan = min(stepLength, inCloudSpan);
-        const float t = cursor + jitter * jitterSpan;
+#if CLOUD_JITTER_FIX == 1
+        // Choose the sample inside the interval the step will actually cover: the thin-layer cap is evaluated at the
+        // cursor first, so a capped step never jitters its sample past the end of its own interval.
+        float jitterLimit = jitterSpan;
+        {
+            const float3 position0 = origin + direction * cursor;
+            const float radius0 = length(position0);
+            const float4 column0 = ColumnData(position0 / max(radius0, 1.0));
+            jitterLimit = min(jitterSpan, ThinLayerStepCap(position0, radius0, direction, stepLength, cursor, column0));
+        }
+#else
+        const float jitterLimit = jitterSpan;
+#endif
+        const float t = cursor + jitter * jitterLimit;
         cursor += stepLength;
         if (fineSteps > 0u)
         {
@@ -1242,35 +1298,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float radius = length(position);
 
         const float4 column = ColumnData(position / max(radius, 1.0));
-        // Thin high layer (cirrus / anvil, 0.70-0.90 of the shell): a coarse step can hop
-        // straight across it, which bands it. Land the step on the layer edge and
-        // take at least 8 steps across its thickness while inside.
-        float stepCap = stepLength;
-        if (column.y > 0.01)
-        {
-            const float layerThickness = max(g.shell.z - g.shell.y, 1.0);
-            const float heightFraction = (radius - g.shell.x - g.shell.y) / layerThickness;
-            const float slope = dot(direction, position / max(radius, 1.0)) / layerThickness;
-            const float absSlope = max(abs(slope), 1.0e-7);
-)" R"(            if (heightFraction >= 0.70 && heightFraction <= 0.90)
-            {
-                // Vertical advance of at most 1/8 of the layer, and never more than a few
-                // hundred metres: a near-horizontal ray inside a thin dense slab (an anvil
-                // seen edge-on) otherwise takes km-long steps and bands the slab.
-                // The anvil thins towards its rim (down to ~45 % of the layer), so take the
-                // 8 steps across the thinnest part, or the thin sheet is hit by 1-2 samples.
-                const float thin = lerp(0.45, 1.0, saturate(column.y * 1.5)) * 0.5;
-                stepCap = min(stepLength, min(0.2 * thin / absSlope / 8.0, 300.0 + 0.012 * t));
-            }
-            else if (heightFraction < 0.70 && slope > 0.0)
-            {
-                stepCap = min(stepLength, (0.70 - heightFraction) / slope + 20.0);
-            }
-            else if (heightFraction > 0.90 && slope < 0.0)
-            {
-                stepCap = min(stepLength, (0.90 - heightFraction) / slope + 20.0);
-            }
-        }
+        const float stepCap = ThinLayerStepCap(position, radius, direction, stepLength, t, column);
         cursor = cursorBefore + stepCap;
         gRelief = 1.0;
         gStep = stepCap;
@@ -1300,10 +1328,10 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             continue;
         }
 
-        // Inside cloud the step is capped (the reference clouds use 75 m + 0.006 x
+)" R"(        // Inside cloud the step is capped (the reference clouds use 75 m + 0.006 x
         // distance, up to 1.5 km), so billow edges are sampled finely enough; the
         // coarse schedule above is only for crossing empty space.
-        const float inCloudStep = clamp(75.0 + 0.006 * t, 75.0, kMaxStep);
+        const float inCloudStep = CLOUD_INCLOUD_STEP_SCALE * clamp(75.0 + 0.006 * t, 75.0, kMaxStep);
         const float actualStep = min(stepCap, max(inCloudStep, kInCloudScheduleFraction * stepLength));
         cursor = cursorBefore + actualStep;
 
@@ -1734,7 +1762,7 @@ constexpr const char* kShadowMain = R"(float4 main(VSOutput input) : SV_Target0
 // function; `farField` is empty unless the filtered far field is enabled, and `prefix` defines the switch.
 [[nodiscard]] std::string MarchSource(const std::string& prefix, const std::string& farField)
 {
-    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kCloudLights + kMarchMain + kMarchGodrays;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kCloudLights + kThinLayerCap + kMarchMain + kMarchGodrays;
 }
 
 [[nodiscard]] std::string ShadowSource(const std::string& prefix, const std::string& farField)
@@ -2179,7 +2207,37 @@ CloudRenderer::CloudRenderer(
             std::free(flag);
         }
     }
-    const std::string sourcePrefix;
+    // Developer hook: ORBIT_CLOUD_DEFINES="NAME=VALUE;NAME=VALUE" becomes #define lines in every cloud shader, so a march
+    // tunable can be A/B-tested without a rebuild (see tools/orbit_ab.py). Names are restricted to [A-Za-z0-9_].
+    std::string sourcePrefix;
+    {
+        char* defines = nullptr;
+        std::size_t definesLength = 0;
+        if (_dupenv_s(&defines, &definesLength, "ORBIT_CLOUD_DEFINES") == 0 && defines != nullptr)
+        {
+            const std::string list(defines);
+            std::free(defines);
+            std::size_t begin = 0;
+            while (begin <= list.size())
+            {
+                std::size_t end = list.find(';', begin);
+                if (end == std::string::npos)
+                {
+                    end = list.size();
+                }
+                const std::string item = list.substr(begin, end - begin);
+                const std::size_t eq = item.find('=');
+                const std::string name = item.substr(0, eq);
+                const bool valid = !name.empty() &&
+                    name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos;
+                if (valid)
+                {
+                    sourcePrefix += "#define " + name + " " + (eq == std::string::npos ? std::string("1") : item.substr(eq + 1)) + "\n";
+                }
+                begin = end + 1;
+            }
+        }
+    }
     const std::string marchPrefix = sourcePrefix + (pointLights_
         ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
         : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");

@@ -1,0 +1,18 @@
+{
+  "world": "Worlds/Main.orbitworld",
+  "body": "Earth",
+  "baseline": "off",
+  "controls": 1,
+  "variants": {
+    "off": {"env": {}},
+    "on":  {"env": {"ORBIT_REFRACT_SUN": "1"}}
+  },
+  "scenes": [
+    {"name": "sun_64300", "time_microseconds": 18070405751, "local_time_seconds": 64300,
+     "pose": {"kind": "surface", "lat_deg": 0, "lon_deg": 0, "alt_m": 20, "yaw_deg": 67, "pitch_deg": 2}},
+    {"name": "sun_64650", "local_time_seconds": 64650,
+     "pose": {"kind": "surface", "lat_deg": 0, "lon_deg": 0, "alt_m": 20, "yaw_deg": 67, "pitch_deg": 2}},
+    {"name": "sun_64750", "local_time_seconds": 64750,
+     "pose": {"kind": "surface", "lat_deg": 0, "lon_deg": 0, "alt_m": 20, "yaw_deg": 67, "pitch_deg": 2}}
+  ]
+}
