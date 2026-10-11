@@ -117,9 +117,10 @@ static float gCloudDistance = 1.0e9;
 #endif
 // 1: once a sample's footprint has saturated the far-field blend (baseBlend = 1) the point-sampled noise shape is not
 // used any more (the filtered table replaces it), so skip those noise fetches and use the noise mean for the one
-// remaining dependence, the height variation of the cloud top. 0 = the shipped path.
+// remaining dependence, the height variation of the cloud top. 1 is the default (council review R-20261011-182716-2c7c9797);
+// ORBIT_CLOUD_DEFINES=CLOUD_FAR_EARLYOUT=0 restores the noise fetches for A/B.
 #ifndef CLOUD_FAR_EARLYOUT
-#define CLOUD_FAR_EARLYOUT 0
+#define CLOUD_FAR_EARLYOUT 1
 #endif
 static const uint kMaxSteps = uint(CLOUD_MAX_STEPS);
 // Transmittance below which the march stops and the pixel counts as opaque.
