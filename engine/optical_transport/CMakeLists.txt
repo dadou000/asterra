@@ -5,6 +5,7 @@ add_library(OrbitOpticalTransport STATIC
     src/DischargeGraph.cpp
     src/EmitterTree.cpp
     src/OpticalHierarchy.cpp
+    src/Refraction.cpp
     src/StellarVisibility.cpp
     src/TransmittanceStats.cpp
 )

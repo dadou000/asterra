@@ -4,6 +4,7 @@
 #include <orbit/optical_transport/DischargeGraph.hpp>
 #include <orbit/optical_transport/EmitterTree.hpp>
 #include <orbit/optical_transport/OpticalHierarchy.hpp>
+#include <orbit/optical_transport/Refraction.hpp>
 #include <orbit/optical_transport/StellarVisibility.hpp>
 #include <orbit/optical_transport/TransmittanceStats.hpp>
 
@@ -318,6 +319,84 @@ int main()
         double last = 1.0;
         for (double k = 0.05; k < 60.0; k *= 1.2) { const double t = stats.Transmittance(k); monotone = monotone && t <= last + 1e-9; last = t; }
         Check(monotone, "transmittance is monotone in K");
+    }
+
+    // --- planetary refraction from (radius, surface refractivity, scale height)
+    {
+        constexpr double deg = std::numbers::pi / 180.0;
+        const RefractionAtmosphere earth;
+        const RefractionTable table = RefractionTable::Build(earth);
+        Check(table.Valid() && !RefractionTable::Ducting(earth), "Earth is not a ducting atmosphere");
+
+        // Against Saemundsson's formula for the standard atmosphere (true elevation, arcminutes).
+        double worstLow = 0.0, worstHigh = 0.0;
+        for (const double e : {0.0, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 45.0, 70.0})
+        {
+            double apparent = 0.0;
+            Check(table.ApparentElevation(e * deg, 0.0, apparent), "elevations above the horizon are visible");
+            const double bending = (apparent - e * deg) / deg * 60.0;
+            const double reference = 1.02 / std::tan((e + 10.3 / (e + 5.11)) * deg);
+            const double error = std::abs(bending - reference) / reference;
+            (e < 2.0 ? worstLow : worstHigh) = std::max(e < 2.0 ? worstLow : worstHigh, error);
+        }
+        std::printf("refraction vs Saemundsson: worst %.1f %% below 2 deg, %.1f %% above\n", 100.0 * worstLow, 100.0 * worstHigh);
+        Check(worstLow < 0.05, "refraction near the horizon is within 5 percent of the standard formula");
+        Check(worstHigh < 0.07, "refraction elsewhere is within 7 percent of the standard formula");
+        double at45 = 0.0;
+        table.ApparentElevation(45.0 * deg, 0.0, at45);
+        Check(Near(at45 - 45.0 * deg, earth.surfaceRefractivity, 0.01), "at 45 degrees bending is N0 tan(z) = N0");
+
+        // Where the horizon is: an object seen on the horizon is really about 35 arcminutes below it.
+        double truth = 0.0;
+        Check(table.TrueElevation(0.0, 0.0, truth) && Near(-truth / deg * 60.0, 35.0, 0.06), "an object on the horizon is ~35 arcminutes below it");
+        Check(Near(-truth, HorizonRefractionEstimate(earth), 0.12), "closed-form N0 sqrt(pi R / 2H) agrees with the integral within 12 percent");
+        double blocked = 0.0;
+        Check(!table.ApparentElevation(-2.0 * deg, 0.0, blocked), "an object 2 degrees below the horizon stays hidden");
+
+        // The Sun's disc is flattened at the horizon and round overhead.
+        const double c0 = table.VerticalCompression(0.0, 0.0), c10 = table.VerticalCompression(10.0 * deg, 0.0);
+        Check(c0 > 0.80 && c0 < 0.90, "a setting Sun is ~15 percent shorter than wide");
+        Check(c10 > c0 && c10 > 0.98 && c10 <= 1.0 + 1.0e-3, "the disc is round again higher up");
+
+        // Round trip, and the apparent limb sits above the geometric one by terrestrial refraction.
+        bool roundTrip = true;
+        for (const double e : {0.0, 0.5, 3.0, 25.0, 80.0})
+        {
+            double a = 0.0, t = 0.0;
+            roundTrip = roundTrip && table.ApparentElevation(e * deg, 100.0, a) && table.TrueElevation(a, 100.0, t) && std::abs(t - e * deg) < 1.0e-6;
+        }
+        Check(roundTrip, "apparent and true elevation invert each other");
+        bool dip = true;
+        for (const double h : {100.0, 1000.0, 10000.0})
+        {
+            const double ratio = table.ApparentLimbElevation(h) / -RefractionTable::GeometricDip(earth, h);
+            dip = dip && ratio > 0.87 && ratio < 0.96;
+        }
+        Check(dip, "refraction reduces the horizon dip by about 4 to 13 percent");
+
+        // Other planets from the same three numbers.
+        RefractionAtmosphere doubled = earth;
+        doubled.surfaceRefractivity *= 2.0;
+        const RefractionTable twice = RefractionTable::Build(doubled);
+        Check(Near(twice.Bending(10.0 * deg, 0.0), 2.0 * table.Bending(10.0 * deg, 0.0), 0.01), "bending is linear in the surface refractivity");
+        const RefractionAtmosphere mars{3.39e6, 5.1e-6, 11100.0};
+        const RefractionTable thin = RefractionTable::Build(mars);
+        Check(thin.Bending(5.0 * deg, 0.0) < 0.05 * table.Bending(5.0 * deg, 0.0), "a thin atmosphere hardly bends light");
+        double marsTruth = 0.0;
+        thin.TrueElevation(0.0, 0.0, marsTruth);
+        Check(Near(-marsTruth, HorizonRefractionEstimate(mars), 0.12), "the closed form holds on another planet");
+        const RefractionAtmosphere venus{6.05e6, 4.1e-3, 15900.0};
+        const RefractionTable trapped = RefractionTable::Build(venus);
+        double none = 0.0;
+        Check(RefractionTable::Ducting(venus) && !trapped.Valid() && !trapped.ApparentElevation(0.1, 0.0, none) && trapped.Bending(0.1, 0.0) == 0.0,
+              "a Venus-class atmosphere is reported as ducting, not given a wrong answer");
+
+        // The solver link and the curvature ratio.
+        Check(Near(SurfaceRefractivityFromSolver(1.0, 1.0), 2.78e-4, 1.0e-12), "the reference atmosphere maps to the reference refractivity");
+        Check(Near(SurfaceRefractivityFromSolver(2.0, 1.0), 5.56e-4, 1.0e-12) && Near(SurfaceRefractivityFromSolver(1.0, 1.21), 2.78e-4 * 1.1, 1.0e-12),
+              "refractivity scales with density and the square root of the Rayleigh composition factor");
+        Check(Near(CriticalGradientRatio(-2.667e-8, 6371000.0), 0.17, 0.01), "ordinary air is far from ducting (ratio 0.17)");
+        Check(CriticalGradientRatio(-1.9e-7, 6371000.0) > 1.0, "a steep inversion trips the ducting ratio");
     }
 
     if (failures == 0) std::printf("OpticalTransport: all tests passed\n");
