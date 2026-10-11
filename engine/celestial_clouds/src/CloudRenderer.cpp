@@ -690,7 +690,7 @@ float ExtinctionProcedural(float4 column, float3 position, float radius, float f
 #endif
 // The simulated storm replaces the procedural density inside its domain. Header (g_storm): [0] active, [1..3] domain centre on the
 // ground (m, planet-centred), [4..6] east, [7..9] north (unit), [13] planet radius, [14] dx, [15] dy, [16] dz (m), [17..19] nx ny nz,
-// [20] width of the fade at the domain edge (m). The domain translates with its Galilean frame, so the host moves the centre.
+// [20] width of the fade at the domain edge (m), [21] intensity 0..1 (a dying storm dissolves into the procedural clouds). The domain translates with its Galilean frame, so the host moves the centre.
 float StormMask(float3 position, float radius)
 {
     const float3 dir = position / max(radius, 1.0);
@@ -702,7 +702,7 @@ float StormMask(float3 position, float radius)
     const float halfX = 0.5 * g_storm[17] * g_storm[14];
     const float halfY = 0.5 * g_storm[18] * g_storm[15];
     const float edge = min(halfX - abs(x), halfY - abs(y));
-    return SmoothRange(0.0, max(g_storm[20], 1.0), edge);
+    return SmoothRange(0.0, max(g_storm[20], 1.0), edge) * g_storm[21];
 }
 
 float StormCell(int3 c)

@@ -300,6 +300,25 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
         stormDraft_.spinMinutes = static_cast<f32>(spin);
     }
     (void)context.Checkbox("Ice##storm-ice", stormDraft_.ice);
+    if (!stormAutoLoaded_)
+    {
+        stormAuto_ = storm_->AutoSetting();
+        stormAutoLoaded_ = true;
+    }
+    context.Separator();
+    context.MutedText("Scheduled storms: the nearest live storm of the deterministic schedule near the camera, a pure function of the simulation time.");
+    bool autoChanged = context.Checkbox("Automatic storms near the camera##storm-auto", stormAuto_.enabled);
+    i64 seed = static_cast<i64>(stormAuto_.seed);
+    if (context.InputInteger("Schedule seed##storm-seed", seed))
+    {
+        stormAuto_.seed = static_cast<u64>(std::max<i64>(seed, 0));
+        autoChanged = true;
+    }
+    if (autoChanged)
+    {
+        stormMessage_ = storm_->SetAuto(stormAuto_);
+    }
+    context.Separator();
     if (context.Button("Place storm##storm-place"))
     {
         stormMessage_ = storm_->Place(stormDraft_);
@@ -311,7 +330,7 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
         stormMessage_.clear();
     }
     const StormStatus status = storm_->Status();
-    context.KeyValue("State", StormStateName(status.state));
+    context.KeyValue("State", std::format("{} ({})", StormStateName(status.state), status.mode));
     if (status.state == StormStatus::State::Active)
     {
         context.KeyValue("Centre", std::format("{:.3f}, {:.3f} deg", status.latitudeDegrees, status.longitudeDegrees));
@@ -319,6 +338,12 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
             status.stepMilliseconds));
         context.KeyValue("Domain", std::format("{0} x {0} cells at {1:.0f} m, {2:.0f} MiB", status.cells,
             static_cast<f64>(status.spacingMeters), status.residentMiB));
+        if (status.lifetimeSeconds > 0.0)
+        {
+            context.KeyValue("Age", std::format("{:.0f} of {:.0f} min, intensity {:.2f}{}", status.ageSeconds / 60.0,
+                status.lifetimeSeconds / 60.0, status.intensity, status.catchingUp ? ", catching up" : ""));
+        }
+        context.KeyValue("Checkpoints", std::format("{} for this storm, {:.0f} MiB cached", status.checkpoints, status.checkpointMiB));
     }
     if (!status.message.empty() && status.state != StormStatus::State::Active)
     {

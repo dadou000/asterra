@@ -24,6 +24,19 @@ struct StormPlaceRequest
     u32 spongeCells{12};
 };
 
+// Scheduled storms (phase 6): storms come from celestial_clouds::StormSchedule, a pure function of the absolute simulation time, so the
+// same time shows the same storm in every launch and a time jump needs no stepping through the skipped time. The nearest live storm within
+// `searchKilometres` of the camera is simulated; a manual placement (storm.place) overrides it.
+struct StormAutoRequest
+{
+    bool enabled{false};
+    u64 seed{1};
+    u32 cells{128};
+    f32 spacingMeters{2000.0F};
+    f32 searchKilometres{500.0F};
+    bool ice{true};
+};
+
 struct StormStatus
 {
     enum class State : u8
@@ -34,6 +47,7 @@ struct StormStatus
         Failed
     };
     State state{State::None};
+    std::string mode{"off"};   // off, manual or auto
     std::string message;
     f64 latitudeDegrees{0.0};    // the domain's current centre (it drifts with the storm)
     f64 longitudeDegrees{0.0};
@@ -43,6 +57,14 @@ struct StormStatus
     u32 cells{0};
     f32 spacingMeters{0.0F};
     f64 residentMiB{0.0};
+    u64 stormId{0};              // identity of the storm being drawn (scheduled storms: stable across launches)
+    f64 ageSeconds{0.0};         // simulation time since the storm began
+    f64 lifetimeSeconds{0.0};
+    f64 intensity{0.0};          // 1 = replaces the procedural clouds, falls to 0 as the storm dies
+    bool catchingUp{false};      // the solver is stepping to the current time and nothing is drawn yet
+    u32 checkpoints{0};          // saved states of this storm; a time jump restarts from the nearest
+    f64 checkpointMiB{0.0};      // memory of all cached checkpoints
+    u32 scheduledNearby{0};      // live scheduled storms within the search radius
 };
 
 [[nodiscard]] const char* StormStateName(StormStatus::State state) noexcept;
@@ -56,16 +78,22 @@ public:
     [[nodiscard]] std::string Place(const StormPlaceRequest& request);
     void Clear();
     [[nodiscard]] StormStatus Status() const;
+    // Automatic (scheduled) storms; validates and queues.
+    [[nodiscard]] std::string SetAuto(const StormAutoRequest& request);
+    [[nodiscard]] StormAutoRequest AutoSetting() const;
 
     // Render thread.
     [[nodiscard]] std::optional<StormPlaceRequest> TakePlace();
     [[nodiscard]] bool TakeClear();
+    [[nodiscard]] std::optional<StormAutoRequest> TakeAuto();
     void Publish(const StormStatus& status);
 
 private:
     mutable std::mutex mutex_;
     std::optional<StormPlaceRequest> place_;
     bool clear_{false};
+    std::optional<StormAutoRequest> auto_;
+    StormAutoRequest autoSetting_;
     StormStatus status_;
 };
 

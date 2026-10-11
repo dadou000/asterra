@@ -1189,6 +1189,34 @@ def orbit_storm_place(
 
 
 @mcp.tool()
+def orbit_storm_auto(
+    enabled: bool,
+    seed: int | None = None,
+    cells: int | None = None,
+    spacing_m: float | None = None,
+    search_km: float | None = None,
+    ice: bool | None = None,
+) -> dict[str, Any]:
+    """Scheduled storms near the camera. enabled=true makes Studio simulate the
+    nearest live storm of the deterministic storm schedule
+    (engine/celestial_clouds StormSchedule) within search_km (default 500) of the
+    camera: a pure function of the absolute simulation time and seed (default 1),
+    so the same time shows the same storm in every launch, and a time jump
+    recomputes the storm from the nearest cached checkpoint instead of stepping
+    through the skipped time. A storm grows from nothing at its start, lives 2.5
+    to 4.5 hours and dissolves into the procedural clouds. cells (power of two 16
+    to 256, default 128), spacing_m (default 2000), ice (default true). A manual
+    orbit_storm_place overrides it while it exists. Returns error and the status
+    (mode, storm_id, age_seconds, lifetime_seconds, intensity, catching_up,
+    checkpoints, checkpoint_mib, scheduled_nearby)."""
+    params: dict[str, Any] = {"enabled": enabled}
+    for key, value in (("seed", seed), ("cells", cells), ("spacing_m", spacing_m), ("search_km", search_km), ("ice", ice)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.auto", params)
+
+
+@mcp.tool()
 def orbit_storm_clear() -> dict[str, Any]:
     """Remove the simulated storm domain; the procedural clouds return."""
     return _rpc("storm.clear")

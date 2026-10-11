@@ -46,6 +46,8 @@ private:
     WeatherLabView* view_{nullptr};
     StormDomainMailbox* storm_{nullptr};
     StormPlaceRequest stormDraft_;
+    StormAutoRequest stormAuto_;
+    bool stormAutoLoaded_{false};
     std::string stormMessage_;
     weather_lab::WeatherLabSettings draft_;
     bool draftLoaded_{false};

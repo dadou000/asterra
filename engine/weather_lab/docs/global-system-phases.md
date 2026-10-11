@@ -31,7 +31,7 @@ Order follows risk: the nesting and the pressure solve across levels come before
 | P3 domain and boundaries | 500 km base, open lateral boundaries, moving frame, refinement indicator with hysteresis and a cell budget, activity masks, FP16 storage | Outflow does not wrap in 6 simulated hours; the budget cap holds (the finest level coarsens instead of the step growing); total about 4.4 M cells measured |
 | P4 GPU port | Vulkan compute port of the level stack as a hot module; the per-level steps and the multigrid on the GPU | Matches the CPU reference within a stated tolerance; at least 10x real time for the P3 domain; memory inside the 2 GB weather budget |
 | P5 render link | Solver fields to `CloudFieldProduct` and the volume renderer (density bricks inside L1/L2); the analytic and the simulated sky compared with the cloud split view (`clouds.split_set`) on the same camera and time | No visible seam at the domain edge; the wall cloud and anvil come from the simulation; frame cost inside the cloud budget |
-| P6 placement and timewarp | Where on the planet a domain is placed (triggered by the analytic map's convective regions), its lifetime, checkpoints, decay into the analytic map | Scenario 13 (extreme timewarp) passes without the 45 s pre-spin; two launches place the same storm |
+| P6 placement and timewarp (first slice built, see `global-system-status-p6`) | Where on the planet a domain is placed (triggered by the analytic map's convective regions), its lifetime, checkpoints, decay into the analytic map | Scenario 13 (extreme timewarp) passes without the 45 s pre-spin; two launches place the same storm |
 
 ## Time and determinism
 

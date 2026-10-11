@@ -503,6 +503,43 @@ void GpuStormSolver::Advance(const u32 steps, const f32 dt)
     s.lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
+StormCheckpoint GpuStormSolver::Save()
+{
+    Impl& s = *impl_;
+    s.Begin();
+    s.commands->Transition(*s.arena, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::CopySource);
+    s.commands->CopyBuffer(*s.arena, static_cast<u64>(s.copyBase[s.current]) * sizeof(f32), *s.readback, 0U,
+        s.copyFloats * sizeof(f32));
+    s.commands->Transition(*s.arena, rhi::ResourceState::CopySource, rhi::ResourceState::UnorderedAccess);
+    s.Submit();
+    StormCheckpoint checkpoint;
+    checkpoint.time = s.time;
+    checkpoint.data.resize(static_cast<std::size_t>(s.copyFloats));
+    std::memcpy(checkpoint.data.data(), s.readback->Map(), checkpoint.data.size() * sizeof(f32));
+    s.readback->Unmap();
+    return checkpoint;
+}
+
+void GpuStormSolver::Restore(const StormCheckpoint& checkpoint)
+{
+    Impl& s = *impl_;
+    if (checkpoint.data.size() != static_cast<std::size_t>(s.copyFloats))
+    {
+        throw std::runtime_error("GpuStormSolver::Restore: the checkpoint is from a different grid");
+    }
+    std::memcpy(s.staging->Map(), checkpoint.data.data(), checkpoint.data.size() * sizeof(f32));
+    s.staging->Unmap();
+    s.current = 0U;
+    s.time = checkpoint.time;
+    s.Begin();
+    s.commands->Transition(*s.arena, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::CopyDestination);
+    s.commands->CopyBuffer(*s.staging, 0U, *s.arena, 0U, s.copyFloats * sizeof(f32));
+    s.commands->Transition(*s.arena, rhi::ResourceState::CopyDestination, rhi::ResourceState::UnorderedAccess);
+    s.Submit();
+}
+
+std::size_t GpuStormSolver::CheckpointBytes() const { return static_cast<std::size_t>(impl_->copyFloats * sizeof(f32)); }
+
 rhi::Buffer& GpuStormSolver::CloudBuffer() { return *impl_->cloudOut; }
 
 void GpuStormSolver::ExportCloud(const StormPlacement& placement)
@@ -525,6 +562,7 @@ void GpuStormSolver::ExportCloud(const StormPlacement& placement)
     header[19] = static_cast<f32>(s.cfg.nz);
     const f32 sponge = static_cast<f32>(s.cfg.lateralSpongeCells > 0U ? s.cfg.lateralSpongeCells : 8U) * s.cfg.dx;
     header[20] = placement.fadeMeters > 0.0F ? placement.fadeMeters : sponge;
+    header[21] = std::clamp(placement.intensity, 0.0F, 1.0F);
     std::memcpy(s.headerStage->Map(), header.data(), header.size() * sizeof(f32));
     s.headerStage->Unmap();
 

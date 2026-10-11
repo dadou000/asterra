@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/StormDomain.hpp>
 
 #include <cmath>
+#include <cstdio>
 
 namespace orbit::studio_ui
 {
@@ -15,6 +16,7 @@ Value StatusValue(const StormStatus& s)
 {
     return Value::Object{
         {"state", std::string(StormStateName(s.state))},
+        {"mode", s.mode},
         {"message", s.message},
         {"latitude_deg", s.latitudeDegrees},
         {"longitude_deg", s.longitudeDegrees},
@@ -23,7 +25,15 @@ Value StatusValue(const StormStatus& s)
         {"step_ms", s.stepMilliseconds},
         {"cells", static_cast<f64>(s.cells)},
         {"spacing_m", static_cast<f64>(s.spacingMeters)},
-        {"resident_mib", s.residentMiB}};
+        {"resident_mib", s.residentMiB},
+        {"storm_id", [&] { char text[17]; std::snprintf(text, sizeof(text), "%016llx", static_cast<unsigned long long>(s.stormId)); return std::string(text); }()},
+        {"age_seconds", s.ageSeconds},
+        {"lifetime_seconds", s.lifetimeSeconds},
+        {"intensity", s.intensity},
+        {"catching_up", s.catchingUp},
+        {"checkpoints", static_cast<f64>(s.checkpoints)},
+        {"checkpoint_mib", s.checkpointMiB},
+        {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)}};
 }
 
 f64 Optional(const Value& params, const char* key, const f64 fallback)
@@ -80,6 +90,40 @@ std::string StormDomainMailbox::Place(const StormPlaceRequest& request)
     status_.cells = request.cells;
     status_.spacingMeters = request.spacingMeters;
     return {};
+}
+
+std::string StormDomainMailbox::SetAuto(const StormAutoRequest& request)
+{
+    if (!IsPowerOfTwo(request.cells) || request.cells < 16U || request.cells > 256U)
+    {
+        return "cells must be a power of two from 16 to 256";
+    }
+    if (!(request.spacingMeters >= 500.0F && request.spacingMeters <= 5000.0F))
+    {
+        return "spacing must be 500 to 5000 m";
+    }
+    if (!(request.searchKilometres >= 50.0F && request.searchKilometres <= 2000.0F))
+    {
+        return "search must be 50 to 2000 km";
+    }
+    const std::scoped_lock lock(mutex_);
+    auto_ = request;
+    autoSetting_ = request;
+    return {};
+}
+
+StormAutoRequest StormDomainMailbox::AutoSetting() const
+{
+    const std::scoped_lock lock(mutex_);
+    return autoSetting_;
+}
+
+std::optional<StormAutoRequest> StormDomainMailbox::TakeAuto()
+{
+    const std::scoped_lock lock(mutex_);
+    auto request = auto_;
+    auto_.reset();
+    return request;
 }
 
 void StormDomainMailbox::Clear()
@@ -166,6 +210,44 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 request.ice = ice->AsBool();
             }
             const std::string error = mailbox.Place(request);
+            Value::Object result{{"error", error}};
+            for (auto& entry : StatusValue(mailbox.Status()).AsObject()) { result.insert(entry); }
+            return result;
+        });
+
+    dispatcher.Register(
+        {
+            .name = "storm.auto",
+            .description =
+                "Scheduled storms near the camera. `enabled` true makes Studio simulate the nearest live storm of the deterministic storm "
+                "schedule (engine/celestial_clouds StormSchedule) within `search_km` (default 500) of the camera: a pure function of the "
+                "absolute simulation time and `seed` (default 1), so the same time shows the same storm in every launch, and a time jump "
+                "recomputes the storm from the nearest cached checkpoint instead of stepping through the skipped time. The storm grows from "
+                "nothing at its start, lives 2.5 to 4.5 hours and dissolves into the procedural clouds. Other parameters: `cells` (power of "
+                "two 16 to 256, default 128), `spacing_m` (default 2000), `ice` (default true). A manual storm.place overrides it while it "
+                "exists. Returns `error` and the status (`mode`, `storm_id`, `age_seconds`, `lifetime_seconds`, `intensity`, `catching_up`, "
+                "`checkpoints`, `checkpoint_mib`, `scheduled_nearby`).",
+            .mutating = true
+        },
+        [&mailbox](const Value& params)
+        {
+            const Value* enabled = params.IsObject() ? params.Find("enabled") : nullptr;
+            if (enabled == nullptr || !enabled->IsBool())
+            {
+                throw rpc::Error(kBadParams, "enabled must be a boolean.");
+            }
+            StormAutoRequest request = mailbox.AutoSetting();
+            request.enabled = enabled->AsBool();
+            request.seed = static_cast<u64>(Optional(params, "seed", static_cast<f64>(request.seed)));
+            request.cells = static_cast<u32>(Optional(params, "cells", request.cells));
+            request.spacingMeters = static_cast<f32>(Optional(params, "spacing_m", request.spacingMeters));
+            request.searchKilometres = static_cast<f32>(Optional(params, "search_km", request.searchKilometres));
+            if (const Value* ice = params.Find("ice"); ice != nullptr)
+            {
+                if (!ice->IsBool()) { throw rpc::Error(kBadParams, "ice must be a boolean."); }
+                request.ice = ice->AsBool();
+            }
+            const std::string error = mailbox.SetAuto(request);
             Value::Object result{{"error", error}};
             for (auto& entry : StatusValue(mailbox.Status()).AsObject()) { result.insert(entry); }
             return result;

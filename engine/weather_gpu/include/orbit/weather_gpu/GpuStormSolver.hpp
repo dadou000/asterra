@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // Phase 4 of the storm domain plan (docs: /world/weather-lab/global-system-plan): the fast core on the GPU.
 //
@@ -29,6 +30,14 @@ struct StormPlacement
     std::array<float, 3> north{};
     float planetRadius{6371000.0F};
     float fadeMeters{0.0F};           // procedural-to-simulated blend at the edge; 0 = the lateral sponge width (or 8 cells)
+    float intensity{1.0F};            // 1 = the simulated clouds fully replace the procedural ones inside the domain, 0 = not at all
+};
+
+// The complete simulation state at one storm time: restoring it and stepping on gives exactly the result of never having stopped.
+struct StormCheckpoint
+{
+    double time{0.0};
+    std::vector<float> data;
 };
 
 class GpuStormSolver
@@ -52,6 +61,12 @@ public:
 
     // Runs `steps` steps of length `dt` (fixed: the adaptive Courant limit needs a readback per step) in one submission and waits.
     void Advance(std::uint32_t steps, float dt);
+
+    // Reads the state back (one GPU round trip) / puts a saved state in. A restored solver continues bit for bit like the original:
+    // the GPU kernels use no atomics and no unordered reductions.
+    [[nodiscard]] StormCheckpoint Save();
+    void Restore(const StormCheckpoint& checkpoint);
+    [[nodiscard]] std::size_t CheckpointBytes() const;
 
     // Writes the placement header and the cloud extinction (1/m) of the current state into CloudBuffer(). The buffer is left in
     // ResourceState::ShaderResource, ready for CloudRenderer::SetStormBuffer; the call waits for the GPU.

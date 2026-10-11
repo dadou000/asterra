@@ -76,6 +76,31 @@ int main()
     (void)Call(dispatcher, "storm.clear");
     Check(mailbox.TakeClear(), "clear over RPC");
 
+    // Scheduled storms: validation, queuing once, and the RPC.
+    StormDomainMailbox other;
+    StormAutoRequest autoRequest;
+    autoRequest.enabled = true;
+    autoRequest.seed = 7;
+    Check(other.SetAuto(autoRequest).empty(), "a valid automatic request is queued");
+    const auto takenAuto = other.TakeAuto();
+    Check(takenAuto.has_value() && takenAuto->enabled && takenAuto->seed == 7U, "the automatic request arrives intact");
+    Check(!other.TakeAuto().has_value(), "an automatic request is taken once");
+    Check(other.AutoSetting().seed == 7U, "the setting is remembered for the panel");
+    StormAutoRequest badAuto = autoRequest;
+    badAuto.cells = 100;
+    Check(!other.SetAuto(badAuto).empty(), "automatic cells must be a power of two");
+    badAuto = autoRequest;
+    badAuto.searchKilometres = 10.0F;
+    Check(!other.SetAuto(badAuto).empty(), "the search radius has a floor");
+    orbit::rpc::Dispatcher autoDispatcher;
+    RegisterStormDomainRpc(autoDispatcher, other);
+    const Value autoResult = Call(autoDispatcher, "storm.auto", R"({"enabled":true,"seed":42,"search_km":300,"cells":64})");
+    Check(autoResult.Find("result") != nullptr && autoResult.Find("result")->Find("error")->AsString().empty(), "storm.auto over RPC");
+    const auto viaRpc = other.TakeAuto();
+    Check(viaRpc.has_value() && viaRpc->seed == 42U && viaRpc->cells == 64U && viaRpc->searchKilometres == 300.0F, "the RPC parameters reach the request");
+    Check(Call(autoDispatcher, "storm.auto", R"({"seed":1})").Find("error") != nullptr, "enabled is required");
+    Check(autoResult.Find("result")->Find("mode") != nullptr && autoResult.Find("result")->Find("storm_id") != nullptr, "the status reports mode and storm_id");
+
     if (failures == 0) { std::printf("StormDomain: all checks passed\n"); }
     return failures == 0 ? 0 : 1;
 }

@@ -59,6 +59,7 @@ verified = "f4a2dc6"
 "storm domain phases, gates, timewarp, open decisions" = "global-system-phases"
 "measured results of the storm domain phases (ice, nesting)" = "global-system-status"
 "measured results of phases 3 and 4 (sponge, adaptive nest, GPU port)" = "global-system-status-late"
+"phase 6: scheduled storms, checkpoints, timewarp results" = "global-system-status-p6"
 "GPU port: Vulkan compute kernels, CPU comparison, benchmark" = "gpu-port"
 +++
 

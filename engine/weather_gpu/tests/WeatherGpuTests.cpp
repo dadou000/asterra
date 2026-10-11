@@ -155,6 +155,38 @@ int RunTests()
     Check(peak > 0.005F && peak < 5.0F);   // a cloud exists, and its extinction is a plausible fraction of 1 per metre
     Check(total > 0.0);
 
+    // Determinism and checkpoints: two independent solvers agree bit for bit, and restoring a mid-run checkpoint and stepping on gives
+    // exactly the state of the run that never stopped. This is what lets a storm be recomputed after a timewarp.
+    {
+        FastStormSolver init(config);
+        weather_gpu::GpuStormSolver first(*device, compiler, config);
+        weather_gpu::GpuStormSolver second(*device, compiler, config);
+        first.Upload(init);
+        second.Upload(init);
+        first.Advance(40, 12.0F);
+        second.Advance(40, 12.0F);
+        const weather_gpu::StormCheckpoint ca = first.Save();
+        const weather_gpu::StormCheckpoint cb = second.Save();
+        Check(ca.data == cb.data && ca.time == cb.time);                 // two runs, one answer
+        first.Advance(25, 12.0F);
+        const weather_gpu::StormCheckpoint straight = first.Save();
+        weather_gpu::GpuStormSolver c(*device, compiler, config);
+        c.Restore(ca);                                                   // into a solver that never ran
+        Check(c.Time() == ca.time);
+        c.Advance(25, 12.0F);
+        Check(c.Save().data == straight.data);                           // restore then step == never stopped
+        // Restoring into the original solver after it moved on also works.
+        first.Restore(ca);
+        first.Advance(25, 12.0F);
+        Check(first.Save().data == straight.data);
+        Check(c.CheckpointBytes() > 1000000U);
+        weather_gpu::StormCheckpoint wrong;
+        wrong.data.assign(10, 0.0F);
+        bool threw = false;
+        try { c.Restore(wrong); } catch (const std::exception&) { threw = true; }
+        Check(threw);
+    }
+
     std::cout << "Weather GPU tests passed\n";
     return 0;
 }

@@ -742,7 +742,13 @@ private:
     std::shared_ptr<StormRuntime> storm_;   // shared_ptr: the deleter is captured where the type is complete
     // Builds, steps (in lockstep with `now`) and exports the storm domain and points the cloud renderer at it; call once per frame that
     // draws clouds on `body`.
-    void UpdateStormDomain(time::SimulationTime now, const universe::BodyId& body, f64 planetRadiusMeters);
+    void UpdateStormDomain(
+        time::SimulationTime now,
+        const universe::BodyId& body,
+        f64 planetRadiusMeters,
+        const math::Double3& cameraBodyMeters,
+        const math::Float3& sunDirectionBody,
+        const celestial_clouds::CloudLayerParameters& layer);
     mutable std::mutex transientFlashMutex_;
     lighting::TransientFlashRegistry transientFlashes_;
     editor_ui::PathPreviewRenderer pathRenderer_;

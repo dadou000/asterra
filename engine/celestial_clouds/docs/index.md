@@ -20,6 +20,7 @@ sources = [
 ]
 symbols = ["CloudFieldProduct", "GpuCloudFieldProduct", "CloudLayerField", "CloudTexel", "WeatherClimate", "CloudRenderer"]
 invariants = [
+  "StormSchedule (ScheduleStorm, StormsNear) is a pure function of the absolute time, the seed and the weather parameters: no camera, no history, so launches and viewpoints agree on every storm and a timewarp needs no stepping.",
   "EvaluateWeather is a pure function of (direction, absolute seconds, parameters, climate): valid and finite at any epoch tested up to 1e10 s (about 317 years), identical on repeat, as smooth in time at t = 1e10 s as at t = 0 (mean coverage change 1.37e-5 per second at both) and with no drift of global cover (0.367-0.387 across epochs) or loss of circulation structure; timewarp therefore needs no stepping through skipped time (pinned by WeatherTimewarpTests).",
   "Pace of the weather map is fast compared with nature, by authoring: everything drifts through a noise dimension at evolve = 1.5e-5 per second (the pattern is 0.96 correlated after one hour and about 0.32 after a day, a floor set by the fixed latitude bands) and the baroclinic wave phase advances at 6 x evolve, i.e. waves travel ~60 m/s at 52 degrees latitude where real synoptic waves move 10-15 m/s. Fine at 1x; at high timewarp clouds morph rather than drift for days. Slowing the rates ~5-8x is a one-line change but changes the look of every session, so it is left as an art decision.",
   "The cloud field is built once per body on the GPU and shared: the orbital globe composite and the ray-marched shell read the same field, so both views agree on where the weather is.",
@@ -53,6 +54,7 @@ verified = "69bafa8"
 | --- | --- |
 | `WeatherModel.hpp` | weather parameters and climate that bias the cloud type and coverage |
 | `CloudField.hpp` | CPU `CloudFieldProduct` and GPU `GpuCloudFieldProduct`: per-texel `cloudType`, coverage, optical depth |
+| `StormSchedule.hpp/.cpp` | where and when simulated storms exist: a pure function of the absolute time (fixed lat/lon tiles x six hour slots, hashed, weighted by the weather map's convective score); see `/world/weather-lab/global-system-status-p6` |
 | `CloudRenderer.hpp/.cpp` | per-pixel ray-marched shell, light volume, temporal resolve, cloud lab; shaders are embedded strings |
 
 ## Per-view controls (`view.terrain_layers_set`)

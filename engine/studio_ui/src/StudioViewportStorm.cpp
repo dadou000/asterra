@@ -1,48 +1,105 @@
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
+#include <orbit/celestial_clouds/StormSchedule.hpp>
 #include <orbit/core/Log.hpp>
-
-#include <stdexcept>
-#include <string>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
 #include <orbit/weather_lab/FastStormSolver.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace orbit::studio_ui
 {
 namespace
 {
 constexpr f64 kPi = 3.14159265358979323846;
-constexpr u32 kMaxStepsPerFrame = 8U;
-constexpr f64 kJumpSeconds = 3600.0;   // a larger gap in simulation time restarts the storm instead of catching up
+constexpr f64 kCheckpointCadenceSeconds = 1200.0;   // a checkpoint every 20 minutes of storm time
+constexpr std::size_t kCheckpointBudgetBytes = 384ULL * 1024ULL * 1024ULL;
+constexpr u32 kStepsPerFrame = 4U;                  // while keeping up with the clock: at most this many steps a frame
+constexpr u32 kCatchUpStepsPerFrame = 24U;          // while behind (a time jump, a new storm): about 70 ms of GPU work a frame
+constexpr f64 kFadeSeconds = 2400.0;                // the last 40 minutes of a storm dissolve into the procedural clouds
+constexpr f64 kManualLifetimeSeconds = 1.0e15;
+
+f64 SmoothStep(const f64 a, const f64 b, const f64 x)
+{
+    const f64 t = std::clamp((x - a) / (b - a), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+u64 Mix64(u64 x)
+{
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30U)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27U)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31U);
+}
 } // namespace
 
-// The simulated storm domain of the primary view (docs: /world/weather-lab/gpu-port and global-system-plan). Created, stepped and
-// exported on the render thread only, because the solver submits to the Vulkan queue.
+// The simulated storm of the primary view (docs: /world/weather-lab/gpu-port and global-system-phases). Everything here runs on the render
+// thread, because the solver submits to the Vulkan queue.
+//
+// A storm is described by (start, lifetime, place); what is drawn at simulation time t is the solver state at storm age t - start. The
+// solver is stepped forward in lockstep with the clock; when the clock jumps (or a different storm is chosen) the state is restored from the
+// nearest cached checkpoint at or before the wanted age and stepped from there, so a jump costs at most one checkpoint interval of steps
+// when the storm was seen before, and one run from its beginning (spread over frames, nothing drawn meanwhile) when not.
 struct StudioViewportRenderer::StormRuntime
 {
-    StormPlaceRequest request;
-    weather_lab::FastStormConfig config;
-    std::unique_ptr<weather_gpu::GpuStormSolver> solver;
+    struct Active
+    {
+        bool valid{false};
+        bool manual{false};
+        u64 id{0};
+        f64 startSeconds{0.0};
+        f64 lifetimeSeconds{0.0};
+        f64 latitudeRadians{0.0};
+        f64 longitudeRadians{0.0};
+        weather_lab::FastStormConfig config;
+    };
+
+    StormPlaceRequest manualRequest;
+    bool manualActive{false};
+    f64 manualStartSeconds{0.0};
+    u64 manualCounter{0};
+    StormAutoRequest autoRequest;
     universe::BodyId body{};
-    f64 radiusMeters{6371000.0};
-    f64 placedSimSeconds{0.0};   // simulation time of the placement
-    f64 spinSeconds{0.0};
+    bool bodySet{false};
+
+    Active active;
+    std::unique_ptr<weather_gpu::GpuStormSolver> solver;
+    std::unique_ptr<weather_lab::FastStormSolver> cpuInit;
+    u64 solverGridKey{0};
+    u64 initId{~0ULL};
+    bool haveState{false};
     f32 stepSeconds{24.0F};
-    f64 lastSimSeconds{0.0};
     u64 steps{0};
     f64 stepMilliseconds{0.0};
-    bool exportedOnce{false};
-    StormStatus status;
+    bool exported{false};
+
+    struct Cached
+    {
+        f64 age;
+        weather_gpu::StormCheckpoint data;
+    };
+    std::map<u64, std::vector<Cached>> checkpoints;
+    std::map<u64, u64> lastUse;
+    u64 useCounter{0};
+    std::size_t checkpointBytes{0};
 };
 
 StudioViewportRenderer::~StudioViewportRenderer() = default;
 
 void StudioViewportRenderer::UpdateStormDomain(
-    const time::SimulationTime now, const universe::BodyId& body, const f64 planetRadiusMeters)
+    const time::SimulationTime now,
+    const universe::BodyId& body,
+    const f64 planetRadiusMeters,
+    const math::Double3& cameraBodyMeters,
+    const math::Float3& sunDirectionBody,
+    const celestial_clouds::CloudLayerParameters& layer)
 {
     if (!storm_)
     {
@@ -51,134 +108,297 @@ void StudioViewportRenderer::UpdateStormDomain(
     StormRuntime& rt = *storm_;
     const f64 nowSeconds = static_cast<f64>(now.microsecondsFromEpoch) * 1.0e-6;
 
+    if (const auto request = stormMailbox_.TakeAuto(); request.has_value())
+    {
+        rt.autoRequest = *request;
+        rt.active.valid = false;
+        rt.bodySet = false;
+    }
     if (stormMailbox_.TakeClear())
     {
-        rt.solver.reset();
-        rt.status = {};
-        cloudRenderer_.SetStormBuffer(nullptr);
+        rt.manualActive = false;
+        rt.active.valid = false;
+        rt.haveState = false;
     }
-
-    const auto build = [&](const StormPlaceRequest& request)
-    {
-        rt.status = {};
-        rt.status.latitudeDegrees = request.latitudeDegrees;
-        rt.status.longitudeDegrees = request.longitudeDegrees;
-        rt.status.cells = request.cells;
-        rt.status.spacingMeters = request.spacingMeters;
-        try
-        {
-            weather_lab::FastStormConfig config;
-            config.nx = request.cells;
-            config.ny = request.cells;
-            config.nz = 40U;
-            config.dx = request.spacingMeters;
-            config.dy = request.spacingMeters;
-            config.dz = 500.0F;
-            config.ice = request.ice;
-            config.bubble.amplitude = request.bubbleKelvin;
-            config.lateralSpongeCells = request.spongeCells;
-            config.threads = 4U;
-            config.maxTimeStep = std::clamp(request.spacingMeters / 2000.0F * 24.0F, 6.0F, 24.0F);
-            config.maxCourant = 1.0e9F;
-            if (const std::string problem = weather_gpu::GpuStormSolver::Validate(config); !problem.empty())
-            {
-                throw std::runtime_error(problem);
-            }
-            weather_lab::FastStormSolver cpu(config);
-            auto solver = std::make_unique<weather_gpu::GpuStormSolver>(*device_, *compiler_, config);
-            solver->Upload(cpu);
-            rt.stepSeconds = config.maxTimeStep;
-            rt.spinSeconds = static_cast<f64>(request.spinMinutes) * 60.0;
-            const auto spinSteps = static_cast<u32>(rt.spinSeconds / rt.stepSeconds);
-            for (u32 done = 0; done < spinSteps; done += 50U)
-            {
-                solver->Advance(std::min(50U, spinSteps - done), rt.stepSeconds);
-            }
-            rt.request = request;
-            rt.config = config;
-            rt.solver = std::move(solver);
-            rt.body = body;
-            rt.radiusMeters = planetRadiusMeters;
-            rt.placedSimSeconds = nowSeconds;
-            rt.lastSimSeconds = nowSeconds;
-            rt.steps = spinSteps;
-            rt.exportedOnce = false;
-            rt.status.state = StormStatus::State::Active;
-            rt.status.message = "running";
-        }
-        catch (const std::exception& exception)
-        {
-            rt.solver.reset();
-            rt.status.state = StormStatus::State::Failed;
-            rt.status.message = exception.what();
-            log::Warning(std::string("Storm domain placement failed: ") + exception.what());
-        }
-    };
-
     if (const auto request = stormMailbox_.TakePlace(); request.has_value())
     {
-        build(*request);
+        rt.manualRequest = *request;
+        rt.manualActive = true;
+        // The storm began `spin` minutes before the placement, so it is already developed when it first draws.
+        rt.manualStartSeconds = nowSeconds - static_cast<f64>(request->spinMinutes) * 60.0;
+        rt.active.valid = false;
+        rt.haveState = false;
+        rt.bodySet = false;
+        ++rt.manualCounter;
+    }
+    if (!rt.bodySet)
+    {
+        rt.body = body;
+        rt.bodySet = true;
     }
 
-    if (!rt.solver || rt.body != body)
+    // ---- which storm?
+    StormRuntime::Active wanted;
+    u32 scheduledNearby = 0;
+    const f64 cameraLength = std::sqrt(static_cast<f64>(cameraBodyMeters.x) * cameraBodyMeters.x
+        + static_cast<f64>(cameraBodyMeters.y) * cameraBodyMeters.y + static_cast<f64>(cameraBodyMeters.z) * cameraBodyMeters.z);
+    const char* mode = "off";
+    if (rt.manualActive)
     {
-        cloudRenderer_.SetStormBuffer(nullptr);
-        if (rt.status.state != StormStatus::State::None)
+        mode = "manual";
+        const StormPlaceRequest& m = rt.manualRequest;
+        wanted.valid = true;
+        wanted.manual = true;
+        wanted.id = Mix64(0x4D414E55414CULL ^ rt.manualCounter);
+        wanted.startSeconds = rt.manualStartSeconds;
+        wanted.lifetimeSeconds = kManualLifetimeSeconds;
+        wanted.latitudeRadians = m.latitudeDegrees * kPi / 180.0;
+        wanted.longitudeRadians = m.longitudeDegrees * kPi / 180.0;
+        wanted.config.nx = m.cells;
+        wanted.config.ny = m.cells;
+        wanted.config.dx = m.spacingMeters;
+        wanted.config.dy = m.spacingMeters;
+        wanted.config.ice = m.ice;
+        wanted.config.bubble.amplitude = m.bubbleKelvin;
+        wanted.config.lateralSpongeCells = m.spongeCells;
+    }
+    else if (rt.autoRequest.enabled && cameraLength > 1.0)
+    {
+        mode = "auto";
+        celestial_clouds::StormScheduleConfig schedule;
+        schedule.seed = rt.autoRequest.seed;
+        celestial_clouds::WeatherParameters weather;
+        weather.subsolarLatitudeRadians = std::asin(std::clamp(static_cast<f64>(sunDirectionBody.y), -1.0, 1.0));
+        weather.noiseScale = layer.weatherScale;
+        weather.detailScale = layer.detailScale;
+        weather.seed = layer.seed;
+        const f64 latitude = std::asin(std::clamp(static_cast<f64>(cameraBodyMeters.y) / cameraLength, -1.0, 1.0));
+        const f64 longitude = std::atan2(-static_cast<f64>(cameraBodyMeters.z), static_cast<f64>(cameraBodyMeters.x));
+        const auto near = celestial_clouds::StormsNear(latitude, longitude, static_cast<f64>(rt.autoRequest.searchKilometres) * 1000.0,
+            planetRadiusMeters, nowSeconds, schedule, weather, celestial_clouds::WeatherClimate{});
+        scheduledNearby = static_cast<u32>(near.size());
+        if (!near.empty())
         {
-            stormMailbox_.Publish(rt.status);
+            const celestial_clouds::ScheduledStorm& s = near.front();
+            wanted.valid = true;
+            wanted.id = s.id;
+            wanted.startSeconds = s.startSeconds;
+            wanted.lifetimeSeconds = s.lifetimeSeconds;
+            wanted.latitudeRadians = s.latitudeRadians;
+            wanted.longitudeRadians = s.longitudeRadians;
+            wanted.config.nx = rt.autoRequest.cells;
+            wanted.config.ny = rt.autoRequest.cells;
+            wanted.config.dx = rt.autoRequest.spacingMeters;
+            wanted.config.dy = rt.autoRequest.spacingMeters;
+            wanted.config.ice = rt.autoRequest.ice;
+            wanted.config.lateralSpongeCells = std::max(4U, rt.autoRequest.cells / 10U);
+            // Each storm gets its own warm bubble, so scheduled storms differ in strength.
+            wanted.config.bubble.amplitude = 1.6F + 0.8F * static_cast<f32>(static_cast<f64>(Mix64(s.id) >> 11U) / 9007199254740992.0);
         }
+    }
+
+    StormStatus status;
+    status.mode = mode;
+    status.scheduledNearby = scheduledNearby;
+    status.checkpointMiB = static_cast<f64>(rt.checkpointBytes) / (1024.0 * 1024.0);
+
+    if (!wanted.valid || rt.body != body)
+    {
+        rt.active.valid = false;
+        cloudRenderer_.SetStormBuffer(nullptr);
+        if (rt.autoRequest.enabled && !rt.manualActive)
+        {
+            status.message = "no scheduled storm is alive near the camera";
+        }
+        stormMailbox_.Publish(status);
         return;
     }
 
-    // Step in lockstep with the simulation clock. A clock that went backwards or jumped far ahead restarts the storm: catching up
-    // across a timewarp is phase 6 (checkpoints), not done here.
-    const f64 target = rt.spinSeconds + (nowSeconds - rt.placedSimSeconds);
-    if (nowSeconds < rt.lastSimSeconds - 1.0 || target - rt.solver->Time() > kJumpSeconds)
+    // ---- the solver for this storm's grid
+    wanted.config.nz = 40U;
+    wanted.config.dz = 500.0F;
+    wanted.config.threads = 4U;
+    wanted.config.maxTimeStep = std::clamp(wanted.config.dx / 2000.0F * 24.0F, 6.0F, 24.0F);
+    wanted.config.maxCourant = 1.0e9F;
+    if (wanted.config.lateralSpongeCells == 0U) { wanted.config.lateralSpongeCells = 12U; }
+    try
     {
-        build(rt.request);
-        if (!rt.solver) { return; }
+        const bool switched = !rt.active.valid || rt.active.id != wanted.id;
+        const u64 gridKey = Mix64((static_cast<u64>(wanted.config.nx) << 32U) ^ static_cast<u64>(wanted.config.dx * 16.0F)
+            ^ (wanted.config.ice ? 0x1000000000ULL : 0ULL) ^ (static_cast<u64>(wanted.config.lateralSpongeCells) << 48U));
+        if (!rt.solver || rt.solverGridKey != gridKey)
+        {
+            if (const std::string problem = weather_gpu::GpuStormSolver::Validate(wanted.config); !problem.empty())
+            {
+                throw std::runtime_error(problem);
+            }
+            rt.solver = std::make_unique<weather_gpu::GpuStormSolver>(*device_, *compiler_, wanted.config);
+            rt.solverGridKey = gridKey;
+            rt.checkpoints.clear();
+            rt.lastUse.clear();
+            rt.checkpointBytes = 0;
+            rt.haveState = false;
+            rt.initId = ~0ULL;
+        }
+        if (switched)
+        {
+            rt.haveState = false;
+            rt.exported = false;
+        }
+        rt.active = wanted;
+        rt.stepSeconds = wanted.config.maxTimeStep;
+        rt.lastUse[wanted.id] = ++rt.useCounter;
+        const f64 age = std::clamp(nowSeconds - wanted.startSeconds, 0.0, wanted.lifetimeSeconds);
+
+        // A different storm needs its own initial state (the bubble differs); the CPU solver only builds it.
+        if (rt.initId != wanted.id)
+        {
+            rt.cpuInit = std::make_unique<weather_lab::FastStormSolver>(wanted.config);
+            rt.initId = wanted.id;
+        }
+
+        // ---- restore when the state is not usable for this age: no state, or the clock went backwards
+        if (!rt.haveState || age < rt.solver->Time() - 1.0)
+        {
+            const auto found = rt.checkpoints.find(wanted.id);
+            const StormRuntime::Cached* best = nullptr;
+            if (found != rt.checkpoints.end())
+            {
+                for (const auto& cached : found->second)
+                {
+                    if (cached.age <= age + 1.0e-6 && (best == nullptr || cached.age > best->age)) { best = &cached; }
+                }
+            }
+            if (best != nullptr)
+            {
+                rt.solver->Restore(best->data);
+            }
+            else
+            {
+                rt.solver->Upload(*rt.cpuInit);
+            }
+            rt.haveState = true;
+            rt.exported = false;
+        }
+
+        // ---- step toward the wanted age, saving a checkpoint at every cadence boundary passed
+        const bool catchingUp = age - rt.solver->Time() > 3.0 * rt.stepSeconds;
+        u32 budget = catchingUp ? kCatchUpStepsPerFrame : kStepsPerFrame;
+        bool stepped = false;
+        while (budget > 0U && age - rt.solver->Time() >= rt.stepSeconds)
+        {
+            const f64 time = rt.solver->Time();
+            const f64 nextBoundary = (std::floor(time / kCheckpointCadenceSeconds + 1.0e-9) + 1.0) * kCheckpointCadenceSeconds;
+            const auto toBoundary = static_cast<u32>(std::max(1.0, std::ceil((nextBoundary - time) / rt.stepSeconds - 1.0e-9)));
+            const auto available = static_cast<u32>((age - time) / rt.stepSeconds);
+            const u32 chunk = std::min({budget, available, toBoundary});
+            if (chunk == 0U) { break; }
+            rt.solver->Advance(chunk, rt.stepSeconds);
+            rt.steps += chunk;
+            rt.stepMilliseconds = rt.solver->LastAdvanceMilliseconds() / chunk;
+            budget -= chunk;
+            stepped = true;
+            // Passed a boundary (within one step of it): save the state, once per boundary.
+            const f64 reached = rt.solver->Time();
+            const f64 boundary = std::floor((reached + 0.5 * rt.stepSeconds) / kCheckpointCadenceSeconds) * kCheckpointCadenceSeconds;
+            auto& list = rt.checkpoints[wanted.id];
+            const bool have = std::any_of(list.begin(), list.end(),
+                [&](const StormRuntime::Cached& c) { return std::fabs(c.age - reached) < 0.5 * rt.stepSeconds; });
+            if (boundary > 0.0 && std::fabs(reached - boundary) < 0.5 * rt.stepSeconds && !have)
+            {
+                weather_gpu::StormCheckpoint saved = rt.solver->Save();
+                rt.checkpointBytes += saved.data.size() * sizeof(f32);
+                const f64 savedAge = saved.time;
+                list.push_back({savedAge, std::move(saved)});
+                // Over budget: drop the least recently used other storm's checkpoints, then thin this storm's oldest.
+                while (rt.checkpointBytes > kCheckpointBudgetBytes)
+                {
+                    u64 victim = 0;
+                    u64 oldest = ~0ULL;
+                    for (const auto& [id, use] : rt.lastUse)
+                    {
+                        const auto entry = rt.checkpoints.find(id);
+                        if (id != wanted.id && entry != rt.checkpoints.end() && !entry->second.empty() && use < oldest)
+                        {
+                            oldest = use;
+                            victim = id;
+                        }
+                    }
+                    if (oldest == ~0ULL)
+                    {
+                        if (list.size() <= 1U) { break; }
+                        rt.checkpointBytes -= list.front().data.data.size() * sizeof(f32);
+                        list.erase(list.begin());
+                        continue;
+                    }
+                    for (const auto& cached : rt.checkpoints[victim]) { rt.checkpointBytes -= cached.data.data.size() * sizeof(f32); }
+                    rt.checkpoints.erase(victim);
+                }
+            }
+        }
+        const bool stillBehind = age - rt.solver->Time() > 3.0 * rt.stepSeconds;
+
+        // ---- publish the domain to the cloud renderer (nothing while catching up)
+        const f64 intensity = 1.0 - SmoothStep(wanted.lifetimeSeconds - kFadeSeconds, wanted.lifetimeSeconds, age);
+        // The domain translates with the Galilean frame: its centre drifts at (frameU, frameV) over the ground.
+        const f64 travelled = rt.solver->Time();
+        const f64 latitude = wanted.latitudeRadians + static_cast<f64>(wanted.config.frameV) * travelled / planetRadiusMeters;
+        const f64 longitude = wanted.longitudeRadians
+            + static_cast<f64>(wanted.config.frameU) * travelled / (planetRadiusMeters * std::max(std::cos(wanted.latitudeRadians), 0.05));
+        status.latitudeDegrees = latitude * 180.0 / kPi;
+        status.longitudeDegrees = longitude * 180.0 / kPi;
+        if (!stillBehind && intensity > 0.0)
+        {
+            if (stepped || !rt.exported)
+            {
+                const f64 cl = std::cos(latitude), sl = std::sin(latitude), co = std::cos(longitude), so = std::sin(longitude);
+                weather_gpu::StormPlacement placement;
+                placement.active = true;
+                placement.planetRadius = static_cast<f32>(planetRadiusMeters);
+                // Body-fixed frame of the cloud renderer: +Y is the pole, longitude grows toward -Z.
+                placement.centre = {planetRadiusMeters * cl * co, planetRadiusMeters * sl, -planetRadiusMeters * cl * so};
+                placement.east = {static_cast<f32>(-so), 0.0F, static_cast<f32>(-co)};
+                placement.north = {static_cast<f32>(-sl * co), static_cast<f32>(cl), static_cast<f32>(sl * so)};
+                placement.intensity = static_cast<f32>(intensity);
+                rt.solver->ExportCloud(placement);
+                rt.exported = true;
+            }
+            cloudRenderer_.SetStormBuffer(&rt.solver->CloudBuffer());
+        }
+        else
+        {
+            cloudRenderer_.SetStormBuffer(nullptr);
+        }
+
+        status.state = StormStatus::State::Active;
+        status.message = stillBehind ? "catching up to the simulation clock" : "running";
+        status.catchingUp = stillBehind;
+        status.stormSeconds = rt.solver->Time();
+        status.steps = rt.steps;
+        status.stepMilliseconds = rt.stepMilliseconds;
+        status.cells = wanted.config.nx;
+        status.spacingMeters = wanted.config.dx;
+        status.residentMiB = static_cast<f64>(rt.solver->ResidentBytes()) / (1024.0 * 1024.0);
+        status.stormId = wanted.id;
+        status.ageSeconds = age;
+        status.lifetimeSeconds = wanted.manual ? 0.0 : wanted.lifetimeSeconds;
+        status.intensity = intensity;
+        status.checkpoints = static_cast<u32>(rt.checkpoints[wanted.id].size());
+        status.checkpointMiB = static_cast<f64>(rt.checkpointBytes) / (1024.0 * 1024.0);
     }
-    else
+    catch (const std::exception& exception)
     {
-        const f64 behind = target - rt.solver->Time();
-        const auto steps = std::min(kMaxStepsPerFrame, static_cast<u32>(std::max(0.0, behind / rt.stepSeconds)));
-        if (steps > 0U)
-        {
-            rt.solver->Advance(steps, rt.stepSeconds);
-            rt.steps += steps;
-            rt.stepMilliseconds = rt.solver->LastAdvanceMilliseconds() / steps;
-        }
-        if (steps > 0U || !rt.exportedOnce)
-        {
-            // The domain translates with the Galilean frame: its centre drifts at (frameU, frameV) over the ground.
-            const f64 travelled = rt.solver->Time() - rt.spinSeconds;
-            const f64 latitude0 = rt.request.latitudeDegrees * kPi / 180.0;
-            const f64 longitude0 = rt.request.longitudeDegrees * kPi / 180.0;
-            const f64 latitude = latitude0 + static_cast<f64>(rt.config.frameV) * travelled / rt.radiusMeters;
-            const f64 longitude = longitude0
-                + static_cast<f64>(rt.config.frameU) * travelled / (rt.radiusMeters * std::max(std::cos(latitude0), 0.05));
-            const f64 cl = std::cos(latitude), sl = std::sin(latitude), co = std::cos(longitude), so = std::sin(longitude);
-            weather_gpu::StormPlacement placement;
-            placement.active = true;
-            placement.planetRadius = static_cast<f32>(rt.radiusMeters);
-            // Body-fixed frame of the cloud renderer: +Y is the pole, longitude grows toward -Z.
-            placement.centre = {rt.radiusMeters * cl * co, rt.radiusMeters * sl, -rt.radiusMeters * cl * so};
-            placement.east = {static_cast<f32>(-so), 0.0F, static_cast<f32>(-co)};
-            placement.north = {static_cast<f32>(-sl * co), static_cast<f32>(cl), static_cast<f32>(sl * so)};
-            rt.solver->ExportCloud(placement);
-            rt.exportedOnce = true;
-            rt.status.latitudeDegrees = latitude * 180.0 / kPi;
-            rt.status.longitudeDegrees = longitude * 180.0 / kPi;
-        }
+        rt.solver.reset();
+        rt.active.valid = false;
+        rt.haveState = false;
+        cloudRenderer_.SetStormBuffer(nullptr);
+        status.state = StormStatus::State::Failed;
+        status.message = exception.what();
+        log::Warning(std::string("Storm domain failed: ") + exception.what());
+        // Do not retry every frame.
+        rt.manualActive = false;
+        rt.autoRequest.enabled = false;
     }
-    rt.lastSimSeconds = nowSeconds;
-    rt.status.state = StormStatus::State::Active;
-    rt.status.message = "running";
-    rt.status.stormSeconds = rt.solver->Time();
-    rt.status.steps = rt.steps;
-    rt.status.stepMilliseconds = rt.stepMilliseconds;
-    rt.status.residentMiB = static_cast<f64>(rt.solver->ResidentBytes()) / (1024.0 * 1024.0);
-    cloudRenderer_.SetStormBuffer(&rt.solver->CloudBuffer());
-    stormMailbox_.Publish(rt.status);
+    stormMailbox_.Publish(status);
 }
 } // namespace orbit::studio_ui

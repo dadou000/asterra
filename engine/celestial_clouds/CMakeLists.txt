@@ -2,6 +2,7 @@ add_library(OrbitCelestialClouds STATIC
     src/CloudFarField.cpp
     src/CloudField.cpp
     src/CloudRenderer.cpp
+    src/StormSchedule.cpp
     src/WeatherModel.cpp
 )
 
@@ -63,6 +64,24 @@ if(BUILD_TESTING)
     )
     target_compile_features(
         OrbitWeatherMapDump PRIVATE cxx_std_23)
+
+    add_executable(
+        OrbitStormScheduleTests
+        tests/StormScheduleTests.cpp
+    )
+    target_link_libraries(
+        OrbitStormScheduleTests
+        PRIVATE
+            Orbit::CelestialClouds
+    )
+    target_compile_features(
+        OrbitStormScheduleTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitStormScheduleTests)
+    add_test(
+        NAME Orbit.StormSchedule
+        COMMAND OrbitStormScheduleTests
+    )
 
     add_test(
         NAME Orbit.CelestialClouds
