@@ -71,6 +71,14 @@ buffer layout are unchanged because a proxy is an ordinary entry; spot cone shap
   near-surface inversion or superadiabatic layers.
 - Lighting already has an emissive hierarchy (`EmissiveHierarchy`); a city-light tree should extend it, not duplicate it.
 
+## Finding 5: the caustic photon redundancy is real and exactly as large as the spec said
+
+`kCausticVertex` ran the full photon trace in every one of the six vertices of a photon quad: 3 `TraceGlass` calls and one `MarchScene` per vertex, 903,168
+glass traces per caster at the maximum 224 x 224 grid (3 x 6 x 224^2). A compute pre-pass (`ORBIT_GLASS_CAUSTIC_COMPUTE=1`, default off) traces each photon once
+(150,528) and the splat vertex shader reads the stored record. Counts come from the code, not from a GPU timing. Verified: all five shader variants compile with
+`glslangValidator`, the legacy pixel shader's SPIR-V is byte-identical to before the refactor, the legacy vertex shader keeps the same bindings, and the C++ passes a
+syntax check. Not verified: any run on a GPU (descriptor layout, barriers, image equivalence, speedup). See `/authoring/primitives`.
+
 ## Integration status of Finding 2
 
 Implemented behind `ORBIT_CLOUD_FILTERED_FAR=1` (default off, see `/rendering/clouds/raymarch`): `CloudFarField` bakes the table from the

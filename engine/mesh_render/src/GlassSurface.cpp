@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 #include <string>
@@ -562,17 +563,19 @@ float4 main(float4 position : SV_Position) : SV_Target0
 }
 )";
 
-constexpr const char* kCausticVertex = R"(
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_baseRoughness;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_baseRoughnessSampler;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_normalMetallic;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_normalMetallicSampler;
-[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_emission;
-[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_emissionSampler;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] Texture2D g_sunShadow;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] SamplerState g_sunShadowSampler;
+constexpr const char* kCausticTextures = R"(
+[[vk::binding(BASE_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_baseRoughness;
+[[vk::binding(BASE_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_baseRoughnessSampler;
+[[vk::binding(NORMAL_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_normalMetallic;
+[[vk::binding(NORMAL_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_normalMetallicSampler;
+[[vk::binding(EMISSION_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_emission;
+[[vk::binding(EMISSION_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_emissionSampler;
+[[vk::binding(SHADOW_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_sunShadow;
+[[vk::binding(SHADOW_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_sunShadowSampler;
 
-struct VSOutput
+)";
+
+constexpr const char* kCausticTypes = R"(struct VSOutput
 {
     float4 position : SV_Position;
     nointerpolation float3 hit : TEXCOORD0;
@@ -592,7 +595,9 @@ VSOutput Degenerate()
     return o;
 }
 
-float3 SunBasisU(float3 toSun)
+)";
+
+constexpr const char* kCausticHelpers = R"(float3 SunBasisU(float3 toSun)
 {
     return normalize(cross(toSun, abs(toSun.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
 }
@@ -635,12 +640,11 @@ float SunReaches(float3 p, float3 toSun)
     return stored >= receiverDepth - 2.0 / mapSize ? 1.0 : 0.0;
 }
 
-VSOutput main(uint vertexId : SV_VertexID)
+// One photon traced once: the same function feeds the vertex shader (legacy path) and the compute pre-pass.
+VSOutput CausticPhotonRecord(uint photon)
 {
     const Inst inst = LoadInst((uint)g.c3.y);
     const uint grid = (uint)g.c4.w;
-    const uint photon = vertexId / 6u;
-    const uint corner = vertexId % 6u;
     const float2 cell = float2((float)(photon % grid), (float)(photon / grid));
 
     const float3 toSun = g.c4.xyz;
@@ -709,6 +713,18 @@ VSOutput main(uint vertexId : SV_VertexID)
     o.sigma = sigma;
     o.power = g.c5.rgb * (spacing * spacing) * center.weight;
 
+    o.position = float4(0.0, 0.0, 0.0, 1.0);
+    return o;
+}
+
+bool IsDegenerate(VSOutput o)
+{
+    return o.position.x > 1.5;
+}
+
+// Clip-space position of one corner of a photon's footprint quad; w <= 0 when the quad is behind the near plane.
+float4 CausticCorner(float3 hit, float sigma, uint corner)
+{
     const float2 offsets[6] = {
         float2(-1.0, -1.0), float2(1.0, -1.0), float2(-1.0, 1.0),
         float2(1.0, -1.0), float2(1.0, 1.0), float2(-1.0, 1.0)};
@@ -717,20 +733,91 @@ VSOutput main(uint vertexId : SV_VertexID)
     const float3 view = float3(dot(q, g.c0.xyz), dot(q, g.c1.xyz), dot(q, g.c2.xyz));
     if (view.z <= g.c2.w)
     {
+        return float4(0.0, 0.0, 0.0, -1.0);
+    }
+    return float4(view.x / g.c0.w, view.y / g.c1.w, 0.5 * view.z, view.z);
+}
+)";
+
+constexpr const char* kCausticVertex = R"(
+VSOutput main(uint vertexId : SV_VertexID)
+{
+    const uint photon = vertexId / 6u;
+    const uint corner = vertexId % 6u;
+    VSOutput o = CausticPhotonRecord(photon);
+    if (IsDegenerate(o))
+    {
         return Degenerate();
     }
-    o.position = float4(view.x / g.c0.w, view.y / g.c1.w, 0.5 * view.z, view.z);
+    const float4 corner4 = CausticCorner(o.hit, o.sigma, corner);
+    if (corner4.w <= 0.0)
+    {
+        return Degenerate();
+    }
+    o.position = corner4;
     return o;
 }
 )";
 
+constexpr const char* kCausticVertexBuffered = R"(
+[[vk::binding(1, 0)]] StructuredBuffer<float4> g_photons;
+
+// Reads the record written by the compute pre-pass (3 float4 per photon: hit+sigma, dir+valid, power).
+VSOutput main(uint vertexId : SV_VertexID)
+{
+    const uint photon = (uint)g.c6.w + vertexId / 6u;
+    const uint corner = vertexId % 6u;
+    const float4 r0 = g_photons[photon * 3u];
+    const float4 r1 = g_photons[photon * 3u + 1u];
+    const float4 r2 = g_photons[photon * 3u + 2u];
+    if (r1.w < 0.5)
+    {
+        return Degenerate();
+    }
+    const float4 corner4 = CausticCorner(r0.xyz, r0.w, corner);
+    if (corner4.w <= 0.0)
+    {
+        return Degenerate();
+    }
+    VSOutput o;
+    o.position = corner4;
+    o.hit = r0.xyz;
+    o.dir = r1.xyz;
+    o.power = r2.xyz;
+    o.sigma = r0.w;
+    return o;
+}
+)";
+
+constexpr const char* kCausticCompute = R"(
+[[vk::binding(1, 0)]] RWStructuredBuffer<float4> g_photonsOut;
+
+// One thread per photon: the whole trace (glass path, scene march, footprint) happens once instead of once
+// per quad vertex. Every photon of the grid writes a record, valid or not, so the buffer is always complete.
+[numthreads(8, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    const uint grid = (uint)g.c4.w;
+    if (id.x >= grid || id.y >= grid)
+    {
+        return;
+    }
+    const uint photon = id.y * grid + id.x;
+    const VSOutput o = CausticPhotonRecord(photon);
+    const uint slot = ((uint)g.c6.w + photon) * 3u;
+    g_photonsOut[slot] = float4(o.hit, o.sigma);
+    g_photonsOut[slot + 1u] = float4(o.dir, IsDegenerate(o) ? 0.0 : 1.0);
+    g_photonsOut[slot + 2u] = float4(o.power, 0.0);
+}
+)";
+
 constexpr const char* kCausticPixel = R"(
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_baseRoughness;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_baseRoughnessSampler;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_normalMetallic;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_normalMetallicSampler;
-[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_emission;
-[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_emissionSampler;
+[[vk::binding(BASE_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_baseRoughness;
+[[vk::binding(BASE_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_baseRoughnessSampler;
+[[vk::binding(NORMAL_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_normalMetallic;
+[[vk::binding(NORMAL_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_normalMetallicSampler;
+[[vk::binding(EMISSION_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_emission;
+[[vk::binding(EMISSION_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_emissionSampler;
 
 struct PSInput
 {
@@ -771,9 +858,18 @@ float4 main(PSInput input) : SV_Target0
 }
 )";
 
+// Texture bindings of the caustic stages. The legacy pipeline has one buffer (records), so sampled textures start
+// at binding 1; the photon pre-pass pipelines add a second buffer (the photon records), so they start at 2.
+inline const std::string kDefaultDefines =
+    "#define DEPTH_BINDING 1\n#define BACKDROP_BINDING 2\n"
+    "#define BASE_BINDING 2\n#define NORMAL_BINDING 3\n#define EMISSION_BINDING 4\n#define SHADOW_BINDING 5\n";
+inline const std::string kPhotonPassDefines =
+    "#define DEPTH_BINDING 2\n#define BACKDROP_BINDING 3\n"
+    "#define BASE_BINDING 3\n#define NORMAL_BINDING 4\n#define EMISSION_BINDING 5\n#define SHADOW_BINDING 6\n";
+
 [[nodiscard]] std::string Compose(
     const std::initializer_list<const char*> parts,
-    const std::string& defines = "#define DEPTH_BINDING 1\n#define BACKDROP_BINDING 2\n")
+    const std::string& defines = kDefaultDefines)
 {
     std::string source = defines;
     for (const char* part : parts)
@@ -810,7 +906,8 @@ float4 ExactParams() { return g_records[(uint)g.c5.w * 6u + 3u]; }
     const u32 height,
     const f32 photonGrid,
     const GlassLighting& lighting,
-    const u32 instanceCount)
+    const u32 instanceCount,
+    const u32 photonBase = 0U)
 {
     const auto bits = [](const f32 value) { return std::bit_cast<u32>(value); };
     const f32 visibility = std::clamp(lighting.sunVisibility, 0.0F, 1.0F);
@@ -830,7 +927,7 @@ float4 ExactParams() { return g_records[(uint)g.c5.w * 6u + 3u]; }
         bits(lighting.sunIrradiance[2] * visibility),
         bits(static_cast<f32>(instanceCount)),
         bits(lighting.environment[0]), bits(lighting.environment[1]),
-        bits(lighting.environment[2]), 0U};
+        bits(lighting.environment[2]), bits(static_cast<f32>(photonBase))};
 }
 
 void SetFullTarget(
@@ -1027,7 +1124,7 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
     }
     {
         const auto vs = compile(
-            Compose({kCommon, kTrace, kScene, kCausticVertex}),
+            Compose({kCommon, kTrace, kScene, kCausticTextures, kCausticTypes, kCausticHelpers, kCausticVertex}),
             shader::Stage::Vertex);
         const auto ps = compile(
             Compose({kCommon, kScene, kCausticPixel}),
@@ -1037,6 +1134,56 @@ GlassSurfaceRenderer::GlassSurfaceRenderer(
             .pixelShader = view(ps),
             .pushConstantDwords = kGlassPushDwords,
             .shaderResourceBuffers = 1U,
+            .sampledTextures = 5U,
+            .topology = rhi::PrimitiveTopology::TriangleList,
+            .fillMode = rhi::FillMode::Solid,
+            .cullMode = rhi::CullMode::None,
+            .blendMode = rhi::BlendMode::Additive,
+            .depthTest = false,
+            .depthWrite = false,
+            .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
+            .colorAttachmentCount = 1U});
+    }
+    // ORBIT_GLASS_CAUSTIC_COMPUTE=1 traces every caustic photon once in a compute pre-pass instead of once per
+    // quad vertex (six times). Opt-in until it has been checked on a GPU; the legacy pipeline stays as fallback.
+    bool photonPass = false;
+    {
+        char* flag = nullptr;
+        std::size_t flagLength = 0;
+        if (_dupenv_s(&flag, &flagLength, "ORBIT_GLASS_CAUSTIC_COMPUTE") == 0 && flag != nullptr)
+        {
+            photonPass = flag[0] == '1';
+            std::free(flag);
+        }
+    }
+    if (photonPass)
+    {
+        const std::initializer_list<const char*> shared{
+            kCommon, kTrace, kScene, kCausticTextures, kCausticTypes, kCausticHelpers};
+        const auto join = [&](const char* last)
+        {
+            std::string text = kPhotonPassDefines;
+            for (const char* part : shared)
+            {
+                text += part;
+            }
+            return text + last;
+        };
+        const auto cs = compile(join(kCausticCompute), shader::Stage::Compute);
+        causticTracePipeline_ = device.CreateComputePipeline({
+            .computeShader = view(cs),
+            .pushConstantDwords = kGlassPushDwords,
+            .shaderResourceBuffers = 2U,
+            .storageTextures = 0U,
+            .sampledTextures = 5U});
+        const auto vs = compile(join(kCausticVertexBuffered), shader::Stage::Vertex);
+        const auto ps = compile(
+            Compose({kCommon, kScene, kCausticPixel}, kPhotonPassDefines), shader::Stage::Pixel);
+        causticBufferedPipeline_ = device.CreateGraphicsPipeline({
+            .vertexShader = view(vs),
+            .pixelShader = view(ps),
+            .pushConstantDwords = kGlassPushDwords,
+            .shaderResourceBuffers = 2U,
             .sampledTextures = 5U,
             .topology = rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -1178,30 +1325,85 @@ void GlassSurfaceRenderer::DrawCaustics(
     rhi::Buffer& records = UploadRecords(casters, shadowTail);
     const GlassCamera camera = MakeGlassCamera(view, width, height);
 
-    commands.SetRenderTarget(sceneColor);
-    SetFullTarget(commands, width, height);
-    commands.SetGraphicsPipeline(*causticPipeline_);
-    commands.SetGraphicsBuffer(0U, records);
-    commands.SetGraphicsTexture(0U, depth);
-    commands.SetGraphicsTexture(1U, surfaceBaseRoughness);
-    commands.SetGraphicsTexture(2U, surfaceNormalMetallic);
-    commands.SetGraphicsTexture(3U, surfaceEmissionClass);
     // Never read when no shadow frame was uploaded (enabled flag 0).
-    commands.SetGraphicsTexture(4U, haveShadow ? *sunShadowMap : depth);
+    rhi::Texture& shadowSource = haveShadow ? *sunShadowMap : depth;
 
-    for (u32 index = 0U; index < casters.size(); ++index)
+    std::vector<u32> grids;
+    std::vector<u32> photonBases;
+    u32 photonTotal = 0U;
+    for (const GlassInstance& instance : casters)
     {
-        const GlassInstance& instance = casters[index];
         const f32 radius = std::sqrt(
             instance.halfExtents[0] * instance.halfExtents[0] +
             instance.halfExtents[1] * instance.halfExtents[1] +
             instance.halfExtents[2] * instance.halfExtents[2]);
-        const u32 grid = GlassPhotonGrid(radius);
+        grids.push_back(GlassPhotonGrid(radius));
+        photonBases.push_back(photonTotal);
+        photonTotal += grids.back() * grids.back();
+    }
+
+    const bool photonPass = causticTracePipeline_ != nullptr && causticBufferedPipeline_ != nullptr;
+    if (photonPass)
+    {
+        constexpr u64 kPhotonRecordBytes = 3U * 16U;
+        if (causticPhotons_ == nullptr || causticPhotonCapacity_ < photonTotal)
+        {
+            if (causticPhotons_ != nullptr)
+            {
+                // The previous buffer may still be read by frames in flight.
+                records_.push_back({std::move(causticPhotons_), pendingFramesMask_});
+            }
+            causticPhotonCapacity_ = std::max<u64>(photonTotal, 2U * kMinPhotonGrid * kMinPhotonGrid);
+            causticPhotons_ = device_.CreateBuffer({
+                .sizeBytes = causticPhotonCapacity_ * kPhotonRecordBytes,
+                .usage = rhi::BufferUsage::Structured,
+                .memory = rhi::MemoryUsage::GpuOnly,
+                .initialState = rhi::ResourceState::ShaderResource});
+        }
+
+        commands.Transition(
+            *causticPhotons_, rhi::ResourceState::ShaderResource, rhi::ResourceState::UnorderedAccess);
+        commands.SetComputePipeline(*causticTracePipeline_);
+        commands.SetComputeBuffer(0U, records);
+        commands.SetComputeBuffer(1U, *causticPhotons_);
+        commands.SetComputeTexture(0U, depth);
+        commands.SetComputeTexture(1U, surfaceBaseRoughness);
+        commands.SetComputeTexture(2U, surfaceNormalMetallic);
+        commands.SetComputeTexture(3U, surfaceEmissionClass);
+        commands.SetComputeTexture(4U, shadowSource);
+        for (u32 index = 0U; index < casters.size(); ++index)
+        {
+            const auto constants = PackPush(
+                camera, index, width, height, static_cast<f32>(grids[index]), lighting,
+                static_cast<u32>(casters.size()), photonBases[index]);
+            commands.SetComputeConstants(constants);
+            commands.Dispatch((grids[index] + 7U) / 8U, (grids[index] + 7U) / 8U, 1U);
+        }
+        commands.Transition(
+            *causticPhotons_, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::ShaderResource);
+    }
+
+    commands.SetRenderTarget(sceneColor);
+    SetFullTarget(commands, width, height);
+    commands.SetGraphicsPipeline(photonPass ? *causticBufferedPipeline_ : *causticPipeline_);
+    commands.SetGraphicsBuffer(0U, records);
+    if (photonPass)
+    {
+        commands.SetGraphicsBuffer(1U, *causticPhotons_);
+    }
+    commands.SetGraphicsTexture(0U, depth);
+    commands.SetGraphicsTexture(1U, surfaceBaseRoughness);
+    commands.SetGraphicsTexture(2U, surfaceNormalMetallic);
+    commands.SetGraphicsTexture(3U, surfaceEmissionClass);
+    commands.SetGraphicsTexture(4U, shadowSource);
+
+    for (u32 index = 0U; index < casters.size(); ++index)
+    {
         const auto constants = PackPush(
-            camera, index, width, height, static_cast<f32>(grid), lighting,
-            static_cast<u32>(casters.size()));
+            camera, index, width, height, static_cast<f32>(grids[index]), lighting,
+            static_cast<u32>(casters.size()), photonBases[index]);
         commands.SetGraphicsConstants(constants);
-        commands.Draw(grid * grid * 6U);
+        commands.Draw(grids[index] * grids[index] * 6U);
     }
 }
 

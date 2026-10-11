@@ -204,6 +204,12 @@ private:
     rhi::Device& device_;
     std::unique_ptr<rhi::GraphicsPipeline> copyPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> causticPipeline_;
+    // Photon pre-pass (ORBIT_GLASS_CAUSTIC_COMPUTE=1): one compute thread traces each photon once into
+    // causticPhotons_, and causticBufferedPipeline_ only splats the stored records. Null when disabled.
+    std::unique_ptr<rhi::ComputePipeline> causticTracePipeline_;
+    std::unique_ptr<rhi::GraphicsPipeline> causticBufferedPipeline_;
+    std::unique_ptr<rhi::Buffer> causticPhotons_;
+    u64 causticPhotonCapacity_{0U};
     std::unique_ptr<rhi::GraphicsPipeline> glassPipeline_;
     std::vector<RetiredRecords> records_;
     std::unique_ptr<rhi::Buffer> dummySdf_;
