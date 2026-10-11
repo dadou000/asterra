@@ -139,6 +139,12 @@ static float gCloudDistance = 1.0e9;
 #ifndef CLOUD_EMPTY_COVERAGE
 #define CLOUD_EMPTY_COVERAGE 1.0e-4
 #endif
+// Temporal reuse of the march. 1: only one pixel of every 2x2 block of the cloud target is marched per frame (the march target is half
+// the width and height; the phase rotates over four frames) at the footprint of a full-resolution cloud pixel, and the resolve fills the
+// rest from reprojected history. CLOUD_CHECKERBOARD_WEIGHT is the weight of a fresh sample in the resolve (default 0.4).
+#ifndef CLOUD_CHECKERBOARD
+#define CLOUD_CHECKERBOARD 0
+#endif
 #ifndef CLOUD_PROF_STEPVIS
 #define CLOUD_PROF_STEPVIS 0
 #endif
@@ -1733,6 +1739,21 @@ float3 VolumeHeat(float tau)
 
 float4 main(VSOutput input) : SV_Target0
 {
+#if CLOUD_CHECKERBOARD
+    {
+        // This pixel of the half-size target is the full-resolution cloud pixel 2*p + offset; march that one (CloudMarch and
+        // CloudWithGodrays read the pixel and uv from `input`, so remapping them here is all they need).
+        const uint order[4] = { 0u, 3u, 1u, 2u };
+        const uint phase = order[uint(g.temporal.x) & 3u];
+        const int2 fullPixel = int2(input.position.xy) * 2 + int2(int(phase & 1u), int(phase >> 1u));
+        uint depthW, depthH;
+        g_depth.GetDimensions(depthW, depthH);
+        const float fullWidth = float(depthW) / g.atmosphere.w;
+        const float fullHeight = fullWidth / g.cameraAspect.w;
+        input.position.xy = float2(fullPixel) + 0.5;
+        input.uv = (float2(fullPixel) + 0.5) / float2(fullWidth, fullHeight);
+    }
+#endif
     const float4 result = CloudWithGodrays(input);
     if (g.volumeDebug < 0.0)
     {
@@ -1912,6 +1933,21 @@ float4 main(VSOutput input) : SV_Target0
 // is compensated as well as rotation; the history is clamped to the current 3x3
 // neighbourhood so changing weather and disocclusion never leave ghosts.
 constexpr const char* kResolvePixelShader = R"(
+#ifndef CLOUD_CHECKERBOARD
+#define CLOUD_CHECKERBOARD 0
+#endif
+#ifndef CLOUD_CHECKERBOARD_WEIGHT
+#define CLOUD_CHECKERBOARD_WEIGHT 0.4
+#endif
+// 1: fetch the nearest history texel instead of filtering it (a stale pixel is a copy; filtering a copy blurs it a little each frame)
+// How a stale (not re-marched) pixel's history is limited to the fresh neighbours' range: 0 = clamped like a fresh pixel, 1 = not clamped,
+// 2 = clamped to the range widened by half its width plus 0.01. A tight clamp over stride-2 samples removes features one pixel wide.
+#ifndef CLOUD_CB_CLAMP
+#define CLOUD_CB_CLAMP 0
+#endif
+#ifndef CLOUD_HISTORY_NEAREST
+#define CLOUD_HISTORY_NEAREST 0
+#endif
 #ifndef CLOUD_RESOLVE_WEIGHT
 #define CLOUD_RESOLVE_WEIGHT -1.0
 #endif
@@ -1952,9 +1988,19 @@ float4 main(VSOutput input) : SV_Target0
 {
     uint width, height;
     g_current.GetDimensions(width, height);
-    const int2 pixel = int2(input.position.xy);
+    const int2 pixel = int2(input.position.xy);   // pixel of the (full-size) resolved target
     const int2 maxPixel = int2(width - 1u, height - 1u);
-    const float4 current = g_current.Load(int3(pixel, 0));
+#if CLOUD_CHECKERBOARD
+    // g_current holds one pixel of every 2x2 block: pixel p is fresh this frame when p & 1 equals the phase offset.
+    const int2 base = min(pixel >> 1, maxPixel);
+    const uint order[4] = { 0u, 3u, 1u, 2u };
+    const uint phase = order[uint(r.params.y) & 3u];
+    const bool fresh = all((pixel & 1) == int2(int(phase & 1u), int(phase >> 1u)));
+#else
+    const int2 base = pixel;
+    const bool fresh = true;
+#endif
+    const float4 current = g_current.Load(int3(base, 0));
     if (r.prevPosValid.w < 0.5)
     {
         return current;
@@ -1968,7 +2014,7 @@ float4 main(VSOutput input) : SV_Target0
         [unroll]
         for (int dx = -1; dx <= 1; ++dx)
         {
-            const float4 s = g_current.Load(int3(clamp(pixel + int2(dx, dy), int2(0, 0), maxPixel), 0));
+            const float4 s = g_current.Load(int3(clamp(base + int2(dx, dy), int2(0, 0), maxPixel), 0));
             lo = min(lo, s);
             hi = max(hi, s);
         }
@@ -2008,14 +2054,37 @@ float4 main(VSOutput input) : SV_Target0
         return current;
     }
 
+#if CLOUD_HISTORY_NEAREST
+    uint historyWidth, historyHeight;
+    g_history.GetDimensions(historyWidth, historyHeight);
+    float4 history = g_history.Load(int3(clamp(int2(previousUv * float2(historyWidth, historyHeight)), int2(0, 0),
+                                               int2(historyWidth - 1u, historyHeight - 1u)), 0));
+#else
     float4 history = g_history.SampleLevel(g_historySampler, previousUv, 0);
+#endif
     if (any(isnan(history)) || any(isinf(history)))
     {
         return current;
     }
+#if CLOUD_CHECKERBOARD && CLOUD_CB_CLAMP == 1
+    if (fresh)
+    {
+        history = clamp(history, lo, hi);
+    }
+#elif CLOUD_CHECKERBOARD && CLOUD_CB_CLAMP == 2
+    {
+        const float4 pad = fresh ? float4(0.0, 0.0, 0.0, 0.0) : 0.5 * (hi - lo) + 0.01;
+        history = clamp(history, lo - pad, hi + pad);
+    }
+#else
     history = clamp(history, lo, hi);
+#endif
     // CLOUD_RESOLVE_WEIGHT >= 0 overrides the caller's weight (developer hook: ORBIT_CLOUD_DEFINES / clouds.set_defines).
+#if CLOUD_CHECKERBOARD
+    const float currentWeight = fresh ? CLOUD_CHECKERBOARD_WEIGHT : 0.0;   // a stale pixel is history alone, kept inside the neighbours' range
+#else
     const float currentWeight = CLOUD_RESOLVE_WEIGHT >= 0.0 ? CLOUD_RESOLVE_WEIGHT : r.params.x;
+#endif
     return lerp(history, current, currentWeight);
 }
 )";
@@ -2492,6 +2561,9 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
         shadowPipeline_ = std::move(shadowPipeline);
         volumePipeline_ = std::move(volumePipeline);
         defines_ = defineText;
+        // CLOUD_CHECKERBOARD=1 changes the size of the march target, which the pass code must follow.
+        const std::size_t found = defineText.find("CLOUD_CHECKERBOARD=");
+        checkerboard_ = found != std::string::npos && found + 19U < defineText.size() && defineText[found + 19U] == '1';
         return {};
     }
     catch (const std::exception& exception)
@@ -2722,14 +2794,15 @@ void CloudRenderer::Draw(
         volumeDebugAltitude);
 
 
+    // `width`/`height` are the full cloud size (footprint, aspect); the target is half that in each dimension when checkerboarded.
     commands.SetRenderTarget(target);
     commands.SetViewport({
         .x = 0.0F, .y = 0.0F,
-        .width = static_cast<f32>(width), .height = static_cast<f32>(height),
+        .width = static_cast<f32>(target.Width()), .height = static_cast<f32>(target.Height()),
         .minDepth = 0.0F, .maxDepth = 1.0F});
     commands.SetScissor({
         .left = 0, .top = 0,
-        .right = static_cast<i32>(width), .bottom = static_cast<i32>(height)});
+        .right = static_cast<i32>(target.Width()), .bottom = static_cast<i32>(target.Height())});
 
     commands.SetGraphicsPipeline(*pipeline_);
     commands.SetGraphicsConstants(constants);
@@ -2985,7 +3058,8 @@ void CloudRenderer::Resolve(
     const CloudResolveView& now,
     const CloudResolveView& previous,
     const bool historyValid,
-    const f32 currentWeight)
+    const f32 currentWeight,
+    const u32 frameIndex)
 {
     if (width == 0U || height == 0U)
     {
@@ -3017,7 +3091,7 @@ void CloudRenderer::Resolve(
     put(3U, prevPos);
     put(4U, prevForward);
     put(5U, prevUp);
-    put(6U, {Bits(std::clamp(currentWeight, 0.0F, 1.0F)), 0U, 0U, 0U});
+    put(6U, {Bits(std::clamp(currentWeight, 0.0F, 1.0F)), Bits(static_cast<f32>(frameIndex % 4096U)), 0U, 0U});
 
     commands.SetRenderTarget(target);
     commands.SetViewport({

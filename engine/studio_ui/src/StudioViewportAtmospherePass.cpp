@@ -325,18 +325,28 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
             }
             auto* cloudVolume = cloudVolumeSlot.get();
             const f32 cloudVolumeDebug = info.layers.cloudVolumeDebugAltitude;
-            const u32 cloudWidth = std::max(
+            // Temporal reuse of the march (CLOUD_CHECKERBOARD=1): the march target is half the cloud size in each dimension and the
+            // resolved history keeps the full size, so the cloud size is made even.
+            const bool cloudCheckerboard = cloudRenderer_.CheckerboardEnabled();
+            u32 cloudWidth = std::max(
                 1U, static_cast<u32>(std::ceil(static_cast<f32>(width) * cloudScale)));
-            const u32 cloudHeight = std::max(
+            u32 cloudHeight = std::max(
                 1U, static_cast<u32>(std::ceil(static_cast<f32>(height) * cloudScale)));
+            if (cloudCheckerboard)
+            {
+                cloudWidth += cloudWidth & 1U;
+                cloudHeight += cloudHeight & 1U;
+            }
+            const u32 marchWidth = cloudCheckerboard ? cloudWidth / 2U : cloudWidth;
+            const u32 marchHeight = cloudCheckerboard ? cloudHeight / 2U : cloudHeight;
             auto& cloudTarget = cloudTargets_[info.id];
             if (cloudTarget == nullptr ||
-                cloudTarget->Width() != cloudWidth ||
-                cloudTarget->Height() != cloudHeight)
+                cloudTarget->Width() != marchWidth ||
+                cloudTarget->Height() != marchHeight)
             {
                 cloudTarget = device_->CreateTexture({
-                    .width = cloudWidth,
-                    .height = cloudHeight,
+                    .width = marchWidth,
+                    .height = marchHeight,
                     .format = rhi::TextureFormat::RGBA16_Float,
                     .initialState = rhi::ResourceState::ShaderResource});
             }
@@ -549,7 +559,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                  cloudLayer,
                  nowView,
                  previousView,
-                 historyValid](
+                 historyValid,
+                 cloudFrame](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -568,7 +579,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         nowView,
                         previousView,
                         historyValid,
-                        0.2F);
+                        0.2F,
+                        cloudFrame);
                 });
 
             temporal.previous = nowView;

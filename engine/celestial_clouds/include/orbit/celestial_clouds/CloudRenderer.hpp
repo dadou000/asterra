@@ -102,6 +102,8 @@ public:
     // string; on error the previous shaders stay in use. Safe between frames: the replaced pipelines are retired by the RHI.
     [[nodiscard]] std::string SetShaderDefines(const std::string& defines);
     [[nodiscard]] const std::string& ShaderDefines() const noexcept { return defines_; }
+    // True while CLOUD_CHECKERBOARD=1: the march target is half the cloud size in each dimension (one pixel of every 2x2 block per frame).
+    [[nodiscard]] bool CheckerboardEnabled() const noexcept { return checkerboard_; }
 
     CloudRenderer(const CloudRenderer&) = delete;
     CloudRenderer& operator=(const CloudRenderer&) = delete;
@@ -191,7 +193,8 @@ public:
         const CloudResolveView& now,
         const CloudResolveView& previous,
         bool historyValid,
-        f32 currentWeight);
+        f32 currentWeight,
+        u32 frameIndex = 0U);
 
     // Blends the reduced-resolution result over 'target' (scene colour):
     // scene * T + L, bilinearly upsampled.
@@ -208,6 +211,7 @@ private:
     const shader::Compiler* compiler_{nullptr};
     std::string farField_;
     std::string defines_;
+    bool checkerboard_{false};
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> compositePipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> resolvePipeline_;
