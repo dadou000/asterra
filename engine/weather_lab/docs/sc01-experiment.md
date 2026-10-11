@@ -69,7 +69,7 @@ of freezing).
 3. GPU port of the stages (Vulkan compute) and a memory budget against the 2 GB weather allocation: ~80 B/cell on CPU means
    ~17 M cells would fit (70% of 2 GiB), before AMR.
 4. Studio integration: the Weather Lab panel runs the fast core, loads CM1 references and compares them, with `weather_lab.*`
-   RPC/MCP (done, CPU canvases; built and tested only on Linux for the library, RPC layer and MCP adapter, and compiled
-   syntax-only against the real Studio headers - first Windows build and a visual check are still owed). Open: volume-render the
+   RPC/MCP (done, CPU canvases; the library and RPC tests also pass on Windows as of 2026-10-11 (`Orbit.WeatherLab`, `Orbit.WeatherLabRpc`);
+   a visual check of the panel is still owed). The plan for the global system is `global-system-plan`. Open: volume-render the
    fields through the existing volume renderer instead of 2-D slices.
 5. Open lateral boundaries (the domain is periodic, so outflow re-enters after ~2 h).
