@@ -16,8 +16,10 @@ SRC = (CLOUDS / "src/CloudRenderer.cpp").read_text()
 lits = {m.group(1): m.group(2).replace(')" R"(', "")
         for m in re.finditer(r'constexpr const char\* (k\w+) = R"\((.*?)\)";', SRC, re.S)}
 common = ["kCloudCommon", "kCloudCommonB", "kCloudCommonC", "kCloudCommonD", "FAR", "kCloudCommonE", "kCloudCommonF", "kCloudLife"]
+BINDINGS_OFF = "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n"
+BINDINGS_ON = "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
 variants = {
-    "march": (common + ["kVolumeMath", "kDepthBindings", "kMarchBindings", "kVolumeRead", "kVolumeDebugRead", "kMarchMain", "kMarchGodrays"], "frag"),
+    "march": (common + ["kVolumeMath", "kDepthBindings", "kMarchBindings", "kVolumeRead", "kVolumeDebugRead", "kCloudLights", "kMarchMain", "kMarchGodrays"], "frag"),
     "shadow": (common + ["kDepthBindings", "kShadowMain"], "frag"),
     "volume": (common + ["kVolumeMath", "kVolumeCompute"], "comp"),
 }
@@ -57,18 +59,21 @@ def main() -> int:
         far = (tmp / "far.hlsl").read_text()
         bad = 0
         for flag in (0, 1):
-            for name, (keys, stage) in variants.items():
-                text = f"#define ORBIT_CLOUD_FILTERED_FAR {flag}\n" + "".join(
-                    (far if flag else "") if k == "FAR" else lits[k] for k in keys)
-                path = tmp / f"{name}{flag}.hlsl"
-                path.write_text(text)
-                r = subprocess.run(["glslangValidator", "-D", "-V", "-S", stage, "-e", "main", "--target-env", "vulkan1.3", str(path)],
-                                   capture_output=True, text=True)
-                errors = [l for l in r.stdout.splitlines() if l.startswith("ERROR")]
-                print(f"flag={flag} {name:6s} {'ok' if r.returncode == 0 else 'FAILED'}")
-                for l in errors[:5]:
-                    print("   ", l)
-                bad += r.returncode != 0
+            for lights in (0, 1):
+                for name, (keys, stage) in variants.items():
+                    if lights and name != "march":
+                        continue   # only the march pipeline gains the light buffer and shifted bindings
+                    text = f"#define ORBIT_CLOUD_FILTERED_FAR {flag}\n" + (BINDINGS_ON if lights else BINDINGS_OFF) + "".join(
+                        (far if flag else "") if k == "FAR" else lits[k] for k in keys)
+                    path = tmp / f"{name}{flag}{lights}.hlsl"
+                    path.write_text(text)
+                    r = subprocess.run(["glslangValidator", "-D", "-V", "-S", stage, "-e", "main", "--target-env", "vulkan1.3", "-o", str(path.with_suffix(".spv")), str(path)],
+                                       capture_output=True, text=True)
+                    errors = [l for l in r.stdout.splitlines() if l.startswith("ERROR")]
+                    print(f"far-field={flag} point-lights={lights} {name:6s} {'ok' if r.returncode == 0 else 'FAILED'}")
+                    for l in errors[:5]:
+                        print("   ", l)
+                    bad += r.returncode != 0
         return 1 if bad else 0
 
 if __name__ == "__main__":

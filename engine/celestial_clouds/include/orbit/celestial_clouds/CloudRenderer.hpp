@@ -9,6 +9,8 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace orbit::celestial_clouds
 {
@@ -78,6 +80,22 @@ public:
         bool allowRefreshSkip{true};
     };
 
+    // A point light that scatters into the clouds (ORBIT_CLOUD_POINT_LIGHTS=1): a lightning flash, street lamps, a lamp
+    // inside a cloud. positionMeters is in the same body-centric frame as the view's camera position. `intensity` is the
+    // radiant intensity per channel in scene-linear units, W/sr as a fraction of the 1361 W/m2 reference (so irradiance
+    // at distance d is intensity / d^2 and equals the sun's when they match). At most 16 are used.
+    struct PointLight
+    {
+        math::Double3 positionMeters{};
+        math::Float3 intensity{};
+    };
+    static constexpr u32 kMaxPointLights = 16U;
+
+    // Call once per frame before recording, with the frame slot that has completed and the number of frames in flight,
+    // so per-frame light buffers are retired only after the GPU is done with them (same contract as the glass renderer).
+    void BeginFrame(u32 completedSlot, u32 framesInFlight);
+    [[nodiscard]] bool PointLightsEnabled() const noexcept { return pointLights_; }
+
     CloudRenderer(const CloudRenderer&) = delete;
     CloudRenderer& operator=(const CloudRenderer&) = delete;
 
@@ -105,7 +123,9 @@ public:
         // Scales the crepuscular rays (sunlight removed from cloud-shadowed air); 0 = off.
         f32 godrayStrength = 1.0F,
         // > 0 draws a horizontal slice of the sun light volume at this altitude (m) as a heatmap.
-        f32 volumeDebugAltitude = 0.0F);
+        f32 volumeDebugAltitude = 0.0F,
+        // Ignored unless PointLightsEnabled().
+        std::span<const PointLight> pointLights = {});
 
     [[nodiscard]] std::unique_ptr<LightVolume> CreateLightVolume() const;
 
@@ -186,5 +206,17 @@ private:
     // tangent-frame anchor that makes toroidal addressing valid.
     std::unique_ptr<rhi::ComputePipeline> volumePipeline_;
     rhi::Device* device_{nullptr};
+
+    // Point lights (ORBIT_CLOUD_POINT_LIGHTS): a fourth shader buffer, rewritten every Draw. Buffers are kept alive until
+    // every frame in flight that could read them has completed (see BeginFrame).
+    struct RetiredBuffer
+    {
+        std::unique_ptr<rhi::Buffer> buffer;
+        u64 pendingFrames{0U};
+    };
+    [[nodiscard]] rhi::Buffer& UploadPointLights(std::span<const PointLight> lights, const math::Double3& cameraPositionMeters);
+    bool pointLights_{false};
+    std::vector<RetiredBuffer> lightBuffers_;
+    u64 pendingFramesMask_{~0ULL};
 };
 } // namespace orbit::celestial_clouds

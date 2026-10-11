@@ -4,6 +4,77 @@ namespace orbit::studio_ui
 {
 using namespace viewport_detail;
 
+namespace
+{
+// Authored point and spot lights as cloud point lights (ORBIT_CLOUD_POINT_LIGHTS=1). At most kMaxPointLights are used:
+// the strongest by flux over squared distance from the camera, with every remaining light folded into one aggregated light
+// at their flux-weighted centroid, so no light's energy is dropped. Spot cone shaping is ignored (treated as a point).
+// Flux becomes scene-linear radiant intensity: lumens / 683 lm/W = watts, / (4 pi) = W/sr, / 1361 W/m2 = the reference
+// irradiance every other stellar term is expressed against.
+[[nodiscard]] std::vector<celestial_clouds::CloudRenderer::PointLight> GatherCloudPointLights(
+    studio_session::StudioSession& session,
+    const std::optional<universe::BodyId>& body,
+    const math::Double3& cameraPositionMeters)
+{
+    using Light = celestial_clouds::CloudRenderer::PointLight;
+    std::vector<Light> result;
+    if (!body.has_value())
+    {
+        return result;
+    }
+    const auto root = session.World().Universe().ObjectForBody(*body);
+    const auto authored = world_model::ResolveAuthoredLocalLights(session.World().Objects(), root);
+    if (authored.empty())
+    {
+        return result;
+    }
+    constexpr f64 kLumensPerWatt = 683.0;
+    constexpr f64 kFourPi = 12.566370614359172;
+    struct Scored
+    {
+        const world_model::AuthoredLocalLight* light;
+        f64 score;
+    };
+    std::vector<Scored> scored;
+    scored.reserve(authored.size());
+    for (const auto& light : authored)
+    {
+        if (!(light.luminousFluxLumens > 0.0))
+        {
+            continue;
+        }
+        const math::Double3 delta = light.positionMeters - cameraPositionMeters;
+        scored.push_back({&light, light.luminousFluxLumens / std::max(math::Dot(delta, delta), 25.0)});
+    }
+    const std::size_t kept = std::min<std::size_t>(scored.size(), celestial_clouds::CloudRenderer::kMaxPointLights - 1U);
+    std::partial_sort(scored.begin(), scored.begin() + static_cast<std::ptrdiff_t>(kept), scored.end(),
+                      [](const Scored& a, const Scored& b) { return a.score > b.score; });
+    const auto toLight = [&](const f64 flux, const math::Double3& position, const math::Double3& color) {
+        const f64 scale = flux / kLumensPerWatt / kFourPi / kStudioReferenceIrradianceWattsPerSquareMeter;
+        return Light{position, {static_cast<f32>(color.x * scale), static_cast<f32>(color.y * scale), static_cast<f32>(color.z * scale)}};
+    };
+    for (std::size_t i = 0; i < kept; ++i)
+    {
+        const auto& l = *scored[i].light;
+        result.push_back(toLight(l.luminousFluxLumens, l.positionMeters, l.colorLinear));
+    }
+    if (scored.size() > kept)
+    {
+        f64 flux = 0.0;
+        math::Double3 centroid{}, color{};
+        for (std::size_t i = kept; i < scored.size(); ++i)
+        {
+            const auto& l = *scored[i].light;
+            flux += l.luminousFluxLumens;
+            centroid = centroid + l.positionMeters * l.luminousFluxLumens;
+            color = color + l.colorLinear * l.luminousFluxLumens;
+        }
+        result.push_back(toLight(flux, centroid / flux, color / flux));
+    }
+    return result;
+}
+} // namespace
+
 void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& context)
 {
     auto& graph = context.graph;
@@ -366,6 +437,19 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         cloudLightVolume);
                 });
 
+            // Authored lights that scatter into the clouds (ORBIT_CLOUD_POINT_LIGHTS=1, off by default).
+            std::vector<celestial_clouds::CloudRenderer::PointLight> pointLights;
+            if (cloudRenderer_.PointLightsEnabled())
+            {
+                pointLights = GatherCloudPointLights(
+                    context.session,
+                    logicalTarget->target.has_value() ? std::optional<universe::BodyId>(logicalTarget->target->body) : std::nullopt,
+                    math::Double3{
+                        static_cast<f64>(cloudView.cameraPositionMeters.x),
+                        static_cast<f64>(cloudView.cameraPositionMeters.y),
+                        static_cast<f64>(cloudView.cameraPositionMeters.z)});
+            }
+
             graph.AddPass(
                 prefix + ".Clouds",
                 {
@@ -381,6 +465,7 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                     }
                 },
                 [this,
+                 pointLights,
                  lightingDepth,
                  atmosphereLuts,
                  cloudTexture,
@@ -415,7 +500,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         cloudLab,
                         cloudFrame,
                         cloudGodrays,
-                        cloudVolumeDebug);
+                        cloudVolumeDebug,
+                        pointLights);
                 });
 
             graph.AddPass(

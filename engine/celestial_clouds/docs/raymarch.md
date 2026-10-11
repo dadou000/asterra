@@ -14,10 +14,11 @@ sources = [
   "engine/celestial_clouds/src/CloudRenderer.cpp",
   "engine/celestial_clouds/include/orbit/celestial_clouds/CloudRenderer.hpp",
   "engine/celestial_clouds/src/CloudFarField.cpp",
+  "engine/studio_ui/src/StudioViewportAtmospherePass.cpp",
   "engine/studio_ui/src/StudioViewportRenderer.cpp",
   "docs/ORBIT_PERFORMANCE.md",
 ]
-symbols = ["FarFieldTransmittance", "gStep", "kMaxSteps", "kBaseStep", "kEmptySkip", "kOpaqueCutoff", "kInCloudScheduleFraction", "kFootprintStep"]
+symbols = ["FarFieldTransmittance", "gStep", "PointLightSource", "UploadPointLights", "kMaxSteps", "kBaseStep", "kEmptySkip", "kOpaqueCutoff", "kInCloudScheduleFraction", "kFootprintStep"]
 invariants = [
   "Three unit-integral vertical profiles (thin low stratus, flat-based rounded cumulus, full-height tower with a denser anvil top) are blended by cloudType so the column optical depth is preserved.",
   "Billows come from one baked 32^3 tileable cellular-noise volume (R base shape, G/B/A erosion octaves; a 16-byte voxel = one fetch), sampled at two non-aligned scales (one rotated) so the lattice never reads as a grid.",
@@ -28,16 +29,18 @@ invariants = [
   "Erosion noise is used only at moderate range (25-60 km in the original design) and never in the sun march; sun colour comes from the atmosphere transmittance LUT sampled once per pixel.",
   "Lighting is three scattering octaves (energy, extinction and anisotropy halved each time) plus an isotropic multiple-scatter floor and a height-dependent ambient.",
   "ORBIT_CLOUD_FILTERED_FAR=1 (read once at CloudRenderer construction; default off) compiles the filtered far field into all three cloud shaders: the shape-to-coverage blend and the gDensity->gDensityFar fade are removed and Extinction() blends, by baseBlend, from the point-sampled step transmittance exp(-sigma*gStep) to FarFieldTransmittance(skinCoverage, hardness, unitSigma*gStep), a table generated from the baked noise (CloudFarField.cpp). Every Extinction() caller must set gStep to the length the sample stands for; gStep = 0 keeps point sampling. CPU reference: EvaluateFarFieldTransmittance. Status: compiled with glslangValidator, unit-tested on CPU, NOT yet seen on screen - the look from orbit is denser and more patchy than the old translucent haze by design.",
+  "ORBIT_CLOUD_POINT_LIGHTS=1 (read once at construction, default off) lets up to 16 point lights scatter into the clouds (CloudRenderer::PointLight, passed to Draw). The march pipeline gains a fourth shader buffer (g_cloudLights at binding 3: [0].x = count, then camera-relative position and scene-linear radiant intensity per light) and its texture bindings shift from 3/4/5 to 4/5/6 through the CLOUD_*_BINDING macros; with the flag off the three cloud shaders are byte-identical in SPIR-V to the previous commit (verified), so the default path cannot have changed. Each step adds irradiance (intensity / d^2, d floored at 5 m) x albedo x the sun's own single+multiple scattering shape x 4.6 x shading, with the light-path optical depth taken as the sample's extinction over at most 150 m (no marching); the output compressor ceiling also tracks the brightest light, because the sun-based ceiling would flatten any light at night. Intensity is W/sr as a fraction of 1361 W/m2 (lumens / 683 / 4 pi / 1361), so a light whose irradiance equals the sun's lights a cloud as bright as the sun does. Producer today: authored point/spot lights (15 strongest by flux over squared distance from the camera plus one aggregate of the rest; spots are treated as points). Per-frame buffers are retired through CloudRenderer::BeginFrame, called next to the glass renderer's. UNVERIFIED: compiled (-fsyntax-only, glslangValidator) but never run or seen; the 150 m diffusion length and the gain are modelling choices, not tuned against a render.",
   "The shader is an embedded string in CloudRenderer.cpp: saving it rebuilds the target and takes the automatic generation handoff.",
 ]
 related = ["/rendering/clouds/shadows-and-light-volume"]
 depends_on = ["/rendering/clouds"]
 verify = [
+  "python tools/check_cloud_shaders.py now also compiles the point-light march variant (bindings 0-3 buffers, 4-6 textures); the flag-off identity is checked by diffing SPIR-V against the previous commit.",
   "python tools/check_cloud_shaders.py compile-checks the embedded cloud shaders (flag off and on) with glslangValidator on Linux; syntax and types only, not DXC and not rendered.",
   "Frame-time average with clouds on vs off at 8 km (Release, Earth): original numbers were +0.7 ms looking at the horizon and +1.65 ms looking down; a regression beyond that needs an explanation.",
   "Side-on grazing clouds at the horizon are sharp, not striped or see-through.",
 ]
-verified = "00d8c5b6"
+verified = "56fbf0e"
 
 [[diagnose]]
 symptom = "side-on or grazing clouds look blurry, striped or see-through"

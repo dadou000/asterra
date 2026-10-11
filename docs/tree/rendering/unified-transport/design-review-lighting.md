@@ -62,3 +62,11 @@ Audit of the spec's "query weather at absolute simulation time, no backlog": `Ev
 measurement confirms it numerically: valid at every epoch up to 1e10 s (about 317 years), no precision loss (mean coverage change per second 1.37e-5 at t = 0 and at t = 1e10), no drift of global cover, circulation structure intact.
 What the audit did find is pace: patterns reshuffle in about half a day (correlation 0.96 after 1 hour, 0.32 after 1 day) and the storm-track waves propagate at ~60 m/s against 10-15 m/s in nature. That is an authoring
 choice recorded in `/rendering/clouds`, not changed here.
+
+## Finding 13: cloud light injection was blocked by two questions that reading the code answered
+
+I had declined to build it because I thought I could not know (1) whether lighting-frame positions are comparable with the cloud shader's and (2) where a per-frame buffer could live safely. Both were answerable from source:
+`LightingView::cameraPositionInFrameMeters` is `Camera().localPositionMeters`, the same body-centric position the cloud view uses; and the glass renderer's `BeginFrame` ring (frames-in-flight mask) is a pattern CloudRenderer can copy exactly.
+Built behind `ORBIT_CLOUD_POINT_LIGHTS=1` (see `/rendering/clouds/raymarch`): a fourth shader buffer, a light term that mirrors the sun's scattering formula, authored lights as the producer (reduced to 16 with the energy of the rest aggregated).
+Verified: all cloud shader variants compile; with the flag off the three cloud shaders' SPIR-V is byte-identical to the previous commit; the light-enabled variant's bindings (buffers 0-3, textures 4-6) match the pipeline the C++ creates;
+the C++ passes -fsyntax-only. Not verified: any run. The flash photometry is consistent (a 300 kJ stroke is ~200 lux at 1 km, ~231 scene-sr of intensity) but the cloud look, the 150 m diffusion length and the gain are untuned. Lightning itself still has no producer in Studio.

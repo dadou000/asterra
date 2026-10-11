@@ -10,7 +10,7 @@ mirages, glass and caustics. Children give the per-area design and the implement
 keywords = ["architecture", "weather", "optical medium", "radiance cache", "light transport", "lightning", "refraction", "glass", "caustics", "cloud lod", "many lights", "proposal"]
 related = ["/rendering/clouds", "/rendering/atmosphere", "/rendering/lighting", "/rendering/volumes"]
 verify = [
-  "python tools/run_cpu_tests.py builds and runs every CPU-only test of this work on Linux (10 groups, ~75 s; storm electrification is ~30 s of it); python tools/check_cloud_shaders.py and python tools/check_glass_shaders.py compile-check the embedded HLSL. None of them runs a GPU: the opt-in flags ORBIT_CLOUD_FILTERED_FAR, ORBIT_GLASS_CAUSTIC_COMPUTE and ORBIT_REFRACT_SUN are unverified on screen.",
+  "python tools/run_cpu_tests.py builds and runs every CPU-only test of this work on Linux (10 groups, ~75 s; storm electrification is ~30 s of it); python tools/check_cloud_shaders.py and python tools/check_glass_shaders.py compile-check the embedded HLSL. None of them runs a GPU: the opt-in flags ORBIT_CLOUD_FILTERED_FAR, ORBIT_GLASS_CAUSTIC_COMPUTE, ORBIT_REFRACT_SUN and ORBIT_CLOUD_POINT_LIGHTS are unverified on screen.",
 ]
 invariants = [
   "The camera cannot change the physical atmosphere: cloud density, humidity, charge and light transport are independent of view distance.",

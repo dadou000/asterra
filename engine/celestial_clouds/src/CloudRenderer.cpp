@@ -818,14 +818,14 @@ float4 LabColumn(float3 d)
 )";
 
 constexpr const char* kDepthBindings = R"(
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+[[vk::binding(CLOUD_DEPTH_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(CLOUD_DEPTH_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
 )";
 
-constexpr const char* kMarchBindings = R"([[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
-[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+constexpr const char* kMarchBindings = R"([[vk::binding(CLOUD_TRANSMITTANCE_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
+[[vk::binding(CLOUD_TRANSMITTANCE_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
+[[vk::binding(CLOUD_MULTI_BINDING, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
+[[vk::binding(CLOUD_MULTI_BINDING, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
 )";
 
 // ---- Sun light volume --------------------------------------------------------------------
@@ -1070,6 +1070,43 @@ void main(uint3 id : SV_DispatchThreadID)
     const float tau = VolumeMarch(origin, normalize(g.sunFar.xyz));
     g_volumeRw.Store4(address, asuint(float4(tau, float(ai) + kVolTagOffset, float(aj) + kVolTagOffset, g.temporal.w)));
 }
+)";
+
+// ---- Point lights (ORBIT_CLOUD_POINT_LIGHTS) ----------------------------------------------------
+// Up to 16 point lights (a lightning flash, street lamps, a lamp inside a cloud) scatter into the cloud the same way the
+// sun does. g_cloudLights[0].x = count; light i: [1 + 2i] = camera-relative position (m), [2 + 2i] = scene-linear radiant
+// intensity (rgb, W/sr as a fraction of the 1361 W/m2 reference, so irradiance at distance d is intensity / d^2 and a
+// light whose irradiance equals the sun's lights the cloud exactly as bright). The path to the light is not marched: its
+// optical depth is the sample's own extinction over at most 150 m (the diffusion length), which keeps the term cheap and
+// bounded; a light buried in a dense cloud therefore lights a ball of about that radius, not the whole storm.
+constexpr const char* kCloudLights = R"(
+#if ORBIT_CLOUD_POINT_LIGHTS
+[[vk::binding(3, 0)]] StructuredBuffer<float4> g_cloudLights;
+static float gLightPeak = 0.0;
+
+float3 PointLightSource(float3 position, float3 origin, float3 direction, float sigma, float sampleAlbedo, float shading)
+{
+    float3 sum = 0.0;
+    const uint count = min((uint)g_cloudLights[0].x, 16u);
+    [loop]
+    for (uint i = 0u; i < count; ++i)
+    {
+        const float3 delta = g_cloudLights[1u + 2u * i].xyz + origin - position;
+        const float distance2 = max(dot(delta, delta), 25.0);   // 5 m floor: a light inside the cloud does not blow up
+        const float3 toLight = delta * rsqrt(distance2);
+        const float3 irradiance = g_cloudLights[2u + 2u * i].rgb / distance2;
+        const float c = dot(direction, toLight);
+        const float phase = 0.1 * Hg(c, 0.95) + 0.2 * Hg(c, 0.8);
+        const float depth = sigma * min(sqrt(distance2), 150.0);
+        const float multi = 0.35 * (3.0 * Hg(c, 0.2) + 0.3 * Hg(c, -0.4)) * exp(-1.28 * sqrt(depth));
+        const float lit = phase * 12.0 * exp(-depth * 1.6) + multi;
+        const float limited = lit / (1.0 + 0.25 * lit);
+        sum += irradiance * sampleAlbedo * limited * 4.6 * shading;
+        gLightPeak = max(gLightPeak, max(irradiance.r, max(irradiance.g, irradiance.b)));
+    }
+    return sum;
+}
+#endif
 )";
 
 constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
@@ -1355,8 +1392,11 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         // is thick, grey and shaded by the whole cloud above it.
         const float baseDark = lerp(1.0, 0.3, (1.0 - smoothstep(0.0, 0.2, h)) * saturate(0.5 + column.w));
         const float shading = (0.62 + 0.38 * thickness01) * baseDark;
-        const float3 source =
+        float3 source =
             irradiance * sampleAlbedo * atmosphereSun * limited * 4.6 * shading * relief;
+#if ORBIT_CLOUD_POINT_LIGHTS
+        source += PointLightSource(position, origin, direction, sigma, sampleAlbedo, shading * relief);
+#endif
 
         const float stepTransmittance = exp(-sigma * actualStep);
         const float contribution = transmittance * (1.0 - stepTransmittance);
@@ -1374,7 +1414,12 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     // Soft shoulder: a wide sheet seen at a grazing angle accumulates many steps of
     // in-scattered light and would clip to flat white. Compress towards a ceiling
     // that tracks the sun brightness, keeping structure in the bright range.
+#if ORBIT_CLOUD_POINT_LIGHTS
+    // The ceiling tracks the sun brightness; at night it would flatten any light, so it also tracks the brightest light seen.
+    const float ceiling = max(irradiance * 0.5 + 0.5 * gLightPeak, 1.0e-4);
+#else
     const float ceiling = max(irradiance * 0.5, 1.0e-4);
+#endif
     radiance = radiance / (1.0 + radiance / ceiling);
 
     // Aerial perspective over the camera-to-cloud distance (the cloud is composited after
@@ -1709,7 +1754,7 @@ constexpr const char* kShadowMain = R"(float4 main(VSOutput input) : SV_Target0
 // function; `farField` is empty unless the filtered far field is enabled, and `prefix` defines the switch.
 [[nodiscard]] std::string MarchSource(const std::string& prefix, const std::string& farField)
 {
-    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kMarchMain + kMarchGodrays;
+    return prefix + std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + farField + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kCloudLights + kMarchMain + kMarchGodrays;
 }
 
 [[nodiscard]] std::string ShadowSource(const std::string& prefix, const std::string& farField)
@@ -2153,8 +2198,24 @@ CloudRenderer::CloudRenderer(
             std::free(flag);
         }
     }
+    // ORBIT_CLOUD_POINT_LIGHTS=1 (default off) lets up to 16 point lights scatter into the clouds. It adds a fourth shader
+    // buffer to the march pipeline, which shifts that pipeline's texture bindings by one; the other pipelines are unchanged.
+    {
+        char* flag = nullptr;
+        std::size_t flagLength = 0;
+        if (_dupenv_s(&flag, &flagLength, "ORBIT_CLOUD_POINT_LIGHTS") == 0 && flag != nullptr)
+        {
+            pointLights_ = flag[0] == '1';
+            std::free(flag);
+        }
+    }
     const std::string sourcePrefix =
         std::string("#define ORBIT_CLOUD_FILTERED_FAR ") + (filteredFar ? "1" : "0") + "\n";
+    const std::string marchPrefix = sourcePrefix + (pointLights_
+        ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
+        : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");
+    const std::string otherPrefix = sourcePrefix +
+        "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n";
     const std::string farField =
         filteredFar ? FarFieldShaderBlock(BuildFarFieldLut(noise, kNoiseGrid)) : std::string();
     const auto vertex = compiler.Compile({
@@ -2162,7 +2223,7 @@ CloudRenderer::CloudRenderer(
         .entryPoint = "main",
         .stage = shader::Stage::Vertex,
         .debug = false});
-    const std::string marchSource = MarchSource(sourcePrefix, farField);
+    const std::string marchSource = MarchSource(marchPrefix, farField);
     const auto pixel = compiler.Compile({
         .source = marchSource,
         .entryPoint = "main",
@@ -2175,7 +2236,7 @@ CloudRenderer::CloudRenderer(
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
         .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = pointLights_ ? 4U : 3U,
         .sampledTextures = 3U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
@@ -2230,7 +2291,7 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
-    const std::string shadowSource = ShadowSource(sourcePrefix, farField);
+    const std::string shadowSource = ShadowSource(otherPrefix, farField);
     const auto shadowPixel = compiler.Compile({
         .source = shadowSource,
         .entryPoint = "main",
@@ -2253,7 +2314,7 @@ CloudRenderer::CloudRenderer(
         .colorAttachmentFormats = {rhi::TextureFormat::RGBA16_Float},
         .colorAttachmentCount = 1U});
 
-    const std::string volumeSource = VolumeSource(sourcePrefix, farField);
+    const std::string volumeSource = VolumeSource(otherPrefix, farField);
     const auto volumeShader = compiler.Compile({
         .source = volumeSource,
         .entryPoint = "main",
@@ -2464,7 +2525,8 @@ void CloudRenderer::Draw(
     const CloudLab& lab,
     const u32 frameIndex,
     const f32 godrayStrength,
-    const f32 volumeDebugAltitude)
+    const f32 volumeDebugAltitude,
+    const std::span<const PointLight> pointLights)
 {
     if (width == 0U || height == 0U || field.LayerCount() == 0U ||
         field.FaceResolution() < 2U)
@@ -2504,10 +2566,63 @@ void CloudRenderer::Draw(
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
     commands.SetGraphicsBuffer(2, *volume.buffer);
+    if (pointLights_)
+    {
+        commands.SetGraphicsBuffer(3, UploadPointLights(pointLights, view.cameraPositionMeters));
+    }
     commands.SetGraphicsTexture(0, depth);
     commands.SetGraphicsTexture(1, luts.Transmittance());
     commands.SetGraphicsTexture(2, luts.MultiScattering());
     commands.Draw(6);
+}
+
+void CloudRenderer::BeginFrame(const u32 completedSlot, const u32 framesInFlight)
+{
+    if (framesInFlight == 0U || framesInFlight > 64U || completedSlot >= framesInFlight)
+    {
+        throw std::invalid_argument("Invalid cloud frame slot");
+    }
+    pendingFramesMask_ = framesInFlight == 64U ? ~0ULL : ((1ULL << framesInFlight) - 1ULL);
+    const u64 completed = 1ULL << completedSlot;
+    for (auto& retired : lightBuffers_)
+    {
+        retired.pendingFrames &= ~completed;
+    }
+    std::erase_if(lightBuffers_, [](const RetiredBuffer& r) { return r.pendingFrames == 0U; });
+}
+
+rhi::Buffer& CloudRenderer::UploadPointLights(
+    const std::span<const PointLight> lights, const math::Double3& cameraPositionMeters)
+{
+    // Layout read by PointLightSource: [0].x = count; light i: [1 + 2i] = camera-relative position, [2 + 2i] = intensity.
+    std::array<f32, 4U * (1U + 2U * kMaxPointLights)> data{};
+    const u32 count = static_cast<u32>(std::min<std::size_t>(lights.size(), kMaxPointLights));
+    data[0] = static_cast<f32>(count);
+    for (u32 i = 0U; i < count; ++i)
+    {
+        const PointLight& light = lights[i];
+        f32* position = data.data() + 4U * (1U + 2U * i);
+        position[0] = static_cast<f32>(light.positionMeters.x - cameraPositionMeters.x);
+        position[1] = static_cast<f32>(light.positionMeters.y - cameraPositionMeters.y);
+        position[2] = static_cast<f32>(light.positionMeters.z - cameraPositionMeters.z);
+        f32* intensity = position + 4U;
+        intensity[0] = std::max(light.intensity.x, 0.0F);
+        intensity[1] = std::max(light.intensity.y, 0.0F);
+        intensity[2] = std::max(light.intensity.z, 0.0F);
+    }
+    auto buffer = device_->CreateBuffer({
+        .sizeBytes = static_cast<u64>(data.size() * sizeof(f32)),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!buffer)
+    {
+        throw std::runtime_error("Failed to allocate the cloud point-light buffer.");
+    }
+    std::memcpy(buffer->Map(), data.data(), data.size() * sizeof(f32));
+    buffer->Unmap();
+    lightBuffers_.push_back({std::move(buffer), pendingFramesMask_});
+    return *lightBuffers_.back().buffer;
 }
 
 void CloudRenderer::UpdateLightVolume(
