@@ -48,4 +48,26 @@ if(BUILD_TESTING)
         NAME Orbit.StormElectrification
         COMMAND OrbitStormElectrificationTests
     )
+
+    add_executable(
+        OrbitStormToLightsTests
+        tests/StormToLightsTests.cpp
+    )
+
+    target_link_libraries(
+        OrbitStormToLightsTests
+        PRIVATE
+            Orbit::StormElectrification
+            Orbit::Lighting
+    )
+
+    target_compile_features(
+        OrbitStormToLightsTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(
+        OrbitStormToLightsTests)
+
+    add_test(
+        NAME Orbit.StormToLights
+        COMMAND OrbitStormToLightsTests
+    )
 endif()
