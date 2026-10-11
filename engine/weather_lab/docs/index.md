@@ -58,6 +58,7 @@ verified = "f4a2dc6"
 "storm domain plan: 500 km nested domain, cell budget, cloud layers, role of CM1" = "global-system-plan"
 "storm domain phases, gates, timewarp, open decisions" = "global-system-phases"
 "measured results of the storm domain phases (ice, nesting)" = "global-system-status"
+"GPU port: Vulkan compute kernels, CPU comparison, benchmark" = "gpu-port"
 +++
 
 The weather lab exists to answer one question before any weather is integrated into Orbit: how much of a CM1 supercell survives

@@ -1,10 +1,10 @@
 +++
 path = "/world/weather-lab/global-system-status"
-title = "Storm domain: measured status of phases 1 to 3"
+title = "Storm domain: measured status of phases 1 to 4"
 kind = "concept"
 status = "experimental"
 summary = """
-Measured results of the storm domain phases so far: the CM1 reproduction and the in-engine ice scheme (P1), the nested fast core against a uniform 500 m run (P2), and the 512 km domain with lateral sponge, storm-following frame, adaptive child and cell budget over 6 simulated hours (P3)."""
+Measured results of the storm domain phases so far: the CM1 reproduction and the in-engine ice scheme (P1), the nested fast core against a uniform 500 m run (P2), the 512 km domain with lateral sponge, storm-following frame, adaptive child and cell budget over 6 simulated hours (P3), and the first slice of the GPU port (P4)."""
 keywords = ["nesting", "relaxation band", "ice", "cm1", "gate", "results", "storm domain", "child grid"]
 sources = [
   "engine/weather_lab/include/orbit/weather_lab/NestedStormSolver.hpp",
@@ -19,7 +19,7 @@ invariants = [
 related = ["/world/weather-lab/global-system-plan", "/world/weather-lab/global-system-phases", "/world/weather-lab/sc01"]
 depends_on = ["/world/weather-lab/global-system-plan"]
 verify = ["orbit_weather_lab nest --minutes 120 --bubble 1 --dt 24 --courant 2.5 --ice 1 --ratio 4 --cells 32 --out child.orbitwx, then compare against a uniform run: orbit_weather_lab run --nx 256 --ny 256 --dx 500 --ice 1 ...", "ctest -R Orbit.WeatherLab"]
-verified = "517dbf9"
+verified = "7eeb1bd"
 +++
 
 ## Phase status
@@ -61,3 +61,16 @@ Run: 512 km parent at 2 km (256x256x40), ice, sponge 16 cells, tracking, adaptiv
 - A fixed 12.5, 3.0 frame with the sponge keeps the same storm strength as the periodic run (peak updraft 45 to 51 m/s against 39 to 52 m/s).
 - Not done: FP16 storage (deferred to the GPU port, where memory matters), vertical stretching, the 222 m level, more than one child, a child that moves relative to its parent.
 
+**P4 (2026-10-12), first slice: single level on the GPU, gate met on speed and agreement.** `engine/weather_gpu` (`GpuStormSolver`, 14 HLSL compute kernels in `shaders/storm.hlsl`, card `/world/weather-lab/gpu-port`): advection, mass fixer, Kessler plus ice microphysics, buoyancy, mixing, top and lateral sponges, and the exact FFT pressure projection in float32. Measured on an RTX 4090:
+
+| Check | Result |
+| --- | --- |
+| After 1 step, 32^3 grid | CPU and GPU agree to 1e-5 (u, v, w, theta); projection divergence 1.1e-9 on both |
+| After 240 steps (48 min, mature storm, 64x64x40, ice) | mean field difference 1e-4 to 1e-3 of the field size; maxima 0.7 m/s in u and w (of 50) from the storm's chaos; divergence 1.3e-8 GPU, 7.9e-9 CPU |
+| 256x256x40 against the CPU for 120 steps (48 min) | same: mean differences about 1e-4, divergence 1.4e-8 |
+| Speed, 512 km domain (2.62 M cells), ice, sponge 16, fixed step 24 s | 2.68 ms per step: 8900x real time, about 180x the CPU (475 ms), against the gate's 10x |
+| Memory | 231 MiB resident for 2.62 M cells with ice (88 B per cell including both ping-pong copies and the spectrum) |
+| Reload | a shader that does not compile returns the error and the running pipelines keep working (test) |
+
+- Not in this slice: the relaxation band and feedback kernels (the nest on the GPU), the adaptive step (a Courant limit needs a readback per step; the step is fixed), the storm-following frame, FP16 storage, wiring into the Weather Lab session and the central hot-reload watcher, RPC/MCP selection of the GPU solver.
+- The speed figure is the solver step alone; the renderer's cloud pass and the readback to feed it are not included, and the cloud renderer shares the GPU.

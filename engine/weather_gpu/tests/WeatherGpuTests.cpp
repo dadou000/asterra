@@ -1,0 +1,126 @@
+#include <orbit/rhi/vulkan/VulkanBackend.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <orbit/weather_gpu/GpuStormSolver.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <source_location>
+
+using namespace orbit;
+using namespace orbit::weather_lab;
+
+namespace
+{
+void Check(const bool condition, const std::source_location location = std::source_location::current())
+{
+    if (!condition)
+    {
+        std::cerr << "Weather GPU test failed at " << location.file_name() << ':' << location.line() << '\n';
+        std::exit(1);
+    }
+}
+
+double MaxDifference(const float* a, const float* b, const std::size_t n)
+{
+    double worst = 0.0;
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        worst = std::max(worst, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    return worst;
+}
+
+FastStormConfig SmallConfig()
+{
+    FastStormConfig c;
+    c.nx = 32;
+    c.ny = 32;
+    c.nz = 40;
+    c.threads = 2;
+    c.ice = true;
+    c.lateralSpongeCells = 4;
+    c.maxTimeStep = 12.0F;
+    c.maxCourant = 1.0e9F;   // fixed step, the same on both sides
+    return c;
+}
+} // namespace
+
+int RunTests()
+{
+    std::unique_ptr<rhi::Device> device;
+    try
+    {
+        device = rhi::vulkan::CreateDevice({});
+    }
+    catch (const std::exception& exception)
+    {
+        std::cout << "Weather GPU tests skipped: no Vulkan device (" << exception.what() << ")\n";
+        return 0;
+    }
+    shader::dxc::DxcShaderCompiler compiler;
+    const FastStormConfig config = SmallConfig();
+    Check(weather_gpu::GpuStormSolver::Validate(config).empty());
+    FastStormConfig tooBig = config;
+    tooBig.nx = 512;
+    Check(!weather_gpu::GpuStormSolver::Validate(tooBig).empty());
+
+    FastStormSolver cpu(config);
+    weather_gpu::GpuStormSolver gpu(*device, compiler, config);
+    gpu.Upload(cpu);
+
+    // Round trip: what goes up comes back unchanged.
+    {
+        FastStormSolver back(config);
+        gpu.Download(back);
+        const std::size_t cells = 32U * 32U * 40U;
+        Check(MaxDifference(cpu.MutableState().theta, back.MutableState().theta, cells) == 0.0);
+        Check(MaxDifference(cpu.MutableState().u, back.MutableState().u, cells) == 0.0);
+    }
+
+    // Eight steps of the storm: the GPU and the CPU reference agree to float32 accuracy of the stages.
+    constexpr int kSteps = 8;
+    for (int i = 0; i < kSteps; ++i)
+    {
+        (void)cpu.Step(12.0F);
+    }
+    gpu.Advance(kSteps, 12.0F);
+    Check(std::fabs(gpu.Time() - cpu.Diagnostics().time) < 1.0e-3);
+    FastStormSolver downloaded(config);
+    gpu.Download(downloaded);
+    const FastStormState a = cpu.MutableState();
+    const FastStormState b = downloaded.MutableState();
+    const std::size_t cells = 32U * 32U * 40U;
+    Check(MaxDifference(a.theta, b.theta, cells) < 0.05);
+    Check(MaxDifference(a.u, b.u, cells) < 0.05);
+    Check(MaxDifference(a.v, b.v, cells) < 0.05);
+    Check(MaxDifference(a.w, b.w, cells + 32U * 32U) < 0.2);
+    Check(MaxDifference(a.qv, b.qv, cells) < 2.0e-4);
+    float wmax = 0.0F;
+    for (std::size_t i = 0; i < cells; ++i) { wmax = std::max(wmax, b.w[i]); }
+    Check(wmax > 0.1F);   // the bubble is rising (about 0.3 m/s after 96 s)
+
+    // A failed reload keeps the running pipelines; a good one swaps in.
+    const std::string error = gpu.ReloadShaders("this is not hlsl");
+    Check(!error.empty());
+    gpu.Advance(1, 12.0F);
+    Check(gpu.ReloadShaders().empty());
+    gpu.Advance(1, 12.0F);
+
+    std::cout << "Weather GPU tests passed\n";
+    return 0;
+}
+
+int main()
+{
+    try
+    {
+        return RunTests();
+    }
+    catch (const std::exception& exception)
+    {
+        std::cerr << "Weather GPU test threw: " << exception.what() << std::endl;
+        return 1;
+    }
+}

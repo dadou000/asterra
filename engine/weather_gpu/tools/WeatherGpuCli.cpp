@@ -1,0 +1,213 @@
+// orbit_weather_gpu: runs the GPU storm core against the CPU reference and times it.
+//
+//   orbit_weather_gpu compare [--nx 32 --ny 32 --nz 40 --steps 12 --dt 12 --ice 1 --sponge 0]
+//   orbit_weather_gpu bench   [--nx 256 --ny 256 --steps 40 --dt 24 --ice 1 --sponge 16]
+
+#include <orbit/rhi/vulkan/VulkanBackend.hpp>
+#include <orbit/shader/dxc/DxcShaderCompiler.hpp>
+#include <orbit/weather_gpu/GpuStormSolver.hpp>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <map>
+#include <string>
+#include <vector>
+
+using namespace orbit;
+using namespace orbit::weather_lab;
+
+namespace
+{
+using Options = std::map<std::string, std::string>;
+
+Options ParseOptions(const int argc, char** argv, const int first)
+{
+    Options options;
+    for (int i = first; i + 1 < argc; i += 2)
+    {
+        const std::string key = argv[i];
+        if (key.rfind("--", 0) == 0)
+        {
+            options[key.substr(2)] = argv[i + 1];
+        }
+    }
+    return options;
+}
+
+double Number(const Options& o, const char* key, const double fallback)
+{
+    const auto it = o.find(key);
+    return it == o.end() ? fallback : std::atof(it->second.c_str());
+}
+
+FastStormConfig ConfigFrom(const Options& o, const double defaultNx, const double defaultSponge)
+{
+    FastStormConfig c;
+    c.nx = static_cast<std::uint32_t>(Number(o, "nx", defaultNx));
+    c.ny = static_cast<std::uint32_t>(Number(o, "ny", defaultNx));
+    c.nz = static_cast<std::uint32_t>(Number(o, "nz", 40.0));
+    c.ice = Number(o, "ice", 1.0) != 0.0;
+    c.lateralSpongeCells = static_cast<std::uint32_t>(Number(o, "sponge", defaultSponge));
+    c.bubble.amplitude = static_cast<float>(Number(o, "bubble", 1.0));
+    c.threads = static_cast<std::uint32_t>(Number(o, "threads", 8.0));
+    // The GPU takes a fixed step; make the CPU reference take exactly the same one.
+    c.maxTimeStep = static_cast<float>(Number(o, "dt", 24.0));
+    c.maxCourant = 1.0e9F;
+    return c;
+}
+
+// Max |divergence| of rho0 u on the periodic grid, from raw state arrays.
+double MaxDivergence(FastStormSolver& solver)
+{
+    const FastStormConfig& c = solver.Config();
+    const FastStormState s = solver.MutableState();
+    const BaseState& base = solver.Base();
+    double worst = 0.0;
+    for (std::uint32_t k = 0; k < c.nz; ++k)
+    {
+        for (std::uint32_t j = 0; j < c.ny; ++j)
+        {
+            for (std::uint32_t i = 0; i < c.nx; ++i)
+            {
+                const std::size_t idx = (static_cast<std::size_t>(k) * c.ny + j) * c.nx + i;
+                const std::size_t ip = (static_cast<std::size_t>(k) * c.ny + j) * c.nx + ((i + 1U) & (c.nx - 1U));
+                const std::size_t jp = (static_cast<std::size_t>(k) * c.ny + ((j + 1U) & (c.ny - 1U))) * c.nx + i;
+                const std::size_t up = idx + static_cast<std::size_t>(c.nx) * c.ny;
+                const double div = (s.u[ip] - s.u[idx]) / c.dx + (s.v[jp] - s.v[idx]) / c.dy
+                    + (base.faceDensity[k + 1U] * s.w[up] - base.faceDensity[k] * s.w[idx]) / base.density[k] / c.dz;
+                worst = std::max(worst, std::fabs(div));
+            }
+        }
+    }
+    return worst;
+}
+
+std::unique_ptr<rhi::Device> OpenDevice()
+{
+    try
+    {
+        return rhi::vulkan::CreateDevice({});
+    }
+    catch (const std::exception& exception)
+    {
+        std::cerr << "no Vulkan device: " << exception.what() << '\n';
+        return nullptr;
+    }
+}
+
+int Compare(const Options& o)
+{
+    auto device = OpenDevice();
+    if (!device) { return 3; }
+    shader::dxc::DxcShaderCompiler compiler;
+    const FastStormConfig config = ConfigFrom(o, 32.0, 0.0);
+    if (const std::string problem = weather_gpu::GpuStormSolver::Validate(config); !problem.empty())
+    {
+        std::cerr << problem << '\n';
+        return 2;
+    }
+    const auto steps = static_cast<std::uint32_t>(Number(o, "steps", 12.0));
+    const float dt = config.maxTimeStep;
+
+    FastStormSolver cpu(config);
+    weather_gpu::GpuStormSolver gpu(*device, compiler, config);
+    gpu.Upload(cpu);
+    std::printf("adapter: %.*s\n", static_cast<int>(device->AdapterName().size()), device->AdapterName().data());
+    for (std::uint32_t chunk = 0; chunk < steps; ++chunk)
+    {
+        (void)cpu.Step(dt);
+        gpu.Advance(1U, dt);
+        if ((chunk + 1U) % std::max(1U, steps / 6U) != 0U && chunk + 1U != steps) { continue; }
+        FastStormSolver downloaded(config);
+        gpu.Download(downloaded);
+        const FastStormState a = cpu.MutableState();
+        const FastStormState b = downloaded.MutableState();
+        const auto diff = [&](const char* name, const float* x, const float* y, const std::size_t n)
+        {
+            if (x == nullptr || y == nullptr) { return; }
+            double worst = 0.0, range = 0.0, mean = 0.0;
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                worst = std::max(worst, static_cast<double>(std::fabs(x[i] - y[i])));
+                range = std::max(range, static_cast<double>(std::fabs(x[i])));
+                mean += std::fabs(x[i] - y[i]);
+            }
+            std::printf("  %-6s max diff %.3e (field max %.3e, mean diff %.3e)\n", name, worst, range, mean / static_cast<double>(n));
+        };
+        const std::size_t cells = static_cast<std::size_t>(config.nx) * config.ny * config.nz;
+        std::printf("step %u (t = %.0f s): divergence cpu %.2e  gpu %.2e\n", chunk + 1U, cpu.Diagnostics().time, MaxDivergence(cpu),
+            MaxDivergence(downloaded));
+        diff("u", a.u, b.u, cells);
+        diff("v", a.v, b.v, cells);
+        diff("w", a.w, b.w, cells + static_cast<std::size_t>(config.nx) * config.ny);
+        diff("theta", a.theta, b.theta, cells);
+        diff("qv", a.qv, b.qv, cells);
+        diff("qc", a.qc, b.qc, cells);
+        diff("qr", a.qr, b.qr, cells);
+        if (config.ice)
+        {
+            diff("qi", a.qi, b.qi, cells);
+            diff("qs", a.qs, b.qs, cells);
+            diff("qg", a.qg, b.qg, cells);
+        }
+    }
+    return 0;
+}
+
+int Bench(const Options& o)
+{
+    auto device = OpenDevice();
+    if (!device) { return 3; }
+    shader::dxc::DxcShaderCompiler compiler;
+    const FastStormConfig config = ConfigFrom(o, 256.0, 16.0);
+    if (const std::string problem = weather_gpu::GpuStormSolver::Validate(config); !problem.empty())
+    {
+        std::cerr << problem << '\n';
+        return 2;
+    }
+    const auto steps = static_cast<std::uint32_t>(Number(o, "steps", 40.0));
+    const float dt = config.maxTimeStep;
+    FastStormSolver cpu(config);
+    weather_gpu::GpuStormSolver gpu(*device, compiler, config);
+    gpu.Upload(cpu);
+    gpu.Advance(2U, dt);   // warm up
+    double best = 1.0e30;
+    for (int run = 0; run < 3; ++run)
+    {
+        gpu.Advance(steps, dt);
+        best = std::min(best, gpu.LastAdvanceMilliseconds());
+    }
+    const double perStep = best / steps;
+    std::printf("adapter: %.*s\n", static_cast<int>(device->AdapterName().size()), device->AdapterName().data());
+    std::printf("%ux%ux%u (%.2f M cells), %u steps of %.0f s: %.2f ms/step, %.0fx real time, %.0f MiB resident\n", config.nx, config.ny,
+        config.nz, static_cast<double>(config.nx) * config.ny * config.nz / 1.0e6, steps, static_cast<double>(dt), perStep,
+        dt / (perStep / 1000.0), static_cast<double>(gpu.ResidentBytes()) / (1024.0 * 1024.0));
+    FastStormSolver downloaded(config);
+    gpu.Download(downloaded);
+    const FastStormState s = downloaded.MutableState();
+    float wmax = 0.0F;
+    const std::size_t n = static_cast<std::size_t>(config.nx) * config.ny * (config.nz + 1U);
+    for (std::size_t i = 0; i < n; ++i) { wmax = std::max(wmax, s.w[i]); }
+    std::printf("after %.0f s: max updraft %.1f m/s, max divergence %.2e\n", gpu.Time(), static_cast<double>(wmax),
+        MaxDivergence(downloaded));
+    return 0;
+}
+} // namespace
+
+int main(const int argc, char** argv)
+{
+    if (argc < 2)
+    {
+        std::cerr << "usage: orbit_weather_gpu compare|bench [--option value ...]\n";
+        return 2;
+    }
+    const std::string command = argv[1];
+    if (command == "compare") { return Compare(ParseOptions(argc, argv, 2)); }
+    if (command == "bench") { return Bench(ParseOptions(argc, argv, 2)); }
+    std::cerr << "unknown command\n";
+    return 2;
+}
