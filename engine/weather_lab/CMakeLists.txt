@@ -7,6 +7,7 @@ add_library(OrbitWeatherLab STATIC
     src/Thermo.cpp
     src/WxFormat.cpp
     src/FastStormSolver.cpp
+    src/NestedStormSolver.cpp
     src/StormMetrics.cpp
     src/WeatherLabSession.cpp
 )

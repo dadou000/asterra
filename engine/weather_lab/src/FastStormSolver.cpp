@@ -256,6 +256,7 @@ struct FastStormSolver::Impl
     std::vector<double> lambdaX, lambdaY;
 
     FastStormDiagnostics diag;
+    FastStormHook hook;
 
     explicit Impl(const FastStormConfig& config);
 
@@ -1262,6 +1263,13 @@ float FastStormSolver::Impl::Step(const float requested)
     Forcing(dt);
     diag.timings.forcingMs = MillisecondsSince(t);
 
+    if (hook)
+    {
+        hook(FastStormState{u.data(), v.data(), w.data(), theta.data(), qv.data(), qc.data(), qr.data(),
+                 qi.data(), qs.data(), qg.data(), cfg.nx, cfg.ny, cfg.nz},
+            diag.time + dt, dt);
+    }
+
     t = Clock::now();
     Project(dt);
     diag.timings.projectionMs = MillisecondsSince(t);
@@ -1337,6 +1345,21 @@ std::uint32_t FastStormSolver::Advance(const double seconds)
         ++steps;
     }
     return steps;
+}
+
+FastStormState FastStormSolver::MutableState()
+{
+    Impl& s = *impl_;
+    return FastStormState{s.u.data(), s.v.data(), s.w.data(), s.theta.data(), s.qv.data(), s.qc.data(), s.qr.data(),
+        s.qi.data(), s.qs.data(), s.qg.data(), s.cfg.nx, s.cfg.ny, s.cfg.nz};
+}
+
+void FastStormSolver::SetPreProjectionHook(FastStormHook hook) { impl_->hook = std::move(hook); }
+
+void FastStormSolver::MarkInitialState()
+{
+    impl_->diag.initialTotalWater = impl_->TotalWater();
+    impl_->diag.totalWater = impl_->diag.initialTotalWater;
 }
 
 const FastStormConfig& FastStormSolver::Config() const { return impl_->cfg; }

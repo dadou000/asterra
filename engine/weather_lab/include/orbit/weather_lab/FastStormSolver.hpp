@@ -4,6 +4,7 @@
 #include <orbit/weather_lab/WxFormat.hpp>
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <cstdint>
 #include <string>
@@ -98,6 +99,30 @@ struct FastStormDiagnostics
     FastStormTimings timings{};
 };
 
+// Raw prognostic arrays, staggered as inside the solver: u at x faces (x = i dx, y and z at centres), v at y faces, w at z faces
+// (nz + 1 levels), everything else at cell centres; index (k * ny + j) * nx + i. The ice arrays are null without cfg.ice.
+struct FastStormState
+{
+    float* u = nullptr;
+    float* v = nullptr;
+    float* w = nullptr;
+    float* theta = nullptr;
+    float* qv = nullptr;
+    float* qc = nullptr;
+    float* qr = nullptr;
+    float* qi = nullptr;
+    float* qs = nullptr;
+    float* qg = nullptr;
+    std::uint32_t nx = 0;
+    std::uint32_t ny = 0;
+    std::uint32_t nz = 0;
+};
+
+// Called inside every step after the forcing and before the pressure projection, with the time at the end of the step and its
+// length; the nesting uses it to relax the lateral boundary zone toward the parent (the projection then removes the divergence
+// the relaxation introduces).
+using FastStormHook = std::function<void(const FastStormState&, double endTime, float dt)>;
+
 class FastStormSolver
 {
 public:
@@ -117,6 +142,12 @@ public:
     std::uint32_t Advance(double seconds);
     // One explicit step of at most `dt` seconds (clamped by the CFL limit).
     float Step(float dt);
+
+    // Direct access to the prognostic arrays (for nesting and tests); valid until the solver is destroyed.
+    [[nodiscard]] FastStormState MutableState();
+    void SetPreProjectionHook(FastStormHook hook);
+    // Re-baselines the water budget after the state was overwritten from outside.
+    void MarkInitialState();
 
     [[nodiscard]] const FastStormConfig& Config() const;
     [[nodiscard]] const BaseState& Base() const;

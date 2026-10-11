@@ -1,11 +1,13 @@
 // orbit_weather_lab: command line front end for the SC-01 storm experiments.
 //
 //   orbit_weather_lab run --out fast.orbitwx --minutes 120 [options]
+//   orbit_weather_lab nest --out child.orbitwx [--parent-out parent.orbitwx] --ratio 4 --cells 32 [--feedback 1] [run options]
 //   orbit_weather_lab metrics run.orbitwx
 //   orbit_weather_lab compare reference.orbitwx candidate.orbitwx
 //   orbit_weather_lab budget [run options]
 
 #include <orbit/weather_lab/FastStormSolver.hpp>
+#include <orbit/weather_lab/NestedStormSolver.hpp>
 #include <orbit/weather_lab/StormMetrics.hpp>
 
 #include <chrono>
@@ -139,6 +141,77 @@ int Run(const Options& o)
     return 0;
 }
 
+int Nest(const Options& o)
+{
+    NestConfig nc;
+    nc.parent = ConfigFrom(o);
+    nc.ratio = static_cast<std::uint32_t>(Number(o, "ratio", nc.ratio));
+    nc.cells = static_cast<std::uint32_t>(Number(o, "cells", nc.cells));
+    nc.relaxCells = static_cast<std::uint32_t>(Number(o, "relax-cells", nc.relaxCells));
+    nc.relaxSeconds = static_cast<float>(Number(o, "relax-seconds", nc.relaxSeconds));
+    nc.feedback = Number(o, "feedback", 0.0) != 0.0;
+    nc.feedbackSeconds = static_cast<float>(Number(o, "feedback-seconds", nc.feedbackSeconds));
+    if (const std::string problem = NestedStormSolver::Validate(nc); !problem.empty())
+    {
+        std::cerr << "invalid nest: " << problem << '\n';
+        return 2;
+    }
+    const double minutes = Number(o, "minutes", 120.0);
+    const double every = Number(o, "every", 600.0);
+    const auto frames = static_cast<std::size_t>(minutes * 60.0 / every) + 1U;
+    std::vector<float> times;
+    for (std::size_t f = 0; f < frames; ++f)
+    {
+        times.push_back(static_cast<float>(static_cast<double>(f) * every));
+    }
+    NestedStormSolver nest(nc);
+    WxWriter childWriter;
+    WxWriter parentWriter;
+    const auto childOut = o.find("out");
+    const auto parentOut = o.find("parent-out");
+    std::string error;
+    if (childOut != o.end() && !childWriter.Open(childOut->second, nest.Child().MakeHeader(times), &error))
+    {
+        std::cerr << error << '\n';
+        return 2;
+    }
+    if (parentOut != o.end() && !parentWriter.Open(parentOut->second, nest.Parent().MakeHeader(times), &error))
+    {
+        std::cerr << error << '\n';
+        return 2;
+    }
+    const auto write = [&]
+    {
+        if (childOut != o.end()) { (void)nest.Child().WriteFrame(childWriter); }
+        if (parentOut != o.end()) { (void)nest.Parent().WriteFrame(parentWriter); }
+    };
+    write();
+    std::printf("nest: parent %ux%ux%u at %.0f m, child %ux%u at %.0f m (%u parent cells, %.0f%% of the child relaxed), %s\n",
+        nc.parent.nx, nc.parent.ny, nc.parent.nz, static_cast<double>(nc.parent.dx),
+        nest.Child().Config().nx, nest.Child().Config().ny, static_cast<double>(nest.Child().Config().dx), nc.cells,
+        100.0 * nest.RelaxedFraction(), nc.feedback ? "two-way" : "one-way");
+    const auto start = std::chrono::steady_clock::now();
+    for (std::size_t f = 1; f < frames; ++f)
+    {
+        nest.Advance(every);
+        write();
+        const auto& dp = nest.Parent().Diagnostics();
+        const auto& dc = nest.Child().Diagnostics();
+        std::printf("t=%6.1f min  parent wmax=%5.1f  child wmax=%5.1f wmin=%6.1f  child div=%.1e  sub-steps/step=%.1f\n",
+            dp.time / 60.0, static_cast<double>(dp.maxUpdraft), static_cast<double>(dc.maxUpdraft),
+            static_cast<double>(dc.maxDowndraft), static_cast<double>(dc.maxDivergence), nest.SubStepRatio());
+        std::fflush(stdout);
+    }
+    childWriter.Close();
+    parentWriter.Close();
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    const double cells = static_cast<double>(nc.parent.nx) * nc.parent.ny * nc.parent.nz
+        + static_cast<double>(nest.Child().Config().nx) * nest.Child().Config().ny * nest.Child().Config().nz;
+    std::printf("simulated %.0f s in %.2f s wall: %.1fx real time, %.2f M cells in total\n",
+        nest.Parent().Diagnostics().time, wall, nest.Parent().Diagnostics().time / wall, cells / 1.0e6);
+    return 0;
+}
+
 int Metrics(const std::string& path)
 {
     WxReader reader;
@@ -217,6 +290,7 @@ int main(const int argc, char** argv)
     }
     const std::string command = argv[1];
     if (command == "run") { return Run(ParseOptions(argc, argv, 2)); }
+    if (command == "nest") { return Nest(ParseOptions(argc, argv, 2)); }
     if (command == "budget") { return Budget(ParseOptions(argc, argv, 2)); }
     if (command == "metrics" && argc >= 3) { return Metrics(argv[2]); }
     if (command == "compare" && argc >= 4) { return Compare(argv[2], argv[3]); }

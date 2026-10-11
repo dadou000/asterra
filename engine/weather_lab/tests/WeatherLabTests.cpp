@@ -1,4 +1,5 @@
 #include <orbit/weather_lab/FastStormSolver.hpp>
+#include <orbit/weather_lab/NestedStormSolver.hpp>
 #include <orbit/weather_lab/StormMetrics.hpp>
 #include <orbit/weather_lab/SliceColor.hpp>
 #include <orbit/weather_lab/Thermo.hpp>
@@ -155,6 +156,81 @@ void TestIceScheme()
     sa.CopyField("qs", ga);
     sb.CopyField("qs", gb);
     Check(ga == gb);
+}
+
+NestConfig SmallNest()
+{
+    NestConfig n;
+    n.parent = SmallConfig();
+    n.parent.bubble.amplitude = 2.0F;
+    n.ratio = 2;
+    n.cells = 16;       // child 32 x 32 at half the spacing
+    n.relaxCells = 6;
+    return n;
+}
+
+void TestNesting()
+{
+    // Validation.
+    NestConfig bad = SmallNest();
+    Check(NestedStormSolver::Validate(bad).empty());
+    bad.ratio = 3;
+    Check(!NestedStormSolver::Validate(bad).empty());
+    bad = SmallNest();
+    bad.cells = 12;   // 24 child cells: not a power of two
+    Check(!NestedStormSolver::Validate(bad).empty());
+    bad = SmallNest();
+    bad.cells = 32;   // no margin left inside a 32-cell parent
+    Check(!NestedStormSolver::Validate(bad).empty());
+
+    // One-way: the child starts as the parent's interpolation, stays finite and divergence-free, develops its own storm.
+    NestedStormSolver oneWay(SmallNest());
+    std::vector<float> childTheta0;
+    oneWay.Child().CopyField("th", childTheta0);
+    const NestConfig layout = SmallNest();
+    Check(childTheta0.size() == 32U * 32U * 40U);
+    oneWay.Advance(1500.0);
+    const FastStormDiagnostics& dc = oneWay.Child().Diagnostics();
+    Check(std::isfinite(dc.maxUpdraft) && dc.maxUpdraft > 3.0F);
+    Check(dc.maxDivergence < 1.0e-5F);
+    Check(std::fabs(oneWay.Child().Diagnostics().time - oneWay.Parent().Diagnostics().time) < 1.0e-3);
+    Check(oneWay.SubStepRatio() >= 1.0);
+
+    // At the child's outer edge the child follows the parent: compare the relaxed edge column with the parent's value there.
+    std::vector<float> childTheta, parentTheta;
+    oneWay.Child().CopyField("th", childTheta);
+    oneWay.Parent().CopyField("th", parentTheta);
+    const std::uint32_t oi = (layout.parent.nx - layout.cells) / 2U;
+    const std::uint32_t oj = (layout.parent.ny - layout.cells) / 2U;
+    double worst = 0.0;
+    for (std::uint32_t k = 0; k < 40U; ++k)
+    {
+        for (std::uint32_t j = 0; j < 32U; ++j)
+        {
+            const float child = childTheta[(static_cast<std::size_t>(k) * 32U + j) * 32U + 0U];
+            const float parent = parentTheta[(static_cast<std::size_t>(k) * layout.parent.ny + oj + j / 2U) * layout.parent.nx + oi];
+            worst = std::max(worst, static_cast<double>(std::fabs(child - parent)));
+        }
+    }
+    Check(worst < 0.6);
+
+    // Two-way: finite, and the parent really changes relative to the one-way run.
+    NestConfig two = SmallNest();
+    two.feedback = true;
+    NestedStormSolver twoWay(two);
+    twoWay.Advance(1500.0);
+    Check(std::isfinite(twoWay.Parent().Diagnostics().maxUpdraft));
+    Check(twoWay.Child().Diagnostics().maxDivergence < 1.0e-5F);
+    std::vector<float> a, b;
+    oneWay.Parent().CopyField("th", a);
+    twoWay.Parent().CopyField("th", b);
+    double difference = 0.0;
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+        Check(std::isfinite(b[i]));
+        difference = std::max(difference, static_cast<double>(std::fabs(a[i] - b[i])));
+    }
+    Check(difference > 1.0e-3);
 }
 
 void TestDeterministicAcrossThreadCounts()
@@ -364,6 +440,7 @@ int main()
     TestProjectionAndWaterBudget();
     TestStormInitiates();
     TestIceScheme();
+    TestNesting();
     TestDeterministicAcrossThreadCounts();
     TestFormatRoundTripAndMetrics();
     TestSliceColors();
