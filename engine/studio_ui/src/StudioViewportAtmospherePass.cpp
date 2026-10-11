@@ -338,7 +338,7 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                 cloudHeight += cloudHeight & 1U;
             }
             const u32 marchWidth = cloudCheckerboard ? cloudWidth / 2U : cloudWidth;
-            const u32 marchHeight = cloudCheckerboard ? cloudHeight / 2U : cloudHeight;
+            const u32 marchHeight = cloudCheckerboard && cloudRenderer_.CheckerboardMode() != 2U ? cloudHeight / 2U : cloudHeight;
             auto& cloudTarget = cloudTargets_[info.id];
             if (cloudTarget == nullptr ||
                 cloudTarget->Width() != marchWidth ||

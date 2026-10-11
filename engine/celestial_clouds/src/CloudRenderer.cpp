@@ -1743,9 +1743,15 @@ float4 main(VSOutput input) : SV_Target0
     {
         // This pixel of the half-size target is the full-resolution cloud pixel 2*p + offset; march that one (CloudMarch and
         // CloudWithGodrays read the pixel and uv from `input`, so remapping them here is all they need).
+#if CLOUD_CHECKERBOARD == 2
+        // Half rate: the target is half the width and the full height; a row's marched pixel alternates with the row and the frame.
+        const int2 lowPixel = int2(input.position.xy);
+        const int2 fullPixel = int2(lowPixel.x * 2 + ((lowPixel.y + int(uint(g.temporal.x) & 1u)) & 1), lowPixel.y);
+#else
         const uint order[4] = { 0u, 3u, 1u, 2u };
         const uint phase = order[uint(g.temporal.x) & 3u];
         const int2 fullPixel = int2(input.position.xy) * 2 + int2(int(phase & 1u), int(phase >> 1u));
+#endif
         uint depthW, depthH;
         g_depth.GetDimensions(depthW, depthH);
         const float fullWidth = float(depthW) / g.atmosphere.w;
@@ -1992,10 +1998,15 @@ float4 main(VSOutput input) : SV_Target0
     const int2 maxPixel = int2(width - 1u, height - 1u);
 #if CLOUD_CHECKERBOARD
     // g_current holds one pixel of every 2x2 block: pixel p is fresh this frame when p & 1 equals the phase offset.
+#if CLOUD_CHECKERBOARD == 2
+    const int2 base = int2(min(pixel.x >> 1, maxPixel.x), min(pixel.y, maxPixel.y));
+    const bool fresh = (pixel.x & 1) == ((pixel.y + int(uint(r.params.y) & 1u)) & 1);
+#else
     const int2 base = min(pixel >> 1, maxPixel);
     const uint order[4] = { 0u, 3u, 1u, 2u };
     const uint phase = order[uint(r.params.y) & 3u];
     const bool fresh = all((pixel & 1) == int2(int(phase & 1u), int(phase >> 1u)));
+#endif
 #else
     const int2 base = pixel;
     const bool fresh = true;
@@ -2563,7 +2574,8 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
         defines_ = defineText;
         // CLOUD_CHECKERBOARD=1 changes the size of the march target, which the pass code must follow.
         const std::size_t found = defineText.find("CLOUD_CHECKERBOARD=");
-        checkerboard_ = found != std::string::npos && found + 19U < defineText.size() && defineText[found + 19U] == '1';
+        const char mode = found != std::string::npos && found + 19U < defineText.size() ? defineText[found + 19U] : '0';
+        checkerboard_ = mode == '1' ? 1U : (mode == '2' ? 2U : 0U);   // 1: a quarter of the pixels per frame, 2: half (a checkerboard)
         return {};
     }
     catch (const std::exception& exception)

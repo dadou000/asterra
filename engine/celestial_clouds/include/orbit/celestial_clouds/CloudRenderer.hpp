@@ -103,7 +103,9 @@ public:
     [[nodiscard]] std::string SetShaderDefines(const std::string& defines);
     [[nodiscard]] const std::string& ShaderDefines() const noexcept { return defines_; }
     // True while CLOUD_CHECKERBOARD=1: the march target is half the cloud size in each dimension (one pixel of every 2x2 block per frame).
-    [[nodiscard]] bool CheckerboardEnabled() const noexcept { return checkerboard_; }
+    [[nodiscard]] bool CheckerboardEnabled() const noexcept { return checkerboard_ != 0U; }
+    // 2 while CLOUD_CHECKERBOARD=2: half the pixels per frame, the march target is half the width and the full height.
+    [[nodiscard]] u32 CheckerboardMode() const noexcept { return checkerboard_; }
 
     CloudRenderer(const CloudRenderer&) = delete;
     CloudRenderer& operator=(const CloudRenderer&) = delete;
@@ -211,7 +213,7 @@ private:
     const shader::Compiler* compiler_{nullptr};
     std::string farField_;
     std::string defines_;
-    bool checkerboard_{false};
+    u32 checkerboard_{0U};
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> compositePipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> resolvePipeline_;
