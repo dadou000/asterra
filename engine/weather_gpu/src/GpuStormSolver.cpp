@@ -38,9 +38,9 @@ struct Params
 static_assert(sizeof(Params) == 36U * 4U);
 
 // The entry points of storm.hlsl.
-constexpr std::array<const char*, 14> kKernels{
+constexpr std::array<const char*, 15> kKernels{
     "AdvectVelocity", "AdvectScalars", "MassPartial", "MassRatio", "MassScale", "Microphysics", "Buoyancy", "TopSponge", "Mix",
-    "LateralSponge", "ProjRhs", "FftLine", "ProjTridiag", "ProjGradient"};
+    "LateralSponge", "ProjRhs", "FftLine", "ProjTridiag", "ProjGradient", "ExportCloud"};
 
 std::string ReadFile(const char* path)
 {
@@ -81,6 +81,8 @@ struct GpuStormSolver::Impl
     std::unique_ptr<rhi::Buffer> baseBuffer;
     std::unique_ptr<rhi::Buffer> staging;
     std::unique_ptr<rhi::Buffer> readback;
+    std::unique_ptr<rhi::Buffer> cloudOut;      // 32 header floats + extinction per cell, for the cloud renderer
+    std::unique_ptr<rhi::Buffer> headerStage;
     std::unique_ptr<rhi::Queue> queue;
     std::unique_ptr<rhi::Fence> fence;
     std::unique_ptr<rhi::CommandAllocator> allocator;
@@ -110,7 +112,12 @@ struct GpuStormSolver::Impl
             .memory = rhi::MemoryUsage::HostVisible, .initialState = rhi::ResourceState::CopySource});
         readback = device.CreateBuffer({.sizeBytes = copyFloats * sizeof(f32), .usage = rhi::BufferUsage::Structured,
             .memory = rhi::MemoryUsage::HostReadback, .initialState = rhi::ResourceState::CopyDestination});
-        if (!arena || !staging || !readback)
+        cloudOut = device.CreateBuffer({.sizeBytes = (32ULL + cells) * sizeof(f32), .usage = rhi::BufferUsage::Structured,
+            .memory = rhi::MemoryUsage::GpuOnly, .initialState = rhi::ResourceState::ShaderResource});
+        headerStage = device.CreateBuffer({.sizeBytes = 32ULL * sizeof(f32), .usage = rhi::BufferUsage::Structured,
+            .memory = rhi::MemoryUsage::HostVisible, .initialState = rhi::ResourceState::CopySource});
+        bytes += static_cast<std::size_t>((32ULL + cells) * sizeof(f32));
+        if (!arena || !staging || !readback || !cloudOut || !headerStage)
         {
             throw std::runtime_error("GpuStormSolver: could not allocate the state buffers");
         }
@@ -213,7 +220,7 @@ struct GpuStormSolver::Impl
                 built[name] = device.CreateComputePipeline({
                     .computeShader = {.data = binary.bytecode.data(), .size = binary.bytecode.size()},
                     .pushConstantDwords = static_cast<u32>(sizeof(Params) / 4U),
-                    .shaderResourceBuffers = 2U});
+                    .shaderResourceBuffers = 3U});
             }
         }
         catch (const std::exception& exception)
@@ -273,6 +280,7 @@ struct GpuStormSolver::Impl
         commands->SetComputeConstants(std::span<const u32>(reinterpret_cast<const u32*>(&p), sizeof(Params) / 4U));
         commands->SetComputeBuffer(0U, *arena);
         commands->SetComputeBuffer(1U, *baseBuffer);
+        commands->SetComputeBuffer(2U, *arena);   // the cloud output slot: only ExportCloud uses it, which binds the real buffer
         commands->Dispatch(gx, gy, gz);
         commands->UavBarrier(*arena);
     }
@@ -493,6 +501,47 @@ void GpuStormSolver::Advance(const u32 steps, const f32 dt)
     }
     s.Submit();
     s.lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+rhi::Buffer& GpuStormSolver::CloudBuffer() { return *impl_->cloudOut; }
+
+void GpuStormSolver::ExportCloud(const StormPlacement& placement)
+{
+    Impl& s = *impl_;
+    std::array<f32, 32> header{};
+    header[0] = placement.active ? 1.0F : 0.0F;
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+        header[1 + i] = static_cast<f32>(placement.centre[i]);
+        header[4 + i] = placement.east[i];
+        header[7 + i] = placement.north[i];
+    }
+    header[13] = placement.planetRadius;
+    header[14] = s.cfg.dx;
+    header[15] = s.cfg.dy;
+    header[16] = s.cfg.dz;
+    header[17] = static_cast<f32>(s.cfg.nx);
+    header[18] = static_cast<f32>(s.cfg.ny);
+    header[19] = static_cast<f32>(s.cfg.nz);
+    const f32 sponge = static_cast<f32>(s.cfg.lateralSpongeCells > 0U ? s.cfg.lateralSpongeCells : 8U) * s.cfg.dx;
+    header[20] = placement.fadeMeters > 0.0F ? placement.fadeMeters : sponge;
+    std::memcpy(s.headerStage->Map(), header.data(), header.size() * sizeof(f32));
+    s.headerStage->Unmap();
+
+    s.Begin();
+    s.commands->Transition(*s.cloudOut, rhi::ResourceState::ShaderResource, rhi::ResourceState::CopyDestination);
+    s.commands->CopyBuffer(*s.headerStage, 0U, *s.cloudOut, 0U, header.size() * sizeof(f32));
+    s.commands->Transition(*s.cloudOut, rhi::ResourceState::CopyDestination, rhi::ResourceState::UnorderedAccess);
+    Params p = s.Base();
+    s.commands->SetComputePipeline(*s.pipelines.at("ExportCloud"));
+    s.commands->SetComputeConstants(std::span<const u32>(reinterpret_cast<const u32*>(&p), sizeof(Params) / 4U));
+    s.commands->SetComputeBuffer(0U, *s.arena);
+    s.commands->SetComputeBuffer(1U, *s.baseBuffer);
+    s.commands->SetComputeBuffer(2U, *s.cloudOut);
+    s.commands->Dispatch((s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, s.cfg.nz);
+    s.commands->UavBarrier(*s.cloudOut);
+    s.commands->Transition(*s.cloudOut, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::ShaderResource);
+    s.Submit();
 }
 
 double GpuStormSolver::Time() const { return impl_->time; }

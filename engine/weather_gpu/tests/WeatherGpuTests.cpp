@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 #include <iostream>
 #include <source_location>
 
@@ -30,6 +32,29 @@ double MaxDifference(const float* a, const float* b, const std::size_t n)
         worst = std::max(worst, static_cast<double>(std::fabs(a[i] - b[i])));
     }
     return worst;
+}
+
+std::vector<float> ReadBuffer(rhi::Device& device, rhi::Buffer& source, const std::size_t floats)
+{
+    auto queue = device.CreateQueue(rhi::QueueType::Graphics);
+    auto fence = device.CreateFence(0);
+    auto allocator = device.CreateCommandAllocator(rhi::QueueType::Graphics);
+    auto commands = device.CreateCommandList(*allocator);
+    auto readback = device.CreateBuffer({.sizeBytes = floats * sizeof(float), .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostReadback, .initialState = rhi::ResourceState::CopyDestination});
+    allocator->Reset();
+    commands->Reset(*allocator);
+    commands->Transition(source, rhi::ResourceState::ShaderResource, rhi::ResourceState::CopySource);
+    commands->CopyBuffer(source, 0U, *readback, 0U, floats * sizeof(float));
+    commands->Transition(source, rhi::ResourceState::CopySource, rhi::ResourceState::ShaderResource);
+    commands->Close();
+    queue->Submit(*commands);
+    queue->Signal(*fence, 1U);
+    fence->Wait(1U);
+    std::vector<float> out(floats);
+    std::memcpy(out.data(), readback->Map(), floats * sizeof(float));
+    readback->Unmap();
+    return out;
 }
 
 FastStormConfig SmallConfig()
@@ -107,6 +132,28 @@ int RunTests()
     gpu.Advance(1, 12.0F);
     Check(gpu.ReloadShaders().empty());
     gpu.Advance(1, 12.0F);
+
+    // Cloud export for the renderer: a placement header and a physically sane extinction field.
+    gpu.Advance(100, 12.0F);
+    weather_gpu::StormPlacement placement;
+    placement.centre = {6371000.0, 0.0, 0.0};
+    placement.east = {0.0F, 0.0F, 1.0F};
+    placement.north = {0.0F, 1.0F, 0.0F};
+    gpu.ExportCloud(placement);
+    const std::vector<float> out = ReadBuffer(*device, gpu.CloudBuffer(), 32U + cells);
+    Check(out[0] == 1.0F);
+    Check(out[13] == 6371000.0F && out[14] == config.dx && out[17] == 32.0F && out[19] == 40.0F);
+    Check(out[20] > 0.0F);
+    float peak = 0.0F;
+    double total = 0.0;
+    for (std::size_t i = 0; i < cells; ++i)
+    {
+        Check(std::isfinite(out[32 + i]) && out[32 + i] >= 0.0F);
+        peak = std::max(peak, out[32 + i]);
+        total += out[32 + i];
+    }
+    Check(peak > 0.005F && peak < 5.0F);   // a cloud exists, and its extinction is a plausible fraction of 1 per metre
+    Check(total > 0.0);
 
     std::cout << "Weather GPU tests passed\n";
     return 0;

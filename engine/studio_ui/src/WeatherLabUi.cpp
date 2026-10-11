@@ -126,6 +126,7 @@ void WeatherLabUi::Draw(PanelContext& context)
     DrawControls(context);
     DrawSettings(context);
     DrawPlayback(context);
+    DrawStorm(context);
     DrawViews(context);
     DrawMetrics(context);
 }
@@ -269,6 +270,63 @@ void WeatherLabUi::DrawSettings(PanelContext& context)
     {
         draft_.recordPath = recordPathText_;
         message_ = session_->Configure(draft_);
+    }
+}
+
+void WeatherLabUi::DrawStorm(PanelContext& context)
+{
+    if (storm_ == nullptr || !context.Section("Storm domain (in the viewport clouds)", false))
+    {
+        return;
+    }
+    context.MutedText(
+        "Places the GPU storm core on the body under the primary view: the clouds inside the domain are the simulated ones, advanced with "
+        "the simulation clock. Same operation as the storm.* RPC. Compare with the procedural sky in the cloud split view (B = CLOUD_STORM=0).");
+    (void)context.InputDouble("Latitude (deg)##storm-lat", stormDraft_.latitudeDegrees);
+    (void)context.InputDouble("Longitude (deg)##storm-lon", stormDraft_.longitudeDegrees);
+    i64 cells = static_cast<i64>(stormDraft_.cells);
+    if (context.InputInteger("Cells (nx = ny)##storm-cells", cells))
+    {
+        stormDraft_.cells = static_cast<u32>(std::clamp<i64>(cells, 16, 256));
+    }
+    f64 spacing = static_cast<f64>(stormDraft_.spacingMeters);
+    if (context.InputDouble("Spacing (m)##storm-spacing", spacing))
+    {
+        stormDraft_.spacingMeters = static_cast<f32>(spacing);
+    }
+    f64 spin = static_cast<f64>(stormDraft_.spinMinutes);
+    if (context.InputDouble("Spin-up (minutes)##storm-spin", spin))
+    {
+        stormDraft_.spinMinutes = static_cast<f32>(spin);
+    }
+    (void)context.Checkbox("Ice##storm-ice", stormDraft_.ice);
+    if (context.Button("Place storm##storm-place"))
+    {
+        stormMessage_ = storm_->Place(stormDraft_);
+    }
+    context.SameLine();
+    if (context.Button("Remove##storm-clear"))
+    {
+        storm_->Clear();
+        stormMessage_.clear();
+    }
+    const StormStatus status = storm_->Status();
+    context.KeyValue("State", StormStateName(status.state));
+    if (status.state == StormStatus::State::Active)
+    {
+        context.KeyValue("Centre", std::format("{:.3f}, {:.3f} deg", status.latitudeDegrees, status.longitudeDegrees));
+        context.KeyValue("Storm time", std::format("{:.1f} min ({} steps, {:.2f} ms per step)", status.stormSeconds / 60.0, status.steps,
+            status.stepMilliseconds));
+        context.KeyValue("Domain", std::format("{0} x {0} cells at {1:.0f} m, {2:.0f} MiB", status.cells,
+            static_cast<f64>(status.spacingMeters), status.residentMiB));
+    }
+    if (!status.message.empty() && status.state != StormStatus::State::Active)
+    {
+        context.MutedText(status.message);
+    }
+    if (!stormMessage_.empty())
+    {
+        context.ErrorText(stormMessage_);
     }
 }
 

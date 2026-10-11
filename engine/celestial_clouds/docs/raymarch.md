@@ -78,3 +78,14 @@ exist (`/rendering/clouds/shadows-and-light-volume`). The measured costs in the 
 <view>.CloudsComposite  composited over the scene AFTER <view>.Atmosphere has been drawn;
                         the march itself adds aerial perspective over the camera-to-cloud distance
 ```
+
+## Simulated storm domain (phase 5 of the storm domain plan)
+
+`CloudRenderer::SetStormBuffer(buffer)` points every cloud pipeline (the march, the cloud shadow and the sun light volume) at a simulation's output: 32 header floats (active flag, domain centre and east/north axes on the planet, planet radius, cell sizes, dimensions, edge fade) then the extinction (1/m) of each cell, `[k][j][i]`, produced by `GpuStormSolver::ExportCloud`. The buffer is bound at buffer slot 3 in all three pipelines; the point lights moved to slot 4 and the texture bindings moved up by one (depth 4 or 5, transmittance 5 or 6, multiscatter 6 or 7). A placeholder with the active flag 0 is bound when no storm is placed.
+
+`Extinction()` is now a wrapper: with the flag set, inside the domain (a smooth fade over the sponge width at its edge) it returns the trilinear-sampled simulated extinction, carved by the erosion noise when a pixel is narrower than about 140 m; outside, `ExtinctionProcedural()` as before. Because the light volume and the shadow pass use `Extinction()` too, the storm shades itself and the ground. `CLOUD_STORM=0` (shader defines) removes the lookup, which is how the split view compares simulated and procedural clouds on the same pixels (`clouds.split_set` with `CLOUD_STORM=0` on the right; the shadow and light-volume shaders are shared, so only the march differs).
+
+Measured (2026-10-12): with no storm placed the images match the build before the change within the harness noise (mean 0.04/255, the same as run-to-run repeats) and the Clouds pass is unchanged (interleaved A/B of default against `CLOUD_STORM=0`: 5.1 vs 5.4, 5.7 vs 5.5, 0.69 vs 0.63 ms, inside the +-5% spread). With a 256 km storm placed 60 km away the pass is about 3 ms either way in that view.
+
+Known limits: the domain edge is a fade to the procedural clouds, and inside it the simulation has no shallow cumulus, so the sky within 128 km of the storm centre is clear apart from the storm (the sponge also removes anything the simulation lets reach the edge); the grid is 500 m to 2 km and the silhouette detail is the erosion noise, not simulated; the sun light volume cascades are camera-windowed, so a storm far from the camera is lit by the march's own sun samples.
+

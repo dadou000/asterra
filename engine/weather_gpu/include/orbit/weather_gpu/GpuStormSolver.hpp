@@ -4,6 +4,7 @@
 #include <orbit/shader/ShaderCompiler.hpp>
 #include <orbit/weather_lab/FastStormSolver.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -19,6 +20,17 @@
 // pipelines only when all of them compile, so a failed edit leaves the running generation untouched.
 namespace orbit::weather_gpu
 {
+// Where the simulated domain sits on the planet, for the cloud renderer (see celestial_clouds CloudRenderer::SetStormBuffer).
+struct StormPlacement
+{
+    bool active{true};
+    std::array<double, 3> centre{};   // centre of the domain on the ground, planet-centred, body-fixed (m)
+    std::array<float, 3> east{};      // unit tangent vectors at the centre; x of the grid runs east, y north
+    std::array<float, 3> north{};
+    float planetRadius{6371000.0F};
+    float fadeMeters{0.0F};           // procedural-to-simulated blend at the edge; 0 = the lateral sponge width (or 8 cells)
+};
+
 class GpuStormSolver
 {
 public:
@@ -40,6 +52,11 @@ public:
 
     // Runs `steps` steps of length `dt` (fixed: the adaptive Courant limit needs a readback per step) in one submission and waits.
     void Advance(std::uint32_t steps, float dt);
+
+    // Writes the placement header and the cloud extinction (1/m) of the current state into CloudBuffer(). The buffer is left in
+    // ResourceState::ShaderResource, ready for CloudRenderer::SetStormBuffer; the call waits for the GPU.
+    void ExportCloud(const StormPlacement& placement);
+    [[nodiscard]] rhi::Buffer& CloudBuffer();
 
     [[nodiscard]] double Time() const;
     // Wall milliseconds of the last Advance (record, submit, wait).

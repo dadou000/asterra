@@ -77,6 +77,8 @@ struct Constants
 [[vk::binding(0, 0)]] ByteAddressBuffer g_clouds : register(t0);
 // 32^3 tileable cellular noise: R base shape, G/B/A erosion octaves (16 B)
 [[vk::binding(1, 0)]] ByteAddressBuffer g_noise : register(t1);
+// Simulated storm domain (engine/weather_gpu): 32 header floats, then extinction (1/m) per cell, [k][j][i]. See StormSigma.
+[[vk::binding(3, 0)]] StructuredBuffer<float> g_storm;
 
 // Marching budget. Steps are distance-adaptive (fine near the camera, coarse far
 // away) but never fewer than the budget needs to cross the whole shell segment.
@@ -466,7 +468,7 @@ constexpr const char* kCloudCommonE = R"(
 // erosion) plus the high layer (cirrus and cumulonimbus anvil outflow).
 // 'footprint' is the metres one sample covers; it filters the noise so far
 // clouds are smooth instead of speckled.
-float Extinction(float4 column, float3 position, float radius, float footprint)
+float ExtinctionProcedural(float4 column, float3 position, float radius, float footprint)
 {
     const float thickness = max(g.shell.z - g.shell.y, 1.0);
     const float h = (radius - g.shell.x - g.shell.y) / thickness;
@@ -681,6 +683,81 @@ float Extinction(float4 column, float3 position, float radius, float footprint)
         sigma += peak * column.y / thickness * profile * shape * 1.7;
     }
     return sigma;
+}
+)" R"(
+#ifndef CLOUD_STORM
+#define CLOUD_STORM 1
+#endif
+// The simulated storm replaces the procedural density inside its domain. Header (g_storm): [0] active, [1..3] domain centre on the
+// ground (m, planet-centred), [4..6] east, [7..9] north (unit), [13] planet radius, [14] dx, [15] dy, [16] dz (m), [17..19] nx ny nz,
+// [20] width of the fade at the domain edge (m). The domain translates with its Galilean frame, so the host moves the centre.
+float StormMask(float3 position, float radius)
+{
+    const float3 dir = position / max(radius, 1.0);
+    const float3 centre = normalize(float3(g_storm[1], g_storm[2], g_storm[3]));
+    const float planetRadius = g_storm[13];
+    const float x = planetRadius * dot(dir, float3(g_storm[4], g_storm[5], g_storm[6]));
+    const float y = planetRadius * dot(dir, float3(g_storm[7], g_storm[8], g_storm[9]));
+    if (dot(dir, centre) < 0.0) { return 0.0; }
+    const float halfX = 0.5 * g_storm[17] * g_storm[14];
+    const float halfY = 0.5 * g_storm[18] * g_storm[15];
+    const float edge = min(halfX - abs(x), halfY - abs(y));
+    return SmoothRange(0.0, max(g_storm[20], 1.0), edge);
+}
+
+float StormCell(int3 c)
+{
+    const int nx = (int)g_storm[17], ny = (int)g_storm[18], nz = (int)g_storm[19];
+    const int3 q = int3(clamp(c.x, 0, nx - 1), clamp(c.y, 0, ny - 1), clamp(c.z, 0, nz - 1));
+    return g_storm[32 + (q.z * ny + q.y) * nx + q.x];
+}
+
+float StormSigma(float3 position, float radius, float footprint)
+{
+    const float3 dir = position / max(radius, 1.0);
+    const float planetRadius = g_storm[13];
+    const float x = planetRadius * dot(dir, float3(g_storm[4], g_storm[5], g_storm[6]));
+    const float y = planetRadius * dot(dir, float3(g_storm[7], g_storm[8], g_storm[9]));
+    const float altitude = radius - planetRadius;
+    const float fx = x / g_storm[14] + 0.5 * g_storm[17] - 0.5;
+    const float fy = y / g_storm[15] + 0.5 * g_storm[18] - 0.5;
+    const float fz = altitude / g_storm[16] - 0.5;
+    if (fz > g_storm[19]) { return 0.0; }
+    const float3 f = floor(float3(fx, fy, fz));
+    const float3 t = float3(fx, fy, fz) - f;
+    const int3 c = int3(f);
+    const float a = lerp(lerp(StormCell(c), StormCell(c + int3(1, 0, 0)), t.x),
+        lerp(StormCell(c + int3(0, 1, 0)), StormCell(c + int3(1, 1, 0)), t.x), t.y);
+    const float b = lerp(lerp(StormCell(c + int3(0, 0, 1)), StormCell(c + int3(1, 0, 1)), t.x),
+        lerp(StormCell(c + int3(0, 1, 1)), StormCell(c + int3(1, 1, 1)), t.x), t.y);
+    float sigma = lerp(a, b, t.z);
+    if (sigma > 1.0e-6)
+    {
+        // The grid is 500 m to 2 km: carve the silhouette and the interior with the erosion noise, fading out when a pixel is wider.
+        const float amount = 1.0 - SmoothRange(0.4, 1.5, footprint / 140.0);
+        if (amount > 0.0)
+        {
+            const float e = SampleNoise(position / 140.0 + 41.0).g;
+            sigma *= lerp(1.0, 0.35 + 1.3 * e, 0.85 * amount);
+        }
+    }
+    return sigma;
+}
+
+float Extinction(float4 column, float3 position, float radius, float footprint)
+{
+#if CLOUD_STORM
+    if (g_storm[0] > 0.5)
+    {
+        const float w = StormMask(position, radius);
+        if (w > 0.0)
+        {
+            const float sim = StormSigma(position, radius, footprint);
+            return w >= 1.0 ? sim : lerp(ExtinctionProcedural(column, position, radius, footprint), sim, w);
+        }
+    }
+#endif
+    return ExtinctionProcedural(column, position, radius, footprint);
 }
 
 )";
@@ -1134,7 +1211,7 @@ void main(uint3 id : SV_DispatchThreadID)
 // bounded; a light buried in a dense cloud therefore lights a ball of about that radius, not the whole storm.
 constexpr const char* kCloudLights = R"(
 #if ORBIT_CLOUD_POINT_LIGHTS
-[[vk::binding(3, 0)]] StructuredBuffer<float4> g_cloudLights;
+[[vk::binding(4, 0)]] StructuredBuffer<float4> g_cloudLights;
 static float gLightPeak = 0.0;
 
 float3 PointLightSource(float3 position, float3 origin, float3 direction, float sigma, float sampleAlbedo, float shading)
@@ -2478,6 +2555,18 @@ CloudRenderer::CloudRenderer(
     {
         throw std::runtime_error("Cloud shader compile failed: " + error);
     }
+    // An inactive storm domain (header word 0 = 0) until SetStormBuffer is given a simulation's output.
+    stormDummy_ = device.CreateBuffer({
+        .sizeBytes = 64ULL * sizeof(f32),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!stormDummy_)
+    {
+        throw std::runtime_error("Cloud storm placeholder buffer creation failed.");
+    }
+    std::memset(stormDummy_->Map(), 0, 64U * sizeof(f32));
+    stormDummy_->Unmap();
     noise_ = device.CreateBuffer({
         .sizeBytes = static_cast<u64>(noise.size() * sizeof(f32)),
         .usage = rhi::BufferUsage::Structured,
@@ -2534,10 +2623,10 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
     {
         const std::string sourcePrefix = DefinePrefix(defineText);
         const std::string marchPrefix = sourcePrefix + (pointLights_
-            ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
-            : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");
+            ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 5\n#define CLOUD_TRANSMITTANCE_BINDING 6\n#define CLOUD_MULTI_BINDING 7\n"
+            : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n");
         const std::string otherPrefix = sourcePrefix +
-            "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n";
+            "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n";
         const std::string& farField = farField_;
         const auto vertex = compiler_->Compile({
             .source = kVertexShader,
@@ -2557,7 +2646,7 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
         .pushConstantDwords = 64U,
-        .shaderResourceBuffers = pointLights_ ? 4U : 3U,
+        .shaderResourceBuffers = pointLights_ ? 5U : 4U,
         .sampledTextures = 3U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
@@ -2580,7 +2669,7 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
         .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = 4U,
         .sampledTextures = 1U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
@@ -2600,7 +2689,7 @@ std::string CloudRenderer::RebuildShaderPipelines(const std::string& defineText)
     auto volumePipeline = device_->CreateComputePipeline({
         .computeShader = {.data = volumeShader.bytecode.data(), .size = volumeShader.bytecode.size()},
         .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = 4U,
         .storageTextures = 0U,
         .sampledTextures = 0U});
         const auto resolvePixel = compiler_->Compile({
@@ -2649,8 +2738,8 @@ std::string CloudRenderer::SetCompareDefines(const std::string& defineText, cons
         {
             const std::string sourcePrefix = DefinePrefix(defineText);
             const std::string marchPrefix = sourcePrefix + (pointLights_
-                ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n"
-                : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 3\n#define CLOUD_TRANSMITTANCE_BINDING 4\n#define CLOUD_MULTI_BINDING 5\n");
+                ? "#define ORBIT_CLOUD_POINT_LIGHTS 1\n#define CLOUD_DEPTH_BINDING 5\n#define CLOUD_TRANSMITTANCE_BINDING 6\n#define CLOUD_MULTI_BINDING 7\n"
+                : "#define ORBIT_CLOUD_POINT_LIGHTS 0\n#define CLOUD_DEPTH_BINDING 4\n#define CLOUD_TRANSMITTANCE_BINDING 5\n#define CLOUD_MULTI_BINDING 6\n");
             const auto vertex = compiler_->Compile({
                 .source = kVertexShader, .entryPoint = "main", .stage = shader::Stage::Vertex, .debug = false});
             const auto marchPixel = compiler_->Compile({
@@ -2661,7 +2750,7 @@ std::string CloudRenderer::SetCompareDefines(const std::string& defineText, cons
                 .vertexAttributes = {},
                 .vertexStrideBytes = 0U,
                 .pushConstantDwords = 64U,
-                .shaderResourceBuffers = pointLights_ ? 4U : 3U,
+                .shaderResourceBuffers = pointLights_ ? 5U : 4U,
                 .sampledTextures = 3U,
                 .topology = rhi::PrimitiveTopology::TriangleList,
                 .fillMode = rhi::FillMode::Solid,
@@ -2949,9 +3038,10 @@ void CloudRenderer::Draw(
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
     commands.SetGraphicsBuffer(2, *volume.buffer);
+    commands.SetGraphicsBuffer(3, StormBuffer());
     if (pointLights_)
     {
-        commands.SetGraphicsBuffer(3, UploadPointLights(pointLights, view.cameraPositionMeters));
+        commands.SetGraphicsBuffer(4, UploadPointLights(pointLights, view.cameraPositionMeters));
     }
     commands.SetGraphicsTexture(0, depth);
     commands.SetGraphicsTexture(1, luts.Transmittance());
@@ -3108,6 +3198,7 @@ void CloudRenderer::UpdateLightVolume(
     commands.SetComputeBuffer(0U, field.Buffer());
     commands.SetComputeBuffer(1U, *noise_);
     commands.SetComputeBuffer(2U, *volume.buffer);
+    commands.SetComputeBuffer(3U, StormBuffer());
     commands.Dispatch(96U / 8U, 96U / 8U, 3U * 32U);
     commands.UavBarrier(*volume.buffer);
     commands.Transition(*volume.buffer, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::ShaderResource);
@@ -3183,6 +3274,7 @@ void CloudRenderer::DrawShadow(
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
     commands.SetGraphicsBuffer(2, *noise_);   // slot 2 is unused by the shadow shader
+    commands.SetGraphicsBuffer(3, StormBuffer());
     commands.SetGraphicsTexture(0, depth);
     commands.Draw(6);
 }

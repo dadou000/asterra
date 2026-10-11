@@ -97,6 +97,12 @@ public:
     void BeginFrame(u32 completedSlot, u32 framesInFlight);
     [[nodiscard]] bool PointLightsEnabled() const noexcept { return pointLights_; }
 
+    // A simulated storm domain (engine/weather_gpu): 32 placement floats then extinction per cell (see StormSigma in the shader).
+    // The buffer must stay alive and in ResourceState::ShaderResource while the clouds draw; nullptr restores the procedural clouds.
+    // Inside the domain the simulated extinction replaces the procedural density in the march, the cloud shadow and the sun light
+    // volume alike, so the storm shades itself and the ground. CLOUD_STORM=0 (shader defines) turns the lookup off for A/B work.
+    void SetStormBuffer(rhi::Buffer* buffer) noexcept { storm_ = buffer; }
+
     // Developer hook (see tools/orbit_ab.py): the march, shadow and volume shaders are recompiled with
     // "NAME=VALUE;NAME=VALUE" as #define lines (tunables such as CLOUD_MAX_STEPS). Returns the compile error, or an empty
     // string; on error the previous shaders stay in use. Safe between frames: the replaced pipelines are retired by the RHI.
@@ -256,6 +262,9 @@ private:
     std::unique_ptr<rhi::GraphicsPipeline> shadowPipeline_;
     // Baked 32^3 tileable cellular noise (base shape + erosion octaves).
     std::unique_ptr<rhi::Buffer> noise_;
+    std::unique_ptr<rhi::Buffer> stormDummy_;
+    rhi::Buffer* storm_{nullptr};
+    [[nodiscard]] rhi::Buffer& StormBuffer() const noexcept { return storm_ != nullptr ? *storm_ : *stormDummy_; }
     // Sun light volume (see UpdateLightVolume): voxels, the pipeline that fills them and the
     // tangent-frame anchor that makes toroidal addressing valid.
     std::unique_ptr<rhi::ComputePipeline> volumePipeline_;

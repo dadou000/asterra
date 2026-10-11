@@ -51,6 +51,9 @@
 #ifndef ENTRY_ProjGradient
 #define ENTRY_ProjGradient ProjGradient
 #endif
+#ifndef ENTRY_ExportCloud
+#define ENTRY_ExportCloud ExportCloud
+#endif
 
 static const float kGravity = 9.81;
 static const float kCp = 1005.7;
@@ -76,6 +79,8 @@ struct Params
 [[vk::push_constant]] Params P;
 [[vk::binding(0, 0)]] RWStructuredBuffer<float> g_a;
 [[vk::binding(1, 0)]] StructuredBuffer<float> g_base;
+// Cloud output for the renderer (celestial_clouds StormSigma): 32 header floats written by the host, then extinction per cell.
+[[vk::binding(2, 0)]] RWStructuredBuffer<float> g_out;
 
 // ----------------------------------------------------------------------------- base state
 // g_base layout: theta, vapor, exner, pressure, density, windU, windV (nz each), faceDensity (nz + 1), lower, upper (nz each),
@@ -771,4 +776,21 @@ void ENTRY_ProjGradient(uint3 id : SV_DispatchThreadID)
     {
         g_a[P.offW + idx] -= P.dt / P.dz * (phi - g_a[P.offPhi + idx - P.plane]);
     }
+}
+
+// Optical extinction (1/m) of the condensate in every cell, for the cloud renderer: sigma = 3 q rho / (2 rho_w r_eff) per species with
+// effective radii of 10 um (cloud water), 30 um (cloud ice), 200 um (snow), 1 mm (graupel) and 0.5 mm (rain). Dispatch (nx/8, ny/8, nz).
+[numthreads(8, 8, 1)]
+void ENTRY_ExportCloud(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= P.nx || id.y >= P.ny || id.z >= P.nz) { return; }
+    const uint idx = (id.z * P.ny + id.y) * P.nx + id.x;
+    float sigma = 0.0;
+    if (Moist())
+    {
+        sigma = 150.0 * S(2u, idx) + 3.0 * S(3u, idx);
+        if (Ice()) { sigma += 54.0 * S(4u, idx) + 8.2 * S(5u, idx) + 1.6 * S(6u, idx); }
+        sigma *= BDensity(id.z);
+    }
+    g_out[32u + idx] = sigma;
 }

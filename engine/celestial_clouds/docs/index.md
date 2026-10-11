@@ -26,6 +26,7 @@ invariants = [
   "CloudRenderer draws only when the view uses the clipmap (full_clipmap) or has no macro globe; clouds are never composited twice.",
   "Turning the view's `clouds` flag off stops the ray march and the cloud shadow; the cloud field itself is still built and used for shadows and orbital globes.",
   "Passes are added in this order per view: Atmosphere, then Clouds -> CloudsResolve (temporal) -> CloudsComposite; CloudShadow runs earlier, before SharedDirectLighting. Clouds are composited AFTER the atmosphere pass, so the cloud shader applies its own aerial perspective over the camera-to-cloud distance (the atmosphere pass only knows the terrain/sky behind a cloud).",
+  "A simulated storm domain (storm.place) replaces the procedural density inside its domain in the march, the cloud shadow and the sun light volume alike, because all three call Extinction(); the buffer is bound at slot 3 of every cloud pipeline and CLOUD_STORM=0 removes the lookup (raymarch).",
   "Cloud type is a continuous axis in each texel: 0 stratus, 0.5 cumulus, 1 cumulonimbus (lab labels: 0.05 stratus, 0.2 stratocumulus, 0.32 nimbostratus, 0.5 cumulus, 0.72 congestus, 1.0 cumulonimbus).",
 ]
 related = ["/rendering/lighting", "/rendering/terrain/clipmaps"]

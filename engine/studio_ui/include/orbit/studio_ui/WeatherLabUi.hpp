@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/studio_ui/StormDomain.hpp>
 #include <orbit/studio_ui/WeatherLabRpc.hpp>
 #include <orbit/weather_lab/WeatherLabSession.hpp>
 
@@ -19,6 +20,8 @@ public:
     WeatherLabUi(weather_lab::WeatherLabSession& session, WeatherLabView& view);
 
     void Register(editor_ui::EditorUi& ui);
+    // The mailbox of the viewport renderer's storm domain (the same object the storm.* RPC drives); without it the section is hidden.
+    void SetStormDomain(StormDomainMailbox* mailbox) noexcept { storm_ = mailbox; }
 
     inline static constexpr editor_ui::PanelId kPanelId{
         .high = 0x5745415448455231ULL,
@@ -30,6 +33,7 @@ private:
     void DrawControls(editor_ui::PanelContext& context);
     void DrawSettings(editor_ui::PanelContext& context);
     void DrawPlayback(editor_ui::PanelContext& context);
+    void DrawStorm(editor_ui::PanelContext& context);
     void DrawViews(editor_ui::PanelContext& context);
     void DrawMetrics(editor_ui::PanelContext& context);
     void DrawSlice(
@@ -40,6 +44,9 @@ private:
 
     weather_lab::WeatherLabSession* session_{nullptr};
     WeatherLabView* view_{nullptr};
+    StormDomainMailbox* storm_{nullptr};
+    StormPlaceRequest stormDraft_;
+    std::string stormMessage_;
     weather_lab::WeatherLabSettings draft_;
     bool draftLoaded_{false};
     std::string playbackPath_;

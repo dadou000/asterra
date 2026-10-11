@@ -1151,6 +1151,50 @@ def orbit_lightning_storm_status() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_storm_status() -> dict[str, Any]:
+    """The simulated storm domain in the viewport clouds: state (none, pending,
+    active, failed), message, its current centre latitude_deg / longitude_deg (it
+    drifts with the storm), storm_seconds simulated, steps, step_ms (GPU time per
+    step), cells, spacing_m and resident_mib."""
+    return _rpc("storm.status")
+
+
+@mcp.tool()
+def orbit_storm_place(
+    latitude_deg: float,
+    longitude_deg: float,
+    cells: int | None = None,
+    spacing_m: float | None = None,
+    bubble_k: float | None = None,
+    spin_minutes: float | None = None,
+    ice: bool | None = None,
+    sponge_cells: int | None = None,
+) -> dict[str, Any]:
+    """Place a simulated storm domain on the body under the primary view. The
+    GPU storm core (engine/weather_gpu) is built on the next frame that draws
+    clouds, spun up for spin_minutes (default 40), then advanced with the
+    simulation clock; inside the domain the cloud renderer draws the simulated
+    condensate instead of the procedural clouds (march, cloud shadow and sun light
+    volume). cells (nx = ny, power of two 16 to 256, default 128), spacing_m (500
+    to 5000, default 2000), bubble_k (default 2), ice (default true), sponge_cells
+    (default 12). One domain at a time. Returns error (empty when queued) and the
+    status; poll orbit_storm_status for active. Compare with the procedural sky:
+    orbit_clouds_split_set(enabled=true, defines="CLOUD_STORM=0")."""
+    params: dict[str, Any] = {"latitude_deg": latitude_deg, "longitude_deg": longitude_deg}
+    for key, value in (("cells", cells), ("spacing_m", spacing_m), ("bubble_k", bubble_k), ("spin_minutes", spin_minutes),
+                       ("ice", ice), ("sponge_cells", sponge_cells)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.place", params)
+
+
+@mcp.tool()
+def orbit_storm_clear() -> dict[str, Any]:
+    """Remove the simulated storm domain; the procedural clouds return."""
+    return _rpc("storm.clear")
+
+
+@mcp.tool()
 def orbit_clouds_get_defines() -> dict[str, Any]:
     """The cloud shader defines in use ("NAME=VALUE;NAME=VALUE", empty = the
     shipped shaders)."""

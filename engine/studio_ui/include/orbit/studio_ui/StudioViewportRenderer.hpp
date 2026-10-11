@@ -47,6 +47,7 @@
 #include <orbit/post_process/HighlightEffects.hpp>
 #include <orbit/post_process/LuminanceHistogram.hpp>
 #include <orbit/post_process/OutputTransform.hpp>
+#include <orbit/studio_ui/StormDomain.hpp>
 #include <orbit/studio_ui/SurfaceVolumeDebugRenderer.hpp>
 #include <orbit/volume_fields/VolumeFieldStorage.hpp>
 #include <orbit/volume_solver/SurfaceVolumeSolver.hpp>
@@ -375,6 +376,11 @@ public:
         rhi::Device& device,
         const shader::Compiler& compiler,
         u32 framesInFlight = 1U);
+    ~StudioViewportRenderer();
+
+    // The simulated storm domain (storm.* RPC and the Weather Lab panel's Storm domain section): requests are queued here and built,
+    // stepped and drawn by the cloud pass on the render thread.
+    [[nodiscard]] StormDomainMailbox& StormMailbox() noexcept { return stormMailbox_; }
 
     // Lightning flashes lighting the scene (RPC `lightning.*`). Thread-safe: the RPC thread fires, the render thread reads.
     u64 FireLightning(const lighting::FlashRequest& request);
@@ -731,6 +737,12 @@ private:
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     celestial_atmosphere::AtmosphereRenderer atmosphereRenderer_;
     celestial_clouds::CloudRenderer cloudRenderer_;
+    StormDomainMailbox stormMailbox_;
+    struct StormRuntime;
+    std::shared_ptr<StormRuntime> storm_;   // shared_ptr: the deleter is captured where the type is complete
+    // Builds, steps (in lockstep with `now`) and exports the storm domain and points the cloud renderer at it; call once per frame that
+    // draws clouds on `body`.
+    void UpdateStormDomain(time::SimulationTime now, const universe::BodyId& body, f64 planetRadiusMeters);
     mutable std::mutex transientFlashMutex_;
     lighting::TransientFlashRegistry transientFlashes_;
     editor_ui::PathPreviewRenderer pathRenderer_;

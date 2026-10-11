@@ -1,6 +1,6 @@
 +++
 path = "/world/weather-lab/global-system-status-late"
-title = "Storm domain: measured status of phases 3 and 4"
+title = "Storm domain: measured status of phases 3 to 5"
 kind = "concept"
 status = "experimental"
 summary = """
@@ -18,7 +18,7 @@ invariants = [
 related = ["/world/weather-lab/global-system-status", "/world/weather-lab/gpu-port", "/world/weather-lab/global-system-phases"]
 depends_on = ["/world/weather-lab/global-system-status"]
 verify = ["orbit_weather_lab nest --nx 256 --ny 256 --dx 2000 --minutes 360 --ice 1 --sponge 16 --track 1 --adaptive 1", "orbit_weather_gpu bench --nx 256 --ny 256 --steps 40 --dt 24 --ice 1 --sponge 16"]
-verified = "da11de2"
+verified = "d4cfd08"
 +++
 
 **P3 (2026-10-12): mostly met; FP16 and L2 deferred.** Added to the fast core and the nest: a lateral sponge (`lateralSpongeCells`, `lateralSpongeRate`: relaxation to the environment within N cells of every edge, applied before the pressure projection), a storm-following Galilean frame (`trackStorm`), an adaptive child (`NestConfig::adaptive`: created at the main updraft when the parent peak reaches 8 m/s, released after the peak stays under 3 m/s for 15 minutes, extent halved when `maxChildCells` would be exceeded), and an activity mask in the microphysics (clear unsaturated cells are skipped).
@@ -53,3 +53,17 @@ Run: 512 km parent at 2 km (256x256x40), ice, sponge 16 cells, tracking, adaptiv
 
 - Not in this slice: the relaxation band and feedback kernels (the nest on the GPU), the adaptive step (a Courant limit needs a readback per step; the step is fixed), the storm-following frame, FP16 storage, wiring into the Weather Lab session and the central hot-reload watcher, RPC/MCP selection of the GPU solver.
 - The speed figure is the solver step alone; the renderer's cloud pass and the readback to feed it are not included, and the cloud renderer shares the GPU.
+
+**P5 (2026-10-12), first slice: the simulated storm is drawn in the viewport clouds; gate partly met.** `storm.place` (RPC, MCP `orbit_storm_place`, Weather Lab panel > Storm domain) builds a `GpuStormSolver` on the render thread, spins it up and steps it with the simulation clock; `GpuStormSolver::ExportCloud` writes extinction and a placement header; `CloudRenderer::SetStormBuffer` makes the march, the cloud shadow and the sun light volume use it (details: `/rendering/clouds/raymarch`).
+
+| Check | Result |
+| --- | --- |
+| On screen, 128 cells at 2 km (256 km), 60 minute spin-up, storm 60 km north of the camera | a cumulonimbus with an overshooting top and an anvil sheared downwind, all from the simulated condensate; the procedural cumulus inside the domain is gone, the horizon cumulus beyond it is unchanged |
+| Split view, simulated left of the divider, `CLOUD_STORM=0` right | same camera, time and pixels; the procedural half has small cumulus and no storm |
+| No storm placed | images unchanged (0.04/255, run-to-run level); Clouds pass unchanged within the +-5% spread |
+| Cost with a storm | the Clouds pass is about 3 ms in that view with or without; solver 60 MiB for 128x128x40; the spin-up (150 steps) built in one frame |
+| Tests | `Orbit.StormDomain` (mailbox and RPC), `Orbit.WeatherGpu` (export header and extinction range) |
+
+- The gate's "no visible seam at the domain edge" is not shown: the edge is a fade over the sponge width, the view looked continuous at the horizon, but only one camera and one time were checked, and the simulation has no shallow cumulus so the domain is a clear patch around the storm. Relaxing the simulation's boundary toward the procedural weather would remove the patch.
+- Not done: the storm follows the simulation clock but a jump over an hour restarts it (checkpoints are phase 6); only one domain; the solver submits and waits on the render thread (at most 8 steps per frame, about 3 ms each); no nesting on the GPU yet, so the viewport storm is a single 2 km level; silhouette detail is erosion noise, not simulated.
+

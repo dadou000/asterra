@@ -1352,6 +1352,9 @@ int orbit::editor_app::StudioApplication::Run(
             weatherLabSession,
             weatherLabView);
         weatherLabUi.Register(ui);
+        // The simulated storm domain in the viewport clouds: the panel section and the storm.* RPC share one mailbox.
+        weatherLabUi.SetStormDomain(&studioViewportRenderer.StormMailbox());
+        orbit::studio_ui::RegisterStormDomainRpc(rpcHost.Dispatcher(), studioViewportRenderer.StormMailbox());
         orbit::studio_ui::RegisterWeatherLabRpc(
             rpcHost.Dispatcher(),
             weatherLabSession,

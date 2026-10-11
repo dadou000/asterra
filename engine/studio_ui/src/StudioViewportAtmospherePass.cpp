@@ -296,6 +296,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                 cloudFound->second.field->layers.front().parameters;
             const f64 cloudReferenceRadius =
                 atmosphereFound->second.parameters.bottomRadiusMeters;
+            // A placed storm domain advances with the simulation clock and replaces the procedural clouds inside it.
+            UpdateStormDomain(context.atTime, cloudFound->second.body, cloudReferenceRadius);
             // Cloud lab: one isolated cloud, optionally lit by a chosen sun.
             auto cloudView = atmosphereView;
             math::Float3 labSun = cloudView.sunDirection;

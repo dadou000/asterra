@@ -41,6 +41,8 @@ add_library(OrbitStudioUi STATIC
     src/StudioViewportVolumePass.cpp
     src/StudioViewportLightingPass.cpp
     src/StudioViewportAtmospherePass.cpp
+    src/StudioViewportStorm.cpp
+    src/StormDomain.cpp
     src/StudioViewportBodyPass.cpp
     src/StudioViewportRenderer.cpp
     src/StudioShellInspector.cpp
@@ -98,6 +100,7 @@ target_link_libraries(OrbitStudioUi
         Orbit::Lighting
         Orbit::StormElectrification
         Orbit::WeatherLab
+        Orbit::WeatherGpu
         Orbit::MeshRender
         Orbit::Platform
         Orbit::PostProcess
@@ -430,6 +433,23 @@ if(BUILD_TESTING)
     add_test(
         NAME Orbit.CloudShaderRpc
         COMMAND OrbitCloudShaderRpcTests
+    )
+
+    add_executable(OrbitStormDomainTests
+        tests/StormDomainTests.cpp
+    )
+
+    target_link_libraries(OrbitStormDomainTests
+        PRIVATE
+            Orbit::StudioUi
+    )
+
+    target_compile_features(OrbitStormDomainTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStormDomainTests)
+
+    add_test(
+        NAME Orbit.StormDomain
+        COMMAND OrbitStormDomainTests
     )
 
     add_executable(OrbitLightningRpcTests
