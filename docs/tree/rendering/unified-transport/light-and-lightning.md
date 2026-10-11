@@ -1,8 +1,8 @@
 +++
 path = "/rendering/unified-transport/light-and-lightning"
-title = "Stars, many lights, radiance caches and lightning (proposed)"
+title = "Stars, many lights, radiance caches and lightning (partly implemented)"
 kind = "concept"
-status = "planned"
+status = "experimental"
 summary = """
 Proposed design for finite stellar disks and shared stellar visibility, energy-preserving hierarchical light selection for cities, versioned \
 camera-independent radiance caches, charge-conserving lightning with a channel graph, and bounded transient illumination."""
@@ -22,6 +22,14 @@ invariants = [
   "A new flash never triggers a full-volume multiple-scattering solve and never blocks on indirect convergence; internal flashes light clouds even when the channel is hidden from the camera; buffers, queues and shader variants are preallocated.",
 ]
 +++
+
+## Implementation status
+
+Done: finite-disc eclipses with limb darkening; `CityLightTree` (per-receiver cut, CPU-measured, not yet on the live light path); tiled-light overflow proxies;
+`TransientFlashRegistry` feeding the tiled lights, and the clouds behind `ORBIT_CLOUD_POINT_LIGHTS` (unverified on a GPU); storm electrification
+(`/rendering/unified-transport/storm-electrification`) driven from the Weather Lab storm, reachable through `lightning.*` RPC and `orbit_lightning_*` MCP tools.
+Not done: terrain-horizon stellar visibility, several independent stars in the cloud renderer, world-space radiance caches with dependency invalidation, a cached
+higher-order scattering response for flashes, the render scheduler, sprites and megaflashes.
 
 ## Lightning pipeline
 

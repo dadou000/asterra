@@ -6,8 +6,8 @@ status = "experimental"
 summary = """
 OrbitOpticalTransport is a std-only library holding the physics and data structures of the unified-transport proposal: cache stamps and dependency \
 invalidation, humidity-driven aerosol growth and moist-air refractivity, finite stellar-disk visibility and transmission-preserving filtering, a sparse \
-optical hierarchy, an energy-preserving emitter tree, a lightning discharge graph with charge conservation, and cloud visual-form selection. It is not yet \
-wired into any renderer or shader."""
+optical hierarchy, an energy-preserving emitter tree, a lightning discharge graph with charge conservation, and cloud visual-form selection. Only the cloud far field, the planetary refraction table and the city light tree are used by other modules; no other \
+renderer or shader consumes it."""
 owner_module = "OrbitOpticalTransport"
 keywords = ["optical transport", "kappa kohler", "refractivity", "stellar disk", "penumbra", "optical hierarchy", "emitter tree", "many lights", "discharge graph", "cloud lod", "cache stamp"]
 sources = [
@@ -55,8 +55,9 @@ docs = ["/rendering/unified-transport"]
 
 ## Status
 
-Everything here is a CPU reference implementation with unit tests. Nothing consumes it yet: no shader, renderer pass, RPC method or MCP tool uses it,
-so none of the proposal's rendering behaviour exists. It is the numerical core that the GPU implementations are meant to match.
+Everything here is a CPU reference implementation with unit tests. Consumers so far: `TransmittanceStats` (`CloudFarField`, flag `ORBIT_CLOUD_FILTERED_FAR`), `RefractionTable` (`celestial_atmosphere`, flag `ORBIT_REFRACT_SUN`),
+`EmitterTree` (`CityLightTree`) and `DischargeGraph` (storm lightning and `TransientFlashRegistry`). `CacheStamp`, `OpticalHierarchy`, the aerosol growth,
+`DiskTransmission`, `BendRay` and `CloudRepresentation` have no consumer, so most of the proposal's rendering behaviour does not exist. It is the numerical core the GPU implementations are meant to match.
 
 ## Pieces
 

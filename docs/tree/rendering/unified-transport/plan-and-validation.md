@@ -1,8 +1,8 @@
 +++
 path = "/rendering/unified-transport/plan-and-validation"
-title = "Implementation order, current-code corrections and validation (proposed)"
+title = "Implementation order, current-code corrections and validation (status tracked below)"
 kind = "playbook"
-status = "planned"
+status = "experimental"
 summary = """
 Phased order for adopting the unified transport architecture, the near-term corrections to existing cloud, haze, light-overflow, glass and caustic code, \
 and the benchmark scenarios and error metrics every step must report."""
@@ -16,6 +16,12 @@ invariants = [
   "Sophisticated cloud, lightning and refraction features consume the common optical and transport infrastructure rather than add isolated approximations.",
 ]
 +++
+
+## Status by phase (HEAD 91fceb6c)
+
+Foundation: CPU data structures only, no shared medium service. Cloud correctness: far field behind a flag. Optical hierarchy, atmosphere coupling, world-space
+transport, visual cloud LOD: not wired. Light hierarchy: city tree and limb darkening built, partly wired. Lightning simulation and transient lighting: built and
+reachable over RPC/MCP, higher-order response missing. Glass: pre-pass behind a flag. Refraction: sun only. Validation scenarios: none run.
 
 ## Phases
 

@@ -6,7 +6,7 @@ status = "experimental"
 summary = """
 OrbitStormElectrification builds charge from graupel-ice collisions, carries it vertically, solves the electric field, and grows stochastic bidirectional-leader \
 flashes (intracloud, cloud-to-cloud, cloud-to-ground) that neutralise charge and emit a time-resolved DischargeGraph; a random-access flash schedule answers timewarp. \
-It is a std-only CPU reference with uncalibrated magnitudes; no weather solver, renderer or RPC uses it yet."""
+It is a std-only CPU reference with uncalibrated magnitudes; it is driven from the Weather Lab storm and reachable over RPC/MCP (`lightning.*`)."""
 owner_module = "OrbitStormElectrification"
 keywords = ["lightning", "electrification", "charge", "graupel", "poisson", "leader", "discharge", "flash", "return stroke", "timewarp", "breakdown", "field"]
 sources = [
@@ -65,6 +65,5 @@ air and their fall speeds. `ChargeGrid::SolvePotential` gives the field; when `M
 
 - There is no lower positive charge pocket, so the storm is a dipole, not a tripole; a lower pocket (graupel charging positive at low liquid water, or melting-level effects) is not modelled.
 - Charge moves vertically only. A real FastStormSolver storm (64x64x40 at 500 m) driven through the ice proxy does electrify once mature (no flash at 10 min; ratio 1.03 and 8 flashes in 900 s at 20 min, 94 at 25 min, ratio 15 at 35 min, field snapshots held frozen), but the ice phase is assumed and the strength is untuned (ctest -R Orbit.WarmRainAdapter, ~55 s). The channel potential is fixed rather than re-solved as it grows.
-- No leader branching physics beyond the stochastic growth; sprites, megaflashes and superbolts are not modelled. Nothing consumes the flash graph in a renderer: the transient-lighting injection
-  (bounded GPU cost, higher-order scattering response) is not built.
-- No RPC/MCP exposure, which `AGENTS.md` requires before this is reachable from Studio.
+- No leader branching physics beyond the stochastic growth; sprites, megaflashes and superbolts are not modelled. The flash graph reaches lights through `TransientFlashRegistry` (direct light, clouds behind `ORBIT_CLOUD_POINT_LIGHTS`); the cached higher-order scattering response is not built.
+- RPC/MCP exists (`lightning.storm_start/status/stop`, `docs/ORBIT_MCP.md`); there is no Studio UI panel for it and nothing has been seen on screen.

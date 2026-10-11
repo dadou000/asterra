@@ -1,12 +1,12 @@
 +++
 path = "/rendering/unified-transport"
-title = "Unified weather, optics and light transport (proposed architecture)"
+title = "Unified weather, optics and light transport (architecture, partly implemented)"
 kind = "section"
-status = "planned"
+status = "experimental"
 summary = """
-Proposed architecture (not implemented) in which weather, atmospheric composition, optical/refractive fields, light sources, shared radiative transport, \
+Architecture in which weather, atmospheric composition, optical/refractive fields, light sources, shared radiative transport, \
 camera-independent lighting caches and camera-dependent rendering all consume one physical state. Covers clouds, haze, stars, cities, lightning, \
-mirages, glass and caustics. Children give the per-area design and the implementation order."""
+mirages, glass and caustics. Partly implemented: a CPU reference core, a lightning pipeline reachable over RPC/MCP and four opt-in unverified GPU paths; \nthe shared medium service, caches and scheduler do not exist yet. Children give the per-area design, status and implementation order."""
 keywords = ["architecture", "weather", "optical medium", "radiance cache", "light transport", "lightning", "refraction", "glass", "caustics", "cloud lod", "many lights", "proposal"]
 related = ["/rendering/clouds", "/rendering/atmosphere", "/rendering/lighting", "/rendering/volumes"]
 verify = [
@@ -73,6 +73,13 @@ budget, then composite in linear HDR before adaptation, bloom and tone mapping. 
 Strategy: first make existing systems agree physically, then make them share expensive work, then pursue elaborate approximations. Every optimization
 reports both its saving and the error it introduces; no speedup is assumed before measurement.
 
+## Implementation status
+
+Nothing below has run on a GPU or been seen on screen. Wired but off by default: `ORBIT_CLOUD_FILTERED_FAR`, `ORBIT_GLASS_CAUSTIC_COMPUTE`, `ORBIT_REFRACT_SUN`,
+`ORBIT_CLOUD_POINT_LIGHTS`. Wired and always on: tiled-light overflow proxies, limb-darkened eclipse fractions, the view-dependent caustic photon budget and the
+lightning RPC/MCP (`lightning.*`, see `docs/ORBIT_MCP.md`). Not built: `SampleMedium`, optical-hierarchy and aerosol consumers, the radiance cache and dependency
+invalidation, curved/2.5D cloud forms, glass through `VisibilityRegistry`, local mirages, the render scheduler and the 14 validation scenarios (`plan-and-validation`).
+
 ## Children
 
 - `medium-and-clouds`: composition, haze, optical hierarchy, stable cloud LOD.
@@ -83,4 +90,4 @@ reports both its saving and the error it introduces; no speedup is assumed befor
 - `design-review-systems`: glass, caustics, eclipses, visibility and lightning findings.
 - `design-review`: measured findings that adjust the proposal (cloud far-field bias, linear transmittance filtering, light overflow fix).
 - `storm-electrification`: CPU reference for charging, the electric field, leader flashes and a timewarp-safe flash schedule.
-- `core`: the CPU reference library (`engine/optical_transport`) implementing the numerical core; renderers do not use it yet.
+- `core`: the CPU reference library (`engine/optical_transport`) implementing the numerical core; only the cloud far field, refraction table and city light tree are used outside it, and the shared medium, caches and scheduler are not built.

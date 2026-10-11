@@ -1,8 +1,8 @@
 +++
 path = "/rendering/unified-transport/medium-and-clouds"
-title = "Atmospheric medium, optical hierarchy and stable clouds (proposed)"
+title = "Atmospheric medium, optical hierarchy and stable clouds (partly implemented)"
 kind = "concept"
-status = "planned"
+status = "experimental"
 summary = """
 Proposed design for one OpticalMedium query shared by sky, clouds, terrain, ocean and lights; humidity-driven aerosol haze; a sparse multiresolution \
 optical hierarchy; and cloud LOD that changes only the visual form, never the cloud's identity, extent or lighting role."""
@@ -21,6 +21,13 @@ invariants = [
   "Curved 2D sheets are planet-anchored with altitude, vertical optical depth and velocity; near the limb they use spherical-shell intersection or are promoted.",
 ]
 +++
+
+## Implementation status
+
+Done (CPU, opt-in on GPU): the far-field bias is measured and `CloudFarField` plus `TransmittanceStats` replace the coverage blend behind `ORBIT_CLOUD_FILTERED_FAR`
+(default off, see `/rendering/unified-transport/design-review`). `OpticalHierarchy` and the kappa-Kohler aerosol growth exist in `/rendering/unified-transport/core` with
+no renderer consumer. Not done: the shared `SampleMedium` service, humidity-driven haze in the atmosphere passes, removal of the cloud's private aerial perspective,
+the camera-independent light volume, the sample-jitter repair and any curved 2D / 2.5D cloud form.
 
 ## Context
 
