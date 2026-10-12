@@ -206,3 +206,35 @@ The recommended next work is to verify the branch builds before adding
 complexity, then implement a compact spatial perturbation registry shared
 between neighboring zones with physically grounded inflow, cold-pool and
 vorticity data from the future global atmospheric provider.
+
+## Phase 8: sparse cross-zone perturbations (experimental)
+
+- `WeatherCrossZoneField.hpp` stores compact, timestamped cold-pool
+  diagnostic sources in body-fixed unit-sphere coordinates. Local cell
+  east/north offsets are mapped to the planetary sphere using a tangent frame.
+  Unlike the zone tree, the disturbance registry crosses zone boundaries.
+- The active `WeatherZoneEvolutionRunner` rebuilds its source registry only
+  on completion of a detailed zone update or zone discovery changes. Each
+  source carries its originating zone and child IDs, source time, radius and
+  normalized strength. Sources are bounded (1024 records by default).
+- A receiving zone samples the **last committed source state** at its own
+  step start. Records from the future, too far away, older than the configured
+  900 simulated-second horizon, or from the receiver's own zone are ignored.
+  Sampled forcing is a frozen input to the background worker, never an
+  unsafe mutable reference across concurrent simulations.
+- Outflow edge lift and internal undercutting influence the *experimental
+  normalized updraft diagnostic* at the next short-step evolution.
+  No cloud shape, real momentum, moisture or energy coupling is claimed.
+- Cross-zone state is discarded on runtime reset (rewind or body switch).
+  Source provenance and age ensure an outdated sender cannot directly
+  overwrite a newer receiver state.
+- Storm zones remain organizational opportunities, not physical barriers.
+  Cross-zone sources do **not** merge zones or force supercell classification.
+- Tests: `ctest -R "Orbit.WeatherCrossZoneField|Orbit.WeatherEmergence|Orbit.WeatherEvolution" --output-on-failure`.
+- Follow-on work: physical global-atmosphere flux exchange with explicit
+  acknowledgments, a global spatial hash for source queries when 1024 sources
+  is insufficient, cross-zone synchronization islands for tightly coupled
+  events, persistent event history, and independent build/run validation.
+- The source records currently represent stationary, decaying influence
+  footprints. Advective transport of the actual cold-pool front and true
+  boundary-layer dynamics are not implemented.
