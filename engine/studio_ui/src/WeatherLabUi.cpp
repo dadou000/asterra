@@ -337,6 +337,10 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
     }
     const StormStatus status = storm_->Status();
     context.KeyValue("State", std::format("{} ({})", StormStateName(status.state), status.mode));
+    context.KeyValue("Multirate scheduler",
+        std::format("{} tickets, {} awaiting long-step backend, {} deferred; maximum lag {:.0f} s",
+            status.zoneWorkTickets, status.zoneBlockedLongSteps,
+            status.zoneDeferredTasks, status.zoneMaximumLagSeconds));
     context.KeyValue("Live atmospheric zones",
         std::format("{} zones from {} candidate probes (generation {}, {}{})",
             status.discoveredZones, status.zoneCandidateProbes, status.zoneGeneration,
