@@ -89,6 +89,45 @@ int main()
     Check(ledger.PendingExchanges().empty(),"acknowledgment drains outbox");
     Check(ledger.Deliver(consumer)==0,"completed receipt never redelivered");
 
+    // Two independent exports: failure at the second record must preserve it
+    // without replaying the already acknowledged first record.
+    WeatherMultirateScheduler orderedScheduler(budget);
+    WeatherEvolutionLedger orderedLedger;
+    orderedScheduler.Reconcile({zone},0);
+    orderedLedger.Reconcile({zone},0);
+    for (int i=0;i<2;++i)
+    {
+        const f64 target=static_cast<f64>((i+1)*60);
+        const auto tickets=orderedScheduler.Plan(target);
+        Check(tickets.size()==1,"ordered ledger produces a work ticket");
+        if(tickets.empty()) break;
+        const auto calculatedStep=WeatherConvectiveSurrogate::Evaluate(
+            *orderedLedger.State(42),zone.weights,tickets.front());
+        Check(calculatedStep.has_value(),"ordered export step evaluates");
+        if(calculatedStep)
+            Check(orderedLedger.Complete(orderedScheduler,*calculatedStep),
+                "ordered export is committed");
+    }
+    struct RejectSecond final : IWeatherExchangeConsumer
+    {
+        u32 accepts{0};
+        bool blockSecond{true};
+        [[nodiscard]] bool Accept(const WeatherExchangeRecord&) override
+        {
+            if(blockSecond && accepts==1) return false;
+            ++accepts;
+            return true;
+        }
+    } rejectSecond;
+    Check(orderedLedger.PendingExchanges().size()==2,"two exports queued");
+    Check(orderedLedger.Deliver(rejectSecond,2)==1,"only acknowledged prefix removed");
+    Check(orderedLedger.PendingExchanges().size()==1 &&
+          orderedLedger.PendingExchanges().front().sequence==2,
+          "second export remains in order");
+    rejectSecond.blockSecond=false;
+    Check(orderedLedger.Deliver(rejectSecond)==1 && rejectSecond.accepts==2,
+        "retry consumes only second record");
+
     ledger.Reset();
     Check(ledger.Epoch()!=epoch,"reset invalidates former timeline receipts");
     Check(failures==0,"all tests");
