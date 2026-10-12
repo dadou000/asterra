@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <limits>
 #include <vector>
+#include <utility>
 
 namespace orbit::celestial_clouds
 {
@@ -100,7 +101,8 @@ public:
     explicit SparseStormZones(StormZoneConfig config = {}) : config_(config) {}
 
     // Caller provides only coarse candidate probes, not all atmospheric cells.
-    // Sort/order of probes does not affect zone grouping or shared weights.
+    // Probe order is irrelevant when the input is within maxProbes; excess probes
+    // are discarded in caller order to enforce a hard work budget.
     // Non-monotonic simulated time resets identity tracking; historical reconstruction
     // belongs to the future event/checkpoint scheduler.
     void Discover(const std::vector<StormZoneProbe>& probes, f64 seconds)
