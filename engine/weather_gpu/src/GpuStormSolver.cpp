@@ -22,7 +22,7 @@ namespace
 {
 constexpr double kPi = 3.14159265358979323846;
 
-// Mirrors `struct Params` in storm.hlsl: 36 32-bit scalars, in the same order.
+// Mirrors `struct Params` in storm.hlsl: 52 32-bit scalars, in the same order.
 struct Params
 {
     u32 nx, ny, nz, plane;
@@ -34,13 +34,17 @@ struct Params
     u32 offRain, offSpec, offPhi, offAux;
     u32 arg0, arg1, arg2, arg3;
     f32 spongeBase, spongeRate, latCells, latRate;
+    u32 pBefore, pAfter, pNx, pNy;
+    f32 blend, edgeWeight, pad0, pad1;
+    u32 originI, originJ, ratio, relaxWidth;
+    u32 pCells, pFaceCells, outOffset, pad2;
 };
-static_assert(sizeof(Params) == 36U * 4U);
+static_assert(sizeof(Params) == 52U * 4U);
 
 // The entry points of storm.hlsl.
-constexpr std::array<const char*, 15> kKernels{
+constexpr std::array<const char*, 17> kKernels{
     "AdvectVelocity", "AdvectScalars", "MassPartial", "MassRatio", "MassScale", "Microphysics", "Buoyancy", "TopSponge", "Mix",
-    "LateralSponge", "ProjRhs", "FftLine", "ProjTridiag", "ProjGradient", "ExportCloud"};
+    "LateralSponge", "ProjRhs", "FftLine", "ProjTridiag", "ProjGradient", "ExportCloud", "RelaxBand", "CopyState"};
 
 std::string ReadFile(const char* path)
 {
@@ -90,7 +94,14 @@ struct GpuStormSolver::Impl
     u64 fenceValue = 0;
     std::map<std::string, std::unique_ptr<rhi::ComputePipeline>> pipelines;
 
-    Impl(rhi::Device& d, const shader::Compiler& c, const FastStormConfig& config) : device(d), compiler(c), cfg(config)
+    GpuStormOptions options;
+    u32 offSnap = 0;
+    u32 cloudCells = 0;                       // cells the cloud buffer has room for after its header
+    rhi::Buffer* parentBuffer = nullptr;      // bound at slot 3 for the next dispatch (RelaxBand reads the parent's arena there)
+    rhi::Buffer* outBuffer = nullptr;         // bound at slot 2 for the next dispatch (ExportCloud writes there)
+
+    Impl(rhi::Device& d, const shader::Compiler& c, const FastStormConfig& config, const GpuStormOptions& opts)
+        : device(d), compiler(c), cfg(config), options(opts)
     {
         plane = cfg.nx * cfg.ny;
         cells = plane * cfg.nz;
@@ -103,7 +114,9 @@ struct GpuStormSolver::Impl
         offPhi = offSpec + 2U * cells;
         offAux = offPhi + cells;
         const u64 auxFloats = 2ULL * (nScalars > 0U ? nScalars - 1U : 0U) * cfg.nz + nScalars + 8U;
-        totalFloats = static_cast<u64>(offAux) + auxFloats;
+        offSnap = static_cast<u32>(static_cast<u64>(offAux) + auxFloats);
+        totalFloats = static_cast<u64>(offSnap) + (options.snapshot ? copyFloats : 0ULL);
+        cloudCells = cells + options.cloudExtraCells;
         bytes = static_cast<std::size_t>(totalFloats * sizeof(f32));
 
         arena = device.CreateBuffer({.sizeBytes = totalFloats * sizeof(f32), .usage = rhi::BufferUsage::Structured,
@@ -112,11 +125,11 @@ struct GpuStormSolver::Impl
             .memory = rhi::MemoryUsage::HostVisible, .initialState = rhi::ResourceState::CopySource});
         readback = device.CreateBuffer({.sizeBytes = copyFloats * sizeof(f32), .usage = rhi::BufferUsage::Structured,
             .memory = rhi::MemoryUsage::HostReadback, .initialState = rhi::ResourceState::CopyDestination});
-        cloudOut = device.CreateBuffer({.sizeBytes = (32ULL + cells) * sizeof(f32), .usage = rhi::BufferUsage::Structured,
+        cloudOut = device.CreateBuffer({.sizeBytes = (32ULL + cloudCells) * sizeof(f32), .usage = rhi::BufferUsage::Structured,
             .memory = rhi::MemoryUsage::GpuOnly, .initialState = rhi::ResourceState::ShaderResource});
         headerStage = device.CreateBuffer({.sizeBytes = 32ULL * sizeof(f32), .usage = rhi::BufferUsage::Structured,
             .memory = rhi::MemoryUsage::HostVisible, .initialState = rhi::ResourceState::CopySource});
-        bytes += static_cast<std::size_t>((32ULL + cells) * sizeof(f32));
+        bytes += static_cast<std::size_t>((32ULL + cloudCells) * sizeof(f32));
         if (!arena || !staging || !readback || !cloudOut || !headerStage)
         {
             throw std::runtime_error("GpuStormSolver: could not allocate the state buffers");
@@ -220,7 +233,7 @@ struct GpuStormSolver::Impl
                 built[name] = device.CreateComputePipeline({
                     .computeShader = {.data = binary.bytecode.data(), .size = binary.bytecode.size()},
                     .pushConstantDwords = static_cast<u32>(sizeof(Params) / 4U),
-                    .shaderResourceBuffers = 3U});
+                    .shaderResourceBuffers = 4U});
             }
         }
         catch (const std::exception& exception)
@@ -256,6 +269,7 @@ struct GpuStormSolver::Impl
         p.spongeRate = cfg.spongeRate;
         p.latCells = static_cast<f32>(cfg.lateralSpongeCells);
         p.latRate = cfg.lateralSpongeRate;
+        p.outOffset = 32U;
         SetCopies(p);
         return p;
     }
@@ -280,18 +294,29 @@ struct GpuStormSolver::Impl
         commands->SetComputeConstants(std::span<const u32>(reinterpret_cast<const u32*>(&p), sizeof(Params) / 4U));
         commands->SetComputeBuffer(0U, *arena);
         commands->SetComputeBuffer(1U, *baseBuffer);
-        commands->SetComputeBuffer(2U, *arena);   // the cloud output slot: only ExportCloud uses it, which binds the real buffer
+        commands->SetComputeBuffer(2U, outBuffer != nullptr ? *outBuffer : *arena);   // only ExportCloud writes through slot 2
+        commands->SetComputeBuffer(3U, parentBuffer != nullptr ? *parentBuffer : *arena);   // only RelaxBand reads the parent here
         commands->Dispatch(gx, gy, gz);
         commands->UavBarrier(*arena);
     }
 
-    void RecordStep(const f32 dt)
+    void RecordStep(const f32 dt, const ParentLink* link = nullptr)
     {
         const u32 gx = (cfg.nx + 7U) / 8U;
         const u32 gy = (cfg.ny + 7U) / 8U;
         const u32 nz = cfg.nz;
         Params p = Base();
         p.dt = dt;
+
+        if (options.snapshot)
+        {
+            // The state at the start of the step, for a child to interpolate from.
+            Params snapshot = Base();
+            snapshot.arg0 = offSnap;
+            snapshot.arg1 = static_cast<u32>(copyFloats);
+            const u32 groups = static_cast<u32>((copyFloats + 255ULL) / 256ULL);
+            Run("CopyState", snapshot, std::min(groups, 65535U), (groups + 65534U) / 65535U, 1U);
+        }
 
         // Advection into the other copy.
         for (u32 mode = 0; mode < 3U; ++mode)
@@ -350,6 +375,16 @@ struct GpuStormSolver::Impl
             p.dt = dt;
         }
 
+        if (link != nullptr && link->parent != nullptr)
+        {
+            // The nest: pull the edge band toward the parent before the projection removes the divergence this introduces.
+            Params relax = p;
+            FillLink(relax, *link, dt);
+            parentBuffer = &link->parent->Arena();
+            Run("RelaxBand", relax, gx, gy, nz + 1U);
+            parentBuffer = nullptr;
+        }
+
         if (cfg.lateralSpongeCells > 0U)
         {
             Run("LateralSponge", p, gx, gy, nz);
@@ -368,6 +403,23 @@ struct GpuStormSolver::Impl
         Run("FftLine", p, cfg.ny, nz, 1U);          // inverse, along x, writing phi
         Run("ProjGradient", p, gx, gy, nz);
         time += dt;
+    }
+
+    void FillLink(Params& p, const ParentLink& link, const f32 dt) const
+    {
+        const FastStormConfig& parentConfig = link.parent->Config();
+        p.pBefore = link.parent->SnapshotOffset();
+        p.pAfter = link.parent->CurrentOffset();
+        p.pNx = parentConfig.nx;
+        p.pNy = parentConfig.ny;
+        p.pCells = link.parent->CellCount();
+        p.pFaceCells = link.parent->FaceCellCount();
+        p.blend = link.blend;
+        p.edgeWeight = 1.0F - std::exp(-dt / std::max(link.relaxSeconds, 1.0e-3F));
+        p.originI = link.originI;
+        p.originJ = link.originJ;
+        p.ratio = link.ratio;
+        p.relaxWidth = std::min(link.relaxCells, std::min(cfg.nx, cfg.ny) / 2U);
     }
 
     void Submit()
@@ -404,8 +456,9 @@ struct GpuStormSolver::Impl
     }
 };
 
-GpuStormSolver::GpuStormSolver(rhi::Device& device, const shader::Compiler& compiler, const FastStormConfig& config)
-    : impl_(std::make_unique<Impl>(device, compiler, config))
+GpuStormSolver::GpuStormSolver(rhi::Device& device, const shader::Compiler& compiler, const FastStormConfig& config,
+    const GpuStormOptions& options)
+    : impl_(std::make_unique<Impl>(device, compiler, config, options))
 {
 }
 
@@ -490,6 +543,55 @@ void GpuStormSolver::Download(FastStormSolver& cpu)
     s.readback->Unmap();
 }
 
+rhi::Buffer& GpuStormSolver::Arena() { return *impl_->arena; }
+std::uint32_t GpuStormSolver::CurrentOffset() const { return impl_->copyBase[impl_->current]; }
+std::uint32_t GpuStormSolver::SnapshotOffset() const { return impl_->offSnap; }
+std::uint32_t GpuStormSolver::CellCount() const { return impl_->cells; }
+std::uint32_t GpuStormSolver::FaceCellCount() const { return impl_->faceCells; }
+
+void GpuStormSolver::Advance(const u32 steps, const f32 dt, const ParentLink& link)
+{
+    Impl& s = *impl_;
+    const auto start = std::chrono::steady_clock::now();
+    s.Begin();
+    for (u32 i = 0; i < steps; ++i)
+    {
+        s.RecordStep(dt, &link);
+    }
+    s.Submit();
+    s.lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+void GpuStormSolver::FillFromParent(const ParentLink& link)
+{
+    Impl& s = *impl_;
+    s.Begin();
+    Params p = s.Base();
+    s.FillLink(p, link, 1.0F);
+    p.pBefore = link.parent->CurrentOffset();   // before = after = the parent's current state
+    p.relaxWidth = 0xFFFFFFFFU;
+    p.blend = 1.0F;
+    s.parentBuffer = &link.parent->Arena();
+    s.Run("RelaxBand", p, (s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, s.cfg.nz + 1U);
+    s.parentBuffer = nullptr;
+    s.time = link.parent->Time();
+    s.Submit();
+}
+
+void GpuStormSolver::ExportCloudInto(rhi::Buffer& out, const std::uint32_t offsetFloats)
+{
+    Impl& s = *impl_;
+    s.Begin();
+    s.commands->Transition(out, rhi::ResourceState::ShaderResource, rhi::ResourceState::UnorderedAccess);
+    Params p = s.Base();
+    p.outOffset = offsetFloats;
+    s.outBuffer = &out;
+    s.Run("ExportCloud", p, (s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, s.cfg.nz);
+    s.outBuffer = nullptr;
+    s.commands->Transition(out, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::ShaderResource);
+    s.Submit();
+}
+
 void GpuStormSolver::Advance(const u32 steps, const f32 dt)
 {
     Impl& s = *impl_;
@@ -563,6 +665,19 @@ void GpuStormSolver::ExportCloud(const StormPlacement& placement)
     const f32 sponge = static_cast<f32>(s.cfg.lateralSpongeCells > 0U ? s.cfg.lateralSpongeCells : 8U) * s.cfg.dx;
     header[20] = placement.fadeMeters > 0.0F ? placement.fadeMeters : sponge;
     header[21] = std::clamp(placement.intensity, 0.0F, 1.0F);
+    if (placement.child.present)
+    {
+        header[22] = 1.0F;
+        header[23] = placement.child.dx;
+        header[24] = placement.child.dy;
+        header[25] = static_cast<f32>(placement.child.nx);
+        header[26] = static_cast<f32>(placement.child.ny);
+        header[27] = static_cast<f32>(placement.child.nz);
+        header[28] = placement.child.offsetX;
+        header[29] = placement.child.offsetY;
+        header[30] = static_cast<f32>(placement.child.dataOffset);
+        header[31] = placement.child.blendMeters;
+    }
     std::memcpy(s.headerStage->Map(), header.data(), header.size() * sizeof(f32));
     s.headerStage->Unmap();
 

@@ -690,7 +690,7 @@ float ExtinctionProcedural(float4 column, float3 position, float radius, float f
 #endif
 // The simulated storm replaces the procedural density inside its domain. Header (g_storm): [0] active, [1..3] domain centre on the
 // ground (m, planet-centred), [4..6] east, [7..9] north (unit), [13] planet radius, [14] dx, [15] dy, [16] dz (m), [17..19] nx ny nz,
-// [20] width of the fade at the domain edge (m), [21] intensity 0..1 (a dying storm dissolves into the procedural clouds). The domain translates with its Galilean frame, so the host moves the centre.
+// [20] width of the fade at the domain edge (m), [22..31] the nest's child level (see StormCellChild), [21] intensity 0..1 (a dying storm dissolves into the procedural clouds). The domain translates with its Galilean frame, so the host moves the centre.
 float StormMask(float3 position, float radius)
 {
     const float3 dir = position / max(radius, 1.0);
@@ -712,6 +712,15 @@ float StormCell(int3 c)
     return g_storm[32 + (q.z * ny + q.y) * nx + q.x];
 }
 
+// The nest's child level (header [22] present, [23..24] dx dy, [25..27] dimensions, [28..29] centre offset from the parent's centre,
+// [30] index of its first cell, [31] blend width): the same vertical grid, finer in the horizontal.
+float StormCellChild(int3 c)
+{
+    const int nx = (int)g_storm[25], ny = (int)g_storm[26], nz = (int)g_storm[27];
+    const int3 q = int3(clamp(c.x, 0, nx - 1), clamp(c.y, 0, ny - 1), clamp(c.z, 0, nz - 1));
+    return g_storm[(int)g_storm[30] + (q.z * ny + q.y) * nx + q.x];
+}
+
 float StormSigma(float3 position, float radius, float footprint)
 {
     const float3 dir = position / max(radius, 1.0);
@@ -731,6 +740,26 @@ float StormSigma(float3 position, float radius, float footprint)
     const float b = lerp(lerp(StormCell(c + int3(0, 0, 1)), StormCell(c + int3(1, 0, 1)), t.x),
         lerp(StormCell(c + int3(0, 1, 1)), StormCell(c + int3(1, 1, 1)), t.x), t.y);
     float sigma = lerp(a, b, t.z);
+    if (g_storm[22] > 0.5)
+    {
+        const float childX = x - g_storm[28];
+        const float childY = y - g_storm[29];
+        const float edge = min(0.5 * g_storm[25] * g_storm[23] - abs(childX), 0.5 * g_storm[26] * g_storm[24] - abs(childY));
+        const float inside = SmoothRange(0.0, max(g_storm[31], 1.0), edge);
+        if (inside > 0.0)
+        {
+            const float cfx = childX / g_storm[23] + 0.5 * g_storm[25] - 0.5;
+            const float cfy = childY / g_storm[24] + 0.5 * g_storm[26] - 0.5;
+            const float2 cf = floor(float2(cfx, cfy));
+            const float2 ct = float2(cfx, cfy) - cf;
+            const int2 cc = int2(cf);
+            const float ca = lerp(lerp(StormCellChild(int3(cc, c.z)), StormCellChild(int3(cc + int2(1, 0), c.z)), ct.x),
+                lerp(StormCellChild(int3(cc + int2(0, 1), c.z)), StormCellChild(int3(cc + int2(1, 1), c.z)), ct.x), ct.y);
+            const float cb = lerp(lerp(StormCellChild(int3(cc, c.z + 1)), StormCellChild(int3(cc + int2(1, 0), c.z + 1)), ct.x),
+                lerp(StormCellChild(int3(cc + int2(0, 1), c.z + 1)), StormCellChild(int3(cc + int2(1, 1), c.z + 1)), ct.x), ct.y);
+            sigma = lerp(sigma, lerp(ca, cb, t.z), inside);
+        }
+    }
     if (sigma > 1.0e-6)
     {
         // The grid is 500 m to 2 km: carve the silhouette and the interior with the erosion noise, fading out when a pixel is wider.

@@ -5,7 +5,7 @@ kind = "subsystem"
 status = "experimental"
 summary = """
 GpuStormSolver runs one level of the fast storm core (advection, mass fixer, Kessler + ice microphysics, buoyancy, mixing, sponges, exact FFT pressure projection) as 14 compute kernels in one HLSL file, \
-validated against the CPU reference and about 180x faster than it on the 512 km domain. Phase 4 of the storm domain plan: single level, fixed step; it also exports its clouds to the renderer (phase 5) and saves and restores its state bit for bit (phase 6). Nesting kernels are next."""
+validated against the CPU reference and about 180x faster than it on the 512 km domain. Phase 4 of the storm domain plan: single level, fixed step; it also exports its clouds to the renderer (phase 5), saves and restores its state bit for bit (phase 6) and nests a finer child grid inside itself (`NestedGpuSolver`, phase 7)."""
 owner_module = "OrbitWeatherGpu"
 keywords = ["weather gpu", "compute", "vulkan", "fast core", "hlsl", "fft", "pressure projection", "gpu port", "hot reload", "storm"]
 sources = [
@@ -24,6 +24,7 @@ invariants = [
   "The pressure solve is float32: the GPU's divergence after projection is 1e-8 to 1.4e-8 /s against the CPU's 4e-9 to 8e-9 in the same storm, which is the accepted tolerance. Do not move it to a looser solver.",
   "The RHI creates every compute pipeline with the entry point `main`; kernels are written as `ENTRY_<name>` and the host defines the chosen one as `main` and the rest as unused names. Adding a kernel means adding it to kKernels in GpuStormSolver.cpp and to the ENTRY fallback list in storm.hlsl.",
   "ReloadShaders swaps the pipelines only when every kernel compiles; a failed edit leaves the running generation usable (tested). Pipelines are only replaced between submissions because Advance waits for its fence.",
+  "A nest is two GpuStormSolvers: the parent keeps a snapshot of its state at the start of each step (kernel CopyState), the child takes a fixed number of steps per parent step and after each one's forcing RelaxBand pulls its edge band toward the parent (interpolated between the snapshot and the end-of-step state) before the pressure projection. The step schedule is fixed, so a nest is reproducible and its checkpoint (both levels) restores bit for bit. The RHI binds four buffers per kernel: arena, base table, cloud output, parent arena (the last two default to the arena).",
   "Save and Restore round-trip the whole state: a restored solver continues bit for bit like the original (tested), which the storm timewarp depends on; keep the kernels free of atomics and unordered reductions.",
   "Grids are limited to 256 cells per axis (one FFT line per workgroup in shared memory) and 120 levels (fixed local arrays); the step is fixed (a Courant limit needs a readback per step) and the storm-following frame is CPU only.",
 ]

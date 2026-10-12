@@ -54,6 +54,12 @@
 #ifndef ENTRY_ExportCloud
 #define ENTRY_ExportCloud ExportCloud
 #endif
+#ifndef ENTRY_RelaxBand
+#define ENTRY_RelaxBand RelaxBand
+#endif
+#ifndef ENTRY_CopyState
+#define ENTRY_CopyState CopyState
+#endif
 
 static const float kGravity = 9.81;
 static const float kCp = 1005.7;
@@ -74,6 +80,11 @@ struct Params
     uint offRain, offSpec, offPhi, offAux;
     uint arg0, arg1, arg2, arg3;
     float spongeBase, spongeRate, latCells, latRate;
+    // Nesting (RelaxBand, CopyState, ExportCloud): the parent's arena offsets and grid, the child's place in it.
+    uint pBefore, pAfter, pNx, pNy;           // parent snapshot copy, parent current copy (arena floats), parent grid
+    float blend, edgeWeight, pad0, pad1;
+    uint originI, originJ, ratio, relaxWidth; // child origin in parent cells; relaxWidth 0xFFFFFFFF = fill the whole child
+    uint pCells, pFaceCells, outOffset, pad2;
 };
 
 [[vk::push_constant]] Params P;
@@ -81,6 +92,8 @@ struct Params
 [[vk::binding(1, 0)]] StructuredBuffer<float> g_base;
 // Cloud output for the renderer (celestial_clouds StormSigma): 32 header floats written by the host, then extinction per cell.
 [[vk::binding(2, 0)]] RWStructuredBuffer<float> g_out;
+// The parent solver's arena, read by RelaxBand (the other kernels are given their own arena here).
+[[vk::binding(3, 0)]] RWStructuredBuffer<float> g_parent;
 
 // ----------------------------------------------------------------------------- base state
 // g_base layout: theta, vapor, exner, pressure, density, windU, windV (nz each), faceDensity (nz + 1), lower, upper (nz each),
@@ -792,5 +805,75 @@ void ENTRY_ExportCloud(uint3 id : SV_DispatchThreadID)
         if (Ice()) { sigma += 54.0 * S(4u, idx) + 8.2 * S(5u, idx) + 1.6 * S(6u, idx); }
         sigma *= BDensity(id.z);
     }
-    g_out[32u + idx] = sigma;
+    g_out[P.outOffset + idx] = sigma;
+}
+
+// ----------------------------------------------------------------------------- nesting
+// Parent value of nest field `field` (0 u, 1 v, 2 w, 3.. scalars) at the child sample (i, j, k), blended in time between the parent's
+// state at the start of its step (`before`) and at the end (`after`), bilinear in the horizontal like NestedStormSolver::ParentValue.
+float ParentField(uint base, uint field, uint k, float fx, float fy)
+{
+    uint offset = base;
+    if (field == 1u) { offset += P.pCells; }
+    else if (field == 2u) { offset += 2u * P.pCells; }
+    else if (field >= 3u) { offset += 2u * P.pCells + P.pFaceCells + (field - 3u) * P.pCells; }
+    const float flx = floor(fx), fly = floor(fy);
+    const float tx = fx - flx, ty = fy - fly;
+    const int i0 = (int)flx, j0 = (int)fly;
+    const int mx = (int)P.pNx - 1, my = (int)P.pNy - 1;
+    const uint rowBase = offset + k * P.pNx * P.pNy;
+    const uint r0 = rowBase + (uint)(j0 & my) * P.pNx;
+    const uint r1 = rowBase + (uint)((j0 + 1) & my) * P.pNx;
+    const float a = lerp(g_parent[r0 + (uint)(i0 & mx)], g_parent[r0 + (uint)((i0 + 1) & mx)], tx);
+    const float b = lerp(g_parent[r1 + (uint)(i0 & mx)], g_parent[r1 + (uint)((i0 + 1) & mx)], tx);
+    return lerp(a, b, ty);
+}
+
+// Pulls the child's edge band toward the parent (or, with relaxWidth = 0xFFFFFFFF, fills the whole child from it), applied between the
+// forcing and the pressure projection like the CPU nest's hook. Dispatch (nx/8, ny/8, nz + 1).
+[numthreads(8, 8, 1)]
+void ENTRY_RelaxBand(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= P.nx || id.y >= P.ny || id.z > P.nz) { return; }
+    const bool full = P.relaxWidth == 0xFFFFFFFFu;
+    const int i = (int)id.x, j = (int)id.y;
+    const int d = min(min(i, (int)P.nx - 1 - i), min(j, (int)P.ny - 1 - j));
+    float weight = 1.0;
+    if (!full)
+    {
+        if (d >= (int)P.relaxWidth) { return; }
+        const float ramp = cos(0.5 * kPi * (float)d / (float)P.relaxWidth);
+        weight = P.edgeWeight * ramp * ramp;
+    }
+    const uint k = id.z;
+    const float r = (float)P.ratio;
+    const uint fieldCount = 3u + P.nScalars;
+    for (uint f = 0u; f < fieldCount; ++f)
+    {
+        const bool isW = f == 2u;
+        if (isW ? (!full && (k == 0u || k >= P.nz)) : (k >= P.nz)) { continue; }
+        const float sx = f == 0u ? 0.0 : 0.5;
+        const float sy = f == 1u ? 0.0 : 0.5;
+        const float fx = (float)P.originI + ((float)i + sx) / r - sx;
+        const float fy = (float)P.originJ + ((float)j + sy) / r - sy;
+        const float older = ParentField(P.pBefore, f, k, fx, fy);
+        const float newer = ParentField(P.pAfter, f, k, fx, fy);
+        const float target = lerp(older, newer, P.blend);
+        uint childOffset = P.offU;
+        if (f == 1u) { childOffset = P.offV; }
+        else if (f == 2u) { childOffset = P.offW; }
+        else if (f >= 3u) { childOffset = P.offS + (f - 3u) * P.cells; }
+        const uint index = childOffset + (k * P.ny + id.y) * P.nx + id.x;
+        g_a[index] += weight * (target - g_a[index]);
+    }
+}
+
+// Copies the current state copy to the snapshot region (arg0 = destination, arg1 = floats): the parent's state at the start of a step,
+// which the child interpolates toward the end-of-step state. Dispatch (floats / 256).
+[numthreads(256, 1, 1)]
+void ENTRY_CopyState(uint3 id : SV_DispatchThreadID)
+{
+    const uint index = id.x + id.y * (65535u * 256u);   // the dispatch is two-dimensional above 65535 groups
+    if (index >= P.arg1) { return; }
+    g_a[P.arg0 + index] = g_a[P.offU + index];
 }

@@ -300,6 +300,7 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
         stormDraft_.spinMinutes = static_cast<f32>(spin);
     }
     (void)context.Checkbox("Ice##storm-ice", stormDraft_.ice);
+    (void)context.Checkbox("Nested 4:1 child grid (500 m)##storm-nested", stormDraft_.nested);
     if (!stormAutoLoaded_)
     {
         stormAuto_ = storm_->AutoSetting();
@@ -308,6 +309,7 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
     context.Separator();
     context.MutedText("Scheduled storms: the nearest live storm of the deterministic schedule near the camera, a pure function of the simulation time.");
     bool autoChanged = context.Checkbox("Automatic storms near the camera##storm-auto", stormAuto_.enabled);
+    autoChanged |= context.Checkbox("Nested child grid##storm-auto-nested", stormAuto_.nested);
     i64 seed = static_cast<i64>(stormAuto_.seed);
     if (context.InputInteger("Schedule seed##storm-seed", seed))
     {
@@ -336,8 +338,10 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
         context.KeyValue("Centre", std::format("{:.3f}, {:.3f} deg", status.latitudeDegrees, status.longitudeDegrees));
         context.KeyValue("Storm time", std::format("{:.1f} min ({} steps, {:.2f} ms per step)", status.stormSeconds / 60.0, status.steps,
             status.stepMilliseconds));
-        context.KeyValue("Domain", std::format("{0} x {0} cells at {1:.0f} m, {2:.0f} MiB", status.cells,
-            static_cast<f64>(status.spacingMeters), status.residentMiB));
+        context.KeyValue("Domain", std::format("{0} x {0} cells at {1:.0f} m{2}, {3:.0f} MiB", status.cells,
+            static_cast<f64>(status.spacingMeters),
+            status.nested ? std::format(" with a child at {:.0f} m", static_cast<f64>(status.childSpacingMeters)) : std::string(),
+            status.residentMiB));
         if (status.lifetimeSeconds > 0.0)
         {
             context.KeyValue("Age", std::format("{:.0f} of {:.0f} min, intensity {:.2f}{}", status.ageSeconds / 60.0,

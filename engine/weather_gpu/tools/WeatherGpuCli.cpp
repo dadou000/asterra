@@ -2,10 +2,12 @@
 //
 //   orbit_weather_gpu compare [--nx 32 --ny 32 --nz 40 --steps 12 --dt 12 --ice 1 --sponge 0]
 //   orbit_weather_gpu bench   [--nx 256 --ny 256 --steps 40 --dt 24 --ice 1 --sponge 16]
+//   orbit_weather_gpu nest    [--nx 128 --ny 128 --ratio 4 --cells 32 --steps 40 --dt 24 --ice 1 --sponge 12]
 
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
+#include <orbit/weather_gpu/NestedGpuSolver.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -196,6 +198,42 @@ int Bench(const Options& o)
         MaxDivergence(downloaded));
     return 0;
 }
+int NestBench(const Options& o)
+{
+    auto device = OpenDevice();
+    if (!device) { return 3; }
+    shader::dxc::DxcShaderCompiler compiler;
+    weather_gpu::NestedGpuConfig nest;
+    nest.parent = ConfigFrom(o, 128.0, 12.0);
+    nest.ratio = static_cast<std::uint32_t>(Number(o, "ratio", 4.0));
+    nest.cells = static_cast<std::uint32_t>(Number(o, "cells", nest.parent.nx / 4.0));
+    nest.relaxCells = static_cast<std::uint32_t>(Number(o, "relax", 12.0));
+    nest.childSubsteps = static_cast<std::uint32_t>(Number(o, "substeps", 2.0));
+    if (const std::string problem = weather_gpu::NestedGpuSolver::Validate(nest); !problem.empty())
+    {
+        std::cerr << problem << '\n';
+        return 2;
+    }
+    const auto steps = static_cast<std::uint32_t>(Number(o, "steps", 40.0));
+    const float dt = nest.parent.maxTimeStep;
+    FastStormSolver cpu(nest.parent);
+    weather_gpu::NestedGpuSolver solver(*device, compiler, nest);
+    solver.Upload(cpu);
+    solver.Advance(2U, dt);
+    double best = 1.0e30;
+    for (int run = 0; run < 3; ++run)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        solver.Advance(steps, dt);
+        best = std::min(best, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    }
+    const double perStep = best / steps;
+    const weather_lab::FastStormConfig& child = solver.Child().Config();
+    std::printf("parent %ux%ux%u at %.0f m + child %ux%u at %.0f m (%u child steps per parent step): %.2f ms per parent step, %.0fx real time, %.0f MiB\n",
+        nest.parent.nx, nest.parent.ny, nest.parent.nz, static_cast<double>(nest.parent.dx), child.nx, child.ny, static_cast<double>(child.dx),
+        nest.childSubsteps, perStep, dt / (perStep / 1000.0), static_cast<double>(solver.ResidentBytes()) / (1024.0 * 1024.0));
+    return 0;
+}
 } // namespace
 
 int main(const int argc, char** argv)
@@ -208,6 +246,7 @@ int main(const int argc, char** argv)
     const std::string command = argv[1];
     if (command == "compare") { return Compare(ParseOptions(argc, argv, 2)); }
     if (command == "bench") { return Bench(ParseOptions(argc, argv, 2)); }
+    if (command == "nest") { return NestBench(ParseOptions(argc, argv, 2)); }
     std::cerr << "unknown command\n";
     return 2;
 }

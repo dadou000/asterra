@@ -22,6 +22,7 @@ struct StormPlaceRequest
     f32 spinMinutes{40.0F};    // simulated before the domain first draws, so a storm exists when it appears
     bool ice{true};
     u32 spongeCells{12};
+    bool nested{true};         // a 4:1 child grid (500 m for a 2 km parent) over the middle quarter of the domain
 };
 
 // Scheduled storms (phase 6): storms come from celestial_clouds::StormSchedule, a pure function of the absolute simulation time, so the
@@ -35,6 +36,7 @@ struct StormAutoRequest
     f32 spacingMeters{2000.0F};
     f32 searchKilometres{500.0F};
     bool ice{true};
+    bool nested{true};
 };
 
 struct StormStatus
@@ -65,6 +67,8 @@ struct StormStatus
     u32 checkpoints{0};          // saved states of this storm; a time jump restarts from the nearest
     f64 checkpointMiB{0.0};      // memory of all cached checkpoints
     u32 scheduledNearby{0};      // live scheduled storms within the search radius
+    bool nested{false};          // the storm being drawn has a child grid
+    f32 childSpacingMeters{0.0F};
 };
 
 [[nodiscard]] const char* StormStateName(StormStatus::State state) noexcept;

@@ -1,6 +1,8 @@
 #include <orbit/rhi/vulkan/VulkanBackend.hpp>
 #include <orbit/shader/dxc/DxcShaderCompiler.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
+#include <orbit/weather_gpu/NestedGpuSolver.hpp>
+#include <orbit/weather_lab/NestedStormSolver.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -185,6 +187,69 @@ int RunTests()
         bool threw = false;
         try { c.Restore(wrong); } catch (const std::exception&) { threw = true; }
         Check(threw);
+    }
+
+    // The nest on the GPU against the nest on the CPU, with the same step schedule on both (parent 12 s, one child step of 12 s).
+    {
+        weather_lab::NestConfig cpuNest;
+        cpuNest.parent = config;
+        cpuNest.parent.lateralSpongeCells = 0;
+        cpuNest.parent.maxTimeStep = 12.0F;
+        cpuNest.ratio = 2;
+        cpuNest.cells = 16;
+        cpuNest.relaxCells = 6;
+        weather_lab::NestedStormSolver cpuSolver(cpuNest);
+        weather_gpu::NestedGpuConfig gpuNest;
+        gpuNest.parent = cpuNest.parent;
+        gpuNest.ratio = 2;
+        gpuNest.cells = 16;
+        gpuNest.relaxCells = 6;
+        gpuNest.childSubsteps = 1;
+        Check(weather_gpu::NestedGpuSolver::Validate(gpuNest).empty());
+        weather_gpu::NestedGpuSolver gpuSolver(*device, compiler, gpuNest);
+        gpuSolver.Upload(cpuSolver.Parent());
+        cpuSolver.Advance(480.0);          // 40 parent steps
+        gpuSolver.Advance(40, 12.0F);
+        Check(std::fabs(gpuSolver.Time() - cpuSolver.Parent().Diagnostics().time) < 1.0e-3);
+        FastStormSolver parentBack(cpuNest.parent);
+        gpuSolver.Parent().Download(parentBack);
+        const FastStormState pa = cpuSolver.Parent().MutableState();
+        const FastStormState pb = parentBack.MutableState();
+        const std::size_t parentCells = 32U * 32U * 40U;
+        std::cout << "nest parent diff: theta " << MaxDifference(pa.theta, pb.theta, parentCells) << " u " << MaxDifference(pa.u, pb.u, parentCells)
+                  << " w " << MaxDifference(pa.w, pb.w, parentCells) << '\n';
+        Check(MaxDifference(pa.theta, pb.theta, parentCells) < 0.05);
+        FastStormConfig childConfig = cpuNest.parent;
+        childConfig.nx = 32;
+        childConfig.ny = 32;
+        childConfig.dx = cpuNest.parent.dx / 2.0F;
+        childConfig.dy = childConfig.dx;
+        FastStormSolver childBack(childConfig);
+        gpuSolver.Child().Download(childBack);
+        const FastStormState ca = cpuSolver.Child().MutableState();
+        const FastStormState cb = childBack.MutableState();
+        const std::size_t childCells = 32U * 32U * 40U;
+        std::cout << "nest child diff:  theta " << MaxDifference(ca.theta, cb.theta, childCells) << " u " << MaxDifference(ca.u, cb.u, childCells)
+                  << " w " << MaxDifference(ca.w, cb.w, childCells) << " qv " << MaxDifference(ca.qv, cb.qv, childCells) << '\n';
+        Check(MaxDifference(ca.theta, cb.theta, childCells) < 0.1);
+        Check(MaxDifference(ca.u, cb.u, childCells) < 0.1);
+        Check(MaxDifference(ca.w, cb.w, childCells + 32U * 32U) < 0.2);
+        Check(MaxDifference(ca.qv, cb.qv, childCells) < 5.0e-4);
+        // The child has its own storm development (it is finer than the parent), not a copy of the parent's field.
+        float childW = 0.0F;
+        for (std::size_t i = 0; i < childCells; ++i) { childW = std::max(childW, cb.w[i]); }
+        Check(childW > 0.05F);
+
+        // A nest checkpoint (both levels) restores and continues bit for bit; a nest is deterministic.
+        gpuSolver.Advance(10, 12.0F);
+        const weather_gpu::StormCheckpoint saved = gpuSolver.Save();
+        Check(saved.data.size() * sizeof(float) == gpuSolver.CheckpointBytes());
+        gpuSolver.Advance(10, 12.0F);
+        const weather_gpu::StormCheckpoint straight = gpuSolver.Save();
+        weather_gpu::NestedGpuSolver replay(*device, compiler, gpuNest);
+        replay.Restore(saved);
+        replay.Advance(10, 12.0F);
+        Check(replay.Save().data == straight.data);
     }
 
     std::cout << "Weather GPU tests passed\n";

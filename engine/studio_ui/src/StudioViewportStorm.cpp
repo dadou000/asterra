@@ -3,6 +3,7 @@
 #include <orbit/celestial_clouds/StormSchedule.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
+#include <orbit/weather_gpu/NestedGpuSolver.hpp>
 #include <orbit/weather_lab/FastStormSolver.hpp>
 
 #include <algorithm>
@@ -19,7 +20,7 @@ namespace
 {
 constexpr f64 kPi = 3.14159265358979323846;
 constexpr f64 kCheckpointCadenceSeconds = 1200.0;   // a checkpoint every 20 minutes of storm time
-constexpr std::size_t kCheckpointBudgetBytes = 384ULL * 1024ULL * 1024ULL;
+constexpr std::size_t kCheckpointBudgetBytes = 640ULL * 1024ULL * 1024ULL;
 constexpr u32 kStepsPerFrame = 4U;                  // while keeping up with the clock: at most this many steps a frame
 constexpr u32 kCatchUpStepsPerFrame = 24U;          // while behind (a time jump, a new storm): about 70 ms of GPU work a frame
 constexpr f64 kFadeSeconds = 2400.0;                // the last 40 minutes of a storm dissolve into the procedural clouds
@@ -30,6 +31,51 @@ f64 SmoothStep(const f64 a, const f64 b, const f64 x)
     const f64 t = std::clamp((x - a) / (b - a), 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
 }
+
+// One storm's simulation: a single level, or a parent with a child grid. The manager drives both the same way.
+class StormSim
+{
+public:
+    StormSim(rhi::Device& device, const shader::Compiler& compiler, const weather_lab::FastStormConfig& config, const bool nested)
+    {
+        if (nested && config.nx >= 32U)
+        {
+            weather_gpu::NestedGpuConfig nest;
+            nest.parent = config;
+            nest.ratio = 4U;
+            nest.cells = config.nx / 4U;
+            nest.relaxCells = std::min(12U, config.nx / 4U);
+            nest.relaxSeconds = 10.0F;
+            nest.childSubsteps = 2U;
+            if (const std::string problem = weather_gpu::NestedGpuSolver::Validate(nest); !problem.empty())
+            {
+                throw std::runtime_error(problem);
+            }
+            nested_ = std::make_unique<weather_gpu::NestedGpuSolver>(device, compiler, nest);
+            childSpacing_ = config.dx / 4.0F;
+        }
+        else
+        {
+            single_ = std::make_unique<weather_gpu::GpuStormSolver>(device, compiler, config);
+        }
+    }
+    void Upload(weather_lab::FastStormSolver& cpu) { if (nested_) { nested_->Upload(cpu); } else { single_->Upload(cpu); } }
+    void Advance(const u32 steps, const f32 dt) { if (nested_) { nested_->Advance(steps, dt); } else { single_->Advance(steps, dt); } }
+    [[nodiscard]] weather_gpu::StormCheckpoint Save() { return nested_ ? nested_->Save() : single_->Save(); }
+    void Restore(const weather_gpu::StormCheckpoint& c) { if (nested_) { nested_->Restore(c); } else { single_->Restore(c); } }
+    void ExportCloud(const weather_gpu::StormPlacement& p) { if (nested_) { nested_->ExportCloud(p); } else { single_->ExportCloud(p); } }
+    [[nodiscard]] rhi::Buffer& CloudBuffer() { return nested_ ? nested_->CloudBuffer() : single_->CloudBuffer(); }
+    [[nodiscard]] double Time() const { return nested_ ? nested_->Time() : single_->Time(); }
+    [[nodiscard]] double LastAdvanceMilliseconds() const { return nested_ ? nested_->LastAdvanceMilliseconds() : single_->LastAdvanceMilliseconds(); }
+    [[nodiscard]] std::size_t ResidentBytes() const { return nested_ ? nested_->ResidentBytes() : single_->ResidentBytes(); }
+    [[nodiscard]] bool Nested() const { return nested_ != nullptr; }
+    [[nodiscard]] f32 ChildSpacing() const { return childSpacing_; }
+
+private:
+    std::unique_ptr<weather_gpu::GpuStormSolver> single_;
+    std::unique_ptr<weather_gpu::NestedGpuSolver> nested_;
+    f32 childSpacing_{0.0F};
+};
 
 u64 Mix64(u64 x)
 {
@@ -59,6 +105,7 @@ struct StudioViewportRenderer::StormRuntime
         f64 latitudeRadians{0.0};
         f64 longitudeRadians{0.0};
         weather_lab::FastStormConfig config;
+        bool nested{false};
     };
 
     StormPlaceRequest manualRequest;
@@ -70,7 +117,7 @@ struct StudioViewportRenderer::StormRuntime
     bool bodySet{false};
 
     Active active;
-    std::unique_ptr<weather_gpu::GpuStormSolver> solver;
+    std::unique_ptr<StormSim> solver;
     std::unique_ptr<weather_lab::FastStormSolver> cpuInit;
     u64 solverGridKey{0};
     u64 initId{~0ULL};
@@ -161,6 +208,7 @@ void StudioViewportRenderer::UpdateStormDomain(
         wanted.config.ice = m.ice;
         wanted.config.bubble.amplitude = m.bubbleKelvin;
         wanted.config.lateralSpongeCells = m.spongeCells;
+        wanted.nested = m.nested;
     }
     else if (rt.autoRequest.enabled && cameraLength > 1.0)
     {
@@ -192,6 +240,7 @@ void StudioViewportRenderer::UpdateStormDomain(
             wanted.config.dy = rt.autoRequest.spacingMeters;
             wanted.config.ice = rt.autoRequest.ice;
             wanted.config.lateralSpongeCells = std::max(4U, rt.autoRequest.cells / 10U);
+            wanted.nested = rt.autoRequest.nested;
             // Each storm gets its own warm bubble, so scheduled storms differ in strength.
             wanted.config.bubble.amplitude = 1.6F + 0.8F * static_cast<f32>(static_cast<f64>(Mix64(s.id) >> 11U) / 9007199254740992.0);
         }
@@ -225,14 +274,15 @@ void StudioViewportRenderer::UpdateStormDomain(
     {
         const bool switched = !rt.active.valid || rt.active.id != wanted.id;
         const u64 gridKey = Mix64((static_cast<u64>(wanted.config.nx) << 32U) ^ static_cast<u64>(wanted.config.dx * 16.0F)
-            ^ (wanted.config.ice ? 0x1000000000ULL : 0ULL) ^ (static_cast<u64>(wanted.config.lateralSpongeCells) << 48U));
+            ^ (wanted.config.ice ? 0x1000000000ULL : 0ULL) ^ (static_cast<u64>(wanted.config.lateralSpongeCells) << 48U)
+            ^ (wanted.nested ? 0x7000000000000ULL : 0ULL));
         if (!rt.solver || rt.solverGridKey != gridKey)
         {
             if (const std::string problem = weather_gpu::GpuStormSolver::Validate(wanted.config); !problem.empty())
             {
                 throw std::runtime_error(problem);
             }
-            rt.solver = std::make_unique<weather_gpu::GpuStormSolver>(*device_, *compiler_, wanted.config);
+            rt.solver = std::make_unique<StormSim>(*device_, *compiler_, wanted.config, wanted.nested);
             rt.solverGridKey = gridKey;
             rt.checkpoints.clear();
             rt.lastUse.clear();
@@ -379,6 +429,8 @@ void StudioViewportRenderer::UpdateStormDomain(
         status.cells = wanted.config.nx;
         status.spacingMeters = wanted.config.dx;
         status.residentMiB = static_cast<f64>(rt.solver->ResidentBytes()) / (1024.0 * 1024.0);
+        status.nested = rt.solver->Nested();
+        status.childSpacingMeters = rt.solver->ChildSpacing();
         status.stormId = wanted.id;
         status.ageSeconds = age;
         status.lifetimeSeconds = wanted.manual ? 0.0 : wanted.lifetimeSeconds;

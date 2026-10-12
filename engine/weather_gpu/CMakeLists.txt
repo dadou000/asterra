@@ -23,6 +23,7 @@ file(COPY_FILE "${ORBIT_STORM_EMBED}.tmp" "${ORBIT_STORM_EMBED}" ONLY_IF_DIFFERE
 
 add_library(OrbitWeatherGpu STATIC
     src/GpuStormSolver.cpp
+    src/NestedGpuSolver.cpp
     "${ORBIT_STORM_EMBED}"
 )
 add_library(Orbit::WeatherGpu ALIAS OrbitWeatherGpu)

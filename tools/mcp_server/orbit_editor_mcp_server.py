@@ -1169,6 +1169,7 @@ def orbit_storm_place(
     spin_minutes: float | None = None,
     ice: bool | None = None,
     sponge_cells: int | None = None,
+    nested: bool | None = None,
 ) -> dict[str, Any]:
     """Place a simulated storm domain on the body under the primary view. The
     GPU storm core (engine/weather_gpu) is built on the next frame that draws
@@ -1177,12 +1178,13 @@ def orbit_storm_place(
     condensate instead of the procedural clouds (march, cloud shadow and sun light
     volume). cells (nx = ny, power of two 16 to 256, default 128), spacing_m (500
     to 5000, default 2000), bubble_k (default 2), ice (default true), sponge_cells
-    (default 12). One domain at a time. Returns error (empty when queued) and the
-    status; poll orbit_storm_status for active. Compare with the procedural sky:
+    (default 12), nested (default true: a 4:1 child grid, 500 m inside a 2 km
+    domain, over the middle quarter of the domain). One domain at a time. Returns
+    error (empty when queued) and the status; poll orbit_storm_status for active. Compare with the procedural sky:
     orbit_clouds_split_set(enabled=true, defines="CLOUD_STORM=0")."""
     params: dict[str, Any] = {"latitude_deg": latitude_deg, "longitude_deg": longitude_deg}
     for key, value in (("cells", cells), ("spacing_m", spacing_m), ("bubble_k", bubble_k), ("spin_minutes", spin_minutes),
-                       ("ice", ice), ("sponge_cells", sponge_cells)):
+                       ("ice", ice), ("sponge_cells", sponge_cells), ("nested", nested)):
         if value is not None:
             params[key] = value
     return _rpc("storm.place", params)
@@ -1196,6 +1198,7 @@ def orbit_storm_auto(
     spacing_m: float | None = None,
     search_km: float | None = None,
     ice: bool | None = None,
+    nested: bool | None = None,
 ) -> dict[str, Any]:
     """Scheduled storms near the camera. enabled=true makes Studio simulate the
     nearest live storm of the deterministic storm schedule
@@ -1210,7 +1213,7 @@ def orbit_storm_auto(
     (mode, storm_id, age_seconds, lifetime_seconds, intensity, catching_up,
     checkpoints, checkpoint_mib, scheduled_nearby)."""
     params: dict[str, Any] = {"enabled": enabled}
-    for key, value in (("seed", seed), ("cells", cells), ("spacing_m", spacing_m), ("search_km", search_km), ("ice", ice)):
+    for key, value in (("seed", seed), ("cells", cells), ("spacing_m", spacing_m), ("search_km", search_km), ("ice", ice), ("nested", nested)):
         if value is not None:
             params[key] = value
     return _rpc("storm.auto", params)

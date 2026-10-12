@@ -99,6 +99,13 @@ int main()
     const auto viaRpc = other.TakeAuto();
     Check(viaRpc.has_value() && viaRpc->seed == 42U && viaRpc->cells == 64U && viaRpc->searchKilometres == 300.0F, "the RPC parameters reach the request");
     Check(Call(autoDispatcher, "storm.auto", R"({"seed":1})").Find("error") != nullptr, "enabled is required");
+    (void)Call(autoDispatcher, "storm.auto", R"({"enabled":true,"nested":false})");
+    const auto flat = other.TakeAuto();
+    Check(flat.has_value() && !flat->nested, "nested can be turned off");
+    Check(Call(autoDispatcher, "storm.auto", R"({"enabled":true,"nested":3})").Find("error") != nullptr, "nested must be a boolean");
+    (void)Call(dispatcher, "storm.place", R"({"latitude_deg":1.0,"longitude_deg":2.0})");
+    const auto defaulted = mailbox.TakePlace();
+    Check(defaulted.has_value() && defaulted->nested, "a placed storm is nested by default");
     Check(autoResult.Find("result")->Find("mode") != nullptr && autoResult.Find("result")->Find("storm_id") != nullptr, "the status reports mode and storm_id");
 
     if (failures == 0) { std::printf("StormDomain: all checks passed\n"); }

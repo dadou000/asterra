@@ -21,6 +21,42 @@
 // pipelines only when all of them compile, so a failed edit leaves the running generation untouched.
 namespace orbit::weather_gpu
 {
+class GpuStormSolver;
+
+// How a child solver is tied to its parent for one step (phase 7): the child's edge band is relaxed toward the parent's state,
+// interpolated in space and between the parent's state at the start of its step and at its end.
+struct ParentLink
+{
+    GpuStormSolver* parent{nullptr};
+    std::uint32_t originI{0};        // the child's lower-left corner, in parent cells
+    std::uint32_t originJ{0};
+    std::uint32_t ratio{4};          // parent dx / child dx
+    std::uint32_t relaxCells{12};    // width of the relaxation band, in child cells
+    float relaxSeconds{10.0F};       // relaxation time at the outer edge
+    float blend{1.0F};               // 0 = the parent's state at the start of its step, 1 = at the end
+};
+
+struct GpuStormOptions
+{
+    bool snapshot{false};            // keep a copy of the state at the start of every step (a parent needs it)
+    std::uint32_t cloudExtraCells{0};// room after the cloud extinction for a child's cells
+};
+
+// The child's place in the exported cloud buffer, for the renderer (CloudRenderer StormSigma).
+struct StormChildView
+{
+    bool present{false};
+    float dx{0.0F};
+    float dy{0.0F};
+    std::uint32_t nx{0};
+    std::uint32_t ny{0};
+    std::uint32_t nz{0};
+    float offsetX{0.0F};             // child centre from the parent's centre, metres (x east, y north)
+    float offsetY{0.0F};
+    std::uint32_t dataOffset{0};     // index of the child's first cell in the buffer
+    float blendMeters{0.0F};         // fade from the parent's value to the child's over this distance from the child's edge
+};
+
 // Where the simulated domain sits on the planet, for the cloud renderer (see celestial_clouds CloudRenderer::SetStormBuffer).
 struct StormPlacement
 {
@@ -31,6 +67,7 @@ struct StormPlacement
     float planetRadius{6371000.0F};
     float fadeMeters{0.0F};           // procedural-to-simulated blend at the edge; 0 = the lateral sponge width (or 8 cells)
     float intensity{1.0F};            // 1 = the simulated clouds fully replace the procedural ones inside the domain, 0 = not at all
+    StormChildView child{};
 };
 
 // The complete simulation state at one storm time: restoring it and stepping on gives exactly the result of never having stopped.
@@ -43,7 +80,8 @@ struct StormCheckpoint
 class GpuStormSolver
 {
 public:
-    GpuStormSolver(rhi::Device& device, const shader::Compiler& compiler, const weather_lab::FastStormConfig& config);
+    GpuStormSolver(rhi::Device& device, const shader::Compiler& compiler, const weather_lab::FastStormConfig& config,
+        const GpuStormOptions& options = {});
     ~GpuStormSolver();
     GpuStormSolver(const GpuStormSolver&) = delete;
     GpuStormSolver& operator=(const GpuStormSolver&) = delete;
@@ -61,6 +99,18 @@ public:
 
     // Runs `steps` steps of length `dt` (fixed: the adaptive Courant limit needs a readback per step) in one submission and waits.
     void Advance(std::uint32_t steps, float dt);
+    // The same for a child: after the forcing of every step its edge band is relaxed toward `link.parent`.
+    void Advance(std::uint32_t steps, float dt, const ParentLink& link);
+    // Fills the whole child from the parent's current state (the start of a nest).
+    void FillFromParent(const ParentLink& link);
+    // Like ExportCloud's extinction pass but into another solver's cloud buffer at `offsetFloats` (a child into its parent's buffer).
+    void ExportCloudInto(rhi::Buffer& out, std::uint32_t offsetFloats);
+    // For the nesting: the arena, the offset of the current state copy and of the start-of-step snapshot, in floats.
+    [[nodiscard]] rhi::Buffer& Arena();
+    [[nodiscard]] std::uint32_t CurrentOffset() const;
+    [[nodiscard]] std::uint32_t SnapshotOffset() const;
+    [[nodiscard]] std::uint32_t CellCount() const;
+    [[nodiscard]] std::uint32_t FaceCellCount() const;
 
     // Reads the state back (one GPU round trip) / puts a saved state in. A restored solver continues bit for bit like the original:
     // the GPU kernels use no atomics and no unordered reductions.

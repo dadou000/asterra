@@ -33,7 +33,9 @@ Value StatusValue(const StormStatus& s)
         {"catching_up", s.catchingUp},
         {"checkpoints", static_cast<f64>(s.checkpoints)},
         {"checkpoint_mib", s.checkpointMiB},
-        {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)}};
+        {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)},
+        {"nested", s.nested},
+        {"child_spacing_m", static_cast<f64>(s.childSpacingMeters)}};
 }
 
 f64 Optional(const Value& params, const char* key, const f64 fallback)
@@ -185,7 +187,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 "advanced in step with the simulation clock; inside the domain the cloud renderer draws the simulated condensate "
                 "instead of the procedural clouds, in the march, the cloud shadow and the sun light volume. Parameters: `latitude_deg`, "
                 "`longitude_deg`, `cells` (nx = ny, power of two 16 to 256, default 128), `spacing_m` (500 to 5000, default 2000), "
-                "`bubble_k` (default 2), `spin_minutes` (0 to 240), `ice` (default true), `sponge_cells` (default 12). One domain at a "
+                "`bubble_k` (default 2), `spin_minutes` (0 to 240), `ice` (default true), `sponge_cells` (default 12), `nested` (default true: a 4:1 child grid over the middle quarter of the domain, so 500 m inside a 2 km domain). One domain at a "
                 "time: placing replaces it. Returns `error` (empty when queued) and the status; poll `storm.status` for `active`. "
                 "Compare it with the procedural sky using clouds.split_set with `CLOUD_STORM=0` for the right half.",
             .mutating = true
@@ -209,6 +211,11 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 if (!ice->IsBool()) { throw rpc::Error(kBadParams, "ice must be a boolean."); }
                 request.ice = ice->AsBool();
             }
+            if (const Value* nested = params.Find("nested"); nested != nullptr)
+            {
+                if (!nested->IsBool()) { throw rpc::Error(kBadParams, "nested must be a boolean."); }
+                request.nested = nested->AsBool();
+            }
             const std::string error = mailbox.Place(request);
             Value::Object result{{"error", error}};
             for (auto& entry : StatusValue(mailbox.Status()).AsObject()) { result.insert(entry); }
@@ -224,7 +231,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 "absolute simulation time and `seed` (default 1), so the same time shows the same storm in every launch, and a time jump "
                 "recomputes the storm from the nearest cached checkpoint instead of stepping through the skipped time. The storm grows from "
                 "nothing at its start, lives 2.5 to 4.5 hours and dissolves into the procedural clouds. Other parameters: `cells` (power of "
-                "two 16 to 256, default 128), `spacing_m` (default 2000), `ice` (default true). A manual storm.place overrides it while it "
+                "two 16 to 256, default 128), `spacing_m` (default 2000), `ice` (default true), `nested` (default true). A manual storm.place overrides it while it "
                 "exists. Returns `error` and the status (`mode`, `storm_id`, `age_seconds`, `lifetime_seconds`, `intensity`, `catching_up`, "
                 "`checkpoints`, `checkpoint_mib`, `scheduled_nearby`).",
             .mutating = true
@@ -246,6 +253,11 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
             {
                 if (!ice->IsBool()) { throw rpc::Error(kBadParams, "ice must be a boolean."); }
                 request.ice = ice->AsBool();
+            }
+            if (const Value* nested = params.Find("nested"); nested != nullptr)
+            {
+                if (!nested->IsBool()) { throw rpc::Error(kBadParams, "nested must be a boolean."); }
+                request.nested = nested->AsBool();
             }
             const std::string error = mailbox.SetAuto(request);
             Value::Object result{{"error", error}};

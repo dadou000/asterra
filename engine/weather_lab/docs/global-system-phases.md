@@ -33,6 +33,8 @@ Order follows risk: the nesting and the pressure solve across levels come before
 | P5 render link | Solver fields to `CloudFieldProduct` and the volume renderer (density bricks inside L1/L2); the analytic and the simulated sky compared with the cloud split view (`clouds.split_set`) on the same camera and time | No visible seam at the domain edge; the wall cloud and anvil come from the simulation; frame cost inside the cloud budget |
 | P6 placement and timewarp (first slice built, see `global-system-status-p6`) | Where on the planet a domain is placed (triggered by the analytic map's convective regions), its lifetime, checkpoints, decay into the analytic map | Scenario 13 (extreme timewarp) passes without the 45 s pre-spin; two launches place the same storm |
 
+Added after the first six: **P7, the nest on the GPU and in the clouds** (gate: the GPU nest matches the CPU nest, the child's finer extinction shows on screen, the cost stays small, phase 6 still holds); first slice built, see `global-system-status-p7`.
+
 ## Time and determinism
 
 - A domain is a function of its placement trigger (planet, location, start time, seed) and the analytic map; state at time t is the nearest stored checkpoint at or before t plus a deterministic integration. Checkpoints are written at a fixed cadence and versioned with the solver generation.
