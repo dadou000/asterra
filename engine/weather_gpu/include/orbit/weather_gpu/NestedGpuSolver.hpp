@@ -57,6 +57,8 @@ public:
     [[nodiscard]] std::size_t ResidentBytes() const;
     [[nodiscard]] GpuStormSolver& Parent();
     [[nodiscard]] GpuStormSolver& Child();
+    // The child grid's west and south edges, metres east and north of the parent's centre.
+    void ChildWestSouthEdge(float& east, float& north) const;
     [[nodiscard]] const NestedGpuConfig& Config() const;
 
 private:

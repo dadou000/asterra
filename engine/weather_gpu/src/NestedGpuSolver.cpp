@@ -150,6 +150,14 @@ void NestedGpuSolver::ExportCloud(StormPlacement placement)
     s.child->ExportCloudInto(s.parent->CloudBuffer(), s.parent->RainOffset() + s.parent->CellCount(), true);
 }
 
+void NestedGpuSolver::ChildWestSouthEdge(float& east, float& north) const
+{
+    const Impl& s = *impl_;
+    const weather_lab::FastStormConfig& p = s.cfg.parent;
+    east = (static_cast<float>(s.originI) - 0.5F * static_cast<float>(p.nx)) * p.dx;
+    north = (static_cast<float>(s.originJ) - 0.5F * static_cast<float>(p.ny)) * p.dy;
+}
+
 rhi::Buffer& NestedGpuSolver::CloudBuffer() { return impl_->parent->CloudBuffer(); }
 
 StormCheckpoint NestedGpuSolver::Save()

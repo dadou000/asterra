@@ -78,8 +78,25 @@ public:
     [[nodiscard]] double Time() const { return nested_ ? nested_->Time() : single_->Time(); }
     [[nodiscard]] double LastAdvanceMilliseconds() const { return nested_ ? nested_->LastAdvanceMilliseconds() : single_->LastAdvanceMilliseconds(); }
     [[nodiscard]] std::size_t ResidentBytes() const { return nested_ ? nested_->ResidentBytes() : single_->ResidentBytes(); }
-    // The parent level's state into a CPU solver of the same configuration (one GPU round trip).
-    void DownloadParent(weather_lab::FastStormSolver& cpu) { if (nested_) { nested_->Parent().Download(cpu); } else { single_->Download(cpu); } }
+    // The grid the lightning is computed on: the nested child (500 m in all three directions) or the single grid; its state into a CPU solver of
+    // that configuration (one GPU round trip), and where its west and south edges are from the domain's centre.
+    [[nodiscard]] const weather_lab::FastStormConfig& LightningConfig() const { return nested_ ? nested_->Child().Config() : single_->Config(); }
+    void DownloadLightning(weather_lab::FastStormSolver& cpu) { if (nested_) { nested_->Child().Download(cpu); } else { single_->Download(cpu); } }
+    void LightningWestSouth(f64& east, f64& north) const
+    {
+        if (nested_)
+        {
+            float e = 0.0F, n = 0.0F;
+            nested_->ChildWestSouthEdge(e, n);
+            east = e;
+            north = n;
+        }
+        else
+        {
+            east = -0.5 * single_->Config().nx * single_->Config().dx;
+            north = -0.5 * single_->Config().ny * single_->Config().dy;
+        }
+    }
     [[nodiscard]] bool Nested() const { return nested_ != nullptr; }
     [[nodiscard]] f32 ChildSpacing() const { return childSpacing_; }
 
@@ -152,8 +169,9 @@ public:
     }
 
     // Where the window sits: cell offsets of its corner in the parent grid (valid once a job was submitted).
-    [[nodiscard]] u32 OriginI() const { return originI_; }
-    [[nodiscard]] u32 OriginJ() const { return originJ_; }
+    // The window's west and south edges, metres from the west and south edges of the grid it was cut from.
+    [[nodiscard]] f64 OriginEast() const { return originEast_; }
+    [[nodiscard]] f64 OriginNorth() const { return originNorth_; }
     [[nodiscard]] u32 Cells() const { return cells_; }
     [[nodiscard]] u64 FlashCount() const { return flashes_.load(); }
     [[nodiscard]] bool Started() const { return started_; }
@@ -169,7 +187,7 @@ private:
 
     void Submit(StormSim& sim, weather_lab::FastStormSolver& readout)
     {
-        sim.DownloadParent(readout);
+        sim.DownloadLightning(readout);
         const weather_lab::FastStormConfig& c = readout.Config();
         std::vector<f32> th, qc, qi, qs, qg, w;
         readout.CopyField("th", th);
@@ -180,7 +198,10 @@ private:
         readout.CopyField("w", w);
         const u32 nx = c.nx, ny = c.ny, nz = c.nz;
         const std::size_t plane = static_cast<std::size_t>(nx) * ny;
-        const u32 window = std::min({kWindowCells, nx, ny});
+        // The charge grid has cubic cells: its spacing is the solver's vertical one, and the horizontal cells are sampled from the solver's
+        // grid (the nested child is 500 m everywhere, so there it is exact; a coarse single grid is repeated over its wider cells).
+        const f64 h = c.dz;
+        const u32 window = static_cast<u32>(std::min<f64>(kWindowCells, std::floor(std::min(nx * c.dx, ny * c.dy) / h)));
         if (!started_)
         {
             // Centre the window on the column carrying the most ice and graupel.
@@ -193,19 +214,19 @@ private:
                     {
                         const std::size_t cell = k * plane + static_cast<std::size_t>(j) * nx + i;
                         const f64 m = static_cast<f64>(qg[cell]) + qi[cell] + qs[cell];
-                        sx += m * i;
-                        sy += m * j;
+                        sx += m * (i + 0.5);
+                        sy += m * (j + 0.5);
                         total += m;
                     }
                 }
             }
-            const f64 cx = total > 0.0 ? sx / total : 0.5 * nx;
-            const f64 cy = total > 0.0 ? sy / total : 0.5 * ny;
-            originI_ = static_cast<u32>(std::clamp(cx - 0.5 * window, 0.0, static_cast<f64>(nx - window)));
-            originJ_ = static_cast<u32>(std::clamp(cy - 0.5 * window, 0.0, static_cast<f64>(ny - window)));
+            const f64 cx = total > 0.0 ? sx / total * c.dx : 0.5 * nx * c.dx;
+            const f64 cy = total > 0.0 ? sy / total * c.dy : 0.5 * ny * c.dy;
+            originEast_ = std::clamp(cx - 0.5 * window * h, 0.0, std::max(0.0, nx * c.dx - window * h));
+            originNorth_ = std::clamp(cy - 0.5 * window * h, 0.0, std::max(0.0, ny * c.dy - window * h));
             cells_ = window;
             nz_ = nz;
-            spacing_ = c.dx;
+            spacing_ = static_cast<f32>(h);
             started_ = true;
         }
         Job job;
@@ -223,9 +244,11 @@ private:
         {
             for (u32 j = 0; j < window; ++j)
             {
+                const u32 sj = std::min(ny - 1U, static_cast<u32>((originNorth_ + (j + 0.5) * h) / c.dy));
                 for (u32 i = 0; i < window; ++i, ++out)
                 {
-                    const std::size_t cell = k * plane + static_cast<std::size_t>(originJ_ + j) * nx + originI_ + i;
+                    const u32 si = std::min(nx - 1U, static_cast<u32>((originEast_ + (i + 0.5) * h) / c.dx));
+                    const std::size_t cell = k * plane + static_cast<std::size_t>(sj) * nx + si;
                     f.temperatureK[out] = th[cell] * base.exner[k];
                     f.airDensity[out] = base.density[k];
                     f.updraft[out] = w[cell];
@@ -324,7 +347,8 @@ private:
     f64 lastTime_{-1.0};
     f64 chargeBoost_{1.0};
     f64 breakdownScale_{1.0};
-    u32 originI_{0}, originJ_{0}, cells_{0}, nz_{0};
+    f64 originEast_{0.0}, originNorth_{0.0};
+    u32 cells_{0}, nz_{0};
     f32 spacing_{500.0F};
 };
 
@@ -733,7 +757,7 @@ void StudioViewportRenderer::UpdateStormDomain(
         {
             if (!rt.cpuRead || rt.readId != wanted.id)
             {
-                rt.cpuRead = std::make_unique<weather_lab::FastStormSolver>(wanted.config);
+                rt.cpuRead = std::make_unique<weather_lab::FastStormSolver>(rt.solver->LightningConfig());
                 rt.readId = wanted.id;
                 rt.lightning.Reset();
             }
@@ -746,9 +770,10 @@ void StudioViewportRenderer::UpdateStormDomain(
                 const math::Double3 north{-sl * co, cl, sl * so};
                 const math::Double3 up{cl * co, sl, -cl * so};
                 const f64 stretch = lightningSettings.slowMotion;
-                const f64 dxm = wanted.config.dx, dym = wanted.config.dy;
-                const f64 offsetE = (static_cast<f64>(rt.lightning.OriginI()) - 0.5 * wanted.config.nx) * dxm;
-                const f64 offsetN = (static_cast<f64>(rt.lightning.OriginJ()) - 0.5 * wanted.config.ny) * dym;
+                f64 gridWest = 0.0, gridSouth = 0.0;
+                rt.solver->LightningWestSouth(gridWest, gridSouth);
+                const f64 offsetE = gridWest + rt.lightning.OriginEast();
+                const f64 offsetN = gridSouth + rt.lightning.OriginNorth();
                 for (auto& flash : flashes)
                 {
                     f64 end = 0.0;
