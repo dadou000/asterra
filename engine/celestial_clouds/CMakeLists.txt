@@ -107,6 +107,12 @@ if(BUILD_TESTING)
     add_test(NAME Orbit.WeatherConvectiveInteractions
         COMMAND OrbitWeatherConvectiveInteractionsTests)
 
+    add_executable(OrbitWeatherEmergenceTests tests/WeatherEmergenceTests.cpp)
+    target_link_libraries(OrbitWeatherEmergenceTests PRIVATE Orbit::CelestialClouds)
+    target_compile_features(OrbitWeatherEmergenceTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitWeatherEmergenceTests)
+    add_test(NAME Orbit.WeatherEmergence COMMAND OrbitWeatherEmergenceTests)
+
     add_executable(
         OrbitStormScheduleTests
         tests/StormScheduleTests.cpp
