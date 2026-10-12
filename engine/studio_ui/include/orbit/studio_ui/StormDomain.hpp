@@ -87,6 +87,7 @@ struct StormStatus
     f64 zoneMaximumLagSeconds{0.0};
     u64 zoneCompletedSteps{0};
     u32 zonePendingExchanges{0};
+    u32 zoneCrossZoneSources{0};
     bool nested{false};          // the storm being drawn has a child grid
     f32 childSpacingMeters{0.0F};
     std::string shaderReload;    // the last storm shader reload: "" never, "ok <file>" or "failed: <compile error>"
