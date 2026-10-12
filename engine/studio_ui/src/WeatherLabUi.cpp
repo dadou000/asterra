@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <future>
+#include <numbers>
 #include <cmath>
 #include <format>
 #include <string_view>
@@ -127,6 +130,7 @@ void WeatherLabUi::Draw(PanelContext& context)
     DrawSettings(context);
     DrawPlayback(context);
     DrawStorm(context);
+    DrawZoneSurvey(context);
     DrawViews(context);
     DrawMetrics(context);
 }
@@ -357,6 +361,79 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
     {
         context.ErrorText(stormMessage_);
     }
+}
+
+void WeatherLabUi::DrawZoneSurvey(PanelContext& context)
+{
+    if (!context.Section("Sparse weather zones (experimental diagnostic)", false))
+    {
+        return;
+    }
+    context.MutedText(
+        "Read-only planetary scan of the existing analytic weather map. "
+        "Zone scores are cloud-derived screening proxies, NOT CAPE, shear or "
+        "a meteorological prediction. This does not spawn or modify storms.");
+    if (zoneSurveyFuture_.valid() &&
+        zoneSurveyFuture_.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    {
+        try
+        {
+            auto probes=zoneSurveyFuture_.get();
+            zoneSurveyProbeCount_=static_cast<u32>(probes.size());
+            zoneSurveyZones_.Discover(probes, zoneSurveyJobTime_);
+        }
+        catch (const std::exception& e)
+        {
+            message_=std::string("Zone survey failed: ")+e.what();
+        }
+    }
+    (void)context.InputDouble("Survey time (simulated seconds)##zones-time", zoneSurveyTime_);
+    (void)context.InputInteger("Equal-area samples##zones-samples", zoneSurveySamples_);
+    zoneSurveySamples_=std::clamp<i64>(zoneSurveySamples_,64,4096);
+    const bool running=zoneSurveyFuture_.valid();
+    if (running)
+    {
+        context.MutedText("Survey running independently of the viewport.");
+    }
+    else if (context.Button("Scan atmosphere##zones-scan"))
+    {
+        zoneSurveyJobTime_=zoneSurveyTime_;
+        const f64 seconds=zoneSurveyJobTime_;
+        const auto samples=static_cast<u32>(zoneSurveySamples_);
+        zoneSurveyFuture_=std::async(std::launch::async,[seconds,samples]
+        {
+            celestial_clouds::AnalyticZoneSurveyConfig config;
+            config.samples=samples;
+            config.maxCandidates=512U;
+            return celestial_clouds::SurveyAnalyticStormZones(
+                seconds,celestial_clouds::WeatherParameters{},
+                celestial_clouds::WeatherClimate{},config);
+        });
+    }
+    context.KeyValue("Scan results",
+        std::format("{} candidate samples, {} persistent zones",
+            zoneSurveyProbeCount_,zoneSurveyZones_.Zones().size()));
+    const auto& zones=zoneSurveyZones_.Zones();
+    for (std::size_t i=0; i<std::min<std::size_t>(zones.size(),12); ++i)
+    {
+        const auto& zone=zones[i];
+        const f64 lat=std::asin(std::clamp(zone.centre.y,-1.0,1.0))*180.0/std::numbers::pi_v<f64>;
+        const f64 lon=std::atan2(-zone.centre.z,zone.centre.x)*180.0/std::numbers::pi_v<f64>;
+        context.KeyValue(std::format("Zone #{}",zone.id),
+            std::format("{:.1f} / {:.1f} deg, {} probes, extent {:.1f} deg, initiation {:.2f}, "
+                        "convection {:.2f}, moisture {:.2f}",
+                lat,lon,zone.contributingProbes,
+                zone.radiusRadians*180.0/std::numbers::pi_v<f64>,
+                static_cast<f64>(zone.weights.initiation),
+                static_cast<f64>(zone.weights.convection),
+                static_cast<f64>(zone.weights.moisture)));
+    }
+    if (zones.size()>12)
+    {
+        context.MutedText(std::format("{} additional zones omitted from this preview.",
+            zones.size()-12));
+    }
+    context.Separator();
 }
 
 void WeatherLabUi::DrawPlayback(PanelContext& context)
