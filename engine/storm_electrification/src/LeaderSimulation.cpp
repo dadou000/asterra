@@ -165,7 +165,35 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                 const double stepLength = h * std::sqrt(static_cast<double>(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]));
                 const double excess = std::abs(phi - channelPotential) / stepLength - threshold;
                 if (excess <= 0.0) continue;
-                const double weight = p.growthExponent == 1.0 ? excess : std::pow(excess, p.growthExponent);
+                double weight = p.growthExponent == 1.0 ? excess : std::pow(excess, p.growthExponent);
+                if (p.screening < 1.0)
+                {
+                    int touching = 0;
+                    for (const auto& around : d)
+                    {
+                        const long ax = x + around[0], ay = y + around[1], az = z + around[2];
+                        if (ax < 0 || ay < 0 || az < 0) continue;
+                        const Cell other{static_cast<std::uint32_t>(ax), static_cast<std::uint32_t>(ay), static_cast<std::uint32_t>(az)};
+                        if (segmentOf.count(key(other))) ++touching;
+                    }
+                    if (touching > 1) weight *= std::pow(p.screening, static_cast<double>(touching - 1));
+                }
+                if (p.directionPersistence > 0.0)
+                {
+                    const std::int32_t reaching = segmentOf[key(c)];
+                    if (reaching >= 0)
+                    {
+                        const Segment& in = graph.Segments()[static_cast<std::size_t>(reaching)];
+                        const double hx = in.to[0] - in.from[0], hy = in.to[1] - in.from[1], hz = in.to[2] - in.from[2];
+                        const double hl = std::sqrt(hx * hx + hy * hy + hz * hz);
+                        const double sl = std::sqrt(static_cast<double>(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]));
+                        if (hl > 0.0 && sl > 0.0)
+                        {
+                            const double cosine = (hx * dir[0] + hy * dir[1] + hz * dir[2]) / (hl * sl);
+                            weight *= 1.0 + p.directionPersistence * std::max(0.0, cosine);
+                        }
+                    }
+                }
                 const auto found = best.find(key(n));
                 if (found == best.end())
                 {

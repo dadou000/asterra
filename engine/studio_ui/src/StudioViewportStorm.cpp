@@ -177,6 +177,7 @@ public:
     [[nodiscard]] f64 OriginNorth() const { return originNorth_; }
     [[nodiscard]] u32 Cells() const { return cells_; }
     [[nodiscard]] u64 FlashCount() const { return flashes_.load(); }
+    [[nodiscard]] u64 GroundFlashCount() const { return groundFlashes_.load(); }
     [[nodiscard]] u32 NzLevels() const { return nz_; }
     [[nodiscard]] f64 JobMilliseconds() const
     {
@@ -317,9 +318,12 @@ private:
                 // budget scales with it: the boost changes how often the storm flashes, not how big a flash is; flash_size changes the size.
                 params.leader.maxFlashCharge *= job.flashSize * job.chargeBoost;
                 // Grow the channel as a tree with a trunk (see LeaderParams), not as a mesh with the same current in every branch.
-                params.leader.growthExponent = 3.0;
-                params.leader.sideBranchChance = 0.03;
-                params.leader.picksDivisor = 24.0;
+                params.leader.growthExponent = 4.0;
+                params.leader.sideBranchChance = 0.004;
+                params.leader.directionPersistence = 6.0;
+                params.leader.screening = 0.15;   // a conducting channel weakens the field at the cells that hug it: it crosses the cloud, it does not pack it
+                params.leader.picksDivisor = 1.0e9;   // one new cell per round: a leader that grows from its strongest tip, branching only now and then
+                params.leader.leaderSpeed = 4.0e6;   // the whole growth of a 400-cell channel takes some 50 ms: the arc is as quick as the light
                 params.leader.currentWeighted = true;
                 params.leader.diagonalGrowth = true;
                 // A real flash has some 50 to 200 km of channel (100 to 400 cells of 500 m); the default cap of 6000 cells let one fill the volume.
@@ -368,6 +372,7 @@ private:
                 out.jobSeconds = job.seconds;
                 storm_electrification::RebaseFlashTimes(flash);
                 out.graph = std::move(flash.graph);
+                if (flash.kind == optical_transport::FlashKind::CloudToGround) { ++groundFlashes_; }
                 ready_.push_back(std::move(out));
                 ++flashes_;
             }
@@ -400,6 +405,7 @@ private:
     std::shared_ptr<const StormChargeBlocks> blocks_;
     f64 jobMilliseconds_{0.0};
     std::atomic<u64> flashes_{0};
+    std::atomic<u64> groundFlashes_{0};
     bool started_{false};
     f64 pending_{0.0};
     f64 lastTime_{-1.0};
@@ -906,7 +912,7 @@ void StudioViewportRenderer::UpdateStormDomain(
                     // pulse the segment carries (so the trunk, which carries the current of everything downstream, glows most). It is part of the
                     // flash like any pulse: the lights on the clouds and the arc overlay both read it, so they agree in timing and duration.
                     {
-                        const f64 tail = std::min(0.06 * stretch, 3.0);
+                        const f64 tail = std::min(0.03 * stretch, 3.0);
                         for (std::size_t i = 0; i < flash.graph.Segments().size(); ++i)
                         {
                             optical_transport::Segment& segment = flash.graph.At(static_cast<std::int32_t>(i));
@@ -936,6 +942,7 @@ void StudioViewportRenderer::UpdateStormDomain(
             if (stillBehind) { rt.lightning.Reset(); }
         }
         status.lightningFlashes = rt.lightning.FlashCount();
+        status.lightningGroundFlashes = rt.lightning.GroundFlashCount();
         status.lightningArcSegments = lastArcSegments_.load();
         status.lightningJobMilliseconds = rt.lightning.JobMilliseconds();
         status.lightningFlashCells = rt.lastFlashCells;

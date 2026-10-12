@@ -301,8 +301,9 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
         {
             return out;
         }
-        // A channel stays visible a little after its pulse (the plasma cools), longer when the flash is slowed down.
-        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.02 * settings.slowMotion, 2.0), 1.0e3, 8000U);
+        // A channel stays visible a few milliseconds after its pulse (the plasma cools), as the lights on the clouds do: they read the same
+        // pulses, and a longer fade made the arc outlast the light several times over.
+        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.002 * settings.slowMotion, 0.5), 1.0e3, 8000U);
     }
     if (channel.empty())
     {
@@ -336,9 +337,13 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
             continue;   // behind the camera
         }
         const f64 pixel = distance * pixelAngle;
-        // HDR colour on a logarithmic scale (the powers span eight decades): a faint leader step 0.3, an in-cloud channel about 1.5, a
-        // return stroke about 3, so the structure stays readable instead of saturating to white.
-        const f32 intensity = static_cast<f32>(std::clamp(0.3 + 0.35 * std::log10(std::max(line.powerWatts, 1.0e3) / 1.0e3), 0.3, 6.0));
+        // The brightness of the whole flash follows its power (so the arc flares with the light on the clouds: about 0.9 in the glow, 7 at
+        // the bright stage), and inside it each segment shows its share of the strongest one: the trunk full, the twigs a fifth of it.
+        const f64 flashBrightness = std::clamp(0.4 * std::pow(std::max(line.flashPeakWatts, 1.0e3) / 1.0e7, 0.4), 0.15, 8.0);
+        const f64 share = line.flashPeakWatts > 0.0 ? std::clamp(line.powerWatts / line.flashPeakWatts, 0.0, 1.0) : 1.0;
+        const f64 trunk = std::pow(share, 0.35);   // 1 for the strongest segment, about 0.13 for one with a hundredth of its power
+        const f32 intensity = static_cast<f32>(flashBrightness * (0.2 + 0.8 * trunk));
+        const f32 coreAlpha = static_cast<f32>(0.35 + 0.65 * trunk);
         // The electrification's cells make a lattice; every node (a cell centre) is moved by a hash of its own position, so the segments that
         // meet in it still meet, and the lattice is not recognisable.
         const auto nodeShift = [&](const math::Double3& world) {
@@ -384,23 +389,23 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
                 out.push_back({toFloat(points[k] + offset), toFloat(points[k + 1] + offset),
                                {0.80F * intensity, 0.87F * intensity, 1.0F * intensity, alpha}});
             };
-            add({}, 1.0F);
+            add({}, coreAlpha);
             // A soft edge: two lines half a pixel to each side (not on the faint twigs, of which there are thousands); the strong segments
             // (the trunk) get a wider glow.
-            if (intensity > 1.0F)
+            if (trunk > 0.45)
             {
                 add(side * (pixel * 0.6), 0.4F);
                 add(side * (-pixel * 0.6), 0.4F);
             }
-            if (intensity > 2.0F)
+            if (trunk > 0.7)
             {
                 add(side * (pixel * 1.4), 0.3F);
                 add(side * (-pixel * 1.4), 0.3F);
             }
-            if (intensity > 3.0F)
+            if (trunk > 0.9)
             {
-                add(side * (pixel * 2.4), 0.2F);
-                add(side * (-pixel * 2.4), 0.2F);
+                add(side * (pixel * 2.4), 0.25F);
+                add(side * (-pixel * 2.4), 0.25F);
             }
         }
     }

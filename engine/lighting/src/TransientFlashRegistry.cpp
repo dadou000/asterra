@@ -202,6 +202,7 @@ std::vector<ChannelLine> TransientFlashRegistry::ChannelLines(
         {
             continue;
         }
+        const std::size_t firstOfFlash = lines.size();
         const f64 t = nowSeconds - flash.startSeconds;
         for (const optical_transport::Segment& segment : flash.graph.Segments())
         {
@@ -219,9 +220,12 @@ std::vector<ChannelLine> TransientFlashRegistry::ChannelLines(
             if (power >= minimumPowerWatts)
             {
                 lines.push_back({flash.origin + math::Double3{segment.from[0], segment.from[1], segment.from[2]},
-                                 flash.origin + math::Double3{segment.to[0], segment.to[1], segment.to[2]}, power});
+                                 flash.origin + math::Double3{segment.to[0], segment.to[1], segment.to[2]}, power, 0.0});
             }
         }
+        f64 peak = 0.0;
+        for (std::size_t i = firstOfFlash; i < lines.size(); ++i) { peak = std::max(peak, lines[i].powerWatts); }
+        for (std::size_t i = firstOfFlash; i < lines.size(); ++i) { lines[i].flashPeakWatts = peak; }
     }
     if (lines.size() > maxLines)
     {

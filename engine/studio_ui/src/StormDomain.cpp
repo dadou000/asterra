@@ -34,6 +34,7 @@ Value StatusValue(const StormStatus& s)
         {"checkpoints", static_cast<f64>(s.checkpoints)},
         {"checkpoint_mib", s.checkpointMiB},
         {"lightning_flashes", static_cast<f64>(s.lightningFlashes)},
+        {"lightning_ground_flashes", static_cast<f64>(s.lightningGroundFlashes)},
         {"lightning_arc_segments", static_cast<f64>(s.lightningArcSegments)},
         {"lightning_job_ms", s.lightningJobMilliseconds},
         {"lightning_flash_cells", static_cast<f64>(s.lightningFlashCells)},

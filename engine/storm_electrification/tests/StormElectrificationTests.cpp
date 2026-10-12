@@ -334,6 +334,32 @@ int main()
                       axisAligned(onDiagonals) < onDiagonals.graph.Segments().size() * 7 / 10,
                   "growing to the 26 neighbours makes a good share of diagonal segments and a full-size tree");
         }
+        // A channel that crosses the cloud instead of packing it: screening (a conducting channel weakens the field at the cells that hug it) and
+        // direction persistence make the same number of cells reach much farther than the plain growth does.
+        {
+            const auto extent = [&](const double screening, const double persistence) {
+                LeaderParams t = leader;
+                t.growthExponent = 4.0;
+                t.sideBranchChance = 0.004;
+                t.picksDivisor = 1.0e9;
+                t.diagonalGrowth = true;
+                t.maxFlashCharge = 1.0e9;
+                t.maxChannelCells = 400;
+                t.screening = screening;
+                t.directionPersistence = persistence;
+                ChargeGrid tg(48, 48, 32, 500.0);
+                chargeUntilBreakdown(tg);
+                const FlashResult r = TryFlash(tg, t, chargingTime, 7);
+                double lo[3] = {1e30, 1e30, 1e30}, hi[3] = {-1e30, -1e30, -1e30};
+                for (const auto& sg : r.graph.Segments())
+                    for (int ax = 0; ax < 3; ++ax) { lo[ax] = std::min(lo[ax], sg.to[ax]); hi[ax] = std::max(hi[ax], sg.to[ax]); }
+                return std::make_pair(r.channelCells, std::max(hi[0] - lo[0], hi[1] - lo[1]));
+            };
+            const auto packed = extent(1.0, 0.0);
+            const auto crossing = extent(0.2, 6.0);
+            Check(packed.first >= 300 && crossing.first >= 300, "both grow to the cell cap");
+            Check(crossing.second > 1.4 * packed.second, "screening and persistence make a channel reach much farther with the same cells");
+        }
         // Timing and energy: the channel grows at the leader speed and the optical energy is finite and bounded.
         const double energy = flash.graph.EnergyInWindow(0.0, 1.0e6);
         Check(energy > 0.0 && energy < 1.0e9, "optical energy of an intracloud flash is finite and bounded");

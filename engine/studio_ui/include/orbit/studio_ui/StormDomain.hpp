@@ -71,6 +71,7 @@ struct StormStatus
     f64 lightningFlashRadiusMaxMeters{0.0}; // the largest such radius since the lightning started
     f64 lightningJobMilliseconds{0.0};  // wall time the electrification worker took for its last job (storm seconds in, flashes and charge out)
     u32 lightningArcSegments{0U};  // channel segments the arc overlay drew in the last frame that had any
+    u64 lightningGroundFlashes{0U};   // of those, the ones that reached the ground (cloud to ground, with a return stroke)
     u64 lightningFlashes{0U};    // flashes the storm's own charge has produced since it started (or since the last time jump)
     u32 scheduledNearby{0};      // live scheduled storms within the search radius
     bool nested{false};          // the storm being drawn has a child grid

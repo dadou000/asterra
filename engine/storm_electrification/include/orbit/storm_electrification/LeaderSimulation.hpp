@@ -53,6 +53,12 @@ struct LeaderParams
     // The channel may step to any of the 26 neighbours of a cell (diagonals included) instead of the 6 that share a face, so it is not made of
     // axis-aligned runs of the grid.
     bool diagonalGrowth = false;
+    // A candidate step is multiplied by 1 + directionPersistence * max(0, cos) where cos is the angle between the step and the heading of the
+    // segment that reached its parent: the channel keeps its heading, so it runs across the cloud instead of curling into a ball.
+    double directionPersistence = 0.0;
+    // A conducting channel screens the field around it: a candidate cell is multiplied by screening^(channel cells touching it - 1), so cells
+    // that hug the channel are unlikely and the tip, which touches only its parent, is the favourite (1 = no screening).
+    double screening = 1.0;
     std::uint64_t seed = 1;
 };
 

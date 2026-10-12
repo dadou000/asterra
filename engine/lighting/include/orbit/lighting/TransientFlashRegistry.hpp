@@ -61,6 +61,7 @@ struct ChannelLine
     math::Double3 from{};
     math::Double3 to{};
     f64 powerWatts{0.0};
+    f64 flashPeakWatts{0.0};   // the strongest segment of the same flash at this moment (so powerWatts / flashPeakWatts is the share of the trunk)
 };
 
 // A placed flash that has not started yet (or only just), with a sphere around its channel in the lighting frame.
