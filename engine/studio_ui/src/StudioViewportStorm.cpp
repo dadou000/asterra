@@ -2,7 +2,7 @@
 
 #include <orbit/celestial_clouds/StormSchedule.hpp>
 #include <orbit/celestial_clouds/StormZoneRuntime.hpp>
-#include <orbit/celestial_clouds/WeatherMultirateScheduler.hpp>
+#include <orbit/celestial_clouds/WeatherEvolution.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
 #include <orbit/weather_gpu/NestedGpuSolver.hpp>
@@ -480,7 +480,7 @@ struct StudioViewportRenderer::StormRuntime
     u64 manualCounter{0};
     StormAutoRequest autoRequest;
     celestial_clouds::StormZoneRuntime zoneRuntime{};
-    celestial_clouds::WeatherMultirateScheduler zoneSchedule{};
+    celestial_clouds::WeatherZoneEvolutionRunner zoneEvolution{};
     u64 lastReconciledZoneGeneration{0};
     u64 zoneBodyGeneration{0};
     universe::BodyId body{};
@@ -603,7 +603,7 @@ void StudioViewportRenderer::UpdateStormDomain(
     if (!rt.bodySet || rt.body != body)
     {
         ++rt.zoneBodyGeneration;
-        rt.zoneSchedule.Reset();
+        rt.zoneEvolution.Reset();
         rt.lastReconciledZoneGeneration = 0;
         rt.body = body;
         rt.bodySet = true;
@@ -617,22 +617,10 @@ void StudioViewportRenderer::UpdateStormDomain(
     rt.zoneRuntime.Tick(rt.zoneBodyGeneration, nowSeconds, zoneWeather,
         celestial_clouds::WeatherClimate{});
     const auto zoneSnapshot = rt.zoneRuntime.Snapshot();
-    if (zoneSnapshot->generation == 0 && rt.lastReconciledZoneGeneration != 0)
-    {
-        rt.zoneSchedule.Reset();
-        rt.lastReconciledZoneGeneration = 0;
-    }
-    if (zoneSnapshot->generation != 0 &&
-        zoneSnapshot->generation != rt.lastReconciledZoneGeneration)
-    {
-        rt.zoneSchedule.Reconcile(zoneSnapshot->zones, zoneSnapshot->simulatedSeconds);
-        rt.lastReconciledZoneGeneration = zoneSnapshot->generation;
-    }
-    // Planning only. No solver is wired to complete these tickets yet:
-    // do not commit unfinished atmospheric evolution during timewarp.
-    const auto zoneTickets = rt.zoneSchedule.Plan(nowSeconds);
-    (void)zoneTickets;
-    const auto zoneScheduleStats = rt.zoneSchedule.Stats();
+    // Shared asynchronous worker: no per-zone thread, no GPU involvement.
+    // Only validated detailed tickets can complete; long-step work stays blocked.
+    rt.zoneEvolution.Tick(*zoneSnapshot, nowSeconds);
+    const auto zoneScheduleStats=rt.zoneEvolution.Scheduler().Stats();
 
     // ---- which storm?
     StormRuntime::Active wanted;
@@ -706,6 +694,9 @@ void StudioViewportRenderer::UpdateStormDomain(
     status.zoneBlockedLongSteps = zoneScheduleStats.blockedLongSteps;
     status.zoneDeferredTasks = zoneScheduleStats.deferred;
     status.zoneMaximumLagSeconds = zoneScheduleStats.maximumLagSeconds;
+    status.zoneCompletedSteps = rt.zoneEvolution.Completed();
+    status.zonePendingExchanges = static_cast<u32>(
+        rt.zoneEvolution.Ledger().PendingExchanges().size());
     status.mode = mode;
     status.scheduledNearby = scheduledNearby;
     status.checkpointMiB = static_cast<f64>(rt.checkpointBytes) / (1024.0 * 1024.0);
