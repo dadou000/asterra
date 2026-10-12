@@ -51,6 +51,9 @@ int main()
     Check(maybe.has_value(),"boundary-length step accepted");
     if(maybe)
     {
+        maybe->state.children[0].vapour+=1.0;
+        Check(!ledger.Complete(scheduler,*maybe),"nonconservative completion rejected");
+        maybe->state.children[0].vapour-=1.0;
         maybe->exchange.toSeconds=999;
         Check(!ledger.Complete(scheduler,*maybe),"mismatched flux window rejected");
         Check(ledger.State(42)->simulatedSeconds==60,"invalid transaction has no side effects");
