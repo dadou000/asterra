@@ -241,6 +241,60 @@ std::vector<ChannelLine> TransientFlashRegistry::ChannelLines(
     return lines;
 }
 
+std::vector<ChannelLine> TransientFlashRegistry::ChannelLinesInWindow(
+    const f64 t0Seconds, const f64 t1Seconds, const f64 minimumPowerWatts, const std::size_t maxLines) const
+{
+    std::vector<ChannelLine> lines;
+    const f64 window = std::max(t1Seconds - t0Seconds, 1.0e-9);
+    for (const Flash& flash : flashes_)
+    {
+        if (!flash.placed)
+        {
+            continue;
+        }
+        const std::size_t firstOfFlash = lines.size();
+        const f64 a = t0Seconds - flash.startSeconds, b = t1Seconds - flash.startSeconds;
+        for (const optical_transport::Segment& segment : flash.graph.Segments())
+        {
+            f64 energy = 0.0;
+            f64 weightedKelvin = 0.0;
+            for (const optical_transport::Pulse& pulse : segment.pulses)
+            {
+                f64 part = 0.0;
+                if (pulse.duration > 0.0)
+                {
+                    const f64 lo = std::max(a, pulse.startTime), hi = std::min(b, pulse.startTime + pulse.duration);
+                    if (hi > lo) { part = pulse.radiantEnergy * (hi - lo) / pulse.duration; }
+                }
+                else if (pulse.startTime >= a && pulse.startTime < b)
+                {
+                    part = pulse.radiantEnergy;
+                }
+                energy += part;
+                weightedKelvin += part * pulse.temperatureKelvin;
+            }
+            const f64 power = energy / window;
+            if (power >= minimumPowerWatts)
+            {
+                const math::Double3 p0{segment.from[0], segment.from[1], segment.from[2]};
+                const math::Double3 p1{segment.to[0], segment.to[1], segment.to[2]};
+                const math::Double3 d = p1 - p0;
+                lines.push_back({flash.origin + p0, flash.origin + p1, power, std::sqrt(math::Dot(d, d)), weightedKelvin / energy, 0.0});
+            }
+        }
+        f64 peak = 0.0;
+        for (std::size_t i = firstOfFlash; i < lines.size(); ++i) { peak = std::max(peak, lines[i].powerWatts); }
+        for (std::size_t i = firstOfFlash; i < lines.size(); ++i) { lines[i].flashPeakWatts = peak; }
+    }
+    if (lines.size() > maxLines)
+    {
+        std::partial_sort(lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(maxLines), lines.end(),
+                          [](const ChannelLine& x, const ChannelLine& y) { return x.powerWatts > y.powerWatts; });
+        lines.resize(maxLines);
+    }
+    return lines;
+}
+
 std::vector<UpcomingFlash> TransientFlashRegistry::UpcomingFlashes(
     const f64 nowSeconds, const f64 horizonSeconds, const f64 graceSeconds) const
 {

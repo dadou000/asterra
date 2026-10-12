@@ -6,9 +6,11 @@
 #include <orbit/storm_electrification/LightningEmission.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <numbers>
+#include <vector>
 
 using namespace orbit::storm_electrification;
 using orbit::optical_transport::FlashKind;
@@ -561,6 +563,125 @@ int main()
         const int plain = groundedCount(0.0);
         std::printf("ground strikes of 3 flashes: seeking %d, plain %d\n", seeking, plain);
         Check(seeking >= 2 && seeking > plain, "flashes that seek the ground reach it far more often than the plain growth");
+    }
+
+    // --- coherent channels, many small flashes, and waves that follow the temperature of the channel.
+    {
+        // Wave speed follows the temperature: a hot channel carries a wave at return stroke speed, a cold one at dart leader speed.
+        const EmissionParams speeds;
+        Check(WaveSpeedForTemperature(15000.0, speeds) == speeds.returnStrokeSpeed && WaveSpeedForTemperature(3000.0, speeds) == speeds.dartLeaderSpeed,
+              "a hot channel carries a wave at the return stroke speed, a cold one at the dart leader speed");
+        Check(WaveSpeedForTemperature(6000.0, speeds) > WaveSpeedForTemperature(5000.0, speeds), "the wave speed grows with the temperature");
+        // No pulse is written for a plasma too cold to glow.
+        double coldest = 1.0e9;
+        orbit::optical_transport::DischargeGraph chain(FlashKind::CloudToGround);
+        for (int i = 0; i < 12; ++i)
+        {
+            orbit::optical_transport::Segment s;
+            s.from[2] = 6000.0 - 500.0 * i;
+            s.to[2] = 6000.0 - 500.0 * (i + 1);
+            s.parent = i - 1;
+            s.formedAt = 1.0e-4 * i;
+            chain.AddSegment(s);
+        }
+        for (std::uint64_t seed = 1; seed <= 20; ++seed)
+        {
+            orbit::optical_transport::DischargeGraph g = chain;
+            AssignPhysicalEmission(g, true, 11, 2.0e-3, seed);
+            for (const auto& seg : g.Segments())
+                for (const auto& pulse : seg.pulses) coldest = std::min(coldest, pulse.temperatureKelvin);
+        }
+        Check(coldest >= 2800.0, "the emission stops where the plasma is too cold to glow");
+    }
+    {
+        // Small flashes: short, never to the ground, and they start at different cells although the potential is not solved between them.
+        ChargeGrid g(48, 48, 32, 500.0);
+        const StormFields storm = MakeStorm(g, 25.0);
+        const ElectrificationParams electrification;
+        LeaderParams t;
+        for (double seconds = 0.0; seconds < 1200.0; seconds += 5.0)
+        {
+            StepElectrification(g, storm, electrification, 5.0);
+            g.SolvePotential();
+            if (MaxBreakdownRatio(g, t) >= 1.0) break;
+        }
+        t.smallFlashFraction = 1.0;
+        t.initiationSpread = 0.4;
+        t.diagonalGrowth = true;
+        t.groundSeekChance = 1.0;   // a small flash does not seek the ground whatever this says
+        t.maxFlashCharge = 1.0e9;
+        std::size_t largest = 0;
+        std::vector<std::array<double, 3>> starts;
+        int grounded = 0, occurred = 0;
+        for (std::uint64_t i = 0; i < 6; ++i)
+        {
+            const FlashResult r = TryFlash(g, t, 100.0, i);
+            if (!r.occurred) continue;
+            ++occurred;
+            largest = std::max(largest, r.graph.Segments().size());
+            grounded += r.kind == FlashKind::CloudToGround ? 1 : 0;
+            const auto& first = r.graph.Segments().front();
+            starts.push_back({first.from[0], first.from[1], first.from[2]});
+        }
+        std::size_t distinct = 0;
+        for (std::size_t a = 0; a < starts.size(); ++a)
+        {
+            bool unique = true;
+            for (std::size_t b = 0; b < a; ++b)
+            {
+                const double dx = starts[a][0] - starts[b][0], dy = starts[a][1] - starts[b][1], dz = starts[a][2] - starts[b][2];
+                if (std::sqrt(dx * dx + dy * dy + dz * dz) < 1000.0) unique = false;
+            }
+            distinct += unique ? 1U : 0U;
+        }
+        std::printf("small flashes: %d occurred, largest %zu cells, %zu distinct starts\n", occurred, largest, distinct);
+        // (This test grid has one hot spot, so after the first small flash the cells around it are set aside and few flashes follow; a real storm has
+        // many.) What is checked: they are short, they do not reach the ground, and no two start in the same place.
+        Check(occurred >= 1 && largest <= 91U && grounded == 0, "small flashes are short and do not reach the ground");
+        Check(distinct == static_cast<std::size_t>(occurred), "successive small flashes start at different places");
+    }
+    {
+        // A goal makes the channel run to where it is going: the same cells reach farther from the start.
+        const auto reach = [&](const double goal) {
+            double total = 0.0;
+            for (std::uint64_t seed = 1; seed <= 3; ++seed)
+            {
+                ChargeGrid g(48, 48, 32, 500.0);
+                const StormFields storm = MakeStorm(g, 25.0);
+                const ElectrificationParams electrification;
+                LeaderParams t;
+                for (double seconds = 0.0; seconds < 1200.0; seconds += 5.0)
+                {
+                    StepElectrification(g, storm, electrification, 5.0);
+                    g.SolvePotential();
+                    if (MaxBreakdownRatio(g, t) >= 1.0) break;
+                }
+                t.growthExponent = 4.0;
+                t.sideBranchChance = 0.004;
+                t.picksDivisor = 1.0e9;
+                t.diagonalGrowth = true;
+                t.screening = 0.15;
+                t.directionPersistence = 6.0;
+                t.maxFlashCharge = 1.0e9;
+                t.maxChannelCells = 200;
+                t.goalBias = goal;
+                t.seed = seed;
+                const FlashResult r = TryFlash(g, t, 100.0, seed);
+                if (!r.occurred) continue;
+                const auto& root = r.graph.Segments().front();
+                double far = 0.0;
+                for (const auto& sg : r.graph.Segments())
+                {
+                    const double dx = sg.to[0] - root.from[0], dy = sg.to[1] - root.from[1], dz = sg.to[2] - root.from[2];
+                    far = std::max(far, std::sqrt(dx * dx + dy * dy + dz * dz));
+                }
+                total += far;
+            }
+            return total;
+        };
+        const double without = reach(0.0), with = reach(8.0);
+        std::printf("reach of 200 cells from the start: without a goal %.1f km, with %.1f km (3 flashes)\n", without / 1000.0, with / 1000.0);
+        Check(with > 1.15 * without, "a channel with a goal reaches farther from its start than one without");
     }
 
     if (failures == 0) std::printf("StormElectrification: all tests passed\n");

@@ -63,7 +63,10 @@ void StudioViewportRenderer::TickFlashClock(const time::SimulationTime atTime)
     {
         simulationRate_ = 0.0;   // paused
     }
-    flashClock_ = flashClock_.load() + elapsed * std::clamp(simulationRate_.load(), 0.0, 1.0);
+    const f64 before = flashClock_.load();
+    flashClock_ = before + elapsed * std::clamp(simulationRate_.load(), 0.0, 1.0);
+    flashWindowEnd_ = flashClock_.load();
+    flashWindowStart_ = std::min(before, flashWindowEnd_ - 1.0e-3);
 }
 
 u64 StudioViewportRenderer::FireLightning(const lighting::FlashRequest& request)
@@ -304,7 +307,7 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
         }
         // A channel stays visible a few milliseconds after its pulse (the plasma cools), as the lights on the clouds do: they read the same
         // pulses, and a longer fade made the arc outlast the light several times over.
-        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.0002 * settings.slowMotion, 0.05), 1.0e3, 8000U);
+        channel = transientFlashes_.ChannelLinesInWindow(flashWindowStart_, flashWindowEnd_, 1.0e3, 8000U);
     }
     if (channel.empty())
     {
@@ -422,7 +425,9 @@ std::vector<lighting::LocalLight> StudioViewportRenderer::TransientFlashLights(c
     {
         return {};
     }
-    return transientFlashes_.LightsForWindow(FlashClockSeconds(), camera, lighting::TransientLightParams{});
+    lighting::TransientLightParams params;
+    params.exposureSeconds = std::max(flashWindowEnd_ - flashWindowStart_, 1.0e-3);
+    return transientFlashes_.LightsForWindow(flashWindowStart_, camera, params);
 }
 
 StudioViewportRenderer::StudioViewportRenderer(

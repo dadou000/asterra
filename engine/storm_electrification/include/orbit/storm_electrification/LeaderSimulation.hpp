@@ -67,6 +67,20 @@ struct LeaderParams
     // cloud-to-ground flash does through the weakly charged air under the storm. 0: flashes only reach the ground by chance.
     double groundSeekChance = 0.0;
     double groundSeekBias = 12.0;
+    // A step toward where the channel is going is multiplied by 1 + goalBias * max(0, cos), with the goal the cell with the largest potential
+    // difference from the channel (the opposite charge), or the ground below the start for a descending leader: the channel runs to where it
+    // needs to go instead of wandering and curling into loops. 0: no goal.
+    double goalBias = 0.0;
+    // The flash starts at a cell chosen at random among those whose field is at least (1 - initiationSpread) of the strongest (0: the strongest
+    // one), so the flashes of a storm do not all start at the same place.
+    double initiationSpread = 0.0;
+    // Most flashes of a real storm are small intracloud ones. With this chance a flash is small: its channel is capped at a few tens of cells
+    // (log-normal around smallFlashMedianCells, at most smallFlashMaxCells), it never seeks the ground, and it is cheap: the potential is not
+    // solved again for it (the solve over the whole grid is what a flash costs), the cells around it are only excluded from the next flash of
+    // the step. 0: all flashes are full ones.
+    double smallFlashFraction = 0.0;
+    double smallFlashMedianCells = 25.0;
+    std::uint32_t smallFlashMaxCells = 90;
     std::uint64_t seed = 1;
 };
 

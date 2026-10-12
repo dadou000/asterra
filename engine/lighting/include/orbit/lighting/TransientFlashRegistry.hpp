@@ -97,6 +97,11 @@ public:
     // fades exponentially), brightest first, at most `maxLines`: what an arc overlay draws. Flashes not yet placed are skipped.
     [[nodiscard]] std::vector<ChannelLine> ChannelLines(f64 nowSeconds, f64 afterglowSeconds, f64 minimumPowerWatts, std::size_t maxLines) const;
 
+    // The same, for the window [t0, t1] of the flash clock instead of an instant: each segment's power is its emitted energy in the window divided
+    // by the window length, exactly what LightsForWindow(t0, ..., exposure = t1 - t0) integrates, so the arcs and the lights of a frame always
+    // show the same emission (a stroke shorter than the frame is never missed by one and counted by the other).
+    [[nodiscard]] std::vector<ChannelLine> ChannelLinesInWindow(f64 t0, f64 t1, f64 minimumPowerWatts, std::size_t maxLines) const;
+
     // Placed flashes that start within `horizonSeconds` from `nowSeconds`, or began less than `graceSeconds` ago.
     [[nodiscard]] std::vector<UpcomingFlash> UpcomingFlashes(f64 nowSeconds, f64 horizonSeconds, f64 graceSeconds) const;
 

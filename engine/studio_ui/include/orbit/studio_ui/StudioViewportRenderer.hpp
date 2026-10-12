@@ -503,6 +503,10 @@ private:
     [[nodiscard]] f64 FlashClockSeconds() const { return flashClock_.load(); }
     void TickFlashClock(time::SimulationTime atTime);
     std::atomic<f64> flashClock_{0.0};
+    // The stretch of flash clock the last frame covered: the lights integrate their energy over it and the arcs draw the power of the same
+    // window, so the two always show the same emission. At least a millisecond wide (a paused clock still shows the instant it holds).
+    f64 flashWindowStart_{0.0};
+    f64 flashWindowEnd_{0.0};
     std::atomic<f64> simulationRate_{1.0};   // estimated simulation seconds per wall second
     f64 flashLastWall_{-1.0};
     f64 flashLastSim_{0.0};

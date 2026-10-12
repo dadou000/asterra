@@ -46,6 +46,7 @@ double MaxBreakdownRatio(const ChargeGrid& g, const LeaderParams& p, std::uint32
         for (std::uint32_t j = 0; j < g.Ny(); ++j)
             for (std::uint32_t i = 0; i < g.Nx(); ++i)
             {
+                if (g.Refractory(g.Index(i, j, k))) continue;
                 const double ratio = g.FieldMagnitude(i, j, k) / threshold;
                 if (ratio > best)
                 {
@@ -60,14 +61,41 @@ double MaxBreakdownRatio(const ChargeGrid& g, const LeaderParams& p, std::uint32
 FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, std::uint64_t flashIndex)
 {
     FlashResult out;
-    grid.SolvePotential();
+    Rng rng{p.seed * 0x2545F4914F6CDD1DULL + flashIndex * 0x9E3779B97F4A7C15ULL + 12345ULL};
+    // A small flash: short, never to the ground, and it does not solve the potential again.
+    const bool small = p.smallFlashFraction > 0.0 && rng.Uniform() < p.smallFlashFraction;
+    std::uint32_t maxCells = p.maxChannelCells;
+    if (small)
+    {
+        const double u = std::max(rng.Uniform(), 1.0e-12), v = rng.Uniform();
+        const double normal = std::sqrt(-2.0 * std::log(u)) * std::cos(6.283185307179586 * v);
+        maxCells = static_cast<std::uint32_t>(std::clamp(p.smallFlashMedianCells * std::exp(0.6 * normal), 8.0, static_cast<double>(p.smallFlashMaxCells)));
+    }
+    if (!small) { grid.SolvePotential(); }
     std::uint32_t si = 0, sj = 0, sk = 0;
-    if (MaxBreakdownRatio(grid, p, &si, &sj, &sk) < 1.0)
+    const double strongest = MaxBreakdownRatio(grid, p, &si, &sj, &sk);
+    if (strongest < 1.0)
     {
         return out;
     }
+    if (p.initiationSpread > 0.0)
+    {
+        // A cell chosen uniformly (one pass, reservoir sampling) among those with a field of at least (1 - spread) of the strongest.
+        const double bar = std::max(1.0, (1.0 - p.initiationSpread) * strongest);
+        double seen = 0.0;
+        for (std::uint32_t k = 0; k < grid.Nz(); ++k)
+        {
+            const double threshold = p.initiationField * DensityFactor(p, grid.Height(k));
+            for (std::uint32_t j = 0; j < grid.Ny(); ++j)
+                for (std::uint32_t i = 0; i < grid.Nx(); ++i)
+                {
+                    if (grid.Refractory(grid.Index(i, j, k)) || grid.FieldMagnitude(i, j, k) / threshold < bar) continue;
+                    seen += 1.0;
+                    if (rng.Uniform() * seen < 1.0) { si = i; sj = j; sk = k; }
+                }
+        }
+    }
     out.energyBefore = grid.FieldEnergy();
-    Rng rng{p.seed * 0x2545F4914F6CDD1DULL + flashIndex * 0x9E3779B97F4A7C15ULL + 12345ULL};
 
     const double h = grid.Spacing();
     const auto key = [&](const Cell& c) { return static_cast<std::uint64_t>(grid.Index(c.i, c.j, c.k)); };
@@ -132,7 +160,25 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
     double time = startTime;
     std::uint32_t round = 0;
     // Some flashes are descending leaders that seek the ground.
-    const bool seekGround = p.groundSeekChance > 0.0 && rng.Uniform() < p.groundSeekChance;
+    const bool seekGround = !small && p.groundSeekChance > 0.0 && rng.Uniform() < p.groundSeekChance;
+    // Where the channel is going: the cell with the largest potential difference from it (the opposite charge), or the ground below its start.
+    double goalI = si, goalJ = sj, goalK = sk;
+    if (!small && p.goalBias > 0.0)
+    {
+        if (seekGround) { goalK = 0.0; }
+        else
+        {
+            double largest = -1.0;
+            for (std::uint32_t k = 0; k < grid.Nz(); ++k)
+                for (std::uint32_t j = 0; j < grid.Ny(); ++j)
+                    for (std::uint32_t i = 0; i < grid.Nx(); ++i)
+                    {
+                        const double difference = std::abs(grid.Potential()[grid.Index(i, j, k)] - channelPotential);
+                        if (difference > largest) { largest = difference; goalI = i; goalJ = j; goalK = k; }
+                    }
+        }
+    }
+
     // Neighbour steps: the 6 face neighbours, or all 26 when the channel may run diagonally.
     std::vector<std::array<int, 3>> d;
     for (int dx = -1; dx <= 1; ++dx)
@@ -145,7 +191,7 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
             }
     std::uint32_t idleRounds = 0;
     // A descending leader does not stop for its charge budget or for crossing air with no charge, only when it connects (or at the cell cap).
-    while (channel.size() < p.maxChannelCells && ((seekGround && !grounded) || (!budgetReached() && idleRounds < p.stagnationRounds)))
+    while (channel.size() < maxCells && ((seekGround && !grounded) || (!budgetReached() && idleRounds < p.stagnationRounds)))
     {
         const double reachedBefore = reachablePositive + reachableNegative;
         struct Candidate { Cell cell; Cell parent; double weight; };
@@ -182,6 +228,16 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                         if (segmentOf.count(key(other))) ++touching;
                     }
                     if (touching > 1) weight *= std::pow(p.screening, static_cast<double>(touching - 1));
+                }
+                if (!small && p.goalBias > 0.0)
+                {
+                    const double gx = goalI - static_cast<double>(c.i), gy = goalJ - static_cast<double>(c.j), gz = goalK - static_cast<double>(c.k);
+                    const double gl = std::sqrt(gx * gx + gy * gy + gz * gz);
+                    const double sl = std::sqrt(static_cast<double>(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]));
+                    if (gl > 0.0 && sl > 0.0)
+                    {
+                        weight *= 1.0 + p.goalBias * std::max(0.0, (gx * dir[0] + gy * dir[1] + gz * dir[2]) / (gl * sl));
+                    }
                 }
                 if (seekGround)
                 {
@@ -382,9 +438,17 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                 (removed > 0.0 ? out.positiveRemoved : out.negativeRemoved) += std::abs(removed) * cellVolume;
             }
         }
-        grid.SolvePotential();
-        out.energyAfter = grid.FieldEnergy();
-        accepted = out.energyAfter < out.energyBefore;
+        if (small)
+        {
+            out.energyAfter = out.energyBefore;   // not solved again: a small flash is taken to dissipate field energy
+            accepted = true;
+        }
+        else
+        {
+            grid.SolvePotential();
+            out.energyAfter = grid.FieldEnergy();
+            accepted = out.energyAfter < out.energyBefore;
+        }
     }
     if (!accepted)
     {
@@ -396,6 +460,21 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
         return out;   // the channel could not be made to dissipate energy: nothing happened
     }
     out.groundCharge = out.positiveRemoved - out.negativeRemoved;   // net charge taken out of the cloud
+    if (small)
+    {
+        // The next flash of this step starts elsewhere: the cells within a few of the channel are set aside until the potential is solved again.
+        std::vector<unsigned char> around(grid.CellCount(), 0U);
+        for (const Cell& c : channel)
+            for (long dz = -4; dz <= 4; ++dz)
+                for (long dy = -4; dy <= 4; ++dy)
+                    for (long dx = -4; dx <= 4; ++dx)
+                    {
+                        const long x = static_cast<long>(c.i) + dx, y = static_cast<long>(c.j) + dy, z = static_cast<long>(c.k) + dz;
+                        if (x < 0 || y < 0 || z < 0 || x >= static_cast<long>(grid.Nx()) || y >= static_cast<long>(grid.Ny()) || z >= static_cast<long>(grid.Nz())) continue;
+                        around[grid.Index(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), static_cast<std::uint32_t>(z))] = 1U;
+                    }
+        grid.MarkRefractory(around);
+    }
     out.occurred = true;
     out.startTime = startTime;
     return out;

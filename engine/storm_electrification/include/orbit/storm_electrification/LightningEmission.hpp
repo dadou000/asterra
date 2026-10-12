@@ -41,6 +41,10 @@ struct EmissionParams
     double branchMinimumShare = 0.012;     // of the charge of the flash: a branch with less is not lit by the return stroke
 };
 
+// The speed of a wave along a channel at a given temperature: a hot, conducting channel (10 kK and more) carries it at the return stroke speed, a
+// cold one (4 kK and less) at the dart leader speed, between on a logarithmic scale. A plasma under about 2800 K does not glow.
+[[nodiscard]] double WaveSpeedForTemperature(double kelvin, const EmissionParams& params = {});
+
 // Replaces the pulses of `graph` (its segments' parents and formedAt define the tree). `grounded` and `groundSegment` give the contact of a
 // flash to the ground; `attachTime` is when the leader reached it (or stopped growing). Deterministic in `seed`.
 void AssignPhysicalEmission(optical_transport::DischargeGraph& graph, bool grounded, std::int32_t groundSegment, double attachTime,

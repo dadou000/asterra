@@ -152,6 +152,7 @@ std::string StormDomainMailbox::SetLightning(const StormLightningSettings& setti
     if (!(settings.brightness >= 1.0 && settings.brightness <= 1.0e6)) { return "brightness must be 1 to 1e6"; }
     if (!(settings.flashSize >= 1.0 && settings.flashSize <= 50.0)) { return "flash_size must be 1 to 50"; }
     if (!(settings.groundStrikeChance >= 0.0 && settings.groundStrikeChance <= 1.0)) { return "ground_strike_chance must be 0 to 1"; }
+    if (!(settings.smallFlashFraction >= 0.0 && settings.smallFlashFraction <= 1.0)) { return "small_flash_fraction must be 0 to 1"; }
     {
         const std::scoped_lock lock(mutex_);
         lightning_ = settings;
@@ -388,7 +389,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 "Parameters (all optional, the rest keep their value): `enabled` (default true), and for testing `slow_motion` (1 to 2000: every "
                 "flash lasts that many times longer at the same power, so one frame can catch it), `charge_boost` (1 to 10000: multiplies the "
                 "charging rate), `breakdown_scale` (0.02 to 1: scales the field at which air breaks down, lower = electrically unstable), `brightness` "
-                "(1 to 1e6: multiplies the energy of every flash, lights and arc alike), `arcs` (default true: the channel of a live flash is drawn as a glowing line) `pause_on_strike` (default false: the simulation pauses just before a flash that is in view starts, so it can be played in slow motion with the rate slider or time.set), `frame_strike` (default false: the camera turns to a flash about to start and backs off until its whole channel is in view) `ground_strike_chance` (0 to 1, default 0.25: the share of flashes that are descending leaders seeking the ground, with a return stroke and later strokes; changing it restarts the charge), `flash_size` (1 to 50, default 4: multiplies the charge one flash may neutralise, so flashes grow larger; changing it restarts the charge) and `show_grid` (default false: draws the electrified window as a box with a grid and the charge in it, red positive and blue negative). "
+                "(1 to 1e6: multiplies the energy of every flash, lights and arc alike), `arcs` (default true: the channel of a live flash is drawn as a glowing line) `pause_on_strike` (default false: the simulation pauses just before a flash that is in view starts, so it can be played in slow motion with the rate slider or time.set), `frame_strike` (default false: the camera turns to a flash about to start and backs off until its whole channel is in view) `small_flash_fraction` (0 to 1, default 0.75: the share of flashes that are small intracloud ones, a few tens of cells, cheap and never to the ground; changing it restarts the charge), `ground_strike_chance` (0 to 1, default 0.25: the share of flashes that are descending leaders seeking the ground, with a return stroke and later strokes; changing it restarts the charge), `flash_size` (1 to 50, default 4: multiplies the charge one flash may neutralise, so flashes grow larger; changing it restarts the charge) and `show_grid` (default false: draws the electrified window as a box with a grid and the charge in it, red positive and blue negative). "
                 "Changing the boost or the breakdown restarts the charge. Returns `error`, the settings and `lightning_flashes` from storm.status.",
             .mutating = true
         },
@@ -408,6 +409,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 settings.brightness = Optional(params, "brightness", settings.brightness);
                 settings.flashSize = Optional(params, "flash_size", settings.flashSize);
                 settings.groundStrikeChance = Optional(params, "ground_strike_chance", settings.groundStrikeChance);
+                settings.smallFlashFraction = Optional(params, "small_flash_fraction", settings.smallFlashFraction);
                 if (const Value* frame = params.Find("frame_strike"); frame != nullptr)
                 {
                     if (!frame->IsBool()) { throw rpc::Error(kBadParams, "frame_strike must be a boolean."); }
@@ -443,6 +445,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 {"show_grid", now.showGrid},
                 {"flash_size", now.flashSize},
                 {"ground_strike_chance", now.groundStrikeChance},
+                {"small_flash_fraction", now.smallFlashFraction},
                 {"lightning_flashes", static_cast<f64>(mailbox.Status().lightningFlashes)}};
             return result;
         });
@@ -477,7 +480,7 @@ rpc::Value StormStateToValue(const StormPersistentState& state)
     const StormLightningSettings& l = state.lightning;
     out.insert({"lightning", Value::Object{{"enabled", l.enabled}, {"slow_motion", l.slowMotion}, {"charge_boost", l.chargeBoost},
         {"breakdown_scale", l.breakdownScale}, {"brightness", l.brightness}, {"arcs", l.arcs}, {"pause_on_strike", l.pauseOnStrike},
-        {"frame_strike", l.frameStrike}, {"show_grid", l.showGrid}, {"flash_size", l.flashSize}, {"ground_strike_chance", l.groundStrikeChance}}});
+        {"frame_strike", l.frameStrike}, {"show_grid", l.showGrid}, {"flash_size", l.flashSize}, {"ground_strike_chance", l.groundStrikeChance}, {"small_flash_fraction", l.smallFlashFraction}}});
     return out;
 }
 
@@ -507,6 +510,7 @@ std::string RestoreStormState(StormDomainMailbox& mailbox, const rpc::Value& sav
         s.showGrid = boolean(*l, "show_grid", s.showGrid);
         s.flashSize = number(*l, "flash_size", s.flashSize);
         s.groundStrikeChance = number(*l, "ground_strike_chance", s.groundStrikeChance);
+        s.smallFlashFraction = number(*l, "small_flash_fraction", s.smallFlashFraction);
         if (const std::string error = mailbox.SetLightning(s); !error.empty()) { problems += "lightning: " + error + "; "; }
     }
     if (const Value* a = saved.Find("auto"); a != nullptr && boolean(*a, "enabled", false))

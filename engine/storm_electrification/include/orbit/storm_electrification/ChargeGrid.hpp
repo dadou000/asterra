@@ -43,6 +43,11 @@ public:
     bool Converged() const { return converged_; }
     const std::vector<double>& Potential() const { return phi_; }
 
+    // Cells where a small flash has just been (until the next potential solve): the place of the next one is chosen elsewhere. The potential is
+    // not re-solved after a small flash, so without this every flash of a step would start at the same cell.
+    void MarkRefractory(const std::vector<unsigned char>& mask);
+    bool Refractory(std::size_t cell) const { return !refractory_.empty() && refractory_[cell] != 0U; }
+
     // Field (V/m) at a cell centre by central differences; a face neighbour outside the block is 0 V.
     void Field(std::uint32_t i, std::uint32_t j, std::uint32_t k, double out[3]) const;
     double FieldMagnitude(std::uint32_t i, std::uint32_t j, std::uint32_t k) const;
@@ -54,6 +59,7 @@ private:
     std::uint32_t nx_, ny_, nz_;
     double dx_;
     std::vector<double> rhoIce_, rhoGraupel_, phi_;
+    std::vector<unsigned char> refractory_;
     bool converged_ = false;
 };
 

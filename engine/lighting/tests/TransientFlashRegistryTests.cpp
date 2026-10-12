@@ -112,6 +112,21 @@ int main()
         Check(arcs.ChannelLines(5.0 + 30.0, 0.02, 1.0e3, 1000U).empty(), "the glow fades away after the last stroke");
         Check(arcs.ChannelLines(4.0, 0.02, 1.0e3, 1000U).empty(), "nothing before the flash starts");
         (void)sorted;
+        // The window version carries the same energy as the lights integrate over the same window, however short the window.
+        for (const f64 window : {1.0e-4, 1.0 / 60.0, 0.2})
+        {
+            TransientFlashRegistry fresh;
+            fresh.Fire(fixed2, 5.0);
+            f64 lineEnergy = 0.0, lightEnergy = 0.0;
+            for (f64 t = 5.0; t < 5.4; t += window)
+            {
+                for (const auto& l : fresh.ChannelLinesInWindow(t, t + window, 0.0, 100000U)) { lineEnergy += l.powerWatts * window; }
+                TransientLightParams p;
+                p.exposureSeconds = window;
+                for (const auto& l : fresh.LightsForWindow(t, camera, p)) { lightEnergy += l.luminousFluxLumens / p.luminousEfficacyOfRadiation * window; }
+            }
+            Check(lineEnergy > 0.0 && std::abs(lightEnergy - lineEnergy) < 0.02 * lineEnergy, "the arcs and the lights of a window carry the same energy");
+        }
     }
 
     // Upcoming flashes (what the strike pause watches): a placed flash is listed from `horizon` before it starts until `grace` after.

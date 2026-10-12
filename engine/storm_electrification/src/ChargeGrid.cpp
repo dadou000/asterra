@@ -43,8 +43,15 @@ double Dot(const std::vector<double>& a, const std::vector<double>& b)
 }
 } // namespace
 
+void ChargeGrid::MarkRefractory(const std::vector<unsigned char>& mask)
+{
+    if (refractory_.size() != mask.size()) { refractory_.assign(mask.size(), 0U); }
+    for (std::size_t c = 0; c < mask.size(); ++c) { refractory_[c] = static_cast<unsigned char>(refractory_[c] | mask[c]); }
+}
+
 int ChargeGrid::SolvePotential(double tolerance, int maxIterations)
 {
+    refractory_.clear();
     const std::size_t n = CellCount();
     std::vector<double> b(n), r(n), p(n), ap(n);
     const double scale = dx_ * dx_ / kVacuumPermittivity;

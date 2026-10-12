@@ -140,7 +140,7 @@ public:
     // Called every frame the storm runs normally; `stormTime` is the solver's time. Returns the flashes the worker finished since the last call.
     std::vector<Flash> Update(StormSim& sim, weather_lab::FastStormSolver& readout, const f64 stormTime, const StormLightningSettings& settings)
     {
-        if (settings.chargeBoost != chargeBoost_ || settings.breakdownScale != breakdownScale_ || settings.flashSize != flashSize_ || settings.groundStrikeChance != groundStrikeChance_)
+        if (settings.chargeBoost != chargeBoost_ || settings.breakdownScale != breakdownScale_ || settings.flashSize != flashSize_ || settings.groundStrikeChance != groundStrikeChance_ || settings.smallFlashFraction != smallFlashFraction_)
         {
             // The source is built with these; a new value starts the charge over.
             Reset();
@@ -148,6 +148,7 @@ public:
             breakdownScale_ = settings.breakdownScale;
             flashSize_ = settings.flashSize;
             groundStrikeChance_ = settings.groundStrikeChance;
+            smallFlashFraction_ = settings.smallFlashFraction;
         }
         if (lastTime_ < 0.0 || stormTime < lastTime_ || stormTime - lastTime_ > kMaxJobSeconds)
         {
@@ -203,6 +204,7 @@ private:
         f64 breakdownScale{1.0};
         f64 flashSize{1.0};
         f64 groundStrikeChance{0.0};
+        f64 smallFlashFraction{0.0};
     };
 
     void Submit(StormSim& sim, weather_lab::FastStormSolver& readout)
@@ -283,6 +285,7 @@ private:
         job.breakdownScale = breakdownScale_;
         job.flashSize = flashSize_;
         job.groundStrikeChance = groundStrikeChance_;
+        job.smallFlashFraction = smallFlashFraction_;
         pending_ = 0.0;
         {
             std::lock_guard lock(mutex_);
@@ -314,7 +317,7 @@ private:
             {
                 storm_electrification::StormLightningParams params;
                 params.timeScale = 1.0;
-                params.maxFlashesPerStep = 2U;   // each flash costs a potential solve over the whole window; a real storm flashes every few seconds
+                params.maxFlashesPerStep = 12U;  // a full flash costs a potential solve over the window, a small one almost nothing
                 params.electrification.chargingEfficiency *= job.chargeBoost;
                 params.leader.initiationField *= job.breakdownScale;
                 params.leader.propagationField *= job.breakdownScale;
@@ -328,6 +331,9 @@ private:
                 params.leader.screening = 0.15;   // a conducting channel weakens the field at the cells that hug it: it crosses the cloud, it does not pack it
                 params.leader.picksDivisor = 1.0e9;   // one new cell per round: a leader that grows from its strongest tip, branching only now and then
                 params.leader.groundSeekChance = job.groundStrikeChance;
+                params.leader.smallFlashFraction = job.smallFlashFraction;   // most flashes of a storm are small and cheap
+                params.leader.goalBias = 6.0;                                // a leader that runs to where it is going, no loops
+                params.leader.initiationSpread = 0.4;                        // not all flashes at the strongest cell
                 params.leader.physicalEmission = true;   // the leader, return stroke, later strokes and cooling of LightningEmission.hpp
                 params.leader.leaderSpeed = 2.5e6;   // the whole growth of a 400-cell channel takes some 50 ms: the arc is as quick as the light
                 params.leader.currentWeighted = true;
@@ -419,6 +425,7 @@ private:
     f64 breakdownScale_{1.0};
     f64 flashSize_{4.0};
     f64 groundStrikeChance_{0.25};
+    f64 smallFlashFraction_{0.75};
     f64 originEast_{0.0}, originNorth_{0.0};
     u32 cells_{0}, nz_{0};
     f32 spacing_{500.0F};
