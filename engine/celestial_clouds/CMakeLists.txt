@@ -93,6 +93,12 @@ if(BUILD_TESTING)
     orbit_enable_warnings(OrbitWeatherMultirateSchedulerTests)
     add_test(NAME Orbit.WeatherMultirateScheduler COMMAND OrbitWeatherMultirateSchedulerTests)
 
+    add_executable(OrbitWeatherEvolutionTests tests/WeatherEvolutionTests.cpp)
+    target_link_libraries(OrbitWeatherEvolutionTests PRIVATE Orbit::CelestialClouds)
+    target_compile_features(OrbitWeatherEvolutionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitWeatherEvolutionTests)
+    add_test(NAME Orbit.WeatherEvolution COMMAND OrbitWeatherEvolutionTests)
+
     add_executable(
         OrbitStormScheduleTests
         tests/StormScheduleTests.cpp
