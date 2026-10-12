@@ -621,7 +621,7 @@ void StudioViewportRenderer::UpdateStormDomain(
     rt.zoneEvolution.SetEvaluator(&celestial_clouds::EvaluateEmergentWeather);
     // Shared asynchronous worker: no per-zone thread, no GPU involvement.
     // Only validated detailed tickets can complete; long-step work stays blocked.
-    rt.zoneEvolution.Tick(*zoneSnapshot, nowSeconds);
+    rt.zoneEvolution.Tick(*zoneSnapshot, nowSeconds, planetRadiusMeters);
     const auto zoneScheduleStats=rt.zoneEvolution.Scheduler().Stats();
 
     // ---- which storm?
@@ -699,6 +699,7 @@ void StudioViewportRenderer::UpdateStormDomain(
     status.zoneCompletedSteps = rt.zoneEvolution.Completed();
     status.zonePendingExchanges = static_cast<u32>(
         rt.zoneEvolution.Ledger().PendingExchanges().size());
+    status.zoneCrossZoneSources = static_cast<u32>(rt.zoneEvolution.CrossZoneSources());
     status.mode = mode;
     status.scheduledNearby = scheduledNearby;
     status.checkpointMiB = static_cast<f64>(rt.checkpointBytes) / (1024.0 * 1024.0);
