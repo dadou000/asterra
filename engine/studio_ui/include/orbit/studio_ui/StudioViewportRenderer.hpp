@@ -69,6 +69,7 @@
 #include <future>
 #include <array>
 #include <atomic>
+#include <set>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -383,6 +384,7 @@ public:
     // The simulated storm domain (storm.* RPC and the Weather Lab panel's Storm domain section): requests are queued here and built,
     // stepped and drawn by the cloud pass on the render thread.
     [[nodiscard]] StormDomainMailbox& StormMailbox() noexcept { return stormMailbox_; }
+    void SetStrikePauseHandler(std::function<void()> handler) { strikePauseHandler_ = std::move(handler); }
 
     // Lightning flashes lighting the scene (RPC `lightning.*`). Thread-safe: the RPC thread fires, the render thread reads.
     u64 FireLightning(const lighting::FlashRequest& request);
@@ -504,6 +506,10 @@ private:
     f64 flashLastSimChangeWall_{0.0};
     // The lit channel segments of the live flashes as overlay lines relative to `camera` (empty when none is lit or arcs are off).
     std::atomic<u32> lastArcSegments_{0U};
+    // Pauses the simulation (through the handler Studio installs) just before a flash that is in view starts; see StormLightningSettings.
+    void WatchStrikes(const render_view::CameraState& camera, u32 width, u32 height);
+    std::function<void()> strikePauseHandler_;
+    std::set<u64> strikeSeen_;
     [[nodiscard]] std::vector<editor_ui::PreviewLine> FlashArcLines(const render_view::CameraState& camera, u32 height);
     void ComposeAtmospherePasses(StudioLightingPassContext& context);
 

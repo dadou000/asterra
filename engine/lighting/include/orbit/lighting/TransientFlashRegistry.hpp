@@ -63,6 +63,15 @@ struct ChannelLine
     f64 powerWatts{0.0};
 };
 
+// A placed flash that has not started yet (or only just), with a sphere around its channel in the lighting frame.
+struct UpcomingFlash
+{
+    u64 id{0U};
+    f64 secondsUntilStart{0.0};   // negative once it has begun
+    math::Double3 centre{};
+    f64 radiusMeters{0.0};
+};
+
 class TransientFlashRegistry
 {
 public:
@@ -84,6 +93,9 @@ public:
     // The channel segments that are lit at `nowSeconds` (a pulse in progress, or one that ended less than a few `afterglowSeconds` ago and
     // fades exponentially), brightest first, at most `maxLines`: what an arc overlay draws. Flashes not yet placed are skipped.
     [[nodiscard]] std::vector<ChannelLine> ChannelLines(f64 nowSeconds, f64 afterglowSeconds, f64 minimumPowerWatts, std::size_t maxLines) const;
+
+    // Placed flashes that start within `horizonSeconds` from `nowSeconds`, or began less than `graceSeconds` ago.
+    [[nodiscard]] std::vector<UpcomingFlash> UpcomingFlashes(f64 nowSeconds, f64 horizonSeconds, f64 graceSeconds) const;
 
     [[nodiscard]] std::vector<FlashStatus> Status(f64 nowSeconds) const;
     void Clear();

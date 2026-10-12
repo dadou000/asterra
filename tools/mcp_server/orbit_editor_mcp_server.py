@@ -1239,6 +1239,7 @@ def orbit_storm_lightning(
     breakdown_scale: float | None = None,
     brightness: float | None = None,
     arcs: bool | None = None,
+    pause_on_strike: bool | None = None,
 ) -> dict[str, Any]:
     """Lightning from the simulated storm's own charge (graupel, ice, supercooled
     water, updraft). Omitted parameters keep their value. For testing:
@@ -1248,14 +1249,18 @@ def orbit_storm_lightning(
     breaks down (electrically unstable). Changing the boost or breakdown
     restarts the charge. brightness (1 to 1e6) multiplies the energy of every
     flash (the light on the clouds and the arc). arcs (default true) draws the
-    channel of a live flash as a jagged glowing line over the clouds. Clouds are
+    channel of a live flash as a jagged glowing line over the clouds.
+    pause_on_strike (default false) pauses the simulation just before a flash
+    that is in view starts, so it can be played in slow motion with time.set
+    rate (also a toggle in the bottom bar). Clouds are
     lit by the flashes when Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1. Returns
     the settings and lightning_flashes (storm.status also has
     lightning_arc_segments)."""
     params: dict[str, Any] = {}
     for key, value in (("enabled", enabled), ("slow_motion", slow_motion),
                        ("charge_boost", charge_boost), ("breakdown_scale", breakdown_scale),
-                       ("brightness", brightness), ("arcs", arcs)):
+                       ("brightness", brightness), ("arcs", arcs),
+                       ("pause_on_strike", pause_on_strike)):
         if value is not None:
             params[key] = value
     return _rpc("storm.lightning", params)

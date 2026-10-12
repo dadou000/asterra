@@ -722,6 +722,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         height);
                 });
 
+            WatchStrikes(atmosphereCamera, width, height);
+
             // The channels of the live lightning flashes as glowing lines over the clouds (storm.lightning arcs).
             if (auto arcLines = FlashArcLines(atmosphereCamera, height); !arcLines.empty())
             {

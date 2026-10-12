@@ -65,6 +65,8 @@ public:
 
     // Adds a "Report issue" button to the band.
     void SetReportIssueHandler(std::function<void()> handler);
+    // A toggle that pauses the simulation just before a lightning flash in view starts (storm.lightning pause_on_strike); the band shows it when set.
+    void SetStrikePauseBinding(std::function<bool()> get, std::function<void(bool)> set);
 
     inline static constexpr const char* kBandId = "orbit.simulation";
 
@@ -74,6 +76,8 @@ private:
     SimulationControls* controls_{nullptr};
     studio_session::StudioSession* session_{nullptr};
     std::function<void()> reportIssue_;
+    std::function<bool()> strikePauseGet_;
+    std::function<void(bool)> strikePauseSet_;
     bool registered_{false};
     i32 stepIndex_{2};
     i32 rateIndex_{1};

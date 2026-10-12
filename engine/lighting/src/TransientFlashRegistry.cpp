@@ -232,6 +232,48 @@ std::vector<ChannelLine> TransientFlashRegistry::ChannelLines(
     return lines;
 }
 
+std::vector<UpcomingFlash> TransientFlashRegistry::UpcomingFlashes(
+    const f64 nowSeconds, const f64 horizonSeconds, const f64 graceSeconds) const
+{
+    std::vector<UpcomingFlash> result;
+    for (const Flash& flash : flashes_)
+    {
+        if (!flash.placed)
+        {
+            continue;
+        }
+        const f64 until = flash.startSeconds - nowSeconds;
+        if (until > horizonSeconds || until < -graceSeconds)
+        {
+            continue;
+        }
+        math::Double3 sum{};
+        std::size_t points = 0;
+        for (const optical_transport::Segment& segment : flash.graph.Segments())
+        {
+            sum = sum + math::Double3{segment.from[0], segment.from[1], segment.from[2]};
+            sum = sum + math::Double3{segment.to[0], segment.to[1], segment.to[2]};
+            points += 2U;
+        }
+        if (points == 0U)
+        {
+            continue;
+        }
+        const math::Double3 centre = sum * (1.0 / static_cast<f64>(points));
+        f64 radius = 0.0;
+        for (const optical_transport::Segment& segment : flash.graph.Segments())
+        {
+            for (const double* p : {segment.from, segment.to})
+            {
+                const math::Double3 d{p[0] - centre.x, p[1] - centre.y, p[2] - centre.z};
+                radius = std::max(radius, std::sqrt(math::Dot(d, d)));
+            }
+        }
+        result.push_back({flash.id, until, flash.origin + centre, radius});
+    }
+    return result;
+}
+
 std::vector<FlashStatus> TransientFlashRegistry::Status(const f64 nowSeconds) const
 {
     std::vector<FlashStatus> result;

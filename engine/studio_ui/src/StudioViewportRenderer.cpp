@@ -127,6 +127,58 @@ u64 StudioViewportRenderer::AddLightningStormFlash(optical_transport::DischargeG
     return transientFlashes_.AddStormFlash(std::move(graph), FlashClockSeconds());
 }
 
+void StudioViewportRenderer::WatchStrikes(const render_view::CameraState& camera, const u32 width, const u32 height)
+{
+    if (!stormMailbox_.Lightning().pauseOnStrike || !strikePauseHandler_ || width == 0U || height == 0U)
+    {
+        strikeSeen_.clear();
+        return;
+    }
+    std::vector<lighting::UpcomingFlash> upcoming;
+    {
+        const std::scoped_lock lock(transientFlashMutex_);
+        upcoming = transientFlashes_.UpcomingFlashes(FlashClockSeconds(), 0.3, 0.1);
+    }
+    const math::Double3 forward{camera.forward.x, camera.forward.y, camera.forward.z};
+    const math::Double3 up{camera.up.x, camera.up.y, camera.up.z};
+    const math::Double3 right = math::Cross(up, forward);
+    const f64 rightLength = std::sqrt(math::Dot(right, right));
+    if (rightLength <= 0.0)
+    {
+        return;
+    }
+    const math::Double3 side = right * (1.0 / rightLength);
+    const f64 tanHalf = std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians));
+    const f64 aspect = static_cast<f64>(width) / static_cast<f64>(height);
+    for (const lighting::UpcomingFlash& flash : upcoming)
+    {
+        if (!strikeSeen_.insert(flash.id).second)
+        {
+            continue;   // already looked at (and paused for, or out of frame)
+        }
+        const math::Double3 rel = flash.centre - camera.localPositionMeters;
+        const f64 depth = math::Dot(rel, forward);
+        if (depth <= 1.0)
+        {
+            continue;
+        }
+        // Inside the view, allowing for the size of the channel.
+        const f64 margin = flash.radiusMeters / depth;
+        const bool inFrame = std::fabs(math::Dot(rel, side)) / depth < tanHalf * aspect + margin &&
+                             std::fabs(math::Dot(rel, up)) / depth < tanHalf + margin;
+        if (inFrame)
+        {
+            strikePauseHandler_();
+            return;
+        }
+    }
+    // Forget flashes that are gone, so the set does not grow.
+    if (strikeSeen_.size() > 256U)
+    {
+        strikeSeen_.clear();
+    }
+}
+
 std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const render_view::CameraState& camera, const u32 height)
 {
     std::vector<editor_ui::PreviewLine> out;

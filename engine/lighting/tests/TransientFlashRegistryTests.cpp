@@ -114,6 +114,21 @@ int main()
         (void)sorted;
     }
 
+    // Upcoming flashes (what the strike pause watches): a placed flash is listed from `horizon` before it starts until `grace` after.
+    {
+        TransientFlashRegistry soon;
+        FlashRequest fixed3 = request;
+        fixed3.cameraRelative = false;
+        fixed3.baseMeters = {1000.0, 0.0, 0.0};
+        soon.Fire(fixed3, 10.0);
+        Check(soon.UpcomingFlashes(8.0, 0.3, 0.1).empty(), "a flash two seconds away is not upcoming yet");
+        const auto near = soon.UpcomingFlashes(9.8, 0.3, 0.1);
+        Check(near.size() == 1U && near.front().secondsUntilStart > 0.0 && near.front().secondsUntilStart < 0.3, "a flash 0.2 s away is upcoming");
+        Check(near.front().radiusMeters > 100.0 && std::abs(near.front().centre.x - 1000.0) < near.front().radiusMeters, "its sphere contains the channel");
+        Check(soon.UpcomingFlashes(10.05, 0.3, 0.1).size() == 1U, "just started still counts");
+        Check(soon.UpcomingFlashes(10.5, 0.3, 0.1).empty(), "a flash well under way no longer does");
+    }
+
     // Several simultaneous flashes still respect the budget.
     TransientFlashRegistry many;
     for (int i = 0; i < 8; ++i) { many.Fire(request, 0.0); }

@@ -1415,6 +1415,16 @@ int orbit::editor_app::StudioApplication::Run(
             simulationControls,
             studioSession);
         simulationUi.Register(ui);
+        // Lightning: pause just before a flash in view so it can be played in slow motion (toggle in the bottom bar, storm.lightning).
+        studioViewportRenderer.SetStrikePauseHandler([&simulationControls]() { simulationControls.SetPlaying(false); });
+        simulationUi.SetStrikePauseBinding(
+            [&studioViewportRenderer]() { return studioViewportRenderer.StormMailbox().Lightning().pauseOnStrike; },
+            [&studioViewportRenderer](const bool on)
+            {
+                auto settings = studioViewportRenderer.StormMailbox().Lightning();
+                settings.pauseOnStrike = on;
+                static_cast<void>(studioViewportRenderer.StormMailbox().SetLightning(settings));
+            });
         orbit::studio_ui::RegisterSimulationRpc(
             rpcHost.Dispatcher(),
             simulationControls,
