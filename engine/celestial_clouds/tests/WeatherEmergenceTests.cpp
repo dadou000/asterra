@@ -38,7 +38,7 @@ int main()
     Check(s.groups[0].id==originalId,"persistent membership retains group ID");
     Check(std::abs(WeatherConvectiveSurrogate::Inventory(s)-inventory)<1e-12,
         "cold-pool feedback does not fabricate water inventory");
-    s.children[1].eastKm=110;
+    s.children[1].eastKm=60;
     Check(WeatherEmergence::Advance(s,60),"splitting geometry advances");
     Check(s.groups.empty(),"disconnected cells dissolve parent group");
     const auto old=s;
