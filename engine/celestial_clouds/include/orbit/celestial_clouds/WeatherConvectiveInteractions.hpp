@@ -60,8 +60,8 @@ public:
         for (std::size_t i=1;i<children.size();++i)
             if(children[i-1]->id==children[i]->id) return graph;
         const f64 radius=std::max(0.001,config.influenceRadiusKm);
-        for (std::size_t i=0;i<children.size();++i)
-            for (std::size_t j=i+1;j<children.size();++j)
+        for (std::size_t i=0;i<children.size() && graph.edges.size()<config.maxEdges;++i)
+            for (std::size_t j=i+1;j<children.size() && graph.edges.size()<config.maxEdges;++j)
             {
                 const auto& a=*children[i];
                 const auto& b=*children[j];
@@ -70,7 +70,6 @@ public:
                 const f64 x=1.0-distance/radius;
                 const f64 influence=x*x*(3.0-2.0*x);
                 graph.edges.push_back({a.id,b.id,distance,influence});
-                if(graph.edges.size()>=config.maxEdges) break;
             }
         // Sparse connectivity graph: components share a synchronization island
         // only when the coupling is sufficiently strong.
@@ -171,4 +170,21 @@ public:
         return true;
     }
 };
+
+// Executes the same conservative local evolution as Phase 5, then computes
+// interactions from the resulting snapshot before transactional publication.
+// The returned integrated rain exchange is unchanged by pairwise transfers.
+[[nodiscard]] inline std::optional<WeatherEvolutionResult> EvaluateInteractingWeather(
+    const WeatherZoneEvolutionState& initial,
+    const StormZoneWeights& environment,
+    const WeatherStepTicket& ticket)
+{
+    auto result=WeatherConvectiveSurrogate::Evaluate(initial,environment,ticket);
+    if(!result) return std::nullopt;
+    const auto graph=WeatherConvectiveInteractions::Build(result->state);
+    if(!WeatherConvectiveInteractions::Apply(result->state,graph,
+        ticket.toSeconds-ticket.fromSeconds))
+        return std::nullopt;
+    return result;
+}
 } // namespace orbit::celestial_clouds
