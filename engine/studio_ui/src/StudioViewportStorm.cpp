@@ -4,16 +4,22 @@
 #include <orbit/core/Log.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
 #include <orbit/weather_gpu/NestedGpuSolver.hpp>
+#include <orbit/storm_electrification/StormLightningSource.hpp>
 #include <orbit/weather_lab/FastStormSolver.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -72,6 +78,8 @@ public:
     [[nodiscard]] double Time() const { return nested_ ? nested_->Time() : single_->Time(); }
     [[nodiscard]] double LastAdvanceMilliseconds() const { return nested_ ? nested_->LastAdvanceMilliseconds() : single_->LastAdvanceMilliseconds(); }
     [[nodiscard]] std::size_t ResidentBytes() const { return nested_ ? nested_->ResidentBytes() : single_->ResidentBytes(); }
+    // The parent level's state into a CPU solver of the same configuration (one GPU round trip).
+    void DownloadParent(weather_lab::FastStormSolver& cpu) { if (nested_) { nested_->Parent().Download(cpu); } else { single_->Download(cpu); } }
     [[nodiscard]] bool Nested() const { return nested_ != nullptr; }
     [[nodiscard]] f32 ChildSpacing() const { return childSpacing_; }
 
@@ -79,6 +87,246 @@ private:
     std::unique_ptr<weather_gpu::GpuStormSolver> single_;
     std::unique_ptr<weather_gpu::NestedGpuSolver> nested_;
     f32 childSpacing_{0.0F};
+};
+
+// Lightning from the simulated storm: the storm's own graupel, ice, supercooled water and updraft charge a window of its grid around the
+// ice (storm_electrification, on a worker thread), and the flashes the breakdown produces come back in storm coordinates. The charge state
+// lives on while the fields are refreshed from the solver, so the charge builds and discharges with the storm.
+class StormLightningFeed
+{
+public:
+    static constexpr u32 kWindowCells = 64U;       // horizontal cells of the electrified window (32 km at 500 m)
+    static constexpr f64 kIntervalSeconds = 10.0;  // storm seconds gathered per job
+    static constexpr f64 kMaxJobSeconds = 120.0;   // a longer backlog (a time jump) is dropped
+
+    struct Flash
+    {
+        optical_transport::DischargeGraph graph{optical_transport::FlashKind::IntraCloud};
+        f64 delaySeconds{0.0};   // storm seconds after the start of its job
+        f64 jobSeconds{0.0};
+        f64 startSeconds{0.0};   // the source's clock at its start: the graph's pulse times are absolute on that clock
+    };
+
+    ~StormLightningFeed() { Stop(); }
+
+    void Reset()
+    {
+        Stop();
+        started_ = false;
+        pending_ = 0.0;
+        lastTime_ = -1.0;
+        std::lock_guard lock(mutex_);
+        ready_.clear();
+    }
+
+    // Called every frame the storm runs normally; `stormTime` is the solver's time. Returns the flashes the worker finished since the last call.
+    std::vector<Flash> Update(StormSim& sim, weather_lab::FastStormSolver& readout, const f64 stormTime, const StormLightningSettings& settings)
+    {
+        if (settings.chargeBoost != chargeBoost_ || settings.breakdownScale != breakdownScale_)
+        {
+            // The source is built with these; a new value starts the charge over.
+            Reset();
+            chargeBoost_ = settings.chargeBoost;
+            breakdownScale_ = settings.breakdownScale;
+        }
+        if (lastTime_ < 0.0 || stormTime < lastTime_ || stormTime - lastTime_ > kMaxJobSeconds)
+        {
+            // First frame, or a jump: the charge belongs to a different storm moment.
+            const bool jumped = lastTime_ >= 0.0;
+            if (jumped) { Reset(); }
+            lastTime_ = stormTime;
+            return {};
+        }
+        pending_ = std::min(pending_ + (stormTime - lastTime_), kMaxJobSeconds);
+        lastTime_ = stormTime;
+        bool idle;
+        {
+            std::lock_guard lock(mutex_);
+            idle = !busy_;
+        }
+        if (idle && pending_ >= kIntervalSeconds)
+        {
+            Submit(sim, readout);
+        }
+        std::lock_guard lock(mutex_);
+        return std::exchange(ready_, {});
+    }
+
+    // Where the window sits: cell offsets of its corner in the parent grid (valid once a job was submitted).
+    [[nodiscard]] u32 OriginI() const { return originI_; }
+    [[nodiscard]] u32 OriginJ() const { return originJ_; }
+    [[nodiscard]] u32 Cells() const { return cells_; }
+    [[nodiscard]] u64 FlashCount() const { return flashes_.load(); }
+    [[nodiscard]] bool Started() const { return started_; }
+
+private:
+    struct Job
+    {
+        storm_electrification::StormFields fields;
+        f64 seconds{0.0};
+        f64 chargeBoost{1.0};
+        f64 breakdownScale{1.0};
+    };
+
+    void Submit(StormSim& sim, weather_lab::FastStormSolver& readout)
+    {
+        sim.DownloadParent(readout);
+        const weather_lab::FastStormConfig& c = readout.Config();
+        std::vector<f32> th, qc, qi, qs, qg, w;
+        readout.CopyField("th", th);
+        readout.CopyField("qc", qc);
+        readout.CopyField("qi", qi);
+        readout.CopyField("qs", qs);
+        readout.CopyField("qg", qg);
+        readout.CopyField("w", w);
+        const u32 nx = c.nx, ny = c.ny, nz = c.nz;
+        const std::size_t plane = static_cast<std::size_t>(nx) * ny;
+        const u32 window = std::min({kWindowCells, nx, ny});
+        if (!started_)
+        {
+            // Centre the window on the column carrying the most ice and graupel.
+            f64 sx = 0.0, sy = 0.0, total = 0.0;
+            for (u32 k = 0; k < nz; ++k)
+            {
+                for (u32 j = 0; j < ny; ++j)
+                {
+                    for (u32 i = 0; i < nx; ++i)
+                    {
+                        const std::size_t cell = k * plane + static_cast<std::size_t>(j) * nx + i;
+                        const f64 m = static_cast<f64>(qg[cell]) + qi[cell] + qs[cell];
+                        sx += m * i;
+                        sy += m * j;
+                        total += m;
+                    }
+                }
+            }
+            const f64 cx = total > 0.0 ? sx / total : 0.5 * nx;
+            const f64 cy = total > 0.0 ? sy / total : 0.5 * ny;
+            originI_ = static_cast<u32>(std::clamp(cx - 0.5 * window, 0.0, static_cast<f64>(nx - window)));
+            originJ_ = static_cast<u32>(std::clamp(cy - 0.5 * window, 0.0, static_cast<f64>(ny - window)));
+            cells_ = window;
+            nz_ = nz;
+            spacing_ = c.dx;
+            started_ = true;
+        }
+        Job job;
+        const std::size_t count = static_cast<std::size_t>(window) * window * nz;
+        storm_electrification::StormFields& f = job.fields;
+        f.temperatureK.resize(count);
+        f.airDensity.resize(count);
+        f.updraft.resize(count);
+        f.graupel.resize(count);
+        f.ice.resize(count);
+        f.liquid.resize(count);
+        const weather_lab::BaseState& base = readout.Base();
+        std::size_t out = 0;
+        for (u32 k = 0; k < nz; ++k)
+        {
+            for (u32 j = 0; j < window; ++j)
+            {
+                for (u32 i = 0; i < window; ++i, ++out)
+                {
+                    const std::size_t cell = k * plane + static_cast<std::size_t>(originJ_ + j) * nx + originI_ + i;
+                    f.temperatureK[out] = th[cell] * base.exner[k];
+                    f.airDensity[out] = base.density[k];
+                    f.updraft[out] = w[cell];
+                    f.graupel[out] = qg[cell];
+                    f.ice[out] = qi[cell] + qs[cell];
+                    f.liquid[out] = qc[cell];
+                }
+            }
+        }
+        job.seconds = pending_;
+        job.chargeBoost = chargeBoost_;
+        job.breakdownScale = breakdownScale_;
+        pending_ = 0.0;
+        {
+            std::lock_guard lock(mutex_);
+            job_ = std::move(job);
+            hasJob_ = true;
+            busy_ = true;
+        }
+        if (!worker_.joinable())
+        {
+            worker_ = std::thread([this] { Run(); });
+        }
+        wake_.notify_one();
+    }
+
+    void Run()
+    {
+        std::unique_ptr<storm_electrification::StormLightningSource> source;
+        for (;;)
+        {
+            Job job;
+            {
+                std::unique_lock lock(mutex_);
+                wake_.wait(lock, [this] { return hasJob_ || stop_; });
+                if (stop_) { return; }
+                job = std::move(job_);
+                hasJob_ = false;
+            }
+            if (!source)
+            {
+                storm_electrification::StormLightningParams params;
+                params.timeScale = 1.0;
+                params.electrification.chargingEfficiency *= job.chargeBoost;
+                params.leader.initiationField *= job.breakdownScale;
+                params.leader.propagationField *= job.breakdownScale;
+                source = std::make_unique<storm_electrification::StormLightningSource>(
+                    std::move(job.fields), cells_, cells_, nz_, static_cast<f64>(spacing_), params);
+            }
+            else
+            {
+                source->UpdateFields(std::move(job.fields));
+            }
+            const f64 before = source->SimulatedSeconds();
+            std::vector<storm_electrification::FlashResult> found = source->Advance(job.seconds);
+            std::lock_guard lock(mutex_);
+            for (auto& flash : found)
+            {
+                Flash out;
+                out.graph = std::move(flash.graph);
+                out.delaySeconds = std::clamp(flash.startTime - before, 0.0, job.seconds);
+                out.jobSeconds = job.seconds;
+                out.startSeconds = flash.startTime;
+                ready_.push_back(std::move(out));
+                ++flashes_;
+            }
+            busy_ = false;
+        }
+    }
+
+    void Stop()
+    {
+        {
+            std::lock_guard lock(mutex_);
+            stop_ = true;
+        }
+        wake_.notify_all();
+        if (worker_.joinable()) { worker_.join(); }
+        std::lock_guard lock(mutex_);
+        stop_ = false;
+        hasJob_ = false;
+        busy_ = false;
+    }
+
+    std::thread worker_;
+    std::mutex mutex_;
+    std::condition_variable wake_;
+    Job job_;
+    bool hasJob_{false};
+    bool busy_{false};
+    bool stop_{false};
+    std::vector<Flash> ready_;
+    std::atomic<u64> flashes_{0};
+    bool started_{false};
+    f64 pending_{0.0};
+    f64 lastTime_{-1.0};
+    f64 chargeBoost_{1.0};
+    f64 breakdownScale_{1.0};
+    u32 originI_{0}, originJ_{0}, cells_{0}, nz_{0};
+    f32 spacing_{500.0F};
 };
 
 u64 Mix64(u64 x)
@@ -130,6 +378,9 @@ struct StudioViewportRenderer::StormRuntime
     u64 steps{0};
     f64 stepMilliseconds{0.0};
     bool exported{false};
+    StormLightningFeed lightning;
+    u64 readId{~0ULL};
+    std::unique_ptr<weather_lab::FastStormSolver> cpuRead;   // the parent's state read back for the lightning
 
     struct Cached
     {
@@ -348,6 +599,7 @@ void StudioViewportRenderer::UpdateStormDomain(
         }
         if (switched)
         {
+            rt.lightning.Reset();
             rt.haveState = false;
             rt.exported = false;
         }
@@ -475,6 +727,62 @@ void StudioViewportRenderer::UpdateStormDomain(
         {
             cloudRenderer_.SetStormBuffer(nullptr);
         }
+
+        // ---- lightning from the storm's own charge (the flashes light the clouds when ORBIT_CLOUD_POINT_LIGHTS=1)
+        const StormLightningSettings lightningSettings = stormMailbox_.Lightning();
+        if (!stillBehind && intensity > 0.0 && lightningSettings.enabled)
+        {
+            if (!rt.cpuRead || rt.readId != wanted.id)
+            {
+                rt.cpuRead = std::make_unique<weather_lab::FastStormSolver>(wanted.config);
+                rt.readId = wanted.id;
+                rt.lightning.Reset();
+            }
+            std::vector<StormLightningFeed::Flash> flashes = rt.lightning.Update(*rt.solver, *rt.cpuRead, rt.solver->Time(), lightningSettings);
+            if (!flashes.empty())
+            {
+                const f64 cl = std::cos(latitude), sl = std::sin(latitude), co = std::cos(longitude), so = std::sin(longitude);
+                const math::Double3 centre{planetRadiusMeters * cl * co, planetRadiusMeters * sl, -planetRadiusMeters * cl * so};
+                const math::Double3 east{-so, 0.0, -co};
+                const math::Double3 north{-sl * co, cl, sl * so};
+                const math::Double3 up{cl * co, sl, -cl * so};
+                const f64 stretch = lightningSettings.slowMotion;
+                const f64 dxm = wanted.config.dx, dym = wanted.config.dy;
+                const f64 offsetE = (static_cast<f64>(rt.lightning.OriginI()) - 0.5 * wanted.config.nx) * dxm;
+                const f64 offsetN = (static_cast<f64>(rt.lightning.OriginJ()) - 0.5 * wanted.config.ny) * dym;
+                for (auto& flash : flashes)
+                {
+                    f64 end = 0.0;
+                    for (std::size_t i = 0; i < flash.graph.Segments().size(); ++i)
+                    {
+                        optical_transport::Segment& segment = flash.graph.At(static_cast<std::int32_t>(i));
+                        // The pulse times are on the electrification clock; the registry wants them relative to the flash.
+                        segment.formedAt = (segment.formedAt - flash.startSeconds) * stretch;
+                        for (auto& pulse : segment.pulses)
+                        {
+                            pulse.startTime = (pulse.startTime - flash.startSeconds) * stretch;
+                            pulse.duration *= stretch;
+                            pulse.radiantEnergy *= stretch;
+                            end = std::max(end, pulse.startTime + pulse.duration);
+                        }
+                        for (double* p : {segment.from, segment.to})
+                        {
+                            const math::Double3 world = east * (offsetE + p[0]) + north * (offsetN + p[1]) + up * p[2];
+                            p[0] = world.x;
+                            p[1] = world.y;
+                            p[2] = world.z;
+                        }
+                    }
+                    // Spread the flashes of one job over the time it covers, so they do not arrive in a burst.
+                    transientFlashes_.Add(std::move(flash.graph), centre, FlashClockSeconds() + std::min(flash.delaySeconds, 10.0), end + 1.0);
+                }
+            }
+        }
+        else if (stillBehind)
+        {
+            rt.lightning.Reset();
+        }
+        status.lightningFlashes = rt.lightning.FlashCount();
 
         status.state = StormStatus::State::Active;
         status.message = stillBehind ? "catching up to the simulation clock" : "running";

@@ -131,6 +131,24 @@ int main()
     reloads.Publish(published);
     Check(reloads.Status().shaderReloads == 1U && !reloads.Status().shaderReload.empty(), "the reload result survives the render thread's status updates");
 
+    // Lightning settings: validated, kept, read back.
+    StormDomainMailbox lightning;
+    Check(lightning.Lightning().enabled && lightning.Lightning().slowMotion == 1.0 && lightning.Lightning().chargeBoost == 1.0, "lightning defaults to real time and normal charging");
+    StormLightningSettings unstable;
+    unstable.slowMotion = 100.0;
+    unstable.chargeBoost = 50.0;
+    unstable.breakdownScale = 0.25;
+    Check(lightning.SetLightning(unstable).empty() && lightning.Lightning().chargeBoost == 50.0 && lightning.Lightning().breakdownScale == 0.25, "valid lightning settings are stored");
+    StormLightningSettings tooSlow = unstable;
+    tooSlow.slowMotion = 0.5;
+    Check(!lightning.SetLightning(tooSlow).empty(), "slow motion below 1 is rejected");
+    tooSlow = unstable;
+    tooSlow.breakdownScale = 0.0;
+    Check(!lightning.SetLightning(tooSlow).empty(), "a breakdown scale of 0 is rejected");
+    tooSlow = unstable;
+    tooSlow.chargeBoost = 1.0e9;
+    Check(!lightning.SetLightning(tooSlow).empty() && lightning.Lightning().slowMotion == 100.0, "a rejected request leaves the stored settings alone");
+
     if (failures == 0) { std::printf("StormDomain: all checks passed\n"); }
     return failures == 0 ? 0 : 1;
 }

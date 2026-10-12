@@ -1232,6 +1232,29 @@ def orbit_storm_reload_shaders(path: str = "") -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_storm_lightning(
+    enabled: bool | None = None,
+    slow_motion: float | None = None,
+    charge_boost: float | None = None,
+    breakdown_scale: float | None = None,
+) -> dict[str, Any]:
+    """Lightning from the simulated storm's own charge (graupel, ice, supercooled
+    water, updraft). Omitted parameters keep their value. For testing:
+    slow_motion (1 to 2000) stretches every flash by that factor at the same
+    power so one frame can catch it; charge_boost (1 to 10000) multiplies the
+    charging rate; breakdown_scale (0.02 to 1) lowers the field at which air
+    breaks down (electrically unstable). Changing the boost or breakdown
+    restarts the charge. Clouds are lit by the flashes when Studio runs with
+    ORBIT_CLOUD_POINT_LIGHTS=1. Returns the settings and lightning_flashes."""
+    params: dict[str, Any] = {}
+    for key, value in (("enabled", enabled), ("slow_motion", slow_motion),
+                       ("charge_boost", charge_boost), ("breakdown_scale", breakdown_scale)):
+        if value is not None:
+            params[key] = value
+    return _rpc("storm.lightning", params)
+
+
+@mcp.tool()
 def orbit_storm_clear() -> dict[str, Any]:
     """Remove the simulated storm domain; the procedural clouds return."""
     return _rpc("storm.clear")

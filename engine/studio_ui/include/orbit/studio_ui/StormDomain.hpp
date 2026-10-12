@@ -66,11 +66,23 @@ struct StormStatus
     bool catchingUp{false};      // the solver is stepping to the current time and nothing is drawn yet
     u32 checkpoints{0};          // saved states of this storm; a time jump restarts from the nearest
     f64 checkpointMiB{0.0};      // memory of all cached checkpoints
+    u64 lightningFlashes{0U};    // flashes the storm's own charge has produced since it started (or since the last time jump)
     u32 scheduledNearby{0};      // live scheduled storms within the search radius
     bool nested{false};          // the storm being drawn has a child grid
     f32 childSpacingMeters{0.0F};
     std::string shaderReload;    // the last storm shader reload: "" never, "ok <file>" or "failed: <compile error>"
     u32 shaderReloads{0};        // successful reloads so far
+};
+
+// The lightning the simulated storm produces from its own charge (storm.lightning). The last three are for testing: a real storm flashes
+// for milliseconds a few times a minute, which is hard to look at; `slowMotion` stretches every flash (keeping its power), `chargeBoost`
+// multiplies the charging rate and `breakdownScale` lowers the field at which air breaks down, so the storm is electrically unstable.
+struct StormLightningSettings
+{
+    bool enabled{true};
+    f64 slowMotion{1.0};      // 1 to 2000
+    f64 chargeBoost{1.0};     // 1 to 10000
+    f64 breakdownScale{1.0};  // 0.02 to 1
 };
 
 [[nodiscard]] const char* StormStateName(StormStatus::State state) noexcept;
@@ -90,6 +102,9 @@ public:
     // Queues a reload of the storm kernels from `path` (empty: the embedded copy). The hot-iteration handler and storm.reload_shaders both
     // call this; the render thread does the reload.
     void RequestShaderReload(const std::string& path);
+    // Validates and stores the lightning settings; returns the problem, or an empty string. Read by the render thread every frame.
+    [[nodiscard]] std::string SetLightning(const StormLightningSettings& settings);
+    [[nodiscard]] StormLightningSettings Lightning() const;
 
     // Render thread.
     [[nodiscard]] std::optional<StormPlaceRequest> TakePlace();
@@ -108,6 +123,7 @@ private:
     std::string reloadMessage_;
     u32 reloadCount_{0};
     StormAutoRequest autoSetting_;
+    StormLightningSettings lightning_;
     StormStatus status_;
 };
 

@@ -813,7 +813,8 @@ void ENTRY_ExportCloud(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= P.nx || id.y >= P.ny || id.z >= P.nz) { return; }
     const uint idx = (id.z * P.ny + id.y) * P.nx + id.x;
-    g_out[P.outOffset + idx] = CellSigma(id.z, idx);
+    // arg0 = 1 writes only the rain's share (the renderer turns it into shafts); 0 the whole extinction.
+    g_out[P.outOffset + idx] = P.arg0 == 1u ? (Moist() ? 3.0 * S(3u, idx) * BDensity(id.z) : 0.0) : CellSigma(id.z, idx);
 }
 
 // Where the simulation has cloud nearby: the renderer keeps the procedural clouds wherever this is 0 (the simulation has no shallow

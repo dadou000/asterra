@@ -104,7 +104,10 @@ public:
     // Fills the whole child from the parent's current state (the start of a nest).
     void FillFromParent(const ParentLink& link);
     // Like ExportCloud's extinction pass but into another solver's cloud buffer at `offsetFloats` (a child into its parent's buffer).
-    void ExportCloudInto(rhi::Buffer& out, std::uint32_t offsetFloats);
+    // With `rainOnly` it writes the rain part of the extinction instead (the renderer's shafts).
+    void ExportCloudInto(rhi::Buffer& out, std::uint32_t offsetFloats, bool rainOnly = false);
+    // Index in the cloud buffer of the rain part of the extinction (the child's cells follow the parent's), header word 11.
+    [[nodiscard]] std::uint32_t RainOffset() const;
     // For the nesting: the arena, the offset of the current state copy and of the start-of-step snapshot, in floats.
     [[nodiscard]] rhi::Buffer& Arena();
     [[nodiscard]] std::uint32_t CurrentOffset() const;

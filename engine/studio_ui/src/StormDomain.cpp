@@ -33,6 +33,7 @@ Value StatusValue(const StormStatus& s)
         {"catching_up", s.catchingUp},
         {"checkpoints", static_cast<f64>(s.checkpoints)},
         {"checkpoint_mib", s.checkpointMiB},
+        {"lightning_flashes", static_cast<f64>(s.lightningFlashes)},
         {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)},
         {"shader_reload", s.shaderReload},
         {"shader_reloads", static_cast<f64>(s.shaderReloads)},
@@ -128,6 +129,22 @@ std::optional<StormAutoRequest> StormDomainMailbox::TakeAuto()
     auto request = auto_;
     auto_.reset();
     return request;
+}
+
+std::string StormDomainMailbox::SetLightning(const StormLightningSettings& settings)
+{
+    if (!(settings.slowMotion >= 1.0 && settings.slowMotion <= 2000.0)) { return "slow_motion must be 1 to 2000"; }
+    if (!(settings.chargeBoost >= 1.0 && settings.chargeBoost <= 10000.0)) { return "charge_boost must be 1 to 10000"; }
+    if (!(settings.breakdownScale >= 0.02 && settings.breakdownScale <= 1.0)) { return "breakdown_scale must be 0.02 to 1"; }
+    const std::scoped_lock lock(mutex_);
+    lightning_ = settings;
+    return {};
+}
+
+StormLightningSettings StormDomainMailbox::Lightning() const
+{
+    const std::scoped_lock lock(mutex_);
+    return lightning_;
 }
 
 void StormDomainMailbox::RequestShaderReload(const std::string& path)
@@ -313,6 +330,43 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
             }
             mailbox.RequestShaderReload(path);
             return StatusValue(mailbox.Status());
+        });
+
+    dispatcher.Register(
+        {
+            .name = "storm.lightning",
+            .description =
+                "Lightning from the simulated storm's own graupel, ice, supercooled water and updraft (storm_electrification on a worker thread, "
+                "flashes handed to the transient flash registry; clouds are lit by them when Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1). "
+                "Parameters (all optional, the rest keep their value): `enabled` (default true), and for testing `slow_motion` (1 to 2000: every "
+                "flash lasts that many times longer at the same power, so one frame can catch it), `charge_boost` (1 to 10000: multiplies the "
+                "charging rate) and `breakdown_scale` (0.02 to 1: scales the field at which air breaks down, lower = electrically unstable). "
+                "Changing the boost or the breakdown restarts the charge. Returns `error`, the settings and `lightning_flashes` from storm.status.",
+            .mutating = true
+        },
+        [&mailbox](const Value& params)
+        {
+            StormLightningSettings settings = mailbox.Lightning();
+            if (params.IsObject())
+            {
+                if (const Value* enabled = params.Find("enabled"); enabled != nullptr)
+                {
+                    if (!enabled->IsBool()) { throw rpc::Error(kBadParams, "enabled must be a boolean."); }
+                    settings.enabled = enabled->AsBool();
+                }
+                settings.slowMotion = Optional(params, "slow_motion", settings.slowMotion);
+                settings.chargeBoost = Optional(params, "charge_boost", settings.chargeBoost);
+                settings.breakdownScale = Optional(params, "breakdown_scale", settings.breakdownScale);
+            }
+            const std::string error = mailbox.SetLightning(settings);
+            const StormLightningSettings now = mailbox.Lightning();
+            Value::Object result{{"error", error},
+                {"enabled", now.enabled},
+                {"slow_motion", now.slowMotion},
+                {"charge_boost", now.chargeBoost},
+                {"breakdown_scale", now.breakdownScale},
+                {"lightning_flashes", static_cast<f64>(mailbox.Status().lightningFlashes)}};
+            return result;
         });
 
     dispatcher.Register(

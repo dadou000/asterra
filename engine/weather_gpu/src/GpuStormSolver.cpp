@@ -116,7 +116,7 @@ struct GpuStormSolver::Impl
         const u64 auxFloats = 2ULL * (nScalars > 0U ? nScalars - 1U : 0U) * cfg.nz + nScalars + 8U;
         offSnap = static_cast<u32>(static_cast<u64>(offAux) + auxFloats);
         totalFloats = static_cast<u64>(offSnap) + (options.snapshot ? copyFloats : 0ULL);
-        cloudCells = cells + options.cloudExtraCells + 2U * plane;   // + the two scratch maps of the influence pass
+        cloudCells = 2U * (cells + options.cloudExtraCells) + 2U * plane;   // extinction, the two scratch maps of the influence pass, then the rain part of the extinction
         bytes = static_cast<std::size_t>(totalFloats * sizeof(f32));
 
         arena = device.CreateBuffer({.sizeBytes = totalFloats * sizeof(f32), .usage = rhi::BufferUsage::Structured,
@@ -579,13 +579,14 @@ void GpuStormSolver::FillFromParent(const ParentLink& link)
     s.Submit();
 }
 
-void GpuStormSolver::ExportCloudInto(rhi::Buffer& out, const std::uint32_t offsetFloats)
+void GpuStormSolver::ExportCloudInto(rhi::Buffer& out, const std::uint32_t offsetFloats, const bool rainOnly)
 {
     Impl& s = *impl_;
     s.Begin();
     s.commands->Transition(out, rhi::ResourceState::ShaderResource, rhi::ResourceState::UnorderedAccess);
     Params p = s.Base();
     p.outOffset = offsetFloats;
+    p.arg0 = rainOnly ? 1U : 0U;
     s.outBuffer = &out;
     s.Run("ExportCloud", p, (s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, s.cfg.nz);
     s.outBuffer = nullptr;
@@ -645,6 +646,12 @@ std::size_t GpuStormSolver::CheckpointBytes() const { return static_cast<std::si
 
 rhi::Buffer& GpuStormSolver::CloudBuffer() { return *impl_->cloudOut; }
 
+std::uint32_t GpuStormSolver::RainOffset() const
+{
+    const Impl& s = *impl_;
+    return 32U + s.cells + s.options.cloudExtraCells + 2U * s.plane;
+}
+
 void GpuStormSolver::ExportCloud(const StormPlacement& placement)
 {
     Impl& s = *impl_;
@@ -667,6 +674,7 @@ void GpuStormSolver::ExportCloud(const StormPlacement& placement)
     header[20] = placement.fadeMeters > 0.0F ? placement.fadeMeters : sponge;
     header[21] = std::clamp(placement.intensity, 0.0F, 1.0F);
     header[10] = static_cast<f32>(32U + s.cells + s.options.cloudExtraCells);   // the influence map follows the child's cells
+    header[11] = static_cast<f32>(RainOffset());   // the rain part of the extinction follows the influence map and its scratch
     if (placement.child.present)
     {
         header[22] = 1.0F;
@@ -695,6 +703,19 @@ void GpuStormSolver::ExportCloud(const StormPlacement& placement)
     s.commands->SetComputeBuffer(2U, *s.cloudOut);
     s.commands->Dispatch((s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, s.cfg.nz);
     s.commands->UavBarrier(*s.cloudOut);
+    {
+        // The rain part of the extinction (the renderer shapes it into shafts); the child's follows the parent's cells.
+        Params r = s.Base();
+        r.outOffset = RainOffset();
+        r.arg0 = 1U;
+        s.commands->SetComputePipeline(*s.pipelines.at("ExportCloud"));
+        s.commands->SetComputeConstants(std::span<const u32>(reinterpret_cast<const u32*>(&r), sizeof(Params) / 4U));
+        s.commands->SetComputeBuffer(0U, *s.arena);
+        s.commands->SetComputeBuffer(1U, *s.baseBuffer);
+        s.commands->SetComputeBuffer(2U, *s.cloudOut);
+        s.commands->Dispatch((s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, s.cfg.nz);
+        s.commands->UavBarrier(*s.cloudOut);
+    }
     // The influence map: column optical depth, then a separable maximum over about 40 km, mapped to 0..1.
     const u32 radiusCells = static_cast<u32>(std::clamp(40000.0F / s.cfg.dx, 4.0F, 40.0F));
     const u32 mapOffset = 32U + s.cells + s.options.cloudExtraCells;

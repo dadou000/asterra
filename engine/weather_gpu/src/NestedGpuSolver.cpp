@@ -147,6 +147,7 @@ void NestedGpuSolver::ExportCloud(StormPlacement placement)
     placement.child.blendMeters = static_cast<float>(s.cfg.relaxCells) * c.dx;
     s.parent->ExportCloud(placement);
     s.child->ExportCloudInto(s.parent->CloudBuffer(), placement.child.dataOffset);
+    s.child->ExportCloudInto(s.parent->CloudBuffer(), s.parent->RainOffset() + s.parent->CellCount(), true);
 }
 
 rhi::Buffer& NestedGpuSolver::CloudBuffer() { return impl_->parent->CloudBuffer(); }

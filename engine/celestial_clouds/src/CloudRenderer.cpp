@@ -723,20 +723,25 @@ float StormMask(float3 position, float radius)
     return SmoothRange(0.0, max(g_storm[20], 1.0), edge) * g_storm[21] * StormInfluence(x, y);
 }
 
-float StormCell(int3 c)
+// x: the whole extinction of the cell, y: the rain's part of it (header [11] = index of that region, 0 = none).
+float2 StormCell(int3 c)
 {
     const int nx = (int)g_storm[17], ny = (int)g_storm[18], nz = (int)g_storm[19];
     const int3 q = int3(clamp(c.x, 0, nx - 1), clamp(c.y, 0, ny - 1), clamp(c.z, 0, nz - 1));
-    return g_storm[32 + (q.z * ny + q.y) * nx + q.x];
+    const int i = (q.z * ny + q.y) * nx + q.x;
+    const int rain = (int)g_storm[11];
+    return float2(g_storm[32 + i], rain > 0 ? g_storm[rain + i] : 0.0);
 }
 
 // The nest's child level (header [22] present, [23..24] dx dy, [25..27] dimensions, [28..29] centre offset from the parent's centre,
 // [30] index of its first cell, [31] blend width): the same vertical grid, finer in the horizontal.
-float StormCellChild(int3 c)
+float2 StormCellChild(int3 c)
 {
     const int nx = (int)g_storm[25], ny = (int)g_storm[26], nz = (int)g_storm[27];
     const int3 q = int3(clamp(c.x, 0, nx - 1), clamp(c.y, 0, ny - 1), clamp(c.z, 0, nz - 1));
-    return g_storm[(int)g_storm[30] + (q.z * ny + q.y) * nx + q.x];
+    const int i = (q.z * ny + q.y) * nx + q.x;
+    const int rain = (int)g_storm[11];
+    return float2(g_storm[(int)g_storm[30] + i], rain > 0 ? g_storm[rain + (int)g_storm[30] - 32 + i] : 0.0);
 }
 
 // Surface detail of the simulated storm (CLOUD_STORM_DETAIL, default 1): the grid is 500 m to 2 km, so up close the density is a smooth
@@ -754,6 +759,16 @@ float StormCellChild(int3 c)
 #endif
 // Density (1/m) above which the carve stops: the visible surface of a thick cloud is where the line of sight has gathered an optical depth
 // of about 1, so the carve has to reach well past the thin fringe.
+// Rain shafts (CLOUD_STORM_SHAFTS_ON=0 removes them, CLOUD_STORM_SHAFTS = how much of the streak pattern shows).
+#ifndef CLOUD_STORM_SHAFTS_ON
+#define CLOUD_STORM_SHAFTS_ON 1
+#endif
+#ifndef CLOUD_STORM_RAIN
+#define CLOUD_STORM_RAIN 1.0
+#endif
+#ifndef CLOUD_STORM_SHAFTS
+#define CLOUD_STORM_SHAFTS 1.0
+#endif
 #ifndef CLOUD_STORM_CORE
 #define CLOUD_STORM_CORE 0.12
 #endif
@@ -786,11 +801,11 @@ float StormSigma(float3 position, float radius, float footprint)
     t = t * t * (3.0 - 2.0 * t);
 #endif
     const int3 c = int3(f);
-    const float a = lerp(lerp(StormCell(c), StormCell(c + int3(1, 0, 0)), t.x),
+    const float2 a = lerp(lerp(StormCell(c), StormCell(c + int3(1, 0, 0)), t.x),
         lerp(StormCell(c + int3(0, 1, 0)), StormCell(c + int3(1, 1, 0)), t.x), t.y);
-    const float b = lerp(lerp(StormCell(c + int3(0, 0, 1)), StormCell(c + int3(1, 0, 1)), t.x),
+    const float2 b = lerp(lerp(StormCell(c + int3(0, 0, 1)), StormCell(c + int3(1, 0, 1)), t.x),
         lerp(StormCell(c + int3(0, 1, 1)), StormCell(c + int3(1, 1, 1)), t.x), t.y);
-    float sigma = lerp(a, b, t.z);
+    float2 both = lerp(a, b, t.z);
     if (g_storm[22] > 0.5)
     {
         const float childX = x - g_storm[28];
@@ -807,13 +822,31 @@ float StormSigma(float3 position, float radius, float footprint)
             ct = ct * ct * (3.0 - 2.0 * ct);
 #endif
             const int2 cc = int2(cf);
-            const float ca = lerp(lerp(StormCellChild(int3(cc, c.z)), StormCellChild(int3(cc + int2(1, 0), c.z)), ct.x),
+            const float2 ca = lerp(lerp(StormCellChild(int3(cc, c.z)), StormCellChild(int3(cc + int2(1, 0), c.z)), ct.x),
                 lerp(StormCellChild(int3(cc + int2(0, 1), c.z)), StormCellChild(int3(cc + int2(1, 1), c.z)), ct.x), ct.y);
-            const float cb = lerp(lerp(StormCellChild(int3(cc, c.z + 1)), StormCellChild(int3(cc + int2(1, 0), c.z + 1)), ct.x),
+            const float2 cb = lerp(lerp(StormCellChild(int3(cc, c.z + 1)), StormCellChild(int3(cc + int2(1, 0), c.z + 1)), ct.x),
                 lerp(StormCellChild(int3(cc + int2(0, 1), c.z + 1)), StormCellChild(int3(cc + int2(1, 1), c.z + 1)), ct.x), ct.y);
-            sigma = lerp(sigma, lerp(ca, cb, t.z), inside);
+            both = lerp(both, lerp(ca, cb, t.z), inside);
         }
     }
+    float sigma = both.x;
+#if CLOUD_STORM_SHAFTS_ON
+    // Rain falls in shafts: streaks a few hundred metres wide, leaning with height, with clear air between them. The mean stays about 1
+    // so the far view keeps the simulated amount; the streaks fade out as a pixel gets wider than them.
+    if (both.y > 1.0e-6)
+    {
+        const float amount = 1.0 - SmoothRange(0.5, 3.0, footprint / 150.0);
+        if (amount > 0.0)
+        {
+            const float lean = altitude * 0.25;
+            const float3 q = float3(x + lean, y + 0.4 * lean, altitude * 0.03);
+            const float streaks = 0.6 * SampleNoise(q / 320.0 + 5.0).g + 0.4 * SampleNoise(q / 110.0 + 23.0).b;
+            const float shaft = saturate(0.5 + (streaks - 0.5) * 2.6);
+            const float rain = min(both.y, sigma);
+            sigma += rain * (CLOUD_STORM_RAIN * lerp(1.0, 0.04 + 2.0 * shaft, amount * CLOUD_STORM_SHAFTS) - 1.0);
+        }
+    }
+#endif
 #if CLOUD_STORM_DETAIL
     if (sigma > 1.0e-6)
     {

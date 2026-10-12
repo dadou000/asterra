@@ -157,6 +157,22 @@ int RunTests()
     Check(peak > 0.005F && peak < 5.0F);   // a cloud exists, and its extinction is a plausible fraction of 1 per metre
     Check(total > 0.0);
 
+    // The rain's share of the extinction (header word 11 = where it starts): never negative, never more than the whole, and present once
+    // the bubble has produced rain.
+    {
+        const std::uint32_t rainAt = gpu.RainOffset();
+        Check(static_cast<std::uint32_t>(out[11]) == rainAt);
+        const std::vector<float> withRain = ReadBuffer(*device, gpu.CloudBuffer(), rainAt + cells);
+        double rainTotal = 0.0;
+        for (std::size_t i = 0; i < cells; ++i)
+        {
+            const float rain = withRain[rainAt + i];
+            Check(std::isfinite(rain) && rain >= 0.0F && rain <= withRain[32 + i] * 1.0001F + 1.0e-9F);
+            rainTotal += rain;
+        }
+        Check(rainTotal >= 0.0 && rainTotal < total);
+    }
+
     // Determinism and checkpoints: two independent solvers agree bit for bit, and restoring a mid-run checkpoint and stepping on gives
     // exactly the state of the run that never stopped. This is what lets a storm be recomputed after a timewarp.
     {

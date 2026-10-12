@@ -4,6 +4,7 @@
 #include <orbit/storm_electrification/LeaderSimulation.hpp>
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace orbit::storm_electrification
@@ -34,6 +35,9 @@ public:
     // `maxSteps` > 0 bounds the work of one call: when more steps are due, the surplus is dropped (the storm falls behind
     // its requested pace instead of stalling the caller, so the next call never starts further behind).
     std::vector<FlashResult> Advance(double wallSeconds, std::uint32_t maxSteps = 0);
+
+    // Replaces the fields of a live storm (same grid) while the charge state carries on: a simulated storm changes as it runs.
+    void UpdateFields(StormFields fields) { fields_ = std::move(fields); }
 
     [[nodiscard]] double SimulatedSeconds() const { return simulated_; }
     [[nodiscard]] double MaxBreakdownRatio() const;

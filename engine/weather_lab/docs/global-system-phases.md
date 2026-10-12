@@ -39,6 +39,8 @@ Then **P8, three loose ends**: the child-edge artifact, hot reload of the storm 
 
 Then **P9, close-range quality** (the storm was right from 60 km and plastic from 13 km): a detail pass in the cloud shader, first slice built, see `global-system-status-p9`.
 
+Then **P10, rain and lightning**: the rain as its own channel (shafts) and flashes from the storm's own charge, with slow-motion and instability levers for testing, see `global-system-status-p10`.
+
 ## Time and determinism
 
 - A domain is a function of its placement trigger (planet, location, start time, seed) and the analytic map; state at time t is the nearest stored checkpoint at or before t plus a deterministic integration. Checkpoints are written at a fixed cadence and versioned with the solver generation.
