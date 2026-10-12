@@ -74,7 +74,13 @@ struct StormStatus
     u32 lightningArcSegments{0U};  // channel segments the arc overlay drew in the last frame that had any
     u64 lightningGroundFlashes{0U};   // of those, the ones that reached the ground (cloud to ground, with a return stroke)
     u64 lightningFlashes{0U};    // flashes the storm's own charge has produced since it started (or since the last time jump)
-    u32 scheduledNearby{0};      // live scheduled storms within the search radius
+    u32 scheduledNearby{0};
+    // Read-only live planetary discovery diagnostics, independent of storm rendering.
+    u32 discoveredZones{0};
+    u32 zoneCandidateProbes{0};
+    u64 zoneGeneration{0};
+    f64 zoneSnapshotSeconds{0.0};
+    bool zoneSurveyBusy{false};      // live scheduled storms within the search radius
     bool nested{false};          // the storm being drawn has a child grid
     f32 childSpacingMeters{0.0F};
     std::string shaderReload;    // the last storm shader reload: "" never, "ok <file>" or "failed: <compile error>"
