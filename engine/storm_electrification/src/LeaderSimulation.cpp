@@ -1,8 +1,10 @@
 #include "orbit/storm_electrification/LeaderSimulation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace orbit::storm_electrification
@@ -72,6 +74,7 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
     // Channel bookkeeping: cell -> segment index of the segment that created it (root has parent -1).
     std::vector<Cell> channel{{si, sj, sk}};
     std::unordered_map<std::uint64_t, std::int32_t> segmentOf;
+    std::unordered_set<std::uint64_t> hasChild;   // cells that already grew a branch
     segmentOf[key(channel[0])] = -1;
     double channelPotential = grid.Potential()[grid.Index(si, sj, sk)];
     double groundTime = 0.0;
@@ -126,7 +129,16 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
     // Growth rounds: every round each tip may extend; the channel front moves at leaderSpeed.
     double time = startTime;
     std::uint32_t round = 0;
-    const int d[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    // Neighbour steps: the 6 face neighbours, or all 26 when the channel may run diagonally.
+    std::vector<std::array<int, 3>> d;
+    for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dz = -1; dz <= 1; ++dz)
+            {
+                const int nonzero = (dx != 0) + (dy != 0) + (dz != 0);
+                if (nonzero == 0 || (nonzero > 1 && !p.diagonalGrowth)) continue;
+                d.push_back({dx, dy, dz});
+            }
     std::uint32_t idleRounds = 0;
     while (channel.size() < p.maxChannelCells && !budgetReached() && idleRounds < p.stagnationRounds)
     {
@@ -136,19 +148,8 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
         std::unordered_map<std::uint64_t, std::size_t> best;
         for (const Cell& c : channel)
         {
-            if (p.sideBranchChance < 1.0)
-            {
-                // Only the tips extend, plus an occasional side branch from the middle of the channel.
-                int neighbours = 0;
-                for (const auto& dir : d)
-                {
-                    const long nx = static_cast<long>(c.i) + dir[0], ny = static_cast<long>(c.j) + dir[1], nz = static_cast<long>(c.k) + dir[2];
-                    if (nx < 0 || ny < 0 || nz < 0) continue;
-                    const Cell around{static_cast<std::uint32_t>(nx), static_cast<std::uint32_t>(ny), static_cast<std::uint32_t>(nz)};
-                    if (segmentOf.count(key(around))) ++neighbours;
-                }
-                if (neighbours > 1 && rng.Uniform() > p.sideBranchChance) continue;
-            }
+            // Only the tips (cells with no child yet) extend, plus an occasional side branch from the middle of the channel.
+            if (p.sideBranchChance < 1.0 && hasChild.count(key(c)) && rng.Uniform() > p.sideBranchChance) continue;
             for (const auto& dir : d)
             {
                 const long x = static_cast<long>(c.i) + dir[0], y = static_cast<long>(c.j) + dir[1], z = static_cast<long>(c.k) + dir[2];
@@ -161,7 +162,8 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                 const double threshold = p.propagationField * DensityFactor(p, grid.Height(n.k));
                 // Positive end extends toward lower potential, negative end toward higher: either way the potential
                 // step across the new cell must beat the propagation field.
-                const double excess = std::abs(phi - channelPotential) / h - threshold;
+                const double stepLength = h * std::sqrt(static_cast<double>(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]));
+                const double excess = std::abs(phi - channelPotential) / stepLength - threshold;
                 if (excess <= 0.0) continue;
                 const double weight = p.growthExponent == 1.0 ? excess : std::pow(excess, p.growthExponent);
                 const auto found = best.find(key(n));
@@ -195,6 +197,7 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
             candidates.erase(candidates.begin() + static_cast<std::ptrdiff_t>(chosen));
             if (segmentOf.count(key(pick.cell))) continue;
             const std::int32_t index = addCellSegment(pick.parent, pick.cell, time);
+            hasChild.insert(key(pick.parent));
             channel.push_back(pick.cell);
             touch(pick.cell);
             if (!grounded && static_cast<double>(pick.cell.k) < p.groundContactHeight)

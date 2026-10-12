@@ -321,6 +321,7 @@ private:
                 params.leader.sideBranchChance = 0.03;
                 params.leader.picksDivisor = 24.0;
                 params.leader.currentWeighted = true;
+                params.leader.diagonalGrowth = true;
                 // A real flash has some 50 to 200 km of channel (100 to 400 cells of 500 m); the default cap of 6000 cells let one fill the volume.
                 params.leader.maxChannelCells = 400U;
                 source = std::make_unique<storm_electrification::StormLightningSource>(

@@ -17,6 +17,9 @@ using namespace viewport_detail;
 
 namespace
 {
+// How far a node of a lightning channel (a centre of the 500 m electrification cells) is moved to hide the lattice: a quarter of a cell.
+constexpr f64 kNodeJitterMeters = 125.0;
+
 // ORBIT_REFRACT_SUN=1 turns on atmospheric refraction of the sun direction (applied where studioDirectLight is resolved). Read once.
 [[nodiscard]] bool RefractSunEnabled()
 {
@@ -336,9 +339,19 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
         // HDR colour on a logarithmic scale (the powers span eight decades): a faint leader step 0.3, an in-cloud channel about 1.5, a
         // return stroke about 3, so the structure stays readable instead of saturating to white.
         const f32 intensity = static_cast<f32>(std::clamp(0.3 + 0.35 * std::log10(std::max(line.powerWatts, 1.0e3) / 1.0e3), 0.3, 6.0));
-        const math::Double3 direction = to - from;
+        // The electrification's cells make a lattice; every node (a cell centre) is moved by a hash of its own position, so the segments that
+        // meet in it still meet, and the lattice is not recognisable.
+        const auto nodeShift = [&](const math::Double3& world) {
+            u64 h = 0x9E3779B97F4A7C15ULL;
+            for (const f64 v : {world.x, world.y, world.z}) { h = (h ^ quantised(v)) * 0x100000001B3ULL + 0x7F4A7C15ULL; }
+            return math::Double3{(unit(h) - 0.5) * 2.0 * kNodeJitterMeters, (unit(h + 1U) - 0.5) * 2.0 * kNodeJitterMeters,
+                                 (unit(h + 2U) - 0.5) * 2.0 * kNodeJitterMeters};
+        };
+        const math::Double3 fromJittered = from + nodeShift(line.from);
+        const math::Double3 toJittered = to + nodeShift(line.to);
+        const math::Double3 direction = toJittered - fromJittered;
         const f64 length = std::sqrt(math::Dot(direction, direction));
-        math::Double3 points[5] = {from, {}, {}, {}, to};
+        math::Double3 points[5] = {fromJittered, {}, {}, {}, toJittered};
         if (length > 1.0)
         {
             const math::Double3 axis = direction * (1.0 / length);
@@ -354,15 +367,16 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
             const auto jitter = [&](const u64 k, const f64 amount) {
                 return p1 * ((unit(seed + 2U * k) - 0.5) * 2.0 * amount * length) + p2 * ((unit(seed + 2U * k + 1U) - 0.5) * 2.0 * amount * length);
             };
-            points[2] = mid + jitter(1U, 0.30);
-            points[1] = (from + points[2]) * 0.5 + jitter(2U, 0.15);
-            points[3] = (points[2] + to) * 0.5 + jitter(3U, 0.15);
+            const math::Double3 middle = (fromJittered + toJittered) * 0.5;
+            points[2] = middle + jitter(1U, 0.30);
+            points[1] = (fromJittered + points[2]) * 0.5 + jitter(2U, 0.15);
+            points[3] = (points[2] + toJittered) * 0.5 + jitter(3U, 0.15);
         }
         else
         {
-            points[1] = from * 0.75 + to * 0.25;
-            points[2] = mid;
-            points[3] = from * 0.25 + to * 0.75;
+            points[1] = fromJittered * 0.75 + toJittered * 0.25;
+            points[2] = (fromJittered + toJittered) * 0.5;
+            points[3] = fromJittered * 0.25 + toJittered * 0.75;
         }
         for (int k = 0; k < 4; ++k)
         {

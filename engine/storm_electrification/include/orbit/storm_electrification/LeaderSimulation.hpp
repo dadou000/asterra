@@ -50,6 +50,9 @@ struct LeaderParams
     double sideBranchChance = 1.0;
     double picksDivisor = 8.0;
     bool currentWeighted = false;
+    // The channel may step to any of the 26 neighbours of a cell (diagonals included) instead of the 6 that share a face, so it is not made of
+    // axis-aligned runs of the grid.
+    bool diagonalGrowth = false;
     std::uint64_t seed = 1;
 };
 

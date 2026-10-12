@@ -302,6 +302,38 @@ int main()
             Check(equalStrongest < 1.5 * equalMean, "the default sharing is equal");
             (void)sum;
         }
+        // Diagonal growth: the channel may step to the 26 neighbours, so some of its segments are not along an axis, and it still grows as a
+        // tree with tips (it did not stop after a few cells when "tip" meant a cell with few neighbours).
+        {
+            const auto axisAligned = [](const FlashResult& r) {
+                std::size_t aligned = 0;
+                for (const auto& seg : r.graph.Segments())
+                {
+                    int moving = 0;
+                    for (int a = 0; a < 3; ++a) { moving += std::fabs(seg.to[a] - seg.from[a]) > 1.0; }
+                    aligned += moving == 1;
+                }
+                return aligned;
+            };
+            LeaderParams grown = leader;
+            grown.growthExponent = 3.0;
+            grown.sideBranchChance = 0.03;
+            grown.picksDivisor = 24.0;
+            grown.currentWeighted = true;
+            grown.maxChannelCells = 400;
+            grown.maxFlashCharge = 1.0e9;   // not the limit here: the channel cap is
+            ChargeGrid faces(48, 48, 32, 500.0), diagonals(48, 48, 32, 500.0);
+            chargeUntilBreakdown(faces);
+            chargeUntilBreakdown(diagonals);
+            const FlashResult onFaces = TryFlash(faces, grown, chargingTime, 7);
+            grown.diagonalGrowth = true;
+            const FlashResult onDiagonals = TryFlash(diagonals, grown, chargingTime, 7);
+            Check(onFaces.occurred && onFaces.graph.Segments().size() > 50 && axisAligned(onFaces) == onFaces.graph.Segments().size(),
+                  "growing to the 6 face neighbours makes only axis-aligned segments");
+            Check(onDiagonals.occurred && onDiagonals.graph.Segments().size() > 50 &&
+                      axisAligned(onDiagonals) < onDiagonals.graph.Segments().size() * 7 / 10,
+                  "growing to the 26 neighbours makes a good share of diagonal segments and a full-size tree");
+        }
         // Timing and energy: the channel grows at the leader speed and the optical energy is finite and bounded.
         const double energy = flash.graph.EnergyInWindow(0.0, 1.0e6);
         Check(energy > 0.0 && energy < 1.0e9, "optical energy of an intracloud flash is finite and bounded");
