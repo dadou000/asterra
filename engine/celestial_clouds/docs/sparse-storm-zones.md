@@ -238,3 +238,32 @@ vorticity data from the future global atmospheric provider.
 - The source records currently represent stationary, decaying influence
   footprints. Advective transport of the actual cold-pool front and true
   boundary-layer dynamics are not implemented.
+
+## Phase 9: ordered atmospheric-exchange outbox (integration contract)
+
+- `WeatherEvolutionLedger` now gives each exported normalized precipitation
+  record an `epoch` and monotonically increasing `sequence` number, allowing
+  a consuming solver to deduplicate attempted deliveries.
+- `IWeatherExchangeConsumer::Accept(record)` is the explicit interface for
+  integrating with a future atmosphere. Acceptance means the consumer has
+  handled a record idempotently. `Deliver(consumer, budget)` preserves the
+  original order, removes only the accepted contiguous prefix, and retains
+  the failed item plus all subsequent records for retry. Zero budget does no work.
+- `Reset()` invalidates prior epoch receipt identifiers and clears the
+  experimental state. **Epoch values are currently process-local**: no restart-
+  safe stable incarnation ID, persisted journal or exactly-once crash recovery
+  exists yet. Do not enable a durable global solver consumer until those exist.
+- A record is dimensionless and cannot directly be used as SI precipitation
+  mass/area or energy/momentum flux. All actual physical feedback remains
+  explicitly disconnected. The simulation's existing cap of 4096 unconsumed
+  exports still stops the experimental evolution instead of dropping exchanges.
+- The sink interface is synchronous by design only at an explicit coupling
+  barrier; future async transports must stage durable acknowledgment on the
+  simulation owner thread. A network or GPU submission alone is not an ACK.
+- Tests in `WeatherEvolutionTests.cpp` now exercise acceptance, rejection,
+  zero-budget drain, duplicate prevention, and epoch invalidation.
+
+**Integration gate**: Phase 1–9 changes have not been verified against a
+full Orbit build or run. Before further physics development, compile the
+weather test targets on Windows and run CTest, resolve failures, and record
+wall-clock and resident-memory metrics. Existing GPU storms remain untouched.
