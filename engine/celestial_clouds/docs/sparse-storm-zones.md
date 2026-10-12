@@ -267,3 +267,36 @@ vorticity data from the future global atmospheric provider.
 full Orbit build or run. Before further physics development, compile the
 weather test targets on Windows and run CTest, resolve failures, and record
 wall-clock and resident-memory metrics. Existing GPU storms remain untouched.
+
+## Phase 10 stabilization: cadence correctness and verification gate
+
+- Fixed a numerical-scheduling defect in `WeatherMultirateScheduler`: an
+  inactive zone's preferred cadence could be 900 simulated seconds while
+  the detailed evolution backend only accepts 120 seconds. Ordinary updates
+  would therefore be permanently classified as requiring an unavailable
+  long-step backend. The preferred zone cadence is now capped by the
+  detailed solver's validated horizon. A genuinely skipped 120+ second
+  interval still requires a coarse operator; nothing falsely commits.
+- Expanded `WeatherMultirateSchedulerTests.cpp` to cover successive
+  low-activity short steps and ensure the long-step path remains explicit.
+- Tightened include dependencies in exchange-delivery tests.
+- Local environment could not resolve github.com for a repository checkout.
+  No build was executed. A GitHub status check for the preceding Phase 9
+  commit returned no CI statuses or workflow runs; absence of checks is not
+  passing validation.
+
+**Required build verification on the Windows developer machine:**
+
+```powershell
+cmake --preset <your-configured-preset>
+cmake --build --preset <your-build-preset> --target OrbitWeatherEvolutionTests OrbitWeatherMultirateSchedulerTests OrbitWeatherEmergenceTests OrbitWeatherCrossZoneFieldTests
+ctest --test-dir <your-build-directory> -C Debug -R "Orbit.(SparseStormZones|StormZoneRuntime|WeatherMultirateScheduler|WeatherEvolution|WeatherConvectiveInteractions|WeatherEmergence|WeatherCrossZoneField)" --output-on-failure
+```
+
+Replace angle-bracket placeholders with the actual repository presets and
+build folder. Do not treat an unexecuted test target as a passing test.
+
+**Additional known stabilization risks:** `std::async` future destruction may
+block when a runtime is torn down with outstanding work; a full event-queue
+or bounded worker-pool migration is needed for hard frame-time guarantees.
+Current numerical proxy constants and spatial envelopes are uncalibrated.
