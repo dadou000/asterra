@@ -495,11 +495,16 @@ def orbit_view_text_diagnostics_set(
 
 
 @mcp.tool()
-def orbit_project_discover(roots: list[str] | None = None) -> list[dict[str, Any]]:
+def orbit_project_discover(roots: list[str] | None = None, include_test_content: bool = True) -> list[dict[str, Any]]:
     """Scan the usual folders (Documents, Desktop, Downloads, Orbit's Projects
-    folder) for Orbit projects, newest first. Pass roots to scan other folders.
-    Open one with orbit_project_open."""
-    return _rpc("project.discover", {"roots": roots} if roots else {})
+    folder) and the engine's bundled examples/ folder for Orbit projects, newest
+    first. Projects under examples/ carry test_content=true; pass
+    include_test_content=False to hide them (the Project Browser's "Show test
+    content" toggle). Pass roots to scan other folders. Open one with orbit_project_open."""
+    params: dict[str, Any] = {"include_test_content": include_test_content}
+    if roots:
+        params["roots"] = roots
+    return _rpc("project.discover", params)
 
 
 @mcp.tool()

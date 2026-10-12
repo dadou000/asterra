@@ -150,16 +150,34 @@ void RegisterStudioProjectRpc(rpc::Dispatcher& dispatcher, studio_ui::ProjectAut
                             }
                         }
                     }
+                    bool includeTestContent = true;
+                    if (params.IsObject())
+                    {
+                        const auto flag = params.AsObject().find("include_test_content");
+                        if (flag != params.AsObject().end() && flag->second.IsBool())
+                        {
+                            includeTestContent = flag->second.AsBool();
+                        }
+                    }
+                    orbit::studio_session::ProjectDiscoveryOptions discoveryOptions;
+                    discoveryOptions.testContentRoots =
+                        orbit::studio_session::ProjectBrowserModel::InternalProjectFolders();
                     if (roots.empty())
                     {
                         roots = orbit::platform::UsualProjectFolders();
+                        roots.insert(roots.end(), discoveryOptions.testContentRoots.begin(),
+                                     discoveryOptions.testContentRoots.end());
                     }
 
                     Value::Array items;
                     for (const auto& project :
                          orbit::studio_session::ProjectBrowserModel::
-                             DiscoverProjects(roots))
+                             DiscoverProjects(roots, discoveryOptions))
                     {
+                        if (project.testContent && !includeTestContent)
+                        {
+                            continue;
+                        }
                         items.push_back(
                             Value(
                                 Value::Object{
@@ -173,7 +191,8 @@ void RegisterStudioProjectRpc(rpc::Dispatcher& dispatcher, studio_ui::ProjectAut
                                              text.begin(),
                                              text.end());
                                      }()},
-                                    {"name", project.displayName}
+                                    {"name", project.displayName},
+                                    {"test_content", project.testContent}
                                 }));
                     }
                     return Value(std::move(items));

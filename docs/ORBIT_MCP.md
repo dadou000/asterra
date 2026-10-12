@@ -103,7 +103,7 @@ claude mcp add orbit-docs -- python <repo>/tools/mcp_server/orbit_docs_mcp_serve
 | `orbit_studio_eco_mode(enabled?)` | `studio.eco_mode_get` / `studio.eco_mode_set` | Reads or toggles Eco pacing; an RPC request wakes the Studio loop immediately. |
 | `orbit_project_create(root, name)` | `project.create` | Creates the project at `root` and switches to it. |
 | `orbit_project_open(path)` | `project.open` | Directory or `Project.orbit.toml`. Saves the current project first. |
-| `orbit_project_discover(roots?)` | `project.discover` | Scans Documents, Desktop, Downloads and Orbit's Projects folder (up to 4 levels, 4 s budget) for projects, newest first. Same scan as the Project Browser's Find Projects section. |
+| `orbit_project_discover(roots?, include_test_content?)` | `project.discover` | Scans Documents, Desktop, Downloads, Orbit's Projects folder and the engine's `examples/` folder (up to 4 levels, 4 s budget) for projects, newest first. Projects under `examples/` are marked `test_content`; `include_test_content=false` hides them, like the browser's "Show test content" checkbox (entries show a `[test]` marker). Same scan as the Project Browser's Find Projects section. |
 | `orbit_project_recent` | `project.recent` | MRU list with `available` and `error`. |
 
 **Switching relaunches Studio.** A Studio process is bound to one project, so

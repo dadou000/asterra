@@ -87,6 +87,7 @@ private:
         discoveryFuture_;
     std::vector<studio_session::DiscoveredProject> discovered_;
     bool discoveryRan_{false};
+    bool showTestContent_{true};
     std::string newProjectRoot_;
     std::string newProjectName_{"New Orbit Project"};
     std::string openProjectPath_;
