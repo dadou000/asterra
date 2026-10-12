@@ -90,16 +90,20 @@ std::string StormDomainMailbox::Place(const StormPlaceRequest& request)
     {
         return "sponge_cells must be at most a quarter of the cells";
     }
-    const std::scoped_lock lock(mutex_);
-    place_ = request;
-    clear_ = false;
-    status_ = {};
-    status_.state = StormStatus::State::Pending;
-    status_.message = "waiting for a frame that draws clouds on the body under the primary view";
-    status_.latitudeDegrees = request.latitudeDegrees;
-    status_.longitudeDegrees = request.longitudeDegrees;
-    status_.cells = request.cells;
-    status_.spacingMeters = request.spacingMeters;
+    {
+        const std::scoped_lock lock(mutex_);
+        place_ = request;
+        manual_ = request;
+        clear_ = false;
+        status_ = {};
+        status_.state = StormStatus::State::Pending;
+        status_.message = "waiting for a frame that draws clouds on the body under the primary view";
+        status_.latitudeDegrees = request.latitudeDegrees;
+        status_.longitudeDegrees = request.longitudeDegrees;
+        status_.cells = request.cells;
+        status_.spacingMeters = request.spacingMeters;
+    }
+    NotifyChanged();
     return {};
 }
 
@@ -117,9 +121,12 @@ std::string StormDomainMailbox::SetAuto(const StormAutoRequest& request)
     {
         return "search must be 50 to 2000 km";
     }
-    const std::scoped_lock lock(mutex_);
-    auto_ = request;
-    autoSetting_ = request;
+    {
+        const std::scoped_lock lock(mutex_);
+        auto_ = request;
+        autoSetting_ = request;
+    }
+    NotifyChanged();
     return {};
 }
 
@@ -145,8 +152,11 @@ std::string StormDomainMailbox::SetLightning(const StormLightningSettings& setti
     if (!(settings.brightness >= 1.0 && settings.brightness <= 1.0e6)) { return "brightness must be 1 to 1e6"; }
     if (!(settings.flashSize >= 1.0 && settings.flashSize <= 50.0)) { return "flash_size must be 1 to 50"; }
     if (!(settings.groundStrikeChance >= 0.0 && settings.groundStrikeChance <= 1.0)) { return "ground_strike_chance must be 0 to 1"; }
-    const std::scoped_lock lock(mutex_);
-    lightning_ = settings;
+    {
+        const std::scoped_lock lock(mutex_);
+        lightning_ = settings;
+    }
+    NotifyChanged();
     return {};
 }
 
@@ -181,10 +191,38 @@ void StormDomainMailbox::PublishShaderReload(const std::string& message, const b
 
 void StormDomainMailbox::Clear()
 {
+    {
+        const std::scoped_lock lock(mutex_);
+        place_.reset();
+        manual_.reset();
+        clear_ = true;
+        status_ = {};
+    }
+    NotifyChanged();
+}
+
+StormPersistentState StormDomainMailbox::Persistent() const
+{
     const std::scoped_lock lock(mutex_);
-    place_.reset();
-    clear_ = true;
-    status_ = {};
+    return {manual_, autoSetting_, lightning_};
+}
+
+void StormDomainMailbox::SetChangeHandler(std::function<void(const StormPersistentState&)> handler)
+{
+    const std::scoped_lock lock(mutex_);
+    changed_ = std::move(handler);
+}
+
+void StormDomainMailbox::NotifyChanged()
+{
+    std::function<void(const StormPersistentState&)> handler;
+    StormPersistentState state;
+    {
+        const std::scoped_lock lock(mutex_);
+        handler = changed_;
+        state = {manual_, autoSetting_, lightning_};
+    }
+    if (handler) { handler(state); }
 }
 
 StormStatus StormDomainMailbox::Status() const
@@ -420,5 +458,83 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
             mailbox.Clear();
             return StatusValue(mailbox.Status());
         });
+}
+
+rpc::Value StormStateToValue(const StormPersistentState& state)
+{
+    Value::Object out;
+    if (state.manual.has_value())
+    {
+        const StormPlaceRequest& m = *state.manual;
+        out.insert({"manual", Value::Object{{"latitude_deg", m.latitudeDegrees}, {"longitude_deg", m.longitudeDegrees},
+            {"cells", static_cast<f64>(m.cells)}, {"spacing_m", static_cast<f64>(m.spacingMeters)}, {"bubble_k", static_cast<f64>(m.bubbleKelvin)},
+            {"spin_minutes", static_cast<f64>(m.spinMinutes)}, {"ice", m.ice}, {"sponge_cells", static_cast<f64>(m.spongeCells)},
+            {"nested", m.nested}}});
+    }
+    const StormAutoRequest& a = state.autoRequest;
+    out.insert({"auto", Value::Object{{"enabled", a.enabled}, {"seed", static_cast<f64>(a.seed)}, {"cells", static_cast<f64>(a.cells)},
+        {"spacing_m", static_cast<f64>(a.spacingMeters)}, {"search_km", static_cast<f64>(a.searchKilometres)}, {"ice", a.ice}, {"nested", a.nested}}});
+    const StormLightningSettings& l = state.lightning;
+    out.insert({"lightning", Value::Object{{"enabled", l.enabled}, {"slow_motion", l.slowMotion}, {"charge_boost", l.chargeBoost},
+        {"breakdown_scale", l.breakdownScale}, {"brightness", l.brightness}, {"arcs", l.arcs}, {"pause_on_strike", l.pauseOnStrike},
+        {"frame_strike", l.frameStrike}, {"show_grid", l.showGrid}, {"flash_size", l.flashSize}, {"ground_strike_chance", l.groundStrikeChance}}});
+    return out;
+}
+
+std::string RestoreStormState(StormDomainMailbox& mailbox, const rpc::Value& saved)
+{
+    std::string problems;
+    const auto number = [](const Value& object, const char* key, const f64 fallback) {
+        const Value* v = object.IsObject() ? object.Find(key) : nullptr;
+        return v != nullptr && v->IsNumber() ? v->AsNumber() : fallback;
+    };
+    const auto boolean = [](const Value& object, const char* key, const bool fallback) {
+        const Value* v = object.IsObject() ? object.Find(key) : nullptr;
+        return v != nullptr && v->IsBool() ? v->AsBool() : fallback;
+    };
+    if (!saved.IsObject()) { return "the saved storm state is not an object"; }
+    if (const Value* l = saved.Find("lightning"); l != nullptr)
+    {
+        StormLightningSettings s;
+        s.enabled = boolean(*l, "enabled", s.enabled);
+        s.slowMotion = number(*l, "slow_motion", s.slowMotion);
+        s.chargeBoost = number(*l, "charge_boost", s.chargeBoost);
+        s.breakdownScale = number(*l, "breakdown_scale", s.breakdownScale);
+        s.brightness = number(*l, "brightness", s.brightness);
+        s.arcs = boolean(*l, "arcs", s.arcs);
+        s.pauseOnStrike = boolean(*l, "pause_on_strike", s.pauseOnStrike);
+        s.frameStrike = boolean(*l, "frame_strike", s.frameStrike);
+        s.showGrid = boolean(*l, "show_grid", s.showGrid);
+        s.flashSize = number(*l, "flash_size", s.flashSize);
+        s.groundStrikeChance = number(*l, "ground_strike_chance", s.groundStrikeChance);
+        if (const std::string error = mailbox.SetLightning(s); !error.empty()) { problems += "lightning: " + error + "; "; }
+    }
+    if (const Value* a = saved.Find("auto"); a != nullptr && boolean(*a, "enabled", false))
+    {
+        StormAutoRequest r;
+        r.enabled = true;
+        r.seed = static_cast<u64>(number(*a, "seed", static_cast<f64>(r.seed)));
+        r.cells = static_cast<u32>(number(*a, "cells", r.cells));
+        r.spacingMeters = static_cast<f32>(number(*a, "spacing_m", r.spacingMeters));
+        r.searchKilometres = static_cast<f32>(number(*a, "search_km", r.searchKilometres));
+        r.ice = boolean(*a, "ice", r.ice);
+        r.nested = boolean(*a, "nested", r.nested);
+        if (const std::string error = mailbox.SetAuto(r); !error.empty()) { problems += "auto: " + error + "; "; }
+    }
+    if (const Value* m = saved.Find("manual"); m != nullptr)
+    {
+        StormPlaceRequest r;
+        r.latitudeDegrees = number(*m, "latitude_deg", r.latitudeDegrees);
+        r.longitudeDegrees = number(*m, "longitude_deg", r.longitudeDegrees);
+        r.cells = static_cast<u32>(number(*m, "cells", r.cells));
+        r.spacingMeters = static_cast<f32>(number(*m, "spacing_m", r.spacingMeters));
+        r.bubbleKelvin = static_cast<f32>(number(*m, "bubble_k", r.bubbleKelvin));
+        r.spinMinutes = static_cast<f32>(number(*m, "spin_minutes", r.spinMinutes));
+        r.spongeCells = static_cast<u32>(number(*m, "sponge_cells", r.spongeCells));
+        r.ice = boolean(*m, "ice", r.ice);
+        r.nested = boolean(*m, "nested", r.nested);
+        if (const std::string error = mailbox.Place(r); !error.empty()) { problems += "manual storm: " + error + "; "; }
+    }
+    return problems;
 }
 } // namespace orbit::studio_ui

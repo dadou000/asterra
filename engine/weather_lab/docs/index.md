@@ -69,6 +69,7 @@ verified = "f4a2dc6"
 "phase 10: the lightning channel shape, lattice and timing" = "global-system-status-p10-shape"
 "phase 10: the physical emission of a lightning flash (timing, colour, brightness)" = "global-system-status-p10-emission"
 "phase 10: cloud-to-ground strikes (descending leaders)" = "global-system-status-p10-ground"
+"phase 10: the placed storm and the lightning settings survive a restart" = "global-system-status-p10-persistence"
 "GPU port: Vulkan compute kernels, CPU comparison, benchmark" = "gpu-port"
 +++
 

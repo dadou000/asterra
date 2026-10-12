@@ -1,3 +1,4 @@
+#include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/studio_ui/StormDomain.hpp>
 
 #include <cstdio>
@@ -148,6 +149,48 @@ int main()
     tooSlow = unstable;
     tooSlow.chargeBoost = 1.0e9;
     Check(!lightning.SetLightning(tooSlow).empty() && lightning.Lightning().slowMotion == 100.0, "a rejected request leaves the stored settings alone");
+
+    // Persistence: what survives a restart is saved on every change and restored through the same validating setters.
+    {
+        StormDomainMailbox saved;
+        int notifications = 0;
+        StormPersistentState last;
+        saved.SetChangeHandler([&](const StormPersistentState& state) { ++notifications; last = state; });
+        StormPlaceRequest storm;
+        storm.latitudeDegrees = 5.55;
+        storm.longitudeDegrees = -12.0;
+        storm.spinMinutes = 80.0F;
+        Check(saved.Place(storm).empty() && notifications == 1 && last.manual.has_value() && last.manual->spinMinutes == 80.0F, "placing a storm is saved");
+        StormLightningSettings tuned;
+        tuned.chargeBoost = 1000.0;
+        tuned.breakdownScale = 0.08;
+        tuned.groundStrikeChance = 0.4;
+        tuned.frameStrike = true;
+        Check(saved.SetLightning(tuned).empty() && notifications == 2 && last.lightning.chargeBoost == 1000.0, "changing the lightning settings is saved");
+        StormPlaceRequest badCells = storm;
+        badCells.cells = 100;
+        Check(!saved.Place(badCells).empty() && notifications == 2, "a rejected request is not saved");
+
+        // Round trip through the JSON form into a fresh mailbox, as a restart does.
+        const orbit::rpc::Value json = StormStateToValue(saved.Persistent());
+        const orbit::rpc::Value parsed = orbit::rpc::ParseValue(orbit::rpc::Serialize(json));
+        StormDomainMailbox restored;
+        const std::string problems = RestoreStormState(restored, parsed);
+        const StormPersistentState back = restored.Persistent();
+        Check(problems.empty(), "a saved state restores without problems");
+        Check(back.manual.has_value() && back.manual->latitudeDegrees == 5.55 && back.manual->longitudeDegrees == -12.0 && back.manual->spinMinutes == 80.0F,
+              "the placed storm comes back");
+        Check(back.lightning.chargeBoost == 1000.0 && back.lightning.breakdownScale == 0.08 && back.lightning.groundStrikeChance == 0.4 && back.lightning.frameStrike,
+              "the lightning settings come back");
+        Check(restored.TakePlace().has_value(), "the restored storm is queued for the render thread");
+
+        saved.Clear();
+        Check(notifications == 3 && !last.manual.has_value(), "clearing the storm is saved");
+        StormDomainMailbox empty;
+        Check(!RestoreStormState(empty, orbit::rpc::Value(1.0)).empty(), "something that is not a saved state is reported");
+        orbit::rpc::Value::Object invalid{{"manual", orbit::rpc::Value::Object{{"latitude_deg", 5.0}, {"longitude_deg", 0.0}, {"cells", 100.0}}}};
+        Check(!RestoreStormState(empty, orbit::rpc::Value(invalid)).empty() && !empty.Persistent().manual.has_value(), "an invalid saved storm is reported and not applied");
+    }
 
     if (failures == 0) { std::printf("StormDomain: all checks passed\n"); }
     return failures == 0 ? 0 : 1;

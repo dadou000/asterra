@@ -113,6 +113,10 @@
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <format>
 #include <functional>
 #include <optional>
@@ -1356,6 +1360,43 @@ int orbit::editor_app::StudioApplication::Run(
         // The simulated storm domain in the viewport clouds: the panel section and the storm.* RPC share one mailbox.
         weatherLabUi.SetStormDomain(&studioViewportRenderer.StormMailbox());
         orbit::studio_ui::RegisterStormDomainRpc(rpcHost.Dispatcher(), studioViewportRenderer.StormMailbox());
+        // The storm placed in the project and the lightning settings are kept in Config/storm_domain.json: restored here, saved on every change,
+        // so they survive a restart and the handoff to a new generation of Studio (which starts from nothing).
+        {
+            const std::filesystem::path stormFile = project.RootDirectory() / "Config" / "storm_domain.json";
+            auto& stormMailbox = studioViewportRenderer.StormMailbox();
+            try
+            {
+                if (std::filesystem::exists(stormFile))
+                {
+                    std::ifstream in(stormFile, std::ios::binary);
+                    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    if (const std::string problems = orbit::studio_ui::RestoreStormState(stormMailbox, orbit::rpc::ParseValue(text)); !problems.empty())
+                    {
+                        orbit::log::Warning("Saved storm state restored with problems: " + problems);
+                    }
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                orbit::log::Warning(std::string("The saved storm state could not be read: ") + exception.what());
+            }
+            auto stormFileMutex = std::make_shared<std::mutex>();
+            stormMailbox.SetChangeHandler([stormFile, stormFileMutex](const orbit::studio_ui::StormPersistentState& state)
+            {
+                const std::scoped_lock lock(*stormFileMutex);
+                try
+                {
+                    std::filesystem::create_directories(stormFile.parent_path());
+                    std::ofstream out(stormFile, std::ios::binary | std::ios::trunc);
+                    out << orbit::rpc::Serialize(orbit::studio_ui::StormStateToValue(state));
+                }
+                catch (const std::exception& exception)
+                {
+                    orbit::log::Warning(std::string("The storm state could not be saved: ") + exception.what());
+                }
+            });
+        }
         // Saving engine/weather_gpu/shaders/storm.hlsl reloads the storm kernels in place (no rebuild, no restart).
         [[maybe_unused]] const auto stormShaderHandler = orbit::hot_reload::AddHotIterationHandler(
             orbit::hot_reload::ChangeKind::EngineShader,

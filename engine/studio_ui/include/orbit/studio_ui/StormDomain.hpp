@@ -3,6 +3,7 @@
 #include <orbit/core/Types.hpp>
 #include <orbit/rpc/JsonRpc.hpp>
 
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -108,6 +109,16 @@ struct StormChargeBlocks
     std::vector<f32> coulombs;
 };
 
+// What survives a restart of Studio (and the automatic handoff to a new generation of it when the sources change): the manual storm that was
+// placed (not a scheduled one: that is a pure function of the clock), the scheduled-storm setting and the lightning settings. Studio saves it
+// in the project (Config/storm_domain.json) whenever it changes and restores it at startup.
+struct StormPersistentState
+{
+    std::optional<StormPlaceRequest> manual;
+    StormAutoRequest autoRequest;
+    StormLightningSettings lightning;
+};
+
 [[nodiscard]] const char* StormStateName(StormStatus::State state) noexcept;
 
 // Thread-safe hand-off between the RPC / panel threads and the render thread, which owns the GPU solver: requests are queued here and
@@ -128,6 +139,9 @@ public:
     // Validates and stores the lightning settings; returns the problem, or an empty string. Read by the render thread every frame.
     [[nodiscard]] std::string SetLightning(const StormLightningSettings& settings);
     [[nodiscard]] StormLightningSettings Lightning() const;
+    // The state worth saving, and a handler called (on the thread that made the change, outside the lock) after every change to it.
+    [[nodiscard]] StormPersistentState Persistent() const;
+    void SetChangeHandler(std::function<void(const StormPersistentState&)> handler);
 
     // Render thread.
     [[nodiscard]] std::optional<StormPlaceRequest> TakePlace();
@@ -147,8 +161,17 @@ private:
     u32 reloadCount_{0};
     StormAutoRequest autoSetting_;
     StormLightningSettings lightning_;
+    std::optional<StormPlaceRequest> manual_;
+    std::function<void(const StormPersistentState&)> changed_;
+
+    void NotifyChanged();
     StormStatus status_;
 };
+
+// The saved form of the state (JSON) and its restoration: applies what the value holds through the mailbox's own validating setters and returns
+// the problems found (empty when all went well).
+[[nodiscard]] rpc::Value StormStateToValue(const StormPersistentState& state);
+[[nodiscard]] std::string RestoreStormState(StormDomainMailbox& mailbox, const rpc::Value& saved);
 
 // storm.place / storm.status / storm.clear: the RPC face of the Weather Lab panel's Storm domain section (docs/ORBIT_MCP.md).
 // `mailbox` must outlive the dispatcher.
