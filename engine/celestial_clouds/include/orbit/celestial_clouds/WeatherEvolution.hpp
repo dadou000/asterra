@@ -172,6 +172,18 @@ public:
             result.exchange.precipitation<0 ||
             result.ticket.kind!=WeatherStepKind::Detailed)
             return false;
+        // Validate the exported quantity against the committed state's
+        // inventory delta before touching the scheduler or the existing state.
+        const f64 before=WeatherConvectiveSurrogate::Inventory(it->second);
+        const f64 after=WeatherConvectiveSurrogate::Inventory(result.state);
+        const f64 exportedDelta=result.state.precipitationExported-
+            it->second.precipitationExported;
+        if (!std::isfinite(before) || !std::isfinite(after) ||
+            !std::isfinite(exportedDelta) || exportedDelta<0.0 ||
+            std::abs(after-before)>1.0e-9*std::max(1.0,std::abs(before)) ||
+            std::abs(exportedDelta-result.exchange.precipitation)>
+                1.0e-9*std::max(1.0,std::abs(exportedDelta)))
+            return false;
         if (!scheduler.Commit(result.ticket)) return false;
         it->second=result.state;
         records_.push_back(result.exchange);
