@@ -1,11 +1,14 @@
 #pragma once
 
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/celestial_clouds/AnalyticZoneSurvey.hpp>
 #include <orbit/studio_ui/StormDomain.hpp>
 #include <orbit/studio_ui/WeatherLabRpc.hpp>
 #include <orbit/weather_lab/WeatherLabSession.hpp>
 
 #include <string>
+#include <future>
+#include <vector>
 
 namespace orbit::studio_ui
 {
@@ -34,6 +37,7 @@ private:
     void DrawSettings(editor_ui::PanelContext& context);
     void DrawPlayback(editor_ui::PanelContext& context);
     void DrawStorm(editor_ui::PanelContext& context);
+    void DrawZoneSurvey(editor_ui::PanelContext& context);
     void DrawViews(editor_ui::PanelContext& context);
     void DrawMetrics(editor_ui::PanelContext& context);
     void DrawSlice(
@@ -46,6 +50,12 @@ private:
     WeatherLabView* view_{nullptr};
     StormDomainMailbox* storm_{nullptr};
     StormPlaceRequest stormDraft_;
+    celestial_clouds::SparseStormZones zoneSurveyZones_;
+    std::future<std::vector<celestial_clouds::StormZoneProbe>> zoneSurveyFuture_;
+    f64 zoneSurveyTime_{0.0};
+    f64 zoneSurveyJobTime_{0.0};
+    i64 zoneSurveySamples_{1024};
+    u32 zoneSurveyProbeCount_{0};
     StormAutoRequest stormAuto_;
     bool stormAutoLoaded_{false};
     std::string stormMessage_;
