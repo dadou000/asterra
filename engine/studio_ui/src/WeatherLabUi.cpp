@@ -337,6 +337,13 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
     }
     const StormStatus status = storm_->Status();
     context.KeyValue("State", std::format("{} ({})", StormStateName(status.state), status.mode));
+    context.KeyValue("Live atmospheric zones",
+        std::format("{} zones from {} candidate probes (generation {}, {}{})",
+            status.discoveredZones, status.zoneCandidateProbes, status.zoneGeneration,
+            status.zoneGeneration ? std::format("at t={:.0f} s", status.zoneSnapshotSeconds) :
+                std::string("no snapshot"),
+            status.zoneSurveyBusy ? ", worker active" : ""));
+
     if (status.state == StormStatus::State::Active)
     {
         context.KeyValue("Centre", std::format("{:.3f}, {:.3f} deg", status.latitudeDegrees, status.longitudeDegrees));
