@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_clouds/StormSchedule.hpp>
 #include <orbit/celestial_clouds/StormZoneRuntime.hpp>
+#include <orbit/celestial_clouds/WeatherMultirateScheduler.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
 #include <orbit/weather_gpu/NestedGpuSolver.hpp>
@@ -479,6 +480,8 @@ struct StudioViewportRenderer::StormRuntime
     u64 manualCounter{0};
     StormAutoRequest autoRequest;
     celestial_clouds::StormZoneRuntime zoneRuntime{};
+    celestial_clouds::WeatherMultirateScheduler zoneSchedule{};
+    u64 lastReconciledZoneGeneration{0};
     u64 zoneBodyGeneration{0};
     universe::BodyId body{};
     bool bodySet{false};
@@ -600,6 +603,8 @@ void StudioViewportRenderer::UpdateStormDomain(
     if (!rt.bodySet || rt.body != body)
     {
         ++rt.zoneBodyGeneration;
+        rt.zoneSchedule.Reset();
+        rt.lastReconciledZoneGeneration = 0;
         rt.body = body;
         rt.bodySet = true;
     }
@@ -612,6 +617,22 @@ void StudioViewportRenderer::UpdateStormDomain(
     rt.zoneRuntime.Tick(rt.zoneBodyGeneration, nowSeconds, zoneWeather,
         celestial_clouds::WeatherClimate{});
     const auto zoneSnapshot = rt.zoneRuntime.Snapshot();
+    if (zoneSnapshot->generation == 0 && rt.lastReconciledZoneGeneration != 0)
+    {
+        rt.zoneSchedule.Reset();
+        rt.lastReconciledZoneGeneration = 0;
+    }
+    if (zoneSnapshot->generation != 0 &&
+        zoneSnapshot->generation != rt.lastReconciledZoneGeneration)
+    {
+        rt.zoneSchedule.Reconcile(zoneSnapshot->zones, zoneSnapshot->simulatedSeconds);
+        rt.lastReconciledZoneGeneration = zoneSnapshot->generation;
+    }
+    // Planning only. No solver is wired to complete these tickets yet:
+    // do not commit unfinished atmospheric evolution during timewarp.
+    const auto zoneTickets = rt.zoneSchedule.Plan(nowSeconds);
+    (void)zoneTickets;
+    const auto zoneScheduleStats = rt.zoneSchedule.Stats();
 
     // ---- which storm?
     StormRuntime::Active wanted;
@@ -681,6 +702,10 @@ void StudioViewportRenderer::UpdateStormDomain(
     status.zoneGeneration = zoneSnapshot->generation;
     status.zoneSnapshotSeconds = zoneSnapshot->simulatedSeconds;
     status.zoneSurveyBusy = rt.zoneRuntime.Busy();
+    status.zoneWorkTickets = zoneScheduleStats.issued;
+    status.zoneBlockedLongSteps = zoneScheduleStats.blockedLongSteps;
+    status.zoneDeferredTasks = zoneScheduleStats.deferred;
+    status.zoneMaximumLagSeconds = zoneScheduleStats.maximumLagSeconds;
     status.mode = mode;
     status.scheduledNearby = scheduledNearby;
     status.checkpointMiB = static_cast<f64>(rt.checkpointBytes) / (1024.0 * 1024.0);
