@@ -48,6 +48,8 @@ public:
                 !std::isfinite(input.coldPoolStrength) ||
                 !std::isfinite(input.updraft) ||
                 !std::isfinite(input.rain) ||
+                !std::isfinite(input.externalLift) ||
+                !std::isfinite(input.externalUndercut) ||
                 input.coldPoolKm<0 || input.coldPoolStrength<0 ||
                 input.rain<0)
                 return false;
@@ -88,6 +90,12 @@ public:
                 intensity+=dt*pool.coldPoolStrength *
                     (config.propagationStrength*edge-config.undercutStrength*inside);
             }
+            // Neighboring zones contribute a lagged, time-stamped diagnostic
+            // boundary condition. It must not create moisture or kinetic energy.
+            intensity+=dt*(config.propagationStrength*
+                std::clamp(previous[i].externalLift,0.0,1.0) -
+                config.undercutStrength*
+                std::clamp(previous[i].externalUndercut,0.0,1.0));
             state.children[i].updraft=std::clamp(intensity,0.0,1.0);
         }
 
