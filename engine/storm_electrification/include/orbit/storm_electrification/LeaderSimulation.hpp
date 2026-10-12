@@ -62,6 +62,11 @@ struct LeaderParams
     // Replace the pulses of the flash by the physical sequence of LightningEmission.hpp (stepped leader glow, return stroke on the main path,
     // dark twigs, later strokes, continuing current, cooling from blue-white to orange). Off: the plain uniform pulses.
     bool physicalEmission = false;
+    // A share of the flashes are descending leaders: with this chance a flash seeks the ground (its steps going down are multiplied by
+    // 1 + groundSeekBias * downward component, and it does not stop for its charge budget before it connects), as the stepped leader of a
+    // cloud-to-ground flash does through the weakly charged air under the storm. 0: flashes only reach the ground by chance.
+    double groundSeekChance = 0.0;
+    double groundSeekBias = 12.0;
     std::uint64_t seed = 1;
 };
 

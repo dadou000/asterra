@@ -131,6 +131,8 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
     // Growth rounds: every round each tip may extend; the channel front moves at leaderSpeed.
     double time = startTime;
     std::uint32_t round = 0;
+    // Some flashes are descending leaders that seek the ground.
+    const bool seekGround = p.groundSeekChance > 0.0 && rng.Uniform() < p.groundSeekChance;
     // Neighbour steps: the 6 face neighbours, or all 26 when the channel may run diagonally.
     std::vector<std::array<int, 3>> d;
     for (int dx = -1; dx <= 1; ++dx)
@@ -142,7 +144,8 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                 d.push_back({dx, dy, dz});
             }
     std::uint32_t idleRounds = 0;
-    while (channel.size() < p.maxChannelCells && !budgetReached() && idleRounds < p.stagnationRounds)
+    // A descending leader does not stop for its charge budget or for crossing air with no charge, only when it connects (or at the cell cap).
+    while (channel.size() < p.maxChannelCells && ((seekGround && !grounded) || (!budgetReached() && idleRounds < p.stagnationRounds)))
     {
         const double reachedBefore = reachablePositive + reachableNegative;
         struct Candidate { Cell cell; Cell parent; double weight; };
@@ -179,6 +182,11 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                         if (segmentOf.count(key(other))) ++touching;
                     }
                     if (touching > 1) weight *= std::pow(p.screening, static_cast<double>(touching - 1));
+                }
+                if (seekGround)
+                {
+                    const double down = std::max(0.0, -static_cast<double>(dir[2]) / std::sqrt(static_cast<double>(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])));
+                    weight *= 1.0 + p.groundSeekBias * down;
                 }
                 if (p.directionPersistence > 0.0)
                 {

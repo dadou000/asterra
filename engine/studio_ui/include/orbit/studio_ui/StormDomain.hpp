@@ -95,6 +95,7 @@ struct StormLightningSettings
     bool frameStrike{false};   // aim the camera at a flash about to start and back off until its whole channel is in view
     bool showGrid{false};      // draw the electrification window (its box, a grid and the charge in it)
     f64 flashSize{4.0};        // 1 to 50: multiplies the charge one flash may neutralise, so a larger value gives larger flashes
+    f64 groundStrikeChance{0.25}; // 0 to 1: the share of flashes that are descending leaders seeking the ground (cloud to ground, with a return stroke)
 };
 
 // The charge in the electrified window summed over blocks of cells, for the grid display: coulombs per block, x fastest then y then z.

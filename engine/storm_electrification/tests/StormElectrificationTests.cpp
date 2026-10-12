@@ -526,6 +526,43 @@ int main()
         Check(branchPeak > 0.0 && branchPeak < mainPeak, "the heavy branch flashes too, dimmer than the main channel");
     }
 
+    // Descending leaders: a flash that seeks the ground reaches it (a return stroke), the same grid without the bias mostly does not.
+    {
+        const auto groundedCount = [&](const double chance) {
+            int grounded = 0;
+            for (std::uint64_t seed = 1; seed <= 3; ++seed)
+            {
+                ChargeGrid g(48, 48, 32, 500.0);
+                const StormFields storm = MakeStorm(g, 25.0);
+                const ElectrificationParams electrification;
+                LeaderParams t;
+                for (double seconds = 0.0; seconds < 1200.0; seconds += 5.0)
+                {
+                    StepElectrification(g, storm, electrification, 5.0);
+                    g.SolvePotential();
+                    if (MaxBreakdownRatio(g, t) >= 1.0) break;
+                }
+                t.growthExponent = 4.0;
+                t.sideBranchChance = 0.004;
+                t.picksDivisor = 1.0e9;
+                t.diagonalGrowth = true;
+                t.screening = 0.15;
+                t.directionPersistence = 6.0;
+                t.maxFlashCharge = 1.0e9;
+                t.maxChannelCells = 400;
+                t.groundSeekChance = chance;
+                t.seed = seed;
+                const FlashResult r = TryFlash(g, t, 100.0, seed);
+                grounded += r.occurred && r.kind == FlashKind::CloudToGround ? 1 : 0;
+            }
+            return grounded;
+        };
+        const int seeking = groundedCount(1.0);
+        const int plain = groundedCount(0.0);
+        std::printf("ground strikes of 3 flashes: seeking %d, plain %d\n", seeking, plain);
+        Check(seeking >= 2 && seeking > plain, "flashes that seek the ground reach it far more often than the plain growth");
+    }
+
     if (failures == 0) std::printf("StormElectrification: all tests passed\n");
     return failures;
 }
