@@ -1,6 +1,8 @@
 #include <orbit/celestial_clouds/WeatherEvolution.hpp>
 #include <cmath>
 #include <cstdio>
+#include <utility>
+#include <vector>
 using namespace orbit;
 using namespace orbit::celestial_clouds;
 namespace {
