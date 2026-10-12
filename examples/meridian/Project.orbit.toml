@@ -4,7 +4,7 @@ script_entry_points = []
 
 [project]
 engine_compatibility = '0.0.9'
-id = '8dd6cf6e-1aff-40a8-8ef9-b1fda01c33a5'
+id = '634dbc66-f1db-4ad8-a93e-1a626c46a142'
 name = 'Meridian'
 schema_version = 1
 startup_world = 'Worlds/Main.orbitworld'

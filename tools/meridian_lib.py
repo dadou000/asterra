@@ -105,7 +105,8 @@ def recipe(kind, parent, name, **kw):
 
 def vec(lat_deg, lon_deg):
     la, lo = math.radians(lat_deg), math.radians(lon_deg)
-    return (math.cos(la) * math.cos(lo), math.sin(la), -math.cos(la) * math.sin(lo))
+    # Engine convention: latitude = asin(y), longitude = atan2(z, x) (+Y is the spin pole).
+    return (math.cos(la) * math.cos(lo), math.sin(la), math.cos(la) * math.sin(lo))
 
 
 
