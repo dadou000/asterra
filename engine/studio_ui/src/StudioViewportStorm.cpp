@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/StudioViewportRenderer.hpp>
 
 #include <orbit/celestial_clouds/StormSchedule.hpp>
+#include <orbit/celestial_clouds/StormZoneRuntime.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
 #include <orbit/weather_gpu/NestedGpuSolver.hpp>
@@ -477,6 +478,8 @@ struct StudioViewportRenderer::StormRuntime
     f64 manualStartSeconds{0.0};
     u64 manualCounter{0};
     StormAutoRequest autoRequest;
+    celestial_clouds::StormZoneRuntime zoneRuntime{};
+    u64 zoneBodyGeneration{0};
     universe::BodyId body{};
     bool bodySet{false};
 
@@ -592,11 +595,23 @@ void StudioViewportRenderer::UpdateStormDomain(
         rt.bodySet = false;
         ++rt.manualCounter;
     }
-    if (!rt.bodySet)
+    // Sparse opportunity discovery follows the authoritative planetary clock,
+    // even when automatic storms are disabled. The worker never blocks rendering.
+    if (!rt.bodySet || rt.body != body)
     {
+        ++rt.zoneBodyGeneration;
         rt.body = body;
         rt.bodySet = true;
     }
+    celestial_clouds::WeatherParameters zoneWeather;
+    zoneWeather.subsolarLatitudeRadians =
+        std::asin(std::clamp(static_cast<f64>(sunDirectionBody.y), -1.0, 1.0));
+    zoneWeather.noiseScale = layer.weatherScale;
+    zoneWeather.detailScale = layer.detailScale;
+    zoneWeather.seed = layer.seed;
+    rt.zoneRuntime.Tick(rt.zoneBodyGeneration, nowSeconds, zoneWeather,
+        celestial_clouds::WeatherClimate{});
+    const auto zoneSnapshot = rt.zoneRuntime.Snapshot();
 
     // ---- which storm?
     StormRuntime::Active wanted;
@@ -661,6 +676,11 @@ void StudioViewportRenderer::UpdateStormDomain(
     }
 
     StormStatus status;
+    status.discoveredZones = static_cast<u32>(zoneSnapshot->zones.size());
+    status.zoneCandidateProbes = zoneSnapshot->candidates;
+    status.zoneGeneration = zoneSnapshot->generation;
+    status.zoneSnapshotSeconds = zoneSnapshot->simulatedSeconds;
+    status.zoneSurveyBusy = rt.zoneRuntime.Busy();
     status.mode = mode;
     status.scheduledNearby = scheduledNearby;
     status.checkpointMiB = static_cast<f64>(rt.checkpointBytes) / (1024.0 * 1024.0);
