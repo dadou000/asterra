@@ -204,6 +204,11 @@ private:
 class WeatherZoneEvolutionRunner
 {
 public:
+    using EvolutionOperator = std::optional<WeatherEvolutionResult> (*)(
+        const WeatherZoneEvolutionState&, const StormZoneWeights&, const WeatherStepTicket&);
+
+    void SetEvaluator(EvolutionOperator evaluator) noexcept { evaluator_ = evaluator; }
+
     void Reset()
     {
         ++epoch_;
@@ -251,11 +256,13 @@ public:
             const auto copy=*state;
             const auto weights=it->weights;
             const u64 jobEpoch=epoch_;
-            worker_=std::async(std::launch::async,[ticket,copy,weights,jobEpoch]
+            const auto evaluator=evaluator_;
+            worker_=std::async(std::launch::async,[ticket,copy,weights,jobEpoch,evaluator]
             {
                 Job result;
                 result.epoch=jobEpoch;
-                result.result=WeatherConvectiveSurrogate::Evaluate(copy,weights,ticket);
+                result.result=evaluator ? evaluator(copy,weights,ticket)
+                    : WeatherConvectiveSurrogate::Evaluate(copy,weights,ticket);
                 return result;
             });
             break; // at most one outstanding shared worker, no per-zone threads
@@ -270,6 +277,7 @@ private:
         u64 epoch{0};
         std::optional<WeatherEvolutionResult> result;
     };
+    EvolutionOperator evaluator_{nullptr};
     WeatherMultirateScheduler scheduler_{};
     WeatherEvolutionLedger ledger_{};
     std::future<Job> worker_{};
