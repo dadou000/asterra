@@ -901,6 +901,28 @@ void StudioViewportRenderer::UpdateStormDomain(
                             p[2] = world.z;
                         }
                     }
+                    // The channel glows from the moment each segment forms until a little after the last pulse, at a fraction of the strongest
+                    // pulse the segment carries (so the trunk, which carries the current of everything downstream, glows most). It is part of the
+                    // flash like any pulse: the lights on the clouds and the arc overlay both read it, so they agree in timing and duration.
+                    {
+                        const f64 tail = std::min(0.06 * stretch, 3.0);
+                        for (std::size_t i = 0; i < flash.graph.Segments().size(); ++i)
+                        {
+                            optical_transport::Segment& segment = flash.graph.At(static_cast<std::int32_t>(i));
+                            f64 carried = 0.0;
+                            for (const auto& pulse : segment.pulses)
+                            {
+                                if (pulse.duration > 0.0) { carried = std::max(carried, pulse.radiantEnergy / pulse.duration); }
+                            }
+                            const f64 power = std::max(2.0e4, 5.0e-3 * carried);
+                            const f64 duration = end + tail - segment.formedAt;
+                            if (duration > 0.0)
+                            {
+                                segment.pulses.push_back({segment.formedAt, duration, power * duration});
+                            }
+                        }
+                        end += tail;
+                    }
                     // Spread the flashes of one job over the time it covers, so they do not arrive in a burst.
                     const std::scoped_lock flashLock(transientFlashMutex_);
                     transientFlashes_.Add(std::move(flash.graph), centre, FlashClockSeconds() + std::min(flash.delaySeconds / std::max(1.0, simulationRate_.load()), 10.0), end + 1.0);

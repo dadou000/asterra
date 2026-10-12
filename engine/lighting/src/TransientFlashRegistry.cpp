@@ -22,11 +22,6 @@ constexpr f64 kTailSeconds = 0.25;   // after the last stroke the flash is kept 
     return static_cast<f64>(state >> 8U) / 16777216.0 - 0.5;
 }
 
-// A channel segment that has formed but is not pulsing glows at this fraction of the strongest pulse it carries (the lit channel an arc overlay
-// draws), at least kChannelGlowFloor: the trunk, which carries the current of everything downstream, stays much brighter than the twigs.
-constexpr f64 kChannelGlowFraction = 5.0e-4;
-constexpr f64 kChannelGlowFloor = 2.0e4;
-
 [[nodiscard]] f64 LifetimeOf(const FlashRequest& request)
 {
     return request.strokeSpacingSeconds * static_cast<f64>(std::max(request.strokes, 1U) - 1U) + kTailSeconds;
@@ -208,22 +203,9 @@ std::vector<ChannelLine> TransientFlashRegistry::ChannelLines(
             continue;
         }
         const f64 t = nowSeconds - flash.startSeconds;
-        // The channel stays faintly visible from the moment each segment forms until the last pulse of the flash, then fades with the glow:
-        // the leader leaves a connected, dimly glowing tree, and the strong pulses (the trunk) stand out on it.
-        f64 flashEnd = 0.0;
         for (const optical_transport::Segment& segment : flash.graph.Segments())
         {
-            for (const optical_transport::Pulse& pulse : segment.pulses) { flashEnd = std::max(flashEnd, pulse.startTime + pulse.duration); }
-        }
-        const f64 persistent = t <= flashEnd ? 1.0 : std::exp(-(t - flashEnd) / glow);
-        for (const optical_transport::Segment& segment : flash.graph.Segments())
-        {
-            f64 carried = 0.0;
-            for (const optical_transport::Pulse& pulse : segment.pulses)
-            {
-                if (pulse.duration > 0.0) { carried = std::max(carried, pulse.radiantEnergy / pulse.duration); }
-            }
-            f64 power = t >= segment.formedAt ? persistent * std::max(kChannelGlowFloor, kChannelGlowFraction * carried) : 0.0;
+            f64 power = 0.0;
             for (const optical_transport::Pulse& pulse : segment.pulses)
             {
                 if (t < pulse.startTime || pulse.duration <= 0.0)
