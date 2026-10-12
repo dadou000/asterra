@@ -9,6 +9,7 @@
 #include <limits>
 #include <vector>
 #include <utility>
+#include <unordered_map>
 
 namespace orbit::celestial_clouds
 {
@@ -149,55 +150,116 @@ public:
             while (parent[i] != i) { i = parent[i]; }
             return i;
         };
-        const f64 threshold = std::cos(config_.neighbourRadians);
-        // Bounded candidate pass. Later replace pair search with a spatial hash
-        // when a global opportunity provider makes very large candidate sets.
-        for (std::size_t i=0; i<n; ++i)
-            for (std::size_t j=i+1; j<n; ++j)
-                if (StormZoneDot(candidates[i].p.direction, candidates[j].p.direction) >= threshold)
+        // Unit-sphere Cartesian hash. Adjacent probes closer than the angular
+        // threshold must occupy the same or neighboring cube buckets.
+        // Expected near-linear candidate clustering; no global dense allocation.
+        struct Key
+        {
+            i32 x, y, z;
+            bool operator==(const Key&) const = default;
+        };
+        struct KeyHash
+        {
+            [[nodiscard]] std::size_t operator()(const Key& k) const noexcept
+            {
+                u64 h = 1469598103934665603ULL;
+                for (const i32 v : {k.x, k.y, k.z})
                 {
-                    const auto a=root(i), b=root(j);
-                    if (a!=b) { parent[b]=a; }
+                    h ^= static_cast<u64>(static_cast<i64>(v));
+                    h *= 1099511628211ULL;
                 }
+                return static_cast<std::size_t>(h);
+            }
+        };
+        const f64 angle = std::clamp(config_.neighbourRadians, 1.0e-6, 3.141592653589793);
+        const f64 chord = 2.0 * std::sin(angle * 0.5);
+        const f64 threshold = std::cos(angle);
+        const auto keyFor = [chord](const math::Double3& p) -> Key
+        {
+            return {static_cast<i32>(std::floor((p.x + 1.0) / chord)),
+                    static_cast<i32>(std::floor((p.y + 1.0) / chord)),
+                    static_cast<i32>(std::floor((p.z + 1.0) / chord))};
+        };
+        std::unordered_map<Key, std::vector<std::size_t>, KeyHash> buckets;
+        buckets.reserve(n);
+        for (std::size_t i=0; i<n; ++i)
+        {
+            const Key k = keyFor(candidates[i].p.direction);
+            for (i32 x=-1; x<=1; ++x)
+                for (i32 y=-1; y<=1; ++y)
+                    for (i32 z=-1; z<=1; ++z)
+                    {
+                        const auto found=buckets.find({k.x+x,k.y+y,k.z+z});
+                        if (found==buckets.end()) { continue; }
+                        for (const auto j : found->second)
+                            if (StormZoneDot(candidates[i].p.direction,
+                                             candidates[j].p.direction)>=threshold)
+                            {
+                                const auto a=root(i), b=root(j);
+                                if (a!=b) { parent[b]=a; }
+                            }
+                    }
+            buckets[k].push_back(i);
+        }
+        // Compress all roots once, then accumulate each group in one pass.
+        for (std::size_t i=0; i<n; ++i) { parent[i]=root(i); }
 
         std::vector<StormZone> next;
         std::vector<bool> used(zones_.size(), false);
+        struct Accumulator
+        {
+            math::Double3 sum{0,0,0};
+            f64 total{0}, initiation{0}, convection{0}, moisture{0}, precipitation{0};
+            u32 count{0};
+            bool active{false};
+        };
+        std::vector<Accumulator> aggregates(n);
         for (std::size_t i=0; i<n; ++i)
         {
-            if (root(i)!=i) { continue; }
-            math::Double3 sum{0,0,0};
-            f64 total=0;
-            f64 initiation=0, convection=0, moisture=0, precip=0;
-            bool active=false;
-            u32 count=0;
-            for (std::size_t j=0; j<n; ++j)
-            {
-                if (root(j)!=i) { continue; }
-                const auto& p=candidates[j].p;
-                const f64 w=std::max(0.01F,p.opportunity);
-                sum.x+=p.direction.x*w; sum.y+=p.direction.y*w; sum.z+=p.direction.z*w;
-                total+=w; initiation+=w*p.opportunity;
-                convection+=w*StormZoneClamp(p.convection);
-                moisture+=w*StormZoneClamp(p.moisture);
-                precip+=w*StormZoneClamp(p.precipitation);
-                active |= candidates[j].active;
-                ++count;
-            }
-            if (!active || total<=0) { continue; } // no zone from weak probes alone
+            auto& a=aggregates[parent[i]];
+            const auto& p=candidates[i].p;
+            const f64 w=std::max(0.01F,p.opportunity);
+            a.sum.x+=p.direction.x*w;
+            a.sum.y+=p.direction.y*w;
+            a.sum.z+=p.direction.z*w;
+            a.total+=w;
+            a.initiation+=w*p.opportunity;
+            a.convection+=w*StormZoneClamp(p.convection);
+            a.moisture+=w*StormZoneClamp(p.moisture);
+            a.precipitation+=w*StormZoneClamp(p.precipitation);
+            a.active |= candidates[i].active;
+            ++a.count;
+        }
+        // First determine representative centres, then radii in a separate pass.
+        std::vector<StormZone> produced;
+        std::vector<std::size_t> groupToZone(n,n);
+        for (std::size_t i=0; i<n; ++i)
+        {
+            const auto& a=aggregates[i];
+            if (!a.active || a.total<=0) { continue; }
             StormZone zone;
-            zone.centre=StormZoneUnit(sum);
-            zone.contributingProbes=count;
-            zone.weights.initiation=static_cast<f32>(initiation/total);
-            zone.weights.convection=static_cast<f32>(convection/total);
-            zone.weights.moisture=static_cast<f32>(moisture/total);
-            zone.weights.precipitation=static_cast<f32>(precip/total);
-            // Provisional organization proxies, NOT physical type predictions.
-            zone.weights.multicell=zone.weights.convection * zone.weights.moisture;
+            zone.centre=StormZoneUnit(a.sum);
+            zone.contributingProbes=a.count;
+            zone.weights.initiation=static_cast<f32>(a.initiation/a.total);
+            zone.weights.convection=static_cast<f32>(a.convection/a.total);
+            zone.weights.moisture=static_cast<f32>(a.moisture/a.total);
+            zone.weights.precipitation=static_cast<f32>(a.precipitation/a.total);
+            // Proxies, not physical storm-class scores.
+            zone.weights.multicell=zone.weights.convection*zone.weights.moisture;
             zone.weights.organized=zone.weights.convection;
-            for (std::size_t j=0; j<n; ++j)
-                if (root(j)==i)
-                    zone.radiusRadians=std::max(zone.radiusRadians,
-                        std::acos(StormZoneDot(zone.centre,candidates[j].p.direction)));
+            groupToZone[i]=produced.size();
+            produced.push_back(zone);
+        }
+        for (std::size_t i=0; i<n; ++i)
+        {
+            const auto index=groupToZone[parent[i]];
+            if (index==n) { continue; }
+            auto& zone=produced[index];
+            zone.radiusRadians=std::max(zone.radiusRadians,
+                std::acos(StormZoneDot(zone.centre,candidates[i].p.direction)));
+        }
+        for (auto& zone : produced)
+        {
             std::size_t match=zones_.size();
             f64 closest=config_.matchRadians;
             for (std::size_t j=0; j<zones_.size(); ++j)
