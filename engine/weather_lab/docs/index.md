@@ -66,6 +66,7 @@ verified = "f4a2dc6"
 "phase 10: rain shafts and the storm's own lightning" = "global-system-status-p10"
 "phase 10: seeing the lightning, one time control, strike pause" = "global-system-status-p10-visibility"
 "phase 10: lightning window, flash size, the channel as a tree" = "global-system-status-p10-solver"
+"phase 10: the lightning channel shape, lattice and timing" = "global-system-status-p10-shape"
 "GPU port: Vulkan compute kernels, CPU comparison, benchmark" = "gpu-port"
 +++
 
