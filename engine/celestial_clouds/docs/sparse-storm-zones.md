@@ -145,3 +145,33 @@ retirement, backward time and bounded analytic probes.
 
 These changes are committed but have not yet been compiled or run on the
 development machine.
+
+## Phase 6: convective interaction graph (experimental)
+
+- `WeatherConvectiveInteractions.hpp` adds a sparse, undirected graph over
+  the convective children inside a discovered zone. Node identity is stable;
+  connectivity is based on local offsets and a bounded distance kernel.
+- All pair edges are canonical (ascending IDs); connected components over
+  sufficiently strong edges become *coupling islands*. An island means shared
+  numerical scheduling is possible, **not** that the cells have merged.
+- On validated short detailed updates, `EvaluateInteractingWeather` first runs
+  the Phase 5 surrogate, then applies simultaneous pairwise interactions from
+  an immutable state copy. Vapor transfers are symmetrical and limited by
+  available inventory across multiple neighbors; diagnostic updraft intensity
+  may increase or decrease through simplified lift/competition response.
+- Positions are local-zone kilometre offsets; interactions are synthetic
+  placeholders, not CM1-calibrated cold-pool dynamics or physical wind profiles.
+  No actual storm deformation, collision, merger, splitting, advection or
+  cross-zone coupling is simulated in this slice.
+- A bounded child/edge budget avoids unbounded allocations. The current
+  per-zone pair construction is O(children^2) with a hard maximum of 64;
+  replace with a spatial hash when larger systems are required.
+- The live shared worker uses this operator via `SetEvaluator`; transactional
+  inventory checks and precipitation export accounting remain unchanged.
+- Long-step obligations remain blocked and the actual global atmosphere still
+  does not consume conserved exchanges. No changes to GPU storm rendering.
+- Validate with:
+  `ctest -R "Orbit.WeatherConvectiveInteractions|Orbit.WeatherEvolution|Orbit.WeatherMultirateScheduler" --output-on-failure`.
+- Validation and compilation have not yet been run. Before calling Phase 6
+  production-ready, add true physical forcing, event-aware coupling/merger,
+  cross-zone neighbors, deterministic checkpointing and hardware benchmarks.
