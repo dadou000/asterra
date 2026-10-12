@@ -736,6 +736,32 @@ int orbit::editor_app::StudioApplication::Run(
         orbit::platform::Window& window =
             runtime.Window();
         std::atomic_bool ecoMode{false};
+        // Requested state of the viewport's full-screen mode; the frame loop animates towards it.
+        std::atomic_bool viewportFullscreen{false};
+        rpcHost.Dispatcher().Register(
+            {.name = "viewport.fullscreen_get",
+             .description = "Whether the primary viewport is (animating into) full screen.",
+             .mutating = false},
+            [&viewportFullscreen](const orbit::rpc::Value&)
+            {
+                return orbit::rpc::Value::Object{
+                    {"enabled", viewportFullscreen.load(std::memory_order_relaxed)}};
+            });
+        rpcHost.Dispatcher().Register(
+            {.name = "viewport.fullscreen_set",
+             .description = "Animate the primary viewport into or out of full screen (same as F11 / the viewport's "
+                            "Full Screen button).",
+             .mutating = true},
+            [&viewportFullscreen](const orbit::rpc::Value& params)
+            {
+                const auto* enabled = params.Find("enabled");
+                if (enabled == nullptr || !enabled->IsBool())
+                {
+                    throw std::invalid_argument("enabled must be a boolean");
+                }
+                viewportFullscreen.store(enabled->AsBool(), std::memory_order_relaxed);
+                return orbit::rpc::Value::Object{{"enabled", enabled->AsBool()}};
+            });
         rpcHost.SetActivityCallback([&window] { window.WakeForActivity(); });
         rpcHost.Dispatcher().Register(
             {.name = "studio.eco_mode_get",
@@ -2440,6 +2466,11 @@ int orbit::editor_app::StudioApplication::Run(
                 }
             };
 
+        float fullscreenProgress = 0.0F;
+        std::array<float, 4> fullscreenDockedRect{};
+        bool fullscreenKeyWasDown = false;
+        auto fullscreenLastFrame = Clock::now();
+
         while (window.PumpEvents())
         {
             {
@@ -3122,7 +3153,34 @@ int orbit::editor_app::StudioApplication::Run(
                 pendingRpcNotifications.clear();
             }
 
-            if (viewportOnlyCapture.active)
+            // Full-screen viewport: F11 / the toolbar button / viewport.fullscreen_set choose the target; the progress
+            // follows it over a short eased animation. While it runs the shell is still drawn and the viewport's last
+            // image grows (or shrinks) between the docked panel and the window; at 1 the panel alone fills the window.
+            if (viewportPanel.fullscreenToggleRequested ||
+                (window.KeyDown(orbit::platform::Key::F11) && !fullscreenKeyWasDown && !ui.WantsKeyboard()))
+            {
+                viewportFullscreen.store(!viewportFullscreen.load(), std::memory_order_relaxed);
+            }
+            viewportPanel.fullscreenToggleRequested = false;
+            fullscreenKeyWasDown = window.KeyDown(orbit::platform::Key::F11);
+            {
+                const auto fullscreenNow = Clock::now();
+                const float dt = std::min(0.1F, std::chrono::duration<float>(fullscreenNow - fullscreenLastFrame).count());
+                fullscreenLastFrame = fullscreenNow;
+                const bool wanted = viewportFullscreen.load(std::memory_order_relaxed);
+                constexpr float kSeconds = 0.28F;
+                fullscreenProgress = std::clamp(fullscreenProgress + (wanted ? dt : -dt) / kSeconds, 0.0F, 1.0F);
+                if (fullscreenProgress <= 0.0F)
+                {
+                    if (const auto rect = ui.PanelScreenRect(orbit::studio_ui::kPrimaryViewportPanel))
+                    {
+                        fullscreenDockedRect = *rect;
+                    }
+                }
+            }
+            const bool viewportFullyFullscreen = fullscreenProgress >= 1.0F && !viewportOnlyCapture.active;
+
+            if (viewportOnlyCapture.active || viewportFullyFullscreen)
             {
                 static_cast<void>(ui.DrawPanelFullscreen(
                     orbit::studio_ui::kPrimaryViewportPanel));
@@ -3135,6 +3193,20 @@ int orbit::editor_app::StudioApplication::Run(
                     "studio.map",
                     ui.PanelVisible(
                         orbit::studio_ui::kSecondaryViewportPanel));
+                if (fullscreenProgress > 0.0F)
+                {
+                    const float t = fullscreenProgress * fullscreenProgress * (3.0F - 2.0F * fullscreenProgress);
+                    const auto full = ui.MainViewportRect();
+                    std::array<float, 4> rect{};
+                    for (std::size_t i = 0; i < 4; ++i)
+                    {
+                        rect[i] = fullscreenDockedRect[i] + (full[i] - fullscreenDockedRect[i]) * t;
+                    }
+                    if (auto* primary = studioViews.Find("studio.primary"))
+                    {
+                        ui.DrawImageOverlay(primary->DisplayColor(), rect);
+                    }
+                }
             }
             cpuFrameTelemetry.Record(
                 CpuFrameTelemetry::Ui,
@@ -3207,7 +3279,15 @@ int orbit::editor_app::StudioApplication::Run(
                         Key::Escape) &&
                 !ui.WantsKeyboard())
             {
-                break;
+                // Esc first leaves full screen; only a further press closes Studio.
+                if (viewportFullscreen.load(std::memory_order_relaxed))
+                {
+                    viewportFullscreen.store(false, std::memory_order_relaxed);
+                }
+                else
+                {
+                    break;
+                }
             }
 
             cpuFrameTelemetry.Record(

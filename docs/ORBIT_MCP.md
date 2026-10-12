@@ -103,6 +103,7 @@ claude mcp add orbit-docs -- python <repo>/tools/mcp_server/orbit_docs_mcp_serve
 | `orbit_studio_eco_mode(enabled?)` | `studio.eco_mode_get` / `studio.eco_mode_set` | Reads or toggles Eco pacing; an RPC request wakes the Studio loop immediately. |
 | `orbit_project_create(root, name)` | `project.create` | Creates the project at `root` and switches to it. |
 | `orbit_project_open(path)` | `project.open` | Directory or `Project.orbit.toml`. Saves the current project first. |
+| `orbit_viewport_fullscreen_get()` / `orbit_viewport_fullscreen_set(enabled)` | `viewport.fullscreen_get` / `viewport.fullscreen_set` | Animated full-screen mode of the primary viewport (F11, the viewport toolbar's Full Screen button; Esc leaves it before it would close Studio). The viewport image grows from the docked panel to the window over ~0.3 s, then the panel alone fills the window. |
 | `orbit_project_discover(roots?, include_test_content?)` | `project.discover` | Scans Documents, Desktop, Downloads, Orbit's Projects folder and the engine's `examples/` folder (up to 4 levels, 4 s budget) for projects, newest first. Projects under `examples/` are marked `test_content`; `include_test_content=false` hides them, like the browser's "Show test content" checkbox (entries show a `[test]` marker). Same scan as the Project Browser's Find Projects section. |
 | `orbit_project_recent` | `project.recent` | MRU list with `available` and `error`. |
 

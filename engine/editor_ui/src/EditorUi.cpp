@@ -977,6 +977,7 @@ public:
     std::vector<PanelDefinition> panels;
     std::vector<u8> panelOpen;
     std::vector<u8> panelVisible;
+    std::unordered_map<std::string, std::array<f32, 4>> panelRects;
     std::vector<MenuAction> menuActions;
     bool automationExpandTrees{false};
     bool automationTraceWidgets{false};
@@ -1529,6 +1530,8 @@ ImageInteraction PanelContext::InteractiveImage(
         ImGuiButtonFlags_MouseButtonLeft |
             ImGuiButtonFlags_MouseButtonRight);
     ImGui::SetCursorScreenPos(after);
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelX);
 
     ImageInteraction result;
     result.hovered = ImGui::IsItemHovered();
@@ -1648,6 +1651,11 @@ ImageInteraction PanelContext::Image(
 
     const bool hovered =
         ImGui::IsItemHovered();
+
+    // The wheel (Shift swaps it to the horizontal axis) belongs to the view's zoom; it must not also scroll the
+    // panel, which drifted the viewport sideways on Shift + wheel.
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelX);
 
     const bool clicked =
         ImGui::IsItemClicked(
@@ -3580,6 +3588,9 @@ void EditorUi::DrawStudioShell()
         impl_->panelVisible[index] = visible ? 1U : 0U;
         if (visible)
         {
+            const ImVec2 windowPos = ImGui::GetWindowPos();
+            const ImVec2 windowSize = ImGui::GetWindowSize();
+            impl_->panelRects[panel.title] = {windowPos.x, windowPos.y, windowSize.x, windowSize.y};
             ::orbit::profiler::Scope panelScope(
                 ::orbit::profiler::Enabled()
                     ? ::orbit::profiler::Intern("Panel " + panel.title)
@@ -3597,6 +3608,57 @@ void EditorUi::DrawStudioShell()
     impl_->DrawNotifications(
         *mainViewport,
         ImGui::GetIO().DeltaTime);
+}
+
+std::optional<std::array<f32, 4>> EditorUi::PanelScreenRect(const PanelId id) const
+{
+    for (const PanelDefinition& panel : impl_->panels)
+    {
+        if (panel.id != id)
+        {
+            continue;
+        }
+        const auto found = impl_->panelRects.find(panel.title);
+        if (found != impl_->panelRects.end())
+        {
+            return found->second;
+        }
+    }
+    return std::nullopt;
+}
+
+std::array<f32, 4> EditorUi::MainViewportRect() const
+{
+    ImGui::SetCurrentContext(impl_->context);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    return {viewport->Pos.x, viewport->Pos.y, viewport->Size.x, viewport->Size.y};
+}
+
+void EditorUi::DrawImageOverlay(rhi::Texture& texture, const std::array<f32, 4>& rect)
+{
+    if (!impl_->frameBegun || rect[2] < 1.0F || rect[3] < 1.0F)
+    {
+        return;
+    }
+    ImGui::SetCurrentContext(impl_->context);
+    const f32 sourceAspect = texture.Height() > 0 ? static_cast<f32>(texture.Width()) / static_cast<f32>(texture.Height()) : 1.0F;
+    const f32 targetAspect = rect[2] / rect[3];
+    ImVec2 uv0{0.0F, 0.0F};
+    ImVec2 uv1{1.0F, 1.0F};
+    if (targetAspect > sourceAspect)
+    {
+        const f32 keep = sourceAspect / targetAspect;
+        uv0.y = 0.5F - keep * 0.5F;
+        uv1.y = 0.5F + keep * 0.5F;
+    }
+    else
+    {
+        const f32 keep = targetAspect / sourceAspect;
+        uv0.x = 0.5F - keep * 0.5F;
+        uv1.x = 0.5F + keep * 0.5F;
+    }
+    ImGui::GetForegroundDrawList(ImGui::GetMainViewport())->AddImage(
+        ToTextureId(texture), ImVec2(rect[0], rect[1]), ImVec2(rect[0] + rect[2], rect[1] + rect[3]), uv0, uv1);
 }
 
 bool EditorUi::DrawPanelFullscreen(const PanelId id)

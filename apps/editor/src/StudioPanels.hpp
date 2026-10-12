@@ -286,6 +286,7 @@ public:
     orbit::f64 viewportFrameDeltaSeconds = 0.0;
     orbit::platform::MouseDelta viewportFrameMouseDelta{};
     bool viewportRightGestureActive = false;
+    bool fullscreenToggleRequested = false;   // set by the viewport toolbar button; the frame loop animates it
     bool cloudSplitGrabbed = false;   // the cloud split divider is being dragged
     bool viewportRightGestureDragged = false;
     orbit::i32 viewportRightGestureDistance = 0;

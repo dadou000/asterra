@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <array>
 #include <optional>
 #include <span>
 #include <functional>
@@ -572,6 +573,13 @@ public:
     [[nodiscard]] bool SetPanelOpen(PanelId id, bool open) noexcept;
     [[nodiscard]] bool PanelOpen(PanelId id) const noexcept;
     [[nodiscard]] bool PanelVisible(PanelId id) const noexcept;
+    // Screen rectangle {x, y, width, height} of a docked panel as it was last drawn by DrawStudioShell, if it was.
+    [[nodiscard]] std::optional<std::array<f32, 4>> PanelScreenRect(PanelId id) const;
+    // Screen rectangle {x, y, width, height} of the whole window's work area.
+    [[nodiscard]] std::array<f32, 4> MainViewportRect() const;
+    // Draws the texture over everything else in `rect`, centre-cropped to keep its aspect. Used for the viewport's
+    // animated transition to and from full screen; carries no interaction.
+    void DrawImageOverlay(rhi::Texture& texture, const std::array<f32, 4>& rect);
     // Opens the panel if needed and brings it to the front of its tab group.
     [[nodiscard]] bool FocusPanel(PanelId id) noexcept;
 

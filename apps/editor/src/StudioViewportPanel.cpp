@@ -276,6 +276,12 @@ void StudioViewportPanel::Register()
                         }
                     }
 
+                    context.SameLine();
+                    if (context.Button("Full Screen (F11)##viewport-fullscreen"))
+                    {
+                        fullscreenToggleRequested = true;
+                    }
+
                     // The folder the screenshots are saved to, in the file browser.
                     context.SameLine();
                     if (context.Button(

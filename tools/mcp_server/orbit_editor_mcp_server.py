@@ -495,6 +495,20 @@ def orbit_view_text_diagnostics_set(
 
 
 @mcp.tool()
+def orbit_viewport_fullscreen_get() -> dict[str, Any]:
+    """Whether the primary viewport is in (or animating into) full-screen mode."""
+    return _rpc("viewport.fullscreen_get")
+
+
+@mcp.tool()
+def orbit_viewport_fullscreen_set(enabled: bool) -> dict[str, Any]:
+    """Animate the primary viewport into or out of full screen (F11 / the
+    viewport's Full Screen button; Esc also leaves it). The image grows from the
+    docked panel to the whole window over about 0.3 s."""
+    return _rpc("viewport.fullscreen_set", {"enabled": enabled})
+
+
+@mcp.tool()
 def orbit_project_discover(roots: list[str] | None = None, include_test_content: bool = True) -> list[dict[str, Any]]:
     """Scan the usual folders (Documents, Desktop, Downloads, Orbit's Projects
     folder) and the engine's bundled examples/ folder for Orbit projects, newest
