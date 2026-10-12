@@ -337,6 +337,8 @@ void WeatherLabUi::DrawStorm(PanelContext& context)
     }
     const StormStatus status = storm_->Status();
     context.KeyValue("State", std::format("{} ({})", StormStateName(status.state), status.mode));
+    context.KeyValue("Cross-zone disturbances",
+        std::format("{} time-stamped sources (experimental)", status.zoneCrossZoneSources));
     context.KeyValue("Convective surrogate",
         std::format("{} completed steps, {} retained precipitation exchange records",
             status.zoneCompletedSteps, status.zonePendingExchanges));
