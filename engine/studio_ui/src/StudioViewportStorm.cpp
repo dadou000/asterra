@@ -774,7 +774,7 @@ void StudioViewportRenderer::UpdateStormDomain(
                     }
                     // Spread the flashes of one job over the time it covers, so they do not arrive in a burst.
                     const std::scoped_lock flashLock(transientFlashMutex_);
-                    transientFlashes_.Add(std::move(flash.graph), centre, FlashClockSeconds() + std::min(flash.delaySeconds, 10.0), end + 1.0);
+                    transientFlashes_.Add(std::move(flash.graph), centre, FlashClockSeconds() + std::min(flash.delaySeconds / std::max(1.0, simulationRate_.load()), 10.0), end + 1.0);
                 }
             }
         }

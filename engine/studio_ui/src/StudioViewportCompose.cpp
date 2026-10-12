@@ -95,6 +95,7 @@ StudioViewportRenderer::Compose(
         }
     }
 
+    TickFlashClock(atTime);
     auto rendered =
         ComposeBase(
             graph,

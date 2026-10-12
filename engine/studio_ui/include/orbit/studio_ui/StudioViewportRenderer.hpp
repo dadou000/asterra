@@ -492,7 +492,16 @@ private:
     void ComposeLightingPasses(StudioLightingPassContext& context);
     // Lights of the flashes alive now, in the lighting frame. Both the tiled-light pass and the cloud pass call this.
     [[nodiscard]] std::vector<lighting::LocalLight> TransientFlashLights(const lighting::CameraPlacement& camera);
-    [[nodiscard]] static f64 FlashClockSeconds();
+    // The clock the lightning flashes run on: it follows the simulation clock up to real time (rate 1) and stops with it, so pausing holds a
+    // flash in the middle of its stroke and a rate below 1 plays it in slow motion; above 1 the weather speeds up and flashes stay at real
+    // time (a stroke lasts milliseconds, a faster clock would step over it between frames).
+    [[nodiscard]] f64 FlashClockSeconds() const { return flashClock_.load(); }
+    void TickFlashClock(time::SimulationTime atTime);
+    std::atomic<f64> flashClock_{0.0};
+    std::atomic<f64> simulationRate_{1.0};   // estimated simulation seconds per wall second
+    f64 flashLastWall_{-1.0};
+    f64 flashLastSim_{0.0};
+    f64 flashLastSimChangeWall_{0.0};
     // The lit channel segments of the live flashes as overlay lines relative to `camera` (empty when none is lit or arcs are off).
     std::atomic<u32> lastArcSegments_{0U};
     [[nodiscard]] std::vector<editor_ui::PreviewLine> FlashArcLines(const render_view::CameraState& camera, u32 height);

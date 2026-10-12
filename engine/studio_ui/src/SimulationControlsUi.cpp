@@ -49,9 +49,15 @@ struct RatePreset
 };
 
 // The last entry stands for any other rate, edited next to the selector.
-constexpr std::array<RatePreset, 8> kRatePresets{{
+constexpr std::array<RatePreset, 14> kRatePresets{{
+    {"0.01x", 0.01},
+    {"0.05x", 0.05},
     {"0.1x", 0.1},
+    {"0.25x", 0.25},
+    {"0.5x", 0.5},
     {"1x", 1.0},
+    {"2x", 2.0},
+    {"5x", 5.0},
     {"10x", 10.0},
     {"60x", 60.0},
     {"600x", 600.0},

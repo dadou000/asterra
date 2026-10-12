@@ -35,9 +35,31 @@ namespace
 }
 } // namespace
 
-f64 StudioViewportRenderer::FlashClockSeconds()
+void StudioViewportRenderer::TickFlashClock(const time::SimulationTime atTime)
 {
-    return std::chrono::duration<f64>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const f64 wall = std::chrono::duration<f64>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const f64 sim = static_cast<f64>(atTime.microsecondsFromEpoch) * 1.0e-6;
+    if (flashLastWall_ < 0.0)
+    {
+        flashLastWall_ = wall;
+        flashLastSim_ = sim;
+        flashLastSimChangeWall_ = wall;
+        return;
+    }
+    const f64 elapsed = std::min(wall - flashLastWall_, 0.25);   // a hitch does not jump the clock
+    flashLastWall_ = wall;
+    if (sim != flashLastSim_)
+    {
+        const f64 instant = (sim - flashLastSim_) / std::max(wall - flashLastSimChangeWall_, 1.0e-4);
+        simulationRate_ = 0.5 * simulationRate_.load() + 0.5 * instant;
+        flashLastSim_ = sim;
+        flashLastSimChangeWall_ = wall;
+    }
+    else if (wall - flashLastSimChangeWall_ > 0.25)
+    {
+        simulationRate_ = 0.0;   // paused
+    }
+    flashClock_ = flashClock_.load() + elapsed * std::clamp(simulationRate_.load(), 0.0, 1.0);
 }
 
 u64 StudioViewportRenderer::FireLightning(const lighting::FlashRequest& request)
@@ -108,6 +130,7 @@ u64 StudioViewportRenderer::AddLightningStormFlash(optical_transport::DischargeG
 std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const render_view::CameraState& camera, const u32 height)
 {
     std::vector<editor_ui::PreviewLine> out;
+    lastArcSegments_ = 0U;
     const StormLightningSettings settings = stormMailbox_.Lightning();
     if (!settings.arcs || height == 0U)
     {
