@@ -24,6 +24,8 @@ struct ConvectiveChildState
     f64 condensate{0.0};
     f64 rain{0.0};
     f64 updraft{0.0};       // normalized intensity diagnostic, not m/s
+    f64 eastKm{0.0};        // local position, relative to zone centre
+    f64 northKm{0.0};
 };
 struct WeatherZoneEvolutionState
 {
@@ -61,6 +63,8 @@ public:
             ConvectiveChildState c;
             c.id=zoneId*4U+i+1U;
             c.vapour=1.0;
+            c.eastKm=(static_cast<f64>(i)-1.0)*12.0;
+            c.northKm=static_cast<f64>((zoneId+i)%3U)*5.0;
             c.updraft=0.01*(static_cast<f64>((zoneId+i*7U)%7U)+1.0);
             state.children.push_back(c);
         }
