@@ -80,6 +80,12 @@ if(BUILD_TESTING)
         COMMAND OrbitSparseStormZonesTests
     )
 
+    add_executable(OrbitStormZoneRuntimeTests tests/StormZoneRuntimeTests.cpp)
+    target_link_libraries(OrbitStormZoneRuntimeTests PRIVATE Orbit::CelestialClouds)
+    target_compile_features(OrbitStormZoneRuntimeTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitStormZoneRuntimeTests)
+    add_test(NAME Orbit.StormZoneRuntime COMMAND OrbitStormZoneRuntimeTests)
+
     add_executable(
         OrbitStormScheduleTests
         tests/StormScheduleTests.cpp
