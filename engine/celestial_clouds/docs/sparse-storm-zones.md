@@ -109,3 +109,39 @@ retirement, backward time and bounded analytic probes.
   protocol with timestamped flux ledgers, and only then enable ticket execution
   for suitable model types. Coarse temporal skipping must never masquerade
   as successful physical integration.
+
+## Phase 5: asynchronous, transactional short-step surrogate
+
+- `WeatherEvolution.hpp` contains `WeatherConvectiveSurrogate`,
+  `WeatherEvolutionLedger` and `WeatherZoneEvolutionRunner`.
+- Each discovered zone initializes three deterministic convective child states,
+  each with its own normalized moisture inventory. These are intentionally
+  experimental perturbations, NOT physically calibrated storm cells.
+- The short-step operator partitions conserved normalized inventory among
+  vapor, condensate, precipitation and exported rain. The integrated export is
+  recorded in a time-stamped exchange ledger.
+- `WeatherEvolutionLedger::Complete` checks a matching ticket, coherent
+  timestamps and exchange metadata before committing both state and scheduler
+  progress. Unfinished tickets never advance simulated time.
+- One shared `std::async` worker runs only the selected eligible short-step
+  ticket; no per-zone threads. Results are applied on the runtime-owner thread.
+- Long-step timewarp tickets are **not executed**. They still require an
+  independently validated coarse evolution operator with integrated feedback.
+- Exchange records are retained, with a hard 4096-record capacity; execution
+  stops when capacity is exhausted rather than silently dropping exchange.
+  A real global solver needs a drain/acknowledgment consumer before production.
+- Rewinding or switching planets resets the *prototype's* zone state and ledger.
+  This cannot be used as an authoritative persistent weather history.
+- Rendering and the existing GPU storm scheduler remain unchanged. The
+  surrogate's normalized moisture and updraft values MUST NOT be rendered or
+  interpreted as meteorological predictions.
+- Live diagnostics expose completed steps and outstanding exchange records
+  in Weather Lab and `storm.status`.
+- Tests: `ctest -R "Orbit.WeatherEvolution|Orbit.WeatherMultirateScheduler|Orbit.StormZoneRuntime" --output-on-failure`.
+- Still required: a physical atmospheric input profile, conservative exchange
+  acknowledgment by a global solver, interaction topology, pressure/energy
+  coupling, calibrated temporal errors, a validated long-step operator,
+  and benchmarks on production hardware.
+
+These changes are committed but have not yet been compiled or run on the
+development machine.
