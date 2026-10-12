@@ -2,6 +2,7 @@
 
 #include <orbit/celestial_clouds/WeatherMultirateScheduler.hpp>
 #include <orbit/celestial_clouds/StormZoneRuntime.hpp>
+#include <orbit/celestial_clouds/WeatherCrossZoneField.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -30,6 +31,8 @@ struct ConvectiveChildState
     f64 northKmPerSecond{0.0};
     f64 coldPoolKm{0.0};
     f64 coldPoolStrength{0.0};  // normalized diagnostic, not thermodynamic deficit
+    f64 externalLift{0.0};     // sampled from other zones for this step
+    f64 externalUndercut{0.0}; // normalized, not SI forcing
 };
 struct WeatherZoneEvolutionState
 {
@@ -202,6 +205,12 @@ public:
         return true;
     }
 
+    template<typename Visitor>
+    void ForEachState(Visitor&& visitor) const
+    {
+        for(const auto& [id,state]:states_) { visitor(id,state); }
+    }
+
     [[nodiscard]] const std::vector<WeatherExchangeRecord>& PendingExchanges() const
     {
         return records_;
@@ -228,8 +237,10 @@ public:
         ledger_.Reset(); // prototype inventory; do not treat as authoritative climate
         lastGeneration_=0;
         completed_=0;
+        crossZone_.Clear();
     }
-    void Tick(const StormZoneSnapshot& snapshot, f64 targetSeconds)
+    void Tick(const StormZoneSnapshot& snapshot, f64 targetSeconds,
+              f64 planetRadiusMeters)
     {
         if (!std::isfinite(targetSeconds)) return;
         if (snapshot.generation==0)
@@ -243,6 +254,7 @@ public:
                 Reset();
             scheduler_.Reconcile(snapshot.zones,snapshot.simulatedSeconds);
             ledger_.Reconcile(snapshot.zones,snapshot.simulatedSeconds);
+            RefreshCrossZone(snapshot,planetRadiusMeters);
             lastGeneration_=snapshot.generation;
             lastSnapshotTime_=snapshot.simulatedSeconds;
         }
@@ -253,7 +265,10 @@ public:
             auto finished=worker_.get();
             if (finished.epoch==epoch_ && finished.result &&
                 ledger_.Complete(scheduler_,*finished.result))
+            {
                 ++completed_;
+                RefreshCrossZone(snapshot,planetRadiusMeters);
+            }
         }
         const auto tickets=scheduler_.Plan(targetSeconds);
         if (!ledger_.HasExchangeCapacity()) return;
@@ -265,7 +280,19 @@ public:
             const auto it=std::find_if(snapshot.zones.begin(),snapshot.zones.end(),
                 [&](const StormZone& z){return z.id==ticket.zoneId;});
             if(it==snapshot.zones.end()) continue;
-            const auto copy=*state;
+            auto copy=*state;
+            // Cross-zone perturbations are evaluated at the RECEIVER's own
+            // committed time. No future reads, shared mutable state, or forced
+            // synchronization between the two zones.
+            for(auto& child:copy.children)
+            {
+                const auto location=WeatherLocalDirection(it->centre,
+                    child.eastKm,child.northKm,planetRadiusMeters);
+                const auto influence=crossZone_.Sample(ticket.zoneId,location,
+                    ticket.fromSeconds,planetRadiusMeters);
+                child.externalLift=influence.lift;
+                child.externalUndercut=influence.undercut;
+            }
             const auto weights=it->weights;
             const u64 jobEpoch=epoch_;
             const auto evaluator=evaluator_;
@@ -283,7 +310,36 @@ public:
     [[nodiscard]] const WeatherMultirateScheduler& Scheduler() const noexcept {return scheduler_;}
     [[nodiscard]] const WeatherEvolutionLedger& Ledger() const noexcept {return ledger_;}
     [[nodiscard]] u64 Completed() const noexcept {return completed_;}
+    [[nodiscard]] std::size_t CrossZoneSources() const noexcept
+    { return crossZone_.SourceCount(); }
 private:
+    void RefreshCrossZone(const StormZoneSnapshot& snapshot,
+                          f64 planetRadiusMeters)
+    {
+        if(!std::isfinite(planetRadiusMeters) || planetRadiusMeters<=0)
+        {
+            crossZone_.Clear();
+            return;
+        }
+        std::vector<WeatherCrossZoneSource> sources;
+        ledger_.ForEachState([&](u64 id,const WeatherZoneEvolutionState& state)
+        {
+            const auto zone=std::find_if(snapshot.zones.begin(),snapshot.zones.end(),
+                [&](const StormZone& z){ return z.id==id; });
+            if(zone==snapshot.zones.end()) return;
+            for(const auto& child:state.children)
+            {
+                if(child.coldPoolKm<=0.001 || child.coldPoolStrength<=0.001)
+                    continue;
+                sources.push_back({
+                    id,child.id,WeatherLocalDirection(zone->centre,
+                        child.eastKm,child.northKm,planetRadiusMeters),
+                    state.simulatedSeconds,child.coldPoolKm,child.coldPoolStrength});
+            }
+        });
+        crossZone_.Publish(std::move(sources));
+    }
+
     struct Job
     {
         u64 epoch{0};
@@ -292,6 +348,7 @@ private:
     EvolutionOperator evaluator_{nullptr};
     WeatherMultirateScheduler scheduler_{};
     WeatherEvolutionLedger ledger_{};
+    WeatherCrossZoneField crossZone_{};
     std::future<Job> worker_{};
     u64 epoch_{0};
     u64 lastGeneration_{0};
