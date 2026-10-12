@@ -71,6 +71,7 @@
 #include <orbit/studio_ui/PlanningUi.hpp>
 #include <orbit/studio_ui/ReportThumbnailCache.hpp>
 #include <orbit/studio_ui/ReportsUi.hpp>
+#include <orbit/studio_ui/SessionState.hpp>
 #include <orbit/studio_ui/SimulationControlsUi.hpp>
 #include <orbit/studio_ui/ViewportCaptureService.hpp>
 #include <orbit/studio_ui/DisplayDiagnosticsUi.hpp>
@@ -1456,6 +1457,8 @@ int orbit::editor_app::StudioApplication::Run(
             simulationControls,
             studioSession);
         simulationUi.Register(ui);
+        // The camera and the simulation clock are kept in the project and put back at startup (Config/session_state.json).
+        orbit::studio_ui::SessionStateKeeper sessionKeeper(rpcHost.Dispatcher(), project.RootDirectory() / "Config" / "session_state.json");
         // Lightning: pause just before a flash in view so it can be played in slow motion (toggle in the bottom bar, storm.lightning).
         studioViewportRenderer.SetStrikePauseHandler([&simulationControls]() { simulationControls.SetPlaying(false); });
         const auto lightningToggle = [&studioViewportRenderer](std::string label, bool orbit::studio_ui::StormLightningSettings::* member)
@@ -3421,6 +3424,7 @@ int orbit::editor_app::StudioApplication::Run(
                         perViewCpuCap);
             }
 
+            sessionKeeper.Update(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
             if (pendingStrikeFrame.has_value())
             {
                 // Turn the camera to the flash and move along the line from it (closer or farther, at the same altitude) until its sphere fills

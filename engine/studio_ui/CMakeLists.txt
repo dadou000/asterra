@@ -14,6 +14,7 @@ add_library(OrbitStudioUi STATIC
     src/ReportThumbnailCache.cpp
     src/ShadingUi.cpp
     src/SimulationControlsUi.cpp
+    src/SessionState.cpp
     src/StudioExpansionShell.cpp
     src/StudioFlatMap.cpp
     src/StudioFlatMapRpc.cpp

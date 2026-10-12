@@ -15,7 +15,7 @@ symbols = ["StormPersistentState", "StormStateToValue", "RestoreStormState"]
 invariants = [
   "The state is saved by the thread that changed it, after every successful Place, Clear, SetAuto and SetLightning (a rejected request is not saved), and restored through the same validating setters, so a hand-edited or stale file cannot put the mailbox in an invalid state; problems are logged and the rest is applied.",
   "A storm restored at startup spins up again from its beginning (spin_minutes), at its original latitude and longitude: the file keeps the request, not the state of the solver, which is recomputed. A scheduled storm needs no saving beyond the setting: it is a function of the clock.",
-  "The simulation clock, its rate and the camera are not part of this state.",
+  "The camera and the simulation clock are kept by a separate keeper (Config/session_state.json), because a storm placed in a view that has no camera stays pending: it is built on the first frame that draws clouds.",
 ]
 related = ["/world/weather-lab/global-system-status-p10-ground", "/world/weather-lab/gpu-port"]
 depends_on = ["/world/weather-lab/global-system-status-p10-ground"]
@@ -34,4 +34,6 @@ verified = "e8a963b"
 
 **Checked:** with Studio started on a project without the file, `storm.place` and a set of lightning settings wrote a 507-byte file; after killing Studio and starting it again, `storm.status` was active, mode manual, latitude 5.55, 128 cells, and the lightning settings were the ones saved (test: the round trip of the JSON through a fresh mailbox, rejected requests not saved, invalid saved values reported).
 
-**Not saved:** the simulation time and rate (a restart starts at the project's time, not at dusk), the camera pose, and the state of the storm itself (a restored storm spins up again, a few seconds, from its beginning).
+**The camera and the clock.** After a hot handoff the new generation has the viewport targeting the planet but no camera (the observer is at the origin), so no clouds are drawn and a restored storm stayed `pending`. `SessionStateKeeper` (`SessionState.cpp`) saves the primary view pose and the clock (time, rate, playing) in `Config/session_state.json` every 5 s while the view has a camera, through `viewport.pose_get` / `time.get`, and at startup puts them back through `viewport.pose_set` / `time.set`: it retries every half second for up to 90 s, selects and focuses the saved body first when the view targets another one, sets the time and then whether it was playing (setting the time pauses the clock), and does nothing if the view already has a camera (the project or the user set one). Checked: with Studio running at dusk and playing, editing a native source file made Studio hand off to a new generation by itself, and the new generation came up with the storm active, the camera in place and the clock playing. A normal restart of Studio also brings the camera back (partly Studio own restore).
+
+**Not saved:** the state of the storm itself (a restored storm spins up again, a few seconds, from its beginning), and anything else about the view (layers, panel layout are Studio own).
