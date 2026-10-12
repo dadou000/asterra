@@ -64,3 +64,21 @@ retirement, backward time and bounded analytic probes.
 3. Add timestamped snapshots and budgeted multirate scheduling, followed by
    procedural convective entities and the interaction graph.
 4. Replace fixed tile occurrence authority only after emergent systems are validated.
+
+## Phase 3: live clock-driven runtime (experimental)
+- `StormZoneRuntime.hpp` owns an asynchronous, cadence-gated opportunity survey,
+  zone discovery, and immutable reference-counted snapshots.
+- `StudioViewportRenderer::UpdateStormDomain` now forwards the actual simulation
+  timestamp and active-body generation, plus the active cloud layer's weather
+  parameters. The current provider has no complete active climate sample, so
+  the climate argument remains the documented analytic default.
+- `storm.status` and Weather Lab show published zone count, candidate count,
+  generation, snapshot time and worker activity. Survey data does NOT change
+  automatic storm selection or cloud rendering.
+- Tests: `ctest -R "Orbit.SparseStormZones|Orbit.StormZoneRuntime"`.
+- The scheduler currently has a single survey cadence and does not yet manage
+  each individual zone's own simulation interval or physical interaction.
+- A snapshot may lag the displayed planetary time while asynchronous work runs.
+  During jumps, the newer survey supersedes older published state; do not use
+  snapshots as authoritative weather physics until timestamped coupling exists.
+- Build, CI and device performance need independent verification.
