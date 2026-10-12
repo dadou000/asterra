@@ -30,6 +30,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/frames/FrameGraph.hpp>
+#include <orbit/hot_reload/HotIterationService.hpp>
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/editor_rpc/ProfilerRpc.hpp>
 #include <orbit/studio_ui/StudioFlatMapRpc.hpp>
@@ -1355,6 +1356,11 @@ int orbit::editor_app::StudioApplication::Run(
         // The simulated storm domain in the viewport clouds: the panel section and the storm.* RPC share one mailbox.
         weatherLabUi.SetStormDomain(&studioViewportRenderer.StormMailbox());
         orbit::studio_ui::RegisterStormDomainRpc(rpcHost.Dispatcher(), studioViewportRenderer.StormMailbox());
+        // Saving engine/weather_gpu/shaders/storm.hlsl reloads the storm kernels in place (no rebuild, no restart).
+        [[maybe_unused]] const auto stormShaderHandler = orbit::hot_reload::AddHotIterationHandler(
+            orbit::hot_reload::ChangeKind::EngineShader,
+            [&studioViewportRenderer](const orbit::hot_reload::HotIterationEvent& event)
+            { studioViewportRenderer.StormMailbox().RequestShaderReload(event.path.string()); });
         orbit::studio_ui::RegisterWeatherLabRpc(
             rpcHost.Dispatcher(),
             weatherLabSession,

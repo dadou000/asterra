@@ -108,6 +108,29 @@ int main()
     Check(defaulted.has_value() && defaulted->nested, "a placed storm is nested by default");
     Check(autoResult.Find("result")->Find("mode") != nullptr && autoResult.Find("result")->Find("storm_id") != nullptr, "the status reports mode and storm_id");
 
+    // Hot iteration of the storm kernels: queued once, and the render thread's result shows in the status.
+    StormDomainMailbox reloads;
+    Check(!reloads.TakeShaderReload().has_value(), "no reload is queued at the start");
+    orbit::rpc::Dispatcher reloadDispatcher;
+    RegisterStormDomainRpc(reloadDispatcher, reloads);
+    const Value queuedReload = Call(reloadDispatcher, "storm.reload_shaders", R"({"path":"engine/weather_gpu/shaders/storm.hlsl"})");
+    Check(queuedReload.Find("result") != nullptr && queuedReload.Find("result")->Find("shader_reloads") != nullptr, "storm.reload_shaders answers with the status");
+    const auto reloadPath = reloads.TakeShaderReload();
+    Check(reloadPath.has_value() && *reloadPath == "engine/weather_gpu/shaders/storm.hlsl", "the path reaches the render thread");
+    Check(!reloads.TakeShaderReload().has_value(), "a reload is taken once");
+    (void)Call(reloadDispatcher, "storm.reload_shaders");
+    const auto embedded = reloads.TakeShaderReload();
+    Check(embedded.has_value() && embedded->empty(), "no path means the embedded copy");
+    Check(Call(reloadDispatcher, "storm.reload_shaders", R"({"path":3})").Find("error") != nullptr, "path must be a string");
+    reloads.PublishShaderReload("ok storm.hlsl", true);
+    reloads.PublishShaderReload("failed: AdvectVelocity: Orbit failed to compile HLSL to SPIR-V.", false);
+    const StormStatus reloadStatus = reloads.Status();
+    Check(reloadStatus.shaderReloads == 1U && reloadStatus.shaderReload.rfind("failed", 0) == 0, "a failed reload is reported and not counted");
+    StormStatus published;
+    published.state = StormStatus::State::Active;
+    reloads.Publish(published);
+    Check(reloads.Status().shaderReloads == 1U && !reloads.Status().shaderReload.empty(), "the reload result survives the render thread's status updates");
+
     if (failures == 0) { std::printf("StormDomain: all checks passed\n"); }
     return failures == 0 ? 0 : 1;
 }

@@ -42,9 +42,9 @@ struct Params
 static_assert(sizeof(Params) == 52U * 4U);
 
 // The entry points of storm.hlsl.
-constexpr std::array<const char*, 17> kKernels{
+constexpr std::array<const char*, 18> kKernels{
     "AdvectVelocity", "AdvectScalars", "MassPartial", "MassRatio", "MassScale", "Microphysics", "Buoyancy", "TopSponge", "Mix",
-    "LateralSponge", "ProjRhs", "FftLine", "ProjTridiag", "ProjGradient", "ExportCloud", "RelaxBand", "CopyState"};
+    "LateralSponge", "ProjRhs", "FftLine", "ProjTridiag", "ProjGradient", "ExportCloud", "ExportInfluence", "RelaxBand", "CopyState"};
 
 std::string ReadFile(const char* path)
 {
@@ -116,7 +116,7 @@ struct GpuStormSolver::Impl
         const u64 auxFloats = 2ULL * (nScalars > 0U ? nScalars - 1U : 0U) * cfg.nz + nScalars + 8U;
         offSnap = static_cast<u32>(static_cast<u64>(offAux) + auxFloats);
         totalFloats = static_cast<u64>(offSnap) + (options.snapshot ? copyFloats : 0ULL);
-        cloudCells = cells + options.cloudExtraCells;
+        cloudCells = cells + options.cloudExtraCells + 2U * plane;   // + the two scratch maps of the influence pass
         bytes = static_cast<std::size_t>(totalFloats * sizeof(f32));
 
         arena = device.CreateBuffer({.sizeBytes = totalFloats * sizeof(f32), .usage = rhi::BufferUsage::Structured,
@@ -298,6 +298,7 @@ struct GpuStormSolver::Impl
         commands->SetComputeBuffer(3U, parentBuffer != nullptr ? *parentBuffer : *arena);   // only RelaxBand reads the parent here
         commands->Dispatch(gx, gy, gz);
         commands->UavBarrier(*arena);
+        if (outBuffer != nullptr) { commands->UavBarrier(*outBuffer); }
     }
 
     void RecordStep(const f32 dt, const ParentLink* link = nullptr)
@@ -665,6 +666,7 @@ void GpuStormSolver::ExportCloud(const StormPlacement& placement)
     const f32 sponge = static_cast<f32>(s.cfg.lateralSpongeCells > 0U ? s.cfg.lateralSpongeCells : 8U) * s.cfg.dx;
     header[20] = placement.fadeMeters > 0.0F ? placement.fadeMeters : sponge;
     header[21] = std::clamp(placement.intensity, 0.0F, 1.0F);
+    header[10] = static_cast<f32>(32U + s.cells + s.options.cloudExtraCells);   // the influence map follows the child's cells
     if (placement.child.present)
     {
         header[22] = 1.0F;
@@ -693,6 +695,24 @@ void GpuStormSolver::ExportCloud(const StormPlacement& placement)
     s.commands->SetComputeBuffer(2U, *s.cloudOut);
     s.commands->Dispatch((s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, s.cfg.nz);
     s.commands->UavBarrier(*s.cloudOut);
+    // The influence map: column optical depth, then a separable maximum over about 40 km, mapped to 0..1.
+    const u32 radiusCells = static_cast<u32>(std::clamp(40000.0F / s.cfg.dx, 4.0F, 40.0F));
+    const u32 mapOffset = 32U + s.cells + s.options.cloudExtraCells;
+    for (u32 stage = 0; stage < 3U; ++stage)
+    {
+        Params q = s.Base();
+        q.outOffset = mapOffset;
+        q.arg0 = stage;
+        q.arg1 = radiusCells;
+        s.commands->SetComputePipeline(*s.pipelines.at("ExportInfluence"));
+        s.commands->SetComputeConstants(std::span<const u32>(reinterpret_cast<const u32*>(&q), sizeof(Params) / 4U));
+        s.commands->SetComputeBuffer(0U, *s.arena);
+        s.commands->SetComputeBuffer(1U, *s.baseBuffer);
+        s.commands->SetComputeBuffer(2U, *s.cloudOut);
+        s.commands->SetComputeBuffer(3U, *s.arena);
+        s.commands->Dispatch((s.cfg.nx + 7U) / 8U, (s.cfg.ny + 7U) / 8U, 1U);
+        s.commands->UavBarrier(*s.cloudOut);
+    }
     s.commands->Transition(*s.cloudOut, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::ShaderResource);
     s.Submit();
 }

@@ -691,6 +691,24 @@ float ExtinctionProcedural(float4 column, float3 position, float radius, float f
 // The simulated storm replaces the procedural density inside its domain. Header (g_storm): [0] active, [1..3] domain centre on the
 // ground (m, planet-centred), [4..6] east, [7..9] north (unit), [13] planet radius, [14] dx, [15] dy, [16] dz (m), [17..19] nx ny nz,
 // [20] width of the fade at the domain edge (m), [22..31] the nest's child level (see StormCellChild), [21] intensity 0..1 (a dying storm dissolves into the procedural clouds). The domain translates with its Galilean frame, so the host moves the centre.
+// Where the simulation has cloud within about 40 km (header [10] = index of the 0..1 map over the parent grid, 0 = no map): the procedural
+// clouds stay everywhere else inside the domain.
+float StormInfluence(float x, float y)
+{
+    const int offset = (int)g_storm[10];
+    if (offset <= 0) { return 1.0; }
+    const int nx = (int)g_storm[17], ny = (int)g_storm[18];
+    const float fx = x / g_storm[14] + 0.5 * nx - 0.5;
+    const float fy = y / g_storm[15] + 0.5 * ny - 0.5;
+    const float2 f = floor(float2(fx, fy));
+    const float2 t = float2(fx, fy) - f;
+    const int2 c = int2(f);
+    const int2 a = clamp(c, int2(0, 0), int2(nx - 1, ny - 1));
+    const int2 b = clamp(c + int2(1, 1), int2(0, 0), int2(nx - 1, ny - 1));
+    return lerp(lerp(g_storm[offset + a.y * nx + a.x], g_storm[offset + a.y * nx + b.x], t.x),
+        lerp(g_storm[offset + b.y * nx + a.x], g_storm[offset + b.y * nx + b.x], t.x), t.y);
+}
+
 float StormMask(float3 position, float radius)
 {
     const float3 dir = position / max(radius, 1.0);
@@ -702,7 +720,7 @@ float StormMask(float3 position, float radius)
     const float halfX = 0.5 * g_storm[17] * g_storm[14];
     const float halfY = 0.5 * g_storm[18] * g_storm[15];
     const float edge = min(halfX - abs(x), halfY - abs(y));
-    return SmoothRange(0.0, max(g_storm[20], 1.0), edge) * g_storm[21];
+    return SmoothRange(0.0, max(g_storm[20], 1.0), edge) * g_storm[21] * StormInfluence(x, y);
 }
 
 float StormCell(int3 c)

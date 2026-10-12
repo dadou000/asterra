@@ -61,6 +61,7 @@ verified = "f4a2dc6"
 "measured results of phases 3 and 4 (sponge, adaptive nest, GPU port)" = "global-system-status-late"
 "phase 6: scheduled storms, checkpoints, timewarp results" = "global-system-status-p6"
 "phase 7: the nest on the GPU and in the clouds, measured" = "global-system-status-p7"
+"phase 8: child-edge artifact, hot-reloadable kernels, continuous sky" = "global-system-status-p8"
 "GPU port: Vulkan compute kernels, CPU comparison, benchmark" = "gpu-port"
 +++
 

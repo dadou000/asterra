@@ -69,6 +69,8 @@ struct StormStatus
     u32 scheduledNearby{0};      // live scheduled storms within the search radius
     bool nested{false};          // the storm being drawn has a child grid
     f32 childSpacingMeters{0.0F};
+    std::string shaderReload;    // the last storm shader reload: "" never, "ok <file>" or "failed: <compile error>"
+    u32 shaderReloads{0};        // successful reloads so far
 };
 
 [[nodiscard]] const char* StormStateName(StormStatus::State state) noexcept;
@@ -85,11 +87,16 @@ public:
     // Automatic (scheduled) storms; validates and queues.
     [[nodiscard]] std::string SetAuto(const StormAutoRequest& request);
     [[nodiscard]] StormAutoRequest AutoSetting() const;
+    // Queues a reload of the storm kernels from `path` (empty: the embedded copy). The hot-iteration handler and storm.reload_shaders both
+    // call this; the render thread does the reload.
+    void RequestShaderReload(const std::string& path);
 
     // Render thread.
     [[nodiscard]] std::optional<StormPlaceRequest> TakePlace();
     [[nodiscard]] bool TakeClear();
     [[nodiscard]] std::optional<StormAutoRequest> TakeAuto();
+    [[nodiscard]] std::optional<std::string> TakeShaderReload();
+    void PublishShaderReload(const std::string& message, bool succeeded);
     void Publish(const StormStatus& status);
 
 private:
@@ -97,6 +104,9 @@ private:
     std::optional<StormPlaceRequest> place_;
     bool clear_{false};
     std::optional<StormAutoRequest> auto_;
+    std::optional<std::string> reload_;
+    std::string reloadMessage_;
+    u32 reloadCount_{0};
     StormAutoRequest autoSetting_;
     StormStatus status_;
 };

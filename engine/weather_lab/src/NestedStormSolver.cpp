@@ -226,7 +226,9 @@ struct NestedStormSolver::Impl
                             continue;
                         }
                         const float ramp = std::cos(0.5F * static_cast<float>(kPi) * static_cast<float>(d) / static_cast<float>(width));
-                        const float weight = edge * ramp * ramp;
+                        // The outer two cells are held to the parent outright (see storm.hlsl RelaxBand): the periodic child draws in air from
+                        // its opposite edge at the inflow side.
+                        const float weight = d < 2 ? 1.0F : edge * ramp * ramp;
                         float& value = pointers[f][(static_cast<std::size_t>(k) * s.ny + static_cast<std::size_t>(j)) * s.nx
                             + static_cast<std::size_t>(i)];
                         value += weight * (ParentValue(f, static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(j), k, blend) - value);

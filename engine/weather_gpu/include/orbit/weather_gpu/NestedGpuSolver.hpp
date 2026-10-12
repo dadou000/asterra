@@ -35,6 +35,9 @@ public:
 
     [[nodiscard]] static std::string Validate(const NestedGpuConfig& config);
 
+    // Recompiles the kernels of both levels from `source` (see GpuStormSolver::ReloadShaders); a failure leaves both running.
+    [[nodiscard]] std::string ReloadShaders(std::string_view source = {});
+
     // Copies the CPU parent's initial state in and fills the child from it.
     void Upload(weather_lab::FastStormSolver& cpuParent);
     // `steps` parent steps of `dt` seconds, each followed by the child's sub-steps.

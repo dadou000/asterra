@@ -35,6 +35,8 @@ Order follows risk: the nesting and the pressure solve across levels come before
 
 Added after the first six: **P7, the nest on the GPU and in the clouds** (gate: the GPU nest matches the CPU nest, the child's finer extinction shows on screen, the cost stays small, phase 6 still holds); first slice built, see `global-system-status-p7`.
 
+Then **P8, three loose ends**: the child-edge artifact, hot reload of the storm kernels through the central watcher, and the procedural sky kept around the storm (all met, see `global-system-status-p8`).
+
 ## Time and determinism
 
 - A domain is a function of its placement trigger (planet, location, start time, seed) and the analytic map; state at time t is the nearest stored checkpoint at or before t plus a deterministic integration. Checkpoints are written at a fixed cadence and versioned with the solver generation.

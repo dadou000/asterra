@@ -54,6 +54,9 @@
 #ifndef ENTRY_ExportCloud
 #define ENTRY_ExportCloud ExportCloud
 #endif
+#ifndef ENTRY_ExportInfluence
+#define ENTRY_ExportInfluence ExportInfluence
+#endif
 #ifndef ENTRY_RelaxBand
 #define ENTRY_RelaxBand RelaxBand
 #endif
@@ -793,19 +796,65 @@ void ENTRY_ProjGradient(uint3 id : SV_DispatchThreadID)
 
 // Optical extinction (1/m) of the condensate in every cell, for the cloud renderer: sigma = 3 q rho / (2 rho_w r_eff) per species with
 // effective radii of 10 um (cloud water), 30 um (cloud ice), 200 um (snow), 1 mm (graupel) and 0.5 mm (rain). Dispatch (nx/8, ny/8, nz).
-[numthreads(8, 8, 1)]
-void ENTRY_ExportCloud(uint3 id : SV_DispatchThreadID)
+float CellSigma(uint k, uint idx)
 {
-    if (id.x >= P.nx || id.y >= P.ny || id.z >= P.nz) { return; }
-    const uint idx = (id.z * P.ny + id.y) * P.nx + id.x;
     float sigma = 0.0;
     if (Moist())
     {
         sigma = 150.0 * S(2u, idx) + 3.0 * S(3u, idx);
         if (Ice()) { sigma += 54.0 * S(4u, idx) + 8.2 * S(5u, idx) + 1.6 * S(6u, idx); }
-        sigma *= BDensity(id.z);
+        sigma *= BDensity(k);
     }
-    g_out[P.outOffset + idx] = sigma;
+    return sigma;
+}
+
+[numthreads(8, 8, 1)]
+void ENTRY_ExportCloud(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= P.nx || id.y >= P.ny || id.z >= P.nz) { return; }
+    const uint idx = (id.z * P.ny + id.y) * P.nx + id.x;
+    g_out[P.outOffset + idx] = CellSigma(id.z, idx);
+}
+
+// Where the simulation has cloud nearby: the renderer keeps the procedural clouds wherever this is 0 (the simulation has no shallow
+// cumulus, so replacing everything inside the domain left a clear patch around the storm). Three passes over the parent grid, each
+// dispatched (nx/8, ny/8) with the map at outOffset (A) and a scratch map right after it (B): arg0 = 0 column optical depth into A;
+// 1 horizontal maximum over arg1 cells, A to B; 2 vertical maximum B to A, mapped to 0..1.
+[numthreads(8, 8, 1)]
+void ENTRY_ExportInfluence(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= P.nx || id.y >= P.ny) { return; }
+    const uint mapA = P.outOffset;
+    const uint mapB = P.outOffset + P.plane;
+    const uint cell = id.y * P.nx + id.x;
+    const int radius = (int)P.arg1;
+    if (P.arg0 == 0u)
+    {
+        float tau = 0.0;
+        for (uint k = 0u; k < P.nz; ++k) { tau += CellSigma(k, k * P.plane + cell) * P.dz; }
+        g_out[mapA + cell] = tau;
+    }
+    else if (P.arg0 == 1u)
+    {
+        float best = 0.0;
+        for (int d = -radius; d <= radius; ++d)
+        {
+            const int x = clamp((int)id.x + d, 0, (int)P.nx - 1);
+            best = max(best, g_out[mapA + id.y * P.nx + (uint)x]);
+        }
+        g_out[mapB + cell] = best;
+    }
+    else
+    {
+        float best = 0.0;
+        for (int d = -radius; d <= radius; ++d)
+        {
+            const int y = clamp((int)id.y + d, 0, (int)P.ny - 1);
+            best = max(best, g_out[mapB + (uint)y * P.nx + id.x]);
+        }
+        const float t = saturate((best - 0.03) / (0.5 - 0.03));
+        g_out[mapA + cell] = t * t * (3.0 - 2.0 * t);
+    }
 }
 
 // ----------------------------------------------------------------------------- nesting
@@ -843,7 +892,9 @@ void ENTRY_RelaxBand(uint3 id : SV_DispatchThreadID)
     {
         if (d >= (int)P.relaxWidth) { return; }
         const float ramp = cos(0.5 * kPi * (float)d / (float)P.relaxWidth);
-        weight = P.edgeWeight * ramp * ramp;
+        // The outer two cells are held to the parent outright: the child's grid is periodic, so its inflow edge draws in air from the
+        // opposite edge, and a partial weight left a sheet of that air (anvil ice from the far side) along the whole edge.
+        weight = d < 2 ? 1.0 : P.edgeWeight * ramp * ramp;
     }
     const uint k = id.z;
     const float r = (float)P.ratio;

@@ -34,6 +34,8 @@ Value StatusValue(const StormStatus& s)
         {"checkpoints", static_cast<f64>(s.checkpoints)},
         {"checkpoint_mib", s.checkpointMiB},
         {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)},
+        {"shader_reload", s.shaderReload},
+        {"shader_reloads", static_cast<f64>(s.shaderReloads)},
         {"nested", s.nested},
         {"child_spacing_m", static_cast<f64>(s.childSpacingMeters)}};
 }
@@ -128,6 +130,29 @@ std::optional<StormAutoRequest> StormDomainMailbox::TakeAuto()
     return request;
 }
 
+void StormDomainMailbox::RequestShaderReload(const std::string& path)
+{
+    const std::scoped_lock lock(mutex_);
+    reload_ = path;
+}
+
+std::optional<std::string> StormDomainMailbox::TakeShaderReload()
+{
+    const std::scoped_lock lock(mutex_);
+    auto path = reload_;
+    reload_.reset();
+    return path;
+}
+
+void StormDomainMailbox::PublishShaderReload(const std::string& message, const bool succeeded)
+{
+    const std::scoped_lock lock(mutex_);
+    reloadMessage_ = message;
+    if (succeeded) { ++reloadCount_; }
+    status_.shaderReload = reloadMessage_;
+    status_.shaderReloads = reloadCount_;
+}
+
 void StormDomainMailbox::Clear()
 {
     const std::scoped_lock lock(mutex_);
@@ -164,6 +189,8 @@ void StormDomainMailbox::Publish(const StormStatus& status)
     // A queued request or clear that arrived meanwhile wins over a stale status from the render thread.
     if (place_.has_value() || clear_) { return; }
     status_ = status;
+    status_.shaderReload = reloadMessage_;
+    status_.shaderReloads = reloadCount_;
 }
 
 void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mailbox)
@@ -263,6 +290,29 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
             Value::Object result{{"error", error}};
             for (auto& entry : StatusValue(mailbox.Status()).AsObject()) { result.insert(entry); }
             return result;
+        });
+
+    dispatcher.Register(
+        {
+            .name = "storm.reload_shaders",
+            .description =
+                "Recompiles the storm solver's compute kernels (engine/weather_gpu/shaders/storm.hlsl) without restarting: from `path`, or "
+                "from the file named by ORBIT_WEATHER_GPU_SHADER, or the embedded copy when neither is given. The same thing happens "
+                "automatically when storm.hlsl is saved while Studio runs (hot iteration). A kernel that does not compile leaves the "
+                "running ones in use and reports the error in `shader_reload` of storm.status; the storm itself is untouched. The reload "
+                "happens on the next frame that draws clouds.",
+            .mutating = true
+        },
+        [&mailbox](const Value& params)
+        {
+            std::string path;
+            if (const Value* p = params.IsObject() ? params.Find("path") : nullptr; p != nullptr)
+            {
+                if (!p->IsString()) { throw rpc::Error(kBadParams, "path must be a string."); }
+                path = p->AsString();
+            }
+            mailbox.RequestShaderReload(path);
+            return StatusValue(mailbox.Status());
         });
 
     dispatcher.Register(

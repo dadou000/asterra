@@ -1220,6 +1220,18 @@ def orbit_storm_auto(
 
 
 @mcp.tool()
+def orbit_storm_reload_shaders(path: str = "") -> dict[str, Any]:
+    """Recompile the storm solver's compute kernels (engine/weather_gpu/shaders/
+    storm.hlsl) without restarting, from path, or the file named by
+    ORBIT_WEATHER_GPU_SHADER, or the embedded copy. This also happens
+    automatically when storm.hlsl is saved while Studio runs. A kernel that does
+    not compile leaves the running ones in use and the error appears in
+    shader_reload of orbit_storm_status; the storm is untouched. Happens on the
+    next frame that draws clouds."""
+    return _rpc("storm.reload_shaders", {"path": path} if path else {})
+
+
+@mcp.tool()
 def orbit_storm_clear() -> dict[str, Any]:
     """Remove the simulated storm domain; the procedural clouds return."""
     return _rpc("storm.clear")

@@ -663,6 +663,7 @@ private:
                     }
 
                     if (kind == ChangeKind::Shader ||
+                        kind == ChangeKind::EngineShader ||
                         kind == ChangeKind::Script ||
                         kind == ChangeKind::Content)
                     {

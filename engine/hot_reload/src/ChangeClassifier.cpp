@@ -137,6 +137,11 @@ ChangeKind ClassifyChange(const std::filesystem::path& path)
         // they can be swapped independently, so for now they use the seamless
         // incremental Studio generation refresh rather than being consumed by
         // the direct-resource queue with no effect.
+        if (generic.find("engine/weather_gpu/shaders/") != std::string::npos)
+        {
+            // GpuStormSolver::ReloadShaders swaps the pipelines in place and keeps the running ones when the edit does not compile.
+            return ChangeKind::EngineShader;
+        }
         return IsContentPath(generic)
             ? ChangeKind::Shader
             : ChangeKind::RestartRequired;
@@ -190,6 +195,8 @@ std::string_view ChangeKindName(const ChangeKind kind) noexcept
         return "native-module";
     case ChangeKind::Shader:
         return "shader";
+    case ChangeKind::EngineShader:
+        return "engine-shader";
     case ChangeKind::Script:
         return "script";
     case ChangeKind::Content:

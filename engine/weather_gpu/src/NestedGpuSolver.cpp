@@ -31,7 +31,7 @@ struct NestedGpuSolver::Impl
 
         GpuStormOptions parentOptions;
         parentOptions.snapshot = true;
-        parentOptions.cloudExtraCells = c.nx * c.ny * c.nz;
+        parentOptions.cloudExtraCells = c.nx * c.ny * c.nz;   // the child's cells; the influence map follows them
         parent = std::make_unique<GpuStormSolver>(device, compiler, p, parentOptions);
         child = std::make_unique<GpuStormSolver>(device, compiler, c, GpuStormOptions{});
     }
@@ -91,6 +91,17 @@ std::string NestedGpuSolver::Validate(const NestedGpuConfig& config)
         return "childSubsteps must be 1 to 4";
     }
     return {};
+}
+
+std::string NestedGpuSolver::ReloadShaders(const std::string_view source)
+{
+    Impl& s = *impl_;
+    // Same source for both levels: compile the parent first and only swap the child when the parent compiled.
+    if (std::string error = s.parent->ReloadShaders(source); !error.empty())
+    {
+        return error;
+    }
+    return s.child->ReloadShaders(source);
 }
 
 void NestedGpuSolver::Upload(weather_lab::FastStormSolver& cpuParent)

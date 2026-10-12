@@ -7,6 +7,9 @@
 #include <orbit/weather_lab/FastStormSolver.hpp>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -59,6 +62,7 @@ public:
             single_ = std::make_unique<weather_gpu::GpuStormSolver>(device, compiler, config);
         }
     }
+    [[nodiscard]] std::string ReloadShaders(const std::string_view source) { return nested_ ? nested_->ReloadShaders(source) : single_->ReloadShaders(source); }
     void Upload(weather_lab::FastStormSolver& cpu) { if (nested_) { nested_->Upload(cpu); } else { single_->Upload(cpu); } }
     void Advance(const u32 steps, const f32 dt) { if (nested_) { nested_->Advance(steps, dt); } else { single_->Advance(steps, dt); } }
     [[nodiscard]] weather_gpu::StormCheckpoint Save() { return nested_ ? nested_->Save() : single_->Save(); }
@@ -136,6 +140,7 @@ struct StudioViewportRenderer::StormRuntime
     std::map<u64, u64> lastUse;
     u64 useCounter{0};
     std::size_t checkpointBytes{0};
+    std::string shaderSource;   // the last reloaded kernel source, applied to solvers built afterwards (empty: the embedded copy)
 };
 
 StudioViewportRenderer::~StudioViewportRenderer() = default;
@@ -154,6 +159,49 @@ void StudioViewportRenderer::UpdateStormDomain(
     }
     StormRuntime& rt = *storm_;
     const f64 nowSeconds = static_cast<f64>(now.microsecondsFromEpoch) * 1.0e-6;
+
+    if (const auto reload = stormMailbox_.TakeShaderReload(); reload.has_value())
+    {
+        // Hot iteration: the kernels are recompiled in place; a failure keeps the running pipelines (GpuStormSolver::ReloadShaders).
+        std::string source;
+        std::string name = "embedded";
+        bool readable = true;
+        if (!reload->empty())
+        {
+            std::ifstream file(*reload, std::ios::binary);
+            std::ostringstream text;
+            text << file.rdbuf();
+            source = text.str();
+            name = std::filesystem::path(*reload).filename().string();
+            readable = file.good() || !source.empty();
+        }
+        if (!readable)
+        {
+            stormMailbox_.PublishShaderReload("failed: cannot read " + *reload, false);
+        }
+        else
+        {
+            std::string error;
+            try
+            {
+                error = rt.solver ? rt.solver->ReloadShaders(source) : std::string();
+            }
+            catch (const std::exception& exception)
+            {
+                error = exception.what();
+            }
+            if (error.empty())
+            {
+                rt.shaderSource = source;
+                rt.exported = false;   // draw the storm again with the new kernels even when the clock is paused
+                stormMailbox_.PublishShaderReload("ok " + name, true);
+            }
+            else
+            {
+                stormMailbox_.PublishShaderReload("failed: " + error, false);
+            }
+        }
+    }
 
     if (const auto request = stormMailbox_.TakeAuto(); request.has_value())
     {
@@ -283,6 +331,14 @@ void StudioViewportRenderer::UpdateStormDomain(
                 throw std::runtime_error(problem);
             }
             rt.solver = std::make_unique<StormSim>(*device_, *compiler_, wanted.config, wanted.nested);
+            if (!rt.shaderSource.empty())
+            {
+                // A kernel edit reloaded earlier applies to this new solver too.
+                if (const std::string error = rt.solver->ReloadShaders(rt.shaderSource); !error.empty())
+                {
+                    log::Warning("Storm kernels from the last reload do not compile on this grid: " + error);
+                }
+            }
             rt.solverGridKey = gridKey;
             rt.checkpoints.clear();
             rt.lastUse.clear();

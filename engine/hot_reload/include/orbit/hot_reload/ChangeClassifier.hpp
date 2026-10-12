@@ -13,7 +13,10 @@ enum class ChangeKind : std::uint8_t
     Shader,
     Script,
     Content,
-    RestartRequired
+    RestartRequired,
+    // An engine-owned shader source that its owner reloads in place (today: engine/weather_gpu/shaders), published to handlers like
+    // the content kinds instead of triggering the generation refresh.
+    EngineShader
 };
 
 [[nodiscard]] ChangeKind ClassifyChange(

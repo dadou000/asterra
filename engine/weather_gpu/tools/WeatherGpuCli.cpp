@@ -234,6 +234,91 @@ int NestBench(const Options& o)
         nest.childSubsteps, perStep, dt / (perStep / 1000.0), static_cast<double>(solver.ResidentBytes()) / (1024.0 * 1024.0));
     return 0;
 }
+int NestDiag(const Options& o)
+{
+    auto device = OpenDevice();
+    if (!device) { return 3; }
+    shader::dxc::DxcShaderCompiler compiler;
+    weather_gpu::NestedGpuConfig nest;
+    nest.parent = ConfigFrom(o, 128.0, 12.0);
+    nest.parent.bubble.amplitude = static_cast<float>(Number(o, "bubble", 2.0));
+    nest.ratio = 4;
+    nest.cells = nest.parent.nx / 4;
+    nest.relaxCells = static_cast<std::uint32_t>(Number(o, "relax", 12.0));
+    const auto steps = static_cast<std::uint32_t>(Number(o, "steps", 150.0));
+    const float dt = nest.parent.maxTimeStep;
+    FastStormSolver cpu(nest.parent);
+    weather_gpu::NestedGpuSolver solver(*device, compiler, nest);
+    solver.Upload(cpu);
+    solver.Advance(steps, dt);
+    const weather_lab::FastStormConfig& cc = solver.Child().Config();
+    FastStormSolver child(cc);
+    solver.Child().Download(child);
+    const FastStormState s = child.MutableState();
+    const std::size_t plane = static_cast<std::size_t>(cc.nx) * cc.ny;
+    // Per column: the highest level that has condensate and its peak (qc + qi + qs), and where those columns sit relative to the edge.
+    std::vector<float> peak(plane, 0.0F);
+    std::vector<int> topLevel(plane, -1);
+    for (std::uint32_t k = 0; k < cc.nz; ++k)
+    {
+        for (std::size_t c = 0; c < plane; ++c)
+        {
+            const float q = s.qc[k * plane + c] + s.qi[k * plane + c] + s.qs[k * plane + c];
+            if (q > peak[c]) { peak[c] = q; }
+            if (q > 1.0e-6F) { topLevel[c] = static_cast<int>(k); }
+        }
+    }
+    float global = 0.0F;
+    for (const float v : peak) { global = std::max(global, v); }
+    std::printf("child %ux%u, condensate peak per column (g/kg), every 4th cell; * marks the %u cell relaxation band:\n", cc.nx, cc.ny, nest.relaxCells);
+    for (std::uint32_t j = cc.ny; j-- > 0;)
+    {
+        if (j % 4U != 0U) { continue; }
+        for (std::uint32_t i = 0; i < cc.nx; i += 2U)
+        {
+            const float v = peak[j * cc.nx + i] * 1000.0F;
+            const bool band = i < nest.relaxCells || i >= cc.nx - nest.relaxCells || j < nest.relaxCells || j >= cc.ny - nest.relaxCells;
+            char ch = v < 0.002F ? '.' : (v < 0.05F ? ':' : (v < 0.5F ? 'o' : (v < 2.0F ? 'O' : '#')));
+            if (band && ch != '.') { ch = ch == '#' ? '@' : '*'; }
+            std::putchar(ch);
+        }
+        std::putchar('\n');
+    }
+    {
+        // The child's edge column against the parent's value at the same place, by height.
+        FastStormSolver parentBack(nest.parent);
+        solver.Parent().Download(parentBack);
+        const FastStormState ps = parentBack.MutableState();
+        const std::uint32_t originI = (nest.parent.nx - nest.cells) / 2U;
+        const std::uint32_t originJ = (nest.parent.ny - nest.cells) / 2U;
+        const std::size_t pPlane = static_cast<std::size_t>(nest.parent.nx) * nest.parent.ny;
+        const std::uint32_t j = cc.ny / 2U;
+        std::printf("row j=%u: child i=0..3 and parent column at the child's west edge, condensate g/kg by level (k: child0 child1 child4 parent)\n", j);
+        for (std::uint32_t k = 0; k < cc.nz; k += 3U)
+        {
+            const auto edge = [&](const std::uint32_t i) { return (s.qc[(k * cc.ny + j) * cc.nx + i] + s.qi[(k * cc.ny + j) * cc.nx + i] + s.qs[(k * cc.ny + j) * cc.nx + i]) * 1000.0F; };
+            const std::size_t pi = k * pPlane + (originJ + j / 4U) * nest.parent.nx + originI;
+            const float parent = (ps.qc[pi] + ps.qi[pi] + ps.qs[pi]) * 1000.0F;
+            const float parentOutside = (ps.qc[pi - 1U] + ps.qi[pi - 1U] + ps.qs[pi - 1U]) * 1000.0F;
+            std::printf("  k=%2u  %.4f %.4f %.4f | parent at edge %.4f, one cell outside %.4f\n", k, static_cast<double>(edge(0)), static_cast<double>(edge(1)),
+                static_cast<double>(edge(4)), static_cast<double>(parent), static_cast<double>(parentOutside));
+        }
+    }
+    // Condensate sitting in the band and the interior, by column count.
+    int bandColumns = 0, interiorColumns = 0;
+    for (std::uint32_t j = 0; j < cc.ny; ++j)
+    {
+        for (std::uint32_t i = 0; i < cc.nx; ++i)
+        {
+            if (peak[j * cc.nx + i] * 1000.0F < 0.002F) { continue; }
+            const bool band = i < nest.relaxCells || i >= cc.nx - nest.relaxCells || j < nest.relaxCells || j >= cc.ny - nest.relaxCells;
+            (band ? bandColumns : interiorColumns) += 1;
+        }
+    }
+    std::printf("columns with condensate: %d in the relaxation band, %d in the interior (global peak %.3f g/kg)\n", bandColumns, interiorColumns,
+        static_cast<double>(global) * 1000.0);
+    return 0;
+}
 } // namespace
 
 int main(const int argc, char** argv)
@@ -247,6 +332,7 @@ int main(const int argc, char** argv)
     if (command == "compare") { return Compare(ParseOptions(argc, argv, 2)); }
     if (command == "bench") { return Bench(ParseOptions(argc, argv, 2)); }
     if (command == "nest") { return NestBench(ParseOptions(argc, argv, 2)); }
+    if (command == "nestdiag") { return NestDiag(ParseOptions(argc, argv, 2)); }
     std::cerr << "unknown command\n";
     return 2;
 }
