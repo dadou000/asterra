@@ -66,6 +66,21 @@ if(BUILD_TESTING)
         OrbitWeatherMapDump PRIVATE cxx_std_23)
 
     add_executable(
+        OrbitSparseStormZonesTests
+        tests/SparseStormZonesTests.cpp
+    )
+    target_link_libraries(
+        OrbitSparseStormZonesTests
+        PRIVATE Orbit::CelestialClouds
+    )
+    target_compile_features(OrbitSparseStormZonesTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitSparseStormZonesTests)
+    add_test(
+        NAME Orbit.SparseStormZones
+        COMMAND OrbitSparseStormZonesTests
+    )
+
+    add_executable(
         OrbitStormScheduleTests
         tests/StormScheduleTests.cpp
     )
