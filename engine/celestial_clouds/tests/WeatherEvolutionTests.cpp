@@ -61,6 +61,36 @@ int main()
     ledger.Reconcile({},200);
     Check(ledger.State(42)==nullptr,"dissolved zone state retired");
     Check(ledger.PendingExchanges().size()==1,"unconsumed exchange retained");
+
+    // Delivery is strictly ordered and never removes a rejected record.
+    struct Consumer final : IWeatherExchangeConsumer
+    {
+        std::vector<std::pair<u64,u64>> received;
+        bool reject{false};
+        [[nodiscard]] bool Accept(const WeatherExchangeRecord& r) override
+        {
+            if(reject) return false;
+            received.emplace_back(r.epoch,r.sequence);
+            return true;
+        }
+    } consumer;
+    Check(ledger.PendingExchanges().size()==1,"retired zone retains undelivered export");
+    const auto epoch=ledger.PendingExchanges().front().epoch;
+    const auto sequence=ledger.PendingExchanges().front().sequence;
+    consumer.reject=true;
+    Check(ledger.Deliver(consumer)==0,"consumer rejection retains export");
+    Check(ledger.PendingExchanges().size()==1,"rejected record stays pending");
+    consumer.reject=false;
+    Check(ledger.Deliver(consumer,0)==0,"zero work budget delivers nothing");
+    Check(ledger.Deliver(consumer,1)==1,"acknowledged record can be removed");
+    Check(consumer.received.size()==1 &&
+          consumer.received[0]==std::make_pair(epoch,sequence),
+          "consumer receives stable epoch and sequence");
+    Check(ledger.PendingExchanges().empty(),"acknowledgment drains outbox");
+    Check(ledger.Deliver(consumer)==0,"completed receipt never redelivered");
+
+    ledger.Reset();
+    Check(ledger.Epoch()!=epoch,"reset invalidates former timeline receipts");
     Check(failures==0,"all tests");
     return failures?1:0;
 }
