@@ -48,6 +48,14 @@ int main()
     auto bad=Fixture();
     bad.children[0].coldPoolKm=-1;
     Check(!WeatherEmergence::Advance(bad,30),"invalid cold pool rejected");
+    auto isolated=Fixture();
+    isolated.children[1].eastKm=65;
+    isolated.children[2].eastKm=130;
+    for(int i=0;i<6;++i)
+        Check(WeatherEmergence::Advance(isolated,60),"isolated environment evolves");
+    Check(WeatherEmergence::OrganizedGroups(isolated)==0,
+        "favorable intensity without interaction does not force organized storms");
+
     const auto initial=WeatherConvectiveSurrogate::Initial(7,0);
     WeatherStepTicket ticket{7,0,60,WeatherStepKind::Detailed,1};
     StormZoneWeights weights;weights.convection=.9F;
