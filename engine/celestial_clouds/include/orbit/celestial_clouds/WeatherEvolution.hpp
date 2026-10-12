@@ -8,6 +8,7 @@
 #include <cmath>
 #include <chrono>
 #include <future>
+#include <cstdint>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -46,6 +47,10 @@ struct WeatherZoneEvolutionState
 };
 struct WeatherExchangeRecord
 {
+    // Unique within one ledger epoch. Consumers must deduplicate by
+    // (epoch, sequence) before acknowledging delivery.
+    u64 epoch{0};
+    u64 sequence{0};
     u64 zoneId{0};
     f64 fromSeconds{0.0};
     f64 toSeconds{0.0};
@@ -57,6 +62,17 @@ struct WeatherEvolutionResult
     WeatherZoneEvolutionState state;
     WeatherExchangeRecord exchange;
 };
+// A true atmospheric provider must implement this at a coupling barrier.
+// Returning true means the exchange was accepted durably/idempotently;
+// false means leave it in the outbox for retry. These quantities are still
+// dimensionless; an SI atmospheric solver must not consume them directly.
+class IWeatherExchangeConsumer
+{
+public:
+    virtual ~IWeatherExchangeConsumer() = default;
+    [[nodiscard]] virtual bool Accept(const WeatherExchangeRecord& exchange) = 0;
+};
+
 class WeatherConvectiveSurrogate
 {
 public:
@@ -146,6 +162,9 @@ public:
     {
         states_.clear();
         records_.clear();
+        // Invalidate receipts from the previous timeline or planetary body.
+        ++epoch_;
+        nextSequence_=1;
     }
     void Reconcile(const std::vector<StormZone>& zones, f64 atTime)
     {
@@ -201,7 +220,10 @@ public:
             return false;
         if (!scheduler.Commit(result.ticket)) return false;
         it->second=result.state;
-        records_.push_back(result.exchange);
+        auto record=result.exchange;
+        record.epoch=epoch_;
+        record.sequence=nextSequence_++;
+        records_.push_back(record);
         return true;
     }
 
@@ -215,10 +237,33 @@ public:
     {
         return records_;
     }
-    // No global feedback sink exists yet. Records are intentionally retained.
+
+    // Call on the simulation owner thread at a verified coupling barrier.
+    // Remove only the accepted prefix; a failed record and everything after
+    // it stay pending in their original order. Budget bounds the delivery cost.
+    [[nodiscard]] std::size_t Deliver(IWeatherExchangeConsumer& consumer,
+                                      std::size_t maxRecords=64)
+    {
+        const std::size_t limit=std::min(records_.size(),maxRecords);
+        std::size_t accepted=0;
+        while (accepted<limit)
+        {
+            if (!consumer.Accept(records_[accepted])) break;
+            ++accepted;
+        }
+        if (accepted!=0)
+            records_.erase(records_.begin(),
+                records_.begin()+static_cast<std::ptrdiff_t>(accepted));
+        return accepted;
+    }
+
+    [[nodiscard]] u64 Epoch() const noexcept {return epoch_;}
+    // No real atmospheric feedback consumer is connected yet.
 private:
     std::unordered_map<u64,WeatherZoneEvolutionState> states_;
     std::vector<WeatherExchangeRecord> records_;
+    u64 epoch_{1};
+    u64 nextSequence_{1};
 };
 // One bounded background operation, shared across all zones. The result is
 // published and reconciled only on the simulation owner thread. No GPU use.
