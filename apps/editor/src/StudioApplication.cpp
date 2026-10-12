@@ -1417,14 +1417,28 @@ int orbit::editor_app::StudioApplication::Run(
         simulationUi.Register(ui);
         // Lightning: pause just before a flash in view so it can be played in slow motion (toggle in the bottom bar, storm.lightning).
         studioViewportRenderer.SetStrikePauseHandler([&simulationControls]() { simulationControls.SetPlaying(false); });
-        simulationUi.SetStrikePauseBinding(
-            [&studioViewportRenderer]() { return studioViewportRenderer.StormMailbox().Lightning().pauseOnStrike; },
-            [&studioViewportRenderer](const bool on)
-            {
-                auto settings = studioViewportRenderer.StormMailbox().Lightning();
-                settings.pauseOnStrike = on;
-                static_cast<void>(studioViewportRenderer.StormMailbox().SetLightning(settings));
-            });
+        const auto lightningToggle = [&studioViewportRenderer](std::string label, bool orbit::studio_ui::StormLightningSettings::* member)
+        {
+            return orbit::studio_ui::SimulationControlsUi::BandToggle{
+                std::move(label),
+                [&studioViewportRenderer, member]() { return studioViewportRenderer.StormMailbox().Lightning().*member; },
+                [&studioViewportRenderer, member](const bool on)
+                {
+                    auto settings = studioViewportRenderer.StormMailbox().Lightning();
+                    settings.*member = on;
+                    static_cast<void>(studioViewportRenderer.StormMailbox().SetLightning(settings));
+                }};
+        };
+        simulationUi.SetBandToggles({
+            lightningToggle("Strike pause", &orbit::studio_ui::StormLightningSettings::pauseOnStrike),
+            lightningToggle("Frame strike", &orbit::studio_ui::StormLightningSettings::frameStrike),
+            lightningToggle("E-grid", &orbit::studio_ui::StormLightningSettings::showGrid)});
+        // Frame strike: the renderer asks (while composing) for the camera to be turned to a flash; it is applied before the next compose.
+        struct PendingStrikeFrame { orbit::math::Double3 centre; orbit::f64 radius; orbit::f64 fov; orbit::f64 aspect; };
+        std::optional<PendingStrikeFrame> pendingStrikeFrame;
+        studioViewportRenderer.SetStrikeFrameHandler(
+            [&pendingStrikeFrame](const orbit::math::Double3& centre, const orbit::f64 radius, const orbit::f64 fov, const orbit::f64 aspect)
+            { pendingStrikeFrame = PendingStrikeFrame{centre, radius, fov, aspect}; });
         orbit::studio_ui::RegisterSimulationRpc(
             rpcHost.Dispatcher(),
             simulationControls,
@@ -3364,6 +3378,48 @@ int orbit::editor_app::StudioApplication::Run(
                     std::min(
                         lightingPlan.radianceCacheUpdates,
                         perViewCpuCap);
+            }
+
+            if (pendingStrikeFrame.has_value())
+            {
+                // Turn the camera to the flash and move along the line from it (closer or farther, at the same altitude) until its sphere fills
+                // about 60 % of the narrower of the two fields of view: the whole channel in view, large enough to see.
+                const PendingStrikeFrame request = *pendingStrikeFrame;
+                pendingStrikeFrame.reset();
+                try
+                {
+                    if (auto pose = studioViews.ViewPose("studio.primary"); pose.has_value() && pose->hasCamera)
+                    {
+                        namespace m = orbit::math;
+                        const orbit::f64 halfVertical = 0.5 * request.fov;
+                        const orbit::f64 halfHorizontal = std::atan(std::tan(halfVertical) * request.aspect);
+                        const orbit::f64 needed = request.radius / std::sin(0.6 * std::min(halfVertical, halfHorizontal)) + 200.0;
+                        m::Double3 observer = pose->observerMeters;
+                        const m::Double3 offset = observer - request.centre;
+                        const orbit::f64 distance = std::sqrt(m::Dot(offset, offset));
+                        if (distance > 1.0)
+                        {
+                            // Move along the line at the same distance from the planet's centre (the same altitude).
+                            const m::Double3 moved = request.centre + offset * (needed / distance);
+                            observer = moved * (std::sqrt(m::Dot(observer, observer)) / std::sqrt(m::Dot(moved, moved)));
+                        }
+                        const m::Double3 up = observer * (1.0 / std::sqrt(m::Dot(observer, observer)));
+                        m::Double3 north = m::Double3{0.0, 1.0, 0.0} - up * up.y;
+                        north = north * (1.0 / std::sqrt(m::Dot(north, north)));
+                        const m::Double3 east = m::Cross(north, up);
+                        const m::Double3 toFlash = request.centre - observer;
+                        const m::Double3 look = toFlash * (1.0 / std::sqrt(m::Dot(toFlash, toFlash)));
+                        pose->observerMeters = observer;
+                        pose->surfaceFrame = {east, north, up};
+                        pose->yawRadians = std::atan2(m::Dot(look, east), m::Dot(look, north));
+                        pose->pitchRadians = std::asin(std::clamp(m::Dot(look, up), -1.0, 1.0));
+                        static_cast<void>(studioViews.RestoreViewPose("studio.primary", *pose));
+                    }
+                }
+                catch (const std::exception& exception)
+                {
+                    orbit::log::Warning(std::string("Frame strike failed: ") + exception.what());
+                }
             }
 
             const auto viewportComposeStarted = Clock::now();

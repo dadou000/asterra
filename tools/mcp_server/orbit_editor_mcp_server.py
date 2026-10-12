@@ -1240,6 +1240,8 @@ def orbit_storm_lightning(
     brightness: float | None = None,
     arcs: bool | None = None,
     pause_on_strike: bool | None = None,
+    frame_strike: bool | None = None,
+    show_grid: bool | None = None,
 ) -> dict[str, Any]:
     """Lightning from the simulated storm's own charge (graupel, ice, supercooled
     water, updraft). Omitted parameters keep their value. For testing:
@@ -1252,7 +1254,11 @@ def orbit_storm_lightning(
     channel of a live flash as a jagged glowing line over the clouds.
     pause_on_strike (default false) pauses the simulation just before a flash
     that is in view starts, so it can be played in slow motion with time.set
-    rate (also a toggle in the bottom bar). Clouds are
+    rate (also a toggle in the bottom bar). frame_strike (default false) turns
+    the camera to a flash about to start and moves it closer or farther until its
+    whole channel fills about 60% of the narrower field of view. show_grid (default false) draws the electrified window as a box with
+    a grid and the charge in it (red positive, blue negative). Both are toggles in
+    the bottom bar too. Clouds are
     lit by the flashes when Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1. Returns
     the settings and lightning_flashes (storm.status also has
     lightning_arc_segments)."""
@@ -1260,7 +1266,8 @@ def orbit_storm_lightning(
     for key, value in (("enabled", enabled), ("slow_motion", slow_motion),
                        ("charge_boost", charge_boost), ("breakdown_scale", breakdown_scale),
                        ("brightness", brightness), ("arcs", arcs),
-                       ("pause_on_strike", pause_on_strike)):
+                       ("pause_on_strike", pause_on_strike), ("frame_strike", frame_strike),
+                       ("show_grid", show_grid)):
         if value is not None:
             params[key] = value
     return _rpc("storm.lightning", params)

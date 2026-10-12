@@ -343,7 +343,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 "Parameters (all optional, the rest keep their value): `enabled` (default true), and for testing `slow_motion` (1 to 2000: every "
                 "flash lasts that many times longer at the same power, so one frame can catch it), `charge_boost` (1 to 10000: multiplies the "
                 "charging rate), `breakdown_scale` (0.02 to 1: scales the field at which air breaks down, lower = electrically unstable), `brightness` "
-                "(1 to 1e6: multiplies the energy of every flash, lights and arc alike), `arcs` (default true: the channel of a live flash is drawn as a glowing line) and `pause_on_strike` (default false: the simulation pauses just before a flash that is in view starts, so it can be played in slow motion with the rate slider or time.set). "
+                "(1 to 1e6: multiplies the energy of every flash, lights and arc alike), `arcs` (default true: the channel of a live flash is drawn as a glowing line) `pause_on_strike` (default false: the simulation pauses just before a flash that is in view starts, so it can be played in slow motion with the rate slider or time.set), `frame_strike` (default false: the camera turns to a flash about to start and backs off until its whole channel is in view) and `show_grid` (default false: draws the electrified window as a box with a grid and the charge in it, red positive and blue negative). "
                 "Changing the boost or the breakdown restarts the charge. Returns `error`, the settings and `lightning_flashes` from storm.status.",
             .mutating = true
         },
@@ -361,6 +361,16 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 settings.chargeBoost = Optional(params, "charge_boost", settings.chargeBoost);
                 settings.breakdownScale = Optional(params, "breakdown_scale", settings.breakdownScale);
                 settings.brightness = Optional(params, "brightness", settings.brightness);
+                if (const Value* frame = params.Find("frame_strike"); frame != nullptr)
+                {
+                    if (!frame->IsBool()) { throw rpc::Error(kBadParams, "frame_strike must be a boolean."); }
+                    settings.frameStrike = frame->AsBool();
+                }
+                if (const Value* grid = params.Find("show_grid"); grid != nullptr)
+                {
+                    if (!grid->IsBool()) { throw rpc::Error(kBadParams, "show_grid must be a boolean."); }
+                    settings.showGrid = grid->AsBool();
+                }
                 if (const Value* pause = params.Find("pause_on_strike"); pause != nullptr)
                 {
                     if (!pause->IsBool()) { throw rpc::Error(kBadParams, "pause_on_strike must be a boolean."); }
@@ -382,6 +392,8 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 {"brightness", now.brightness},
                 {"arcs", now.arcs},
                 {"pause_on_strike", now.pauseOnStrike},
+                {"frame_strike", now.frameStrike},
+                {"show_grid", now.showGrid},
                 {"lightning_flashes", static_cast<f64>(mailbox.Status().lightningFlashes)}};
             return result;
         });

@@ -129,7 +129,10 @@ u64 StudioViewportRenderer::AddLightningStormFlash(optical_transport::DischargeG
 
 void StudioViewportRenderer::WatchStrikes(const render_view::CameraState& camera, const u32 width, const u32 height)
 {
-    if (!stormMailbox_.Lightning().pauseOnStrike || !strikePauseHandler_ || width == 0U || height == 0U)
+    const StormLightningSettings watchSettings = stormMailbox_.Lightning();
+    const bool pausing = watchSettings.pauseOnStrike && static_cast<bool>(strikePauseHandler_);
+    const bool framing = watchSettings.frameStrike && static_cast<bool>(strikeFrameHandler_);
+    if ((!pausing && !framing) || width == 0U || height == 0U)
     {
         strikeSeen_.clear();
         return;
@@ -156,19 +159,32 @@ void StudioViewportRenderer::WatchStrikes(const render_view::CameraState& camera
         {
             continue;   // already looked at (and paused for, or out of frame)
         }
-        const math::Double3 rel = flash.centre - camera.localPositionMeters;
-        const f64 depth = math::Dot(rel, forward);
-        if (depth <= 1.0)
+        bool inFrame = false;
+        if (framing)
         {
-            continue;
+            // The camera is sent to the flash: it will be in view when the request is applied (before the next frame).
+            strikeFrameHandler_(flash.centre, flash.radiusMeters, static_cast<f64>(camera.verticalFovRadians), aspect);
+            inFrame = true;
         }
-        // Inside the view, allowing for the size of the channel.
-        const f64 margin = flash.radiusMeters / depth;
-        const bool inFrame = std::fabs(math::Dot(rel, side)) / depth < tanHalf * aspect + margin &&
-                             std::fabs(math::Dot(rel, up)) / depth < tanHalf + margin;
+        else
+        {
+            const math::Double3 rel = flash.centre - camera.localPositionMeters;
+            const f64 depth = math::Dot(rel, forward);
+            if (depth <= 1.0)
+            {
+                continue;
+            }
+            // Inside the view, allowing for the size of the channel.
+            const f64 margin = flash.radiusMeters / depth;
+            inFrame = std::fabs(math::Dot(rel, side)) / depth < tanHalf * aspect + margin &&
+                      std::fabs(math::Dot(rel, up)) / depth < tanHalf + margin;
+        }
         if (inFrame)
         {
-            strikePauseHandler_();
+            if (pausing)
+            {
+                strikePauseHandler_();
+            }
             return;
         }
     }
@@ -177,6 +193,93 @@ void StudioViewportRenderer::WatchStrikes(const render_view::CameraState& camera
     {
         strikeSeen_.clear();
     }
+}
+
+std::vector<editor_ui::PreviewLine> StudioViewportRenderer::ElectrificationGridLines(const render_view::CameraState& camera)
+{
+    std::vector<editor_ui::PreviewLine> out;
+    if (!stormMailbox_.Lightning().showGrid || !lightningFrame_.valid || lightningFrame_.cells == 0U)
+    {
+        return out;
+    }
+    const LightningGridFrame& f = lightningFrame_;
+    const f64 width = f.cells * f.spacing;
+    const f64 height = f.levels * f.spacing;
+    const auto toFloat = [&](const f64 x, const f64 y, const f64 z) {
+        const math::Double3 p = f.centre + f.east * (f.offsetEast + x) + f.north * (f.offsetNorth + y) + f.up * z - camera.localPositionMeters;
+        return math::Float3{static_cast<f32>(p.x), static_cast<f32>(p.y), static_cast<f32>(p.z)};
+    };
+    const auto line = [&](const f64 x0, const f64 y0, const f64 z0, const f64 x1, const f64 y1, const f64 z1, const math::Float4& colour) {
+        out.push_back({toFloat(x0, y0, z0), toFloat(x1, y1, z1), colour});
+    };
+    const math::Float4 edge{0.30F, 0.85F, 1.0F, 0.9F};
+    const math::Float4 inner{0.30F, 0.85F, 1.0F, 0.28F};
+    const f64 step = 8.0 * f.spacing;   // a grid line every 8 cells (4 km)
+    // The box.
+    for (const f64 z : {0.0, height})
+    {
+        line(0, 0, z, width, 0, z, edge);
+        line(width, 0, z, width, width, z, edge);
+        line(width, width, z, 0, width, z, edge);
+        line(0, width, z, 0, 0, z, edge);
+    }
+    for (const f64 x : {0.0, width})
+    {
+        for (const f64 y : {0.0, width})
+        {
+            line(x, y, 0, x, y, height, edge);
+        }
+    }
+    // The ground grid, level rings every 4 km, and the vertical lines of the grid on the four faces.
+    for (f64 a = step; a < width - 1.0; a += step)
+    {
+        line(a, 0, 0, a, width, 0, inner);
+        line(0, a, 0, width, a, 0, inner);
+        line(a, 0, 0, a, 0, height, inner);
+        line(a, width, 0, a, width, height, inner);
+        line(0, a, 0, 0, a, height, inner);
+        line(width, a, 0, width, a, height, inner);
+    }
+    for (f64 z = step; z < height - 1.0; z += step)
+    {
+        line(0, 0, z, width, 0, z, inner);
+        line(width, 0, z, width, width, z, inner);
+        line(width, width, z, 0, width, z, inner);
+        line(0, width, z, 0, 0, z, inner);
+    }
+    // The charge: a cross on every block that holds a noticeable share of the largest one, red where positive and blue where negative,
+    // its size growing with the square root of the charge.
+    if (lightningBlocks_ && !lightningBlocks_->coulombs.empty())
+    {
+        const StormChargeBlocks& b = *lightningBlocks_;
+        f32 largest = 0.0F;
+        for (const f32 q : b.coulombs) { largest = std::max(largest, std::fabs(q)); }
+        if (largest > 0.0F)
+        {
+            for (u32 k = 0; k < b.nz; ++k)
+            {
+                for (u32 j = 0; j < b.ny; ++j)
+                {
+                    for (u32 i = 0; i < b.nx; ++i)
+                    {
+                        const f32 q = b.coulombs[(static_cast<std::size_t>(k) * b.ny + j) * b.nx + i];
+                        const f32 share = std::fabs(q) / largest;
+                        if (share < 0.05F)
+                        {
+                            continue;
+                        }
+                        const f64 half = 0.5 * b.blockMeters * std::sqrt(static_cast<f64>(share));
+                        const f64 cx = (i + 0.5) * b.blockMeters, cy = (j + 0.5) * b.blockMeters, cz = (k + 0.5) * b.blockMeters;
+                        const math::Float4 colour = q > 0.0F ? math::Float4{1.0F, 0.35F, 0.25F, 0.95F} : math::Float4{0.30F, 0.55F, 1.0F, 0.95F};
+                        line(cx - half, cy, cz, cx + half, cy, cz, colour);
+                        line(cx, cy - half, cz, cx, cy + half, cz, colour);
+                        line(cx, cy, cz - half, cx, cy, cz + half, colour);
+                    }
+                }
+            }
+        }
+    }
+    return out;
 }
 
 std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const render_view::CameraState& camera, const u32 height)

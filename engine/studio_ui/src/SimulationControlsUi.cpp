@@ -743,10 +743,9 @@ void SimulationControlsUi::SetReportIssueHandler(std::function<void()> handler)
     reportIssue_ = std::move(handler);
 }
 
-void SimulationControlsUi::SetStrikePauseBinding(std::function<bool()> get, std::function<void(bool)> set)
+void SimulationControlsUi::SetBandToggles(std::vector<BandToggle> toggles)
 {
-    strikePauseGet_ = std::move(get);
-    strikePauseSet_ = std::move(set);
+    toggles_ = std::move(toggles);
 }
 
 void SimulationControlsUi::Register(editor_ui::EditorUi&)
@@ -946,16 +945,21 @@ void SimulationControlsUi::Draw(editor_ui::PanelContext& context)
         }
     }
 
-    if (strikePauseGet_ && strikePauseSet_)
+    for (std::size_t index = 0; index < toggles_.size(); ++index)
     {
-        const bool armed = strikePauseGet_();
+        const BandToggle& toggle = toggles_[index];
+        if (!toggle.get || !toggle.set)
+        {
+            continue;
+        }
+        const bool on = toggle.get();
         context.SameLine();
         if (context.StateButton(
-                armed ? "Strike pause: on##sim-strike-pause" : "Strike pause##sim-strike-pause",
-                armed ? math::Float4{0.62F, 0.40F, 0.12F, 1.0F} : math::Float4{0.30F, 0.33F, 0.39F, 1.0F},
-                (armed ? 136.0F : 108.0F) * uiScale))
+                std::format("{}##sim-toggle-{}", toggle.label, index),
+                on ? math::Float4{0.62F, 0.40F, 0.12F, 1.0F} : math::Float4{0.30F, 0.33F, 0.39F, 1.0F},
+                (14.0F + 7.0F * static_cast<f32>(toggle.label.size())) * uiScale))
         {
-            strikePauseSet_(!armed);
+            toggle.set(!on);
         }
     }
 

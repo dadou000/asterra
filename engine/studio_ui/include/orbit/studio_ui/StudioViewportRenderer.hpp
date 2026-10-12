@@ -385,6 +385,9 @@ public:
     // stepped and drawn by the cloud pass on the render thread.
     [[nodiscard]] StormDomainMailbox& StormMailbox() noexcept { return stormMailbox_; }
     void SetStrikePauseHandler(std::function<void()> handler) { strikePauseHandler_ = std::move(handler); }
+    // Called (once per flash) when frame_strike is on: the flash's centre and radius in the camera's planet-fixed frame, and the view's
+    // vertical field of view and aspect. Studio turns the camera to it and backs off until the whole channel fits.
+    void SetStrikeFrameHandler(std::function<void(const math::Double3&, f64, f64, f64)> handler) { strikeFrameHandler_ = std::move(handler); }
 
     // Lightning flashes lighting the scene (RPC `lightning.*`). Thread-safe: the RPC thread fires, the render thread reads.
     u64 FireLightning(const lighting::FlashRequest& request);
@@ -509,6 +512,20 @@ private:
     // Pauses the simulation (through the handler Studio installs) just before a flash that is in view starts; see StormLightningSettings.
     void WatchStrikes(const render_view::CameraState& camera, u32 width, u32 height);
     std::function<void()> strikePauseHandler_;
+    std::function<void(const math::Double3&, f64, f64, f64)> strikeFrameHandler_;
+    // Where the electrified window sits (set by the storm update when the lightning runs), and its charge, for the grid display.
+    struct LightningGridFrame
+    {
+        bool valid{false};
+        math::Double3 centre{}, east{}, north{}, up{};
+        f64 offsetEast{0.0};    // the window's west edge, metres east of the domain centre
+        f64 offsetNorth{0.0};
+        f64 spacing{500.0};
+        u32 cells{0};
+        u32 levels{0};
+    } lightningFrame_;
+    std::shared_ptr<const StormChargeBlocks> lightningBlocks_;
+    [[nodiscard]] std::vector<editor_ui::PreviewLine> ElectrificationGridLines(const render_view::CameraState& camera);
     std::set<u64> strikeSeen_;
     [[nodiscard]] std::vector<editor_ui::PreviewLine> FlashArcLines(const render_view::CameraState& camera, u32 height);
     void ComposeAtmospherePasses(StudioLightingPassContext& context);

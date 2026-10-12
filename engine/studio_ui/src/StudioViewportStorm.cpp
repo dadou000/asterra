@@ -133,6 +133,7 @@ public:
         lastTime_ = -1.0;
         std::lock_guard lock(mutex_);
         ready_.clear();
+        blocks_.reset();
     }
 
     // Called every frame the storm runs normally; `stormTime` is the solver's time. Returns the flashes the worker finished since the last call.
@@ -174,6 +175,14 @@ public:
     [[nodiscard]] f64 OriginNorth() const { return originNorth_; }
     [[nodiscard]] u32 Cells() const { return cells_; }
     [[nodiscard]] u64 FlashCount() const { return flashes_.load(); }
+    [[nodiscard]] u32 NzLevels() const { return nz_; }
+    [[nodiscard]] f32 SpacingMeters() const { return spacing_; }
+    // The charge of the last finished job in blocks of 4 x 4 x 4 cells (null until one has finished).
+    [[nodiscard]] std::shared_ptr<const StormChargeBlocks> Blocks() const
+    {
+        std::lock_guard lock(mutex_);
+        return blocks_;
+    }
     [[nodiscard]] bool Started() const { return started_; }
 
 private:
@@ -304,7 +313,32 @@ private:
             }
             const f64 before = source->SimulatedSeconds();
             std::vector<storm_electrification::FlashResult> found = source->Advance(job.seconds);
+            // The charge in blocks of 4 x 4 x 4 cells, for the grid display.
+            auto blocks = std::make_shared<StormChargeBlocks>();
+            {
+                constexpr u32 kBlock = 4U;
+                const storm_electrification::ChargeGrid& grid = source->Grid();
+                blocks->nx = grid.Nx() / kBlock;
+                blocks->ny = grid.Ny() / kBlock;
+                blocks->nz = grid.Nz() / kBlock;
+                blocks->blockMeters = static_cast<f32>(grid.Spacing() * kBlock);
+                blocks->coulombs.assign(static_cast<std::size_t>(blocks->nx) * blocks->ny * blocks->nz, 0.0F);
+                const f64 cellVolume = grid.Spacing() * grid.Spacing() * grid.Spacing();
+                for (u32 k = 0; k < blocks->nz * kBlock; ++k)
+                {
+                    for (u32 j = 0; j < blocks->ny * kBlock; ++j)
+                    {
+                        for (u32 i = 0; i < blocks->nx * kBlock; ++i)
+                        {
+                            const std::size_t cell = grid.Index(i, j, k);
+                            const f64 q = (grid.IceCharge()[cell] + grid.GraupelCharge()[cell]) * cellVolume;
+                            blocks->coulombs[(static_cast<std::size_t>(k / kBlock) * blocks->ny + j / kBlock) * blocks->nx + i / kBlock] += static_cast<f32>(q);
+                        }
+                    }
+                }
+            }
             std::lock_guard lock(mutex_);
+            blocks_ = std::move(blocks);
             for (auto& flash : found)
             {
                 Flash out;
@@ -334,13 +368,14 @@ private:
     }
 
     std::thread worker_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable wake_;
     Job job_;
     bool hasJob_{false};
     bool busy_{false};
     bool stop_{false};
     std::vector<Flash> ready_;
+    std::shared_ptr<const StormChargeBlocks> blocks_;
     std::atomic<u64> flashes_{0};
     bool started_{false};
     f64 pending_{0.0};
@@ -762,6 +797,23 @@ void StudioViewportRenderer::UpdateStormDomain(
                 rt.lightning.Reset();
             }
             std::vector<StormLightningFeed::Flash> flashes = rt.lightning.Update(*rt.solver, *rt.cpuRead, rt.solver->Time(), lightningSettings);
+            if (rt.lightning.Started())
+            {
+                // Where the electrified window is, for the grid display (see ElectrificationGridLines).
+                const f64 cl = std::cos(latitude), sl = std::sin(latitude), co = std::cos(longitude), so = std::sin(longitude);
+                f64 gridWest = 0.0, gridSouth = 0.0;
+                rt.solver->LightningWestSouth(gridWest, gridSouth);
+                lightningFrame_ = {true,
+                    math::Double3{planetRadiusMeters * cl * co, planetRadiusMeters * sl, -planetRadiusMeters * cl * so},
+                    math::Double3{-so, 0.0, -co}, math::Double3{-sl * co, cl, sl * so}, math::Double3{cl * co, sl, -cl * so},
+                    gridWest + rt.lightning.OriginEast(), gridSouth + rt.lightning.OriginNorth(),
+                    static_cast<f64>(rt.lightning.SpacingMeters()), rt.lightning.Cells(), rt.lightning.NzLevels()};
+                lightningBlocks_ = rt.lightning.Blocks();
+            }
+            else
+            {
+                lightningFrame_.valid = false;
+            }
             if (!flashes.empty())
             {
                 const f64 cl = std::cos(latitude), sl = std::sin(latitude), co = std::cos(longitude), so = std::sin(longitude);
@@ -803,9 +855,10 @@ void StudioViewportRenderer::UpdateStormDomain(
                 }
             }
         }
-        else if (stillBehind)
+        else
         {
-            rt.lightning.Reset();
+            lightningFrame_.valid = false;
+            if (stillBehind) { rt.lightning.Reset(); }
         }
         status.lightningFlashes = rt.lightning.FlashCount();
         status.lightningArcSegments = lastArcSegments_.load();

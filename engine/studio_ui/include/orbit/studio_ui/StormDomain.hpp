@@ -87,6 +87,18 @@ struct StormLightningSettings
     f64 brightness{1.0};      // 1 to 1e6: multiplies the energy of every flash (the lights on the clouds and the arc)
     bool arcs{true};          // draw the channel of a live flash as a glowing line
     bool pauseOnStrike{false}; // pause the simulation just before a flash that is in view starts, to play it in slow motion
+    bool frameStrike{false};   // aim the camera at a flash about to start and back off until its whole channel is in view
+    bool showGrid{false};      // draw the electrification window (its box, a grid and the charge in it)
+};
+
+// The charge in the electrified window summed over blocks of cells, for the grid display: coulombs per block, x fastest then y then z.
+struct StormChargeBlocks
+{
+    u32 nx{0};
+    u32 ny{0};
+    u32 nz{0};
+    f32 blockMeters{0.0F};
+    std::vector<f32> coulombs;
 };
 
 [[nodiscard]] const char* StormStateName(StormStatus::State state) noexcept;

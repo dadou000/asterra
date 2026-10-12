@@ -48,6 +48,8 @@ public:
     [[nodiscard]] double MaxBreakdownRatio() const;
     [[nodiscard]] std::uint64_t FlashCount() const { return flashes_; }
     [[nodiscard]] double DomainSizeMeters() const { return grid_.Spacing() * grid_.Nx(); }
+    // The charge state, for display.
+    [[nodiscard]] const ChargeGrid& Grid() const { return grid_; }
 
 private:
     StormFields fields_;
