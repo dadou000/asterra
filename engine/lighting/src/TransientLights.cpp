@@ -38,7 +38,9 @@ std::vector<LocalLight> TransientLightsFromFlash(
         light.type = LocalLightType::Point;
         light.positionInFrameMeters = {
             origin.x + cluster.position[0], origin.y + cluster.position[1], origin.z + cluster.position[2]};
-        light.colorLinear = params.colorLinear;
+        light.colorLinear = cluster.hasColour
+            ? math::Float3{static_cast<f32>(cluster.colour[0]), static_cast<f32>(cluster.colour[1]), static_cast<f32>(cluster.colour[2])}
+            : params.colorLinear;
         light.luminousFluxLumens = static_cast<f32>(lumens);
         light.rangeMeters = static_cast<f32>(std::clamp(
             range, static_cast<f64>(params.minimumRangeMeters), static_cast<f64>(params.maximumRangeMeters)));

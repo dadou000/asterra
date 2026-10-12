@@ -323,7 +323,8 @@ private:
                 params.leader.directionPersistence = 6.0;
                 params.leader.screening = 0.15;   // a conducting channel weakens the field at the cells that hug it: it crosses the cloud, it does not pack it
                 params.leader.picksDivisor = 1.0e9;   // one new cell per round: a leader that grows from its strongest tip, branching only now and then
-                params.leader.leaderSpeed = 4.0e6;   // the whole growth of a 400-cell channel takes some 50 ms: the arc is as quick as the light
+                params.leader.physicalEmission = true;   // the leader, return stroke, later strokes and cooling of LightningEmission.hpp
+                params.leader.leaderSpeed = 2.5e6;   // the whole growth of a 400-cell channel takes some 50 ms: the arc is as quick as the light
                 params.leader.currentWeighted = true;
                 params.leader.diagonalGrowth = true;
                 // A real flash has some 50 to 200 km of channel (100 to 400 cells of 500 m); the default cap of 6000 cells let one fill the volume.
@@ -907,28 +908,6 @@ void StudioViewportRenderer::UpdateStormDomain(
                             p[1] = world.y;
                             p[2] = world.z;
                         }
-                    }
-                    // The channel glows from the moment each segment forms until a little after the last pulse, at a fraction of the strongest
-                    // pulse the segment carries (so the trunk, which carries the current of everything downstream, glows most). It is part of the
-                    // flash like any pulse: the lights on the clouds and the arc overlay both read it, so they agree in timing and duration.
-                    {
-                        const f64 tail = std::min(0.03 * stretch, 3.0);
-                        for (std::size_t i = 0; i < flash.graph.Segments().size(); ++i)
-                        {
-                            optical_transport::Segment& segment = flash.graph.At(static_cast<std::int32_t>(i));
-                            f64 carried = 0.0;
-                            for (const auto& pulse : segment.pulses)
-                            {
-                                if (pulse.duration > 0.0) { carried = std::max(carried, pulse.radiantEnergy / pulse.duration); }
-                            }
-                            const f64 power = std::max(2.0e4, 5.0e-3 * carried);
-                            const f64 duration = end + tail - segment.formedAt;
-                            if (duration > 0.0)
-                            {
-                                segment.pulses.push_back({segment.formedAt, duration, power * duration});
-                            }
-                        }
-                        end += tail;
                     }
                     // Spread the flashes of one job over the time it covers, so they do not arrive in a burst.
                     const std::scoped_lock flashLock(transientFlashMutex_);

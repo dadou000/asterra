@@ -3,6 +3,7 @@
 
 #include <orbit/celestial_atmosphere/AtmosphereRefraction.hpp>
 #include <orbit/core/Log.hpp>
+#include <orbit/optical_transport/Blackbody.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 
 #include <chrono>
@@ -303,7 +304,7 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
         }
         // A channel stays visible a few milliseconds after its pulse (the plasma cools), as the lights on the clouds do: they read the same
         // pulses, and a longer fade made the arc outlast the light several times over.
-        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.002 * settings.slowMotion, 0.5), 1.0e3, 8000U);
+        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.0002 * settings.slowMotion, 0.05), 1.0e3, 8000U);
     }
     if (channel.empty())
     {
@@ -337,13 +338,15 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
             continue;   // behind the camera
         }
         const f64 pixel = distance * pixelAngle;
-        // The brightness of the whole flash follows its power (so the arc flares with the light on the clouds: about 0.9 in the glow, 7 at
-        // the bright stage), and inside it each segment shows its share of the strongest one: the trunk full, the twigs a fifth of it.
-        const f64 flashBrightness = std::clamp(0.4 * std::pow(std::max(line.flashPeakWatts, 1.0e3) / 1.0e7, 0.4), 0.15, 8.0);
-        const f64 share = line.flashPeakWatts > 0.0 ? std::clamp(line.powerWatts / line.flashPeakWatts, 0.0, 1.0) : 1.0;
-        const f64 trunk = std::pow(share, 0.35);   // 1 for the strongest segment, about 0.13 for one with a hundredth of its power
-        const f32 intensity = static_cast<f32>(flashBrightness * (0.2 + 0.8 * trunk));
-        const f32 coreAlpha = static_cast<f32>(0.35 + 0.65 * trunk);
+        // Brightness from the optical power per metre of the segment (without the brightness gain, which is for the lights): on a power law
+        // with 1e3 W/m (the cooled channel) at 0.25, 2e4 (a leader) 0.8, 2.5e5 (a later stroke) 2.3 and 1e6 (a first stroke) 4, clamped at 12;
+        // the colour is the blackbody colour of the segment's temperature, blue-white when hot and orange when it has cooled.
+        const f64 perMeter = line.powerWatts / std::max(settings.brightness, 1.0) / std::max(line.lengthMeters, 1.0);
+        const f64 level = std::clamp(0.25 * std::pow(std::max(perMeter, 1.0) / 1.0e3, 0.4), 0.03, 12.0);
+        const std::array<f64, 3> colour = line.temperatureKelvin > 0.0 ? optical_transport::BlackbodyLinearRgb(line.temperatureKelvin)
+                                                                       : std::array<f64, 3>{0.80, 0.87, 1.0};
+        const f64 trunk = std::clamp(std::pow(perMeter / 1.0e6, 0.25), 0.0, 1.0);   // 1 at a first stroke's power, 0.37 at a leader's
+        const f32 coreAlpha = static_cast<f32>(0.3 + 0.7 * trunk);
         // The electrification's cells make a lattice; every node (a cell centre) is moved by a hash of its own position, so the segments that
         // meet in it still meet, and the lattice is not recognisable.
         const auto nodeShift = [&](const math::Double3& world) {
@@ -387,22 +390,22 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
         {
             const auto add = [&](const math::Double3& offset, const f32 alpha) {
                 out.push_back({toFloat(points[k] + offset), toFloat(points[k + 1] + offset),
-                               {0.80F * intensity, 0.87F * intensity, 1.0F * intensity, alpha}});
+                               {static_cast<f32>(colour[0] * level), static_cast<f32>(colour[1] * level), static_cast<f32>(colour[2] * level), alpha}});
             };
             add({}, coreAlpha);
             // A soft edge: two lines half a pixel to each side (not on the faint twigs, of which there are thousands); the strong segments
             // (the trunk) get a wider glow.
-            if (trunk > 0.45)
+            if (trunk > 0.5)
             {
                 add(side * (pixel * 0.6), 0.4F);
                 add(side * (-pixel * 0.6), 0.4F);
             }
-            if (trunk > 0.7)
+            if (trunk > 0.75)
             {
                 add(side * (pixel * 1.4), 0.3F);
                 add(side * (-pixel * 1.4), 0.3F);
             }
-            if (trunk > 0.9)
+            if (trunk > 0.97)
             {
                 add(side * (pixel * 2.4), 0.25F);
                 add(side * (-pixel * 2.4), 0.25F);

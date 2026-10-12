@@ -20,6 +20,8 @@ struct Pulse
     double startTime = 0.0;      // s
     double duration = 0.0;       // s
     double radiantEnergy = 0.0;  // J emitted optically over the pulse
+    // Temperature of the emitting plasma over the pulse (K), which sets its colour (Blackbody.hpp). 0 = not given: the caller's default colour.
+    double temperatureKelvin = 0.0;
 };
 
 struct Segment
@@ -63,6 +65,9 @@ public:
     {
         double position[3] = {0, 0, 0};
         double energy = 0.0;
+        // Energy-weighted mean colour of the pulses that gave a temperature (linear RGB, largest component 1); `hasColour` is false when none did.
+        double colour[3] = {1.0, 1.0, 1.0};
+        bool hasColour = false;
     };
     std::vector<Cluster> ClusterEmission(double t0, double t1, std::size_t maxClusters) const;
 

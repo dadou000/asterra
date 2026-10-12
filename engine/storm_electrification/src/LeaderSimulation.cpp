@@ -1,5 +1,7 @@
 #include "orbit/storm_electrification/LeaderSimulation.hpp"
 
+#include "orbit/storm_electrification/LightningEmission.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -298,6 +300,10 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
         {
             bright.Reactivate(static_cast<std::int32_t>(s), {lateTime + 1.0e-4 * rng.Uniform(), p.pulseDuration, p.intracloudEnergyPerMeter * h * share[s]});
         }
+    }
+    if (p.physicalEmission)
+    {
+        AssignPhysicalEmission(bright, grounded, groundSegment, out.endTime, p.seed * 0x9E3779B97F4A7C15ULL + flashIndex);
     }
     out.graph = std::move(bright);
 

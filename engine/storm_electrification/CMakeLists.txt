@@ -3,6 +3,7 @@ add_library(OrbitStormElectrification STATIC
     src/Electrification.cpp
     src/FlashSchedule.cpp
     src/LeaderSimulation.cpp
+    src/LightningEmission.cpp
     src/WarmRainAdapter.cpp
     src/StormLightningSource.cpp
 )

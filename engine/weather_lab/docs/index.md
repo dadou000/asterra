@@ -67,6 +67,7 @@ verified = "f4a2dc6"
 "phase 10: seeing the lightning, one time control, strike pause" = "global-system-status-p10-visibility"
 "phase 10: lightning window, flash size, the channel as a tree" = "global-system-status-p10-solver"
 "phase 10: the lightning channel shape, lattice and timing" = "global-system-status-p10-shape"
+"phase 10: the physical emission of a lightning flash (timing, colour, brightness)" = "global-system-status-p10-emission"
 "GPU port: Vulkan compute kernels, CPU comparison, benchmark" = "gpu-port"
 +++
 

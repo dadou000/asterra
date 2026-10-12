@@ -207,6 +207,7 @@ std::vector<ChannelLine> TransientFlashRegistry::ChannelLines(
         for (const optical_transport::Segment& segment : flash.graph.Segments())
         {
             f64 power = 0.0;
+            f64 weightedKelvin = 0.0;
             for (const optical_transport::Pulse& pulse : segment.pulses)
             {
                 if (t < pulse.startTime || pulse.duration <= 0.0)
@@ -215,12 +216,16 @@ std::vector<ChannelLine> TransientFlashRegistry::ChannelLines(
                 }
                 const f64 end = pulse.startTime + pulse.duration;
                 const f64 watts = pulse.radiantEnergy / pulse.duration;
-                power += t <= end ? watts : watts * std::exp(-(t - end) / glow);
+                const f64 now = t <= end ? watts : watts * std::exp(-(t - end) / glow);
+                power += now;
+                weightedKelvin += now * pulse.temperatureKelvin;
             }
             if (power >= minimumPowerWatts)
             {
-                lines.push_back({flash.origin + math::Double3{segment.from[0], segment.from[1], segment.from[2]},
-                                 flash.origin + math::Double3{segment.to[0], segment.to[1], segment.to[2]}, power, 0.0});
+                const math::Double3 a{segment.from[0], segment.from[1], segment.from[2]};
+                const math::Double3 b{segment.to[0], segment.to[1], segment.to[2]};
+                const math::Double3 d = b - a;
+                lines.push_back({flash.origin + a, flash.origin + b, power, std::sqrt(math::Dot(d, d)), weightedKelvin / power, 0.0});
             }
         }
         f64 peak = 0.0;

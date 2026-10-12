@@ -89,7 +89,7 @@ struct StormLightningSettings
     f64 slowMotion{1.0};      // 1 to 2000
     f64 chargeBoost{1.0};     // 1 to 10000
     f64 breakdownScale{1.0};  // 0.02 to 1
-    f64 brightness{1.0};      // 1 to 1e6: multiplies the energy of every flash (the lights on the clouds and the arc)
+    f64 brightness{30.0};     // 1 to 1e6: multiplies the energy of every flash, so the lights on the clouds (the arc shows the physical power)
     bool arcs{true};          // draw the channel of a live flash as a glowing line
     bool pauseOnStrike{false}; // pause the simulation just before a flash that is in view starts, to play it in slow motion
     bool frameStrike{false};   // aim the camera at a flash about to start and back off until its whole channel is in view

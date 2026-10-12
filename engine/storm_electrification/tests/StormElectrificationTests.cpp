@@ -1,7 +1,9 @@
 #include <orbit/storm_electrification/ChargeGrid.hpp>
 #include <orbit/storm_electrification/Electrification.hpp>
 #include <orbit/storm_electrification/FlashSchedule.hpp>
+#include <orbit/optical_transport/Blackbody.hpp>
 #include <orbit/storm_electrification/LeaderSimulation.hpp>
+#include <orbit/storm_electrification/LightningEmission.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -440,6 +442,88 @@ int main()
         const auto far = storm.FlashesIn(year + 1000.0, year + 1100.0);
         Check(far.size() < 200 && std::all_of(far.begin(), far.end(), [&](double t) { return t >= year + 1000.0 && t < year + 1100.0; }),
               "a window a year ahead is answered without simulating the interval");
+    }
+
+    // --- the physical emission of a flash: leader glow, return stroke, dark twigs, later strokes, cooling, colour.
+    {
+        using orbit::optical_transport::DischargeGraph;
+        using orbit::optical_transport::Segment;
+        // A channel: the main path 0..8 (grounded at 8), a heavy branch 9..13 from segment 3, a twig 14 from segment 2. Segments are 500 m.
+        const auto build = [] {
+            DischargeGraph g(FlashKind::CloudToGround);
+            const auto add = [&](int parent, double x0, double z0, double x1, double z1, double formed) {
+                Segment s;
+                s.from[0] = x0; s.from[1] = 0.0; s.from[2] = z0;
+                s.to[0] = x1; s.to[1] = 0.0; s.to[2] = z1;
+                s.parent = parent;
+                s.formedAt = formed;
+                return g.AddSegment(s);
+            };
+            for (int i = 0; i < 9; ++i) add(i - 1, 0.0, 9000.0 - 500.0 * i, 0.0, 9000.0 - 500.0 * (i + 1), 1.0e-4 * i);
+            int parent = 3;
+            for (int i = 0; i < 5; ++i) parent = add(parent, 500.0 * i, 7500.0, 500.0 * (i + 1), 7500.0, 1.0e-3 + 1.0e-4 * i);
+            add(2, 0.0, 8000.0, -500.0, 8000.0, 2.0e-3);
+            return g;
+        };
+        const double attach = 3.0e-3;
+        EmissionParams scaled;   // this channel has 15 segments, so a twig is 7 % of it: the share below which a branch stays dark is set above that
+        scaled.branchMinimumShare = 0.1;
+        double peakKelvinMain = 0.0, peakWattsPerMeterMain = 0.0, leaderWattsPerMeterMax = 0.0, twigAfterAttachKelvin = 0.0;
+        double coolTail = 0.0, coolTailKelvin = 1.0e9;
+        bool anyLaterStroke = false;
+        for (std::uint64_t seed = 1; seed <= 40; ++seed)
+        {
+            DischargeGraph g = build();
+            AssignPhysicalEmission(g, true, 8, attach, seed, scaled);
+            for (std::size_t i = 0; i < g.Segments().size(); ++i)
+            {
+                const auto& seg = g.Segments()[i];
+                const double length = 500.0;
+                for (const auto& p : seg.pulses)
+                {
+                    const double wattsPerMeter = p.radiantEnergy / p.duration / length;
+                    if (p.startTime < seg.formedAt + 3.0e-4) leaderWattsPerMeterMax = std::max(leaderWattsPerMeterMax, wattsPerMeter);
+                    if (i <= 8)
+                    {
+                        peakKelvinMain = std::max(peakKelvinMain, p.temperatureKelvin);
+                        peakWattsPerMeterMain = std::max(peakWattsPerMeterMain, wattsPerMeter);
+                        if (p.startTime > attach + 1.0e-2 && p.temperatureKelvin > 15000.0) anyLaterStroke = true;
+                        if (seed == 1 && i == 8 && p.startTime > attach && p.startTime < attach + 2.0e-2)
+                        {
+                            coolTail = std::max(coolTail, p.startTime + p.duration - attach);
+                            if (p.startTime > attach + 1.0e-3) coolTailKelvin = std::min(coolTailKelvin, p.temperatureKelvin);
+                        }
+                    }
+                    if (i == 14 && p.startTime > attach) twigAfterAttachKelvin = std::max(twigAfterAttachKelvin, p.temperatureKelvin);
+                }
+            }
+        }
+        Check(peakKelvinMain > 20000.0 && peakKelvinMain <= 36001.0, "the return stroke heats the main path to 20 to 36 kK");
+        Check(peakWattsPerMeterMain > 1.0e5 && peakWattsPerMeterMain < 2.0e7, "a return stroke radiates about 1e6 W per metre of channel");
+        Check(leaderWattsPerMeterMax < 2.5e4 && leaderWattsPerMeterMax > 1.0e4, "the stepped leader is some 50 times fainter (2e4 W/m)");
+        Check(twigAfterAttachKelvin < 9100.0, "a twig that carries no charge is not heated by the return stroke (only its own leader glow cools after it)");
+        Check(anyLaterStroke, "a flash to the ground has later strokes, tens of milliseconds after the first");
+        Check(coolTail > 1.0e-3 && coolTailKelvin < 6000.0, "the channel cools to a few thousand kelvin over milliseconds after the stroke");
+        // Colour: hot plasma is blue-white, cooled plasma orange.
+        const auto hot = orbit::optical_transport::BlackbodyLinearRgb(30000.0);
+        const auto warm = orbit::optical_transport::BlackbodyLinearRgb(6500.0);
+        const auto cool = orbit::optical_transport::BlackbodyLinearRgb(3500.0);
+        Check(hot[2] >= hot[0] && hot[2] > 0.99, "30 kK is blue-white");
+        Check(std::abs(warm[0] - warm[2]) < 0.15 && warm[1] > 0.9, "6500 K is white");
+        Check(cool[0] > 0.99 && cool[2] < 0.6 * cool[0], "3500 K is orange");
+        // The first stroke also lights the heavy branch, dimmer than the main channel.
+        DischargeGraph g = build();
+        AssignPhysicalEmission(g, true, 8, attach, 7, scaled);
+        double mainPeak = 0.0, branchPeak = 0.0;
+        for (std::size_t i = 0; i < g.Segments().size(); ++i)
+            for (const auto& p : g.Segments()[i].pulses)
+            {
+                if (p.startTime < attach) continue;
+                const double w = p.radiantEnergy / p.duration;
+                if (i <= 8) mainPeak = std::max(mainPeak, w);
+                if (i >= 9 && i <= 13) branchPeak = std::max(branchPeak, w);
+            }
+        Check(branchPeak > 0.0 && branchPeak < mainPeak, "the heavy branch flashes too, dimmer than the main channel");
     }
 
     if (failures == 0) std::printf("StormElectrification: all tests passed\n");

@@ -59,6 +59,9 @@ struct LeaderParams
     // A conducting channel screens the field around it: a candidate cell is multiplied by screening^(channel cells touching it - 1), so cells
     // that hug the channel are unlikely and the tip, which touches only its parent, is the favourite (1 = no screening).
     double screening = 1.0;
+    // Replace the pulses of the flash by the physical sequence of LightningEmission.hpp (stepped leader glow, return stroke on the main path,
+    // dark twigs, later strokes, continuing current, cooling from blue-white to orange). Off: the plain uniform pulses.
+    bool physicalEmission = false;
     std::uint64_t seed = 1;
 };
 

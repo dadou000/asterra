@@ -61,6 +61,8 @@ struct ChannelLine
     math::Double3 from{};
     math::Double3 to{};
     f64 powerWatts{0.0};
+    f64 lengthMeters{0.0};
+    f64 temperatureKelvin{0.0};   // power-weighted mean of the pulses lit now (0 = none gave one)
     f64 flashPeakWatts{0.0};   // the strongest segment of the same flash at this moment (so powerWatts / flashPeakWatts is the share of the trunk)
 };
 

@@ -1,5 +1,7 @@
 #include "orbit/optical_transport/DischargeGraph.hpp"
 
+#include "orbit/optical_transport/Blackbody.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -70,11 +72,21 @@ std::vector<DischargeGraph::Cluster> DischargeGraph::ClusterEmission(double t0, 
         for (const Segment& s : segments_)
         {
             double e = 0.0;
+            double weightedColour[3] = {0.0, 0.0, 0.0};
+            double coloured = 0.0;
             for (const Pulse& p : s.pulses)
             {
                 const double a = std::max(t0, p.startTime), b = std::min(t1, p.startTime + p.duration);
-                if (p.duration > 0.0 && b > a) e += p.radiantEnergy * (b - a) / p.duration;
-                else if (p.duration <= 0.0 && p.startTime >= t0 && p.startTime < t1) e += p.radiantEnergy;
+                double part = 0.0;
+                if (p.duration > 0.0 && b > a) part = p.radiantEnergy * (b - a) / p.duration;
+                else if (p.duration <= 0.0 && p.startTime >= t0 && p.startTime < t1) part = p.radiantEnergy;
+                e += part;
+                if (part > 0.0 && p.temperatureKelvin > 0.0)
+                {
+                    const auto rgb = BlackbodyLinearRgb(p.temperatureKelvin);
+                    for (int k = 0; k < 3; ++k) weightedColour[k] += part * rgb[static_cast<std::size_t>(k)];
+                    coloured += part;
+                }
             }
             if (e <= 0.0) continue;
             double mid[3];
@@ -84,12 +96,23 @@ std::vector<DischargeGraph::Cluster> DischargeGraph::ClusterEmission(double t0, 
             Cluster& c = cells[key];
             for (int k = 0; k < 3; ++k) c.position[k] += e * mid[k];
             c.energy += e;
+            if (coloured > 0.0)
+            {
+                // Accumulated as energy x colour; normalised when the cell is emitted.
+                for (int k = 0; k < 3; ++k) c.colour[k] = (c.hasColour ? c.colour[k] : 0.0) + weightedColour[k];
+                c.hasColour = true;
+            }
         }
         if (cells.size() <= maxClusters || cell > extent * 2.0)
         {
             for (auto& [key, c] : cells)
             {
                 if (c.energy > 0.0) for (int k = 0; k < 3; ++k) c.position[k] /= c.energy;
+                if (c.hasColour)
+                {
+                    const double peak = std::max({c.colour[0], c.colour[1], c.colour[2], 1.0e-30});
+                    for (int k = 0; k < 3; ++k) c.colour[k] /= peak;
+                }
                 out.push_back(c);
             }
             return out;
