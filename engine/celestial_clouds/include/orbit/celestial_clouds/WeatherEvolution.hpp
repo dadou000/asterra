@@ -26,6 +26,10 @@ struct ConvectiveChildState
     f64 updraft{0.0};       // normalized intensity diagnostic, not m/s
     f64 eastKm{0.0};        // local position, relative to zone centre
     f64 northKm{0.0};
+    f64 eastKmPerSecond{0.0};
+    f64 northKmPerSecond{0.0};
+    f64 coldPoolKm{0.0};
+    f64 coldPoolStrength{0.0};  // normalized diagnostic, not thermodynamic deficit
 };
 struct WeatherZoneEvolutionState
 {
@@ -33,6 +37,9 @@ struct WeatherZoneEvolutionState
     f64 simulatedSeconds{0.0};
     std::vector<ConvectiveChildState> children;
     f64 precipitationExported{0.0};
+    // Emergent organization: component IDs and dwell times, not storm categories.
+    struct Group { u64 id{0}; std::vector<u64> members; f64 coherentSeconds{0.0}; };
+    std::vector<Group> groups;
 };
 struct WeatherExchangeRecord
 {
@@ -65,6 +72,7 @@ public:
             c.vapour=1.0;
             c.eastKm=(static_cast<f64>(i)-1.0)*12.0;
             c.northKm=static_cast<f64>((zoneId+i)%3U)*5.0;
+            c.eastKmPerSecond=(static_cast<f64>(i)-1.0)*0.001;
             c.updraft=0.01*(static_cast<f64>((zoneId+i*7U)%7U)+1.0);
             state.children.push_back(c);
         }
