@@ -1,9 +1,12 @@
 #pragma once
 
 #include <orbit/celestial_clouds/WeatherMultirateScheduler.hpp>
+#include <orbit/celestial_clouds/StormZoneRuntime.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <future>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -151,9 +154,12 @@ public:
         return it==states_.end()?nullptr:&it->second;
     }
 
+    [[nodiscard]] bool HasExchangeCapacity() const noexcept {return records_.size()<4096U;}
+
     [[nodiscard]] bool Complete(WeatherMultirateScheduler& scheduler,
                                const WeatherEvolutionResult& result)
     {
+        if (!HasExchangeCapacity()) return false;
         auto it=states_.find(result.ticket.zoneId);
         if (it==states_.end() ||
             it->second.simulatedSeconds!=result.ticket.fromSeconds ||
@@ -180,5 +186,84 @@ public:
 private:
     std::unordered_map<u64,WeatherZoneEvolutionState> states_;
     std::vector<WeatherExchangeRecord> records_;
+};
+// One bounded background operation, shared across all zones. The result is
+// published and reconciled only on the simulation owner thread. No GPU use.
+class WeatherZoneEvolutionRunner
+{
+public:
+    void Reset()
+    {
+        ++epoch_;
+        scheduler_.Reset();
+        ledger_.Reset(); // prototype inventory; do not treat as authoritative climate
+        lastGeneration_=0;
+        completed_=0;
+    }
+    void Tick(const StormZoneSnapshot& snapshot, f64 targetSeconds)
+    {
+        if (!std::isfinite(targetSeconds)) return;
+        if (snapshot.generation==0)
+        {
+            if(lastGeneration_!=0) Reset();
+            return;
+        }
+        if (snapshot.generation!=lastGeneration_)
+        {
+            if (lastGeneration_!=0 && snapshot.simulatedSeconds<lastSnapshotTime_)
+                Reset();
+            scheduler_.Reconcile(snapshot.zones,snapshot.simulatedSeconds);
+            ledger_.Reconcile(snapshot.zones,snapshot.simulatedSeconds);
+            lastGeneration_=snapshot.generation;
+            lastSnapshotTime_=snapshot.simulatedSeconds;
+        }
+        if (worker_.valid())
+        {
+            if (worker_.wait_for(std::chrono::seconds(0))!=std::future_status::ready)
+                return;
+            auto finished=worker_.get();
+            if (finished.epoch==epoch_ && finished.result &&
+                ledger_.Complete(scheduler_,*finished.result))
+                ++completed_;
+        }
+        const auto tickets=scheduler_.Plan(targetSeconds);
+        if (!ledger_.HasExchangeCapacity()) return;
+        for (const auto& ticket:tickets)
+        {
+            if(ticket.kind!=WeatherStepKind::Detailed) continue;
+            const auto* state=ledger_.State(ticket.zoneId);
+            if(!state) continue;
+            const auto it=std::find_if(snapshot.zones.begin(),snapshot.zones.end(),
+                [&](const StormZone& z){return z.id==ticket.zoneId;});
+            if(it==snapshot.zones.end()) continue;
+            const auto copy=*state;
+            const auto weights=it->weights;
+            const u64 jobEpoch=epoch_;
+            worker_=std::async(std::launch::async,[ticket,copy,weights,jobEpoch]
+            {
+                Job result;
+                result.epoch=jobEpoch;
+                result.result=WeatherConvectiveSurrogate::Evaluate(copy,weights,ticket);
+                return result;
+            });
+            break; // at most one outstanding shared worker, no per-zone threads
+        }
+    }
+    [[nodiscard]] const WeatherMultirateScheduler& Scheduler() const noexcept {return scheduler_;}
+    [[nodiscard]] const WeatherEvolutionLedger& Ledger() const noexcept {return ledger_;}
+    [[nodiscard]] u64 Completed() const noexcept {return completed_;}
+private:
+    struct Job
+    {
+        u64 epoch{0};
+        std::optional<WeatherEvolutionResult> result;
+    };
+    WeatherMultirateScheduler scheduler_{};
+    WeatherEvolutionLedger ledger_{};
+    std::future<Job> worker_{};
+    u64 epoch_{0};
+    u64 lastGeneration_{0};
+    u64 completed_{0};
+    f64 lastSnapshotTime_{0};
 };
 } // namespace orbit::celestial_clouds
