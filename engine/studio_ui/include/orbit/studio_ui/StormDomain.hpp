@@ -66,6 +66,7 @@ struct StormStatus
     bool catchingUp{false};      // the solver is stepping to the current time and nothing is drawn yet
     u32 checkpoints{0};          // saved states of this storm; a time jump restarts from the nearest
     f64 checkpointMiB{0.0};      // memory of all cached checkpoints
+    u32 lightningArcSegments{0U};  // channel segments the arc overlay drew in the last frame that had any
     u64 lightningFlashes{0U};    // flashes the storm's own charge has produced since it started (or since the last time jump)
     u32 scheduledNearby{0};      // live scheduled storms within the search radius
     bool nested{false};          // the storm being drawn has a child grid
@@ -83,6 +84,8 @@ struct StormLightningSettings
     f64 slowMotion{1.0};      // 1 to 2000
     f64 chargeBoost{1.0};     // 1 to 10000
     f64 breakdownScale{1.0};  // 0.02 to 1
+    f64 brightness{1.0};      // 1 to 1e6: multiplies the energy of every flash (the lights on the clouds and the arc)
+    bool arcs{true};          // draw the channel of a live flash as a glowing line
 };
 
 [[nodiscard]] const char* StormStateName(StormStatus::State state) noexcept;

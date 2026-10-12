@@ -721,6 +721,26 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         width,
                         height);
                 });
+
+            // The channels of the live lightning flashes as glowing lines over the clouds (storm.lightning arcs).
+            if (auto arcLines = FlashArcLines(atmosphereCamera, height); !arcLines.empty())
+            {
+                graph.AddPass(
+                    prefix + ".LightningArcs",
+                    {
+                        {
+                            .texture = targets.color,
+                            .state = rhi::ResourceState::RenderTarget,
+                            .access = render_graph::Access::Write
+                        }
+                    },
+                    [this, color, width, height, atmosphereCamera, arcLines = std::move(arcLines)](
+                        rhi::CommandList& commands,
+                        const render_graph::Resources&)
+                    {
+                        pathRenderer_.DrawCameraRelativeLines(commands, *color, width, height, atmosphereCamera, arcLines);
+                    });
+            }
         }
     }
 

@@ -6,6 +6,7 @@
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 
 #include <chrono>
+#include <fstream>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -102,6 +103,102 @@ u64 StudioViewportRenderer::AddLightningStormFlash(optical_transport::DischargeG
 {
     const std::scoped_lock lock(transientFlashMutex_);
     return transientFlashes_.AddStormFlash(std::move(graph), FlashClockSeconds());
+}
+
+std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const render_view::CameraState& camera, const u32 height)
+{
+    std::vector<editor_ui::PreviewLine> out;
+    const StormLightningSettings settings = stormMailbox_.Lightning();
+    if (!settings.arcs || height == 0U)
+    {
+        return out;
+    }
+    std::vector<lighting::ChannelLine> channel;
+    {
+        const std::scoped_lock lock(transientFlashMutex_);
+        if (transientFlashes_.Empty())
+        {
+            return out;
+        }
+        // A channel stays visible a little after its pulse (the plasma cools), longer when the flash is slowed down.
+        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.02 * settings.slowMotion, 2.0), 1.0e3, 1500U);
+    }
+    if (channel.empty())
+    {
+        return out;
+    }
+    const math::Double3 forward{camera.forward.x, camera.forward.y, camera.forward.z};
+    const math::Double3 up{camera.up.x, camera.up.y, camera.up.z};
+    const math::Double3 right = math::Cross(up, forward);
+    const f64 rightLength = std::sqrt(math::Dot(right, right));
+    const math::Double3 side = rightLength > 0.0 ? right * (1.0 / rightLength) : math::Double3{1.0, 0.0, 0.0};
+    const f64 pixelAngle = 2.0 * std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians)) / static_cast<f64>(height);
+    const auto toFloat = [](const math::Double3& v) { return math::Float3{static_cast<f32>(v.x), static_cast<f32>(v.y), static_cast<f32>(v.z)}; };
+    lastArcSegments_ = static_cast<u32>(channel.size());
+    out.reserve(channel.size() * 12U);
+    // The electrification's channel follows the 500 m grid, so its segments are straight and axis aligned. Each one is broken into four
+    // with a lateral displacement taken from a hash of its own end points: jagged like a real channel, the same every frame, and the
+    // neighbouring segments still meet at the shared end points.
+    const auto unit = [](u64 h) {
+        h ^= h >> 33U; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33U; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33U;
+        return static_cast<f64>(h >> 11U) / 9007199254740992.0;
+    };
+    const auto quantised = [](const f64 v) { return static_cast<u64>(static_cast<i64>(std::llround(v))); };
+    for (const lighting::ChannelLine& line : channel)
+    {
+        const math::Double3 from = line.from - camera.localPositionMeters;
+        const math::Double3 to = line.to - camera.localPositionMeters;
+        const math::Double3 mid = (from + to) * 0.5;
+        const f64 distance = std::sqrt(math::Dot(mid, mid));
+        if (math::Dot(mid, forward) <= 0.0)
+        {
+            continue;   // behind the camera
+        }
+        const f64 pixel = distance * pixelAngle;
+        // HDR colour on a logarithmic scale (the powers span eight decades): a faint leader step 0.3, an in-cloud channel about 1.5, a
+        // return stroke about 3, so the structure stays readable instead of saturating to white.
+        const f32 intensity = static_cast<f32>(std::clamp(0.3 + 0.35 * std::log10(std::max(line.powerWatts, 1.0e3) / 1.0e3), 0.3, 6.0));
+        const math::Double3 direction = to - from;
+        const f64 length = std::sqrt(math::Dot(direction, direction));
+        math::Double3 points[5] = {from, {}, {}, {}, to};
+        if (length > 1.0)
+        {
+            const math::Double3 axis = direction * (1.0 / length);
+            const math::Double3 helper = std::fabs(axis.y) < 0.9 ? math::Double3{0.0, 1.0, 0.0} : math::Double3{1.0, 0.0, 0.0};
+            math::Double3 p1 = math::Cross(axis, helper);
+            p1 = p1 * (1.0 / std::sqrt(math::Dot(p1, p1)));
+            const math::Double3 p2 = math::Cross(axis, p1);
+            u64 seed = 0x9E3779B97F4A7C15ULL;
+            for (const f64 v : {line.from.x, line.from.y, line.from.z, line.to.x, line.to.y, line.to.z})
+            {
+                seed = (seed ^ quantised(v)) * 0x100000001B3ULL + 0x7F4A7C15ULL;
+            }
+            const auto jitter = [&](const u64 k, const f64 amount) {
+                return p1 * ((unit(seed + 2U * k) - 0.5) * 2.0 * amount * length) + p2 * ((unit(seed + 2U * k + 1U) - 0.5) * 2.0 * amount * length);
+            };
+            points[2] = mid + jitter(1U, 0.30);
+            points[1] = (from + points[2]) * 0.5 + jitter(2U, 0.15);
+            points[3] = (points[2] + to) * 0.5 + jitter(3U, 0.15);
+        }
+        else
+        {
+            points[1] = from * 0.75 + to * 0.25;
+            points[2] = mid;
+            points[3] = from * 0.25 + to * 0.75;
+        }
+        for (int k = 0; k < 4; ++k)
+        {
+            const auto add = [&](const math::Double3& offset, const f32 alpha) {
+                out.push_back({toFloat(points[k] + offset), toFloat(points[k + 1] + offset),
+                               {0.80F * intensity, 0.87F * intensity, 1.0F * intensity, alpha}});
+            };
+            add({}, 1.0F);
+            // A soft edge: two lines half a pixel to each side.
+            add(side * (pixel * 0.6), 0.4F);
+            add(side * (-pixel * 0.6), 0.4F);
+        }
+    }
+    return out;
 }
 
 std::vector<lighting::LocalLight> StudioViewportRenderer::TransientFlashLights(const lighting::CameraPlacement& camera)

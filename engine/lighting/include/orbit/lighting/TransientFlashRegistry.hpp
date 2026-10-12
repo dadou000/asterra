@@ -55,6 +55,14 @@ struct FlashStatus
     math::Double3 baseMeters{};
 };
 
+// One segment of a live flash's channel, in the lighting frame, with the optical power it radiates now.
+struct ChannelLine
+{
+    math::Double3 from{};
+    math::Double3 to{};
+    f64 powerWatts{0.0};
+};
+
 class TransientFlashRegistry
 {
 public:
@@ -72,6 +80,10 @@ public:
     // Resolves pending placements, drops expired flashes, and returns the lights for [nowSeconds, +exposure).
     [[nodiscard]] std::vector<LocalLight> LightsForWindow(
         f64 nowSeconds, const CameraPlacement& camera, const TransientLightParams& params);
+
+    // The channel segments that are lit at `nowSeconds` (a pulse in progress, or one that ended less than a few `afterglowSeconds` ago and
+    // fades exponentially), brightest first, at most `maxLines`: what an arc overlay draws. Flashes not yet placed are skipped.
+    [[nodiscard]] std::vector<ChannelLine> ChannelLines(f64 nowSeconds, f64 afterglowSeconds, f64 minimumPowerWatts, std::size_t maxLines) const;
 
     [[nodiscard]] std::vector<FlashStatus> Status(f64 nowSeconds) const;
     void Clear();

@@ -761,7 +761,7 @@ void StudioViewportRenderer::UpdateStormDomain(
                         {
                             pulse.startTime *= stretch;
                             pulse.duration *= stretch;
-                            pulse.radiantEnergy *= stretch;
+                            pulse.radiantEnergy *= stretch * lightningSettings.brightness;
                             end = std::max(end, pulse.startTime + pulse.duration);
                         }
                         for (double* p : {segment.from, segment.to})
@@ -773,6 +773,7 @@ void StudioViewportRenderer::UpdateStormDomain(
                         }
                     }
                     // Spread the flashes of one job over the time it covers, so they do not arrive in a burst.
+                    const std::scoped_lock flashLock(transientFlashMutex_);
                     transientFlashes_.Add(std::move(flash.graph), centre, FlashClockSeconds() + std::min(flash.delaySeconds, 10.0), end + 1.0);
                 }
             }
@@ -782,6 +783,7 @@ void StudioViewportRenderer::UpdateStormDomain(
             rt.lightning.Reset();
         }
         status.lightningFlashes = rt.lightning.FlashCount();
+        status.lightningArcSegments = lastArcSegments_.load();
 
         status.state = StormStatus::State::Active;
         status.message = stillBehind ? "catching up to the simulation clock" : "running";

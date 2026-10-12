@@ -68,6 +68,7 @@
 
 #include <future>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <map>
@@ -492,6 +493,9 @@ private:
     // Lights of the flashes alive now, in the lighting frame. Both the tiled-light pass and the cloud pass call this.
     [[nodiscard]] std::vector<lighting::LocalLight> TransientFlashLights(const lighting::CameraPlacement& camera);
     [[nodiscard]] static f64 FlashClockSeconds();
+    // The lit channel segments of the live flashes as overlay lines relative to `camera` (empty when none is lit or arcs are off).
+    std::atomic<u32> lastArcSegments_{0U};
+    [[nodiscard]] std::vector<editor_ui::PreviewLine> FlashArcLines(const render_view::CameraState& camera, u32 height);
     void ComposeAtmospherePasses(StudioLightingPassContext& context);
 
 

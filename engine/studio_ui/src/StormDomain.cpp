@@ -34,6 +34,7 @@ Value StatusValue(const StormStatus& s)
         {"checkpoints", static_cast<f64>(s.checkpoints)},
         {"checkpoint_mib", s.checkpointMiB},
         {"lightning_flashes", static_cast<f64>(s.lightningFlashes)},
+        {"lightning_arc_segments", static_cast<f64>(s.lightningArcSegments)},
         {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)},
         {"shader_reload", s.shaderReload},
         {"shader_reloads", static_cast<f64>(s.shaderReloads)},
@@ -136,6 +137,7 @@ std::string StormDomainMailbox::SetLightning(const StormLightningSettings& setti
     if (!(settings.slowMotion >= 1.0 && settings.slowMotion <= 2000.0)) { return "slow_motion must be 1 to 2000"; }
     if (!(settings.chargeBoost >= 1.0 && settings.chargeBoost <= 10000.0)) { return "charge_boost must be 1 to 10000"; }
     if (!(settings.breakdownScale >= 0.02 && settings.breakdownScale <= 1.0)) { return "breakdown_scale must be 0.02 to 1"; }
+    if (!(settings.brightness >= 1.0 && settings.brightness <= 1.0e6)) { return "brightness must be 1 to 1e6"; }
     const std::scoped_lock lock(mutex_);
     lightning_ = settings;
     return {};
@@ -340,7 +342,8 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 "flashes handed to the transient flash registry; clouds are lit by them when Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1). "
                 "Parameters (all optional, the rest keep their value): `enabled` (default true), and for testing `slow_motion` (1 to 2000: every "
                 "flash lasts that many times longer at the same power, so one frame can catch it), `charge_boost` (1 to 10000: multiplies the "
-                "charging rate) and `breakdown_scale` (0.02 to 1: scales the field at which air breaks down, lower = electrically unstable). "
+                "charging rate), `breakdown_scale` (0.02 to 1: scales the field at which air breaks down, lower = electrically unstable), `brightness` "
+                "(1 to 1e6: multiplies the energy of every flash, lights and arc alike) and `arcs` (default true: the channel of a live flash is drawn as a glowing line). "
                 "Changing the boost or the breakdown restarts the charge. Returns `error`, the settings and `lightning_flashes` from storm.status.",
             .mutating = true
         },
@@ -357,6 +360,12 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 settings.slowMotion = Optional(params, "slow_motion", settings.slowMotion);
                 settings.chargeBoost = Optional(params, "charge_boost", settings.chargeBoost);
                 settings.breakdownScale = Optional(params, "breakdown_scale", settings.breakdownScale);
+                settings.brightness = Optional(params, "brightness", settings.brightness);
+                if (const Value* arcs = params.Find("arcs"); arcs != nullptr)
+                {
+                    if (!arcs->IsBool()) { throw rpc::Error(kBadParams, "arcs must be a boolean."); }
+                    settings.arcs = arcs->AsBool();
+                }
             }
             const std::string error = mailbox.SetLightning(settings);
             const StormLightningSettings now = mailbox.Lightning();
@@ -365,6 +374,8 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 {"slow_motion", now.slowMotion},
                 {"charge_boost", now.chargeBoost},
                 {"breakdown_scale", now.breakdownScale},
+                {"brightness", now.brightness},
+                {"arcs", now.arcs},
                 {"lightning_flashes", static_cast<f64>(mailbox.Status().lightningFlashes)}};
             return result;
         });

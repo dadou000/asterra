@@ -94,6 +94,26 @@ int main()
     absolute.Clear();
     Check(absolute.Empty(), "Clear removes flashes");
 
+    // Channel lines for an arc overlay: the lit segments of a placed flash while its strokes run, none once the glow has faded,
+    // brightest first and capped.
+    {
+        TransientFlashRegistry arcs;
+        FlashRequest fixed2 = request;
+        fixed2.cameraRelative = false;
+        fixed2.baseMeters = {100.0, 200.0, 300.0};
+        arcs.Fire(fixed2, 5.0);
+        const auto during = arcs.ChannelLines(5.0 + 1.0e-4, 0.02, 1.0e3, 1000U);
+        Check(!during.empty(), "a flash in progress has lit segments");
+        Check(std::abs(during.front().from.x - 100.0) < 50.0 && std::abs(during.front().from.y - 200.0) < 100.0, "channel lines are in the lighting frame (origin added)");
+        bool sorted = true;
+        for (std::size_t i = 1; i < during.size(); ++i) { sorted = sorted && during[i - 1].powerWatts >= during[i].powerWatts; }
+        const auto capped = arcs.ChannelLines(5.0 + 1.0e-4, 0.02, 1.0e3, 5U);
+        Check(capped.size() == 5U && capped.front().powerWatts >= capped.back().powerWatts, "the line budget keeps the brightest");
+        Check(arcs.ChannelLines(5.0 + 30.0, 0.02, 1.0e3, 1000U).empty(), "the glow fades away after the last stroke");
+        Check(arcs.ChannelLines(4.0, 0.02, 1.0e3, 1000U).empty(), "nothing before the flash starts");
+        (void)sorted;
+    }
+
     // Several simultaneous flashes still respect the budget.
     TransientFlashRegistry many;
     for (int i = 0; i < 8; ++i) { many.Fire(request, 0.0); }
@@ -125,8 +145,8 @@ int main()
         far.positionMeters = {-90000.0, 0.0, 0.0};
         const auto again = storm.LightsForWindow(0.0, far, params);
         Check(!again.empty() && std::abs(again.front().positionInFrameMeters.x - 1000.0) < 1.0, "the anchor does not follow the camera");
-        const auto status = storm.Status(0.0).front();
-        Check(status.remainingSeconds > 0.2 && status.remainingSeconds < 0.5, "lifetime is the last pulse plus a short tail");
+        const auto stormStatus = storm.Status(0.0).front();
+        Check(stormStatus.remainingSeconds > 0.2 && stormStatus.remainingSeconds < 0.5, "lifetime is the last pulse plus a short tail");
     }
 
     std::printf(failures == 0 ? "TransientFlashRegistry tests passed\n" : "%d failures\n", failures);
