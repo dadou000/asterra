@@ -82,3 +82,30 @@ retirement, backward time and bounded analytic probes.
   During jumps, the newer survey supersedes older published state; do not use
   snapshots as authoritative weather physics until timestamped coupling exists.
 - Build, CI and device performance need independent verification.
+
+## Phase 4: sparse multirate scheduler (planning only)
+- `WeatherMultirateScheduler.hpp` maintains distinct simulated-time cursor,
+  update cadence and budget accounting for each persistent zone identity.
+- `Reconcile` adds/removes zones when a new immutable discovery snapshot
+  arrives; `Plan` creates at most one bounded ticket per due zone, irrespective
+  of the magnitude of the requested time jump.
+- For a time jump exceeding `maximumDetailedStep`, the ticket kind is
+  `RequiresLongStepModel`. This is a **blocked obligation** until a validated
+  long-step model and exchange ledger exist. NO physical state is advanced
+  by issuing a ticket, and the viewport deliberately does not call `Commit`.
+- The runtime currently has no physical zone evolution. `storm.status` and
+  Weather Lab expose ticket count, blocked long steps, deferred task count
+  and maximum simulated-time lag. The old storm scheduler and renderer run
+  as before; this scheduler only observes and plans.
+- The computational budget is measured in estimated scheduling units rather
+  than benchmarked milliseconds. Do not equate the values with measured
+  CPU or GPU cost.
+- The current scheduler does not dispatch worker tasks, build child-structure
+  dependency graphs, reconcile exchange budgets or preserve historical storm
+  identities through arbitrary rewind. Those require further implementations.
+- Validation command:
+  `ctest -R "Orbit.WeatherMultirateScheduler|Orbit.StormZoneRuntime|Orbit.SparseStormZones" --output-on-failure`.
+- Recommended next: add an explicit `IWeatherEvolutionOperator` completion
+  protocol with timestamped flux ledgers, and only then enable ticket execution
+  for suitable model types. Coarse temporal skipping must never masquerade
+  as successful physical integration.
