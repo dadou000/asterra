@@ -739,19 +739,52 @@ float StormCellChild(int3 c)
     return g_storm[(int)g_storm[30] + (q.z * ny + q.y) * nx + q.x];
 }
 
+// Surface detail of the simulated storm (CLOUD_STORM_DETAIL, default 1): the grid is 500 m to 2 km, so up close the density is a smooth
+// bloom. The sample position is displaced by a low-frequency noise (billows, up to CLOUD_STORM_WARP metres) and the fringe is carved with two
+// noise octaves, hard where the density is low and barely in the dense core; both fade out as a pixel gets wider than the features, so
+// the far view is the smooth density as before. CLOUD_STORM_CARVE scales how much of the fringe is carved away.
+#ifndef CLOUD_STORM_DETAIL
+#define CLOUD_STORM_DETAIL 1
+#endif
+#ifndef CLOUD_STORM_WARP
+#define CLOUD_STORM_WARP 500.0
+#endif
+#ifndef CLOUD_STORM_CARVE
+#define CLOUD_STORM_CARVE 1.0
+#endif
+// Density (1/m) above which the carve stops: the visible surface of a thick cloud is where the line of sight has gathered an optical depth
+// of about 1, so the carve has to reach well past the thin fringe.
+#ifndef CLOUD_STORM_CORE
+#define CLOUD_STORM_CORE 0.12
+#endif
+
 float StormSigma(float3 position, float radius, float footprint)
 {
-    const float3 dir = position / max(radius, 1.0);
+    float3 samplePosition = position;
+#if CLOUD_STORM_DETAIL
+    const float warpAmount = 1.0 - SmoothRange(0.4, 1.6, footprint / 150.0);
+    if (warpAmount > 0.0)
+    {
+        samplePosition += (SampleNoise(position / 380.0 + 17.0).rgb - 0.5) * (2.0 * CLOUD_STORM_WARP * warpAmount);
+    }
+#endif
+    const float sampleRadius = length(samplePosition);
+    const float3 dir = samplePosition / max(sampleRadius, 1.0);
     const float planetRadius = g_storm[13];
     const float x = planetRadius * dot(dir, float3(g_storm[4], g_storm[5], g_storm[6]));
     const float y = planetRadius * dot(dir, float3(g_storm[7], g_storm[8], g_storm[9]));
-    const float altitude = radius - planetRadius;
+    const float altitude = sampleRadius - planetRadius;
     const float fx = x / g_storm[14] + 0.5 * g_storm[17] - 0.5;
     const float fy = y / g_storm[15] + 0.5 * g_storm[18] - 0.5;
     const float fz = altitude / g_storm[16] - 0.5;
     if (fz > g_storm[19]) { return 0.0; }
     const float3 f = floor(float3(fx, fy, fz));
-    const float3 t = float3(fx, fy, fz) - f;
+    float3 t = float3(fx, fy, fz) - f;
+#if CLOUD_STORM_DETAIL
+    // Smoothstep weights, as for the noise: plain linear interpolation has slope kinks on the cell planes, and the carved iso-surface shows
+    // them as a stair of one-cell steps.
+    t = t * t * (3.0 - 2.0 * t);
+#endif
     const int3 c = int3(f);
     const float a = lerp(lerp(StormCell(c), StormCell(c + int3(1, 0, 0)), t.x),
         lerp(StormCell(c + int3(0, 1, 0)), StormCell(c + int3(1, 1, 0)), t.x), t.y);
@@ -769,7 +802,10 @@ float StormSigma(float3 position, float radius, float footprint)
             const float cfx = childX / g_storm[23] + 0.5 * g_storm[25] - 0.5;
             const float cfy = childY / g_storm[24] + 0.5 * g_storm[26] - 0.5;
             const float2 cf = floor(float2(cfx, cfy));
-            const float2 ct = float2(cfx, cfy) - cf;
+            float2 ct = float2(cfx, cfy) - cf;
+#if CLOUD_STORM_DETAIL
+            ct = ct * ct * (3.0 - 2.0 * ct);
+#endif
             const int2 cc = int2(cf);
             const float ca = lerp(lerp(StormCellChild(int3(cc, c.z)), StormCellChild(int3(cc + int2(1, 0), c.z)), ct.x),
                 lerp(StormCellChild(int3(cc + int2(0, 1), c.z)), StormCellChild(int3(cc + int2(1, 1), c.z)), ct.x), ct.y);
@@ -778,9 +814,27 @@ float StormSigma(float3 position, float radius, float footprint)
             sigma = lerp(sigma, lerp(ca, cb, t.z), inside);
         }
     }
+#if CLOUD_STORM_DETAIL
     if (sigma > 1.0e-6)
     {
-        // The grid is 500 m to 2 km: carve the silhouette and the interior with the erosion noise, fading out when a pixel is wider.
+        const float amount = 1.0 - SmoothRange(0.5, 3.0, footprint / 70.0);
+        if (amount > 0.0)
+        {
+            // Three octaves (600, 250 and 100 m): a continuous modulation, strong in the thin fringe and absent in the dense core. A hard
+            // threshold left isolated flecks and holes instead of connected billows.
+            const float4 n1 = SampleNoise(position / 600.0 + 41.0);
+            const float4 n2 = SampleNoise(position / 250.0 + 9.0);
+            const float4 n3 = SampleNoise(position / 100.0 + 63.0);
+            const float cauli = 0.5 * n1.g + 0.3 * n2.b + 0.2 * n3.a;
+            const float core = saturate(sigma / CLOUD_STORM_CORE);   // 1 deep inside the cloud, 0 at its fringe
+            const float modulation = lerp(1.0, 0.1 + 1.8 * saturate(0.5 + (cauli - 0.5) * 1.6), (1.0 - core) * 0.9 * CLOUD_STORM_CARVE);
+            sigma *= lerp(1.0, modulation * (0.85 + 0.3 * n2.r), amount);
+        }
+    }
+#else
+    if (sigma > 1.0e-6)
+    {
+        // Without the detail pass: the grid is 500 m to 2 km, the erosion noise only modulates the density.
         const float amount = 1.0 - SmoothRange(0.4, 1.5, footprint / 140.0);
         if (amount > 0.0)
         {
@@ -788,6 +842,7 @@ float StormSigma(float3 position, float radius, float footprint)
             sigma *= lerp(1.0, 0.35 + 1.3 * e, 0.85 * amount);
         }
     }
+#endif
     return sigma;
 }
 
