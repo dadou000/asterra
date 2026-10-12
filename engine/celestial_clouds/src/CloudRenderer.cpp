@@ -103,7 +103,7 @@ static float gCloudDistance = 1.0e9;
 // March cost constants. ORBIT_CLOUD_DEFINES="CLOUD_MAX_STEPS=160;..." overrides them for A/B work (see tools/orbit_ab.py);
 // the defaults are the shipped values.
 #ifndef CLOUD_MAX_STEPS
-#define CLOUD_MAX_STEPS 224
+#define CLOUD_MAX_STEPS 320
 #endif
 #ifndef CLOUD_SCHEDULE_STEPS
 #define CLOUD_SCHEDULE_STEPS 140
@@ -1384,6 +1384,11 @@ constexpr const char* kThinLayerCap = R"(
 #define CLOUD_INCLOUD_STEP_SCALE 1.0
 #endif
 
+// How fast the step cap inside the thin high layer grows with distance (metres per metre): the cap is 300 m + this * t. Raising it to 0.03 or
+// 0.05 helped the edge-on anvil only a little (the budget, CLOUD_MAX_STEPS, is what matters), so the shipped value is the original.
+#ifndef CLOUD_THIN_CAP_GROWTH
+#define CLOUD_THIN_CAP_GROWTH 0.012
+#endif
 // Thin high layer (cirrus / anvil, 0.70-0.90 of the shell): a coarse step can hop straight across it, which bands it.
 // Land the step on the layer edge and take at least 8 steps across its thickness while inside.
 float ThinLayerStepCap(float3 position, float radius, float3 direction, float stepLength, float t, float4 column)
@@ -1402,7 +1407,7 @@ float ThinLayerStepCap(float3 position, float radius, float3 direction, float st
             // The anvil thins towards its rim (down to ~45 % of the layer), so take the 8 steps across the thinnest
             // part, or the thin sheet is hit by 1-2 samples.
             const float thin = lerp(0.45, 1.0, saturate(column.y * 1.5)) * 0.5;
-            stepCap = min(stepLength, min(0.2 * thin / absSlope / 8.0, 300.0 + 0.012 * t));
+            stepCap = min(stepLength, min(0.2 * thin / absSlope / 8.0, 300.0 + CLOUD_THIN_CAP_GROWTH * t));
         }
         else if (heightFraction < 0.70 && slope > 0.0)
         {
