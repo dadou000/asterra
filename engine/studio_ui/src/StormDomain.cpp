@@ -50,6 +50,8 @@ Value StatusValue(const StormStatus& s)
         {"zone_long_steps_blocked", static_cast<f64>(s.zoneBlockedLongSteps)},
         {"zone_tasks_deferred", static_cast<f64>(s.zoneDeferredTasks)},
         {"zone_max_lag_seconds", s.zoneMaximumLagSeconds},
+        {"zone_completed_steps", static_cast<f64>(s.zoneCompletedSteps)},
+        {"zone_pending_exchanges", static_cast<f64>(s.zonePendingExchanges)},
         {"shader_reload", s.shaderReload},
         {"shader_reloads", static_cast<f64>(s.shaderReloads)},
         {"nested", s.nested},
