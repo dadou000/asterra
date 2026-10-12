@@ -3,6 +3,7 @@
 #include <orbit/celestial_clouds/StormSchedule.hpp>
 #include <orbit/celestial_clouds/StormZoneRuntime.hpp>
 #include <orbit/celestial_clouds/WeatherEvolution.hpp>
+#include <orbit/celestial_clouds/WeatherConvectiveInteractions.hpp>
 #include <orbit/core/Log.hpp>
 #include <orbit/weather_gpu/GpuStormSolver.hpp>
 #include <orbit/weather_gpu/NestedGpuSolver.hpp>
@@ -617,6 +618,7 @@ void StudioViewportRenderer::UpdateStormDomain(
     rt.zoneRuntime.Tick(rt.zoneBodyGeneration, nowSeconds, zoneWeather,
         celestial_clouds::WeatherClimate{});
     const auto zoneSnapshot = rt.zoneRuntime.Snapshot();
+    rt.zoneEvolution.SetEvaluator(&celestial_clouds::EvaluateInteractingWeather);
     // Shared asynchronous worker: no per-zone thread, no GPU involvement.
     // Only validated detailed tickets can complete; long-step work stays blocked.
     rt.zoneEvolution.Tick(*zoneSnapshot, nowSeconds);
