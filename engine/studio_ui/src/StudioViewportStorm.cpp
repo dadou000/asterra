@@ -316,6 +316,13 @@ private:
                 // A flash stops once it could neutralise this much charge. A boosted charge rate makes every cell hold that many times more, so the
                 // budget scales with it: the boost changes how often the storm flashes, not how big a flash is; flash_size changes the size.
                 params.leader.maxFlashCharge *= job.flashSize * job.chargeBoost;
+                // Grow the channel as a tree with a trunk (see LeaderParams), not as a mesh with the same current in every branch.
+                params.leader.growthExponent = 3.0;
+                params.leader.sideBranchChance = 0.03;
+                params.leader.picksDivisor = 24.0;
+                params.leader.currentWeighted = true;
+                // A real flash has some 50 to 200 km of channel (100 to 400 cells of 500 m); the default cap of 6000 cells let one fill the volume.
+                params.leader.maxChannelCells = 400U;
                 source = std::make_unique<storm_electrification::StormLightningSource>(
                     std::move(job.fields), cells_, cells_, nz_, static_cast<f64>(spacing_), params);
             }
@@ -453,6 +460,7 @@ struct StudioViewportRenderer::StormRuntime
     f64 stepMilliseconds{0.0};
     bool exported{false};
     StormLightningFeed lightning;
+    u32 lastFlashCells{0U};
     f64 lastFlashRadius{0.0};
     f64 maxFlashRadius{0.0};
     u64 readId{~0ULL};
@@ -868,6 +876,7 @@ void StudioViewportRenderer::UpdateStormDomain(
                                 }
                             }
                             rt.lastFlashRadius = radius;
+                            rt.lastFlashCells = static_cast<u32>(flash.graph.Segments().size());
                             rt.maxFlashRadius = std::max(rt.maxFlashRadius, radius);
                         }
                     }
@@ -906,6 +915,7 @@ void StudioViewportRenderer::UpdateStormDomain(
         status.lightningFlashes = rt.lightning.FlashCount();
         status.lightningArcSegments = lastArcSegments_.load();
         status.lightningJobMilliseconds = rt.lightning.JobMilliseconds();
+        status.lightningFlashCells = rt.lastFlashCells;
         status.lightningFlashRadiusMeters = rt.lastFlashRadius;
         status.lightningFlashRadiusMaxMeters = rt.maxFlashRadius;
 

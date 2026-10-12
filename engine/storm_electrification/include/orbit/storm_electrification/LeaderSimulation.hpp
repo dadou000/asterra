@@ -38,6 +38,18 @@ struct LeaderParams
     double leaderEnergyPerMeter = 0.2;     // J/m of faint leader luminosity (a stepped leader is far dimmer than its stroke)
     double intracloudEnergyPerMeter = 40.0;// J/m radiated as the channel conducts (no return stroke)
     double pulseDuration = 3.0e-5;         // s
+    // How the channel grows. The defaults grow it as a random mesh: every cell of the channel may extend, in proportion to the field excess,
+    // and the optical energy is the same in every segment. These make it a tree with a trunk, like a dielectric breakdown model:
+    //   growthExponent       the chance of a candidate cell goes with excess^exponent (1 = linear; 3 or more concentrates growth where the
+    //                        field is strongest, so the channel runs toward the opposite charge instead of filling the volume);
+    //   sideBranchChance     the chance that a cell with more than one channel neighbour (not a tip) may extend in a round (1 = always);
+    //   picksDivisor         cells added per round = 1 + channel cells / picksDivisor (smaller = faster, bushier growth);
+    //   currentWeighted      the energy radiated by the intracloud channel is shared over its segments in proportion to the number of
+    //                        segments downstream of each (the charge each carries back to the root), so the trunk is bright and the twigs dim.
+    double growthExponent = 1.0;
+    double sideBranchChance = 1.0;
+    double picksDivisor = 8.0;
+    bool currentWeighted = false;
     std::uint64_t seed = 1;
 };
 

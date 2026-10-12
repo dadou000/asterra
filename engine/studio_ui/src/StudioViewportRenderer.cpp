@@ -299,7 +299,7 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
             return out;
         }
         // A channel stays visible a little after its pulse (the plasma cools), longer when the flash is slowed down.
-        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.02 * settings.slowMotion, 2.0), 1.0e3, 1500U);
+        channel = transientFlashes_.ChannelLines(FlashClockSeconds(), std::min(0.02 * settings.slowMotion, 2.0), 1.0e3, 8000U);
     }
     if (channel.empty())
     {
@@ -371,9 +371,23 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
                                {0.80F * intensity, 0.87F * intensity, 1.0F * intensity, alpha}});
             };
             add({}, 1.0F);
-            // A soft edge: two lines half a pixel to each side.
-            add(side * (pixel * 0.6), 0.4F);
-            add(side * (-pixel * 0.6), 0.4F);
+            // A soft edge: two lines half a pixel to each side (not on the faint twigs, of which there are thousands); the strong segments
+            // (the trunk) get a wider glow.
+            if (intensity > 1.0F)
+            {
+                add(side * (pixel * 0.6), 0.4F);
+                add(side * (-pixel * 0.6), 0.4F);
+            }
+            if (intensity > 2.0F)
+            {
+                add(side * (pixel * 1.4), 0.3F);
+                add(side * (-pixel * 1.4), 0.3F);
+            }
+            if (intensity > 3.0F)
+            {
+                add(side * (pixel * 2.4), 0.2F);
+                add(side * (-pixel * 2.4), 0.2F);
+            }
         }
     }
     return out;

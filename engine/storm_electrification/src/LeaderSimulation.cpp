@@ -136,6 +136,19 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
         std::unordered_map<std::uint64_t, std::size_t> best;
         for (const Cell& c : channel)
         {
+            if (p.sideBranchChance < 1.0)
+            {
+                // Only the tips extend, plus an occasional side branch from the middle of the channel.
+                int neighbours = 0;
+                for (const auto& dir : d)
+                {
+                    const long nx = static_cast<long>(c.i) + dir[0], ny = static_cast<long>(c.j) + dir[1], nz = static_cast<long>(c.k) + dir[2];
+                    if (nx < 0 || ny < 0 || nz < 0) continue;
+                    const Cell around{static_cast<std::uint32_t>(nx), static_cast<std::uint32_t>(ny), static_cast<std::uint32_t>(nz)};
+                    if (segmentOf.count(key(around))) ++neighbours;
+                }
+                if (neighbours > 1 && rng.Uniform() > p.sideBranchChance) continue;
+            }
             for (const auto& dir : d)
             {
                 const long x = static_cast<long>(c.i) + dir[0], y = static_cast<long>(c.j) + dir[1], z = static_cast<long>(c.k) + dir[2];
@@ -150,13 +163,14 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
                 // step across the new cell must beat the propagation field.
                 const double excess = std::abs(phi - channelPotential) / h - threshold;
                 if (excess <= 0.0) continue;
+                const double weight = p.growthExponent == 1.0 ? excess : std::pow(excess, p.growthExponent);
                 const auto found = best.find(key(n));
                 if (found == best.end())
                 {
                     best[key(n)] = candidates.size();
-                    candidates.push_back({n, c, excess});
+                    candidates.push_back({n, c, weight});
                 }
-                else if (excess > candidates[found->second].weight)
+                else if (weight > candidates[found->second].weight)
                 {
                     candidates[found->second].parent = c;
                 }
@@ -164,7 +178,8 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
         }
         if (candidates.empty()) break;
         // Extend by a bounded number of cells per round chosen proportionally to their excess field.
-        const std::size_t picks = std::max<std::size_t>(1, std::min<std::size_t>(candidates.size(), 1 + channel.size() / 8));
+        const std::size_t picks = std::max<std::size_t>(
+            1, std::min<std::size_t>(candidates.size(), 1 + static_cast<std::size_t>(static_cast<double>(channel.size()) / std::max(p.picksDivisor, 1.0e-3))));
         for (std::size_t n = 0; n < picks && !candidates.empty(); ++n)
         {
             double total = 0.0;
@@ -233,9 +248,24 @@ FlashResult TryFlash(ChargeGrid& grid, const LeaderParams& p, double startTime, 
         // No return stroke: the channel is bright where it conducts, fading as it forms (every cell glows as it is made
         // and again a little later when the opposite polarity reaches it).
         const double lateTime = out.endTime;
-        for (std::size_t s = 0; s < bright.Segments().size(); ++s)
+        const std::size_t count = bright.Segments().size();
+        // The energy of a segment: equal shares, or (currentWeighted) in proportion to the segments downstream of it, the charge it carries.
+        std::vector<double> share(count, 1.0);
+        if (p.currentWeighted && count > 0)
         {
-            bright.Reactivate(static_cast<std::int32_t>(s), {lateTime + 1.0e-4 * rng.Uniform(), p.pulseDuration, p.intracloudEnergyPerMeter * h});
+            std::vector<double> downstream(count, 1.0);
+            for (std::size_t s = count; s-- > 0;)
+            {
+                const std::int32_t parent = bright.Segments()[s].parent;
+                if (parent >= 0) downstream[static_cast<std::size_t>(parent)] += downstream[s];
+            }
+            double total = 0.0;
+            for (const double v : downstream) total += v;
+            for (std::size_t s = 0; s < count; ++s) share[s] = downstream[s] * static_cast<double>(count) / total;   // the mean stays 1
+        }
+        for (std::size_t s = 0; s < count; ++s)
+        {
+            bright.Reactivate(static_cast<std::int32_t>(s), {lateTime + 1.0e-4 * rng.Uniform(), p.pulseDuration, p.intracloudEnergyPerMeter * h * share[s]});
         }
     }
     out.graph = std::move(bright);

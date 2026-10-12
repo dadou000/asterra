@@ -66,6 +66,7 @@ struct StormStatus
     bool catchingUp{false};      // the solver is stepping to the current time and nothing is drawn yet
     u32 checkpoints{0};          // saved states of this storm; a time jump restarts from the nearest
     f64 checkpointMiB{0.0};      // memory of all cached checkpoints
+    u32 lightningFlashCells{0U};           // channel cells of the last flash
     f64 lightningFlashRadiusMeters{0.0};   // the largest distance from its centre to any point of the last flash's channel
     f64 lightningFlashRadiusMaxMeters{0.0}; // the largest such radius since the lightning started
     f64 lightningJobMilliseconds{0.0};  // wall time the electrification worker took for its last job (storm seconds in, flashes and charge out)

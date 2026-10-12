@@ -36,6 +36,7 @@ Value StatusValue(const StormStatus& s)
         {"lightning_flashes", static_cast<f64>(s.lightningFlashes)},
         {"lightning_arc_segments", static_cast<f64>(s.lightningArcSegments)},
         {"lightning_job_ms", s.lightningJobMilliseconds},
+        {"lightning_flash_cells", static_cast<f64>(s.lightningFlashCells)},
         {"lightning_flash_radius_m", s.lightningFlashRadiusMeters},
         {"lightning_flash_radius_max_m", s.lightningFlashRadiusMaxMeters},
         {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)},

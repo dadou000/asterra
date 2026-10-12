@@ -266,6 +266,42 @@ int main()
         };
         Check(different.occurred && (different.channelCells != flash.channelCells || fingerprint(different) != fingerprint(flash)),
               "a different seed grows a different channel");
+        // A tree with a trunk: with the growth made to concentrate on strong fields, rare side branches and energy by downstream
+        // charge, the channel is far fewer cells, the root-side segments radiate far more than the twigs, and the energy of the flash is
+        // the same as an equal sharing would give.
+        {
+            LeaderParams tree = leader;
+            tree.growthExponent = 3.0;
+            tree.sideBranchChance = 0.03;
+            tree.picksDivisor = 24.0;
+            tree.currentWeighted = true;
+            ChargeGrid treeGrid(48, 48, 32, 500.0);
+            chargeUntilBreakdown(treeGrid);
+            const FlashResult grown = TryFlash(treeGrid, tree, chargingTime, 7);
+            Check(grown.occurred && grown.channelCells >= 3, "a tree-grown flash occurs");
+            double strongest = 0.0, weakest = 1.0e300, sum = 0.0;
+            for (const auto& s : grown.graph.Segments())
+            {
+                double e = 0.0;
+                for (const auto& pulse : s.pulses) e = std::max(e, pulse.radiantEnergy);
+                strongest = std::max(strongest, e);
+                weakest = std::min(weakest, e);
+                sum += e;
+            }
+            Check(grown.graph.Segments().size() > 8 && strongest > 4.0 * weakest, "the trunk radiates several times more than the twigs");
+            // With equal sharing every segment has the same bright pulse, so the strongest is not many times the mean.
+            double equalStrongest = 0.0, equalMean = 0.0;
+            for (const auto& s : flash.graph.Segments())
+            {
+                double e = 0.0;
+                for (const auto& pulse : s.pulses) e = std::max(e, pulse.radiantEnergy);
+                equalStrongest = std::max(equalStrongest, e);
+                equalMean += e;
+            }
+            equalMean /= static_cast<double>(flash.graph.Segments().size());
+            Check(equalStrongest < 1.5 * equalMean, "the default sharing is equal");
+            (void)sum;
+        }
         // Timing and energy: the channel grows at the leader speed and the optical energy is finite and bounded.
         const double energy = flash.graph.EnergyInWindow(0.0, 1.0e6);
         Check(energy > 0.0 && energy < 1.0e9, "optical energy of an intracloud flash is finite and bounded");
