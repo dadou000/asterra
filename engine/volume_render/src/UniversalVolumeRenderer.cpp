@@ -2488,11 +2488,30 @@ void UniversalVolumeRenderer::AddLivePasses(
             world_model::
                 VolumeField::Emission);
 
-    if (!emission.IsValid())
+    // Without an emission field the shader still needs a bound buffer; density stands in for it. The render graph
+    // rejects a pass that declares one buffer twice, so the stand-in is bound but declared only once.
+    const bool emissionIsDensityStandIn = !emission.IsValid();
+    if (emissionIsDensityStandIn)
     {
         emission =
             density;
     }
+
+    std::vector<render_graph::BufferUse> raymarchBufferUses{
+        {density,rhi::ResourceState::ShaderResource,render_graph::Access::Read}};
+    if (!emissionIsDensityStandIn)
+    {
+        raymarchBufferUses.push_back(
+            {emission,rhi::ResourceState::ShaderResource,render_graph::Access::Read});
+    }
+    raymarchBufferUses.insert(
+        raymarchBufferUses.end(),
+        {{slotMapHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+         {localLightsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+         {paramsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+         {effectiveRadianceCells,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+         {effectiveRadianceLevels,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
+         {effectiveParticleLightGrid,rhi::ResourceState::ShaderResource,render_graph::Access::Read}});
 
     graph.AddPass(
         std::string(prefix) +
@@ -2528,16 +2547,7 @@ void UniversalVolumeRenderer::AddLivePasses(
                         Write
             }
         },
-        {
-            {density,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {emission,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {slotMapHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {localLightsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {paramsHandle,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {effectiveRadianceCells,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {effectiveRadianceLevels,rhi::ResourceState::ShaderResource,render_graph::Access::Read},
-            {effectiveParticleLightGrid,rhi::ResourceState::ShaderResource,render_graph::Access::Read}
-        },
+        std::move(raymarchBufferUses),
         [this,
          currentHandle,
          depth,
