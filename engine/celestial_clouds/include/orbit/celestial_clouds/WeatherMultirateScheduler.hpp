@@ -70,9 +70,15 @@ public:
             // Strongly convective regions get more frequent diagnostic work.
             // This is a cadence heuristic only, not a physical timestep bound.
             const f64 activity=std::clamp(static_cast<f64>(z.weights.convection),0.0,1.0);
+            // Never schedule routine detailed work beyond the validated
+            // integration horizon. Slower zones use multiple bounded steps;
+            // genuine timewarp jumps remain explicit long-step obligations.
+            const f64 maximumCadence=std::max(1.0,
+                std::min(budget_.maximumZoneInterval,budget_.maximumDetailedStep));
             node.interval=std::clamp(
                 budget_.maximumZoneInterval*(1.0-0.92*activity),
-                budget_.minimumZoneInterval,budget_.maximumZoneInterval);
+                std::min(budget_.minimumZoneInterval,maximumCadence),
+                maximumCadence);
             node.cost=1.0F;
         }
         for (auto it=nodes_.begin();it!=nodes_.end();)
@@ -116,7 +122,9 @@ public:
                 ++stats_.deferred;
                 continue;
             }
-            const f64 advance=std::min(target,node.committed+node.interval);
+            const f64 advance=std::min(target,
+                node.committed+std::min(node.interval,
+                    std::max(1.0,budget_.maximumDetailedStep)));
             const bool longStep=target-node.committed>
                 std::max(1.0,budget_.maximumDetailedStep);
             // For an extreme jump, ticket requests the whole missing interval.
