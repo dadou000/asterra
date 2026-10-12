@@ -108,6 +108,12 @@ struct StormChargeBlocks
     u32 nz{0};
     f32 blockMeters{0.0F};
     std::vector<f32> coulombs;
+    // The extinction of the cloud in the same window, per metre, one value per charge-grid cell (x fastest, then y, then z): what hides a
+    // channel behind the cloud (see StudioViewportRenderer::FlashArcLines). Empty until the first job has finished.
+    u32 extinctionCells{0};
+    u32 extinctionLevels{0};
+    f32 extinctionSpacing{0.0F};
+    std::vector<f32> extinction;
 };
 
 // What survives a restart of Studio (and the automatic handoff to a new generation of it when the sources change): the manual storm that was

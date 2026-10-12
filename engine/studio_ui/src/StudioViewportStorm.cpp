@@ -205,6 +205,7 @@ private:
         f64 flashSize{1.0};
         f64 groundStrikeChance{0.0};
         f64 smallFlashFraction{0.0};
+        std::vector<f32> extinction;   // per metre, per cell of the window (see StormChargeBlocks)
     };
 
     void Submit(StormSim& sim, weather_lab::FastStormSolver& readout)
@@ -260,6 +261,7 @@ private:
         f.graupel.resize(count);
         f.ice.resize(count);
         f.liquid.resize(count);
+        job.extinction.resize(count);
         const weather_lab::BaseState& base = readout.Base();
         std::size_t out = 0;
         for (u32 k = 0; k < nz; ++k)
@@ -277,6 +279,10 @@ private:
                     f.graupel[out] = qg[cell];
                     f.ice[out] = qi[cell] + qs[cell];
                     f.liquid[out] = qc[cell];
+                    // Extinction of the particles, sigma = 3 W / (2 rho_w r_eff) for a water content W (kg/m3): droplets of 10 um, ice crystals
+                    // of 40 um and 900 kg/m3, graupel of 0.5 mm and 400 kg/m3; the rain and the precipitation are in the renderer's own cloud.
+                    const f32 density = base.density[k];
+                    job.extinction[out] = density * (150.0F * qc[cell] + 41.0F * qi[cell] + 7.5F * qs[cell] + 7.5F * qg[cell]);
                 }
             }
         }
@@ -376,6 +382,10 @@ private:
             }
             std::lock_guard lock(mutex_);
             jobMilliseconds_ = std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - jobStart).count();
+            blocks->extinctionCells = cells_;
+            blocks->extinctionLevels = nz_;
+            blocks->extinctionSpacing = spacing_;
+            blocks->extinction = std::move(job.extinction);
             blocks_ = std::move(blocks);
             for (auto& flash : found)
             {

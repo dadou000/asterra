@@ -318,7 +318,39 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
     const math::Double3 right = math::Cross(up, forward);
     const f64 rightLength = std::sqrt(math::Dot(right, right));
     const math::Double3 side = rightLength > 0.0 ? right * (1.0 / rightLength) : math::Double3{1.0, 0.0, 0.0};
-    const f64 pixelAngle = 2.0 * std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians)) / static_cast<f64>(height);
+    // The width of an arc is a share of the screen height, not a number of pixels: its glow is measured on a 1080 pixel high reference screen
+    // and the core is thickened by whole device pixels when the screen is higher (4K: a core of three pixels), so it looks the same at any
+    // resolution.
+    const f64 devicePixelAngle = 2.0 * std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians)) / static_cast<f64>(height);
+    const f64 pixelAngle = 2.0 * std::tan(0.5 * static_cast<f64>(camera.verticalFovRadians)) / 1080.0;
+    const int extraCore = std::clamp(static_cast<int>(std::ceil(0.5 * (static_cast<f64>(height) / 1080.0 - 1.0) - 1.0e-6)), 0, 4);
+    // Cloud in front of a channel: the extinction of the storm's window is integrated along the line of sight to the middle of the segment.
+    const std::shared_ptr<const StormChargeBlocks> blocks = lightningBlocks_;
+    const LightningGridFrame frame = lightningFrame_;
+    const bool occlude = blocks && frame.valid && !blocks->extinction.empty() && blocks->extinctionCells > 0U;
+    // Light is scattered forward in a cloud, so a channel stays visible through a much larger optical depth than the extinction suggests.
+    constexpr f64 kForwardScatterShare = 0.12;
+    const auto transmittance = [&](const math::Double3& target) {
+        if (!occlude) { return 1.0; }
+        const math::Double3 start = camera.localPositionMeters;
+        const math::Double3 ray = target - start;
+        const f64 distance = std::sqrt(math::Dot(ray, ray));
+        const f64 step = 0.5 * static_cast<f64>(blocks->extinctionSpacing);
+        const u32 samples = std::min(static_cast<u32>(distance / std::max(step, 1.0)) + 1U, 400U);
+        f64 optical = 0.0;
+        const f64 stride = distance / samples;
+        for (u32 s = 0; s < samples; ++s)
+        {
+            const math::Double3 rel = start + ray * ((s + 0.5) / samples) - frame.centre;
+            const f64 x = math::Dot(rel, frame.east) - frame.offsetEast, y = math::Dot(rel, frame.north) - frame.offsetNorth, z = math::Dot(rel, frame.up);
+            const f64 inv = 1.0 / static_cast<f64>(blocks->extinctionSpacing);
+            if (x < 0.0 || y < 0.0 || z < 0.0) { continue; }
+            const u32 i = static_cast<u32>(x * inv), j = static_cast<u32>(y * inv), k = static_cast<u32>(z * inv);
+            if (i >= blocks->extinctionCells || j >= blocks->extinctionCells || k >= blocks->extinctionLevels) { continue; }
+            optical += static_cast<f64>(blocks->extinction[(static_cast<std::size_t>(k) * blocks->extinctionCells + j) * blocks->extinctionCells + i]) * stride;
+        }
+        return std::exp(-kForwardScatterShare * optical);
+    };
     const auto toFloat = [](const math::Double3& v) { return math::Float3{static_cast<f32>(v.x), static_cast<f32>(v.y), static_cast<f32>(v.z)}; };
     lastArcSegments_ = static_cast<u32>(channel.size());
     out.reserve(channel.size() * 12U);
@@ -345,7 +377,9 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
         // with 1e3 W/m (the cooled channel) at 0.25, 2e4 (a leader) 0.8, 2.5e5 (a later stroke) 2.3 and 1e6 (a first stroke) 4, clamped at 12;
         // the colour is the blackbody colour of the segment's temperature, blue-white when hot and orange when it has cooled.
         const f64 perMeter = line.powerWatts / std::max(settings.brightness, 1.0) / std::max(line.lengthMeters, 1.0);
-        const f64 level = std::clamp(0.25 * std::pow(std::max(perMeter, 1.0) / 1.0e3, 0.4), 0.03, 12.0);
+        const f64 seen = transmittance((line.from + line.to) * 0.5);
+        if (seen < 0.01) { continue; }   // buried in the cloud
+        const f64 level = std::clamp(0.25 * std::pow(std::max(perMeter, 1.0) / 1.0e3, 0.4), 0.03, 12.0) * seen;
         const std::array<f64, 3> colour = line.temperatureKelvin > 0.0 ? optical_transport::BlackbodyLinearRgb(line.temperatureKelvin)
                                                                        : std::array<f64, 3>{0.80, 0.87, 1.0};
         const f64 trunk = std::clamp(std::pow(perMeter / 1.0e6, 0.25), 0.0, 1.0);   // 1 at a first stroke's power, 0.37 at a leader's
@@ -396,6 +430,15 @@ std::vector<editor_ui::PreviewLine> StudioViewportRenderer::FlashArcLines(const 
                                {static_cast<f32>(colour[0] * level), static_cast<f32>(colour[1] * level), static_cast<f32>(colour[2] * level), alpha}});
             };
             add({}, coreAlpha);
+            if (trunk > 0.3)
+            {
+                const f64 devicePixel = distance * devicePixelAngle;
+                for (int e = 1; e <= extraCore; ++e)
+                {
+                    add(side * (devicePixel * e), coreAlpha);
+                    add(side * (-devicePixel * e), coreAlpha);
+                }
+            }
             // A soft edge: two lines half a pixel to each side (not on the faint twigs, of which there are thousands); the strong segments
             // (the trunk) get a wider glow.
             if (trunk > 0.5)
