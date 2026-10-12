@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
@@ -112,7 +113,7 @@ private:
 class StormLightningFeed
 {
 public:
-    static constexpr u32 kWindowCells = 64U;       // horizontal cells of the electrified window (32 km at 500 m)
+    static constexpr u32 kWindowCells = 128U;      // horizontal cells of the electrified window at most (64 km at 500 m: the whole nested grid)
     static constexpr f64 kIntervalSeconds = 10.0;  // storm seconds gathered per job
     static constexpr f64 kMaxJobSeconds = 120.0;   // a longer backlog (a time jump) is dropped
 
@@ -139,12 +140,13 @@ public:
     // Called every frame the storm runs normally; `stormTime` is the solver's time. Returns the flashes the worker finished since the last call.
     std::vector<Flash> Update(StormSim& sim, weather_lab::FastStormSolver& readout, const f64 stormTime, const StormLightningSettings& settings)
     {
-        if (settings.chargeBoost != chargeBoost_ || settings.breakdownScale != breakdownScale_)
+        if (settings.chargeBoost != chargeBoost_ || settings.breakdownScale != breakdownScale_ || settings.flashSize != flashSize_)
         {
             // The source is built with these; a new value starts the charge over.
             Reset();
             chargeBoost_ = settings.chargeBoost;
             breakdownScale_ = settings.breakdownScale;
+            flashSize_ = settings.flashSize;
         }
         if (lastTime_ < 0.0 || stormTime < lastTime_ || stormTime - lastTime_ > kMaxJobSeconds)
         {
@@ -176,6 +178,11 @@ public:
     [[nodiscard]] u32 Cells() const { return cells_; }
     [[nodiscard]] u64 FlashCount() const { return flashes_.load(); }
     [[nodiscard]] u32 NzLevels() const { return nz_; }
+    [[nodiscard]] f64 JobMilliseconds() const
+    {
+        std::lock_guard lock(mutex_);
+        return jobMilliseconds_;
+    }
     [[nodiscard]] f32 SpacingMeters() const { return spacing_; }
     // The charge of the last finished job in blocks of 4 x 4 x 4 cells (null until one has finished).
     [[nodiscard]] std::shared_ptr<const StormChargeBlocks> Blocks() const
@@ -192,6 +199,7 @@ private:
         f64 seconds{0.0};
         f64 chargeBoost{1.0};
         f64 breakdownScale{1.0};
+        f64 flashSize{1.0};
     };
 
     void Submit(StormSim& sim, weather_lab::FastStormSolver& readout)
@@ -270,6 +278,7 @@ private:
         job.seconds = pending_;
         job.chargeBoost = chargeBoost_;
         job.breakdownScale = breakdownScale_;
+        job.flashSize = flashSize_;
         pending_ = 0.0;
         {
             std::lock_guard lock(mutex_);
@@ -304,6 +313,9 @@ private:
                 params.electrification.chargingEfficiency *= job.chargeBoost;
                 params.leader.initiationField *= job.breakdownScale;
                 params.leader.propagationField *= job.breakdownScale;
+                // A flash stops once it could neutralise this much charge. A boosted charge rate makes every cell hold that many times more, so the
+                // budget scales with it: the boost changes how often the storm flashes, not how big a flash is; flash_size changes the size.
+                params.leader.maxFlashCharge *= job.flashSize * job.chargeBoost;
                 source = std::make_unique<storm_electrification::StormLightningSource>(
                     std::move(job.fields), cells_, cells_, nz_, static_cast<f64>(spacing_), params);
             }
@@ -311,6 +323,7 @@ private:
             {
                 source->UpdateFields(std::move(job.fields));
             }
+            const auto jobStart = std::chrono::steady_clock::now();
             const f64 before = source->SimulatedSeconds();
             std::vector<storm_electrification::FlashResult> found = source->Advance(job.seconds);
             // The charge in blocks of 4 x 4 x 4 cells, for the grid display.
@@ -338,6 +351,7 @@ private:
                 }
             }
             std::lock_guard lock(mutex_);
+            jobMilliseconds_ = std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - jobStart).count();
             blocks_ = std::move(blocks);
             for (auto& flash : found)
             {
@@ -376,12 +390,14 @@ private:
     bool stop_{false};
     std::vector<Flash> ready_;
     std::shared_ptr<const StormChargeBlocks> blocks_;
+    f64 jobMilliseconds_{0.0};
     std::atomic<u64> flashes_{0};
     bool started_{false};
     f64 pending_{0.0};
     f64 lastTime_{-1.0};
     f64 chargeBoost_{1.0};
     f64 breakdownScale_{1.0};
+    f64 flashSize_{4.0};
     f64 originEast_{0.0}, originNorth_{0.0};
     u32 cells_{0}, nz_{0};
     f32 spacing_{500.0F};
@@ -437,6 +453,8 @@ struct StudioViewportRenderer::StormRuntime
     f64 stepMilliseconds{0.0};
     bool exported{false};
     StormLightningFeed lightning;
+    f64 lastFlashRadius{0.0};
+    f64 maxFlashRadius{0.0};
     u64 readId{~0ULL};
     std::unique_ptr<weather_lab::FastStormSolver> cpuRead;   // the parent's state read back for the lightning
 
@@ -828,6 +846,31 @@ void StudioViewportRenderer::UpdateStormDomain(
                 const f64 offsetN = gridSouth + rt.lightning.OriginNorth();
                 for (auto& flash : flashes)
                 {
+                    {
+                        // Its size, for storm.status: the farthest point of the channel from the channel's centre.
+                        math::Double3 sum{};
+                        std::size_t points = 0;
+                        for (const auto& segment : flash.graph.Segments())
+                        {
+                            sum = sum + math::Double3{segment.from[0], segment.from[1], segment.from[2]} + math::Double3{segment.to[0], segment.to[1], segment.to[2]};
+                            points += 2U;
+                        }
+                        if (points > 0U)
+                        {
+                            const math::Double3 mean = sum * (1.0 / static_cast<f64>(points));
+                            f64 radius = 0.0;
+                            for (const auto& segment : flash.graph.Segments())
+                            {
+                                for (const double* p : {segment.from, segment.to})
+                                {
+                                    const math::Double3 d{p[0] - mean.x, p[1] - mean.y, p[2] - mean.z};
+                                    radius = std::max(radius, std::sqrt(math::Dot(d, d)));
+                                }
+                            }
+                            rt.lastFlashRadius = radius;
+                            rt.maxFlashRadius = std::max(rt.maxFlashRadius, radius);
+                        }
+                    }
                     f64 end = 0.0;
                     for (std::size_t i = 0; i < flash.graph.Segments().size(); ++i)
                     {
@@ -862,6 +905,9 @@ void StudioViewportRenderer::UpdateStormDomain(
         }
         status.lightningFlashes = rt.lightning.FlashCount();
         status.lightningArcSegments = lastArcSegments_.load();
+        status.lightningJobMilliseconds = rt.lightning.JobMilliseconds();
+        status.lightningFlashRadiusMeters = rt.lastFlashRadius;
+        status.lightningFlashRadiusMaxMeters = rt.maxFlashRadius;
 
         status.state = StormStatus::State::Active;
         status.message = stillBehind ? "catching up to the simulation clock" : "running";

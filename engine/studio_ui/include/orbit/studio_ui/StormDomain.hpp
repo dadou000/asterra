@@ -66,6 +66,9 @@ struct StormStatus
     bool catchingUp{false};      // the solver is stepping to the current time and nothing is drawn yet
     u32 checkpoints{0};          // saved states of this storm; a time jump restarts from the nearest
     f64 checkpointMiB{0.0};      // memory of all cached checkpoints
+    f64 lightningFlashRadiusMeters{0.0};   // the largest distance from its centre to any point of the last flash's channel
+    f64 lightningFlashRadiusMaxMeters{0.0}; // the largest such radius since the lightning started
+    f64 lightningJobMilliseconds{0.0};  // wall time the electrification worker took for its last job (storm seconds in, flashes and charge out)
     u32 lightningArcSegments{0U};  // channel segments the arc overlay drew in the last frame that had any
     u64 lightningFlashes{0U};    // flashes the storm's own charge has produced since it started (or since the last time jump)
     u32 scheduledNearby{0};      // live scheduled storms within the search radius
@@ -89,6 +92,7 @@ struct StormLightningSettings
     bool pauseOnStrike{false}; // pause the simulation just before a flash that is in view starts, to play it in slow motion
     bool frameStrike{false};   // aim the camera at a flash about to start and back off until its whole channel is in view
     bool showGrid{false};      // draw the electrification window (its box, a grid and the charge in it)
+    f64 flashSize{4.0};        // 1 to 50: multiplies the charge one flash may neutralise, so a larger value gives larger flashes
 };
 
 // The charge in the electrified window summed over blocks of cells, for the grid display: coulombs per block, x fastest then y then z.

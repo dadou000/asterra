@@ -1242,6 +1242,7 @@ def orbit_storm_lightning(
     pause_on_strike: bool | None = None,
     frame_strike: bool | None = None,
     show_grid: bool | None = None,
+    flash_size: float | None = None,
 ) -> dict[str, Any]:
     """Lightning from the simulated storm's own charge (graupel, ice, supercooled
     water, updraft). Omitted parameters keep their value. For testing:
@@ -1258,7 +1259,8 @@ def orbit_storm_lightning(
     the camera to a flash about to start and moves it closer or farther until its
     whole channel fills about 60% of the narrower field of view. show_grid (default false) draws the electrified window as a box with
     a grid and the charge in it (red positive, blue negative). Both are toggles in
-    the bottom bar too. Clouds are
+    the bottom bar too. flash_size (1 to 50, default 4) multiplies the charge one
+    flash may neutralise, so flashes grow larger (restarts the charge). Clouds are
     lit by the flashes when Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1. Returns
     the settings and lightning_flashes (storm.status also has
     lightning_arc_segments)."""
@@ -1267,7 +1269,7 @@ def orbit_storm_lightning(
                        ("charge_boost", charge_boost), ("breakdown_scale", breakdown_scale),
                        ("brightness", brightness), ("arcs", arcs),
                        ("pause_on_strike", pause_on_strike), ("frame_strike", frame_strike),
-                       ("show_grid", show_grid)):
+                       ("show_grid", show_grid), ("flash_size", flash_size)):
         if value is not None:
             params[key] = value
     return _rpc("storm.lightning", params)

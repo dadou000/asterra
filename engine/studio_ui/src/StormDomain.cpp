@@ -35,6 +35,9 @@ Value StatusValue(const StormStatus& s)
         {"checkpoint_mib", s.checkpointMiB},
         {"lightning_flashes", static_cast<f64>(s.lightningFlashes)},
         {"lightning_arc_segments", static_cast<f64>(s.lightningArcSegments)},
+        {"lightning_job_ms", s.lightningJobMilliseconds},
+        {"lightning_flash_radius_m", s.lightningFlashRadiusMeters},
+        {"lightning_flash_radius_max_m", s.lightningFlashRadiusMaxMeters},
         {"scheduled_nearby", static_cast<f64>(s.scheduledNearby)},
         {"shader_reload", s.shaderReload},
         {"shader_reloads", static_cast<f64>(s.shaderReloads)},
@@ -138,6 +141,7 @@ std::string StormDomainMailbox::SetLightning(const StormLightningSettings& setti
     if (!(settings.chargeBoost >= 1.0 && settings.chargeBoost <= 10000.0)) { return "charge_boost must be 1 to 10000"; }
     if (!(settings.breakdownScale >= 0.02 && settings.breakdownScale <= 1.0)) { return "breakdown_scale must be 0.02 to 1"; }
     if (!(settings.brightness >= 1.0 && settings.brightness <= 1.0e6)) { return "brightness must be 1 to 1e6"; }
+    if (!(settings.flashSize >= 1.0 && settings.flashSize <= 50.0)) { return "flash_size must be 1 to 50"; }
     const std::scoped_lock lock(mutex_);
     lightning_ = settings;
     return {};
@@ -343,7 +347,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 "Parameters (all optional, the rest keep their value): `enabled` (default true), and for testing `slow_motion` (1 to 2000: every "
                 "flash lasts that many times longer at the same power, so one frame can catch it), `charge_boost` (1 to 10000: multiplies the "
                 "charging rate), `breakdown_scale` (0.02 to 1: scales the field at which air breaks down, lower = electrically unstable), `brightness` "
-                "(1 to 1e6: multiplies the energy of every flash, lights and arc alike), `arcs` (default true: the channel of a live flash is drawn as a glowing line) `pause_on_strike` (default false: the simulation pauses just before a flash that is in view starts, so it can be played in slow motion with the rate slider or time.set), `frame_strike` (default false: the camera turns to a flash about to start and backs off until its whole channel is in view) and `show_grid` (default false: draws the electrified window as a box with a grid and the charge in it, red positive and blue negative). "
+                "(1 to 1e6: multiplies the energy of every flash, lights and arc alike), `arcs` (default true: the channel of a live flash is drawn as a glowing line) `pause_on_strike` (default false: the simulation pauses just before a flash that is in view starts, so it can be played in slow motion with the rate slider or time.set), `frame_strike` (default false: the camera turns to a flash about to start and backs off until its whole channel is in view) `flash_size` (1 to 50, default 4: multiplies the charge one flash may neutralise, so flashes grow larger; changing it restarts the charge) and `show_grid` (default false: draws the electrified window as a box with a grid and the charge in it, red positive and blue negative). "
                 "Changing the boost or the breakdown restarts the charge. Returns `error`, the settings and `lightning_flashes` from storm.status.",
             .mutating = true
         },
@@ -361,6 +365,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 settings.chargeBoost = Optional(params, "charge_boost", settings.chargeBoost);
                 settings.breakdownScale = Optional(params, "breakdown_scale", settings.breakdownScale);
                 settings.brightness = Optional(params, "brightness", settings.brightness);
+                settings.flashSize = Optional(params, "flash_size", settings.flashSize);
                 if (const Value* frame = params.Find("frame_strike"); frame != nullptr)
                 {
                     if (!frame->IsBool()) { throw rpc::Error(kBadParams, "frame_strike must be a boolean."); }
@@ -394,6 +399,7 @@ void RegisterStormDomainRpc(rpc::Dispatcher& dispatcher, StormDomainMailbox& mai
                 {"pause_on_strike", now.pauseOnStrike},
                 {"frame_strike", now.frameStrike},
                 {"show_grid", now.showGrid},
+                {"flash_size", now.flashSize},
                 {"lightning_flashes", static_cast<f64>(mailbox.Status().lightningFlashes)}};
             return result;
         });
