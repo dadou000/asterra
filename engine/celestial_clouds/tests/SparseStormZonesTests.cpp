@@ -1,7 +1,9 @@
 #include <orbit/celestial_clouds/SparseStormZones.hpp>
+#include <orbit/celestial_clouds/AnalyticZoneSurvey.hpp>
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 using namespace orbit;
@@ -58,6 +60,31 @@ int main()
     const auto p=AnalyticStormProbe({1,0,0},1000.0,WeatherParameters{},WeatherClimate{});
     Check(std::isfinite(p.opportunity) && p.opportunity>=0 && p.opportunity<=1,
         "analytic bridge has bounded screening value");
+    // Planetary survey is camera independent, bounded and repeatable at arbitrary time.
+    AnalyticZoneSurveyConfig scan;
+    scan.samples=512;
+    scan.maxCandidates=64;
+    scan.minimumOpportunity=0.0F;
+    const auto a=SurveyAnalyticStormZones(86400.0,WeatherParameters{},WeatherClimate{},scan);
+    const auto b=SurveyAnalyticStormZones(86400.0,WeatherParameters{},WeatherClimate{},scan);
+    Check(a.size()==64 && b.size()==64,"candidate survey respects hard cap");
+    bool same=a.size()==b.size();
+    for (std::size_t i=0; i<a.size() && i<b.size(); ++i)
+        same &= a[i].opportunity==b[i].opportunity
+            && a[i].direction.x==b[i].direction.x
+            && a[i].direction.y==b[i].direction.y;
+    Check(same,"survey repeats exactly for same timestamp and seed");
+    SparseStormZones scanned;
+    scanned.Discover(a,86400.0);
+    Check(scanned.Zones().size()<=StormZoneConfig{}.maxZones,
+        "discovery respects zone budget");
+    scan.maxCandidates=0;
+    Check(SurveyAnalyticStormZones(0,WeatherParameters{},WeatherClimate{},scan).empty(),
+        "empty budget does not allocate candidates");
+    scan.maxCandidates=64;
+    Check(SurveyAnalyticStormZones(std::numeric_limits<f64>::infinity(),
+        WeatherParameters{},WeatherClimate{},scan).empty(),"non-finite time is ignored");
+
     Check(failures==0,"all zone tests");
     return failures==0?0:1;
 }
