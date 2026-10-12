@@ -97,7 +97,7 @@ int main()
     orderedLedger.Reconcile({zone},0);
     for (int i=0;i<2;++i)
     {
-        const f64 target=static_cast<f64>((i+1)*60);
+        const f64 target=i==0 ? 60.0 : 180.0;
         const auto tickets=orderedScheduler.Plan(target);
         Check(tickets.size()==1,"ordered ledger produces a work ticket");
         if(tickets.empty()) break;
