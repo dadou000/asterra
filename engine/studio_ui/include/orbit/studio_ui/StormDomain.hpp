@@ -80,7 +80,11 @@ struct StormStatus
     u32 zoneCandidateProbes{0};
     u64 zoneGeneration{0};
     f64 zoneSnapshotSeconds{0.0};
-    bool zoneSurveyBusy{false};      // live scheduled storms within the search radius
+    bool zoneSurveyBusy{false};
+    u32 zoneWorkTickets{0};
+    u32 zoneBlockedLongSteps{0};
+    u32 zoneDeferredTasks{0};
+    f64 zoneMaximumLagSeconds{0.0};
     bool nested{false};          // the storm being drawn has a child grid
     f32 childSpacingMeters{0.0F};
     std::string shaderReload;    // the last storm shader reload: "" never, "ok <file>" or "failed: <compile error>"
