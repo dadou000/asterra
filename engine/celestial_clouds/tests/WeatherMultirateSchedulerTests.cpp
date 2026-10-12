@@ -28,6 +28,24 @@ int main()
     Check(old.size()==2 && old[0].fromSeconds==0,"planning alone cannot advance physics");
     Check(scheduler.Commit(first[0]),"successful real completion accepted");
     Check(!scheduler.Commit(first[0]),"stale duplicate completion rejected");
+    // Activity-dependent cadence cannot exceed the detailed solver horizon.
+    WeatherStepBudget slowBudget;
+    slowBudget.maximumDetailedStep=120;
+    slowBudget.maximumZoneInterval=900;
+    WeatherMultirateScheduler slow(slowBudget);
+    slow.Reconcile({Zone(90,0)},0);
+    auto slowFirst=slow.Plan(120);
+    Check(slowFirst.size()==1 &&
+          slowFirst[0].kind==WeatherStepKind::Detailed &&
+          slowFirst[0].toSeconds==120,
+          "inactive zone remains within validated detailed horizon");
+    Check(slow.Commit(slowFirst[0]),"slow zone commits detailed step");
+    auto slowSecond=slow.Plan(240);
+    Check(slowSecond.size()==1 &&
+          slowSecond[0].kind==WeatherStepKind::Detailed &&
+          slowSecond[0].fromSeconds==120,
+          "inactive zone continues with bounded ordinary steps");
+
     const auto later=scheduler.Plan(86400000);
     Check(later.size()==2,"huge warp has bounded ticket count");
     Check(later[0].kind==WeatherStepKind::RequiresLongStepModel,"long warp requires compatible backend");
