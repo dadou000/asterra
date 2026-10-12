@@ -66,6 +66,7 @@
 #include <orbit/time/SimulationTime.hpp>
 #include <orbit/world_model/CelestialLightingService.hpp>
 
+#include <future>
 #include <array>
 #include <chrono>
 #include <functional>
@@ -563,6 +564,13 @@ private:
         u64 fingerprint{0};
         std::unique_ptr<celestial_clouds::CloudFieldProduct> field;
         std::unique_ptr<celestial_clouds::GpuCloudFieldProduct> gpu;
+        // The next field being built off the render thread: building one takes about a second (the weather noise over six faces), and the
+        // simulation clock asks for a new one every simulated second, so playing at rate 1 or more used to stall the frame each time.
+        // Until it lands the previous field keeps drawing.
+        std::future<celestial_clouds::CloudFieldProduct> pending;
+        bool hasPending{false};
+        u64 pendingFingerprint{0};
+        universe::BodyId pendingBody{};
     };
     struct GiantPresentation
     {

@@ -92,6 +92,7 @@ std::string StormLightningController::Start(const StormLightningRequest& request
             {
                 if (sink_.addFlash)
                 {
+                    storm_electrification::RebaseFlashTimes(flash);
                     sink_.addFlash(std::move(flash.graph));
                 }
             }

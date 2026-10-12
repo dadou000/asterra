@@ -2,8 +2,10 @@
 #include "StudioViewportPrimitives.hpp"
 
 #include <orbit/celestial_atmosphere/AtmosphereRefraction.hpp>
+#include <orbit/core/Log.hpp>
 #include <orbit/post_process/HumanEyeAdaptation.hpp>
 
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -1440,6 +1442,30 @@ StudioViewportRenderer::ComposeBase(
                 auto& cloudPresentation =
                     cloudPresentations_[info.id];
 
+                // A field built in the background has landed: install it (the GPU upload stays on this thread).
+                if (cloudPresentation.hasPending &&
+                    cloudPresentation.pending.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+                {
+                    cloudPresentation.hasPending = false;
+                    try
+                    {
+                        cloudPresentation.field = std::make_unique<celestial_clouds::CloudFieldProduct>(cloudPresentation.pending.get());
+                        cloudPresentation.gpu = std::make_unique<celestial_clouds::GpuCloudFieldProduct>(*device_, *cloudPresentation.field);
+                        cloudPresentation.body = cloudPresentation.pendingBody;
+                        cloudPresentation.fingerprint = cloudPresentation.pendingFingerprint;
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        log::Warning(std::string("Cloud field build failed: ") + exception.what());
+                    }
+                    static_cast<void>(
+                        completeCelestialGrant(
+                            info.id,
+                            cloudPresentation.pendingBody,
+                            celestial_scheduler::WorkKind::CloudField,
+                            cloudPresentation.pendingFingerprint));
+                }
+
                 const bool cloudNeedsBuild =
                     cloudPresentation.field ==
                         nullptr ||
@@ -1450,6 +1476,7 @@ StudioViewportRenderer::ComposeBase(
                         cloudFingerprint;
 
                 if (cloudNeedsBuild &&
+                    !cloudPresentation.hasPending &&
                     acquireCelestialGrant(
                         info.id,
                         logicalTarget->
@@ -1463,6 +1490,24 @@ StudioViewportRenderer::ComposeBase(
                         70,
                         true))
                 {
+                  if (cloudPresentation.field != nullptr &&
+                      cloudPresentation.body == logicalTarget->target->body)
+                  {
+                    // The same body with a newer time: build it on another thread. The task keeps the terrain source alive (concurrent
+                    // Sample calls are part of TerrainSource's contract: the streaming workers do the same).
+                    std::shared_ptr<const terrain::TerrainSource> climateHold =
+                        macroGlobeSurface != nullptr ? macroGlobeSurface->terrain : nullptr;
+                    cloudPresentation.pending = std::async(
+                        std::launch::async,
+                        [climateHold, referenceRadius, parameters = cloudParameters, atTime, cloudConfig]() {
+                            return celestial_clouds::BuildCloudField(climateHold.get(), nullptr, referenceRadius, parameters, atTime, cloudConfig);
+                        });
+                    cloudPresentation.hasPending = true;
+                    cloudPresentation.pendingFingerprint = cloudFingerprint;
+                    cloudPresentation.pendingBody = logicalTarget->target->body;
+                  }
+                  else
+                  {
                     cloudPresentation.field =
                         std::make_unique<
                             celestial_clouds::
@@ -1498,6 +1543,7 @@ StudioViewportRenderer::ComposeBase(
                             celestial_scheduler::
                                 WorkKind::CloudField,
                             cloudFingerprint));
+                  }
                 }
 
                 const bool cloudCurrent =

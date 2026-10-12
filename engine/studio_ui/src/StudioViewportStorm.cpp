@@ -104,7 +104,6 @@ public:
         optical_transport::DischargeGraph graph{optical_transport::FlashKind::IntraCloud};
         f64 delaySeconds{0.0};   // storm seconds after the start of its job
         f64 jobSeconds{0.0};
-        f64 startSeconds{0.0};   // the source's clock at its start: the graph's pulse times are absolute on that clock
     };
 
     ~StormLightningFeed() { Stop(); }
@@ -286,10 +285,10 @@ private:
             for (auto& flash : found)
             {
                 Flash out;
-                out.graph = std::move(flash.graph);
                 out.delaySeconds = std::clamp(flash.startTime - before, 0.0, job.seconds);
                 out.jobSeconds = job.seconds;
-                out.startSeconds = flash.startTime;
+                storm_electrification::RebaseFlashTimes(flash);
+                out.graph = std::move(flash.graph);
                 ready_.push_back(std::move(out));
                 ++flashes_;
             }
@@ -757,10 +756,10 @@ void StudioViewportRenderer::UpdateStormDomain(
                     {
                         optical_transport::Segment& segment = flash.graph.At(static_cast<std::int32_t>(i));
                         // The pulse times are on the electrification clock; the registry wants them relative to the flash.
-                        segment.formedAt = (segment.formedAt - flash.startSeconds) * stretch;
+                        segment.formedAt *= stretch;
                         for (auto& pulse : segment.pulses)
                         {
-                            pulse.startTime = (pulse.startTime - flash.startSeconds) * stretch;
+                            pulse.startTime *= stretch;
                             pulse.duration *= stretch;
                             pulse.radiantEnergy *= stretch;
                             end = std::max(end, pulse.startTime + pulse.duration);

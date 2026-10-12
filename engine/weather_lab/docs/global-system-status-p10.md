@@ -24,7 +24,7 @@ invariants = [
 related = ["/world/weather-lab/global-system-status-p9", "/world/weather-lab/gpu-port", "/rendering/unified-transport/storm-electrification"]
 depends_on = ["/world/weather-lab/global-system-status-p9"]
 verify = ["ctest -R \"Orbit.WeatherGpu|Orbit.StormDomain|Orbit.StormLightning\"", "storm.place, then storm.lightning with slow_motion 100, charge_boost 40, breakdown_scale 0.25 while time runs at rate 10 and Studio runs with ORBIT_CLOUD_POINT_LIGHTS=1: storm.status lightning_flashes grows"]
-verified = "a73c5f3"
+verified = "b29be18"
 +++
 
 **P10 (2026-10-12): the two follow-ups of phase 9, rain and lightning.**
@@ -43,8 +43,8 @@ verified = "a73c5f3"
 
 Testing levers (`storm.lightning`, `orbit_storm_lightning`): `slow_motion` (1 to 2000) stretches every flash and keeps its power, `charge_boost` (1 to 10000) multiplies the charging, `breakdown_scale` (0.02 to 1) lowers the breakdown field, so a storm can be made electrically unstable on demand.
 
-What the work found:
-- The pulse times of a flash are absolute on the electrification clock; the first version added them as they were and each flash was delayed by the time the source had run (remaining lifetime 64 s at age 1.4 s). Shifted to start at zero they live 1 to 1.5 s. `StormLightningController` hands graphs to the registry without that shift; worth checking there.
-- With simulation time running at rate 20 every storm step coincided with a frame of about 1 s (rate 5: one per step, and the same with the lightning off), unrelated to the exports (0.5 ms) and the readback (9 ms); not diagnosed here.
+What the work found, and fixed (same phase):
+- The pulse times of a flash are absolute on the electrification clock; the first version added them as they were and each flash was delayed by the time the source had run (remaining lifetime 64 s at age 1.4 s). `RebaseFlashTimes` (storm_electrification) now moves a flash to start at zero (and can stretch it); the feed and `StormLightningController`, which had the same omission, both use it. Test: a rebased flash starts at 0 and slowing it by 10 multiplies its energy by 10.
+- With simulation time running, every frame took about 1 s (rate 20: 2 frames a second, with or without a storm). The profiler's stall sample showed `BuildCloudField` on the render thread: the cloud field (weather noise over six faces, about 950 ms) is rebuilt for every simulated second, so playing at rate 1 stuttered once a second too. The rebuild now runs on another thread (`std::async`, holding the terrain source, whose `Sample` is documented as concurrent-safe) while the previous field keeps drawing, and the GPU upload stays on the render thread. At rate 20: 110 fps with every frame under 13 ms without a storm, 70 to 90 fps with a storm (worst frame about 30 ms, the storm catching up four steps a frame). The first build and a change of body stay synchronous.
 
 - Not done: a screenshot of a flash (a flash lasts a fraction of a frame; `viewport.screenshot` cannot catch it, and slow motion beyond the pulse length would need a frozen flash clock), electrification on the child grid, the charge window follows the ice only at its start, the surface lighting pass uses the same flashes but was not checked, cloud-base structure, mammatus.

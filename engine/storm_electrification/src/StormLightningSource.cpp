@@ -12,6 +12,24 @@ StormLightningSource::StormLightningSource(
 {
 }
 
+void RebaseFlashTimes(FlashResult& flash, const double stretch)
+{
+    const double start = flash.startTime;
+    for (std::size_t i = 0; i < flash.graph.Segments().size(); ++i)
+    {
+        optical_transport::Segment& segment = flash.graph.At(static_cast<std::int32_t>(i));
+        segment.formedAt = (segment.formedAt - start) * stretch;
+        for (optical_transport::Pulse& pulse : segment.pulses)
+        {
+            pulse.startTime = (pulse.startTime - start) * stretch;
+            pulse.duration *= stretch;
+            pulse.radiantEnergy *= stretch;   // the same power for longer
+        }
+    }
+    flash.endTime = (flash.endTime - start) * stretch;
+    flash.startTime = 0.0;
+}
+
 double StormLightningSource::MaxBreakdownRatio() const
 {
     return storm_electrification::MaxBreakdownRatio(grid_, params_.leader);

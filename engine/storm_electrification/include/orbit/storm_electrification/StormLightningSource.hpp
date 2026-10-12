@@ -24,6 +24,11 @@ struct StormLightningParams
     LeaderParams leader{};
 };
 
+// A flash's graph carries pulse and formation times on the source's clock (seconds since it was created), the same clock as
+// `flash.startTime`. The lights and the flash registry want times relative to the flash itself: this moves the graph to start at 0 and
+// multiplies every time by `stretch` (1 = real time). Without it a flash that starts 40 s into a run is dark for its first 40 s.
+void RebaseFlashTimes(FlashResult& flash, double stretch = 1.0);
+
 class StormLightningSource
 {
 public:

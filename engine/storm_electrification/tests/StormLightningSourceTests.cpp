@@ -95,6 +95,27 @@ int main()
     Check(inside, "channels stay inside the storm domain");
     Check(ordered, "flashes come out in time order");
     Check(energetic, "every flash radiates");
+    // Rebasing moves a flash to start at 0 and stretches it without changing its power.
+    if (!big.empty())
+    {
+        FlashResult flash = big.back();
+        const double started = flash.startTime;
+        double firstBefore = 1.0e30, energyBefore = flash.graph.EnergyInWindow(-1.0e9, 1.0e9);
+        for (const auto& seg : flash.graph.Segments()) for (const auto& p : seg.pulses) firstBefore = std::min(firstBefore, p.startTime);
+        Check(started > 5.0 && firstBefore >= started - 1.0e-9, "a flash's pulse times are on the source clock, after its start");
+        RebaseFlashTimes(flash, 10.0);
+        double firstAfter = 1.0e30, lastEnd = 0.0, power = 0.0;
+        for (const auto& seg : flash.graph.Segments())
+            for (const auto& p : seg.pulses)
+            {
+                firstAfter = std::min(firstAfter, p.startTime);
+                lastEnd = std::max(lastEnd, p.startTime + p.duration);
+                power = std::max(power, p.radiantEnergy / p.duration);
+            }
+        Check(flash.startTime == 0.0 && firstAfter >= -1.0e-9 && firstAfter < 1.0, "a rebased flash starts at zero");
+        Check(std::fabs(flash.graph.EnergyInWindow(-1.0e9, 1.0e9) - 10.0 * energyBefore) < 1.0e-6 * energyBefore, "slowing a flash by 10 keeps its power, so its energy grows by 10");
+        Check(lastEnd < 100.0 && power > 0.0, "a rebased flash is short");
+    }
     std::printf(failures == 0 ? "StormLightningSource tests passed\n" : "%d failures\n", failures);
     return failures == 0 ? 0 : 1;
 }
