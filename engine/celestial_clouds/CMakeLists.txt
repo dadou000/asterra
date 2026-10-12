@@ -113,6 +113,13 @@ if(BUILD_TESTING)
     orbit_enable_warnings(OrbitWeatherEmergenceTests)
     add_test(NAME Orbit.WeatherEmergence COMMAND OrbitWeatherEmergenceTests)
 
+    add_executable(OrbitWeatherCrossZoneFieldTests
+        tests/WeatherCrossZoneFieldTests.cpp)
+    target_link_libraries(OrbitWeatherCrossZoneFieldTests PRIVATE Orbit::CelestialClouds)
+    target_compile_features(OrbitWeatherCrossZoneFieldTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitWeatherCrossZoneFieldTests)
+    add_test(NAME Orbit.WeatherCrossZoneField COMMAND OrbitWeatherCrossZoneFieldTests)
+
     add_executable(
         OrbitStormScheduleTests
         tests/StormScheduleTests.cpp
