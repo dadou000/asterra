@@ -50,7 +50,10 @@ private:
     WeatherLabView* view_{nullptr};
     StormDomainMailbox* storm_{nullptr};
     StormPlaceRequest stormDraft_;
-    celestial_clouds::SparseStormZones zoneSurveyZones_;
+    // Larger neighbor extent than the production default: equal-area diagnostic
+    // sample points are much farther apart than a high-resolution global solver grid.
+    celestial_clouds::SparseStormZones zoneSurveyZones_{
+        celestial_clouds::StormZoneConfig{.neighbourRadians=0.15, .matchRadians=0.25}};
     std::future<std::vector<celestial_clouds::StormZoneProbe>> zoneSurveyFuture_;
     f64 zoneSurveyTime_{0.0};
     f64 zoneSurveyJobTime_{0.0};
