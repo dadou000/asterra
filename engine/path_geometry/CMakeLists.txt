@@ -95,3 +95,15 @@ if(BUILD_TESTING)
     orbit_enable_warnings(OrbitCorridorSweepTests)
     add_test(NAME Orbit.CorridorSweep COMMAND OrbitCorridorSweepTests)
 endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitCorridorTerrainSourceTests
+        tests/CorridorTerrainSourceTests.cpp)
+    target_link_libraries(OrbitCorridorTerrainSourceTests
+        PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitCorridorTerrainSourceTests
+        PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCorridorTerrainSourceTests)
+    add_test(NAME Orbit.CorridorTerrainSource
+        COMMAND OrbitCorridorTerrainSourceTests)
+endif()
