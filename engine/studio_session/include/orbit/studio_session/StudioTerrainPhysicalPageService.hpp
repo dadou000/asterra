@@ -117,13 +117,19 @@ public:
         world::PlanetId planet{};
         u8 level{0};
         u64 revisionFingerprint{0};
-        std::map<world::PlanetTileId,
-            std::shared_ptr<const StudioTerrainPhysicalPageSnapshot>,
-            bool(*)(const world::PlanetTileId&, const world::PlanetTileId&)>
-            pages{[](const auto& a, const auto& b) {
+        struct TileLess
+        {
+            [[nodiscard]] bool operator()(
+                const world::PlanetTileId& a,
+                const world::PlanetTileId& b) const noexcept
+            {
                 return std::tuple{static_cast<u8>(a.face),a.level,a.x,a.y} <
                        std::tuple{static_cast<u8>(b.face),b.level,b.x,b.y};
-            }};
+            }
+        };
+        std::map<world::PlanetTileId,
+            std::shared_ptr<const StudioTerrainPhysicalPageSnapshot>,
+            TileLess> pages;
         [[nodiscard]] std::optional<f64> Sample(
             const math::Double3& direction) const noexcept;
     };
