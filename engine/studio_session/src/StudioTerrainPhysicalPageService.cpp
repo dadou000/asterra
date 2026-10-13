@@ -3172,6 +3172,30 @@ void StudioTerrainPhysicalPageService::StageCorridorConstruction(
     }
 }
 
+std::optional<f64> StudioTerrainPhysicalPageSnapshot::SampleSurfaceHeight(
+    const f64 u, const f64 v) const noexcept
+{
+    if (!material || !std::isfinite(u) || !std::isfinite(v) ||
+        u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+        return std::nullopt;
+    const u32 n = material->Resolution();
+    if (n == 0U) return std::nullopt;
+    const f64 px = u * static_cast<f64>(n - 1U);
+    const f64 py = v * static_cast<f64>(n - 1U);
+    const u32 x0 = static_cast<u32>(px);
+    const u32 y0 = static_cast<u32>(py);
+    const u32 x1 = std::min(x0 + 1U, n - 1U);
+    const u32 y1 = std::min(y0 + 1U, n - 1U);
+    const f64 tx = px - static_cast<f64>(x0);
+    const f64 ty = py - static_cast<f64>(y0);
+    const f64 a = material->At(x0, y0).SurfaceHeightMeters();
+    const f64 b = material->At(x1, y0).SurfaceHeightMeters();
+    const f64 d = material->At(x0, y1).SurfaceHeightMeters();
+    const f64 e = material->At(x1, y1).SurfaceHeightMeters();
+    return (a * (1.0 - tx) + b * tx) * (1.0 - ty) +
+           (d * (1.0 - tx) + e * tx) * ty;
+}
+
 void StudioTerrainPhysicalPageService::
 QueueChange(
     const terrain_dependency::
