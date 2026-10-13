@@ -3,6 +3,7 @@
 
 #include <orbit/jobs/JobSystem.hpp>
 #include <orbit/math/Vector.hpp>
+#include <orbit/path_geometry/CorridorTerrainSource.hpp>
 #include <orbit/surface_authoring/TerrainConstraints.hpp>
 #include <orbit/surface_model/SurfaceMaterialResolver.hpp>
 #include <orbit/terrain/AnalyticTerrainSource.hpp>
@@ -246,6 +247,10 @@ struct BodyBuildInputs
     std::shared_ptr<
         const terrain::AnalyticTerrainSource>
         source;
+    // Optional immutable construction overlay captured with each worker's
+    // BodyBuildInputs. Publication must replace this snapshot, never mutate it.
+    std::shared_ptr<const path_geometry::CorridorTerrainSource>
+        corridorOverlay;
 
     terrain_geology::GeologicalMaterialLibrary geology;
     terrain_geology::RockTypeId defaultBedrock{};
@@ -273,6 +278,15 @@ struct BodyBuildInputs
     {
     }
 };
+
+[[nodiscard]] terrain::TerrainSample SampleConstructionTerrain(
+    const BodyBuildInputs& inputs,
+    const terrain::TerrainQuery& query) noexcept
+{
+    if (inputs.corridorOverlay)
+        return inputs.corridorOverlay->Sample(query);
+    return inputs.source->Sample(query);
+}
 
 struct SharedBodyInputs
 {
@@ -468,7 +482,7 @@ BoundarySample(
     const f64 footprintMeters)
 {
     const auto sample =
-        inputs.source->Sample({
+        SampleConstructionTerrain(inputs, {
             .unitDirection =
                 position.unitDirection,
             .footprintMeters =
@@ -782,7 +796,7 @@ BuildDrainageHalo(
                     y);
 
             const auto sample =
-                inputs.source->Sample({
+                SampleConstructionTerrain(inputs, {
                     .unitDirection =
                         position.
                             unitDirection,
