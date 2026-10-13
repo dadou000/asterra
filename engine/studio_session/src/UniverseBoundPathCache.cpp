@@ -38,6 +38,28 @@ bool UniverseBoundPathCache::RefreshBinding()
     return true;
 }
 
+bool UniverseBoundPathCache::StoreCorridorIfChanged(
+    const u64 authoredSignature,
+    const path_geometry::PathCenterline& centerline,
+    const paths::PathProfile& profile,
+    const path_geometry::CorridorSweep& corridor,
+    const path_geometry::PathBuildOptions options,
+    const path_geometry::CorridorRefinementOptions refinement,
+    const std::optional<u64> routeGeneration)
+{
+    static_cast<void>(RefreshBinding());
+    if (authoredSignature == 0U)
+        throw std::invalid_argument("Corridor authored signature must be nonzero.");
+    const auto found = corridorAuthoredSignatures_.find(centerline.edge);
+    if (found != corridorAuthoredSignatures_.end() &&
+        found->second == authoredSignature && Find(centerline.edge) != nullptr &&
+        RouteGeneration(centerline.edge) == routeGeneration)
+        return false;
+    StoreCorridor(centerline, profile, corridor, options, refinement, routeGeneration);
+    corridorAuthoredSignatures_[centerline.edge] = authoredSignature;
+    return true;
+}
+
 void UniverseBoundPathCache::StoreCorridor(
     const path_geometry::PathCenterline& centerline,
     const paths::PathProfile& profile,
@@ -51,6 +73,7 @@ void UniverseBoundPathCache::StoreCorridor(
     auto product = path_geometry::BuildCorridorDerived(
         centerline, profile, corridor, options, refinement);
     Store(std::move(product), routeGeneration);
+    corridorAuthoredSignatures_.erase(centerline.edge);
 }
 
 void UniverseBoundPathCache::Store(
@@ -81,6 +104,7 @@ void UniverseBoundPathCache::Store(
     }
 
     const scene::ObjectId edge = product.edge;
+    corridorAuthoredSignatures_.erase(edge);
     products_[edge] = std::move(product);
 
     if (routeGeneration.has_value())
@@ -133,6 +157,7 @@ bool UniverseBoundPathCache::Erase(
     const scene::ObjectId edge) noexcept
 {
     routeGenerations_.erase(edge);
+    corridorAuthoredSignatures_.erase(edge);
     return products_.erase(edge) != 0U;
 }
 
@@ -140,6 +165,7 @@ void UniverseBoundPathCache::Clear() noexcept
 {
     products_.clear();
     routeGenerations_.clear();
+    corridorAuthoredSignatures_.clear();
 }
 
 std::size_t UniverseBoundPathCache::Size() const noexcept
