@@ -29,6 +29,8 @@ struct OccultationResult
     bool annular{false};
 };
 
+[[nodiscard]] f64 DiscHorizonVisibleFraction(f64 centerElevationRadians, f64 stellarAngularRadiusRadians) noexcept;
+
 [[nodiscard]] OccultationResult FiniteDiscOccultation(
     const ApparentDisc& source,
     const ApparentDisc& occluder);
