@@ -251,6 +251,14 @@ BuildPhysicalRenderPages(
                 addresses.end())
             addresses.push_back(address);
 
+    // M2.45: Bound new physical GPU uploads per viewport compose.
+    // Already-resident pages do not consume this budget and remain visible.
+    constexpr u32 kLocalUploadBudget = 2U;
+    constexpr u32 kConstructionUploadBudget = 1U;
+    const std::size_t localPageCount = neighboringTiles.size();
+    u32 localUploads = 0U;
+    u32 constructionUploads = 0U;
+
     auto& cache =
         services->Cache();
 
@@ -260,9 +268,10 @@ BuildPhysicalRenderPages(
             global.
             seaLevelMeters;
 
-    for (const auto& address :
-         addresses)
+    for (std::size_t addressIndex = 0; addressIndex < addresses.size(); ++addressIndex)
     {
+        const auto& address = addresses[addressIndex];
+        const bool localPriority = addressIndex < localPageCount;
         const auto snapshot =
             session.
                 TerrainPhysicalPages().
@@ -319,6 +328,12 @@ BuildPhysicalRenderPages(
             cached->physicalSurface ==
                 nullptr)
         {
+            // Preserve last-ready pages; defer new uploads instead of
+            // submitting unbounded host-visible allocations in one frame.
+            if (localPriority
+                ? localUploads >= kLocalUploadBudget
+                : constructionUploads >= kConstructionUploadBudget)
+                continue;
             const auto uploadRevision =
                 session.
                     TerrainPhysicalPages().
@@ -345,6 +360,9 @@ BuildPhysicalRenderPages(
                 continue;
             }
 
+            // Count attempts, including failed uploads, to cap frame spikes.
+            if (localPriority) ++localUploads;
+            else ++constructionUploads;
             try
             {
                 const u32 resolution =
