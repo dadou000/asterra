@@ -444,8 +444,10 @@ BuildPhysicalRenderPages(
                         const f32 rawElevation =
                             cell.
                                 SurfaceHeightMeters();
-                        const f32 elevation = std::isfinite(rawElevation)
-                            ? rawElevation : 0.0F;
+                        if (!std::isfinite(rawElevation))
+                            throw std::runtime_error(
+                                "Physical terrain surface contains a nonfinite elevation.");
+                        const f32 elevation = rawElevation;
 
                         texels[
                             static_cast<
