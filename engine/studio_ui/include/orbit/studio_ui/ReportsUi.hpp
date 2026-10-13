@@ -5,6 +5,7 @@
 #include <orbit/studio_reports/IssueReport.hpp>
 
 #include <filesystem>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -143,7 +144,7 @@ private:
     {
         u64 reportId{0U};
         u32 settleFrames{8U};
-        u32 profileFrames{120U};
+        std::optional<std::chrono::steady_clock::time_point> profileStarted;
         bool waitingForPose{false};
     };
     std::optional<PendingPerformanceCapture> performanceCapture_;
