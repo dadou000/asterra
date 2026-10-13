@@ -147,6 +147,30 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
             atmosphereFound->second.parameters;
         const auto atmosphereCamera =
             view->Camera();
+        // Do not use ReferenceRadiusForShape() as a shadow caster: it is
+        // the largest bounding-sphere axis and wrongly eclipses real points
+        // on an oblate world's smaller-radius surface.
+        const math::Float3 atmosphereBodyRadii = context.shape.has_value()
+            ? std::visit([](const auto& body) -> math::Float3
+            {
+                if constexpr (std::is_same_v<
+                    std::decay_t<decltype(body)>, universe::SphereShape>)
+                {
+                    const f32 r = static_cast<f32>(body.radiusMeters);
+                    return {r, r, r};
+                }
+                else
+                {
+                    return {
+                        static_cast<f32>(body.radiiMeters.x),
+                        static_cast<f32>(body.radiiMeters.y),
+                        static_cast<f32>(body.radiiMeters.z)};
+                }
+            }, *context.shape)
+            : math::Float3{
+                static_cast<f32>(atmosphereParameters.bottomRadiusMeters),
+                static_cast<f32>(atmosphereParameters.bottomRadiusMeters),
+                static_cast<f32>(atmosphereParameters.bottomRadiusMeters)};
 
         const celestial_atmosphere::
             AtmosphereRenderView
@@ -175,6 +199,7 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         irradianceScale,
                 .terrainOcclusionEnabled = info.layers.terrainOccludedAtmosphere,
                 .sunAngularRadiusRadians = studioDirectLight.sunAngularRadiusRadians,
+                .bodyRadiiMeters = atmosphereBodyRadii,
                 .terrainSunShadow = context.terrainSunShadow
             };
 

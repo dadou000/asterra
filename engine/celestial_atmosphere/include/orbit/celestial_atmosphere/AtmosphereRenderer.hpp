@@ -31,6 +31,10 @@ struct AtmosphereRenderView
     f32 irradianceScale{1.0F};
     bool terrainOcclusionEnabled{false};
     f32 sunAngularRadiusRadians{0.0F};
+    // Actual body-centred ellipsoid axes. Atmospheric density/LUTs still
+    // use their reference spherical shell, but solar blockage must follow
+    // the body's real silhouette. Zero axes fall back to bottomRadius.
+    math::Float3 bodyRadiiMeters{};
     std::shared_ptr<rhi::Buffer> terrainSunShadow;
 };
 

@@ -67,7 +67,7 @@ struct Constants
     float4 mieScatterAbsCenter; // Mie scattering (1/m), absorber centre (m)
     float4 mieExtinctAbsHalf;   // Mie extinction (1/m), absorber half width
     float4 absorptionE;         // absorber extinction (1/m), irradiance scale
-    float4 sunOcclusion;        // stellar angular radius, enabled, padding
+    float4 sunOcclusion;        // stellar angular radius, ellipsoid axes xyz (m)
 };
 
 [[vk::push_constant]] Constants g;
@@ -220,6 +220,13 @@ float4 main(VSOutput input) : SV_Target0
     float visibilityNear = 1.0;
     float visibilityFar = 1.0;
     static const uint kShadowInterval = 16u;
+    // Only the optional terrain-ray field may be disabled. The planet
+    // ALWAYS blocks direct sunlight, including on the nightside.
+    const bool terrainFieldReady =
+        g_terrainSunShadow.Load(12u) > 0u &&
+        g_terrainSunShadow.Load(16u) > 0u;
+    const float3 bodyRadii = max(g.sunOcclusion.yzw, float3(1.0, 1.0, 1.0));
+    const float3 scaledSun = normalize(sun / bodyRadii);
 
     [loop]
     for (uint i = 0u; i < steps; ++i)
@@ -228,7 +235,7 @@ float4 main(VSOutput input) : SV_Target0
         const float3 position = origin + direction * t;
         // Sparse view-ray knots bound terrain queries independently of
         // simulation-time delta. Body-fixed geometry is reused across timewarp.
-        if (g.sunOcclusion.y > 0.5 && (i % kShadowInterval) == 0u)
+        if (terrainFieldReady && (i % kShadowInterval) == 0u)
         {
             const uint endIndex = min(i + kShadowInterval, steps) - 1u;
             const float endT = tStart + (float(endIndex) + 0.5) * step;
@@ -238,11 +245,13 @@ float4 main(VSOutput input) : SV_Target0
                 origin + direction * endT, sun, bottom, g.sunOcclusion.x);
         }
         const uint remaining = steps - (i / kShadowInterval) * kShadowInterval;
-        const float visibility = g.sunOcclusion.y > 0.5
-            ? lerp(visibilityNear, visibilityFar,
+        const float sphereVisibility = EllipsoidSunVisibility(
+            position, bodyRadii, scaledSun, g.sunOcclusion.x);
+        const float visibility = terrainFieldReady
+            ? min(sphereVisibility, lerp(visibilityNear, visibilityFar,
                 float(i % kShadowInterval) /
-                float(max(min(kShadowInterval, remaining) - 1u, 1u)))
-            : 1.0;
+                float(max(min(kShadowInterval, remaining) - 1u, 1u))))
+            : sphereVisibility;
         const float radius = length(position);
         const float altitude = max(radius - bottom, 0.0);
 
@@ -305,7 +314,33 @@ AtmosphereRenderer::AtmosphereRenderer(
     const auto mainPosition = pixelSource.find("float4 main(VSOutput input) : SV_Target0");
     if (mainPosition == std::string::npos)
         throw std::logic_error("Atmosphere shader entry point not found.");
-    pixelSource.insert(mainPosition, lighting::kSunVisibilityShader);
+    // The density and transmittance LUT remain referenced to a sphere,
+    // but direct-sun visibility must instead use the body's real ellipsoid.
+    // This is a local tangent-disc approximation only inside the thin
+    // atmosphere; its full/zero classification is analytic and exact for
+    // the ellipsoid. Keep it cheap enough for every integration sample.
+    pixelSource.insert(mainPosition,
+        std::string(lighting::kSunVisibilityShader) + R"(
+float EllipsoidSunVisibility(float3 p, float3 axes,
+    float3 normalizedScaledSun, float angularRadius)
+{
+    const float3 q = p / axes;
+    const float d2 = dot(q, q);
+    if (d2 <= 1.0) return 0.0;
+    const float inverseD = rsqrt(d2);
+    const float mu = dot(q, normalizedScaledSun) * inverseD;
+    const float horizonMu = -sqrt(max(1.0 - inverseD * inverseD, 0.0));
+    const float clearance = mu - horizonMu;
+    // Uniform solar disc above a locally straight ellipsoid horizon.
+    // The curvature effect is negligible within the thin atmosphere;
+    // the width correction also avoids calling asin on full day/night.
+    const float spread = angularRadius * inverseD;
+    if (spread <= 1.0e-7) return clearance >= 0.0 ? 1.0 : 0.0;
+    if (clearance >= spread) return 1.0;
+    if (clearance <= -spread) return 0.0;
+    return StellarDiscFraction(clearance, spread);
+}
+)");
     const auto pixel =
         compiler.Compile({
             .source = pixelSource,
@@ -413,9 +448,12 @@ void AtmosphereRenderer::Draw(
         f(p.absorptionExtinctionPerMeter.z),
         Bits(std::max(view.irradianceScale, 0.0F)),
         Bits(std::max(view.sunAngularRadiusRadians, 0.0F)),
-        Bits(view.terrainOcclusionEnabled ? 1.0F : 0.0F),
-        0U,
-        0U
+        Bits(view.bodyRadiiMeters.x > 0.0F
+            ? view.bodyRadiiMeters.x : static_cast<f32>(p.bottomRadiusMeters)),
+        Bits(view.bodyRadiiMeters.y > 0.0F
+            ? view.bodyRadiiMeters.y : static_cast<f32>(p.bottomRadiusMeters)),
+        Bits(view.bodyRadiiMeters.z > 0.0F
+            ? view.bodyRadiiMeters.z : static_cast<f32>(p.bottomRadiusMeters))
     };
 
     commands.SetRenderTarget(target);
@@ -441,7 +479,8 @@ void AtmosphereRenderer::Draw(
     commands.SetGraphicsTexture(2, luts.Transmittance());
     commands.SetGraphicsTexture(3, luts.MultiScattering());
     commands.SetGraphicsBuffer(0,
-        view.terrainSunShadow ? *view.terrainSunShadow : *emptyTerrainShadow_);
+        (view.terrainOcclusionEnabled && view.terrainSunShadow)
+            ? *view.terrainSunShadow : *emptyTerrainShadow_);
     commands.Draw(6);
 }
 } // namespace orbit::celestial_atmosphere
