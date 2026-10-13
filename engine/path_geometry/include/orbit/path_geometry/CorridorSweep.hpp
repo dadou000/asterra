@@ -21,6 +21,28 @@ struct CorridorSweep
     // Optional per-station banking angle in radians; empty means no bank.
     std::vector<f64> bankRadians;
 };
+struct CorridorRefinementOptions
+{
+    f64 maximumChordErrorMeters{0.025};
+    f64 maximumBankStepRadians{0.02};
+    f64 maximumSegmentLengthMeters{8.0};
+    u32 maximumSubdivisions{10};
+};
+
+struct RefinedCorridor
+{
+    std::vector<PathStation> stations;
+    CorridorSweep corridor;
+};
+
+// Refine between *authored source stations*. Cubic Hermite positions are
+// determined by endpoint position and tangent; this is an approximation of
+// the source path, not an exact reconstruction of a lost Bezier/clothoid.
+[[nodiscard]] RefinedCorridor RefineCorridor(
+    const std::vector<PathStation>& source,
+    const CorridorSweep& corridor,
+    CorridorRefinementOptions options = {});
+
 [[nodiscard]] PathMesh BuildCorridorMesh(
     const std::vector<PathStation>& stations,
     const CorridorSweep& corridor);
