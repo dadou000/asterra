@@ -3554,8 +3554,7 @@ StudioViewportRenderer::ComposeBase(
                 });
         }
 
-        if (drawPathDebug &&
-            presentation ==
+        if (presentation ==
                 StudioViewportPresentation::BodyPreview &&
             frames != nullptr &&
             !products.empty())
@@ -3585,7 +3584,8 @@ StudioViewportRenderer::ComposeBase(
                  camera,
                  frameGraph,
                  pathProducts,
-                 atTime](
+                 atTime,
+                 drawPathDebug](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -3597,7 +3597,8 @@ StudioViewportRenderer::ComposeBase(
                         camera,
                         *frameGraph,
                         atTime,
-                        pathProducts);
+                        pathProducts,
+                        drawPathDebug);
                 });
         }
 
