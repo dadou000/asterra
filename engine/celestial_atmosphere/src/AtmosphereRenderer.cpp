@@ -148,6 +148,30 @@ float MiePhase(float c, float gAnisotropy)
     return (1.0 - gg) / (4.0 * kPi * pow(d, 1.5));
 }
 
+// Radial-density-adaptive quadrature: cluster samples around the tangent
+// point or ground intersection without advancing through simulation time.
+float AtmosphereMarchBoundary(float u, float a, float b, float nearest)
+{
+    const float span = max(b - a, 1.0e-4);
+    if (nearest <= a + 0.01 * span)
+    {
+        const float q = 1.0 - u;
+        return a + span * (u * u * u);
+    }
+    if (nearest >= b - 0.01 * span)
+    {
+        const float q = 1.0 - u;
+        return a + span * (1.0 - q * q * q);
+    }
+    if (u <= 0.5)
+    {
+        const float q = 1.0 - 2.0 * u;
+        return a + (nearest - a) * (1.0 - q * q * q);
+    }
+    const float q = 2.0 * u - 1.0;
+    return nearest + (b - nearest) * (q * q * q);
+}
+
 float4 main(VSOutput input) : SV_Target0
 {
     const int2 pixel = int2(input.position.xy);
@@ -214,7 +238,11 @@ float4 main(VSOutput input) : SV_Target0
     // full count.
     const uint steps =
         clamp(uint(ceil((tEnd - tStart) / 300.0)) + 3u, 4u, kSteps);
-    const float step = (tEnd - tStart) / float(steps);
+    // Uniform orbital steps skip the dense atmosphere as the closest point
+    // drifts between samples: apparent shell thickness then oscillates with
+    // altitude. Concentrate bounded quadrature intervals at the closest
+    // approach, independently of the camera's particular orbital distance.
+    const float closestT = clamp(-dot(origin, direction), tStart, tEnd);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
     float visibilityNear = 1.0;
@@ -224,25 +252,36 @@ float4 main(VSOutput input) : SV_Target0
     [loop]
     for (uint i = 0u; i < steps; ++i)
     {
-        const float t = tStart + (float(i) + 0.5) * step;
+        const float edge0 = AtmosphereMarchBoundary(
+            float(i) / float(steps), tStart, tEnd, closestT);
+        const float edge1 = AtmosphereMarchBoundary(
+            float(i + 1u) / float(steps), tStart, tEnd, closestT);
+        const float localStep = max(edge1 - edge0, 0.0);
+        const float t = 0.5 * (edge0 + edge1);
         const float3 position = origin + direction * t;
         // Sparse view-ray knots bound terrain queries independently of
         // simulation-time delta. Body-fixed geometry is reused across timewarp.
-        if (g.sunOcclusion.y > 0.5 && (i % kShadowInterval) == 0u)
+        if ((i % kShadowInterval) == 0u)
         {
             const uint endIndex = min(i + kShadowInterval, steps) - 1u;
-            const float endT = tStart + (float(endIndex) + 0.5) * step;
-            visibilityNear = TerrainSunVisibility(g_terrainSunShadow, position,
-                sun, bottom, g.sunOcclusion.x);
-            visibilityFar = TerrainSunVisibility(g_terrainSunShadow,
-                origin + direction * endT, sun, bottom, g.sunOcclusion.x);
+            const float endA = AtmosphereMarchBoundary(
+                float(endIndex) / float(steps), tStart, tEnd, closestT);
+            const float endB = AtmosphereMarchBoundary(
+                float(endIndex + 1u) / float(steps), tStart, tEnd, closestT);
+            const float3 lastPoint = origin + direction * (0.5 * (endA + endB));
+            visibilityNear = g.sunOcclusion.y > 0.5
+                ? TerrainSunVisibility(g_terrainSunShadow, position, sun,
+                    bottom, g.sunOcclusion.x)
+                : SphereStellarVisibility(position, sun, bottom, g.sunOcclusion.x);
+            visibilityFar = g.sunOcclusion.y > 0.5
+                ? TerrainSunVisibility(g_terrainSunShadow, lastPoint, sun,
+                    bottom, g.sunOcclusion.x)
+                : SphereStellarVisibility(lastPoint, sun, bottom, g.sunOcclusion.x);
         }
         const uint remaining = steps - (i / kShadowInterval) * kShadowInterval;
-        const float visibility = g.sunOcclusion.y > 0.5
-            ? lerp(visibilityNear, visibilityFar,
-                float(i % kShadowInterval) /
-                float(max(min(kShadowInterval, remaining) - 1u, 1u)))
-            : 1.0;
+        const float visibility = lerp(visibilityNear, visibilityFar,
+            float(i % kShadowInterval) /
+            float(max(min(kShadowInterval, remaining) - 1u, 1u)));
         const float radius = length(position);
         const float altitude = max(radius - bottom, 0.0);
 
@@ -271,7 +310,7 @@ float4 main(VSOutput input) : SV_Target0
             (sunTransmittance * visibility * (rayleigh * rayleighPhase + mie * miePhase) +
              multiResponse * (rayleigh + mie) / (4.0 * kPi));
 
-        const float3 stepTransmittance = exp(-extinction * step);
+        const float3 stepTransmittance = exp(-extinction * localStep);
         // Integrate the source exactly across the step for a constant medium.
         const float3 integral =
             (1.0 - stepTransmittance) / max(extinction, 1.0e-12);
