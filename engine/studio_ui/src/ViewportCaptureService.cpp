@@ -22,7 +22,7 @@ constexpr u32 kDefaultSettleUltra = 20U;
 // Frames for each tile after the camera has been turned onto it.
 constexpr u32 kTileSettleFrames = 8U;
 constexpr u32 kDebugSettleFrames = 8U;
-constexpr u32 kDebugHeaderHeight = 36U;
+constexpr u32 kDebugHeaderHeight = 56U;
 // Longest waits, so a stuck view can never leave Studio stranded at a capture
 // size.
 constexpr u32 kResizeTimeoutFrames = 600U;
@@ -484,6 +484,8 @@ void ViewportCaptureService::ShootDebugPanel()
         throw std::runtime_error("Diagnostic capture dimensions changed.");
     }
 
+    if (w > kMaxDimension / 2U || h > kMaxDimension / 2U)
+        throw std::runtime_error("Diagnostic sheet exceeds supported dimensions.");
     const u32 sheetWidth = w * 2U;
     const u32 panelHeight = h + kDebugHeaderHeight;
     if (debugComposite_.empty())
@@ -542,9 +544,9 @@ void ViewportCaptureService::ShootDebugPanel()
     const char* titles[] = {
         "ATMOSPHERE / LIT", "ALBEDO / ROUGHNESS",
         "NORMAL / METALLIC", "EMISSION / META"};
-    u32 penX = originX + 12U;
-    const u32 penY = originY + 11U;
-    for (const char* p = titles[debugPanel_]; *p; ++p, penX += 7U)
+    u32 penX = originX + 14U;
+    const u32 penY = originY + 14U;
+    for (const char* p = titles[debugPanel_]; *p; ++p, penX += 14U)
     {
         const auto bits = glyph(*p);
         for (u32 row = 0; row < 7U; ++row)
@@ -552,17 +554,21 @@ void ViewportCaptureService::ShootDebugPanel()
             for (u32 col = 0; col < 5U; ++col)
             {
                 if ((bits[row] & (1U << (4U - col))) == 0U ||
-                    penX + col >= originX + w)
+                    penX + col * 2U + 1U >= originX + w)
                 {
                     continue;
                 }
-                const auto index =
-                    (static_cast<std::size_t>(penY + row) * sheetWidth +
-                     penX + col) * 4U;
-                debugComposite_[index] = 255U;
-                debugComposite_[index + 1U] = 255U;
-                debugComposite_[index + 2U] = 255U;
-                debugComposite_[index + 3U] = 255U;
+                for (u32 oy = 0; oy < 2U; ++oy)
+                for (u32 ox = 0; ox < 2U; ++ox)
+                {
+                    const auto index =
+                        (static_cast<std::size_t>(penY + row * 2U + oy) * sheetWidth +
+                         penX + col * 2U + ox) * 4U;
+                    debugComposite_[index] = 255U;
+                    debugComposite_[index + 1U] = 255U;
+                    debugComposite_[index + 2U] = 255U;
+                    debugComposite_[index + 3U] = 255U;
+                }
             }
         }
     }
@@ -576,6 +582,7 @@ void ViewportCaptureService::ShootDebugPanel()
     }
     hooks_.setDebugMode(debugPanel_);
     settleLeft_ = kDebugSettleFrames;
+    busyWaited_ = 0U;
 }
 
 void ViewportCaptureService::Tick()
@@ -681,6 +688,12 @@ void ViewportCaptureService::Tick()
             --settleLeft_;
             return;
         }
+        if (hooks_.busy && hooks_.busy() && busyWaited_ < kBusyTimeoutFrames)
+        {
+            ++busyWaited_;
+            return;
+        }
+        busyWaited_ = 0U;
         try
         {
             ShootDebugPanel();
