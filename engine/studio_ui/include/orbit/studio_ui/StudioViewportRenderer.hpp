@@ -773,6 +773,12 @@ private:
         std::shared_ptr<mesh_render::SdfExtraGeometry> sdfExtra;
         std::shared_ptr<const mesh_render::SdfTerrainPatch> terrainPatch;
         math::Double3 terrainPatchAnchor{};
+        math::Double3 terrainCoverageAnchorBody{};
+        math::Double3 terrainCoverageEastBody{};
+        math::Double3 terrainCoverageNorthBody{};
+        world::PlanetId terrainCoveragePlanet{};
+        u8 terrainCoverageLevel{255U};
+        std::vector<world::PlanetTileId> terrainCoverageTiles;
         u64 terrainPatchSourceRevision{~0ULL};
         u64 terrainPatchCounter{0U};
     };
