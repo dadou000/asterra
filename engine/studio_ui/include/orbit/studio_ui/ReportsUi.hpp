@@ -56,6 +56,13 @@ public:
     // then shows the problem at a glance, with no test to launch. False when no
     // screenshot could be taken (the error is in ScreenshotError()).
     bool CaptureScreenshot(u64 id, bool endCondition);
+    // Export a condition screenshot to the user-facing Captures folder.
+    // Does not alter the report's attached evidence.
+    [[nodiscard]] std::filesystem::path ExportCapture(u64 id, bool endCondition);
+    // Open the shared report capture directory in the native file browser.
+    [[nodiscard]] std::filesystem::path OpenCaptureFolder();
+    // Captures current viewport evidence only if this report is performance-scoped.
+    [[nodiscard]] bool CapturePerformanceIssue(u64 id);
 
     // Shows a file in the platform file browser.
     using OpenHook = std::function<void(const std::filesystem::path&)>;
