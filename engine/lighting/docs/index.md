@@ -100,3 +100,32 @@ Method: toggle one flag, compare, restore it (`/rendering/terrain/clipmaps/debug
 ### Runtime witness and corrected source isolation
 
 The first audit revision was too subtle for orbital scenes: mode 1 approximated the already-present sphere check, mode 2 usually agreed with it except at a mountain rim, and mode 3 only skipped near-field GI that was already disabled in orbit. Also the original direct-light heatmaps could be hidden by later passes or never reach the display for forward-only surfaces. The audit now draws a **post-output-transform 180×18 pixel swatch** at the top-left (red method 1, green method 2, blue method 3; white underline = the corresponding debug flag is on). This is a routing witness, not a physics result; a missing swatch means stale executable, wrong viewport, or a missing audit render pass. Mode 3 now also skips the atmosphere/cloud compositor, isolating surface lighting from later volumetric additions. In methods 1/2 without their debug toggle, only physically near-terminator differences are expected. If the diagnostic shader fails to shade a forward-only pixel, the surface debug remains insufficient: inspect macro-globe and far-body prelit outputs separately. This is a temporary tool, not a shipping render feature.
+
+### GPU binding / display-provenance fix (2026-10-13)
+
+**Root cause found:** the experimental sunlight change increased DirectLighting's
+`shaderResourceBuffers` from six to seven but failed to move its six
+`[[vk::binding]]` combined texture descriptors from [6..11] to [7..12].
+Binding 6 was claimed by **both** the terrain-shadow buffer and albedo sampler.
+The Vulkan graphics pipeline explicitly lays out all storage buffers first
+and sampled textures afterward. As a result the direct-light shader's material,
+normal, metadata and depth inputs could not be trusted. Corrected in
+`engine/lighting/src/DirectLighting.cpp` (commit 0f5af14be).
+
+To avoid false confidence from the previous top-left witness, each corresponding
+debug checkbox now enables a **post-output-transform full-screen diagnostic**
+with its own shader, independent of DirectLighting's surface-metadata discard:
+mode 1 displays finite-disc analytic solar boundary (red blocked, green visible,
+yellow partial; magenta = sphere hit but no G-buffer metadata, cyan = metadata
+without reconstructable position); mode 2 displays R=terrain visibility,
+G=sphere visibility, B=terrain field ready (solid blue while missing, magenta
+when no valid surface position); mode 3 displays R=log scene HDR luminance,
+G=physical surface metadata present, B=valid geometric depth. The latter
+is a **render-input provenance view**, not a radiometric decomposition of
+direct/GI/atmospheric light. Its red-only highlights reveal forward-lit pixels
+unreachable by the material-gated DirectLighting pixel shader.
+
+All views sample the existing scene, G-buffer, and depth, do not use exposure,
+bloom, color correction, or TAA histories, and preserve the red/green/blue
+method witness stripe. All debugging is opt-in. Compiled/runtime tests remain
+pending; the binding fix is source-proven by `VulkanPipeline.cpp`.

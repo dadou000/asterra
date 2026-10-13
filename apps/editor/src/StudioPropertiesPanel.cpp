@@ -301,13 +301,13 @@ void StudioPropertiesPanel::Register()
                             }
                         };
                         auditSwitch("1. Finite-disc planet occlusion##sun-audit-disc", 1U);
-                        changed |= context.Checkbox("Debug 1: disc visibility (gray)##sun-audit-d1",
+                        changed |= context.Checkbox("Debug 1: boundary + G-buffer validity##sun-audit-d1",
                             layers.sunAuditDiscDebug);
                         auditSwitch("2. Body-fixed terrain sun rays##sun-audit-relief", 2U);
-                        changed |= context.Checkbox("Debug 2: R=terrain G=planet B=field ready##sun-audit-d2",
+                        changed |= context.Checkbox("Debug 2: terrain/planet/field validity##sun-audit-d2",
                             layers.sunAuditReliefDebug);
                         auditSwitch("3. Separate direct vs sky/GI sources##sun-audit-sources", 3U);
-                        changed |= context.Checkbox("Debug 3: R=direct G=sky B=emission##sun-audit-d3",
+                        changed |= context.Checkbox("Debug 3: R=scene G=metadata B=depth##sun-audit-d3",
                             layers.sunAuditSourcesDebug);
                         context.MutedText("Debug bypasses later atmosphere/GI so colors remain legible.");
                         context.Separator();

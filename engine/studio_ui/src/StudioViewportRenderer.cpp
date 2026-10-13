@@ -3389,8 +3389,18 @@ StudioViewportRenderer::ComposeBase(
         u32 sharedRadianceLevelCount =
             0U;
 
+        std::shared_ptr<rhi::Buffer> activeAuditTerrainShadow;
         if (usesPhysicalSurfaceLighting)
         {
+            activeAuditTerrainShadow =
+                (info.layers.terrainOccludedAtmosphere ||
+                 info.layers.sunAuditMethod == 2U) &&
+                    hasMacroGlobe && macroGlobeSurface != nullptr &&
+                    macroGlobeSurface->terrain != nullptr &&
+                    shape.has_value() && logicalTarget->target.has_value()
+                    ? EnsureTerrainSunShadow(info.id, logicalTarget->target->body,
+                        macroGlobeSurface->terrain, ReferenceRadiusForShape(*shape))
+                    : nullptr;
             StudioLightingPassContext lightingContext{
                 graph, session, view, info,
                 targets, prefix, presentation, snapshot,
@@ -3399,14 +3409,7 @@ StudioViewportRenderer::ComposeBase(
                 sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
                 bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
                 nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters,
-                (info.layers.terrainOccludedAtmosphere ||
-                 info.layers.sunAuditMethod == 2U) &&
-                    hasMacroGlobe && macroGlobeSurface != nullptr &&
-                    macroGlobeSurface->terrain != nullptr &&
-                    shape.has_value() && logicalTarget->target.has_value()
-                    ? EnsureTerrainSunShadow(info.id, logicalTarget->target->body,
-                        macroGlobeSurface->terrain, ReferenceRadiusForShape(*shape))
-                    : nullptr
+                activeAuditTerrainShadow
             };
             ComposeLightingPasses(lightingContext);
         }
@@ -3952,19 +3955,56 @@ StudioViewportRenderer::ComposeBase(
                 (auditMode == 1U && info.layers.sunAuditDiscDebug) ||
                 (auditMode == 2U && info.layers.sunAuditReliefDebug) ||
                 (auditMode == 3U && info.layers.sunAuditSourcesDebug);
+            std::vector<render_graph::BufferUse> auditBufferUses;
+            if (auditDebug && activeAuditTerrainShadow != nullptr)
+            {
+                const auto terrainHandle = graph.ImportBuffer(
+                    prefix + ".SunAuditField", *activeAuditTerrainShadow,
+                    rhi::ResourceState::ShaderResource);
+                auditBufferUses.push_back({
+                    .buffer = terrainHandle,
+                    .state = rhi::ResourceState::ShaderResource,
+                    .access = render_graph::Access::Read});
+            }
             graph.AddPass(
                 prefix + ".SunAuditWitness",
-                {{
-                    .texture = targets.display,
-                    .state = rhi::ResourceState::RenderTarget,
-                    .access = render_graph::Access::Write
-                }},
-                [this, displayColor, width, height, auditMode, auditDebug](
+                {
+                    {.texture = targets.color,
+                     .state = rhi::ResourceState::ShaderResource,
+                     .access = render_graph::Access::Read},
+                    {.texture = targets.surfaceEmissionClass,
+                     .state = rhi::ResourceState::ShaderResource,
+                     .access = render_graph::Access::Read},
+                    {.texture = targets.depth,
+                     .state = rhi::ResourceState::DepthRead,
+                     .access = render_graph::Access::Read},
+                    {.texture = targets.display,
+                     .state = rhi::ResourceState::RenderTarget,
+                     .access = render_graph::Access::Write}
+                },
+                auditBufferUses,
+                [this, displayColor, width, height, auditMode, auditDebug,
+                 auditInputs = SunAuditViewportInputs{
+                     .scene = color,
+                     .emissionMetadata = &view->SurfaceEmissionClass(),
+                     .depth = &view->Depth(),
+                     .terrainShadow = activeAuditTerrainShadow.get(),
+                     .camera = view->Camera(),
+                     .sunDirection = studioDirectLight.directionBody,
+                     .planetRadiusMeters = shape.has_value()
+                         ? static_cast<f32>(ReferenceRadiusForShape(*shape))
+                         : 0.0F,
+                     .sunAngularRadiusRadians =
+                         studioDirectLight.sunAngularRadiusRadians
+                 },
+                 auditKeepAlive = activeAuditTerrainShadow](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
+                    // Buffer lifetime is owned by the captured shared_ptr.
+                    static_cast<void>(auditKeepAlive);
                     sunAuditIndicator_.Draw(commands, *displayColor,
-                        width, height, auditMode, auditDebug);
+                        auditInputs, width, height, auditMode, auditDebug);
                 });
         }
 
