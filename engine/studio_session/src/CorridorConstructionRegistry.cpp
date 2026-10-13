@@ -10,7 +10,8 @@ namespace orbit::studio_session
 std::vector<terrain::PhysicalTerrainPageAddress>
 CorridorConstructionRegistry::PagesForBody(
     const universe::BodyId body, const std::size_t maximumPages,
-    const math::Double3* observerDirection) const
+    const math::Double3* observerDirection,
+    const std::span<const terrain::PhysicalTerrainPageAddress> previous) const
 {
     std::vector<terrain::PhysicalTerrainPageAddress> pages;
     if (maximumPages == 0U) return pages;
@@ -39,6 +40,23 @@ CorridorConstructionRegistry::PagesForBody(
                     world::CubeToUnitDirection(world::TileCenter(b.tile)));
                 return da > db;
             });
+    }
+    // Existing resident pages retain a small angular preference, so tiny
+    // observer motion does not continuously replace the final budget slot.
+    // The bias is bounded: a substantially closer page still takes priority.
+    if (observerDirection && math::LengthSquared(*observerDirection) > 0.5 &&
+        !previous.empty())
+    {
+        const auto direction = math::Normalize(*observerDirection);
+        const auto score = [&](const auto& page) {
+            const f64 proximity = math::Dot(direction,
+                world::CubeToUnitDirection(world::TileCenter(page.tile)));
+            const bool resident = std::find(previous.begin(), previous.end(),
+                page) != previous.end();
+            return proximity + (resident ? 0.002 : 0.0);
+        };
+        std::stable_sort(pages.begin(), pages.end(),
+            [&](const auto& a, const auto& b) { return score(a) > score(b); });
     }
     if (pages.size() > maximumPages) pages.resize(maximumPages);
     return pages;
