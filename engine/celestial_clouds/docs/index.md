@@ -42,11 +42,20 @@ verified = "69bafa8"
 
 [routes]
 "how the near-field cloud march works, why it is blurry/striped/slow" = "raymarch"
+"blackrack EVE release 5 archive and rendering techniques" = "blackrack-eve-release5-reference"
+"blackrack-inspired optimization plan and code mapping for Orbit" = "blackrack-eve-orbit-design"
+"papers, open-source examples and volumetric clouds resource library" = "cloud-rendering-reference-library"
 "cloud shadows on the ground, god rays, cloud-on-cloud shadow" = "shadows-and-light-volume"
 "inspect one isolated cloud of a chosen type" = "cloud-lab"
 "weather model, orbital weather representation" = "/legacy/tree-history-research-v006-cloud-weather"
 "universal volumetrics (clouds, fog, generic media)" = "/legacy/tree-history-research-v007-universal-volumetrics"
 +++
+
+## Reference research (Release 5 / planetary volumetrics)
+
+- [Inspected EVE Release 5 archive and technique inventory](blackrack-eve-release5-reference.md): evidence-ranked configuration, build limitations, cloud types, light volume, temporal upscaling, layer order, SDF and Scatterer coupling. Proprietary archive and binaries are not stored in this repo.
+- [Orbit-specific code and performance design](blackrack-eve-orbit-design.md): function-level integration plan, A/B shader toggles, cache structure, correctness constraints and staged implementation.
+- [Cloud rendering source library](cloud-rendering-reference-library.md): upstream blackrack documentation, Nubis/Nubis3, Unreal, atmospheric papers, source projects and caveats.
 
 ## Module map (`engine/celestial_clouds`)
 
