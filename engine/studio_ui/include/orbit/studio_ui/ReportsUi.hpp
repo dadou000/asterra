@@ -61,8 +61,13 @@ public:
     [[nodiscard]] std::filesystem::path ExportCapture(u64 id, bool endCondition);
     // Open the shared report capture directory in the native file browser.
     [[nodiscard]] std::filesystem::path OpenCaptureFolder();
-    // Captures current viewport evidence only if this report is performance-scoped.
+    // Restores the recorded starting condition, then captures after viewport
+    // convergence from Tick(). Returns false while queued or on failure.
     [[nodiscard]] bool CapturePerformanceIssue(u64 id);
+    [[nodiscard]] bool PerformanceCapturePending() const noexcept
+    {
+        return performanceCapture_.has_value();
+    }
 
     // Shows a file in the platform file browser.
     using OpenHook = std::function<void(const std::filesystem::path&)>;
@@ -134,6 +139,13 @@ private:
     rpc::Dispatcher* dispatcher_{nullptr};
     std::string viewId_;
     std::optional<PendingPose> pending_;
+    struct PendingPerformanceCapture
+    {
+        u64 reportId{0U};
+        u32 settleFrames{8U};
+        bool waitingForPose{false};
+    };
+    std::optional<PendingPerformanceCapture> performanceCapture_;
     std::string restoreStatus_;
 };
 
