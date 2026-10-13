@@ -1,5 +1,6 @@
 #include <orbit/paths/PathNetwork.hpp>
 
+#include <cmath>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -215,6 +216,38 @@ void RegisterSchemas(
                 .kind = schema::PropertyKind::Vector3,
                 .unit = "m",
                 .defaultValue = math::Double3{}
+            },
+            {
+                .id = kInfrastructureCatalogId,
+                .name = "Infrastructure Catalog",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string{}
+            },
+            {
+                .id = kInfrastructureCatalogVersion,
+                .name = "Catalog Version",
+                .kind = schema::PropertyKind::Integer,
+                .defaultValue = i64{1}
+            },
+            {
+                .id = kInfrastructureConstruction,
+                .name = "Construction Mode",
+                .kind = schema::PropertyKind::String,
+                .defaultValue = std::string("terrain")
+            },
+            {
+                .id = kInfrastructureDesignSpeed,
+                .name = "Design Speed",
+                .kind = schema::PropertyKind::Float,
+                .unit = "km/h",
+                .defaultValue = f64{0.0},
+                .range = {.minimum = 0.0}
+            },
+            {
+                .id = kInfrastructureEaseTurns,
+                .name = "Ease Turns",
+                .kind = schema::PropertyKind::Boolean,
+                .defaultValue = true
             },
             {
                 .id = kEdgeProfileOverride,
@@ -678,6 +711,35 @@ void PathNetworkService::SetBezierHandles(
     }
 }
 
+void PathNetworkService::SetInfrastructureIntent(
+    const scene::ObjectId edge, std::string catalogId,
+    const i64 catalogVersion, std::string constructionMode,
+    const f64 designSpeedKmh, const bool easeTurns)
+{
+    if (!FindEdge(edge).has_value())
+        throw std::invalid_argument("Infrastructure intent requires a valid path edge.");
+    if (catalogId.empty() || catalogVersion < 1 ||
+        (constructionMode != "terrain" && constructionMode != "supported") ||
+        !std::isfinite(designSpeedKmh) || designSpeedKmh < 0.0)
+        throw std::invalid_argument("Invalid infrastructure catalog, version, construction or design speed.");
+    const bool ownsTransaction = !commands_.HasActiveTransaction();
+    if (ownsTransaction) commands_.BeginTransaction("Set Infrastructure Intent");
+    try
+    {
+        commands_.SetProperty(edge, kInfrastructureCatalogId, std::move(catalogId));
+        commands_.SetProperty(edge, kInfrastructureCatalogVersion, catalogVersion);
+        commands_.SetProperty(edge, kInfrastructureConstruction, std::move(constructionMode));
+        commands_.SetProperty(edge, kInfrastructureDesignSpeed, designSpeedKmh);
+        commands_.SetProperty(edge, kInfrastructureEaseTurns, easeTurns);
+        if (ownsTransaction) commands_.CommitTransaction();
+    }
+    catch (...)
+    {
+        if (ownsTransaction && commands_.HasActiveTransaction()) commands_.RollbackTransaction();
+        throw;
+    }
+}
+
 void PathNetworkService::SetProfile(
     const scene::ObjectId pathObject,
     std::string profileAsset)
@@ -944,7 +1006,12 @@ PathNetworkService::FindEdge(
         .profileOverride =
             PropertyOr<std::string>(
                 objects_, edge,
-                kEdgeProfileOverride, {})
+                kEdgeProfileOverride, {}),
+        .infrastructureCatalogId = PropertyOr<std::string>(objects_, edge, kInfrastructureCatalogId, {}),
+        .infrastructureCatalogVersion = PropertyOr<i64>(objects_, edge, kInfrastructureCatalogVersion, 1),
+        .constructionMode = PropertyOr<std::string>(objects_, edge, kInfrastructureConstruction, "terrain"),
+        .designSpeedKmh = PropertyOr<f64>(objects_, edge, kInfrastructureDesignSpeed, 0.0),
+        .easeTurns = PropertyOr<bool>(objects_, edge, kInfrastructureEaseTurns, true)
     };
 }
 
