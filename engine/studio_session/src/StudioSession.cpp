@@ -1,6 +1,9 @@
 #include <orbit/studio_session/StudioSession.hpp>
 
 #include <orbit/rpc/JsonRpc.hpp>
+#include <orbit/path_geometry/PathSource.hpp>
+#include <orbit/path_geometry/CorridorSweep.hpp>
+#include <orbit/paths/PathNetwork.hpp>
 #include <orbit/studio_session/StudioMeshRpc.hpp>
 #include <orbit/studio_session/StudioTerrainSampleRpc.hpp>
 #include <orbit/studio_session/StudioTerrainStatusRpc.hpp>
@@ -531,6 +534,66 @@ StudioTickResult StudioSession::Tick(
     result.pathProductsInvalidated =
         pathProducts_.RefreshBinding();
     static_cast<void>(pathProducts_.RefreshSemanticInvalidation());
+    // Bounded initial production resolver for authored *frame-local* road/rail
+    // edges. Unsupported categories remain dirty with an inspectable failure;
+    // no silent frame guesses for moving decks, geodetic anchors or routing.
+    static_cast<void>(pathProducts_.RebuildDirty(
+        [this](const scene::ObjectId id)
+            -> std::optional<UniverseBoundPathCache::RebuildRequest>
+        {
+            const auto edge = pathNetwork_.Service().FindEdge(id);
+            if (!edge || edge->infrastructureCatalogId.empty()) return std::nullopt;
+            const auto a = pathNetwork_.Service().FindNode(edge->startNode);
+            const auto b = pathNetwork_.Service().FindNode(edge->endNode);
+            if (!a || !b) return std::nullopt;
+            const auto* fa = std::get_if<paths::FramePointAnchor>(&a->anchor);
+            const auto* fb = std::get_if<paths::FramePointAnchor>(&b->anchor);
+            if (!fa || !fb || fa->frame != fb->frame)
+                return std::nullopt;
+            if (!world_.Universe().Frames().Contains(fa->frame))
+                return std::nullopt;
+            if (edge->mode == paths::EdgeMode::Routed)
+                return std::nullopt;
+            const bool isRoad = edge->infrastructureCatalogId == "rural-road";
+            const bool isRail = edge->infrastructureCatalogId == "ballasted-rail";
+            if ((!isRoad && !isRail) || edge->infrastructureCatalogVersion != 1)
+                return std::nullopt;
+            paths::PathProfile profile{};
+            profile.name = isRail ? "Ballasted Rail" : "Rural Road";
+            profile.kind = isRail ? paths::PathProfileKind::Rail : paths::PathProfileKind::Road;
+            profile.widthMeters = isRail ? 1.5 : 7.0;
+            profile.lanes = isRail ? 1U : 2U;
+            path_geometry::PathSourceRequest source{};
+            source.edge = *edge;
+            source.startNode = *a;
+            source.endNode = *b;
+            source.targetFrame = fa->frame;
+            source.frames = &world_.Universe().Frames();
+            source.bodies = &world_.Universe().Bodies();
+            source.atTime = clock_.Time();
+            source.sourceRevision = world_.Objects().Revision();
+            const auto centerline = path_geometry::BuildPathCenterline(source);
+            if (!centerline) return std::nullopt;
+            path_geometry::CorridorSweep section{};
+            if (isRail)
+            {
+                section.bands = {
+                    {{{-0.77, 0.0}, {-0.73, 0.15}}},
+                    {{{0.73, 0.15}, {0.77, 0.0}}}
+                };
+            }
+            else
+            {
+                section.bands = {{{{-3.5, 0.0}, {0.0, 0.07}, {3.5, 0.0}}}};
+            }
+            UniverseBoundPathCache::RebuildRequest request{};
+            request.authoredSignature = world_.Objects().Revision();
+            if (request.authoredSignature == 0U) request.authoredSignature = 1U;
+            request.centerline = *centerline;
+            request.profile = std::move(profile);
+            request.corridor = std::move(section);
+            return request;
+        }, 2U));
     result.viewportTargetsChanged =
         viewports_.Refresh();
 
