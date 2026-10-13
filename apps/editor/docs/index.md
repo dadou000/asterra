@@ -49,3 +49,7 @@ verify = [
 ]
 verified = "329654cd3290274cd945e9daec3fd214267ef2c8"
 +++
+
+## Debug / Test Center
+
+Orbit Studio's canonical user-facing location for tests and diagnostics is the **Debug** top-level workspace. The Debug panel groups terrain/infrastructure, lighting/atmosphere, performance/reports and G-buffer tools; its current construction terrain validation is a read-only physical-page sanity check. See `/editor/studio-ui/debug-center`.
