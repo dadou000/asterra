@@ -35,7 +35,8 @@ public:
     // physical work only for authored corridors, never intervening empty tiles.
     [[nodiscard]] std::vector<terrain::PhysicalTerrainPageAddress>
     PagesForBody(universe::BodyId body, std::size_t maximumPages,
-        const math::Double3* observerDirection = nullptr) const;
+        const math::Double3* observerDirection = nullptr,
+        std::span<const terrain::PhysicalTerrainPageAddress> previous = {}) const;
 
     void Clear() noexcept { records_.clear(); }
 
