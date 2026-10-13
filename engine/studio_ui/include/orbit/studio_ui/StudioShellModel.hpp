@@ -87,7 +87,6 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
     case StudioWorkspaceMode::Planning: return "Planning";
     case StudioWorkspaceMode::Debug: return "Debug";
     case StudioWorkspaceMode::Plugins: return "Plugins";
-    case StudioWorkspaceMode::Debug: return "Debug";
     }
     return "Viewport";
 }
@@ -104,6 +103,7 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
     case StudioWorkspaceMode::Shading: return "Shading";
     case StudioWorkspaceMode::Planning: return "Planning";
     case StudioWorkspaceMode::Plugins: return "Plugins";
+    case StudioWorkspaceMode::Debug: return "Debug";
     }
 
     return "Scene";
