@@ -1,5 +1,9 @@
 #include <orbit/celestial_clouds/UnifiedCloudFoundation.hpp>
 
+// Keep regression assertions active even when CTest is built in Release.
+#if defined(NDEBUG)
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cmath>
 #include <optional>
