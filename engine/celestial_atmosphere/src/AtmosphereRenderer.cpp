@@ -172,6 +172,55 @@ float AtmosphereMarchBoundary(float u, float startT, float endT,
     return closestT + (endT - closestT) * q * q * q;
 }
 
+// Exact zero-angular-radius eclipse interval for a parallel stellar ray.
+// An ellipsoid becomes a sphere under axis scaling. Its infinite shadow
+// is the intersection of a circular cylinder behind the planet and the
+// nightside half-space. Both are convex, so along the camera ray their
+// intersection is either empty or ONE contiguous interval [start,end].
+// Clip the quadratic cylinder and linear half-space in normalized view
+// segment coordinates to avoid tiny metre-scale quadratic coefficients.
+float2 EllipsoidEclipseInterval(float3 origin, float3 viewDirection,
+    float3 radii, float3 scaledSun, float startT, float endT)
+{
+    const float segment = endT - startT;
+    const float3 q0 = (origin + viewDirection * startT) / radii;
+    const float3 qv = (viewDirection * segment) / radii;
+    const float3 perp0 = q0 - scaledSun * dot(q0, scaledSun);
+    const float3 perpV = qv - scaledSun * dot(qv, scaledSun);
+    const float a = dot(perpV, perpV);
+    const float b = dot(perp0, perpV);
+    const float c = dot(perp0, perp0) - 1.0;
+    float lower = 0.0;
+    float upper = 1.0;
+    if (a <= 1.0e-16)
+    {
+        if (c > 0.0) return float2(endT, endT);
+    }
+    else
+    {
+        const float discriminant = b * b - a * c;
+        if (discriminant < 0.0) return float2(endT, endT);
+        const float root = sqrt(max(discriminant, 0.0));
+        lower = max(lower, (-b - root) / a);
+        upper = min(upper, (-b + root) / a);
+    }
+
+    // The front-facing half of the extended cylinder is sunlit. Only
+    // points with dot(q,scaledSun) < 0 can be eclipsed by the planet.
+    const float facing0 = dot(q0, scaledSun);
+    const float facingV = dot(qv, scaledSun);
+    if (facingV > 1.0e-9)
+        upper = min(upper, -facing0 / facingV);
+    else if (facingV < -1.0e-9)
+        lower = max(lower, -facing0 / facingV);
+    else if (facing0 >= 0.0)
+        return float2(endT, endT);
+
+    if (lower >= upper) return float2(endT, endT);
+    return float2(startT + segment * lower,
+                  startT + segment * upper);
+}
+
 float4 main(VSOutput input) : SV_Target0
 {
     const int2 pixel = int2(input.position.xy);
@@ -250,13 +299,18 @@ float4 main(VSOutput input) : SV_Target0
     float visibilityNear = 1.0;
     float visibilityFar = 1.0;
     static const uint kShadowInterval = 16u;
-    // Only the optional terrain-ray field may be disabled. The planet
-    // ALWAYS blocks direct sunlight, including on the nightside.
+    // The optional relief field only adds mountain occlusion. The
+    // planetary solar shadow interval below is always evaluated.
     const bool terrainFieldReady =
         g_terrainSunShadow.Load(12u) > 0u &&
         g_terrainSunShadow.Load(16u) > 0u;
     const float3 bodyRadii = max(g.sunOcclusion.yzw, float3(1.0, 1.0, 1.0));
     const float3 scaledSun = normalize(sun / bodyRadii);
+    // Solve once per view ray rather than sampling a hard terminator only
+    // at each of 40 step midpoints. Each step will integrate its lit
+    // subinterval(s) with the correct Beer-Lambert camera attenuation.
+    const float2 eclipse = EllipsoidEclipseInterval(
+        origin, direction, bodyRadii, scaledSun, tStart, tEnd);
 
     [loop]
     for (uint i = 0u; i < steps; ++i)
@@ -284,13 +338,11 @@ float4 main(VSOutput input) : SV_Target0
                 origin + direction * endT, sun, bottom, g.sunOcclusion.x);
         }
         const uint remaining = steps - (i / kShadowInterval) * kShadowInterval;
-        const float sphereVisibility = EllipsoidSunVisibility(
-            position, bodyRadii, scaledSun, g.sunOcclusion.x);
-        const float visibility = terrainFieldReady
-            ? min(sphereVisibility, lerp(visibilityNear, visibilityFar,
+        const float terrainVisibility = terrainFieldReady
+            ? lerp(visibilityNear, visibilityFar,
                 float(i % kShadowInterval) /
-                float(max(min(kShadowInterval, remaining) - 1u, 1u))))
-            : sphereVisibility;
+                float(max(min(kShadowInterval, remaining) - 1u, 1u)))
+            : 1.0;
         const float radius = length(position);
         const float altitude = max(radius - bottom, 0.0);
 
@@ -309,21 +361,61 @@ float4 main(VSOutput input) : SV_Target0
 
         const float sunMu = dot(position / max(radius, 1.0), sun);
         const float2 lut = LutUv(radius, sunMu);
-        const float3 sunTransmittance =
-            g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
         const float3 multiResponse =
             g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
 
-        const float3 source =
-            irradiance *
-            (sunTransmittance * visibility * (rayleigh * rayleighPhase + mie * miePhase) +
-             multiResponse * (rayleigh + mie) / (4.0 * kPi));
-
         const float3 stepTransmittance = exp(-extinction * stepLength);
-        // Integrate the source exactly across the step for a constant medium.
-        const float3 integral =
-            (1.0 - stepTransmittance) / max(extinction, 1.0e-12);
-        radiance += transmittance * source * integral;
+        const float3 safeExtinction = max(extinction, 1.0e-12);
+        // Multiple scattering is a separate (approximate) illumination
+        // source. Never multiply it by the direct planet eclipse mask.
+        const float3 multiSource =
+            irradiance * multiResponse * (rayleigh + mie) / (4.0 * kPi);
+        radiance += transmittance * multiSource *
+            (1.0 - stepTransmittance) / safeExtinction;
+
+        // Light may turn on or off INSIDE this segment. A single midpoint
+        // sample switches the whole interval at once, causing nested rings
+        // in the dawn sky and stripes around an orbital terminator.
+        // Analytically subtract the planet's eclipse interval from this
+        // segment. Most segments have exactly one full lit interval or
+        // none; only a segment straddling both boundaries has two.
+        const float3 directPhase =
+            rayleigh * rayleighPhase + mie * miePhase;
+        [unroll]
+        for (uint region = 0u; region < 2u; ++region)
+        {
+            const float litStart = region == 0u
+                ? edgeA : max(edgeA, eclipse.y);
+            const float litEnd = region == 0u
+                ? min(edgeB, eclipse.x) : edgeB;
+            if (litEnd <= litStart + 1.0e-4) continue;
+
+            // Sample the solar transmittance in the LIT portion rather
+            // than the eclipsed step midpoint. In particular, the LUT
+            // can be zero at a shadowed midpoint even if half the segment
+            // receives sunlight.
+            const float litMid = 0.5 * (litStart + litEnd);
+            const float3 sunPoint = origin + direction * litMid;
+            const float sunRadius = length(sunPoint);
+            const float sunMuLit =
+                dot(sunPoint / max(sunRadius, 1.0), sun);
+            const float3 sunTransmission =
+                g_transmittance.SampleLevel(g_transmittanceSampler,
+                    LutUv(sunRadius, sunMuLit), 0).rgb;
+            const float discVisibility = EllipsoidSunVisibility(
+                sunPoint, bodyRadii, scaledSun, g.sunOcclusion.x);
+
+            // Integral of T_camera(s) on the lit interval. The camera
+            // extinction is evaluated at the original density midpoint;
+            // its variation is a separate, smooth quadrature error.
+            const float3 opticalStart =
+                exp(-extinction * max(litStart - edgeA, 0.0));
+            const float3 opticalEnd =
+                exp(-extinction * max(litEnd - edgeA, 0.0));
+            radiance += transmittance * irradiance * directPhase *
+                sunTransmission * discVisibility * terrainVisibility *
+                (opticalStart - opticalEnd) / safeExtinction;
+        }
         transmittance *= stepTransmittance;
     }
 
@@ -355,9 +447,9 @@ AtmosphereRenderer::AtmosphereRenderer(
         throw std::logic_error("Atmosphere shader entry point not found.");
     // The density and transmittance LUT remain referenced to a sphere,
     // but direct-sun visibility must instead use the body's real ellipsoid.
-    // This is a local tangent-disc approximation only inside the thin
-    // atmosphere; its full/zero classification is analytic and exact for
-    // the ellipsoid. Keep it cheap enough for every integration sample.
+    // The shadow cylinder integrates the point-sun occultation exactly
+    // along each segment; this local tangent-disc factor smooths the
+    // remaining narrow finite-solar-disc transition.
     pixelSource.insert(mainPosition,
         std::string(lighting::kSunVisibilityShader) + R"(
 float EllipsoidSunVisibility(float3 p, float3 axes,
