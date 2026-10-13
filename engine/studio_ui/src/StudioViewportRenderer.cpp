@@ -1485,15 +1485,42 @@ StudioViewportRenderer::ComposeBase(
                     const auto& patchSource =
                         session.TerrainRuntime().TerrainSource(
                             *terrainRuntime);
-                    // The near-field SDF patch must rebuild when the
-                    // published physical surface changes, not just when the
-                    // analytic terrain source revision changes.
-                    const auto physicalCenter =
-                        session.TerrainPhysicalPages().Find(
-                            terrainRuntime->observerPhysicalPage);
-                    const u64 sourceRevision = patchSource.Revision() ^
-                        (physicalCenter
-                             ? physicalCenter->revisionFingerprint : 0U);
+                    // Capture the immutable physical pages covering a
+                    // 193 m square near-field patch. The 17x17 footprint
+                    // probes include seams and missing pages in the fingerprint
+                    // without performing a service lookup per terrain vertex.
+                    constexpr u32 kCount = 193U;
+                    constexpr f64 kCell = 1.0;
+                    const auto bodyFromFrame =
+                        math::Inverse(meshPresentation.targetFromBody);
+                    const math::Double3 anchorBody =
+                        math::TransformPoint(bodyFromFrame, anchor);
+                    std::vector<math::Double3> footprintDirections;
+                    if (math::LengthSquared(anchorBody) > 1.0)
+                    {
+                        const auto up = math::Normalize(anchorBody);
+                        const auto helper = std::abs(up.y) < 0.99
+                            ? math::Double3{0.0, 1.0, 0.0}
+                            : math::Double3{1.0, 0.0, 0.0};
+                        const auto east = math::Normalize(math::Cross(helper, up));
+                        const auto north = math::Cross(up, east);
+                        footprintDirections.reserve(17U * 17U);
+                        for (u32 y = 0; y < 17U; ++y)
+                            for (u32 x = 0; x < 17U; ++x)
+                            {
+                                const auto point = anchorBody +
+                                    east * ((static_cast<f64>(x) - 8.0) * 12.0) +
+                                    north * ((static_cast<f64>(y) - 8.0) * 12.0);
+                                footprintDirections.push_back(math::Normalize(point));
+                            }
+                    }
+                    const auto physicalBatch =
+                        session.TerrainPhysicalPages().CaptureHeightPages(
+                            terrainRuntime->planet.id,
+                            terrainRuntime->physicalPageLevel,
+                            footprintDirections);
+                    const u64 sourceRevision = terrain::StableCombine64(
+                        patchSource.Revision(), physicalBatch.revisionFingerprint);
                     const f64 moved = math::Length(
                         anchor - meshPresentation.terrainPatchAnchor);
                     if (meshPresentation.terrainPatch == nullptr ||
@@ -1501,12 +1528,6 @@ StudioViewportRenderer::ComposeBase(
                             sourceRevision ||
                         moved > 2.0)
                     {
-                        constexpr u32 kCount = 193U;
-                        constexpr f64 kCell = 1.0;
-                        const auto bodyFromFrame =
-                            math::Inverse(meshPresentation.targetFromBody);
-                        const math::Double3 anchorBody =
-                            math::TransformPoint(bodyFromFrame, anchor);
                         const f64 anchorRadius = math::Length(anchorBody);
                         if (anchorRadius > 1.0)
                         {
@@ -1581,11 +1602,7 @@ StudioViewportRenderer::ComposeBase(
                                             terrainRuntime->planet.id,
                                         .radialOffsetMeters = 0.0});
                                     const auto publishedHeight =
-                                        session.TerrainPhysicalPages().
-                                            SamplePublishedSurfaceHeight(
-                                                terrainRuntime->planet.id,
-                                                direction,
-                                                terrainRuntime->physicalPageLevel);
+                                        physicalBatch.Sample(direction);
                                     const f64 elevation =
                                         publishedHeight.has_value()
                                         ? *publishedHeight
