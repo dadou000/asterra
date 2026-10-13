@@ -566,6 +566,12 @@ BuildPhysicalRenderPages(
             }
         }
 
+        // Never publish an obsolete upload after a newer physical revision.
+        const auto latestStatus = session.TerrainPhysicalPages().PageStatus(address);
+        if (!latestStatus ||
+            latestStatus->revisionFingerprint != snapshot->revisionFingerprint)
+            continue;
+
         if ((cached->products &
              physicalProduct) == 0U ||
             cached->physicalSurface ==
