@@ -3172,6 +3172,39 @@ void StudioTerrainPhysicalPageService::StageCorridorConstruction(
     }
 }
 
+std::optional<f64>
+StudioTerrainPhysicalPageService::SamplePublishedSurfaceHeight(
+    const world::PlanetId planet,
+    const math::Double3& unitDirection,
+    const u8 pageLevel) const noexcept
+{
+    if (!planet || pageLevel > 24U ||
+        !std::isfinite(unitDirection.x) ||
+        !std::isfinite(unitDirection.y) ||
+        !std::isfinite(unitDirection.z) ||
+        math::LengthSquared(unitDirection) < 0.5)
+        return std::nullopt;
+    const auto coordinate = world::UnitDirectionToCube(
+        math::Normalize(unitDirection));
+    const terrain::PhysicalTerrainPageAddress address{
+        .planet = planet,
+        .tile = world::TileForDirection(unitDirection, pageLevel)
+    };
+    const auto snapshot = Find(address);
+    if (!snapshot || !snapshot->material)
+        return std::nullopt;
+    const auto bounds = world::TileBounds(address.tile);
+    const f64 du = bounds.maximumUv.x - bounds.minimumUv.x;
+    const f64 dv = bounds.maximumUv.y - bounds.minimumUv.y;
+    if (du <= 0.0 || dv <= 0.0)
+        return std::nullopt;
+    const f64 u = std::clamp(
+        (coordinate.uv.x - bounds.minimumUv.x) / du, 0.0, 1.0);
+    const f64 v = std::clamp(
+        (coordinate.uv.y - bounds.minimumUv.y) / dv, 0.0, 1.0);
+    return snapshot->SampleSurfaceHeight(u, v);
+}
+
 std::optional<f64> StudioTerrainPhysicalPageSnapshot::SampleSurfaceHeight(
     const f64 u, const f64 v) const noexcept
 {
