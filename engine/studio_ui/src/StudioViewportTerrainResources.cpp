@@ -286,6 +286,8 @@ BuildPhysicalRenderPages(
     constexpr u64 kUploadByteBudget = 512U * 1024U;
     u64 attemptedUploadBytes = 0U;
 
+    result.pages.reserve(addresses.size());
+
     auto& cache =
         services->Cache();
 
