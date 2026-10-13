@@ -298,6 +298,13 @@ struct SharedBodyInputs
         return current;
     }
 
+    [[nodiscard]] std::shared_ptr<const BodyBuildInputs>
+    Latest() const
+    {
+        std::scoped_lock lock(mutex);
+        return pending ? pending : current;
+    }
+
     void Store(
         std::shared_ptr<
             const BodyBuildInputs> value)
@@ -2951,7 +2958,7 @@ void StudioTerrainPhysicalPageService::Sync(
                  found->second->shared->Capture()->seasonalRainfallBin !=
                      inputs->seasonalRainfallBin)
         {
-            const auto previousInputs = found->second->shared->Capture();
+            const auto previousInputs = found->second->shared->Latest();
             // Recomposition must not erase an independently published
             // infrastructure snapshot. The terrain source may have changed;
             // publication will refresh the overlay against the new source.
@@ -3124,7 +3131,7 @@ void StudioTerrainPhysicalPageService::StageCorridorConstruction(
         throw std::invalid_argument(
             "Construction target has no physical terrain runtime.");
     auto& runtime = *found->second;
-    const auto current = runtime.shared->Capture();
+    const auto current = runtime.shared->Latest();
     if (!current || !current->source)
         throw std::logic_error("Construction target has no terrain source.");
     for (const auto& address : affectedPages)
