@@ -336,6 +336,39 @@ void StudioSession::QueueTerrainInvalidation(
     }
 }
 
+std::size_t StudioSession::QueueInfrastructureTerrainPages(
+    const std::span<const terrain::PhysicalTerrainPageAddress> pages,
+    const std::size_t maximumPages)
+{
+    if (pages.size() > maximumPages || maximumPages == 0U)
+        throw std::invalid_argument(
+            "Infrastructure page invalidation exceeds bounded budget.");
+    // Validate all inputs first so invalid requests cannot partially enqueue.
+    for (const auto& page : pages)
+    {
+        if (!page.planet || page.tile.level > 24U ||
+            page.tile.x >= (1U << page.tile.level) ||
+            page.tile.y >= (1U << page.tile.level))
+            throw std::invalid_argument(
+                "Infrastructure physical page address is invalid.");
+    }
+    const auto initial = pendingTerrainInvalidations_.size();
+    for (const auto& page : pages)
+    {
+        QueueTerrainInvalidation({
+            .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            .scope = {
+                .planet = page.planet,
+                .global = false,
+                .center = page.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+    }
+    return pendingTerrainInvalidations_.size() - initial;
+}
+
 void StudioSession::QueueTerrainInvalidations(
     const std::span<
         const terrain_dependency::TerrainInvalidationRequest>
