@@ -582,7 +582,8 @@ StudioTickResult StudioSession::Tick(
                     {
                         const auto edge = pathNetwork_.Service().FindEdge(child.id);
                         if (edge && !edge->infrastructureCatalogId.empty() &&
-                            pathProducts_.Find(edge->id) == nullptr)
+                            pathProducts_.Find(edge->id) == nullptr &&
+                            !pathProducts_.IsDirty(edge->id))
                             pathProducts_.MarkDirty(edge->id);
                     }
                     else if (child.type != paths::kPathNodeType)
