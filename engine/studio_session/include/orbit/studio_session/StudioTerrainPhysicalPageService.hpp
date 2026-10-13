@@ -107,6 +107,14 @@ public:
     void SetPaused(bool paused) noexcept;
     [[nodiscard]] bool Paused() const noexcept;
 
+    // Query the final material-column height of a published, ready page.
+    // Returns no value for unloaded/unfinished pages; rendering can fall
+    // back to its analytic source without blocking physical workers.
+    [[nodiscard]] std::optional<f64> SamplePublishedSurfaceHeight(
+        world::PlanetId planet,
+        const math::Double3& unitDirection,
+        u8 pageLevel) const noexcept;
+
     [[nodiscard]] std::shared_ptr<
         const StudioTerrainPhysicalPageSnapshot>
     Find(
