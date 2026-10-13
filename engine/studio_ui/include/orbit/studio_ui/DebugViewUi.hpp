@@ -2,6 +2,7 @@
 
 #include <orbit/editor_ui/EditorUi.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
+#include <orbit/studio_session/StudioSession.hpp>
 
 namespace orbit::studio_ui
 {
@@ -13,7 +14,8 @@ namespace orbit::studio_ui
 class DebugViewUi
 {
 public:
-    explicit DebugViewUi(StudioRenderViewSet& views) noexcept;
+    explicit DebugViewUi(StudioRenderViewSet& views,
+        studio_session::StudioSession& session) noexcept;
 
     void Register(editor_ui::EditorUi& ui);
 
@@ -29,5 +31,7 @@ private:
         const StudioRenderViewInfo& info);
 
     StudioRenderViewSet* views_{nullptr};
+    studio_session::StudioSession* session_{nullptr};
+    std::string constructionResult_{"Not run"};
 };
 } // namespace orbit::studio_ui
