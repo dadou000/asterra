@@ -608,16 +608,31 @@ private:
         startup.wShowWindow = SW_HIDE;
         startup.hStdOutput = logHandle;
         startup.hStdError = logHandle;
-        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        // OrbitStudio is a GUI process with no guaranteed STD_INPUT_HANDLE.
+        // Supply a non-interactive input handle so CreateProcessW cannot
+        // inherit an invalid console descriptor or wait for Git prompts.
+        HANDLE emptyInput = CreateFileW(L"NUL", GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (emptyInput == INVALID_HANDLE_VALUE)
+        {
+            CloseHandle(logHandle);
+            return {.output = "Cannot open non-interactive Git input."};
+        }
+        (void)SetHandleInformation(emptyInput, HANDLE_FLAG_INHERIT,
+            HANDLE_FLAG_INHERIT);
+        startup.hStdInput = emptyInput;
         std::wstring command = std::wstring(L"git.exe ") + arguments;
         PROCESS_INFORMATION process{};
         const BOOL launched = CreateProcessW(nullptr, command.data(),
             nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
             config_.sourceRoot.c_str(), &startup, &process);
+        const DWORD launchError = launched == FALSE ? GetLastError() : 0U;
+        CloseHandle(emptyInput);
         CloseHandle(logHandle);
         if (launched == FALSE)
             return {.output = std::format(
-                "Git could not start (Windows error {}).", GetLastError())};
+                "Git could not start (Windows error {}).", launchError)};
         (void)WaitForSingleObject(process.hProcess, INFINITE);
         DWORD exitCode = 1U;
         (void)GetExitCodeProcess(process.hProcess, &exitCode);
