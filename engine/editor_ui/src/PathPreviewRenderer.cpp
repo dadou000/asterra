@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 #include <vector>
 
 namespace orbit::editor_ui
@@ -408,8 +409,13 @@ void PathPreviewRenderer::Draw(
             PathDerivedProduct* const>
         products,
     const bool drawDebugLines,
-    rhi::Texture* const depth)
+    rhi::Texture* const depth,
+    const std::span<rhi::Texture* const> surfaceAttachments)
 {
+    if (!surfaceAttachments.empty() && surfaceAttachments.size() != 3U)
+        throw std::invalid_argument("Corridor MRT requires exactly three surface attachments.");
+    if (!surfaceAttachments.empty() && depth == nullptr)
+        throw std::invalid_argument("Corridor MRT requires a depth attachment.");
     if (width == 0U ||
         height == 0U ||
         !camera.frame ||
