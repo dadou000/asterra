@@ -265,7 +265,7 @@ BuildPhysicalRenderPages(
 
     // Sparse construction pages are already tracked by the async page owner.
     // Append only authored footprints; do not fill the intervening terrain.
-    const auto observerDirection = math::Normalize(runtime.observer.meters);
+    const auto observerDirection = observerUp;
     const auto constructionPages =
         session.ConstructionPhysicalPages(runtime.body, 8U,
             &observerDirection, runtime.viewportId);
