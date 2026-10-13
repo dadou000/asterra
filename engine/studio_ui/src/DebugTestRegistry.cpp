@@ -15,8 +15,12 @@ bool DebugTestRegistry::Register(DebugTestDescriptor descriptor)
 
 bool DebugTestRegistry::Unregister(const std::string_view id)
 {
-    results_.erase(id);
-    return tests_.erase(id) > 0U;
+    const auto result = results_.find(id);
+    if (result != results_.end()) results_.erase(result);
+    const auto test = tests_.find(id);
+    if (test == tests_.end()) return false;
+    tests_.erase(test);
+    return true;
 }
 
 std::vector<DebugTestDescriptor> DebugTestRegistry::Catalog() const
