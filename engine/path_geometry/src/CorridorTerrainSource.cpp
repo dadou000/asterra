@@ -30,6 +30,26 @@ CorridorTerrainSource::CorridorTerrainSource(
     }
 }
 
+CorridorTerrainSource::CorridorTerrainSource(
+    std::shared_ptr<const terrain::TerrainSource> source,
+    const world::PlanetDefinition planet,
+    std::vector<CorridorTerrainLayer> layers,
+    const u64 revision)
+    : CorridorTerrainSource(*source, planet, std::move(layers), revision)
+{
+    ownedSource_ = std::move(source);
+    source_ = ownedSource_.get();
+}
+
+std::shared_ptr<const CorridorTerrainSource>
+CorridorTerrainSource::Rebind(
+    std::shared_ptr<const terrain::TerrainSource> source) const
+{
+    if (!source) throw std::invalid_argument("Cannot rebind null terrain source.");
+    return std::make_shared<CorridorTerrainSource>(
+        std::move(source), planet_, layers_, authoringRevision_);
+}
+
 terrain::TerrainSample CorridorTerrainSource::Sample(
     const terrain::TerrainQuery& query) const noexcept
 {
