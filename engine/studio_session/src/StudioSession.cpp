@@ -560,7 +560,9 @@ StudioSession::DispatchRpc(
     std::vector<terrain::PhysicalTerrainPageAddress> rpcConstructionPages;
     for (const auto& binding : rpcTerrainBindings)
     {
-        const auto pages = ConstructionPhysicalPages(binding.body);
+        const auto direction = math::Normalize(binding.observer.meters);
+        const auto pages = ConstructionPhysicalPages(binding.body, 8U,
+            &direction);
         rpcConstructionPages.insert(rpcConstructionPages.end(),
             pages.begin(), pages.end());
     }
@@ -764,7 +766,9 @@ StudioTickResult StudioSession::Tick(
     std::vector<terrain::PhysicalTerrainPageAddress> constructionPages;
     for (const auto& binding : terrainBindings)
     {
-        const auto pages = ConstructionPhysicalPages(binding.body);
+        const auto direction = math::Normalize(binding.observer.meters);
+        const auto pages = ConstructionPhysicalPages(binding.body, 8U,
+            &direction);
         constructionPages.insert(constructionPages.end(),
             pages.begin(), pages.end());
     }
