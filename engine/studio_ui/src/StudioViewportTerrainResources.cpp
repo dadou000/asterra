@@ -238,6 +238,16 @@ BuildPhysicalRenderPages(
             .planet = runtime.observerPhysicalPage.planet,
             .tile = tile
         });
+    // Sparse construction pages are already tracked by the async page owner.
+    // Append only authored footprints; do not fill the intervening terrain.
+    const auto constructionPages =
+        session.ConstructionPhysicalPages(runtime.body);
+    for (const auto& address : constructionPages)
+        if (address.planet == runtime.planet.id &&
+            address.tile.level == runtime.physicalPageLevel &&
+            std::find(addresses.begin(), addresses.end(), address) ==
+                addresses.end())
+            addresses.push_back(address);
 
     auto& cache =
         services->Cache();
