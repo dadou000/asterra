@@ -1,6 +1,8 @@
 #include <orbit/celestial_atmosphere/Atmosphere.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <initializer_list>
 
 int main()
 {
@@ -19,6 +21,55 @@ int main()
     };
 
     AtmosphereParameters earth;
+
+    // The GPU atmosphere sampling schedule must vary continuously as the
+    // closest approach moves through the ray interval. The original
+    // 2.5%-threshold mapping jumped by ~0.1 of an orbital ray length,
+    // creating concentric dawn/terminator rings in neighboring pixels.
+    const auto marchBoundary = [](const double u, const double c)
+    {
+        const double left = std::sqrt(c);
+        const double right = std::sqrt(1.0 - c);
+        const double pivot = left / std::max(left + right, 1.0e-6);
+        if (u <= pivot)
+        {
+            const double q = std::clamp(
+                (pivot - u) / std::max(pivot, 1.0e-6), 0.0, 1.0);
+            return c * (1.0 - q * q * q);
+        }
+        const double q = std::clamp(
+            (u - pivot) / std::max(1.0 - pivot, 1.0e-6), 0.0, 1.0);
+        return c + (1.0 - c) * q * q * q;
+    };
+    for (const double c : {0.0, 0.001, 0.025, 0.25, 0.5,
+                           0.75, 0.975, 0.999, 1.0})
+    {
+        double previous = marchBoundary(0.0, c);
+        if (std::abs(previous) > 1.0e-12)
+            return 9;
+        for (int k = 1; k <= 40; ++k)
+        {
+            const double next = marchBoundary(double(k) / 40.0, c);
+            if (!(next >= previous && next <= 1.0 + 1.0e-12))
+                return 10;
+            previous = next;
+        }
+        if (std::abs(previous - 1.0) > 1.0e-12)
+            return 11;
+    }
+    // The values immediately either side of the old arbitrary cutoff
+    // must now differ only by the movement of the physical ray.
+    for (const double c : {0.025, 0.975})
+    {
+        for (int k = 0; k <= 40; ++k)
+        {
+            const double u = double(k) / 40.0;
+            const double a = marchBoundary(u, c - 1.0e-6);
+            const double b = marchBoundary(u, c + 1.0e-6);
+            if (std::abs(b - a) > 1.0e-3)
+                return 12;
+        }
+    }
 
     const auto seaLevel =
         SampleAtmosphere(

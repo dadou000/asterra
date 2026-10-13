@@ -153,26 +153,23 @@ float MiePhase(float c, float gAnisotropy)
 // in one or two steps; its midpoint crosses the terminator in discrete
 // arcs as the camera changes altitude. Cluster steps near the closest
 // approach to the planet (or near the surface intersection when clipped).
-float AtmosphereMarchBoundary(float u, float startT, float endT, float closestT)
+float AtmosphereMarchBoundary(float u, float startT, float endT,
+    float closestT, float centerIndex)
 {
-    const float span = max(endT - startT, 1.0e-4);
-    const float center = clamp(closestT, startT, endT);
-    if (center <= startT + 0.025 * span)
+    // Invert a two-sided cubic density centred on the ray's nearest
+    // approach. The split/index continuously varies from 0 to 1 as the
+    // closest approach crosses either end of the segment. There must be
+    // NO hard branch at a fixed percentage of the segment: the old 2.5%
+    // cutoff jumped an integration boundary by ~10% of an orbital ray.
+    if (u <= centerIndex)
     {
-        return startT + span * u * u * u;
+        const float q = saturate((centerIndex - u) /
+            max(centerIndex, 1.0e-6));
+        return startT + (closestT - startT) * (1.0 - q * q * q);
     }
-    if (center >= endT - 0.025 * span)
-    {
-        const float q = 1.0 - u;
-        return endT - span * q * q * q;
-    }
-    if (u <= 0.5)
-    {
-        const float q = 1.0 - 2.0 * u;
-        return startT + (center - startT) * (1.0 - q * q * q);
-    }
-    const float q = 2.0 * u - 1.0;
-    return center + (endT - center) * q * q * q;
+    const float q = saturate((u - centerIndex) /
+        max(1.0 - centerIndex, 1.0e-6));
+    return closestT + (endT - closestT) * q * q * q;
 }
 
 float4 main(VSOutput input) : SV_Target0
@@ -242,6 +239,12 @@ float4 main(VSOutput input) : SV_Target0
     const uint steps =
         clamp(uint(ceil((tEnd - tStart) / 300.0)) + 3u, 4u, kSteps);
     const float closestT = clamp(-dot(origin, direction), tStart, tEnd);
+    const float closestFraction = saturate(
+        (closestT - tStart) / max(tEnd - tStart, 1.0e-4));
+    const float leftWeight = sqrt(closestFraction);
+    const float rightWeight = sqrt(1.0 - closestFraction);
+    const float centerIndex = leftWeight /
+        max(leftWeight + rightWeight, 1.0e-6);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
     float visibilityNear = 1.0;
@@ -259,9 +262,9 @@ float4 main(VSOutput input) : SV_Target0
     for (uint i = 0u; i < steps; ++i)
     {
         const float edgeA = AtmosphereMarchBoundary(
-            float(i) / float(steps), tStart, tEnd, closestT);
+            float(i) / float(steps), tStart, tEnd, closestT, centerIndex);
         const float edgeB = AtmosphereMarchBoundary(
-            float(i + 1u) / float(steps), tStart, tEnd, closestT);
+            float(i + 1u) / float(steps), tStart, tEnd, closestT, centerIndex);
         const float stepLength = max(edgeB - edgeA, 0.0);
         const float t = 0.5 * (edgeA + edgeB);
         const float3 position = origin + direction * t;
@@ -271,9 +274,9 @@ float4 main(VSOutput input) : SV_Target0
         {
             const uint endIndex = min(i + kShadowInterval, steps) - 1u;
             const float endA = AtmosphereMarchBoundary(
-                float(endIndex) / float(steps), tStart, tEnd, closestT);
+                float(endIndex) / float(steps), tStart, tEnd, closestT, centerIndex);
             const float endB = AtmosphereMarchBoundary(
-                float(endIndex + 1u) / float(steps), tStart, tEnd, closestT);
+                float(endIndex + 1u) / float(steps), tStart, tEnd, closestT, centerIndex);
             const float endT = 0.5 * (endA + endB);
             visibilityNear = TerrainSunVisibility(g_terrainSunShadow, position,
                 sun, bottom, g.sunOcclusion.x);
