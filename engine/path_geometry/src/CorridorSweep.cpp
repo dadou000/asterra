@@ -6,6 +6,61 @@
 
 namespace orbit::path_geometry
 {
+CorridorTerrainBlend BlendCorridorTerrainHeight(
+    const f64 sourceHeightMeters,
+    const CorridorTerrainSample& sample)
+{
+    if (!std::isfinite(sourceHeightMeters) ||
+        !std::isfinite(sample.targetHeightMeters) ||
+        !std::isfinite(sample.influence))
+        throw std::invalid_argument("Terrain composition inputs must be finite.");
+    const f64 influence = std::clamp(sample.influence, 0.0, 1.0);
+    const f64 height = sourceHeightMeters +
+        (sample.targetHeightMeters - sourceHeightMeters) * influence;
+    return {
+        .heightMeters = height,
+        .cutMeters = std::max(0.0, sourceHeightMeters - height),
+        .fillMeters = std::max(0.0, height - sourceHeightMeters),
+        .influence = influence
+    };
+}
+
+std::optional<CorridorTerrainEnvelope> CorridorFootprintEnvelope(
+    const std::vector<PathStation>& stations,
+    const CorridorTerrainFootprint& footprint)
+{
+    if (stations.size() < 2 || !std::isfinite(footprint.halfWidthMeters) ||
+        !std::isfinite(footprint.shoulderMeters) ||
+        !std::isfinite(footprint.blendMeters) ||
+        footprint.halfWidthMeters <= 0.0 || footprint.shoulderMeters < 0.0 ||
+        footprint.blendMeters < 0.0)
+        return std::nullopt;
+    const f64 radius = footprint.halfWidthMeters +
+        footprint.shoulderMeters + footprint.blendMeters;
+    CorridorTerrainEnvelope bounds{
+        .minimum = {std::numeric_limits<f64>::infinity(),
+                    std::numeric_limits<f64>::infinity(),
+                    std::numeric_limits<f64>::infinity()},
+        .maximum = {-std::numeric_limits<f64>::infinity(),
+                    -std::numeric_limits<f64>::infinity(),
+                    -std::numeric_limits<f64>::infinity()}
+    };
+    for (const auto& station : stations)
+    {
+        if (!std::isfinite(station.position.x) ||
+            !std::isfinite(station.position.y) ||
+            !std::isfinite(station.position.z))
+            return std::nullopt;
+        bounds.minimum.x = std::min(bounds.minimum.x, station.position.x-radius);
+        bounds.minimum.y = std::min(bounds.minimum.y, station.position.y-radius);
+        bounds.minimum.z = std::min(bounds.minimum.z, station.position.z-radius);
+        bounds.maximum.x = std::max(bounds.maximum.x, station.position.x+radius);
+        bounds.maximum.y = std::max(bounds.maximum.y, station.position.y+radius);
+        bounds.maximum.z = std::max(bounds.maximum.z, station.position.z+radius);
+    }
+    return bounds;
+}
+
 std::optional<CorridorTerrainSample> SampleCorridorTerrain(
     const std::vector<PathStation>& stations,
     const math::Double3& point,
