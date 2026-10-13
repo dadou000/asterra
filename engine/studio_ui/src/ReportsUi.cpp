@@ -298,9 +298,25 @@ bool ReportsController::CapturePerformanceIssue(const u64 id)
             studio_reports::ReportScope::Performance)) == 0U)
         throw std::invalid_argument(
             "Mark Performance issue on this report before capturing.");
-    // Preserve the report's original condition metadata. Attach a fresh
-    // viewport screenshot to its existing starting condition.
-    return CaptureScreenshot(id, false);
+    if (performanceCapture_)
+        throw std::logic_error("A performance capture is already pending.");
+    // Require an actual recorded condition. Never substitute the current
+    // viewport for missing report state.
+    static_cast<void>(RequireCondition(id, false));
+    const auto restored = Restore(id, false);
+    if (restored.pose != "restored" && restored.pose != "pending")
+        throw std::runtime_error(
+            "Cannot capture report condition: " + restored.message);
+    if (!restored.timeRestored)
+        throw std::runtime_error(
+            "Cannot capture report condition: simulation time was not restored.");
+    performanceCapture_ = PendingPerformanceCapture{
+        .reportId = id,
+        .settleFrames = 8U,
+        .waitingForPose = restored.pose == "pending"
+    };
+    screenshotError_.clear();
+    return false; // asynchronous: screenshot is created by Tick().
 }
 
 void ReportsController::SetOpenHook(OpenHook hook)
@@ -495,10 +511,38 @@ ReportsController::RestoreResult ReportsController::Restore(
 
 void ReportsController::Tick()
 {
-    if (!pending_.has_value())
+    // The existing camera restore state machine must finish before capture.
+    if (!pending_.has_value() && performanceCapture_)
     {
+        if (performanceCapture_->waitingForPose &&
+            restoreStatus_ != "Camera restored.")
+        {
+            screenshotError_ = "Report camera restore failed: " + restoreStatus_;
+            performanceCapture_.reset();
+            return;
+        }
+        if (performanceCapture_->settleFrames > 0U)
+        {
+            --performanceCapture_->settleFrames;
+            return;
+        }
+        const u64 id = performanceCapture_->reportId;
+        performanceCapture_.reset();
+        const auto* report = store_->Find(id);
+        if (!report || (report->scopes & studio_reports::ScopeBit(
+                studio_reports::ReportScope::Performance)) == 0U)
+        {
+            screenshotError_ = "Report deleted or no longer marked as performance issue.";
+            return;
+        }
+        if (CaptureScreenshot(id, false))
+            restoreStatus_ = "Performance capture completed from recorded condition.";
+        else
+            restoreStatus_ = "Performance capture failed: " + screenshotError_;
         return;
     }
+    if (!pending_.has_value())
+        return;
 
     bool ready = false;
     try
@@ -536,6 +580,11 @@ void ReportsController::Tick()
         restored = false;
     }
     pending_.reset();
+    if (performanceCapture_ && !restored)
+    {
+        screenshotError_ = "Recorded camera pose could not be restored.";
+        performanceCapture_.reset();
+    }
     restoreStatus_ = restored
         ? "Camera restored."
         : "Camera could not be restored: the captured body did not become "
