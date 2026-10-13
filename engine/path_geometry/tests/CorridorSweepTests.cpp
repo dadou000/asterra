@@ -13,6 +13,19 @@ int main()
         {.stationMeters=20, .position={20,0,5}, .tangent={1,0,0}, .up={0,1,0}, .lateral={0,0,1}}
     };
     CorridorSweep road{{{{{-3.5,0},{0,0.07},{3.5,0}}}}, {0,0,0}};
+    // Road construction influence is bounded and reproducible; it does not
+    // modify the terrain source or depend on the sampling order.
+    const CorridorTerrainFootprint footprint{3.5, 1.0, 3.0};
+    const auto onCenter = SampleCorridorTerrain(stations, {5, 15, 0}, footprint);
+    CHECK(onCenter.has_value());
+    CHECK(onCenter->influence == 1.0);
+    CHECK(std::abs(onCenter->targetHeightMeters) < 1.e-9);
+    const auto shoulder = SampleCorridorTerrain(stations, {5, 0, 5.5}, footprint);
+    CHECK(shoulder.has_value());
+    CHECK(shoulder->influence > 0.0 && shoulder->influence < 1.0);
+    CHECK(!SampleCorridorTerrain(stations, {5, 0, 10}, footprint).has_value());
+    CHECK(!SampleCorridorTerrain(stations, {5, 0, 0}, {3.5, -1.0, 2.0}).has_value());
+    CHECK(onCenter == SampleCorridorTerrain(stations, {5, 15, 0}, footprint));
     const auto roadMesh=BuildCorridorMesh(stations,road);
     CHECK(roadMesh.vertices.size()==9);
     CHECK(roadMesh.indices.size()==24);
