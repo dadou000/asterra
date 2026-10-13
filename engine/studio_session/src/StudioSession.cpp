@@ -530,6 +530,7 @@ StudioTickResult StudioSession::Tick(
         pathRouting_.RefreshBinding();
     result.pathProductsInvalidated =
         pathProducts_.RefreshBinding();
+    static_cast<void>(pathProducts_.RefreshSemanticInvalidation());
     result.viewportTargetsChanged =
         viewports_.Refresh();
 
