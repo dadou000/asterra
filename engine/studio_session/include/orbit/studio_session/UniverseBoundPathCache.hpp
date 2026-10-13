@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace orbit::studio_session
@@ -56,6 +57,10 @@ public:
     [[nodiscard]] std::optional<u64>
     RouteGeneration(scene::ObjectId edge) const noexcept;
 
+    // Targeted semantic change notification: retains last-valid visual product
+    // while marking it ineligible for a revision-cache hit.
+    void MarkDirty(scene::ObjectId edge) noexcept;
+    [[nodiscard]] bool IsDirty(scene::ObjectId edge) const noexcept;
     [[nodiscard]] bool Erase(scene::ObjectId edge) noexcept;
     void Clear() noexcept;
 
@@ -78,6 +83,7 @@ private:
         routeGenerations_;
     std::unordered_map<scene::ObjectId, u64>
         corridorAuthoredSignatures_;
+    std::unordered_set<scene::ObjectId> dirtyCorridors_;
     u64 observedUniverseGeneration_{~u64{0}};
     u64 bindingGeneration_{0};
 };
