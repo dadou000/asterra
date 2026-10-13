@@ -112,6 +112,12 @@ int main()
         Check(cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
         Check(cache.Find(edge)->buildSignature != generatedSignature);
         Check(cache.Size() == 1U);
+        cache.MarkDirty(edge);
+        Check(cache.IsDirty(edge));
+        Check(cache.Find(edge) != nullptr); // keep previous version available
+        Check(cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
+        Check(!cache.IsDirty(edge));
+        Check(!cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
 
         bool foreignFrameRejected = false;
         try
