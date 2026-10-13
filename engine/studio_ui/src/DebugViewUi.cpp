@@ -53,15 +53,48 @@ void DebugViewUi::Register(editor_ui::EditorUi& ui)
         .dockOrder = 60,
         .minSize = {.width = 260.0F, .height = 160.0F},
         .draw =
-            [this](editor_ui::PanelContext& context)
+            [this, &ui](editor_ui::PanelContext& context)
             {
-                Draw(context);
+                Draw(ui, context);
             }});
 }
 
-void DebugViewUi::Draw(editor_ui::PanelContext& context)
+void DebugViewUi::Draw(
+    editor_ui::EditorUi& ui,
+    editor_ui::PanelContext& context)
 {
-    context.Heading("Debug View");
+    context.Heading("Debug / Test Center");
+    context.MutedText("One entry point for rendering, terrain, lighting, performance and validation tools.");
+    const auto open = [&](std::string_view title, std::string_view button) {
+        if (context.Button(button))
+        {
+            if (!ui.FocusPanelByTitle(title))
+                context.MutedText("This tool is not registered in the current workspace.");
+        }
+    };
+
+    context.Separator();
+    context.Heading("Terrain / Infrastructure");
+    open("Surface Authoring", "Terrain authoring##dbg-terrain");
+    context.SameLine();
+    open("Body Map / Debug View", "Terrain map##dbg-map");
+    context.MutedText("Road cut, railway grading, physical-page residency and displacement tests use the existing terrain tools. An automated validation experiment is not registered yet.");
+
+    context.Separator();
+    context.Heading("Lighting / Atmosphere");
+    open("Display Diagnostics", "Display and eye adaptation##dbg-display");
+    context.SameLine();
+    open("Shading", "Shading##dbg-shading");
+    open("Celestial", "Atmosphere and celestial##dbg-celestial");
+
+    context.Separator();
+    context.Heading("Performance / Reports");
+    open("Profiler", "Profiler##dbg-profiler");
+    context.SameLine();
+    open("Reports", "Reports##dbg-reports");
+
+    context.Separator();
+    context.Heading("Viewport GBuffer");
     context.MutedText(
         "Chooses which GBuffer channel each viewport renders. "
         "The same switch is available per-viewport in its own toolbar, "
