@@ -11,10 +11,12 @@ sources = [
   "engine/studio_ui/src/StudioViewportPanels.cpp",
   "engine/studio_ui/include/orbit/studio_ui/DebugViewUi.hpp",
   "engine/studio_ui/src/DebugViewUi.cpp",
+  "engine/studio_ui/include/orbit/studio_ui/DebugTestRegistry.hpp",
+  "engine/studio_ui/src/DebugTestRegistry.cpp",
   "apps/editor/src/StudioApplication.cpp",
   "engine/studio_session/include/orbit/studio_session/StudioTerrainPhysicalPageService.hpp"
 ]
-symbols = ["StudioWorkspaceMode", "StudioViewportPanels::DrawWorkspaceBand", "DebugViewUi", "StudioTerrainPhysicalPageSnapshot::SampleSurfaceHeight"]
+symbols = ["StudioWorkspaceMode", "StudioViewportPanels::DrawWorkspaceBand", "DebugViewUi", "DebugTestRegistry", "RegisterBuiltInDebugTests", "StudioTerrainPhysicalPageSnapshot::SampleSurfaceHeight"]
 invariants = [
   "The top-level Debug workspace and its registered Debug panel are the canonical user-facing location for engine diagnostics, tests and experiments.",
   "A test lives with the subsystem that owns the behavior; Debug presents and invokes it, not a second copy of the implementation.",
@@ -37,9 +39,15 @@ The Debug center groups existing tools into:
 
 Some destination panels are optional or registered only by certain Studio configurations; a missing panel is reported rather than treated as a successful operation.
 
+## Central debug test registry
+
+`DebugTestRegistry` is owned by the active `DebugViewUi` instance. Each descriptor supplies a unique stable ID, label, category and synchronous on-demand `run(StudioSession&)` callback. The registry returns one of **NOT RUN**, **PASS**, **FAIL**, **NOT READY**, remembers the last outcome, and isolates standard exceptions so the Debug panel can report failures without escaping the UI callback.
+
+The initial `terrain.physical_page_sanity` test is registered by `RegisterBuiltInDebugTests`, not implemented inside the drawing function. To add an experiment, register a descriptor with the registry (or a future plugin-facing registration adapter); do not append a hardcoded Run button to `DebugViewUi::Draw`. The current interface does not yet provide async execution, history, screenshot capture or RPC registration of individual tests.
+
 ## Construction Terrain Validation (first runnable check)
 
-In **Debug → Terrain / Infrastructure**, click **Run validation**. The check reads the primary viewport's current observer physical page from `StudioSession::TerrainRuntime()`; it does not construct a road or modify the world.
+In **Debug → Terrain / Infrastructure**, click **Run** next to **Terrain / Construction terrain / physical-page sanity**. The check reads the primary viewport's current observer physical page from `StudioSession::TerrainRuntime()`; it does not construct a road or modify the world.
 
 Expected outcomes:
 - **NOT READY:** no primary terrain viewport or no currently published material page/status.
