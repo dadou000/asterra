@@ -148,6 +148,33 @@ float MiePhase(float c, float gAnisotropy)
     return (1.0 - gg) / (4.0 * kPi * pow(d, 1.5));
 }
 
+// Monotonic density-aware integration boundaries. A fixed 40-step linear
+// march at orbital distance can stride across the entire dense atmosphere
+// in one or two steps; its midpoint crosses the terminator in discrete
+// arcs as the camera changes altitude. Cluster steps near the closest
+// approach to the planet (or near the surface intersection when clipped).
+float AtmosphereMarchBoundary(float u, float startT, float endT, float closestT)
+{
+    const float span = max(endT - startT, 1.0e-4);
+    const float center = clamp(closestT, startT, endT);
+    if (center <= startT + 0.025 * span)
+    {
+        return startT + span * u * u * u;
+    }
+    if (center >= endT - 0.025 * span)
+    {
+        const float q = 1.0 - u;
+        return endT - span * q * q * q;
+    }
+    if (u <= 0.5)
+    {
+        const float q = 1.0 - 2.0 * u;
+        return startT + (center - startT) * (1.0 - q * q * q);
+    }
+    const float q = 2.0 * u - 1.0;
+    return center + (endT - center) * q * q * q;
+}
+
 float4 main(VSOutput input) : SV_Target0
 {
     const int2 pixel = int2(input.position.xy);
@@ -214,7 +241,7 @@ float4 main(VSOutput input) : SV_Target0
     // full count.
     const uint steps =
         clamp(uint(ceil((tEnd - tStart) / 300.0)) + 3u, 4u, kSteps);
-    const float step = (tEnd - tStart) / float(steps);
+    const float closestT = clamp(-dot(origin, direction), tStart, tEnd);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
     float visibilityNear = 1.0;
@@ -231,14 +258,23 @@ float4 main(VSOutput input) : SV_Target0
     [loop]
     for (uint i = 0u; i < steps; ++i)
     {
-        const float t = tStart + (float(i) + 0.5) * step;
+        const float edgeA = AtmosphereMarchBoundary(
+            float(i) / float(steps), tStart, tEnd, closestT);
+        const float edgeB = AtmosphereMarchBoundary(
+            float(i + 1u) / float(steps), tStart, tEnd, closestT);
+        const float stepLength = max(edgeB - edgeA, 0.0);
+        const float t = 0.5 * (edgeA + edgeB);
         const float3 position = origin + direction * t;
         // Sparse view-ray knots bound terrain queries independently of
         // simulation-time delta. Body-fixed geometry is reused across timewarp.
         if (terrainFieldReady && (i % kShadowInterval) == 0u)
         {
             const uint endIndex = min(i + kShadowInterval, steps) - 1u;
-            const float endT = tStart + (float(endIndex) + 0.5) * step;
+            const float endA = AtmosphereMarchBoundary(
+                float(endIndex) / float(steps), tStart, tEnd, closestT);
+            const float endB = AtmosphereMarchBoundary(
+                float(endIndex + 1u) / float(steps), tStart, tEnd, closestT);
+            const float endT = 0.5 * (endA + endB);
             visibilityNear = TerrainSunVisibility(g_terrainSunShadow, position,
                 sun, bottom, g.sunOcclusion.x);
             visibilityFar = TerrainSunVisibility(g_terrainSunShadow,
@@ -280,7 +316,7 @@ float4 main(VSOutput input) : SV_Target0
             (sunTransmittance * visibility * (rayleigh * rayleighPhase + mie * miePhase) +
              multiResponse * (rayleigh + mie) / (4.0 * kPi));
 
-        const float3 stepTransmittance = exp(-extinction * step);
+        const float3 stepTransmittance = exp(-extinction * stepLength);
         // Integrate the source exactly across the step for a constant medium.
         const float3 integral =
             (1.0 - stepTransmittance) / max(extinction, 1.0e-12);
