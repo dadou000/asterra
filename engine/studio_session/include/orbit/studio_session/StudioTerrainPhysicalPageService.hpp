@@ -14,6 +14,8 @@
 #include <orbit/time/SimulationTime.hpp>
 
 #include <memory>
+#include <map>
+#include <tuple>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -115,8 +117,13 @@ public:
         world::PlanetId planet{};
         u8 level{0};
         u64 revisionFingerprint{0};
-        std::vector<std::shared_ptr<const StudioTerrainPhysicalPageSnapshot>>
-            pages;
+        std::map<world::PlanetTileId,
+            std::shared_ptr<const StudioTerrainPhysicalPageSnapshot>,
+            bool(*)(const world::PlanetTileId&, const world::PlanetTileId&)>
+            pages{[](const auto& a, const auto& b) {
+                return std::tuple{static_cast<u8>(a.face),a.level,a.x,a.y} <
+                       std::tuple{static_cast<u8>(b.face),b.level,b.x,b.y};
+            }};
         [[nodiscard]] std::optional<f64> Sample(
             const math::Double3& direction) const noexcept;
     };
