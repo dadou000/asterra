@@ -15,11 +15,19 @@ struct CorridorBand
 {
     std::vector<CorridorProfilePoint> profile;
 };
+// Every key has the same band/vertex topology. Interpolate geometry only;
+// topological changes (adding/removing lanes or rails) require junction geometry.
+struct CorridorSectionKey
+{
+    f64 stationMeters{0};
+    std::vector<CorridorBand> bands;
+};
 struct CorridorSweep
 {
     std::vector<CorridorBand> bands;
     // Optional per-station banking angle in radians; empty means no bank.
     std::vector<f64> bankRadians;
+    std::vector<CorridorSectionKey> sectionKeys;
 };
 struct CorridorRefinementOptions
 {
