@@ -14,7 +14,8 @@ enum class StudioWorkspaceMode : u8
     Simulation,
     Shading,
     Planning,
-    Plugins
+    Plugins,
+    Debug
 };
 
 enum class StudioBrowserMode : u8
@@ -84,7 +85,9 @@ inline constexpr WorldAssetsBrowserContract kWorldAssetsBrowserContract{
         return "Viewport";
     case StudioWorkspaceMode::Shading: return "Shading";
     case StudioWorkspaceMode::Planning: return "Planning";
+    case StudioWorkspaceMode::Debug: return "Debug";
     case StudioWorkspaceMode::Plugins: return "Plugins";
+    case StudioWorkspaceMode::Debug: return "Debug";
     }
     return "Viewport";
 }
