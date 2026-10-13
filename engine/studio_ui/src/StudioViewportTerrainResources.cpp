@@ -246,7 +246,13 @@ BuildPhysicalRenderPages(
         std::iter_swap(addresses.begin(), centerIt);
     // M2.47: Order the remaining local pages by angular distance to the
     // observer, so a constrained frame budget fills nearby pages first.
-    const auto observerUp = math::Normalize(runtime.observer.meters);
+    const auto observerUp =
+        std::isfinite(runtime.observer.meters.x) &&
+        std::isfinite(runtime.observer.meters.y) &&
+        std::isfinite(runtime.observer.meters.z) &&
+        math::LengthSquared(runtime.observer.meters) > 0.5
+            ? math::Normalize(runtime.observer.meters)
+            : math::Double3{1.0, 0.0, 0.0};
     if (addresses.size() > 1U)
         std::stable_sort(addresses.begin() + 1, addresses.end(),
             [&](const auto& a, const auto& b) {
