@@ -2962,10 +2962,17 @@ void StudioTerrainPhysicalPageService::Sync(
             // Recomposition must not erase an independently published
             // infrastructure snapshot. The terrain source may have changed;
             // publication will refresh the overlay against the new source.
-            if (previousInputs)
-                inputs->corridorOverlay = previousInputs->corridorOverlay
-                    ? previousInputs->corridorOverlay->Rebind(inputs->source)
-                    : nullptr;
+            if (previousInputs && previousInputs->corridorOverlay)
+            {
+                // CaptureInputs publishes immutable build inputs. Preserve the
+                // independently authored corridor overlay by rebinding it on
+                // a fresh copy, never by mutating the captured snapshot.
+                // Existing worker jobs retain their original version.
+                auto rebound = std::make_shared<BodyBuildInputs>(*inputs);
+                rebound->corridorOverlay =
+                    previousInputs->corridorOverlay->Rebind(rebound->source);
+                inputs = std::move(rebound);
+            }
             const bool riverAuthoringChanged = previousInputs != nullptr &&
                 previousInputs->semanticRevision != inputs->semanticRevision;
             const bool seasonalRainfallChanged = previousInputs != nullptr &&
