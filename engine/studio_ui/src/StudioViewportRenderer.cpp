@@ -1494,35 +1494,60 @@ StudioViewportRenderer::ComposeBase(
                         math::Inverse(meshPresentation.targetFromBody);
                     const math::Double3 anchorBody =
                         math::TransformPoint(bodyFromFrame, anchor);
-                    std::vector<math::Double3> footprintDirections;
-                    if (math::LengthSquared(anchorBody) > 1.0)
-                    {
-                        const auto up = math::Normalize(anchorBody);
-                        const auto helper = std::abs(up.y) < 0.99
+                    const auto upCoverage = math::Normalize(anchorBody);
+                    const auto helperCoverage =
+                        std::abs(upCoverage.y) < 0.99
                             ? math::Double3{0.0, 1.0, 0.0}
                             : math::Double3{1.0, 0.0, 0.0};
-                        const auto east = math::Normalize(math::Cross(helper, up));
-                        const auto north = math::Cross(up, east);
-                        // Exact coverage of this generated vertex lattice:
-                        // every displaced vertex has its owning tile in the
-                        // immutable capture, including cube-face seams.
+                    const auto eastCoverage = math::Normalize(
+                        math::Cross(helperCoverage, upCoverage));
+                    const auto northCoverage = math::Cross(
+                        upCoverage, eastCoverage);
+                    const bool coverageInvalid =
+                        meshPresentation.terrainCoverageTiles.empty() ||
+                        meshPresentation.terrainCoveragePlanet !=
+                            terrainRuntime->planet.id ||
+                        meshPresentation.terrainCoverageLevel !=
+                            terrainRuntime->physicalPageLevel ||
+                        math::Length(anchorBody -
+                            meshPresentation.terrainCoverageAnchorBody) > 2.0 ||
+                        math::Dot(eastCoverage,
+                            meshPresentation.terrainCoverageEastBody) < 0.999999 ||
+                        math::Dot(northCoverage,
+                            meshPresentation.terrainCoverageNorthBody) < 0.999999;
+                    if (coverageInvalid && math::LengthSquared(anchorBody) > 1.0)
+                    {
+                        std::vector<world::PlanetTileId> coverage;
+                        coverage.reserve(static_cast<std::size_t>(kCount) * kCount);
                         const f64 half = 0.5 * static_cast<f64>(kCount - 1U);
-                        footprintDirections.reserve(
-                            static_cast<std::size_t>(kCount) * kCount);
                         for (u32 y = 0U; y < kCount; ++y)
                             for (u32 x = 0U; x < kCount; ++x)
                             {
                                 const auto point = anchorBody +
-                                    east * ((static_cast<f64>(x) - half) * kCell) +
-                                    north * ((static_cast<f64>(y) - half) * kCell);
-                                footprintDirections.push_back(math::Normalize(point));
+                                    eastCoverage * ((static_cast<f64>(x) - half) * kCell) +
+                                    northCoverage * ((static_cast<f64>(y) - half) * kCell);
+                                coverage.push_back(world::TileForDirection(
+                                    math::Normalize(point),
+                                    terrainRuntime->physicalPageLevel));
                             }
+                        std::sort(coverage.begin(), coverage.end(),
+                            studio_session::StudioTerrainPhysicalPageService::
+                                HeightPageBatch::TileLess{});
+                        coverage.erase(std::unique(coverage.begin(), coverage.end()),
+                            coverage.end());
+                        meshPresentation.terrainCoverageTiles = std::move(coverage);
+                        meshPresentation.terrainCoverageAnchorBody = anchorBody;
+                        meshPresentation.terrainCoverageEastBody = eastCoverage;
+                        meshPresentation.terrainCoverageNorthBody = northCoverage;
+                        meshPresentation.terrainCoveragePlanet = terrainRuntime->planet.id;
+                        meshPresentation.terrainCoverageLevel =
+                            terrainRuntime->physicalPageLevel;
                     }
                     const auto physicalBatch =
-                        session.TerrainPhysicalPages().CaptureHeightPages(
+                        session.TerrainPhysicalPages().CaptureHeightTiles(
                             terrainRuntime->planet.id,
                             terrainRuntime->physicalPageLevel,
-                            footprintDirections);
+                            meshPresentation.terrainCoverageTiles);
                     const u64 sourceRevision = terrain::StableCombine64(
                         patchSource.Revision(), physicalBatch.revisionFingerprint);
                     const f64 moved = math::Length(
