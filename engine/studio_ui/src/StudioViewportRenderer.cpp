@@ -3574,8 +3574,8 @@ StudioViewportRenderer::ComposeBase(
                 });
         }
 
-        if (presentation ==
-                StudioViewportPresentation::BodyPreview &&
+        if ((presentation == StudioViewportPresentation::BodyPreview ||
+             presentation == StudioViewportPresentation::ProductionTerrain) &&
             frames != nullptr &&
             !products.empty())
         {
