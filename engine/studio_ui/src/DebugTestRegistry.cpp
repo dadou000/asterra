@@ -15,6 +15,9 @@ bool DebugTestRegistry::Register(DebugTestDescriptor descriptor)
 
 bool DebugTestRegistry::Unregister(const std::string_view id)
 {
+    for (auto it = history_.begin(); it != history_.end();)
+        if (it->testId == id) it = history_.erase(it);
+        else ++it;
     const auto result = results_.find(id);
     if (result != results_.end()) results_.erase(result);
     const auto test = tests_.find(id);
@@ -38,6 +41,7 @@ DebugTestResult DebugTestRegistry::Run(
     const auto it = tests_.find(id);
     if (it == tests_.end())
         return {DebugTestOutcome::NotReady, "Unknown debug test"};
+    const auto started = std::chrono::steady_clock::now();
     DebugTestResult result;
     try { result = it->second.run(session); }
     catch (const std::exception& error)
@@ -48,7 +52,17 @@ DebugTestResult DebugTestRegistry::Run(
     {
         result = {DebugTestOutcome::Fail, "Unknown validation exception"};
     }
+    const auto finished = std::chrono::steady_clock::now();
     results_.insert_or_assign(std::string(id), result);
+    history_.push_back({
+        .sequence = ++sequence_,
+        .testId = std::string(id),
+        .result = result,
+        .elapsedMilliseconds = std::chrono::duration<f64, std::milli>(
+            finished - started).count(),
+        .worldGeneration = session.World().Generation()
+    });
+    if (history_.size() > kMaxHistory) history_.pop_front();
     return result;
 }
 
@@ -56,6 +70,20 @@ DebugTestResult DebugTestRegistry::LastResult(std::string_view id) const
 {
     const auto it = results_.find(id);
     return it == results_.end() ? DebugTestResult{} : it->second;
+}
+
+std::vector<DebugTestRunRecord> DebugTestRegistry::History(
+    const std::string_view id) const
+{
+    std::vector<DebugTestRunRecord> records;
+    for (const auto& record : history_)
+        if (record.testId == id) records.push_back(record);
+    return records;
+}
+
+std::vector<DebugTestRunRecord> DebugTestRegistry::RecentRuns() const
+{
+    return {history_.begin(), history_.end()};
 }
 
 std::string_view DebugTestCategoryName(DebugTestCategory category) noexcept
