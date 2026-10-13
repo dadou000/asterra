@@ -2075,6 +2075,23 @@ def orbit_path_set_bezier_handles(
 
 
 @mcp.tool()
+def orbit_infrastructure_set_intent(
+    edge_id: str,
+    catalog_id: str,
+    catalog_version: int = 1,
+    construction_mode: str = "terrain",
+    design_speed_kmh: float = 0.0,
+    ease_turns: bool = True,
+) -> dict[str, Any]:
+    """Set versioned road/rail catalog intent on an existing path edge; design speed 0 uses catalog default."""
+    return _rpc("infrastructure.set_intent", {
+        "edge": edge_id, "catalog_id": catalog_id,
+        "catalog_version": catalog_version, "construction_mode": construction_mode,
+        "design_speed_kmh": design_speed_kmh, "ease_turns": ease_turns,
+    })
+
+
+@mcp.tool()
 def orbit_path_set_profile(
     object_id: str,
     profile_asset: str | None,
