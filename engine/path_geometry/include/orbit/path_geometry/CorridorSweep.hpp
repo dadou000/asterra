@@ -54,4 +54,13 @@ struct RefinedCorridor
 [[nodiscard]] PathMesh BuildCorridorMesh(
     const std::vector<PathStation>& stations,
     const CorridorSweep& corridor);
+// Adapter for Orbit's existing path-product cache/renderer. The normal
+// BuildPathDerived result remains the source of lanes and navigation;
+// the corridor sweep replaces its visual surface and collision triangles.
+[[nodiscard]] PathDerivedProduct BuildCorridorDerived(
+    const PathCenterline& centerline,
+    const paths::PathProfile& profile,
+    const CorridorSweep& corridor,
+    PathBuildOptions options = {},
+    CorridorRefinementOptions refinement = {});
 } // namespace orbit::path_geometry
