@@ -34,6 +34,15 @@ struct StudioTerrainPhysicalPageSnapshot
         const terrain_material_column::MaterialColumnPage>
         material;
 
+    // Canonical resolved physical-surface elevation for renderer, physics,
+    // and tooling consumers. Derived from the final material column AFTER
+    // construction, erosion and deposits; never from the analytic base
+    // source or the corridor mesh. Coordinates are page-local [0,1].
+    [[nodiscard]] std::optional<f64> SampleSurfaceHeight(
+        f64 u, f64 v) const noexcept;
+
+
+
     std::shared_ptr<const terrain_erosion::RiverNetwork> rivers;
     std::shared_ptr<const terrain_hydrology::DrainagePage> drainage;
     std::shared_ptr<const terrain_water::LakeWaterField> lakes;
