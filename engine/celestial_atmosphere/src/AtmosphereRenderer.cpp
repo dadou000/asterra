@@ -72,14 +72,14 @@ struct Constants
 
 [[vk::push_constant]] Constants g;
 
-[[vk::binding(0, 0)]] [[vk::combinedImageSampler]] Texture2D g_scene;
-[[vk::binding(0, 0)]] [[vk::combinedImageSampler]] SamplerState g_sceneSampler;
-[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
-[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] Texture2D g_scene;
+[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] SamplerState g_sceneSampler;
+[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
+[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
+[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
+[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
 [[vk::binding(0, 0)]] ByteAddressBuffer g_terrainSunShadow;
 
 static const uint kSteps = 40u;
