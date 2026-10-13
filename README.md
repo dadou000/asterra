@@ -207,3 +207,7 @@ sample cache, morphing and depth surface. Lake levels use coarse hydrology as
 one authority while fine regions continue to refine rivers and surrounding land.
 See [standing water rendering](docs/STANDING_WATER_RENDERING.md) for validation,
 storage costs and remaining limitations.
+
+## Where to find debugging and tests
+
+In the unified Orbit Studio editor, open the **Debug** workspace tab for the canonical test and diagnostics entry point. Its categories link to the existing specialist tools; those tools remain authoritative. The first on-demand construction terrain validation checks only physical-page readiness, revision consistency and one finite height sample—not full GPU displacement or collision. See [`engine/studio_ui/docs/debug-center.md`](engine/studio_ui/docs/debug-center.md) for exact expectations and current limits.
