@@ -1,6 +1,7 @@
 #include <orbit/path_geometry/CorridorTerrainSource.hpp>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 
 namespace
 {
@@ -44,6 +45,16 @@ int main()
     Check(after.climate.temperatureC == before.climate.temperatureC);
     Check(overlay.GenerationRevisions().authoring !=
           base.GenerationRevisions().authoring);
+    // The rebound snapshot owns its source even after the original caller
+    // releases the last reference; no dangling source pointer is permitted.
+    auto ownedBase = std::make_shared<FlatSource>();
+    std::weak_ptr<FlatSource> weakBase = ownedBase;
+    auto ownedOverlay = overlay.Rebind(ownedBase);
+    ownedBase.reset();
+    Check(!weakBase.expired());
+    Check(std::abs(ownedOverlay->Sample(query).elevationMeters) < 1.e-8);
+    ownedOverlay.reset();
+    Check(weakBase.expired());
     query.planet = orbit::world::PlanetId::Random();
     Check(overlay.Sample(query).elevationMeters == 20.0);
     return 0;
