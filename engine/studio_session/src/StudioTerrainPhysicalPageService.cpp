@@ -2956,7 +2956,9 @@ void StudioTerrainPhysicalPageService::Sync(
             // infrastructure snapshot. The terrain source may have changed;
             // publication will refresh the overlay against the new source.
             if (previousInputs)
-                inputs->corridorOverlay = previousInputs->corridorOverlay;
+                inputs->corridorOverlay = previousInputs->corridorOverlay
+                    ? previousInputs->corridorOverlay->Rebind(inputs->source)
+                    : nullptr;
             const bool riverAuthoringChanged = previousInputs != nullptr &&
                 previousInputs->semanticRevision != inputs->semanticRevision;
             const bool seasonalRainfallChanged = previousInputs != nullptr &&
@@ -3137,7 +3139,9 @@ void StudioTerrainPhysicalPageService::StageCorridorConstruction(
     // Copy-on-write: currently running workers retain their original inputs.
     // The scheduler's applied-change callback commits the pending snapshot.
     auto next = std::make_shared<BodyBuildInputs>(*current);
-    next->corridorOverlay = std::move(overlay);
+    next->corridorOverlay = overlay
+        ? overlay->Rebind(current->source)
+        : nullptr;
     runtime.shared->Stage(std::move(next));
     for (const auto& address : affectedPages)
     {
