@@ -1,6 +1,7 @@
 add_library(OrbitPathGeometry STATIC
     src/PathDerived.cpp
     src/PathSource.cpp
+    src/CorridorSweep.cpp
 )
 
 add_library(
@@ -81,4 +82,12 @@ if(BUILD_TESTING)
         NAME Orbit.PathSource
         COMMAND OrbitPathSourceTests
     )
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitCorridorSweepTests tests/CorridorSweepTests.cpp)
+    target_link_libraries(OrbitCorridorSweepTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitCorridorSweepTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCorridorSweepTests)
+    add_test(NAME Orbit.CorridorSweep COMMAND OrbitCorridorSweepTests)
 endif()
