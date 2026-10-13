@@ -140,6 +140,31 @@ StudioSession::StudioSession(
     RegisterStudioMeshRpc(
         rpc_.Dispatcher(),
         *this);
+    rpc_.Dispatcher().Register(
+        {.name = "infrastructure.build_status",
+         .description = "Read cached corridor build state and errors.",
+         .mutating = false},
+        [this](const rpc::Value& params) -> rpc::Value
+        {
+            if (!params.IsObject()) throw rpc::Error(-32602, "Object params required.");
+            const auto* idValue = params.Find("edge");
+            if (!idValue || !idValue->IsString())
+                throw rpc::Error(-32602, "edge must be a path edge ID string.");
+            const auto edge = scene::ObjectId::Parse(idValue->AsString());
+            if (!edge) throw rpc::Error(-32602, "Invalid edge ID.");
+            const auto* product = pathProducts_.Find(*edge);
+            const bool dirty = pathProducts_.IsDirty(*edge);
+            const std::string error = pathProducts_.RebuildError(*edge);
+            return rpc::Value(rpc::Value::Object{
+                {"edge", edge->ToString()},
+                {"state", !error.empty() ? "failed" : dirty ? "dirty" :
+                          product ? "ready" : "missing"},
+                {"has_last_valid_mesh", product != nullptr},
+                {"error", error},
+                {"build_signature", product ? std::to_string(product->buildSignature) : std::string{}},
+                {"dirty_count", static_cast<i64>(pathProducts_.DirtyCount())}
+            });
+        });
     static_cast<void>(activeBody_.Refresh());
     static_cast<void>(pathNetwork_.RefreshBinding());
     static_cast<void>(pathRouting_.RefreshBinding());
