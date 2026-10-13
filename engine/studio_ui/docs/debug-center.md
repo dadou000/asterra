@@ -43,7 +43,7 @@ Some destination panels are optional or registered only by certain Studio config
 
 `DebugTestRegistry` is owned by the active `DebugViewUi` instance. Each descriptor supplies a unique stable ID, label, category and synchronous on-demand `run(StudioSession&)` callback. The registry returns one of **NOT RUN**, **PASS**, **FAIL**, **NOT READY**, remembers the last outcome, and isolates standard exceptions so the Debug panel can report failures without escaping the UI callback.
 
-The initial `terrain.physical_page_sanity` test is registered by `RegisterBuiltInDebugTests`, not implemented inside the drawing function. To add an experiment, register a descriptor with the registry (or a future plugin-facing registration adapter); do not append a hardcoded Run button to `DebugViewUi::Draw`. The current interface does not yet provide async execution, history, screenshot capture or RPC registration of individual tests.
+The initial `terrain.physical_page_sanity` test is registered by `RegisterBuiltInDebugTests`, not implemented inside the drawing function. To add an experiment, register a descriptor with the registry (or a future plugin-facing registration adapter); do not append a hardcoded Run button to `DebugViewUi::Draw`. The registry keeps up to 128 in-memory run records globally, each with a sequence number, elapsed wall-clock time, world generation and outcome. The Debug panel shows the latest timing and per-test history count. History is not persisted between editor sessions. The current interface does not yet provide asynchronous execution, screenshot capture or RPC registration of individual tests.
 
 ## Construction Terrain Validation (first runnable check)
 
