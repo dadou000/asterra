@@ -244,6 +244,19 @@ BuildPhysicalRenderPages(
     const auto centerIt = std::find(addresses.begin(), addresses.end(), center);
     if (centerIt != addresses.end() && centerIt != addresses.begin())
         std::iter_swap(addresses.begin(), centerIt);
+    // M2.47: Order the remaining local pages by angular distance to the
+    // observer, so a constrained frame budget fills nearby pages first.
+    const auto observerUp = math::Normalize(runtime.observer.meters);
+    if (addresses.size() > 1U)
+        std::stable_sort(addresses.begin() + 1, addresses.end(),
+            [&](const auto& a, const auto& b) {
+                const f64 da = math::Dot(observerUp,
+                    world::CubeToUnitDirection(world::TileCenter(a.tile)));
+                const f64 db = math::Dot(observerUp,
+                    world::CubeToUnitDirection(world::TileCenter(b.tile)));
+                return da > db;
+            });
+
     // Sparse construction pages are already tracked by the async page owner.
     // Append only authored footprints; do not fill the intervening terrain.
     const auto observerDirection = math::Normalize(runtime.observer.meters);
