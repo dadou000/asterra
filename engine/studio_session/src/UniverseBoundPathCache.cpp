@@ -108,6 +108,7 @@ void UniverseBoundPathCache::Store(
     const scene::ObjectId edge = product.edge;
     corridorAuthoredSignatures_.erase(edge);
     dirtyCorridors_.erase(edge);
+    rebuildErrors_.erase(edge);
     products_[edge] = std::move(product);
     dependencySnapshots_[edge] = CaptureDependencies(edge);
 
@@ -229,9 +230,59 @@ std::size_t UniverseBoundPathCache::RefreshSemanticInvalidation()
     return invalidated;
 }
 
+std::size_t UniverseBoundPathCache::RebuildDirty(
+    const RebuildResolver& resolver, const std::size_t budget)
+{
+    static_cast<void>(RefreshBinding());
+    if (!resolver || budget == 0 || world_ == nullptr || !world_->HasWorld()) return 0;
+    std::vector<scene::ObjectId> candidates;
+    for (const auto edge : dirtyCorridors_)
+        if (!rebuildErrors_.contains(edge)) candidates.push_back(edge);
+    std::sort(candidates.begin(), candidates.end(), [](const auto a, const auto b) {
+        return a.high != b.high ? a.high < b.high : a.low < b.low;
+    });
+    std::size_t processed = 0;
+    for (const auto edge : candidates)
+    {
+        if (processed >= budget) break;
+        ++processed;
+        try
+        {
+            const auto request = resolver(edge);
+            if (!request)
+            {
+                rebuildErrors_[edge] = "No current corridor build request for edge.";
+                continue;
+            }
+            if (request->centerline.edge != edge)
+                throw std::invalid_argument("Rebuild request edge does not match dirty edge.");
+            static_cast<void>(StoreCorridorIfChanged(request->authoredSignature,
+                request->centerline, request->profile, request->corridor,
+                request->options, request->refinement, request->routeGeneration));
+            rebuildErrors_.erase(edge);
+        }
+        catch (const std::exception& error)
+        {
+            rebuildErrors_[edge] = error.what();
+        }
+    }
+    return processed;
+}
+
+std::string UniverseBoundPathCache::RebuildError(const scene::ObjectId edge) const
+{
+    const auto it = rebuildErrors_.find(edge);
+    return it == rebuildErrors_.end() ? std::string{} : it->second;
+}
+
+std::size_t UniverseBoundPathCache::DirtyCount() const noexcept
+{
+    return dirtyCorridors_.size();
+}
+
 void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
 {
-    if (edge) dirtyCorridors_.insert(edge);
+    if (edge) { dirtyCorridors_.insert(edge); rebuildErrors_.erase(edge); }
 }
 
 bool UniverseBoundPathCache::IsDirty(const scene::ObjectId edge) const noexcept
@@ -244,6 +295,7 @@ bool UniverseBoundPathCache::Erase(
 {
     routeGenerations_.erase(edge);
     dirtyCorridors_.erase(edge);
+    rebuildErrors_.erase(edge);
     corridorAuthoredSignatures_.erase(edge);
     dependencySnapshots_.erase(edge);
     return products_.erase(edge) != 0U;
@@ -257,6 +309,7 @@ void UniverseBoundPathCache::Clear() noexcept
     dependencySnapshots_.clear();
     observedSceneRevision_ = ~u64{0};
     dirtyCorridors_.clear();
+    rebuildErrors_.clear();
 }
 
 std::size_t UniverseBoundPathCache::Size() const noexcept
