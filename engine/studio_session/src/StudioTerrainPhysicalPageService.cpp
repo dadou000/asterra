@@ -2830,7 +2830,9 @@ void StudioTerrainPhysicalPageService::Sync(
     const std::span<
         const StudioTerrainViewportRuntimeSnapshot>
         runtimes,
-    const time::SimulationTime atTime)
+    const time::SimulationTime atTime,
+    const std::span<const terrain::PhysicalTerrainPageAddress>
+        constructionInterests)
 {
     if (impl_->world == nullptr ||
         !impl_->world->HasWorld())
@@ -3040,6 +3042,16 @@ void StudioTerrainPhysicalPageService::Sync(
                 .planet = runtime.observerPhysicalPage.planet,
                 .tile = tile
             };
+            if (bodyInterests.insert(address).second)
+                impl_->RegisterInterest(body, address);
+        }
+        // Authored infrastructure receives a separate hard-capped interest
+        // set. No surrounding empty pages are requested for these footprints.
+        for (const auto& address : constructionInterests)
+        {
+            if (address.planet != runtime.planet.id ||
+                address.tile.level != runtime.physicalPageLevel)
+                continue;
             if (bodyInterests.insert(address).second)
                 impl_->RegisterInterest(body, address);
         }
