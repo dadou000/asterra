@@ -33,6 +33,7 @@
 #include <chrono>
 #include <cmath>
 #include <map>
+#include <tuple>
 #include <mutex>
 #include <numbers>
 #include <stdexcept>
@@ -3170,6 +3171,69 @@ void StudioTerrainPhysicalPageService::StageCorridorConstruction(
             }
         });
     }
+}
+
+std::optional<f64>
+StudioTerrainPhysicalPageService::HeightPageBatch::Sample(
+    const math::Double3& direction) const noexcept
+{
+    if (!planet || !std::isfinite(direction.x) ||
+        !std::isfinite(direction.y) || !std::isfinite(direction.z) ||
+        math::LengthSquared(direction) < 0.5)
+        return std::nullopt;
+    const auto tile = world::TileForDirection(direction, level);
+    for (const auto& page : pages)
+    {
+        if (!page || page->address.tile != tile ||
+            page->address.planet != planet) continue;
+        const auto coordinate = world::UnitDirectionToCube(
+            math::Normalize(direction));
+        const auto bounds = world::TileBounds(tile);
+        const f64 du = bounds.maximumUv.x - bounds.minimumUv.x;
+        const f64 dv = bounds.maximumUv.y - bounds.minimumUv.y;
+        if (du <= 0 || dv <= 0) return std::nullopt;
+        return page->SampleSurfaceHeight(
+            std::clamp((coordinate.uv.x - bounds.minimumUv.x)/du,0.0,1.0),
+            std::clamp((coordinate.uv.y - bounds.minimumUv.y)/dv,0.0,1.0));
+    }
+    return std::nullopt;
+}
+
+StudioTerrainPhysicalPageService::HeightPageBatch
+StudioTerrainPhysicalPageService::CaptureHeightPages(
+    const world::PlanetId planet, const u8 level,
+    const std::span<const math::Double3> directions) const
+{
+    HeightPageBatch result{};
+    result.planet = planet;
+    result.level = level;
+    result.revisionFingerprint = 1469598103934665603ULL;
+    std::vector<world::PlanetTileId> tiles;
+    for (const auto& direction : directions)
+    {
+        if (math::LengthSquared(direction) < 0.5) continue;
+        const auto tile = world::TileForDirection(direction, level);
+        if (std::find(tiles.begin(), tiles.end(), tile) == tiles.end())
+            tiles.push_back(tile);
+    }
+    std::sort(tiles.begin(), tiles.end(), [](const auto& a, const auto& b) {
+        return std::tuple{static_cast<u8>(a.face),a.level,a.x,a.y} <
+               std::tuple{static_cast<u8>(b.face),b.level,b.x,b.y};
+    });
+    for (const auto& tile : tiles)
+    {
+        const auto snapshot = Find({.planet=planet,.tile=tile});
+        result.revisionFingerprint = terrain::StableCombine64(
+            result.revisionFingerprint,
+            (static_cast<u64>(static_cast<u8>(tile.face)) << 56U) ^
+            (static_cast<u64>(tile.level) << 48U) ^
+            (static_cast<u64>(tile.x) << 24U) ^ tile.y);
+        result.revisionFingerprint = terrain::StableCombine64(
+            result.revisionFingerprint,
+            snapshot ? snapshot->revisionFingerprint : 0U);
+        if (snapshot) result.pages.push_back(snapshot);
+    }
+    return result;
 }
 
 std::optional<f64>
