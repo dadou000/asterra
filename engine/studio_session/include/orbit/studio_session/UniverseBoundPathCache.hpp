@@ -5,7 +5,9 @@
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 
+#include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -64,6 +66,25 @@ public:
     [[nodiscard]] std::size_t RefreshSemanticInvalidation();
     void MarkDirty(scene::ObjectId edge) noexcept;
     [[nodiscard]] bool IsDirty(scene::ObjectId edge) const noexcept;
+    struct RebuildRequest
+    {
+        u64 authoredSignature{0};
+        path_geometry::PathCenterline centerline;
+        paths::PathProfile profile;
+        path_geometry::CorridorSweep corridor;
+        path_geometry::PathBuildOptions options{};
+        path_geometry::CorridorRefinementOptions refinement{};
+        std::optional<u64> routeGeneration;
+    };
+    using RebuildResolver =
+        std::function<std::optional<RebuildRequest>(scene::ObjectId)>;
+    // Resolver must snapshot current authoritative inputs, not reuse stale meshes.
+    // Processes at most budget dirty edges in stable ID order. Failed edges
+    // stay dirty with a diagnostic; they are not retried until explicitly requested.
+    [[nodiscard]] std::size_t RebuildDirty(
+        const RebuildResolver& resolver, std::size_t budget = 2);
+    [[nodiscard]] std::string RebuildError(scene::ObjectId edge) const;
+    [[nodiscard]] std::size_t DirtyCount() const noexcept;
     [[nodiscard]] bool Erase(scene::ObjectId edge) noexcept;
     void Clear() noexcept;
 
@@ -95,6 +116,7 @@ private:
     std::unordered_map<scene::ObjectId, u64>
         corridorAuthoredSignatures_;
     std::unordered_set<scene::ObjectId> dirtyCorridors_;
+    std::unordered_map<scene::ObjectId, std::string> rebuildErrors_;
     u64 observedUniverseGeneration_{~u64{0}};
     u64 bindingGeneration_{0};
 };
