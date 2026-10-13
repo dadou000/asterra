@@ -114,6 +114,15 @@ public:
     // must project from the owning planetary body before calling this method.
     // One radius-zero authoring request per unique page; never global.
     // Returns the number of newly queued requests.
+    // Resolve a derived corridor from its authored frame into an explicitly
+    // selected body's rotating frame. Rejects missing/ambiguous body bindings,
+    // excessive spans, and unavailable terrain runtime pages.
+    [[nodiscard]] std::size_t QueueInfrastructureCorridorTerrain(
+        const path_geometry::PathDerivedProduct& product,
+        universe::BodyId body,
+        f64 influenceRadiusMeters,
+        std::size_t maximumPages = 4096);
+
     [[nodiscard]] std::size_t QueueInfrastructureTerrainPages(
         std::span<const terrain::PhysicalTerrainPageAddress> pages,
         std::size_t maximumPages = 4096);
