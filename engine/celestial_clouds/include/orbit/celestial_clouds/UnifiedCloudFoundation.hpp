@@ -11,6 +11,9 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <map>
+#include <string>
+#include <string_view>
 
 namespace orbit::celestial_clouds::unified
 {
@@ -160,6 +163,51 @@ struct IntegratedMedium
             near.radiance[channel] + near.transmittance * far.radiance[channel];
     return output;
 }
+
+// Each B viewport owns its independent history/generation domain. Never use
+// A's "studio.primary" or "studio.primary.B" cache names for B. This CPU
+// registry is safe to use before a B GPU renderer is implemented and makes
+// lifetime/invalidation semantics testable without graphics hardware.
+class ViewRegistry
+{
+public:
+    [[nodiscard]] Invalidation Observe(
+        const std::string_view viewId, const FrameSignature& signature)
+    {
+        if (viewId.empty())
+            throw std::invalid_argument("Unified clouds require a stable viewport ID.");
+        auto& previous = views_[std::string(viewId)];
+        const Invalidation invalidation = Invalidate(previous, signature);
+        previous = signature;
+        return invalidation;
+    }
+
+    void Forget(const std::string_view viewId)
+    {
+        views_.erase(std::string(viewId));
+    }
+
+    void Reset() noexcept { views_.clear(); }
+    [[nodiscard]] std::size_t Size() const noexcept { return views_.size(); }
+
+private:
+    std::map<std::string, std::optional<FrameSignature>, std::less<>> views_;
+};
+
+// Memory and update limits belong to B, not to A's graphics settings. B will
+// use a fixed budget per body/view and evict far-field/cached data first.
+struct ResourceBudget
+{
+    u64 maximumResidentBytes{256ULL * 1024ULL * 1024ULL};
+    u32 maximumUpdatesPerFrame{4096U};
+    u32 maximumViewSteps{192U};
+
+    [[nodiscard]] bool Valid() const noexcept
+    {
+        return maximumResidentBytes >= 1ULL * 1024ULL * 1024ULL &&
+            maximumUpdatesPerFrame > 0U && maximumViewSteps > 0U;
+    }
+};
 
 // No implicit fallback to A. The GPU implementation will produce a B-owned
 // medium target, light cache, history, and performance pass namespace.
