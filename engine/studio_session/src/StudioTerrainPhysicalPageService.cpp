@@ -2952,6 +2952,11 @@ void StudioTerrainPhysicalPageService::Sync(
                      inputs->seasonalRainfallBin)
         {
             const auto previousInputs = found->second->shared->Capture();
+            // Recomposition must not erase an independently published
+            // infrastructure snapshot. The terrain source may have changed;
+            // publication will refresh the overlay against the new source.
+            if (previousInputs)
+                inputs->corridorOverlay = previousInputs->corridorOverlay;
             const bool riverAuthoringChanged = previousInputs != nullptr &&
                 previousInputs->semanticRevision != inputs->semanticRevision;
             const bool seasonalRainfallChanged = previousInputs != nullptr &&
