@@ -172,7 +172,10 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         directionBody,
                 .irradianceScale =
                     studioDirectLight.
-                        irradianceScale
+                        irradianceScale,
+                .terrainOcclusionEnabled = info.layers.terrainOccludedAtmosphere,
+                .sunAngularRadiusRadians = studioDirectLight.sunAngularRadiusRadians,
+                .terrainSunShadow = context.terrainSunShadow
             };
 
         graph.AddPass(

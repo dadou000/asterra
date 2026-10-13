@@ -18,6 +18,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
 #include <orbit/math/RigidTransform.hpp>
 #include <orbit/lighting/EmissiveInvalidation.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
@@ -72,6 +73,7 @@
 #include <set>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <map>
 #include <orbit/jobs/JobSystem.hpp>
 
@@ -647,6 +649,22 @@ private:
         std::unique_ptr<celestial_rings::GpuRingMeshProduct> farMesh;
         celestial_rings::FarRingProfile farProfile{};
     };
+    [[nodiscard]] std::shared_ptr<rhi::Buffer> EnsureTerrainSunShadow(
+        std::string_view viewportId, universe::BodyId body,
+        const std::shared_ptr<const terrain::TerrainSource>& source, f64 radius);
+    struct TerrainSunShadowPresentation
+    {
+        universe::BodyId body{}, pendingBody{};
+        std::shared_ptr<const terrain::TerrainSource> source, pendingSource;
+        f64 radius{0.0}, pendingRadius{0.0};
+        u64 revision{0U};
+        std::shared_ptr<rhi::Buffer> buffer;
+        std::future<lighting::TerrainSunShadowField> pending;
+        std::chrono::steady_clock::time_point retryAfter{};
+    };
+    std::map<std::string, TerrainSunShadowPresentation, std::less<>>
+        terrainSunShadowPresentations_;
+
     struct AtmospherePresentation
     {
         universe::BodyId body{};

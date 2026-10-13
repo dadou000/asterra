@@ -134,6 +134,8 @@ struct StudioTerrainLayerOptions
     bool bypassIndirectLighting{false};
     bool bypassNearFieldWater{false};
     bool bypassAtmosphere{false};
+    // Experimental direct scattering with body-fixed terrain/stellar visibility.
+    bool terrainOccludedAtmosphere{false};
     // Skips only the hybrid reflections stage (the final gather still runs); bypassIndirectLighting skips both.
     bool bypassHybridReflections{false};
     // Smooth surfaces: one shared exact mesh scene for opaque reflections and

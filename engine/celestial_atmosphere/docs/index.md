@@ -59,6 +59,10 @@ verified = "74906ec"
 | authoring solver and provenance | `engine/world_model/AtmospherePropertySolver.hpp`, `PropertyProvenance*.hpp` |
 | per-view cache, diagnostics, pass wiring | `engine/studio_ui/src/StudioViewportRenderer.cpp` (`AtmospherePresentation`, `StudioAtmosphereDiagnostics`) |
 
+## Experimental terrain-aware sunlight
+
+The per-view `terrain_occluded_atmosphere` option evaluates direct single-scattering visibility from an asynchronous disposable, body-fixed `TerrainSource` field, leaving multiple scattering unchanged. The field is keyed by terrain identity/revision, body and radius: neither camera movement nor timewarp nor changing stellar direction rebuilds geometry. Until the field completes, finite-disc analytic planet occultation is used. Sparse view-ray knots bound the GPU cost. The switch is off by default in Lighting / Renderer > Atmosphere and is also accessible via `view.terrain_layers_set` and MCP. This first implementation intentionally leaves dynamic cloud optical-depth sharing and terrain direct-surface shading to later work; the existing cloud god-ray correction remains active.
+
 ## Frame order (per view)
 
 The render graph adds the atmosphere pass, then the cloud passes; clouds are composited after the atmosphere and

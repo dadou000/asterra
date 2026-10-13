@@ -1,4 +1,7 @@
 #include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <string>
 
 #include <algorithm>
 #include <array>
@@ -64,6 +67,7 @@ struct Constants
     float4 mieScatterAbsCenter; // Mie scattering (1/m), absorber centre (m)
     float4 mieExtinctAbsHalf;   // Mie extinction (1/m), absorber half width
     float4 absorptionE;         // absorber extinction (1/m), irradiance scale
+    float4 sunOcclusion;        // stellar angular radius, enabled, padding
 };
 
 [[vk::push_constant]] Constants g;
@@ -76,6 +80,7 @@ struct Constants
 [[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
 [[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
 [[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+[[vk::binding(0, 0)]] ByteAddressBuffer g_terrainSunShadow;
 
 static const uint kSteps = 40u;
 static const float kPi = 3.14159265358979;
@@ -212,12 +217,32 @@ float4 main(VSOutput input) : SV_Target0
     const float step = (tEnd - tStart) / float(steps);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
+    float visibilityNear = 1.0;
+    float visibilityFar = 1.0;
+    static const uint kShadowInterval = 16u;
 
     [loop]
     for (uint i = 0u; i < steps; ++i)
     {
         const float t = tStart + (float(i) + 0.5) * step;
         const float3 position = origin + direction * t;
+        // Sparse view-ray knots bound terrain queries independently of
+        // simulation-time delta. Body-fixed geometry is reused across timewarp.
+        if (g.sunOcclusion.y > 0.5 && (i % kShadowInterval) == 0u)
+        {
+            const uint endIndex = min(i + kShadowInterval, steps) - 1u;
+            const float endT = tStart + (float(endIndex) + 0.5) * step;
+            visibilityNear = TerrainSunVisibility(g_terrainSunShadow, position,
+                sun, bottom, g.sunOcclusion.x);
+            visibilityFar = TerrainSunVisibility(g_terrainSunShadow,
+                origin + direction * endT, sun, bottom, g.sunOcclusion.x);
+        }
+        const uint remaining = steps - (i / kShadowInterval) * kShadowInterval;
+        const float visibility = g.sunOcclusion.y > 0.5
+            ? lerp(visibilityNear, visibilityFar,
+                float(i % kShadowInterval) /
+                float(max(min(kShadowInterval, remaining) - 1u, 1u)))
+            : 1.0;
         const float radius = length(position);
         const float altitude = max(radius - bottom, 0.0);
 
@@ -243,7 +268,7 @@ float4 main(VSOutput input) : SV_Target0
 
         const float3 source =
             irradiance *
-            (sunTransmittance * (rayleigh * rayleighPhase + mie * miePhase) +
+            (sunTransmittance * visibility * (rayleigh * rayleighPhase + mie * miePhase) +
              multiResponse * (rayleigh + mie) / (4.0 * kPi));
 
         const float3 stepTransmittance = exp(-extinction * step);
@@ -276,14 +301,20 @@ AtmosphereRenderer::AtmosphereRenderer(
             .debug = false
         });
 
+    std::string pixelSource(kPixelShader);
+    const auto mainPosition = pixelSource.find("float4 main(VSOutput input) : SV_Target0");
+    if (mainPosition == std::string::npos)
+        throw std::logic_error("Atmosphere shader entry point not found.");
+    pixelSource.insert(mainPosition, lighting::kSunVisibilityShader);
     const auto pixel =
         compiler.Compile({
-            .source = kPixelShader,
+            .source = pixelSource,
             .entryPoint = "main",
             .stage = shader::Stage::Pixel,
             .debug = false
         });
 
+    emptyTerrainShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
     pipeline_ =
         device.CreateGraphicsPipeline({
             .vertexShader = {
@@ -296,8 +327,8 @@ AtmosphereRenderer::AtmosphereRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 36U,
-            .shaderResourceBuffers = 0U,
+            .pushConstantDwords = 40U,
+            .shaderResourceBuffers = 1U,
             .sampledTextures = 4U,
             .topology = rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -336,7 +367,7 @@ void AtmosphereRenderer::Draw(
             return Bits(static_cast<f32>(value));
         };
 
-    const std::array<u32, 36> constants{
+    const std::array<u32, 40> constants{
         f(view.cameraPositionMeters.x),
         f(view.cameraPositionMeters.y),
         f(view.cameraPositionMeters.z),
@@ -380,7 +411,11 @@ void AtmosphereRenderer::Draw(
         f(p.absorptionExtinctionPerMeter.x),
         f(p.absorptionExtinctionPerMeter.y),
         f(p.absorptionExtinctionPerMeter.z),
-        Bits(std::max(view.irradianceScale, 0.0F))
+        Bits(std::max(view.irradianceScale, 0.0F)),
+        Bits(std::max(view.sunAngularRadiusRadians, 0.0F)),
+        Bits(view.terrainOcclusionEnabled ? 1.0F : 0.0F),
+        0U,
+        0U
     };
 
     commands.SetRenderTarget(target);
@@ -405,6 +440,8 @@ void AtmosphereRenderer::Draw(
     commands.SetGraphicsTexture(1, depth);
     commands.SetGraphicsTexture(2, luts.Transmittance());
     commands.SetGraphicsTexture(3, luts.MultiScattering());
+    commands.SetGraphicsBuffer(0,
+        view.terrainSunShadow ? *view.terrainSunShadow : *emptyTerrainShadow_);
     commands.Draw(6);
 }
 } // namespace orbit::celestial_atmosphere

@@ -3397,7 +3397,14 @@ StudioViewportRenderer::ComposeBase(
                 lightingPlan, lightingTimestamps, cpuTimingRecorder, recordComposeStage,
                 sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
                 bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
-                nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters
+                nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters,
+                info.layers.terrainOccludedAtmosphere &&
+                    hasMacroGlobe && macroGlobeSurface != nullptr &&
+                    macroGlobeSurface->terrain != nullptr &&
+                    shape.has_value() && logicalTarget->target.has_value()
+                    ? EnsureTerrainSunShadow(info.id, logicalTarget->target->body,
+                        macroGlobeSurface->terrain, ReferenceRadiusForShape(*shape))
+                    : nullptr
             };
             ComposeLightingPasses(lightingContext);
         }

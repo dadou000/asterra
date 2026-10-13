@@ -149,6 +149,18 @@ ResolveStudioDirectLight(
         result.irradianceScale = static_cast<f32>(
             result.direct->irradianceWattsPerSquareMeter /
             kStudioReferenceIrradianceWattsPerSquareMeter);
+        if (const auto emitterObject = session.World().Universe().ObjectForBody(result.direct->emitter);
+            emitterObject.has_value())
+        {
+            if (const auto radiative = world_model::ResolveRadiativeBody(
+                    session.World().Objects(), *emitterObject);
+                radiative.has_value() && result.direct->sourceDistanceMeters > 0.0)
+            {
+                result.sunAngularRadiusRadians = static_cast<f32>(std::asin(std::clamp(
+                    radiative->photosphereRadiusMeters / result.direct->sourceDistanceMeters,
+                    0.0, 1.0)));
+            }
+        }
     }
 
     return result;

@@ -21,6 +21,7 @@ target_link_libraries(
     PUBLIC
         Orbit::Core
         Orbit::Math
+        Orbit::Lighting
         Orbit::OpticalTransport
         Orbit::RHI
         Orbit::Shader

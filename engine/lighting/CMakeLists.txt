@@ -7,6 +7,7 @@ add_library(OrbitLighting STATIC
     src/SurfaceDebugRenderer.cpp
     src/LightingView.cpp
     src/DirectLighting.cpp
+    src/TerrainSunShadow.cpp
     src/Visibility.cpp
     src/AnalyticBodyVisibility.cpp
     src/TerrainHeightfieldVisibility.cpp
@@ -44,6 +45,7 @@ target_link_libraries(OrbitLighting
     PUBLIC
         Orbit::Core
         Orbit::CelestialAppearance
+        Orbit::CelestialLighting
         Orbit::CelestialRepresentation
         Orbit::Content
         Orbit::Frames
@@ -60,6 +62,11 @@ target_compile_features(OrbitLighting PUBLIC cxx_std_23)
 orbit_enable_warnings(OrbitLighting)
 
 if(BUILD_TESTING)
+    add_executable(OrbitTerrainSunShadowTests tests/TerrainSunShadowTests.cpp)
+    target_link_libraries(OrbitTerrainSunShadowTests PRIVATE Orbit::Lighting)
+    target_compile_features(OrbitTerrainSunShadowTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTerrainSunShadowTests)
+    add_test(NAME Orbit.TerrainSunShadow COMMAND OrbitTerrainSunShadowTests)
     add_executable(OrbitLightingSurfaceDataTests
         tests/SurfaceDataTests.cpp
     )

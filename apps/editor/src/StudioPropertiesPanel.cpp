@@ -321,6 +321,12 @@ void StudioPropertiesPanel::Register()
                             layers.bypassAtmosphere = !atmosphere;
                             changed = true;
                         }
+                        changed |= context.Checkbox(
+                            "Terrain-Occluded Sunlight (Experimental)##atmosphere-terrain-occlusion",
+                            layers.terrainOccludedAtmosphere);
+                        context.MutedText(
+                            "Body-fixed mountain shadows in atmospheric direct scattering. "
+                            "Indirect sky scattering remains; no timewarp catch-up.");
                     }
                     if (showClouds)
                     {
