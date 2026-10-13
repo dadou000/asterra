@@ -1112,16 +1112,9 @@ void ReportsUi::DrawDetail(editor_ui::PanelContext& context)
                     changed = false;
                     editRevision_ = store.Revision();
                 }
-                if (controller_->CapturePerformanceIssue(id))
-                {
-                    status_ = "Performance capture attached to this report.";
-                    statusError_ = false;
-                }
-                else
-                {
-                    status_ = controller_->ScreenshotError();
-                    statusError_ = true;
-                }
+                static_cast<void>(controller_->CapturePerformanceIssue(id));
+                status_ = "Restoring recorded report condition; capture queued.";
+                statusError_ = false;
             }
             catch (const std::exception& exception)
             {
@@ -1129,7 +1122,9 @@ void ReportsUi::DrawDetail(editor_ui::PanelContext& context)
                 statusError_ = true;
             }
         }
-        context.MutedText("Captures the current viewport for this selected performance report.");
+        context.MutedText("Restores the report's saved simulation time and camera, settles the viewport, then captures.");
+        if (controller_->PerformanceCapturePending())
+            context.MutedText("Restoring / settling for performance capture...");
     }
 
     bool deleted = false;
