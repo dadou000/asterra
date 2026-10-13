@@ -53,31 +53,68 @@ The full normative contract, ABI/state/lifetime rules, acceptance checklist, and
 
 ## Build
 
-### One-click Windows build
+### Fast incremental Studio build (default)
 
-Double-click `build_orbit.bat` from the repository root.
-
-It configures CMake, builds the runtime, Studio and headless build CLI, and packages the developer build into:
-
-```text
-dist/Orbit-Windows-Release/
-├── OrbitStudio.exe
-├── OrbitPlayer.exe
-├── OrbitBuild.exe
-├── dxcompiler.dll
-└── symbols/
-```
-
-Useful command-line options:
+`build_orbit.bat` now builds **OrbitStudio only** plus its required
+OrbitPlayer/hot-reload dependencies. It uses the existing fast MSVC
+incremental compilation/linking configuration, reuses a valid CMake cache,
+and skips the distribution packaging and large PDB copies. The generated
+build system still automatically reconfigures if CMake files change.
 
 ```bat
-build_orbit.bat run
-build_orbit.bat debug run
-build_orbit.bat rebuild
-build_orbit.bat release nopause
+build_orbit.bat
+build_orbit.bat unpacked run
+build_orbit.bat debug unpacked run
+build_orbit.bat jobs 4 unpacked run
 ```
 
-For normal local development the build script enables the low-latency hot-iteration configuration. After the initial build/launch, prefer saving files and allowing Orbit's watcher to route the change automatically rather than repeatedly invoking the build script.
+`unpacked run` stages the same Studio executable (named `Orbit.exe`) and
+its two runtime dependencies to a unique ignored `out/unpacked/` directory
+and launches it with the repository root as its working directory. This
+avoids locking the linker's development output and preserves the single
+Studio application, its project browser, and automatic generation handoff.
+There is **no additional launcher application**. When only building, no
+unpacked staging or release packaging occurs. The existing CMake POST_BUILD
+also publishes the canonical root `Orbit.exe` when Windows does not have
+that file locked.
+
+The default is two parallel MSBuild projects, since MSVC `/MP` already
+parallelizes compilation within each target; adjust with `jobs N` or
+`ORBIT_BUILD_JOBS` after profiling RAM/CPU use. A clean build is still
+expensive; these changes primarily accelerate repeated small edits.
+
+### Explicit package / full rebuild
+
+```bat
+build_orbit.bat package
+build_orbit.bat release package run
+build_orbit.bat rebuild package
+build_orbit.bat reconfigure
+```
+
+`package` builds OrbitStudio, OrbitBuild and OrbitPlayer, then creates
+`dist/Orbit-Windows-Release/` (or `Debug`) with executables,
+`dxcompiler.dll`, and symbol files. This work no longer happens on
+every ordinary development build.
+
+### Self-hosted GitHub Windows build (no hosted runner minutes)
+
+`.github/workflows/orbit-self-hosted-unpacked.yml` watches the Harmony
+branch and uses a Windows self-hosted runner labelled `orbit-vulkan`.
+It builds Studio directly in the runner workspace, runs targeted
+CPU tests, and **does not archive or package the build**. It retains the
+ignored build directory between checkouts for fast subsequent builds.
+For a real GPU smoke test, dispatch the workflow with `gpu_smoke`
+enabled from a desktop-session runner.
+
+You must first install/register the runner yourself in GitHub repository
+**Settings > Actions > Runners > New self-hosted runner**. Select Windows
+x64, follow the current GitHub-generated setup commands, add the
+`orbit-vulkan` label, and install Visual Studio C++ tools, CMake,
+Vulkan SDK and drivers. For interactive Vulkan-window tests, run
+the agent from your logged-in desktop rather than an isolated service.
+This workflow has no pull-request trigger (self-hosted execution of
+untrusted PRs would be unsafe).
 
 ### Manual build
 

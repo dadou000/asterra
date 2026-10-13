@@ -1,0 +1,70 @@
+name: Orbit Self-Hosted Unpacked
+
+# Avoid hosted Windows runner minutes. Never run untrusted PR code here.
+on:
+  push:
+    branches: [0.1.1-Harmony]
+    paths:
+      - 'build_orbit.bat'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'apps/**'
+      - 'engine/**'
+      - 'tests/**'
+      - '.github/workflows/orbit-self-hosted-unpacked.yml'
+  workflow_dispatch:
+    inputs:
+      gpu_smoke:
+        description: 'Run Vulkan window smoke on an interactive desktop runner'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orbit-unpacked-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  studio:
+    runs-on: [self-hosted, Windows, X64, orbit-vulkan]
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Checkout while retaining ignored incremental build outputs
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: false
+
+      - name: Verify build prerequisites
+        run: |
+          where cmake
+          where git
+          where cl
+          where vulkaninfo
+
+      - name: Incremental unpacked Studio build
+        env:
+          ORBIT_BUILD_JOBS: '2'
+        run: call build_orbit.bat unpacked nopause
+
+      - name: Build targeted CPU test executables
+        run: cmake --build build --config Release --target OrbitTerrainSunShadowTests OrbitCelestialAtmosphereTests --parallel 2
+
+      - name: Run targeted CPU tests
+        run: ctest --test-dir build -C Release -R "Orbit\.(TerrainSunShadow|CelestialAtmosphere)$" --output-on-failure
+
+      - name: Verify unpacked executable
+        run: |
+          if not exist "build\apps\editor\Release\OrbitStudio.exe" exit /b 1
+          if not exist "build\apps\editor\Release\dxcompiler.dll" exit /b 1
+          echo Unpacked Studio: %CD%\build\apps\editor\Release\OrbitStudio.exe
+
+      - name: Optional real-device Vulkan UI smoke
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu_smoke }}
+        run: call tools\validation\run_terrain_ui_smoke.bat release nobuild nopause
