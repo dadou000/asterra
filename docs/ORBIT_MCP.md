@@ -668,3 +668,12 @@ all five values:
 remains independently composed. `bypass_sdf_gi` removes its approximate field
 fallback without disabling triangle queries. See
 `/rendering/lighting/smooth-reflections` for shading limits and GPU acceptance.
+
+
+## Infrastructure catalog intent (M1.3)
+
+| MCP tool | RPC method | Notes |
+| --- | --- | --- |
+| `orbit_infrastructure_set_intent(edge_id, catalog_id, catalog_version, construction_mode, design_speed_kmh, ease_turns)` | `infrastructure.set_intent` | Transactionally stores catalog/version, terrain or supported mode, speed (zero = catalog default) and transition preference on an existing path edge. |
+
+The existing `orbit_path_inspect` / `path.inspect` returns the persisted infrastructure metadata from `PathEdgeToRpc`. This is a persistence and automation slice only: no alignment solve or Studio-specific path editing control is claimed. The generic schema-driven Inspector can expose registered properties once a path edge is selected.
