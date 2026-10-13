@@ -49,7 +49,8 @@ public:
                 PathDerivedProduct* const>
             products,
         bool drawDebugLines = true,
-        rhi::Texture* depth = nullptr);
+        rhi::Texture* depth = nullptr,
+        std::span<rhi::Texture* const> surfaceAttachments = {});
 
     // Generic camera-relative line overlay path reused by Studio gizmos.
     // Positions are already relative to camera.localPositionMeters.
