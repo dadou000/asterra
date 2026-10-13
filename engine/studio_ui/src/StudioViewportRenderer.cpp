@@ -3575,6 +3575,11 @@ StudioViewportRenderer::ComposeBase(
                         .access =
                             render_graph::Access::
                                 Write
+                    },
+                    {
+                        .texture = targets.depth,
+                        .state = rhi::ResourceState::DepthWrite,
+                        .access = render_graph::Access::Write
                     }
                 },
                 [this,
@@ -3585,7 +3590,8 @@ StudioViewportRenderer::ComposeBase(
                  frameGraph,
                  pathProducts,
                  atTime,
-                 drawPathDebug](
+                 drawPathDebug,
+                 depth = &view->Depth()](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -3598,7 +3604,8 @@ StudioViewportRenderer::ComposeBase(
                         *frameGraph,
                         atTime,
                         pathProducts,
-                        drawPathDebug);
+                        drawPathDebug,
+                        depth);
                 });
         }
 
