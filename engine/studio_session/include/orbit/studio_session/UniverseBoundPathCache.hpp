@@ -59,6 +59,9 @@ public:
 
     // Targeted semantic change notification: retains last-valid visual product
     // while marking it ineligible for a revision-cache hit.
+    // Called after committed scene changes; compare only dependencies of cached edges.
+    // Returns number of newly dirty/removed corridor products.
+    [[nodiscard]] std::size_t RefreshSemanticInvalidation();
     void MarkDirty(scene::ObjectId edge) noexcept;
     [[nodiscard]] bool IsDirty(scene::ObjectId edge) const noexcept;
     [[nodiscard]] bool Erase(scene::ObjectId edge) noexcept;
@@ -74,6 +77,14 @@ public:
     [[nodiscard]] u64 BindingGeneration() const noexcept;
 
 private:
+    struct DependencySnapshot
+    {
+        std::vector<std::optional<schema::PropertyValue>> properties;
+        [[nodiscard]] bool operator==(const DependencySnapshot&) const = default;
+    };
+    [[nodiscard]] DependencySnapshot CaptureDependencies(scene::ObjectId edge) const;
+    std::unordered_map<scene::ObjectId, DependencySnapshot> dependencySnapshots_;
+    u64 observedSceneRevision_{~u64{0}};
     editor_session::EditorWorldSession* world_{nullptr};
     std::unordered_map<
         scene::ObjectId,
