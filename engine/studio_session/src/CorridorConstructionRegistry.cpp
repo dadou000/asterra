@@ -35,6 +35,7 @@ bool CorridorConstructionRegistry::Publish(
     // objects must not walk every road's stations on every Studio tick.
     if (old != records_.end() &&
         old->second.level == physicalPageLevel &&
+        old->second.sourceRevision == base.Revision() &&
         old->second.entries.size() == entries.size())
     {
         bool revisionsMatch = true;
@@ -54,13 +55,15 @@ bool CorridorConstructionRegistry::Publish(
     BodyState next{};
     next.planet = planet.id;
     next.level = physicalPageLevel;
+    next.sourceRevision = base.Revision();
     next.publicationRevision =
         old == records_.end() ? 1U : old->second.publicationRevision + 1U;
 
     std::vector<path_geometry::CorridorTerrainLayer> layers;
     std::vector<terrain::PhysicalTerrainPageAddress> changedPages;
     bool changed = old == records_.end() ? !entries.empty() :
-        old->second.level != physicalPageLevel;
+        old->second.level != physicalPageLevel ||
+        old->second.sourceRevision != next.sourceRevision;
     for (auto& entry : entries)
     {
         std::vector<math::Double3> points;
@@ -86,7 +89,9 @@ bool CorridorConstructionRegistry::Publish(
                 prior = &match->second;
         }
         const bool modified = !prior || prior->revision != entry.revision ||
-            old->second.level != physicalPageLevel || prior->pages != *projected;
+            old->second.level != physicalPageLevel ||
+            old->second.sourceRevision != next.sourceRevision ||
+            prior->pages != *projected;
         if (modified)
         {
             changed = true;
