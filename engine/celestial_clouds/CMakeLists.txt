@@ -38,6 +38,13 @@ orbit_enable_warnings(
     OrbitCelestialClouds)
 
 if(BUILD_TESTING)
+    add_executable(OrbitUnifiedCloudFoundationTests
+        tests/UnifiedCloudFoundationTests.cpp)
+    target_link_libraries(OrbitUnifiedCloudFoundationTests PRIVATE Orbit::CelestialClouds)
+    target_compile_features(OrbitUnifiedCloudFoundationTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitUnifiedCloudFoundationTests)
+    add_test(NAME Orbit.UnifiedCloudFoundation COMMAND OrbitUnifiedCloudFoundationTests)
+
     add_executable(
         OrbitCelestialCloudTests
         tests/CloudFieldTests.cpp
