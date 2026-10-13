@@ -1,6 +1,7 @@
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 
 #include <algorithm>
+#include <orbit/paths/PathNetwork.hpp>
 #include <stdexcept>
 #include <utility>
 
@@ -108,6 +109,7 @@ void UniverseBoundPathCache::Store(
     corridorAuthoredSignatures_.erase(edge);
     dirtyCorridors_.erase(edge);
     products_[edge] = std::move(product);
+    dependencySnapshots_[edge] = CaptureDependencies(edge);
 
     if (routeGeneration.has_value())
     {
@@ -155,6 +157,78 @@ UniverseBoundPathCache::RouteGeneration(
         : std::optional<u64>(found->second);
 }
 
+UniverseBoundPathCache::DependencySnapshot
+UniverseBoundPathCache::CaptureDependencies(const scene::ObjectId edge) const
+{
+    DependencySnapshot snapshot;
+    if (world_ == nullptr || !world_->HasWorld()) return snapshot;
+    const auto& objects = world_->Objects();
+    const auto record = objects.Find(edge);
+    if (!record.has_value() || record->type != paths::kPathEdgeType)
+        return snapshot;
+    const auto capture = [&](scene::ObjectId id, schema::PropertyId key) {
+        snapshot.properties.push_back(objects.GetProperty(id, key));
+    };
+    // Stable graph topology, handles, profile, catalog and construction.
+    for (const auto key : {paths::kEdgeStartNode, paths::kEdgeEndNode,
+        paths::kEdgeMode, paths::kBezierStartHandle, paths::kBezierEndHandle,
+        paths::kEdgeProfileOverride, paths::kInfrastructureCatalogId,
+        paths::kInfrastructureCatalogVersion, paths::kInfrastructureConstruction,
+        paths::kInfrastructureDesignSpeed, paths::kInfrastructureEaseTurns})
+        capture(edge, key);
+    const auto endpoint = [&](schema::PropertyId key) {
+        const auto value = objects.GetProperty(edge, key);
+        if (!value || !std::holds_alternative<schema::ObjectReferenceValue>(*value)) return;
+        const auto id = std::get<schema::ObjectReferenceValue>(*value);
+        const scene::ObjectId node{.high=id.high, .low=id.low};
+        // Explicitly encode missing/deleted nodes in the snapshot.
+        snapshot.properties.emplace_back(objects.Find(node).has_value());
+        for (const auto property : {paths::kAnchorKind, paths::kAnchorFrame,
+            paths::kAnchorPosition, paths::kAnchorBody, paths::kAnchorSurface,
+            paths::kAnchorEntity, paths::kAnchorSocket})
+            capture(node, property);
+    };
+    endpoint(paths::kEdgeStartNode);
+    endpoint(paths::kEdgeEndNode);
+    // Network profile changes also affect derived geometry.
+    if (record->parent)
+        capture(*record->parent, paths::kNetworkProfile);
+    return snapshot;
+}
+
+std::size_t UniverseBoundPathCache::RefreshSemanticInvalidation()
+{
+    static_cast<void>(RefreshBinding());
+    if (world_ == nullptr || !world_->HasWorld()) return 0;
+    const u64 revision = world_->Objects().Revision();
+    if (revision == observedSceneRevision_) return 0;
+    observedSceneRevision_ = revision;
+    std::size_t invalidated = 0;
+    for (auto it = products_.begin(); it != products_.end();)
+    {
+        const auto edge = it->first;
+        if (!world_->Objects().Find(edge).has_value())
+        {
+            routeGenerations_.erase(edge);
+            corridorAuthoredSignatures_.erase(edge);
+            dependencySnapshots_.erase(edge);
+            dirtyCorridors_.erase(edge);
+            it = products_.erase(it);
+            ++invalidated;
+            continue;
+        }
+        const auto current = CaptureDependencies(edge);
+        const auto old = dependencySnapshots_.find(edge);
+        if (old == dependencySnapshots_.end() || old->second != current)
+        {
+            MarkDirty(edge);
+            ++invalidated;
+        }
+        ++it;
+    }
+    return invalidated;
+}
+
 void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
 {
     if (edge) dirtyCorridors_.insert(edge);
@@ -171,6 +245,7 @@ bool UniverseBoundPathCache::Erase(
     routeGenerations_.erase(edge);
     dirtyCorridors_.erase(edge);
     corridorAuthoredSignatures_.erase(edge);
+    dependencySnapshots_.erase(edge);
     return products_.erase(edge) != 0U;
 }
 
@@ -179,6 +254,8 @@ void UniverseBoundPathCache::Clear() noexcept
     products_.clear();
     routeGenerations_.clear();
     corridorAuthoredSignatures_.clear();
+    dependencySnapshots_.clear();
+    observedSceneRevision_ = ~u64{0};
     dirtyCorridors_.clear();
 }
 
