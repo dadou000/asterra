@@ -42,5 +42,29 @@ int main()
         {.maximumChordErrorMeters=0.01, .maximumBankStepRadians=0.015,
          .maximumSegmentLengthMeters=4.0, .maximumSubdivisions=10});
     CHECK(refined.stations==again.stations);
+    // Variable road width and crown retain the same vertex topology.
+    CorridorSweep varying=road;
+    varying.sectionKeys={
+        {0, {{{{-3.0,0},{0,0.06},{3.0,0}}}}},
+        {20, {{{{-5.0,0},{0,0.12},{5.0,0}}}}}
+    };
+    const auto varMesh=BuildCorridorMesh(stations,varying);
+    CHECK(varMesh.vertices.size()==roadMesh.vertices.size());
+    CHECK(std::abs(varMesh.vertices[0].position.z + 3.0)<1.e-9);
+    CHECK(std::abs(varMesh.vertices[3].position.z + 4.0)<1.e-9);
+    CHECK(std::abs(varMesh.vertices[7].position.y - 0.12)<1.e-9);
+    CHECK(BuildCorridorMesh(stations,varying)==varMesh);
+    // Refining the path must preserve the authored section keys.
+    const auto varRefined=RefineCorridor(stations,varying);
+    CHECK(varRefined.corridor.sectionKeys.size()==2);
+    CHECK(BuildCorridorMesh(varRefined.stations,varRefined.corridor).vertices.size() >
+          varMesh.vertices.size());
+    bool badKey=false;
+    try {
+        auto broken=varying;
+        broken.sectionKeys[1].bands[0].profile.pop_back();
+        (void)BuildCorridorMesh(stations,broken);
+    } catch (const std::invalid_argument&) {badKey=true;}
+    CHECK(badKey);
     return 0;
 }
