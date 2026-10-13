@@ -55,6 +55,19 @@ int main()
     Check(std::abs(ownedOverlay->Sample(query).elevationMeters) < 1.e-8);
     ownedOverlay.reset();
     Check(weakBase.expired());
+    // Recomposition must not change samples observed by an already
+    // captured worker snapshot, even when a newer source is rebound.
+    auto replacementBase = std::make_shared<FlatSource>();
+    auto oldWorkerSnapshot = overlay.Rebind(replacementBase);
+    const auto replacement = std::make_shared<FlatSource>();
+    const auto newWorkerSnapshot = oldWorkerSnapshot->Rebind(replacement);
+    Check(oldWorkerSnapshot.get() != newWorkerSnapshot.get());
+    Check(oldWorkerSnapshot->Revision() == newWorkerSnapshot->Revision());
+    Check(std::abs(oldWorkerSnapshot->Sample(query).elevationMeters -
+                   newWorkerSnapshot->Sample(query).elevationMeters) < 1.e-8);
+    Check(oldWorkerSnapshot->GenerationRevisions().authoring ==
+          newWorkerSnapshot->GenerationRevisions().authoring);
+
     query.planet = orbit::world::PlanetId::Random();
     Check(overlay.Sample(query).elevationMeters == 20.0);
     return 0;
