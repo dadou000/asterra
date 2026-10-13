@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/ReportsUi.hpp>
 
 #include <orbit/studio_ui/ReportThumbnailCache.hpp>
+#include <orbit/profiler/Profiler.hpp>
 
 #include <algorithm>
 #include <array>
@@ -313,6 +314,7 @@ bool ReportsController::CapturePerformanceIssue(const u64 id)
     performanceCapture_ = PendingPerformanceCapture{
         .reportId = id,
         .settleFrames = 8U,
+        .profileFrames = 120U,
         .waitingForPose = restored.pose == "pending"
     };
     screenshotError_.clear();
@@ -526,19 +528,41 @@ void ReportsController::Tick()
             --performanceCapture_->settleFrames;
             return;
         }
+        // Collect frames AFTER the saved condition and viewport have settled.
+        // profiler::Capture serializes the recent circular trace window; it
+        // must not be invoked on the first restored frame.
+        if (performanceCapture_->profileFrames > 0U)
+        {
+            --performanceCapture_->profileFrames;
+            return;
+        }
         const u64 id = performanceCapture_->reportId;
         performanceCapture_.reset();
         const auto* report = store_->Find(id);
         if (!report || (report->scopes & studio_reports::ScopeBit(
                 studio_reports::ReportScope::Performance)) == 0U)
         {
-            screenshotError_ = "Report deleted or no longer marked as performance issue.";
+            restoreStatus_ = "Profiler capture cancelled: report changed or deleted.";
             return;
         }
-        if (CaptureScreenshot(id, false))
-            restoreStatus_ = "Performance capture completed from recorded condition.";
-        else
-            restoreStatus_ = "Performance capture failed: " + screenshotError_;
+        try
+        {
+            if (store_->Path().empty())
+                throw std::runtime_error("Save the report store before capturing.");
+            const auto folder = store_->Path().parent_path() / "Captures";
+            std::filesystem::create_directories(folder);
+            const auto path = folder / std::format("report-{}-performance.json", id);
+            const auto info = profiler::Capture(path, 2000.0);
+            restoreStatus_ = std::format(
+                "Profiler trace saved: {} ({} events, {} threads).",
+                info.path.generic_string(), info.events, info.threads);
+            screenshotError_.clear();
+        }
+        catch (const std::exception& error)
+        {
+            screenshotError_ = error.what();
+            restoreStatus_ = "Profiler capture failed: " + screenshotError_;
+        }
         return;
     }
     if (!pending_.has_value())
@@ -1099,7 +1123,7 @@ void ReportsUi::DrawDetail(editor_ui::PanelContext& context)
     }
     if ((scopes & studio_reports::ScopeBit(ReportScope::Performance)) != 0U)
     {
-        if (context.Button("Auto-capture performance issue" +
+        if (context.Button("Capture performance trace from condition" +
                 suffix + "-perf-capture"))
         {
             try
@@ -1113,7 +1137,7 @@ void ReportsUi::DrawDetail(editor_ui::PanelContext& context)
                     editRevision_ = store.Revision();
                 }
                 static_cast<void>(controller_->CapturePerformanceIssue(id));
-                status_ = "Restoring recorded report condition; capture queued.";
+                status_ = "Restoring recorded condition; profiler trace queued.";
                 statusError_ = false;
             }
             catch (const std::exception& exception)
@@ -1122,9 +1146,9 @@ void ReportsUi::DrawDetail(editor_ui::PanelContext& context)
                 statusError_ = true;
             }
         }
-        context.MutedText("Restores the report's saved simulation time and camera, settles the viewport, then captures.");
+        context.MutedText("Restores saved time/camera, settles the viewport, records a profiler trace (JSON).");
         if (controller_->PerformanceCapturePending())
-            context.MutedText("Restoring / settling for performance capture...");
+            context.MutedText("Restoring / recording performance trace...");
     }
 
     bool deleted = false;
