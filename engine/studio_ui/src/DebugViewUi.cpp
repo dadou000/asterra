@@ -1,4 +1,5 @@
 #include <orbit/studio_ui/DebugViewUi.hpp>
+#include <cmath>
 
 namespace orbit::studio_ui
 {
@@ -38,8 +39,9 @@ namespace
 }
 } // namespace
 
-DebugViewUi::DebugViewUi(StudioRenderViewSet& views) noexcept
-    : views_(&views)
+DebugViewUi::DebugViewUi(StudioRenderViewSet& views,
+    studio_session::StudioSession& session) noexcept
+    : views_(&views), session_(&session)
 {
 }
 
@@ -79,6 +81,39 @@ void DebugViewUi::Draw(
     context.SameLine();
     open("Body Map / Debug View", "Terrain map##dbg-map");
     context.MutedText("Road cut, railway grading, physical-page residency and displacement tests use the existing terrain tools. An automated validation experiment is not registered yet.");
+
+    context.Heading("Construction terrain validation");
+    context.MutedText("Read-only validation of the active observer physical page.");
+    if (context.Button("Run validation##construction-terrain"))
+    {
+        constructionResult_ = "No live terrain viewport.";
+        if (session_ != nullptr)
+        {
+            const auto runtimes = session_->TerrainRuntime().Catalog();
+            for (const auto& runtime : runtimes)
+            {
+                if (runtime.viewportId != "studio.primary") continue;
+                const auto address = runtime.observerPhysicalPage;
+                const auto page = session_->TerrainPhysicalPages().Find(address);
+                const auto status = session_->TerrainPhysicalPages().PageStatus(address);
+                if (!page || !page->material || !status)
+                    constructionResult_ = "NOT READY: observer physical page unavailable.";
+                else if (page->revisionFingerprint == 0U ||
+                         page->revisionFingerprint != status->revisionFingerprint)
+                    constructionResult_ = "FAIL: published physical-page revision mismatch.";
+                else
+                {
+                    const auto h = page->SampleSurfaceHeight(0.5, 0.5);
+                    if (!h || !std::isfinite(*h))
+                        constructionResult_ = "FAIL: nonfinite or missing center height.";
+                    else
+                        constructionResult_ = "PASS: physical page ready, revision matched, height finite.";
+                }
+                break;
+            }
+        }
+    }
+    context.KeyValue("Construction", constructionResult_);
 
     context.Separator();
     context.Heading("Lighting / Atmosphere");
