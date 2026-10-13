@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <source_location>
 #include <string>
 
@@ -635,6 +637,22 @@ int main()
             corridorPages, 1U)); }
         catch (const std::invalid_argument&) { rejectedInfrastructurePages = true; }
         Check(rejectedInfrastructurePages);
+
+        // A published physical page is the shared height authority for
+        // potential collision and render consumers. Interpolate final material
+        // columns (not the analytic pre-construction terrain source).
+        orbit::studio_session::StudioTerrainPhysicalPageSnapshot surface{};
+        auto columns = std::make_shared<
+            orbit::terrain_material_column::MaterialColumnPage>(2U, 1.0);
+        columns->SetCell(0, 0, {.bedrockHeightMeters = 10.0F});
+        columns->SetCell(1, 0, {.bedrockHeightMeters = 20.0F});
+        columns->SetCell(0, 1, {.bedrockHeightMeters = 30.0F});
+        columns->SetCell(1, 1, {.bedrockHeightMeters = 40.0F});
+        surface.material = std::move(columns);
+        Check(std::abs(*surface.SampleSurfaceHeight(0.5, 0.5) - 25.0) < 1.e-6);
+        Check(!surface.SampleSurfaceHeight(-0.1, 0.5).has_value());
+        Check(!surface.SampleSurfaceHeight(0.0,
+            std::numeric_limits<double>::quiet_NaN()).has_value());
 
         const auto beforeCloseUniverseGeneration =
             studio.World().UniverseGeneration();
