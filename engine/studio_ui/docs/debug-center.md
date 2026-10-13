@@ -78,3 +78,13 @@ Older docs and code may describe debugging inside Planet tools, Lighting experim
 5. Run `python tools/orbit_docs_cli.py check` and the Studio test suite.
 
 **Validation status:** Source wiring exists on Harmony, but neither a local build nor interactive verification of this workspace is recorded here.
+
+## Report capture controls
+
+Open **Debug → Reports** and select a report. The **Capture tools** section offers:
+
+- **Export capture**: copies the selected report's starting-condition PNG to the report store's adjacent `Captures/report-<id>-start.png`. This exports the existing evidence and does not re-render or alter the stored report screenshot. A missing screenshot or unsaved report store produces an error.
+- **Open capture folder**: creates (if absent) and opens the same `Captures` directory through the platform's existing native file-browser hook.
+- **Auto-capture performance issue**: visible when the selected report has **Performance issue** checked; captures the current primary viewport through the existing report screenshot hook and attaches it to the report's starting condition. The button does **not** revisit historical report camera poses or silently capture all marked reports. It is unavailable while the high-resolution viewport capture service is active.
+
+The screenshot hook and native folder opening are wired by `apps/editor/src/StudioApplication.cpp`. They are shared with the existing report capture/thumbnail workflow; this is not a second capture implementation. The current viewport capture is evidence of the present scene, not a profiler trace. For a complete performance report, attach existing profiler timings separately.
