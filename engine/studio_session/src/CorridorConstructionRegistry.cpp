@@ -9,7 +9,8 @@ namespace orbit::studio_session
 {
 std::vector<terrain::PhysicalTerrainPageAddress>
 CorridorConstructionRegistry::PagesForBody(
-    const universe::BodyId body, const std::size_t maximumPages) const
+    const universe::BodyId body, const std::size_t maximumPages,
+    const math::Double3* observerDirection) const
 {
     std::vector<terrain::PhysicalTerrainPageAddress> pages;
     if (maximumPages == 0U) return pages;
@@ -27,6 +28,18 @@ CorridorConstructionRegistry::PagesForBody(
             static_cast<u8>(b.tile.face), b.tile.level, b.tile.x, b.tile.y};
     });
     pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+    if (observerDirection && math::LengthSquared(*observerDirection) > 0.5)
+    {
+        const auto direction = math::Normalize(*observerDirection);
+        std::stable_sort(pages.begin(), pages.end(),
+            [&](const auto& a, const auto& b) {
+                const f64 da = math::Dot(direction,
+                    world::CubeToUnitDirection(world::TileCenter(a.tile)));
+                const f64 db = math::Dot(direction,
+                    world::CubeToUnitDirection(world::TileCenter(b.tile)));
+                return da > db;
+            });
+    }
     if (pages.size() > maximumPages) pages.resize(maximumPages);
     return pages;
 }
