@@ -114,6 +114,29 @@ PathMesh BuildCorridorMesh(
             }
         }
     }
+    // Derive normals from the *actual* swept triangles, not the station up
+    // vector: crowns, banking, elevation keyframes and curved alignments all
+    // modify the physical surface.
+    std::vector<math::Double3> accumulated(mesh.vertices.size());
+    for (std::size_t k = 0; k + 2 < mesh.indices.size(); k += 3)
+    {
+        const auto ia = mesh.indices[k], ib = mesh.indices[k+1],
+                   ic = mesh.indices[k+2];
+        const auto& a = mesh.vertices[ia].position;
+        const auto& b = mesh.vertices[ib].position;
+        const auto& c = mesh.vertices[ic].position;
+        auto face = math::Cross(b-a, c-a);
+        // Sweep winding is not an up-vector guarantee; choose the
+        // hemisphere of the frame's authored upward normal.
+        if (math::Dot(face, mesh.vertices[ia].normal) < 0.0)
+            face = face * -1.0;
+        accumulated[ia] = accumulated[ia] + face;
+        accumulated[ib] = accumulated[ib] + face;
+        accumulated[ic] = accumulated[ic] + face;
+    }
+    for (std::size_t i = 0; i < mesh.vertices.size(); ++i)
+        if (math::LengthSquared(accumulated[i]) > 1.0e-20)
+            mesh.vertices[i].normal = math::Normalize(accumulated[i]);
     return mesh;
 }
 } // namespace orbit::path_geometry
