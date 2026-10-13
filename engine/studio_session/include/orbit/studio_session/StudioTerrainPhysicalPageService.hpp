@@ -2,6 +2,7 @@
 
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/jobs/JobSystem.hpp>
+#include <orbit/path_geometry/CorridorTerrainSource.hpp>
 #include <orbit/studio_session/StudioTerrainRebuildScheduler.hpp>
 #include <orbit/studio_session/StudioTerrainRuntimeBridge.hpp>
 #include <orbit/terrain/TerrainContracts.hpp>
@@ -75,6 +76,14 @@ public:
     void Sync(
         std::span<const StudioTerrainViewportRuntimeSnapshot> runtimes,
         time::SimulationTime atTime = {});
+
+    // Stage an immutable construction snapshot, then invalidate exactly the
+    // supplied old+new footprint pages. All addresses must belong to the
+    // owning planetary body. An empty set is intentionally rejected.
+    void StageCorridorConstruction(
+        universe::BodyId body,
+        std::shared_ptr<const path_geometry::CorridorTerrainSource> overlay,
+        std::span<const terrain::PhysicalTerrainPageAddress> affectedPages);
 
     void QueueChange(
         const terrain_dependency::TerrainInvalidationRequest& request);
