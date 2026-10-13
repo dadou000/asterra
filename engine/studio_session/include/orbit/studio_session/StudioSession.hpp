@@ -88,6 +88,12 @@ public:
     [[nodiscard]] const terrain_debug::TerrainDebugLivePages&
     TerrainDebugPages() const noexcept;
 
+    // Select a bounded sparse set of authored construction pages for the
+    // viewport GPU compositor and asynchronous physical residency.
+    [[nodiscard]] std::vector<terrain::PhysicalTerrainPageAddress>
+    ConstructionPhysicalPages(universe::BodyId body,
+        std::size_t maximumPages = 8U) const;
+
     [[nodiscard]] StudioTerrainPhysicalPageService&
     TerrainPhysicalPages() noexcept;
     [[nodiscard]] const StudioTerrainPhysicalPageService&
