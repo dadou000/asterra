@@ -5,7 +5,7 @@ kind = "concept"
 status = "stable"
 owner_module = "OrbitCelestialAtmosphere"
 summary = """
-Static LUTs (transmittance 128x32, multiple scattering 32x16) share AtmosphereFingerprint; the sky-view LUT (128x64) \
+Static LUTs (transmittance 256x128, multiple scattering 32x16) share AtmosphereFingerprint; the sky-view LUT (128x64) \
 adds observer radius, source direction and incident irradiance (AtmosphereSkyFingerprint). Composition/profile edits \
 invalidate everything; camera altitude, source motion and eclipse changes invalidate the sky view only. GPU LUTs are \
 RGBA16F and ReplaceSkyView swaps just the view-dependent texture."""
@@ -19,6 +19,8 @@ sources = [
 ]
 symbols = ["AtmosphereLutConfig", "BuildStaticLuts", "BuildSkyView", "AtmosphereFingerprint", "AtmosphereSkyFingerprint", "SkyViewInput", "ReplaceSkyView", "SkyFrameSunDirection", "QuantizedSkyObserverRadius"]
 invariants = [
+  "Altitude LUT coordinates are sqrt((r-bottom)/(top-bottom)), concentrating texels near the ground. Source angular radius is asin(photosphereRadius/sourceDistance); the shared stellar disc horizon model supplies a continuous penumbra. Direct surfaces sample sunlight attenuation at their own position, not at the camera.",
+  "CPU LUT sampling uses texel-centre coordinates (unit * size - 0.5), matching normalized GPU sampling. SunTransmittanceAt applies exact geometric ground blocking before interpolation, so a coarse table cannot leak direct sunlight below the curved horizon on small planets.",
   "Density is exponential with altitude above bottomRadiusMeters: rho_R = exp(-h/H_R), rho_M = exp(-h/H_M); the absorber is a triangular vertical layer with an explicit centre height and half width.",
   "sigma_s = beta_R rho_R + beta_M_s rho_M; sigma_t = beta_R rho_R + beta_M_e rho_M + beta_abs rho_abs. Mie extinction must be >= Mie scattering per channel and ground albedo must be in [0, 1] (both validated).",
   "Transmittance is a 2D LUT over (radius within the shell, direction cosine to the local radial), integrated deterministically with trapezoids; rays blocked by the ground return zero transmittance to the top boundary; the radius mapping derives from bottom/top radius, not Earth constants.",
@@ -38,7 +40,7 @@ verify = [
   "StudioAtmosphereDiagnostics: body, static fingerprint, sky fingerprint, observer radius/altitude, direct irradiance and all LUT dimensions.",
   "Climbing from the ground to orbit rebuilds the sky view a few times per altitude decade, not every frame (profile with orbit_profiler_capture: atmosphere.build_sky_view scope).",
 ]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "ab6e2066"
 
 [[diagnose]]
 symptom = "sky or limb looks wrong after editing atmosphere properties (stale or unchanged)"
@@ -63,7 +65,7 @@ docs = ["/rendering/terrain/clipmaps/rebuild-hitches"]
 
 `AtmosphereParameters{}` is Earth-like: bottom 6,371 km, top 6,471 km, Rayleigh scale height 8 km, Mie scale height 1.2 km
 and g = 0.8, absorber centred at 25 km with a 15 km half width, ground albedo 0.1. `AtmosphereLutConfig{}`:
-transmittance 128x32, multiple scattering 32x16, sky view 128x64, with 64 optical-depth steps, 32 multi-scattering
+transmittance 256x128, multiple scattering 32x16, sky view 128x64, with 128 optical-depth steps, 32 multi-scattering
 directions and 48 sky-view steps.
 
 ## Intentional limits (stated at the M21 baseline; verify before relying)

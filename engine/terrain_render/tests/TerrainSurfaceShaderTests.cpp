@@ -66,6 +66,19 @@ int main()
             orbit::terrain_render::BuildClipmapBedPixelShader(
                 orbit::terrain_render::detail::kTerrainSurfacePixelShader));
 
+    // The bed rewrite removes water shading only. The existing diagnostic
+    // must still return emissive colours before ordinary material output.
+    const auto debugStart = bedSource.find("if (input.waterDepth > 4.0)");
+    const auto debugReturn = bedSource.find("return debugOutput;", debugStart);
+    const auto effectsStage = bedSource.find("float3 surfaceEmission =");
+    if (debugStart == std::string::npos || debugReturn == std::string::npos ||
+        effectsStage == std::string::npos ||
+        debugReturn >= effectsStage)
+    {
+        std::cerr << "Clipmap bed assembly removed or altered the shading diagnostic.\n";
+        return EXIT_FAILURE;
+    }
+
     const struct
     {
         const char* name;

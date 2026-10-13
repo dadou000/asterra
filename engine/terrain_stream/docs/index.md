@@ -9,13 +9,18 @@ keywords = ["streaming", "toroidal", "residency", "sample streamer", "strip refr
 sources = [
   "engine/terrain_stream/include/orbit/terrain_stream/TerrainMorphRefresh.hpp",
   "engine/terrain_stream/include/orbit/terrain_stream/TerrainSampleStreamer.hpp",
+  "engine/terrain_stream/src/TerrainSampleStreamer.cpp",
+  "engine/terrain_render/src/TerrainPreviewRenderer.cpp",
+  "engine/terrain_gpu/src/FieldGenerationCompute.hpp",
+  "tests/TerrainSampleStreamerTests.cpp",
   "engine/terrain_stream/include/orbit/terrain_stream/ToroidalResidency.hpp",
   "engine/terrain_stream/CMakeLists.txt",
 ]
 symbols = ["ToroidalResidency", "TerrainSampleStreamer", "TerrainSampleRequest", "TerrainSamplePatch"]
 invariants = [
   "Ordinary clipmap motion changes a level's window centre by exact integer cell steps while surfaceFrame stays fixed, so retained toroidal samples keep their world-space address (/rendering/terrain/clipmaps/lattice-and-tracking).",
-  "Shading normals/slopes are sampled at a fine, LOD-independent footprint (finite differences at a small epsilon) regardless of the level's own geometric spacing, so every ring shades with the micro-relief the finest level would see; a zero footprint falls back to the level's own spacing (legacy behaviour).",
+  "Shading-normal footprint/epsilon overrides are optional; zero falls back to the level footprint/spacing. Production explicitly supplies each ring's own footprint/spacing to avoid undersampled micro-relief on coarse rings.",
+  "Morph slopes blend toward the parent evaluated with coarseFootprintMeters and coarseSpacingMeters, matching the GPU. Fine overrides must not leak into the coarse endpoint. The CPU reuses coarseSample as the center height at that same footprint.",
   "Samples containing frame-relative morph targets and pre-blended heights/biomes need extended strip updates: call TerrainMorphRefresh before submitting sample jobs and commit the resulting patches together with the matching motion and residency state, otherwise rings and residency origins disagree.",
   "Eight normalised biome weights are packed as two RGBA8 values per sample.",
 ]
@@ -24,10 +29,10 @@ depends_on = ["/foundation/core", "/foundation/jobs", "/rendering/terrain/clipma
 used_by = ["/editor/studio-session", "/rendering/terrain/gpu-passes"]
 verify = [
   "ctest -R Orbit.TerrainStream",
-  "ctest -R Orbit.TerrainSampleStreamer",
+  "ctest -R Orbit.TerrainSampleStreamer (also compares child slopes with independently generated parent samples on a footprint-dependent curved surface)",
   "ctest -R Orbit.TerrainMorphRefresh",
 ]
-verified = "b0a0de7f"
+verified = "8dc17324af29e897a3eb204ad9d93e3319b832c4"
 +++
 
 

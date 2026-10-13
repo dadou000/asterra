@@ -7,6 +7,7 @@ summary = "A map of the large studio_ui module by responsibility: the app-level 
 owner_module = "OrbitStudioUi"
 keywords = ["studio ui", "shell model", "view continuity", "viewport capture", "inspector extension", "flat map", "profiler panel", "panels", "workspace", "expansion shell", "authoring modes", "8k capture", "tiled capture"]
 sources = [
+  "engine/studio_ui/src/StudioViewportTerrainSunShadow.cpp",
   "engine/studio_ui/src/StudioShellQuickCreatePopup.cpp",
   "engine/studio_ui/src/StudioShellQuickCreateBrowser.cpp",
   "engine/studio_ui/src/StudioShellCommandPalettePopup.cpp",
@@ -38,6 +39,7 @@ sources = [
 ]
 symbols = ["StudioExpansionShell", "StudioInspectorProviderRegistration", "StudioViewContinuity", "ViewportCaptureService", "ProfilerUi", "StudioTerrainNavigationConfig"]
 invariants = [
+  "StudioViewportRenderer builds the shared terrain sun shadow field asynchronously, retaining the canonical source through the job. Cache keys are body, source identity/revision and radius; camera/LOD/sun changes never rebuild the field. Only a still-current validated candidate is uploaded/activated; failures keep the prior same-body field. Immutable shared buffers pin graph callbacks and Vulkan defers resource destruction through GPU completion. Pending generation keeps the host rendering so a still view installs its finished field.",
   "Snap remains visible with Select active and opens the same settings editor used by Properties. Distance units default to meters and support mm/cm/m/km/in/ft; the manipulator still consumes canonical meters. Angle increments use degrees and scale uses percent. StudioViewportPanels::SetSnapping validates finite positive increments before changing shared state; viewport.snapping_get/set and MCP reuse it. Distance and preferred unit persist in StudioPersistentState, and old state defaults to meters. Native implementation changes use the central generation handoff.",
   "Build groups transform tools with smaller World/Local/Snap modifiers, categorized creation menus (Meshes, Procedurals, Lighting, VFX, SFX), selection editing, and history. The shell no longer reserves a selected-object breadcrumb row; command shortcuts and argument forms are serviced by the remaining context band. Categories gather registered creation commands and plugin contributions and use the existing owners, including argument forms for parameterized tools. Empty categories report that no tools are registered. Selected tools use an accent tint; unavailable creation, selection, and history commands are disabled. Universe capability toggles use the same presentation. Narrow layouts retain all actions as compact icons with tooltips, and UI callbacks retain the existing RPC-backed owners.",
   "StudioExpansionShell owns lifecycle and contribution registration; StudioShellPersistence, StudioShellInspector, StudioShellTerrainTools, StudioShellNavigation and StudioShellViewportBand implement its independent responsibilities. Navigation delegates command palette, quick-create popup and full argument/browser forms to separate implementation units. All share the same shell-owned state and existing UI/RPC authority.",
@@ -71,7 +73,7 @@ verify = [
   "ctest -R Orbit.StudioViewportNavigation",
   "ctest -R Orbit.ProfilerModel",
 ]
-verified = "329654cd3290274cd945e9daec3fd214267ef2c8"
+verified = "ab6e2066"
 [routes]
 "Implementation planning bubbles, project persistence or planning MCP tools" = "/editor/studio-ui/planning"
 "Celestial panel, Celestial Tools, atmosphere preset buttons, System View canvas or orbit handles misbehave" = "/editor/studio-ui/celestial-authoring"

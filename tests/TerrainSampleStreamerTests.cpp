@@ -4,6 +4,7 @@
 #include <orbit/terrain_stream/TerrainSampleStreamer.hpp>
 #include <orbit/world/Planet.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <iostream>
@@ -74,6 +75,31 @@ public:
             }
         };
     }
+};
+
+// Both filtering footprint and finite-difference spacing change this source's
+// slopes. A constant-height source cannot detect a parent-normal mismatch.
+class SlopingTerrainSource final : public orbit::terrain::TerrainSource
+{
+public:
+    SlopingTerrainSource(const orbit::world::SurfaceFrame& frame,
+                         const orbit::f64 radius) noexcept
+        : frame_(frame), radius_(radius) {}
+
+    [[nodiscard]] orbit::terrain::TerrainSample Sample(
+        const orbit::terrain::TerrainQuery& query) const noexcept override
+    {
+        const auto east = orbit::math::Dot(query.unitDirection, frame_.east) * radius_;
+        const auto north = orbit::math::Dot(query.unitDirection, frame_.north) * radius_;
+        return {
+            .elevationMeters = query.footprintMeters * east +
+                0.05 * east * east + 0.02 * north * north
+        };
+    }
+
+private:
+    orbit::world::SurfaceFrame frame_;
+    orbit::f64 radius_;
 };
 
 bool NearlyEqual(
@@ -466,6 +492,59 @@ int main()
         std::cerr
             << "Terrain LOD morph did not reach the coarse edge height.\n";
         return 1;
+    }
+
+    // Compare the morphed child with independently generated parent samples,
+    // including the perimeter, an intermediate blend and the untouched centre.
+    const SlopingTerrainSource slopingSource(frame, planet.radiusMeters);
+    orbit::terrain_stream::TerrainSampleStreamer slopeStreamer(jobs, planet, slopingSource);
+    auto childRequest = morphRequests[0];
+    auto fineRequest = childRequest;
+    fineRequest.morphToCoarser = false;
+    auto parentRequest = fineRequest;
+    parentRequest.spacingMeters = childRequest.coarseSpacingMeters;
+    parentRequest.footprintMeters = childRequest.coarseFootprintMeters;
+    parentRequest.centerOffsetMeters = {0.0, 0.0};
+    const orbit::terrain_stream::TerrainSampleRequest slopeRequests[]{
+        childRequest, fineRequest, parentRequest
+    };
+    const auto slopeResults = slopeStreamer.GenerateBlocking(slopeRequests);
+    const auto& child = slopeResults[0].patches[0].samples;
+    const auto& fine = slopeResults[1].patches[0].samples;
+    const auto& parent = slopeResults[2].patches[0].samples;
+    for (orbit::u32 y = 0; y < 9; ++y)
+    {
+        for (orbit::u32 x = 0; x < 9; ++x)
+        {
+            const auto index = y * 9 + x;
+            const auto& actual = child[index];
+            const auto parentX = 4 + static_cast<int>(std::lround(
+                actual.morphTargetXMeters / parentRequest.spacingMeters));
+            const auto parentY = 4 + static_cast<int>(std::lround(
+                actual.morphTargetYMeters / parentRequest.spacingMeters));
+            const auto& coarse = parent[parentY * 9 + parentX];
+            const auto edgeDistance = std::max(
+                std::abs(static_cast<int>(x) - 4),
+                std::abs(static_cast<int>(y) - 4)) * childRequest.spacingMeters;
+            const auto t = std::clamp(
+                (edgeDistance - childRequest.morphStartHalfExtentMeters) /
+                    (childRequest.morphEndHalfExtentMeters - childRequest.morphStartHalfExtentMeters),
+                0.0, 1.0);
+            const auto morph = t * t * (3.0 - 2.0 * t);
+            const auto expectedEast = fine[index].fineSlopeEast +
+                (coarse.fineSlopeEast - fine[index].fineSlopeEast) * morph;
+            const auto expectedNorth = fine[index].fineSlopeNorth +
+                (coarse.fineSlopeNorth - fine[index].fineSlopeNorth) * morph;
+            if (!std::isfinite(actual.fineSlopeEast) ||
+                !std::isfinite(actual.fineSlopeNorth) ||
+                std::abs(actual.fineSlopeEast - expectedEast) > 1.0e-5 ||
+                std::abs(actual.fineSlopeNorth - expectedNorth) > 1.0e-5)
+            {
+                std::cerr << "Terrain morph normals disagree with independent parent slopes at "
+                          << x << ", " << y << ".\n";
+                return 1;
+            }
+        }
     }
 
     return 0;

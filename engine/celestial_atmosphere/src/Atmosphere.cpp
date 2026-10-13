@@ -386,40 +386,14 @@ struct RayBoundary
             0.0,
             1.0);
 
-    // sqrt mapping allocates more resolution near the dense lower atmosphere.
-    return
-        std::sqrt(
-            p.bottomRadiusMeters *
-                p.bottomRadiusMeters +
-            u *
-                (p.topRadiusMeters *
-                     p.topRadiusMeters -
-                 p.bottomRadiusMeters *
-                     p.bottomRadiusMeters));
+    // Quadratic altitude allocates texels to the dense lower atmosphere.
+    return p.bottomRadiusMeters + u * u * (p.topRadiusMeters - p.bottomRadiusMeters);
 }
 
-[[nodiscard]] f64 UnitFromRadius(
-    const AtmosphereParameters& p,
-    const f64 radius) noexcept
+[[nodiscard]] f64 UnitFromRadius(const AtmosphereParameters& p, const f64 radius) noexcept
 {
-    const f64 denominator =
-        p.topRadiusMeters *
-            p.topRadiusMeters -
-        p.bottomRadiusMeters *
-            p.bottomRadiusMeters;
-
-    if (denominator <= 0.0)
-    {
-        return 0.0;
-    }
-
-    return std::clamp(
-        (radius * radius -
-         p.bottomRadiusMeters *
-             p.bottomRadiusMeters) /
-            denominator,
-        0.0,
-        1.0);
+    return std::sqrt(std::clamp((radius - p.bottomRadiusMeters) /
+        std::max(p.topRadiusMeters - p.bottomRadiusMeters, 1.0), 0.0, 1.0));
 }
 
 [[nodiscard]] math::Double3 LutRgb(
@@ -427,14 +401,10 @@ struct RayBoundary
     const f64 u,
     const f64 v)
 {
-    const f64 fx =
-        std::clamp(u, 0.0, 1.0) *
-        static_cast<f64>(
-            lut.width - 1U);
-    const f64 fy =
-        std::clamp(v, 0.0, 1.0) *
-        static_cast<f64>(
-            lut.height - 1U);
+    // LUT builders sample texel centres. Match normalized GPU sampling,
+    // rather than mapping [0,1] to the first/last centre a second time.
+    const f64 fx = std::clamp(u * lut.width - 0.5, 0.0, static_cast<f64>(lut.width - 1U));
+    const f64 fy = std::clamp(v * lut.height - 0.5, 0.0, static_cast<f64>(lut.height - 1U));
 
     const u32 x0 =
         static_cast<u32>(
@@ -724,7 +694,7 @@ u64 AtmosphereFingerprint(
     Validate(p, c);
 
     u64 seed =
-        0x4d323141544d4f31ULL;
+        0x4d323141544d4f32ULL;
 
     for (const auto value : {
              p.bottomRadiusMeters,
@@ -1599,6 +1569,15 @@ math::Double3 SunTransmittanceAt(
     const f64 radiusMeters,
     const f64 sunCosineZenith)
 {
+    // Ground blocking is a geometric discontinuity. Bilinear interpolation
+    // across the LUT's horizon cannot decide whether the star is visible.
+    const f64 mu = std::clamp(sunCosineZenith, -1.0, 1.0);
+    if (mu < 0.0 && radiusMeters * radiusMeters * (1.0 - mu * mu) <
+            parameters.bottomRadiusMeters * parameters.bottomRadiusMeters)
+    {
+        return {};
+    }
+
     if (staticLuts.transmittance.width == 0U ||
         staticLuts.transmittance.height == 0U)
     {

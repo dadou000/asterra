@@ -17,8 +17,9 @@ enum class SurfaceEffectKind : u32
 };
 
 // GPU-facing planetary stamp. Storing a normalized body-fixed direction rather
-// than a multi-million-metre float position preserves sub-metre footprints on
-// large planets and is naturally stable under floating-origin shifts.
+// than a multi-million-metre float position is stable under floating-origin
+// shifts. Chord-based evaluation avoids dot/acos cancellation, but float3
+// direction quantization still limits very small footprints on large planets.
 struct SurfaceEffectGpuStamp
 {
     math::Float3 bodyFixedDirection{0.0F, 1.0F, 0.0F};

@@ -48,10 +48,10 @@ related = [
 ]
 depends_on = ["/rendering/terrain/clipmaps", "/rendering/terrain/streaming", "/rendering/shader-compiler", "/rules/hot-iteration"]
 verify = [
-  "ctest -R Orbit.TerrainSurfaceShader (compiles base, effect, bed, water vertex and water pixel variants with DXC and checks the bed variant draws no water).",
+  "ctest -R Orbit.TerrainSurfaceShader (compiles base, effect, bed, terrain vertex, water vertex and water pixel variants with DXC; checks the bed draws no water and preserves shading diagnostics before effects).",
   "Switch on clipmap_hole_view, clipmap_projection_view and clipmap_shading_view one at a time (view.terrain_overlays_set) after any change to the debug branches of the vertex shader.",
 ]
-verified = "55d48117"
+verified = "8dc17324af29e897a3eb204ad9d93e3319b832c4"
 
 [routes]
 "the finer level's hole, fade or dither looks wrong" = "/rendering/terrain/clipmaps/level-cross-fade"

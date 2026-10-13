@@ -14,12 +14,15 @@ keywords = ["atmosphere", "sky", "scattering", "rayleigh", "mie", "transmittance
 sources = [
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/Atmosphere.hpp",
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/AtmosphereRenderer.hpp",
+  "engine/celestial_atmosphere/src/AtmosphereRenderer.cpp",
+  "engine/lighting/include/orbit/lighting/SunVisibilityShader.hpp",
   "engine/celestial_atmosphere/include/orbit/celestial_atmosphere/SkyIrradiance.hpp",
   "engine/world_model/include/orbit/world_model/CelestialAtmosphereBinding.hpp",
   "engine/studio_ui/src/StudioViewportRenderer.cpp",
 ]
 symbols = ["AtmosphereParameters", "AtmosphereRenderer", "GpuAtmosphereLuts", "ResolveAtmosphereBody", "SunTransmittanceAt"]
 invariants = [
+  "Extinction integrates with up to 96 steps; shared direct sunlight is evaluated at eight-step boundaries and linearly reconstructed between them, giving continuous transitions with at most 13 nested shadow queries. This is a bounded reconstruction approximation, not 192 terrain traversals per pixel.",
   "The Atmosphere capability is the only persistent atmosphere authority: there is exactly one enabled Physical Scattering capability per body (duplicates are rejected) and ResolveAtmosphereBody maps it to AtmosphereParameters. Do not add a second atmosphere representation or cache.",
   "Nothing Earth-specific is baked into the runtime: body radius, atmosphere radius, density profiles, scattering coefficients and LUT resolutions are explicit inputs (the struct defaults are only an Earth-like starting point).",
   "The body reference radius is the lower atmosphere boundary; altitude is measured from bottomRadiusMeters.",
@@ -27,7 +30,9 @@ invariants = [
   "The same static LUT authority serves ground sky and orbital limb: observers outside the atmosphere are not clamped to the top radius.",
   "Sunlight on surfaces and clouds comes from the same transmittance LUT the sky is made of (SunTransmittanceAt), so lit surfaces receive the same reddened sunlight as the sky.",
   "bypass_atmosphere skips the atmosphere pass for a view (and, as documented, the clouds drawn after it); it is a diagnostic flag and must be restored.",
-  "The aerial-perspective raymarch uses ceil(pathLength / 300 m) + 3 steps clamped to 4..40: near-field surface pixels take a handful of steps, long space-to-ground paths keep all 40.",
+  "Direct single scattering evaluates the shared body-fixed TerrainSunShadowField at every integration point before reading the transmittance LUT; terrain outside the framebuffer still casts a shadow and blocked sunlight does not remove indirect multiple scattering. Until the first valid field is ready, analytic body occlusion supplies the fallback. Field detail is limited by its global sampling resolution.",
+  "Native and embedded shader edits use the central incremental Studio generation handoff; failed candidates preserve the active generation and authoritative world/camera state.",
+  "The aerial-perspective raymarch uses ceil(pathLength / 300 m) + 3 steps clamped to 4..96: near-field surface pixels take a handful of steps, long space-to-ground paths keep all 96.",
 ]
 related = ["/rendering/clouds", "/rendering/lighting"]
 depends_on = ["/rendering"]
@@ -36,7 +41,7 @@ verify = [
   "ctest -R Orbit.CelestialAtmosphere (Atmosphere and SkyIrradiance tests), Orbit.CelestialAtmosphereBinding and Orbit.AtmospherePropertySolver.",
   "orbit_view_terrain_layers_set(bypass_atmosphere=true): the sky, haze and limb disappear; restoring false brings them back without a restart.",
 ]
-verified = "1229ef74"
+verified = "ab6e2066"
 
 [routes]
 "how the LUTs are built, fingerprints, what invalidates what, sky view, limb" = "lut-pipeline"

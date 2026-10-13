@@ -39,14 +39,11 @@ namespace
 {
     const auto na = NormalizeSafe(a);
     const auto nb = NormalizeSafe(b);
-    const f32 cosine =
-        std::clamp(
-            na.x * nb.x +
-            na.y * nb.y +
-            na.z * nb.z,
-            -1.0F,
-            1.0F);
-    return std::acos(cosine);
+    // acos(dot) loses metre-scale separations at planetary radii: the dot
+    // rounds to 1 long before the direction components become equal. The
+    // normalized chord retains those component differences (GPU parity).
+    const f32 halfChord = std::clamp(math::Length(na - nb) * 0.5F, 0.0F, 1.0F);
+    return 2.0F * std::asin(halfChord);
 }
 
 [[nodiscard]] math::Float3 Lerp(

@@ -26,6 +26,8 @@ target_link_libraries(
         Orbit::Shader
         Orbit::Terrain
         Orbit::Time
+    PRIVATE
+        Orbit::Lighting
 )
 
 target_compile_features(

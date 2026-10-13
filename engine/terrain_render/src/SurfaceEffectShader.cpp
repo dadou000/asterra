@@ -64,12 +64,11 @@ SurfaceEffectInfluence EvaluateSurfaceEffects(float3 bodyFixedDirection)
             break;
         }
 
-        const float cosine =
-            clamp(
-                dot(direction, normalize(stamp.bodyFixedDirection)),
-                -1.0,
-                1.0);
-        const float distance = acos(cosine);
+        // Keep small angular differences: acos(dot) rounds metre-scale
+        // planetary footprints to zero distance. Mirrors the CPU reference.
+        const float halfChord = saturate(
+            length(direction - normalize(stamp.bodyFixedDirection)) * 0.5);
+        const float distance = 2.0 * asin(halfChord);
 
         if (distance >= stamp.angularRadiusRadians)
         {

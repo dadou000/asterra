@@ -25,12 +25,10 @@ struct TerrainSampleRequest
     f64 coarseSpacingMeters{0.0};
     f64 coarseFootprintMeters{0.0};
 
-    // Shading normals are sampled at this footprint/epsilon regardless
-    // of this level's own (possibly much coarser) geometric spacing, so
-    // every ring shades with the same ground-truth micro-relief the
-    // finest clipmap level would see up close instead of a blocky
-    // normal derived from wide-apart geometry samples. Zero falls back
-    // to this level's own footprint/spacing (legacy behavior).
+    // Optional shading-normal footprint/epsilon overrides. Zero uses this
+    // level's own footprint/spacing; production also supplies those explicitly
+    // to avoid sampling sub-pixel micro-relief on coarse rings. During morph,
+    // the parent slope always uses coarseFootprintMeters/coarseSpacingMeters.
     f64 fineNormalFootprintMeters{0.0};
     f64 fineNormalEpsilonMeters{0.0};
 

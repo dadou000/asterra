@@ -146,6 +146,7 @@ ResolveStudioDirectLight(
             static_cast<f32>(direction.y),
             static_cast<f32>(direction.z)
         };
+        result.sunAngularRadiusRadians = static_cast<f32>(result.direct->sourceAngularRadiusRadians);
         result.irradianceScale = static_cast<f32>(
             result.direct->irradianceWattsPerSquareMeter /
             kStudioReferenceIrradianceWattsPerSquareMeter);

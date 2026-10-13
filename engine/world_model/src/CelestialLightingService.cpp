@@ -276,6 +276,8 @@ CelestialLightingService::DirectLightingAtBody(
             *receiverBodyFixedToEmitter,
         .sourceDistanceMeters =
             sourceDistance,
+        .sourceAngularRadiusRadians = std::asin(std::clamp(
+            radiative->photosphereRadiusMeters / sourceDistance, 0.0, 1.0)),
         .visibleFraction =
             combined.visibleFraction,
         .irradianceWattsPerSquareMeter =

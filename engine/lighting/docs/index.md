@@ -12,6 +12,11 @@ terrain, authored proxies and analytic bodies. Every stage can be bypassed per v
 keywords = ["lighting", "direct lighting", "indirect", "radiance cache", "final gather", "reflections", "visibility", "ray query", "bypass", "gi"]
 sources = [
   "engine/lighting/include/orbit/lighting/DirectLighting.hpp",
+  "engine/lighting/src/DirectLighting.cpp",
+  "engine/lighting/include/orbit/lighting/SunVisibilityShader.hpp",
+  "engine/lighting/include/orbit/lighting/TerrainSunShadow.hpp",
+  "engine/lighting/src/TerrainSunShadow.cpp",
+  "engine/lighting/tests/TerrainSunShadowTests.cpp",
   "engine/lighting/include/orbit/lighting/RadianceClipmap.hpp",
   "engine/lighting/include/orbit/lighting/RadianceEstimator.hpp",
   "engine/lighting/include/orbit/lighting/ScreenSpaceFinalGather.hpp",
@@ -21,6 +26,9 @@ sources = [
 ]
 symbols = ["DirectLightingRenderer", "HybridReflectionRenderer", "ScreenSpaceFinalGatherRenderer", "RadianceClipmapConfig", "GpuRadianceCell"]
 invariants = [
+  "GPU terrain sunlight traversal has a 32-probe budget with body-fixed sun-axis planes and continuous finite-disc visibility. The CPU reference uses the finer 512-probe traversal; runtime can miss relief narrower than its sun-ray spacing. This explicit accuracy/performance tradeoff prevents nested volume shadow marches from dominating the frame.",
+  "Terrain, atmosphere and clouds share the finite photosphere disc visibility model. Ground and atmospheric direct illumination read the same cloud optical-depth cache as clouds; atmosphere transmittance is sampled at the receiving surface. The shared cloud reader rejects unready voxels and antipodal tangent-plane aliases.",
+  "TerrainSunShadowField is a disposable body-fixed global heightfield sampled from the canonical TerrainSource (including standing water) at 1024x512 texel centres. Surface sunlight, atmosphere single scattering and cloud sources use one shared sun-ray traversal of this field; the camera depth buffer, viewport bounds and render LOD never determine sun visibility. Longitude wraps; minimum/maximum sampled elevation bounds traversal and an inscribed solid sphere rejects fully blocked rays.",
   "Occlusion for lighting is answered through the shared visibility registry (terrain, authored proxies, analytic bodies); do not add a parallel occlusion path for one effect.",
   "The near-field indirect stack is off when the planet is seen from orbit and whenever bypass_indirect_lighting is set; fills that depend on it vanish with it.",
   "Without sunlight (night side, space) the atmosphere's sky summary is zero, so sky-derived fills are zero too.",
@@ -38,11 +46,12 @@ related = ["/rendering/lighting/smooth-reflections", "/rendering/terrain", "/ren
 depends_on = ["/rendering"]
 used_by = ["/editor/viewport"]
 verify = [
+  "ctest -R Orbit.TerrainSunShadow: flat planetary night/day, a mountain blocking a grazing ray, sun-facing and above-mountain rays, longitude seam, invalid candidate rejection.",
   "ctest -R Orbit.Lighting (the lighting tests registered in engine/lighting/CMakeLists.txt).",
   "orbit_view_terrain_layers_get lists every bypass_* flag; all must be false in normal use.",
   "ctest -R Orbit.LightingLocalLightRegistry (capped-tile ordering and dropped counts).",
 ]
-verified = "f842a956"
+verified = "ab6e2066"
 
 [routes]
 "cache cells, residency, dark slabs, relighting, 96-byte cell" = "radiance-cache"

@@ -22,6 +22,8 @@ target_link_libraries(
         Orbit::Math
         Orbit::RHI
         Orbit::Shader
+    PRIVATE
+        Orbit::Lighting
 )
 
 target_compile_features(

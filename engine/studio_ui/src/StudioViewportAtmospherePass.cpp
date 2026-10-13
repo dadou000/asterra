@@ -94,7 +94,10 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         directionBody,
                 .irradianceScale =
                     studioDirectLight.
-                        irradianceScale
+                        irradianceScale,
+                .sunAngularRadiusRadians = studioDirectLight.sunAngularRadiusRadians,
+                .terrainSunShadow = context.terrainSunShadow,
+                .cloudSunShadow = context.cloudSunShadow
             };
 
         graph.AddPass(
@@ -353,7 +356,7 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
-                    cloudRenderer_.UpdateLightVolume(
+                    if (cloudView.cloudSunShadow == nullptr) cloudRenderer_.UpdateLightVolume(
                         commands,
                         *cloudVolume,
                         *cloudGpu,

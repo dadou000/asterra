@@ -12,6 +12,7 @@ height step appears along page bounds."""
 keywords = ["precision", "sin", "cos", "float32", "concentric rings", "spiky", "physical page", "composite", "height step", "page bounds", "series"]
 sources = [
   "engine/terrain_render/src/ClipmapVertexShader.hpp",
+  "engine/terrain_render/src/TerrainPreviewRenderer.cpp",
   "engine/terrain_gpu/src/PhysicalPageCompositeCompute.hpp",
   "engine/terrain_gpu/src/GpuPhysicalPageComposite.cpp",
   "engine/terrain_gpu/src/FieldGenerationCompute.hpp",
@@ -23,6 +24,8 @@ invariants = [
   "A new shader doing offset/planetRadius -> direction must use the same helper, not raw sin/cos: raw hardware sin/cos snaps samples onto concentric rings at planet scale.",
   "The page composite fades from generated terrain to the physical page over the page's outer 6 texels; it must not replace elevation/water depth outright inside the page.",
   "physical_pages (view.terrain_layers_set) disables the composite for comparison.",
+  "CompositeRegionDelta emits UAV barriers before and after an actual read/write delta dispatch. Dispatch order alone does not synchronize field-generator writes with erosion reads; the no-delta path adds no barriers.",
+  "Current page/delta composites change height but leave generated slopes unchanged. This is a known final-surface normal mismatch, not corrected by the page feather. See close-range-review before implementing normal reconstruction.",
   "Float32 positions lose precision far from a frozen clipmap window (about 1 m at 10,000 km); that is acceptable only for inspection.",
 ]
 related = ["/rendering/terrain/clipmaps/lattice-and-tracking", "/rendering/terrain/clipmaps/generator-parity"]
@@ -31,7 +34,7 @@ verify = [
   "Wireframe (clipmap_wireframe) must not show polar-looking concentric structure; terrain must not show spiky ring patterns.",
   "Toggle physical_pages and enable cache_status: no elevation step along the page outline with the composite on.",
 ]
-verified = "b0a0de7f"
+verified = "8dc17324af29e897a3eb204ad9d93e3319b832c4"
 
 [[diagnose]]
 symptom = "spiky concentric ring patterns in the terrain or a polar-looking wireframe"

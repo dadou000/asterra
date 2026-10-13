@@ -611,10 +611,9 @@ TerrainSampleStreamer::GeneratePatch(
                                 request.
                                     surfaceFrame,
                                 snappedCoarseOffset,
-                                fineNormalFootprintMeters,
-                                fineNormalEpsilonMeters,
-                                fineNormalFootprintMeters == request.coarseFootprintMeters
-                                    ? &coarseSample : nullptr);
+                                request.coarseFootprintMeters,
+                                request.coarseSpacingMeters,
+                                &coarseSample);
 
                     fineSlope = {
                         fineSlope.x +

@@ -1609,8 +1609,12 @@ private:
         deltaRequest.morphStartHalfExtentMeters = request.morphStartHalfExtentMeters;
         deltaRequest.morphEndHalfExtentMeters = request.morphEndHalfExtentMeters;
 
+        // The delta pass reads and rewrites the field generator's output.
+        // Dispatch order alone is not a Vulkan memory dependency.
+        commandList.UavBarrier(gpuBuffer);
         regionDeltaComposite_->Dispatch(
             commandList, deltaRequest, *deltaBuffer, gpuBuffer);
+        commandList.UavBarrier(gpuBuffer);
     }
 
     [[nodiscard]] rhi::Buffer* GetOrCreateRegionDeltaBuffer(

@@ -1,6 +1,7 @@
 #include <orbit/terrain_render/SurfaceEffects.hpp>
 
 #include <cmath>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -58,6 +59,53 @@ int main()
     Check(outside.wetness == 0.0F);
     Check(outside.soot == 0.0F);
     Check(outside.heat == 0.0F);
+
+    // Metre-sized deposits must not collapse to zero distance when the dot
+    // product rounds to 1 at planetary scale. Exercise both poles/tangents
+    // and an oblique frame, where float direction storage also has a limit.
+    constexpr f32 planetRadius = 6'371'000.0F;
+    const math::Float3 directions[]{
+        {1.0F, 0.0F, 0.0F},
+        {0.0F, 1.0F, 0.0F},
+        math::Normalize(math::Float3{1.0F, 2.0F, 3.0F})
+    };
+    for (const auto direction : directions)
+    {
+        const auto tangent = math::Normalize(
+            math::Cross(direction, math::Float3{0.0F, 0.0F, 1.0F}));
+        for (const f32 radiusMeters : {0.25F, 2.0F, 16.0F})
+        {
+            // Oblique float3s cannot resolve an arbitrary 25 cm footprint.
+            if (direction.z != 0.0F && radiusMeters < 16.0F) continue;
+            const SurfaceEffectGpuStamp deposit[]{
+                {
+                    .bodyFixedDirection = direction,
+                    .angularRadiusRadians = radiusMeters / planetRadius,
+                    .amount = 0.8F,
+                    .effect = SurfaceEffectKind::Wetness
+                }
+            };
+            for (const f32 fraction : {0.0F, 0.25F, 0.5F, 0.75F, 1.25F, 8.0F})
+            {
+                const f32 angle = fraction * radiusMeters / planetRadius;
+                const auto point = direction * std::cos(angle) + tangent * std::sin(angle);
+                const auto influence = EvaluateSurfaceEffects(point, deposit);
+                const f32 falloff = std::max(1.0F - fraction, 0.0F);
+                const f32 expected = 0.8F * falloff * falloff;
+                const f32 tolerance = direction.z == 0.0F ? 1.0e-5F : 0.025F;
+                if (!std::isfinite(influence.wetness) ||
+                    std::abs(influence.wetness - expected) > tolerance)
+                {
+                    std::cerr << "Planetary deposit falloff failed at radius "
+                              << radiusMeters << " m, fraction " << fraction
+                              << ": got " << influence.wetness
+                              << ", expected " << expected << ".\n";
+                    return EXIT_FAILURE;
+                }
+            }
+            Check(EvaluateSurfaceEffects(direction * -1.0F, deposit).wetness == 0.0F);
+        }
+    }
 
     const SurfacePbrState base{
         .baseColor = {0.6F, 0.5F, 0.4F},
