@@ -554,9 +554,16 @@ StudioSession::DispatchRpc(
     static_cast<void>(
         terrainRuntime_.Refresh());
 
+    const auto rpcTerrainBindings = terrainRuntime_.Catalog();
+    std::vector<terrain::PhysicalTerrainPageAddress> rpcConstructionPages;
+    for (const auto& binding : rpcTerrainBindings)
+    {
+        const auto pages = ConstructionPhysicalPages(binding.body);
+        rpcConstructionPages.insert(rpcConstructionPages.end(),
+            pages.begin(), pages.end());
+    }
     terrainPhysicalPages_.Sync(
-        terrainRuntime_.Catalog(),
-        clock_.Time());
+        rpcTerrainBindings, clock_.Time(), rpcConstructionPages);
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();
@@ -752,7 +759,15 @@ StudioTickResult StudioSession::Tick(
         terrainRuntime_.Refresh();
 
     const auto terrainBindings = terrainRuntime_.Catalog();
-    terrainPhysicalPages_.Sync(terrainBindings, clock_.Time());
+    std::vector<terrain::PhysicalTerrainPageAddress> constructionPages;
+    for (const auto& binding : terrainBindings)
+    {
+        const auto pages = ConstructionPhysicalPages(binding.body);
+        constructionPages.insert(constructionPages.end(),
+            pages.begin(), pages.end());
+    }
+    terrainPhysicalPages_.Sync(
+        terrainBindings, clock_.Time(), constructionPages);
 
     // Publish only body-fixed corridors. Moving-deck/inertial alignments
     // require dynamic construction semantics and must not excavate a planet.
