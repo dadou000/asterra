@@ -573,6 +573,22 @@ void ViewportCaptureService::ShootDebugPanel()
             }
         }
     }
+    // Delineate the distinct diagnostic channel so it cannot be mistaken
+    // for a stale GPU attachment or uninitialized right-edge pixels.
+    if (debugPanel_ != 0U)
+    {
+        const u32 splitX = originX + static_cast<u32>(w * 0.88);
+        for (u32 y = 0U; y < h; ++y)
+        {
+            const auto offset =
+                (static_cast<std::size_t>(originY + kDebugHeaderHeight + y) *
+                 sheetWidth + splitX) * 4U;
+            debugComposite_[offset] = 255U;
+            debugComposite_[offset + 1U] = 255U;
+            debugComposite_[offset + 2U] = 255U;
+            debugComposite_[offset + 3U] = 255U;
+        }
+    }
     ++debugPanel_;
     if (debugPanel_ == 4U)
     {
