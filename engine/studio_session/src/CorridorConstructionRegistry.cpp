@@ -114,6 +114,19 @@ bool CorridorConstructionRegistry::Publish(
             }
 
     if (!changed) return false;
+    // No construction footprint means there is nothing to republish or
+    // invalidate, even if the upstream analytic source was recomposed.
+    // Retain updated source identity to avoid retrying every tick.
+    if (changedPages.empty())
+    {
+        if (next.entries.empty())
+        {
+            records_.insert_or_assign(body, std::move(next));
+            return false;
+        }
+        throw std::logic_error(
+            "Changed corridor construction has no affected terrain pages.");
+    }
 
     std::sort(changedPages.begin(), changedPages.end(),
         [](const auto& a, const auto& b) {
