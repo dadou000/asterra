@@ -3,6 +3,7 @@ add_library(OrbitPathGeometry STATIC
     src/PathSource.cpp
     src/CorridorSweep.cpp
     src/CorridorRefinement.cpp
+    src/CorridorDerived.cpp
 )
 
 add_library(
