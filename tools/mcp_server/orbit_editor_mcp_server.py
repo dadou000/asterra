@@ -117,6 +117,20 @@ def orbit_project_info() -> dict[str, Any]:
 
 
 @mcp.tool()
+def orbit_studio_github_update(start: bool = False) -> dict[str, Any]:
+    """Check GitHub update status or request safe Harmony update/rebuild.
+
+    start=True saves the project, refuses dirty or divergent Git history,
+    fetches origin/0.1.1-Harmony, rebuilds Studio incrementally, and hands
+    off to the new process only after a successful build. A successful
+    update may temporarily disconnect RPC during the generation handoff.
+    Call with start=False to inspect stage/detail/log_path.
+    """
+    return _rpc("studio.github_update_start" if start
+                else "studio.github_update_status")
+
+
+@mcp.tool()
 def orbit_studio_eco_mode(enabled: bool | None = None) -> dict[str, Any]:
     """Read or set Studio Eco mode (15 FPS while active, 1 FPS while idle)."""
     if enabled is None:

@@ -677,3 +677,25 @@ fallback without disabling triangle queries. See
 | `orbit_infrastructure_set_intent(edge_id, catalog_id, catalog_version, construction_mode, design_speed_kmh, ease_turns)` | `infrastructure.set_intent` | Transactionally stores catalog/version, terrain or supported mode, speed (zero = catalog default) and transition preference on an existing path edge. |
 
 The existing `orbit_path_inspect` / `path.inspect` returns the persisted infrastructure metadata from `PathEdgeToRpc`. This is a persistence and automation slice only: no alignment solve or Studio-specific path editing control is claimed. The generic schema-driven Inspector can expose registered properties once a path edge is selected.
+
+## Top-bar GitHub update (Harmony)
+
+The unified Studio top menu row contains **Update Orbit** immediately to the left
+of the project indicator. The Build menu exposes the same command. Both invoke
+the central hot-iteration service, not an independent build process or launcher.
+
+RPC `studio.github_update_status` and MCP `orbit_studio_github_update(start=False)`
+return `available`, `busy`, `stage`, `detail`, and `log_path`.
+RPC `studio.github_update_start` and MCP
+`orbit_studio_github_update(start=True)` save the project/world then queue the
+background transaction and return `queued=true`; they do not wait for a
+build. The source update is intentionally limited to the currently checked-out
+`0.1.1-Harmony` branch and `origin`. No force, stash, rebase or reset is
+performed: a dirty worktree, wrong branch, divergent history, or failed fetch
+blocks the update and preserves the current Studio. Successful fast-forward
+is followed by the existing incremental OrbitStudio build and isolated
+hot-generation handoff. Poll status while running; RPC may disconnect briefly
+when the new generation starts. Failures are reported in the toolbar and in
+`build/hot_reload_runtime/OrbitStudio_github_update.log`; compiler output
+remains in `OrbitStudio_hot_iteration_build.log`. Hosted GitHub Actions
+minutes are not required because the build executes locally.

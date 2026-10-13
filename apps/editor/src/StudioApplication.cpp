@@ -2171,6 +2171,76 @@ int orbit::editor_app::StudioApplication::Run(
                 }
         });
 
+        // One authority path for the top-bar gizmo, Build menu and MCP.
+        // Save project/world data before the successful generation handoff.
+        const auto updateOrbitFromGitHub =
+            [&project, &world, &worldSession]() -> bool
+            {
+                const auto current =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                if (!current.available || current.busy)
+                    return false;
+                try
+                {
+                    project.Save();
+                    if (worldSession.HasWorld())
+                        world().Checkpoint();
+                }
+                catch (const std::exception& exception)
+                {
+                    orbit::log::Error(
+                        std::string("GitHub update: could not save project: ") +
+                        exception.what());
+                    return false;
+                }
+                return orbit::hot_reload::RequestGitHubUpdate();
+            };
+
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.github_update_status",
+             .description = "Background GitHub update and rebuild state.",
+             .mutating = false},
+            [](const orbit::rpc::Value&)
+            {
+                const auto status =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                return orbit::rpc::Value::Object{
+                    {"available", status.available},
+                    {"busy", status.busy},
+                    {"stage", status.stage},
+                    {"detail", status.detail},
+                    {"log_path", status.logPath.string()}
+                };
+            });
+        rpcHost.Dispatcher().Register(
+            {.name = "studio.github_update_start",
+             .description = "Save project and queue fast-forward-only origin Harmony update, incremental build and staged Studio handoff.",
+             .mutating = true},
+            [&updateOrbitFromGitHub](const orbit::rpc::Value&)
+            {
+                if (!updateOrbitFromGitHub())
+                    throw std::runtime_error(
+                        "GitHub update unavailable, busy or project save failed.");
+                return orbit::rpc::Value::Object{
+                    {"queued", true},
+                    {"branch", "0.1.1-Harmony"}
+                };
+            });
+        ui.RegisterMenuAction({
+            .menu = "Build",
+            .label = "Update Orbit from GitHub",
+            .invoke = [&updateOrbitFromGitHub]
+            {
+                static_cast<void>(updateOrbitFromGitHub());
+            },
+            .enabled = []
+            {
+                const auto status =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                return status.available && !status.busy;
+            }
+        });
+
         ui.RegisterMenuAction({
             .menu = "Build",
             .label = "Validate Project",
@@ -3121,6 +3191,29 @@ int orbit::editor_app::StudioApplication::Run(
                 }
 
                 const auto& manifest = project.Manifest();
+                const auto gitUpdate =
+                    orbit::hot_reload::QueryGitHubUpdate();
+                ui.SetUpdateIndicator({
+                    .label = gitUpdate.busy
+                        ? "Updating..."
+                        : gitUpdate.stage == "Failed" ||
+                          gitUpdate.stage == "Blocked"
+                            ? "Update failed"
+                            : "Update Orbit",
+                    .tooltip =
+                        "GitHub origin/0.1.1-Harmony - fast-forward only. "
+                        "Save, incrementally rebuild and restart on success."
+                        "\n" + gitUpdate.stage + ": " +
+                        gitUpdate.detail +
+                        (gitUpdate.logPath.empty()
+                            ? std::string{}
+                            : "\nLog: " + gitUpdate.logPath.string()),
+                    .enabled = gitUpdate.available && !gitUpdate.busy,
+                    .onClick = [&updateOrbitFromGitHub]
+                    {
+                        static_cast<void>(updateOrbitFromGitHub());
+                    }
+                });
                 ui.SetProjectIndicator({
                     .name = manifest.displayName,
                     .detail =

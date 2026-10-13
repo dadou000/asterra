@@ -42,6 +42,20 @@ void RemoveHotIterationHandler(
 [[nodiscard]] std::uint32_t
 PumpHotIterationEvents();
 
+// Queryable background source-update transaction. Never changes a user's
+// tracked files if their worktree is dirty, branch is wrong or has diverged.
+struct GitHubUpdateStatus
+{
+    bool available{false};
+    bool busy{false};
+    std::string stage{"Idle"};
+    std::string detail;
+    std::filesystem::path logPath;
+};
+
+[[nodiscard]] bool RequestGitHubUpdate();
+[[nodiscard]] GitHubUpdateStatus QueryGitHubUpdate();
+
 struct HotIterationConfig
 {
     std::filesystem::path sourceRoot;
@@ -79,6 +93,9 @@ public:
 
     void Start();
     void Stop() noexcept;
+
+    [[nodiscard]] bool QueueGitHubUpdate();
+    [[nodiscard]] GitHubUpdateStatus GitHubUpdateState() const;
 
 private:
     class Impl;

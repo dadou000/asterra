@@ -646,6 +646,17 @@ public:
     };
     void SetProjectIndicator(ProjectIndicator indicator);
 
+    // One compact, global action immediately before the project chip.
+    // Presentation/status only; the hot-iteration service owns Git/build.
+    struct UpdateIndicator
+    {
+        std::string label;
+        std::string tooltip;
+        bool enabled{true};
+        std::function<void()> onClick;
+    };
+    void SetUpdateIndicator(UpdateIndicator indicator);
+
     // Transient, non-modal, click-through popup stacked in the lower-right of
     // the main viewport. Presentation only: it never gates the operation it
     // reports. Safe to call any time on the UI thread; the toast is created on

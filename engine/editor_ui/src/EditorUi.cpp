@@ -986,6 +986,7 @@ public:
     std::string pendingFocusTitle;
     std::string automationOpenMenu;
     EditorUi::ProjectIndicator projectIndicator;
+    EditorUi::UpdateIndicator updateIndicator;
 
     struct ActiveNotification
     {
@@ -3089,6 +3090,12 @@ void EditorUi::ResetLayout() noexcept
     impl_->layoutBuildPending = true;
 }
 
+void EditorUi::SetUpdateIndicator(
+    UpdateIndicator indicator)
+{
+    impl_->updateIndicator = std::move(indicator);
+}
+
 void EditorUi::SetProjectIndicator(
     ProjectIndicator indicator)
 {
@@ -3468,6 +3475,46 @@ void EditorUi::DrawStudioShell()
             }
 
             ImGui::EndMenu();
+        }
+
+        if (!impl_->updateIndicator.label.empty())
+        {
+            const UpdateIndicator& update = impl_->updateIndicator;
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const f32 updateWidth =
+                ImGui::CalcTextSize(update.label.c_str()).x +
+                style.FramePadding.x * 2.0F;
+            f32 projectWidth = 0.0F;
+            if (!impl_->projectIndicator.name.empty())
+            {
+                std::string projectText =
+                    "Project: " + impl_->projectIndicator.name;
+                if (!impl_->projectIndicator.detail.empty())
+                    projectText += "  |  " +
+                        impl_->projectIndicator.detail;
+                projectWidth = ImGui::CalcTextSize(
+                    projectText.c_str()).x +
+                    style.FramePadding.x * 2.0F +
+                    style.ItemSpacing.x;
+            }
+            const f32 x = ImGui::GetWindowWidth() -
+                updateWidth - projectWidth -
+                style.ItemSpacing.x * 2.0F;
+            if (x > ImGui::GetCursorPosX())
+                ImGui::SetCursorPosX(x);
+            ImGui::BeginDisabled(!update.enabled);
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                Rgb(0x4b, 0x7b, 0xec, 0.16F));
+            if (ImGui::SmallButton(
+                    (update.label + "##orbit-github-update").c_str()) &&
+                update.onClick)
+                update.onClick();
+            ImGui::PopStyleColor();
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(
+                    ImGuiHoveredFlags_AllowWhenDisabled) &&
+                !update.tooltip.empty())
+                ImGui::SetTooltip("%s", update.tooltip.c_str());
         }
 
         if (!impl_->projectIndicator.name.empty())

@@ -29,3 +29,16 @@ verified = "b0a0de7f"
 +++
 
 
+
+## Source update command
+
+The hot-iteration worker also serializes explicit GitHub source updates with
+its normal fallback Studio builds. The top-bar action saves the current project
+and queues a fetch of `origin/0.1.1-Harmony`. Local source modifications or
+untracked files, a different branch, non-fast-forward history and Git failures
+abort without overwriting local files. The operation then rebuilds only the
+incremental `OrbitStudio` target and uses the existing staged generation
+handoff. Working-source change notifications produced by Git checkout are
+discarded and watchers are rearmed afterward to avoid redundant rebuilding.
+Status and failures are visible through the shared RPC/MCP action and Studio
+toolbar. The UI thread never waits for Git, MSBuild or process handoff.
