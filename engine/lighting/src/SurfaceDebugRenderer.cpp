@@ -96,7 +96,7 @@ float4 main(VSOutput input) : SV_Target0
     const float2 sourceUv = float2(
         secondary ? (input.uv.x - 0.88) / 0.12 : input.uv.x / 0.88,
         input.uv.y);
-    const float4 value = g_source.SampleLevel(g_sampler, saturate(sourceUv), 0);
+    const float4 value = g_source.Sample(g_sampler, saturate(sourceUv));
 
     if (g.mode < 1.5)
     {
