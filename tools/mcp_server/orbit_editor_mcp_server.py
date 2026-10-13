@@ -2090,6 +2090,12 @@ def orbit_path_set_bezier_handles(
 
 
 @mcp.tool()
+def orbit_infrastructure_build_status(edge_id: str) -> dict[str, Any]:
+    """Inspect an infrastructure edge's corridor generation state, last valid mesh and failure."""
+    return _rpc("infrastructure.build_status", {"edge": edge_id})
+
+
+@mcp.tool()
 def orbit_infrastructure_set_intent(
     edge_id: str,
     catalog_id: str,
