@@ -92,7 +92,8 @@ public:
     // viewport GPU compositor and asynchronous physical residency.
     [[nodiscard]] std::vector<terrain::PhysicalTerrainPageAddress>
     ConstructionPhysicalPages(universe::BodyId body,
-        std::size_t maximumPages = 8U) const;
+        std::size_t maximumPages = 8U,
+        const math::Double3* observerDirection = nullptr) const;
 
     [[nodiscard]] StudioTerrainPhysicalPageService&
     TerrainPhysicalPages() noexcept;
