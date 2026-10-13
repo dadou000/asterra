@@ -14,6 +14,7 @@
 #include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -334,6 +335,53 @@ void StudioSession::QueueTerrainInvalidation(
     {
         pendingTerrainInvalidations_.push_back(request);
     }
+}
+
+std::size_t StudioSession::QueueInfrastructureCorridorTerrain(
+    const path_geometry::PathDerivedProduct& product,
+    const universe::BodyId body,
+    const f64 influenceRadiusMeters,
+    const std::size_t maximumPages)
+{
+    if (!world_.HasWorld() || !body || maximumPages == 0U ||
+        !std::isfinite(influenceRadiusMeters) || influenceRadiusMeters < 0.0 ||
+        product.stations.size() < 2U || !product.frame)
+        throw std::invalid_argument("Invalid corridor construction mapping inputs.");
+
+    const auto* targetBody = world_.Universe().Bodies().FindBody(body);
+    if (!targetBody)
+        throw std::invalid_argument("Construction target body not found.");
+
+    const auto runtimeCatalog = terrainRuntime_.Catalog();
+    const StudioTerrainViewportRuntimeSnapshot* runtime = nullptr;
+    for (const auto& entry : runtimeCatalog)
+    {
+        if (entry.body != body) continue;
+        if (runtime != nullptr && (runtime->planet.id != entry.planet.id ||
+                                    runtime->physicalPageLevel != entry.physicalPageLevel))
+            throw std::invalid_argument("Ambiguous physical terrain mapping for body.");
+        runtime = &entry;
+    }
+    if (!runtime || !runtime->planet.id)
+        throw std::invalid_argument("No active physical terrain runtime for construction body.");
+
+    std::vector<math::Double3> bodyPositions;
+    bodyPositions.reserve(product.stations.size());
+    for (const auto& station : product.stations)
+    {
+        const auto transformed = world_.Universe().Frames().TransformPoint(
+            {.frame = product.frame, .localMeters = station.position},
+            targetBody->frame, clock_.Time());
+        if (!transformed)
+            throw std::invalid_argument("Corridor frame cannot resolve to target body.");
+        bodyPositions.push_back(transformed->localMeters);
+    }
+    const auto pages = path_geometry::ProjectCorridorToTerrainPages(
+        runtime->planet, bodyPositions, influenceRadiusMeters,
+        runtime->physicalPageLevel, maximumPages);
+    if (!pages)
+        throw std::invalid_argument("Corridor planetary page projection exceeded safe limits.");
+    return QueueInfrastructureTerrainPages(*pages, maximumPages);
 }
 
 std::size_t StudioSession::QueueInfrastructureTerrainPages(
