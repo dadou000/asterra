@@ -229,7 +229,8 @@ BuildPhysicalRenderPages(
     // Edge-only coverage leaves gaps when an observer or road crosses a page
     // corner; TileNeighborhood handles cube-face orientation at those seams.
     const auto neighboringTiles = world::TileNeighborhood(
-        runtime.observerPhysicalPage.tile, 1U);
+        runtime.observerPhysicalPage.tile,
+        studio_session::PhysicalPageCoverageRadius(runtime));
     std::vector<terrain::PhysicalTerrainPageAddress> addresses;
     addresses.reserve(neighboringTiles.size());
     for (const auto& tile : neighboringTiles)
