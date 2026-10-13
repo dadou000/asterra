@@ -133,7 +133,7 @@ std::shared_ptr<rhi::Buffer> UploadTerrainSunShadowField(rhi::Device& device,
         .sizeBytes = sizeof(header) + field.elevations.size() * sizeof(f32),
         .usage = rhi::BufferUsage::Structured, .memory = rhi::MemoryUsage::HostVisible,
         .initialState = rhi::ResourceState::ShaderResource});
-    auto* bytes = buffer->Map();
+    auto* bytes = static_cast<u8*>(buffer->Map());
     std::memcpy(bytes, header.data(), sizeof(header));
     std::memcpy(bytes + sizeof(header), field.elevations.data(), field.elevations.size() * sizeof(f32));
     buffer->Unmap();
