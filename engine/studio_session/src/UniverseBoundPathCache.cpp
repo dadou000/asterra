@@ -52,11 +52,12 @@ bool UniverseBoundPathCache::StoreCorridorIfChanged(
         throw std::invalid_argument("Corridor authored signature must be nonzero.");
     const auto found = corridorAuthoredSignatures_.find(centerline.edge);
     if (found != corridorAuthoredSignatures_.end() &&
-        found->second == authoredSignature && Find(centerline.edge) != nullptr &&
+        found->second == authoredSignature && !IsDirty(centerline.edge) && Find(centerline.edge) != nullptr &&
         RouteGeneration(centerline.edge) == routeGeneration)
         return false;
     StoreCorridor(centerline, profile, corridor, options, refinement, routeGeneration);
     corridorAuthoredSignatures_[centerline.edge] = authoredSignature;
+    dirtyCorridors_.erase(centerline.edge);
     return true;
 }
 
@@ -105,6 +106,7 @@ void UniverseBoundPathCache::Store(
 
     const scene::ObjectId edge = product.edge;
     corridorAuthoredSignatures_.erase(edge);
+    dirtyCorridors_.erase(edge);
     products_[edge] = std::move(product);
 
     if (routeGeneration.has_value())
@@ -153,10 +155,21 @@ UniverseBoundPathCache::RouteGeneration(
         : std::optional<u64>(found->second);
 }
 
+void UniverseBoundPathCache::MarkDirty(const scene::ObjectId edge) noexcept
+{
+    if (edge) dirtyCorridors_.insert(edge);
+}
+
+bool UniverseBoundPathCache::IsDirty(const scene::ObjectId edge) const noexcept
+{
+    return dirtyCorridors_.contains(edge);
+}
+
 bool UniverseBoundPathCache::Erase(
     const scene::ObjectId edge) noexcept
 {
     routeGenerations_.erase(edge);
+    dirtyCorridors_.erase(edge);
     corridorAuthoredSignatures_.erase(edge);
     return products_.erase(edge) != 0U;
 }
@@ -166,6 +179,7 @@ void UniverseBoundPathCache::Clear() noexcept
     products_.clear();
     routeGenerations_.clear();
     corridorAuthoredSignatures_.clear();
+    dirtyCorridors_.clear();
 }
 
 std::size_t UniverseBoundPathCache::Size() const noexcept
