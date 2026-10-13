@@ -1889,6 +1889,14 @@ std::string_view StudioViewportPanels::WorkspaceModeName() const noexcept
 
 bool StudioViewportPanels::SetWorkspaceMode(const std::string_view name)
 {
+    // Accept the new debug workspace through scripting/RPC as well as tabs,
+    // independent of legacy workspace-name parsers.
+    if (name == "Debug" || name == "debug")
+    {
+        if (g_workspaceUi == nullptr) return false;
+        ActivateWorkspace(*g_workspaceUi, WorkspaceMode::Debug);
+        return true;
+    }
     const auto parsed = ParseWorkspaceMode(name);
     if (!parsed.has_value() || g_workspaceUi == nullptr)
     {
