@@ -220,7 +220,8 @@ std::size_t UniverseBoundPathCache::RefreshSemanticInvalidation()
         }
         const auto current = CaptureDependencies(edge);
         const auto old = dependencySnapshots_.find(edge);
-        if (old == dependencySnapshots_.end() || old->second != current)
+        if ((old == dependencySnapshots_.end() || old->second != current) &&
+            !IsDirty(edge))
         {
             MarkDirty(edge);
             ++invalidated;
