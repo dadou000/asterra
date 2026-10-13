@@ -1485,10 +1485,9 @@ StudioViewportRenderer::ComposeBase(
                     const auto& patchSource =
                         session.TerrainRuntime().TerrainSource(
                             *terrainRuntime);
-                    // Capture the immutable physical pages covering a
-                    // 193 m square near-field patch. The 17x17 footprint
-                    // probes include seams and missing pages in the fingerprint
-                    // without performing a service lookup per terrain vertex.
+                    // Capture every tile touched by the generated 193x193
+                    // vertex lattice. Tile discovery is conservative for the
+                    // lattice (not the continuous triangles between vertices).
                     constexpr u32 kCount = 193U;
                     constexpr f64 kCell = 1.0;
                     const auto bodyFromFrame =
@@ -1504,13 +1503,18 @@ StudioViewportRenderer::ComposeBase(
                             : math::Double3{1.0, 0.0, 0.0};
                         const auto east = math::Normalize(math::Cross(helper, up));
                         const auto north = math::Cross(up, east);
-                        footprintDirections.reserve(17U * 17U);
-                        for (u32 y = 0; y < 17U; ++y)
-                            for (u32 x = 0; x < 17U; ++x)
+                        // Exact coverage of this generated vertex lattice:
+                        // every displaced vertex has its owning tile in the
+                        // immutable capture, including cube-face seams.
+                        const f64 half = 0.5 * static_cast<f64>(kCount - 1U);
+                        footprintDirections.reserve(
+                            static_cast<std::size_t>(kCount) * kCount);
+                        for (u32 y = 0U; y < kCount; ++y)
+                            for (u32 x = 0U; x < kCount; ++x)
                             {
                                 const auto point = anchorBody +
-                                    east * ((static_cast<f64>(x) - 8.0) * 12.0) +
-                                    north * ((static_cast<f64>(y) - 8.0) * 12.0);
+                                    east * ((static_cast<f64>(x) - half) * kCell) +
+                                    north * ((static_cast<f64>(y) - half) * kCell);
                                 footprintDirections.push_back(math::Normalize(point));
                             }
                     }
