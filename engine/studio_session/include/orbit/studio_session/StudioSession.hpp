@@ -19,6 +19,7 @@
 #include <orbit/terrain_debug/TerrainDebugLivePages.hpp>
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -93,7 +94,8 @@ public:
     [[nodiscard]] std::vector<terrain::PhysicalTerrainPageAddress>
     ConstructionPhysicalPages(universe::BodyId body,
         std::size_t maximumPages = 8U,
-        const math::Double3* observerDirection = nullptr) const;
+        const math::Double3* observerDirection = nullptr,
+        std::string_view viewportId = {}) const;
 
     [[nodiscard]] StudioTerrainPhysicalPageService&
     TerrainPhysicalPages() noexcept;
@@ -193,6 +195,14 @@ private:
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
     CorridorConstructionRegistry corridorConstruction_;
+    struct ConstructionSelection
+    {
+        universe::BodyId body{};
+        u64 worldGeneration{0U};
+        std::vector<terrain::PhysicalTerrainPageAddress> pages;
+    };
+    mutable std::map<std::string, ConstructionSelection>
+        constructionSelections_;
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
     StudioTerrainBakeController terrainBake_;
     StudioTerrainPhysicalPageService terrainPhysicalPages_;
