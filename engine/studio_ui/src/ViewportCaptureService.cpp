@@ -1,6 +1,7 @@
 #include <orbit/studio_ui/ViewportCaptureService.hpp>
 
-#include <algorithm>\n#include <array>
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <exception>
@@ -19,7 +20,9 @@ using rpc::Value;
 constexpr u32 kDefaultSettleFullscreen = 6U;
 constexpr u32 kDefaultSettleUltra = 20U;
 // Frames for each tile after the camera has been turned onto it.
-constexpr u32 kTileSettleFrames = 8U;\nconstexpr u32 kDebugSettleFrames = 8U;\nconstexpr u32 kDebugHeaderHeight = 36U;
+constexpr u32 kTileSettleFrames = 8U;
+constexpr u32 kDebugSettleFrames = 8U;
+constexpr u32 kDebugHeaderHeight = 36U;
 // Longest waits, so a stuck view can never leave Studio stranded at a capture
 // size.
 constexpr u32 kResizeTimeoutFrames = 600U;
@@ -89,6 +92,8 @@ std::string_view ViewportCaptureService::KindName(const Kind kind) noexcept
         return "ultra";
     case Kind::Custom:
         return "custom";
+    case Kind::AtmosphereDebug:
+        return "atmosphere-debug";
     }
     return "custom";
 }
@@ -118,6 +123,8 @@ ViewportCaptureService::Size ViewportCaptureService::TargetSize(
     }
     case Kind::Custom:
         return {request.width, request.height};
+    case Kind::AtmosphereDebug:
+        return view;
     }
     return view;
 }
@@ -303,7 +310,12 @@ void ViewportCaptureService::Start(Request request)
         throw std::invalid_argument("The capture size is empty.");
     }
 
-    if (request.kind == Kind::AtmosphereDebug &&\n        (!hooks_.debugMode || !hooks_.setDebugMode || !hooks_.captureImage))\n    {\n        throw std::logic_error("Atmosphere diagnostic capture is not attached.");\n    }\n    tiled_ = request.kind != Kind::AtmosphereDebug && NeedsTiling(target_);
+    if (request.kind == Kind::AtmosphereDebug &&
+        (!hooks_.debugMode || !hooks_.setDebugMode || !hooks_.captureImage))
+    {
+        throw std::logic_error("Atmosphere diagnostic capture is not attached.");
+    }
+    tiled_ = request.kind != Kind::AtmosphereDebug && NeedsTiling(target_);
     if (tiled_ &&
         (!hooks_.captureImage || !hooks_.setTile || !hooks_.viewFovRadians))
     {
@@ -339,6 +351,10 @@ void ViewportCaptureService::Start(Request request)
     busyWaited_ = 0U;
     stateFrames_ = 0U;
     tileIndex_ = 0U;
+    debugPanel_ = 0U;
+    debugComposite_.clear();
+    if (request.kind == Kind::AtmosphereDebug)
+        originalDebugMode_ = hooks_.debugMode();
     result_.reset();
     error_.clear();
     request_ = std::move(request);
@@ -371,6 +387,7 @@ ViewportCaptureService::WantedViewSize() const
     case State::Resizing:
     case State::Settling:
     case State::TileSettling:
+    case State::DebugSettling:
         return renderSize_;
     case State::Restoring:
         return original_;
@@ -380,6 +397,8 @@ ViewportCaptureService::WantedViewSize() const
 
 void ViewportCaptureService::ReleaseHolds()
 {
+    if (request_.kind == Kind::AtmosphereDebug && hooks_.setDebugMode)
+        hooks_.setDebugMode(originalDebugMode_);
     if (!holding_)
     {
         return;
@@ -405,6 +424,8 @@ void ViewportCaptureService::Finish(std::string error)
     ReleaseHolds();
     output_.clear();
     output_.shrink_to_fit();
+    debugComposite_.clear();
+    debugComposite_.shrink_to_fit();
     error_ = std::move(error);
     stateFrames_ = 0U;
     state_ = State::Restoring;
@@ -601,6 +622,16 @@ void ViewportCaptureService::Tick()
             {
                 BeginTiles();
             }
+            else if (request_.kind == Kind::AtmosphereDebug)
+            {
+                wasPlaying_ = hooks_.simulationPlaying ? hooks_.simulationPlaying() : false;
+                if (hooks_.setSimulationPlaying) hooks_.setSimulationPlaying(false);
+                if (hooks_.lockExposure) hooks_.lockExposure(true);
+                holding_ = true;
+                hooks_.setDebugMode(0U);
+                settleLeft_ = kDebugSettleFrames;
+                state_ = State::DebugSettling;
+            }
             else
             {
                 result_ = hooks_.capture(path_);
@@ -639,6 +670,27 @@ void ViewportCaptureService::Tick()
         }
         return;
 
+    case State::DebugSettling:
+        if (size != renderSize_)
+        {
+            Finish("Viewport resized during diagnostic capture.");
+            return;
+        }
+        if (settleLeft_ > 0U)
+        {
+            --settleLeft_;
+            return;
+        }
+        try
+        {
+            ShootDebugPanel();
+        }
+        catch (const std::exception& exception)
+        {
+            Finish(std::string("Diagnostic capture failed: ") + exception.what());
+        }
+        return;
+
     case State::Restoring:
         if (size == original_ || stateFrames_ > kRestoreTimeoutFrames)
         {
@@ -672,6 +724,9 @@ Value ViewportCaptureService::Status() const
         break;
     case State::TileSettling:
         state = "tiles";
+        break;
+    case State::DebugSettling:
+        state = "diagnostics";
         break;
     case State::Restoring:
         state = "restoring";
@@ -727,7 +782,8 @@ void RegisterViewportCaptureRpc(
                 "Starts a high-resolution capture of the primary viewport, "
                 "the same as the viewport Screenshot / Ultra buttons. kind: "
                 "'fullscreen' (window resolution), 'ultra' (16K: 15360 px "
-                "on the long side, the viewport's aspect), 'atmosphere-debug' "\n                "(one annotated four-panel PNG) or 'custom' "
+                "on the long side, the viewport's aspect), 'atmosphere-debug' "
+                "(one annotated four-panel PNG) or 'custom' "
                 "(width, height up to 16384). Optional path (PNG, or BMP when it ends in .bmp) and "
                 "settle_frames. The view is resized, given frames to "
                 "converge, captured and restored, so this returns at once: "
@@ -752,7 +808,11 @@ void RegisterViewportCaptureRpc(
                     {
                         request.kind = ViewportCaptureService::Kind::Ultra;
                     }
-                    else if (name == "atmosphere-debug")\n                    {\n                        request.kind = ViewportCaptureService::Kind::AtmosphereDebug;\n                    }\n                    else if (name == "custom")
+                    else if (name == "atmosphere-debug")
+                    {
+                        request.kind = ViewportCaptureService::Kind::AtmosphereDebug;
+                    }
+                    else if (name == "custom")
                     {
                         request.kind = ViewportCaptureService::Kind::Custom;
                     }
