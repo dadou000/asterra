@@ -17,7 +17,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         lightingPlan, lightingTimestamps, cpuTimingRecorder, recordComposeStage,
         sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
         bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
-        nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters
+        nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters,
+        terrainSunShadow
     ] = context;
 
     const auto* logicalTarget = session.Viewports().Find(info.id);
