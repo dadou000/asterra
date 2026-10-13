@@ -110,6 +110,24 @@ public:
     // Query the final material-column height of a published, ready page.
     // Returns no value for unloaded/unfinished pages; rendering can fall
     // back to its analytic source without blocking physical workers.
+    struct HeightPageBatch
+    {
+        world::PlanetId planet{};
+        u8 level{0};
+        u64 revisionFingerprint{0};
+        std::vector<std::shared_ptr<const StudioTerrainPhysicalPageSnapshot>>
+            pages;
+        [[nodiscard]] std::optional<f64> Sample(
+            const math::Double3& direction) const noexcept;
+    };
+
+    // Capture a coherent set of immutable published snapshots once per patch,
+    // not once per vertex. Include missing pages in the fingerprint so their
+    // later arrival triggers a patch rebuild.
+    [[nodiscard]] HeightPageBatch CaptureHeightPages(
+        world::PlanetId planet, u8 level,
+        std::span<const math::Double3> directions) const;
+
     [[nodiscard]] std::optional<f64> SamplePublishedSurfaceHeight(
         world::PlanetId planet,
         const math::Double3& unitDirection,
