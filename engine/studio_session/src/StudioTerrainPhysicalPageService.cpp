@@ -3200,28 +3200,17 @@ StudioTerrainPhysicalPageService::HeightPageBatch::Sample(
 }
 
 StudioTerrainPhysicalPageService::HeightPageBatch
-StudioTerrainPhysicalPageService::CaptureHeightPages(
+StudioTerrainPhysicalPageService::CaptureHeightTiles(
     const world::PlanetId planet, const u8 level,
-    const std::span<const math::Double3> directions) const
+    const std::span<const world::PlanetTileId> tiles) const
 {
     HeightPageBatch result{};
     result.planet = planet;
     result.level = level;
     result.revisionFingerprint = 1469598103934665603ULL;
-    std::vector<world::PlanetTileId> tiles;
-    for (const auto& direction : directions)
-    {
-        if (math::LengthSquared(direction) < 0.5) continue;
-        const auto tile = world::TileForDirection(direction, level);
-        if (std::find(tiles.begin(), tiles.end(), tile) == tiles.end())
-            tiles.push_back(tile);
-    }
-    std::sort(tiles.begin(), tiles.end(), [](const auto& a, const auto& b) {
-        return std::tuple{static_cast<u8>(a.face),a.level,a.x,a.y} <
-               std::tuple{static_cast<u8>(b.face),b.level,b.x,b.y};
-    });
     for (const auto& tile : tiles)
     {
+        if (tile.level != level) continue;
         const auto snapshot = Find({.planet=planet,.tile=tile});
         result.revisionFingerprint = terrain::StableCombine64(
             result.revisionFingerprint,
@@ -3234,6 +3223,25 @@ StudioTerrainPhysicalPageService::CaptureHeightPages(
         if (snapshot) result.pages.emplace(tile, snapshot);
     }
     return result;
+}
+
+StudioTerrainPhysicalPageService::HeightPageBatch
+StudioTerrainPhysicalPageService::CaptureHeightPages(
+    const world::PlanetId planet, const u8 level,
+    const std::span<const math::Double3> directions) const
+{
+    std::vector<world::PlanetTileId> tiles;
+    tiles.reserve(directions.size());
+    for (const auto& direction : directions)
+    {
+        if (!std::isfinite(direction.x) || !std::isfinite(direction.y) ||
+            !std::isfinite(direction.z) ||
+            math::LengthSquared(direction) < 0.5) continue;
+        tiles.push_back(world::TileForDirection(direction, level));
+    }
+    std::sort(tiles.begin(), tiles.end(), HeightPageBatch::TileLess{});
+    tiles.erase(std::unique(tiles.begin(), tiles.end()), tiles.end());
+    return CaptureHeightTiles(planet, level, tiles);
 }
 
 std::optional<f64>
