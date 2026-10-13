@@ -3029,53 +3029,18 @@ void StudioTerrainPhysicalPageService::Sync(
             interests[
                 runtime.body];
 
-        bodyInterests.insert(
-            runtime.
-                observerPhysicalPage);
-
-        impl_->RegisterInterest(
-            body,
-            runtime.
-                observerPhysicalPage);
-
-        constexpr std::array<
-            world::TileEdge,
-            4U>
-            edges{
-                world::TileEdge::North,
-                world::TileEdge::East,
-                world::TileEdge::South,
-                world::TileEdge::West
-            };
-
-        for (const auto edge :
-             edges)
+        // Match the renderer's complete 3x3 physical-page neighborhood.
+        // Diagonal pages are required when crossing corner seams.
+        const auto neighborhood = world::TileNeighborhood(
+            runtime.observerPhysicalPage.tile, 1U);
+        for (const auto& tile : neighborhood)
         {
-            const auto neighbor =
-                world::
-                    NeighborAcrossTileEdge(
-                        runtime.
-                            observerPhysicalPage.
-                            tile,
-                        edge);
-
-            const terrain::
-                PhysicalTerrainPageAddress
-                neighborAddress{
-                    .planet =
-                        runtime.
-                            observerPhysicalPage.
-                            planet,
-                    .tile =
-                        neighbor.tile
-                };
-
-            bodyInterests.insert(
-                neighborAddress);
-
-            impl_->RegisterInterest(
-                body,
-                neighborAddress);
+            const terrain::PhysicalTerrainPageAddress address{
+                .planet = runtime.observerPhysicalPage.planet,
+                .tile = tile
+            };
+            if (bodyInterests.insert(address).second)
+                impl_->RegisterInterest(body, address);
         }
     }
 
