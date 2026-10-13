@@ -2626,7 +2626,7 @@ EditorRpcService::EditorRpcService(
                 throw rpc::Error(-32602, "Invalid infrastructure intent parameter types.");
             paths::PathNetworkService service(objects, commandService);
             service.SetInfrastructureIntent(edge, cat.AsString(), ver.AsInteger(),
-                mode.AsString(), speed.AsDouble(), ease.AsBool());
+                mode.AsString(), speed.AsNumber(), ease.AsBool());
             return PathEdgeToRpc(*service.FindEdge(edge));
         });
 
