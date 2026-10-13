@@ -88,3 +88,11 @@ Open **Debug → Reports** and select a report. The **Capture tools** section of
 - **Capture performance trace from condition**: enabled for performance-scoped reports. Restores the saved starting condition (simulation time paused and camera pose/target), waits for the target and eight settling ticks, collects approximately two seconds of live profiler events, then writes `Captures/report-<id>-performance.json` through the existing `profiler::Capture` implementation. This is a Chrome/Perfetto trace, **not a screenshot**. Capture fails if the recorded condition cannot be restored. Recorded timing may differ if the paused simulation suppresses the workload; capturing the original dynamic workload requires a separate replay policy.
 
 Screenshot captures and native folder opening reuse the editor hooks in `apps/editor/src/StudioApplication.cpp`; performance traces reuse the existing `profiler::Capture` mechanism. No second profiler or screenshot recorder is introduced. The trace location is deterministic per report ID and a new capture replaces the previous trace for that report.
+
+## Automatic dock layout saving and profiler navigation
+
+Orbit Studio uses Dear ImGui's native docking settings file as the single authority for panel positions, sizing, and dock splits. The existing file is loaded when Studio starts, saved on exit, and now automatically saved after roughly two seconds without further layout changes (via `IniSavingRate`). **Reset Layout** continues to rebuild the default arrangement. No separate layout serializer is introduced.
+
+The **Profiler** panel now provides toolbar controls for **Fit all**, **Zoom in/out** around the visible window center, **Previous/Next** half-window pan, **Focus selection** (when a slice is selected) and **Focus slowest** (largest available slice). These use the existing `ProfilerModel` navigation methods and therefore preserve live/pause interaction rules. The profiler's established trace export, workload capture and timeline remain unchanged.
+
+Verification pending: launch Orbit Studio, rearrange and resize panels, stop interacting for more than two seconds, force-close and relaunch, then confirm the layout persists; exercise zoom/pan/focus on both live and loaded traces. C++ compilation and runtime interaction are not yet verified.
