@@ -46,22 +46,32 @@ PathDerivedProduct BuildCorridorDerived(
     // Cached identity includes all authored profile geometry and refinement
     // settings, not only the original path centerline.
     u64 hash = MixCorridor(product.buildSignature, 0x434f525249444f52ULL);
+    hash = MixCorridor(hash, corridor.bands.size());
     for (const auto& band : corridor.bands)
+    {
+        hash = MixCorridor(hash, band.profile.size());
         for (const auto& p : band.profile)
         {
             hash = MixCorridor(hash, Bits(p.lateralMeters));
             hash = MixCorridor(hash, Bits(p.elevationMeters));
         }
+    }
+    hash = MixCorridor(hash, corridor.sectionKeys.size());
     for (const auto& key : corridor.sectionKeys)
     {
         hash = MixCorridor(hash, Bits(key.stationMeters));
+        hash = MixCorridor(hash, key.bands.size());
         for (const auto& band : key.bands)
+        {
+            hash = MixCorridor(hash, band.profile.size());
             for (const auto& p : band.profile)
             {
                 hash = MixCorridor(hash, Bits(p.lateralMeters));
                 hash = MixCorridor(hash, Bits(p.elevationMeters));
             }
+        }
     }
+    hash = MixCorridor(hash, corridor.bankRadians.size());
     for (const auto angle : corridor.bankRadians)
         hash = MixCorridor(hash, Bits(angle));
     hash = MixCorridor(hash, Bits(refinement.maximumChordErrorMeters));
