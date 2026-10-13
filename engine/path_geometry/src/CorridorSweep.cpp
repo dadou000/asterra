@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <orbit/world/PlanetTileNeighborhood.hpp>
 #include <set>
+#include <tuple>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
