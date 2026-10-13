@@ -1,6 +1,7 @@
 #pragma once
 
 #include <orbit/editor_ui/EditorUi.hpp>
+#include <orbit/studio_ui/DebugTestRegistry.hpp>
 #include <orbit/studio_ui/StudioRenderViewSet.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
 
@@ -32,6 +33,6 @@ private:
 
     StudioRenderViewSet* views_{nullptr};
     studio_session::StudioSession* session_{nullptr};
-    std::string constructionResult_{"Not run"};
+    DebugTestRegistry tests_;
 };
 } // namespace orbit::studio_ui
