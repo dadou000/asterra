@@ -43,6 +43,7 @@ DebugViewUi::DebugViewUi(StudioRenderViewSet& views,
     studio_session::StudioSession& session) noexcept
     : views_(&views), session_(&session)
 {
+    RegisterBuiltInDebugTests(tests_);
 }
 
 void DebugViewUi::Register(editor_ui::EditorUi& ui)
@@ -82,38 +83,24 @@ void DebugViewUi::Draw(
     open("Body Map / Debug View", "Terrain map##dbg-map");
     context.MutedText("Road cut, railway grading, physical-page residency and displacement tests use the existing terrain tools. An automated validation experiment is not registered yet.");
 
-    context.Heading("Construction terrain validation");
-    context.MutedText("Read-only validation of the active observer physical page.");
-    if (context.Button("Run validation##construction-terrain"))
+    context.Heading("Registered experiments");
+    for (const auto& test : tests_.Catalog())
     {
-        constructionResult_ = "No live terrain viewport.";
-        if (session_ != nullptr)
+        context.Text(std::string(DebugTestCategoryName(test.category)) +
+            " / " + test.label);
+        if (context.Button("Run##debug-test:" + test.id) && session_)
+            static_cast<void>(tests_.Run(test.id, *session_));
+        const auto result = tests_.LastResult(test.id);
+        const char* state = "NOT RUN";
+        switch (result.outcome)
         {
-            const auto runtimes = session_->TerrainRuntime().Catalog();
-            for (const auto& runtime : runtimes)
-            {
-                if (runtime.viewportId != "studio.primary") continue;
-                const auto address = runtime.observerPhysicalPage;
-                const auto page = session_->TerrainPhysicalPages().Find(address);
-                const auto status = session_->TerrainPhysicalPages().PageStatus(address);
-                if (!page || !page->material || !status)
-                    constructionResult_ = "NOT READY: observer physical page unavailable.";
-                else if (page->revisionFingerprint == 0U ||
-                         page->revisionFingerprint != status->revisionFingerprint)
-                    constructionResult_ = "FAIL: published physical-page revision mismatch.";
-                else
-                {
-                    const auto h = page->SampleSurfaceHeight(0.5, 0.5);
-                    if (!h || !std::isfinite(*h))
-                        constructionResult_ = "FAIL: nonfinite or missing center height.";
-                    else
-                        constructionResult_ = "PASS: physical page ready, revision matched, height finite.";
-                }
-                break;
-            }
+        case DebugTestOutcome::NotRun: state = "NOT RUN"; break;
+        case DebugTestOutcome::Pass: state = "PASS"; break;
+        case DebugTestOutcome::Fail: state = "FAIL"; break;
+        case DebugTestOutcome::NotReady: state = "NOT READY"; break;
         }
+        context.KeyValue(state, result.detail);
     }
-    context.KeyValue("Construction", constructionResult_);
 
     context.Separator();
     context.Heading("Lighting / Atmosphere");
