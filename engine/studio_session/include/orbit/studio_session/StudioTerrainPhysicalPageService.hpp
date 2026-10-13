@@ -86,7 +86,9 @@ public:
     // The center physical page plus its four seam neighbors are kept live.
     void Sync(
         std::span<const StudioTerrainViewportRuntimeSnapshot> runtimes,
-        time::SimulationTime atTime = {});
+        time::SimulationTime atTime = {},
+        std::span<const terrain::PhysicalTerrainPageAddress>
+            constructionInterests = {});
 
     // Stage an immutable construction snapshot, then invalidate exactly the
     // supplied old+new footprint pages. All addresses must belong to the
