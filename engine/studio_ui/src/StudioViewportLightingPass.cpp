@@ -2083,7 +2083,9 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          radianceLevelCount,
          lightingTimestamps,
          frameIndex,
-         nearFieldIndirect](
+         nearFieldIndirect,
+         shape,
+         studioDirectLight](
             rhi::CommandList& commands,
             const render_graph::Resources&
                 resources)
@@ -2135,7 +2137,12 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     // side, so ambient comes from the atmosphere/GI
                     // sky summary rather than a constant floor.
                     .ambientIrradianceScale =
-                        0.0F
+                        0.0F,
+                    .planetRadiusMeters = shape.has_value()
+                        ? static_cast<f32>(ReferenceRadiusForShape(*shape))
+                        : 0.0F,
+                    .stellarAngularRadiusRadians =
+                        studioDirectLight.sunAngularRadiusRadians
                 });
 
             if (lightingTimestamps != nullptr)

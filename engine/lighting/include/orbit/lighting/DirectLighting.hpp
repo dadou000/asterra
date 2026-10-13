@@ -27,6 +27,9 @@ struct DirectLightingSettings
     // atmosphere/sky-visibility term. It is deliberately a shared lighting
     // setting rather than renderer-local preview fill.
     f32 ambientIrradianceScale{0.035F};
+    // Planet-fixed direct stellar visibility at the actual surface point.
+    f32 planetRadiusMeters{0.0F};
+    f32 stellarAngularRadiusRadians{0.00465F};
 };
 
 class DirectLightingRenderer

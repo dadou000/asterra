@@ -145,6 +145,7 @@ struct Constants
     uint4 localGrid;
     float4 cameraFrameAndParticleGrid;
     float4 extra; // x: cloud shadow bound, y: proxy sun shadow bound, z: radiance level count, w: sky cache strength
+    float4 planetShadow; // x: planetary reference radius, y: apparent source angular radius
 };
 [[vk::push_constant]] Constants g;
 
@@ -535,6 +536,51 @@ float4 main(VSOutput input) : SV_Target0
         stellarColor *
         stellarIrradiance;
 
+    // Use each pixel's body-fixed position, not the camera's local horizon:
+    // an orbital camera may see both the daylight and nightside hemisphere.
+    // Analytic globe renderers do not always write geometric depth; for these,
+    // reconstruct the surface from the view ray's sphere intersection.
+    if (g.planetShadow.x > 0.0)
+    {
+        const float3 eye = g.cameraFrameAndParticleGrid.xyz;
+        float3 surface = eye;
+        bool surfaceFound = false;
+        const float surfaceDepth = g_depth.Sample(
+            g_depthSampler, input.uv).r;
+        if (surfaceDepth > 0.0)
+        {
+            surface += ReconstructSurfacePosition(
+                surfaceDepth, cameraRay, cameraForward);
+            surfaceFound = true;
+        }
+        else
+        {
+            const float b = dot(eye, cameraRay);
+            const float impact2 = dot(eye, eye) - b * b;
+            const float discriminant = g.planetShadow.x * g.planetShadow.x - impact2;
+            if (discriminant >= 0.0)
+            {
+                const float t = -b - sqrt(discriminant);
+                if (t > 0.0)
+                {
+                    surface += cameraRay * t;
+                    surfaceFound = true;
+                }
+            }
+        }
+        if (surfaceFound)
+        {
+            const float radial = length(surface);
+            const float ratio = min(g.planetShadow.x /
+                max(radial, g.planetShadow.x), 1.0);
+            const float horizonMu = -sqrt(max(1.0 - ratio * ratio, 0.0));
+            const float sunMu = dot(surface / max(radial, 1.0), stellarDirection);
+            const float angular = max(g.planetShadow.y, 1.0e-5);
+            stellarLinear *= smoothstep(
+                horizonMu - angular, horizonMu + angular, sunMu);
+        }
+    }
+
     if (g.extra.x > 0.0)
     {
         stellarLinear *=
@@ -744,7 +790,7 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 32U,
+            .pushConstantDwords = 36U,
             .shaderResourceBuffers = 6U,
             .sampledTextures = 6U,
             .topology =
@@ -810,7 +856,7 @@ void DirectLightingRenderer::Draw(
     constexpr f32 kPhotopicLuminousEfficacy =
         683.0F;
 
-    const std::array<u32, 32> constants{
+    const std::array<u32, 36> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -864,7 +910,10 @@ void DirectLightingRenderer::Draw(
                     radianceLevels != nullptr
                 ? static_cast<f32>(radianceLevelCount)
                 : 0.0F),
-        bits(std::max(skyCacheStrength, 0.0F))
+        bits(std::max(skyCacheStrength, 0.0F)),
+        bits(std::max(settings.planetRadiusMeters, 0.0F)),
+        bits(std::max(settings.stellarAngularRadiusRadians, 0.0F)),
+        0U, 0U
     };
 
     commands.SetRenderTarget(targetSceneColor);
