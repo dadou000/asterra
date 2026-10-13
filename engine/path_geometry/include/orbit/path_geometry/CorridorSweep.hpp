@@ -1,6 +1,7 @@
 #pragma once
 #include <orbit/path_geometry/PathDerived.hpp>
 #include <vector>
+#include <optional>
 
 namespace orbit::path_geometry
 {
@@ -36,6 +37,29 @@ struct CorridorRefinementOptions
     f64 maximumSegmentLengthMeters{8.0};
     u32 maximumSubdivisions{10};
 };
+
+// Non-destructive terrain construction influence, evaluated in the same
+// frame as the derived corridor. Terrain samplers may blend this into their
+// displacement field without changing the underlying authored height source.
+struct CorridorTerrainFootprint
+{
+    f64 halfWidthMeters{0.0};
+    f64 shoulderMeters{0.0};
+    f64 blendMeters{0.0};
+};
+struct CorridorTerrainSample
+{
+    f64 targetHeightMeters{0.0};
+    f64 influence{0.0}; // 0=source terrain, 1=engineered datum
+    f64 signedLateralMeters{0.0};
+    f64 stationMeters{0.0};
+};
+// Works for planar, frame-local height fields. Planetary body-fixed/geodetic
+// projection is deliberately not inferred here.
+[[nodiscard]] std::optional<CorridorTerrainSample> SampleCorridorTerrain(
+    const std::vector<PathStation>& stations,
+    const math::Double3& frameLocalPoint,
+    const CorridorTerrainFootprint& footprint);
 
 struct RefinedCorridor
 {
