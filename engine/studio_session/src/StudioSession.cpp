@@ -534,6 +534,40 @@ StudioTickResult StudioSession::Tick(
     result.pathProductsInvalidated =
         pathProducts_.RefreshBinding();
     static_cast<void>(pathProducts_.RefreshSemanticInvalidation());
+    // Discover only newly authored infrastructure edges. Reuse scene revision
+    // to avoid rescanning unrelated world objects during steady-state ticks.
+    const u64 sceneRevision = world_.Objects().Revision();
+    if (infrastructureDiscoveryWorldGeneration_ != world_.Generation() ||
+        infrastructureDiscoveryRevision_ != sceneRevision)
+    {
+        infrastructureDiscoveryWorldGeneration_ = world_.Generation();
+        infrastructureDiscoveryRevision_ = sceneRevision;
+        const auto roots = world_.Objects().Roots();
+        for (const auto& root : roots)
+        {
+            // Iterative traversal; path networks may be nested under world folders.
+            std::vector<scene::ObjectId> pending{root.id};
+            while (!pending.empty())
+            {
+                const auto parent = pending.back();
+                pending.pop_back();
+                for (const auto& child : world_.Objects().Children(parent))
+                {
+                    if (child.type == paths::kPathEdgeType)
+                    {
+                        const auto edge = pathNetwork_.Service().FindEdge(child.id);
+                        if (edge && !edge->infrastructureCatalogId.empty() &&
+                            pathProducts_.Find(edge->id) == nullptr)
+                            pathProducts_.MarkDirty(edge->id);
+                    }
+                    else if (child.type != paths::kPathNodeType)
+                    {
+                        pending.push_back(child.id);
+                    }
+                }
+            }
+        }
+    }
     // Bounded initial production resolver for authored *frame-local* road/rail
     // edges. Unsupported categories remain dirty with an inspectable failure;
     // no silent frame guesses for moving decks, geodetic anchors or routing.
