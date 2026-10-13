@@ -260,10 +260,25 @@ StudioSession::TerrainDebugPages() const noexcept
 std::vector<terrain::PhysicalTerrainPageAddress>
 StudioSession::ConstructionPhysicalPages(
     const universe::BodyId body, const std::size_t maximumPages,
-    const math::Double3* observerDirection) const
+    const math::Double3* observerDirection,
+    const std::string_view viewportId) const
 {
-    return corridorConstruction_.PagesForBody(body, maximumPages,
-        observerDirection);
+    if (viewportId.empty())
+        return corridorConstruction_.PagesForBody(
+            body, maximumPages, observerDirection);
+
+    auto& selection = constructionSelections_[std::string(viewportId)];
+    if (selection.body != body ||
+        selection.worldGeneration != world_.Generation())
+    {
+        selection = {};
+        selection.body = body;
+        selection.worldGeneration = world_.Generation();
+    }
+    auto result = corridorConstruction_.PagesForBody(
+        body, maximumPages, observerDirection, selection.pages);
+    selection.pages = result;
+    return result;
 }
 
 StudioTerrainPhysicalPageService&
@@ -562,7 +577,7 @@ StudioSession::DispatchRpc(
     {
         const auto direction = math::Normalize(binding.observer.meters);
         const auto pages = ConstructionPhysicalPages(binding.body, 8U,
-            &direction);
+            &direction, binding.viewportId);
         rpcConstructionPages.insert(rpcConstructionPages.end(),
             pages.begin(), pages.end());
     }
