@@ -83,7 +83,11 @@ VSOutput main(VSInput input)
             // so NDC Y is up here exactly as in every other renderer; negating
             // it mirrored path and diagnostic overlays vertically.
             y / tanHalfFov,
-            g_push.projection.z,
+            // Reverse-Z finite perspective: near -> 1, far -> 0.
+            // Clip-space w=z; avoid a constant clip-space near plane.
+            (g_push.projection.z *
+                (g_push.projection.w - z)) /
+                max(g_push.projection.w - g_push.projection.z, 0.001),
             z);
     output.color = input.color;
     return output;
