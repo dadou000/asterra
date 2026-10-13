@@ -45,8 +45,8 @@ jobs:
         run: |
           where cmake
           where git
-          where cl
-          where vulkaninfo
+          cmake --version
+          git --version
 
       - name: Incremental unpacked Studio build
         env:
