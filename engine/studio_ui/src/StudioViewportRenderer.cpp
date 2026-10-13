@@ -1485,7 +1485,15 @@ StudioViewportRenderer::ComposeBase(
                     const auto& patchSource =
                         session.TerrainRuntime().TerrainSource(
                             *terrainRuntime);
-                    const u64 sourceRevision = patchSource.Revision();
+                    // The near-field SDF patch must rebuild when the
+                    // published physical surface changes, not just when the
+                    // analytic terrain source revision changes.
+                    const auto physicalCenter =
+                        session.TerrainPhysicalPages().Find(
+                            terrainRuntime->observerPhysicalPage);
+                    const u64 sourceRevision = patchSource.Revision() ^
+                        (physicalCenter
+                             ? physicalCenter->revisionFingerprint : 0U);
                     const f64 moved = math::Length(
                         anchor - meshPresentation.terrainPatchAnchor);
                     if (meshPresentation.terrainPatch == nullptr ||
@@ -1572,10 +1580,17 @@ StudioViewportRenderer::ComposeBase(
                                         .planet =
                                             terrainRuntime->planet.id,
                                         .radialOffsetMeters = 0.0});
+                                    const auto publishedHeight =
+                                        session.TerrainPhysicalPages().
+                                            SamplePublishedSurfaceHeight(
+                                                terrainRuntime->planet.id,
+                                                direction,
+                                                terrainRuntime->physicalPageLevel);
                                     const f64 elevation =
-                                        std::isfinite(sample.elevationMeters)
-                                        ? sample.elevationMeters
-                                        : 0.0;
+                                        publishedHeight.has_value()
+                                        ? *publishedHeight
+                                        : (std::isfinite(sample.elevationMeters)
+                                            ? sample.elevationMeters : 0.0);
                                     const math::Double3 ground =
                                         direction *
                                         (terrainRuntime->planet
