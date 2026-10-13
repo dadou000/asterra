@@ -243,7 +243,7 @@ BuildPhysicalRenderPages(
     const auto observerDirection = math::Normalize(runtime.observer.meters);
     const auto constructionPages =
         session.ConstructionPhysicalPages(runtime.body, 8U,
-            &observerDirection);
+            &observerDirection, runtime.viewportId);
     for (const auto& address : constructionPages)
         if (address.planet == runtime.planet.id &&
             address.tile.level == runtime.physicalPageLevel &&
