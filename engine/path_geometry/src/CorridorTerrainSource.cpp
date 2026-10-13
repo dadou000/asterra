@@ -81,10 +81,28 @@ terrain::TerrainSample CorridorTerrainSource::Sample(
         const auto target = SampleCorridorTerrain(
             layer.stations, point, layer.footprint);
         if (!target || target->influence <= 0.0) continue;
-        // SampleCorridorTerrain yields a radial body-space height; source
-        // elevation is measured relative to the planet reference radius.
+        // The generic corridor sampler reports a projection onto the
+        // interpolated up vector. That projection is NOT the radial distance
+        // on a curved planet (and can vary with latitude). Recover the
+        // physical axis point at the sampled station and use its radius.
         auto local = *target;
-        local.targetHeightMeters -= planet_.radiusMeters;
+        const auto positionAtStation = [&]() noexcept {
+            for (std::size_t i = 0; i + 1 < layer.stations.size(); ++i)
+            {
+                const auto& a = layer.stations[i];
+                const auto& b = layer.stations[i + 1];
+                if (local.stationMeters < a.stationMeters ||
+                    local.stationMeters > b.stationMeters) continue;
+                const f64 length = b.stationMeters - a.stationMeters;
+                const f64 t = length > 0.0 ?
+                    std::clamp((local.stationMeters - a.stationMeters) / length,
+                               0.0, 1.0) : 0.0;
+                return a.position + (b.position - a.position) * t;
+            }
+            return layer.stations.back().position;
+        };
+        local.targetHeightMeters =
+            math::Length(positionAtStation()) - planet_.radiusMeters;
         const auto blend = BlendCorridorTerrainHeight(
             sample.elevationMeters, local);
         sample.elevationMeters = blend.heightMeters;
