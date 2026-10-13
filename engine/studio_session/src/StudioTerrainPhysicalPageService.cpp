@@ -3104,6 +3104,51 @@ void StudioTerrainPhysicalPageService::Sync(
     }
 }
 
+void StudioTerrainPhysicalPageService::StageCorridorConstruction(
+    const universe::BodyId body,
+    std::shared_ptr<const path_geometry::CorridorTerrainSource> overlay,
+    const std::span<const terrain::PhysicalTerrainPageAddress> affectedPages)
+{
+    if (!body || affectedPages.empty() || affectedPages.size() > 4096U)
+        throw std::invalid_argument(
+            "Corridor publication requires a valid body and bounded old/new pages.");
+    const auto found = impl_->bodies.find(body);
+    if (found == impl_->bodies.end())
+        throw std::invalid_argument(
+            "Construction target has no physical terrain runtime.");
+    auto& runtime = *found->second;
+    const auto current = runtime.shared->Capture();
+    if (!current || !current->source)
+        throw std::logic_error("Construction target has no terrain source.");
+    for (const auto& address : affectedPages)
+    {
+        if (address.planet != current->planet.id ||
+            address.tile.level > 24U ||
+            address.tile.x >= (1U << address.tile.level) ||
+            address.tile.y >= (1U << address.tile.level))
+            throw std::invalid_argument(
+                "Corridor construction page belongs to another planet or is invalid.");
+    }
+    // Copy-on-write: currently running workers retain their original inputs.
+    // The scheduler's applied-change callback commits the pending snapshot.
+    auto next = std::make_shared<BodyBuildInputs>(*current);
+    next->corridorOverlay = std::move(overlay);
+    runtime.shared->Stage(std::move(next));
+    for (const auto& address : affectedPages)
+    {
+        runtime.scheduler.QueueChange({
+            .kind = terrain_dependency::TerrainChangeKind::TerrainAuthoring,
+            .scope = {
+                .planet = address.planet,
+                .global = false,
+                .center = address.tile,
+                .radiusTiles = 0U,
+                .downstreamRadiusTiles = 0U
+            }
+        });
+    }
+}
+
 void StudioTerrainPhysicalPageService::
 QueueChange(
     const terrain_dependency::
