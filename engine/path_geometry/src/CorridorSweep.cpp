@@ -6,6 +6,68 @@
 
 namespace orbit::path_geometry
 {
+std::optional<CorridorTerrainSample> SampleCorridorTerrain(
+    const std::vector<PathStation>& stations,
+    const math::Double3& point,
+    const CorridorTerrainFootprint& footprint)
+{
+    if (stations.size() < 2 || !std::isfinite(footprint.halfWidthMeters) ||
+        !std::isfinite(footprint.shoulderMeters) ||
+        !std::isfinite(footprint.blendMeters) ||
+        footprint.halfWidthMeters <= 0.0 || footprint.shoulderMeters < 0.0 ||
+        footprint.blendMeters < 0.0)
+        return std::nullopt;
+
+    const f64 core = footprint.halfWidthMeters + footprint.shoulderMeters;
+    const f64 outer = core + footprint.blendMeters;
+    f64 bestDistSquared = std::numeric_limits<f64>::infinity();
+    CorridorTerrainSample best{};
+    bool found = false;
+    // Project in the station local tangent/lateral plane, not global XZ:
+    // this also supports arbitrarily oriented local construction frames.
+    for (std::size_t i = 0; i + 1 < stations.size(); ++i)
+    {
+        const auto& a = stations[i];
+        const auto& b = stations[i+1];
+        const auto delta = b.position - a.position;
+        const f64 lengthSquared = math::LengthSquared(delta);
+        if (lengthSquared < 1.0e-12) continue;
+        const auto up = math::Normalize(a.up + b.up);
+        if (math::LengthSquared(up) < 0.5) continue;
+        const auto horizontal = delta - up * math::Dot(delta, up);
+        const f64 horizontalSquared = math::LengthSquared(horizontal);
+        if (horizontalSquared < 1.0e-12) continue;
+        const auto horizontalPoint = point - a.position -
+            up * math::Dot(point - a.position, up);
+        const f64 t = std::clamp(
+            math::Dot(horizontalPoint, horizontal) / horizontalSquared, 0.0, 1.0);
+        const auto axisPoint = a.position + delta * t;
+        const auto localUp = math::Normalize(a.up * (1.0 - t) + b.up * t);
+        const auto lateral = math::Normalize(a.lateral * (1.0 - t) + b.lateral * t);
+        if (math::LengthSquared(localUp) < 0.5 ||
+            math::LengthSquared(lateral) < 0.5) continue;
+        const auto offset = point - axisPoint;
+        const f64 signedLateral = math::Dot(offset, lateral);
+        const auto planarResidual = offset - localUp * math::Dot(offset, localUp);
+        const f64 distanceSquared = math::LengthSquared(planarResidual);
+        if (distanceSquared >= bestDistSquared) continue;
+        bestDistSquared = distanceSquared;
+        best.signedLateralMeters = signedLateral;
+        best.stationMeters = a.stationMeters +
+            (b.stationMeters - a.stationMeters) * t;
+        best.targetHeightMeters = math::Dot(axisPoint, localUp);
+        const f64 distance = std::sqrt(distanceSquared);
+        const f64 blend = footprint.blendMeters;
+        const f64 x = blend > 0.0 ?
+            std::clamp((outer - distance) / blend, 0.0, 1.0) :
+            (distance <= core ? 1.0 : 0.0);
+        best.influence = distance <= core ? 1.0 : x*x*(3.0-2.0*x);
+        found = true;
+    }
+    return found && bestDistSquared <= outer*outer ?
+        std::optional<CorridorTerrainSample>{best} : std::nullopt;
+}
+
 PathMesh BuildCorridorMesh(
     const std::vector<PathStation>& stations,
     const CorridorSweep& corridor)
