@@ -1,6 +1,6 @@
 #include <orbit/studio_ui/ViewportCaptureService.hpp>
 
-#include <algorithm>
+#include <algorithm>\n#include <array>
 #include <chrono>
 #include <cmath>
 #include <exception>
@@ -19,7 +19,7 @@ using rpc::Value;
 constexpr u32 kDefaultSettleFullscreen = 6U;
 constexpr u32 kDefaultSettleUltra = 20U;
 // Frames for each tile after the camera has been turned onto it.
-constexpr u32 kTileSettleFrames = 8U;
+constexpr u32 kTileSettleFrames = 8U;\nconstexpr u32 kDebugSettleFrames = 8U;\nconstexpr u32 kDebugHeaderHeight = 36U;
 // Longest waits, so a stuck view can never leave Studio stranded at a capture
 // size.
 constexpr u32 kResizeTimeoutFrames = 600U;
@@ -303,7 +303,7 @@ void ViewportCaptureService::Start(Request request)
         throw std::invalid_argument("The capture size is empty.");
     }
 
-    tiled_ = NeedsTiling(target_);
+    if (request.kind == Kind::AtmosphereDebug &&\n        (!hooks_.debugMode || !hooks_.setDebugMode || !hooks_.captureImage))\n    {\n        throw std::logic_error("Atmosphere diagnostic capture is not attached.");\n    }\n    tiled_ = request.kind != Kind::AtmosphereDebug && NeedsTiling(target_);
     if (tiled_ &&
         (!hooks_.captureImage || !hooks_.setTile || !hooks_.viewFovRadians))
     {
@@ -449,6 +449,112 @@ void ViewportCaptureService::ShootTile()
     result_ = render_view::WriteImageRgba8(
         path_, target_.first, target_.second, output_.data());
     Finish({});
+}
+
+
+void ViewportCaptureService::ShootDebugPanel()
+{
+    const auto image = hooks_.captureImage();
+    const u32 w = target_.first;
+    const u32 h = target_.second;
+    if (image.width != w || image.height != h ||
+        image.rgba.size() < static_cast<std::size_t>(w) * h * 4U)
+    {
+        throw std::runtime_error("Diagnostic capture dimensions changed.");
+    }
+
+    const u32 sheetWidth = w * 2U;
+    const u32 panelHeight = h + kDebugHeaderHeight;
+    if (debugComposite_.empty())
+    {
+        debugComposite_.assign(
+            static_cast<std::size_t>(sheetWidth) * panelHeight * 2U * 4U,
+            0U);
+    }
+    const u32 originX = (debugPanel_ % 2U) * w;
+    const u32 originY = (debugPanel_ / 2U) * panelHeight;
+    for (u32 y = 0; y < h; ++y)
+    {
+        const auto source = image.rgba.data() +
+            static_cast<std::size_t>(y) * w * 4U;
+        auto* destination = debugComposite_.data() +
+            (static_cast<std::size_t>(originY + kDebugHeaderHeight + y) *
+             sheetWidth + originX) * 4U;
+        std::copy_n(source, static_cast<std::size_t>(w) * 4U, destination);
+    }
+
+    // A small built-in bitmap font keeps the annotations in the image
+    // without UI chrome, external fonts or platform-dependent text rendering.
+    const auto glyph = [](char c) -> std::array<u8, 7>
+    {
+        switch (c)
+        {
+        case 'A': return {14,17,17,31,17,17,17};
+        case 'B': return {30,17,17,30,17,17,30};
+        case 'C': return {15,16,16,16,16,16,15};
+        case 'D': return {30,17,17,17,17,17,30};
+        case 'E': return {31,16,16,30,16,16,31};
+        case 'F': return {31,16,16,30,16,16,16};
+        case 'G': return {15,16,16,23,17,17,15};
+        case 'H': return {17,17,17,31,17,17,17};
+        case 'I': return {31,4,4,4,4,4,31};
+        case 'L': return {16,16,16,16,16,16,31};
+        case 'M': return {17,27,21,21,17,17,17};
+        case 'N': return {17,25,21,19,17,17,17};
+        case 'O': return {14,17,17,17,17,17,14};
+        case 'P': return {30,17,17,30,16,16,16};
+        case 'R': return {30,17,17,30,20,18,17};
+        case 'S': return {15,16,16,14,1,1,30};
+        case 'T': return {31,4,4,4,4,4,4};
+        case 'U': return {17,17,17,17,17,17,14};
+        case 'V': return {17,17,17,17,17,10,4};
+        case '0': return {14,17,19,21,25,17,14};
+        case '1': return {4,12,4,4,4,4,14};
+        case '2': return {14,17,1,2,4,8,31};
+        case '3': return {30,1,1,14,1,1,30};
+        case ':': return {0,4,4,0,4,4,0};
+        case '/': return {1,1,2,4,8,16,16};
+        case '-': return {0,0,0,31,0,0,0};
+        default: return {};
+        }
+    };
+    const char* titles[] = {
+        "ATMOSPHERE / LIT", "ALBEDO / ROUGHNESS",
+        "NORMAL / METALLIC", "EMISSION / META"};
+    u32 penX = originX + 12U;
+    const u32 penY = originY + 11U;
+    for (const char* p = titles[debugPanel_]; *p; ++p, penX += 7U)
+    {
+        const auto bits = glyph(*p);
+        for (u32 row = 0; row < 7U; ++row)
+        {
+            for (u32 col = 0; col < 5U; ++col)
+            {
+                if ((bits[row] & (1U << (4U - col))) == 0U ||
+                    penX + col >= originX + w)
+                {
+                    continue;
+                }
+                const auto index =
+                    (static_cast<std::size_t>(penY + row) * sheetWidth +
+                     penX + col) * 4U;
+                debugComposite_[index] = 255U;
+                debugComposite_[index + 1U] = 255U;
+                debugComposite_[index + 2U] = 255U;
+                debugComposite_[index + 3U] = 255U;
+            }
+        }
+    }
+    ++debugPanel_;
+    if (debugPanel_ == 4U)
+    {
+        result_ = render_view::WriteImageRgba8(
+            path_, sheetWidth, panelHeight * 2U, debugComposite_.data());
+        Finish({});
+        return;
+    }
+    hooks_.setDebugMode(debugPanel_);
+    settleLeft_ = kDebugSettleFrames;
 }
 
 void ViewportCaptureService::Tick()
@@ -621,7 +727,7 @@ void RegisterViewportCaptureRpc(
                 "Starts a high-resolution capture of the primary viewport, "
                 "the same as the viewport Screenshot / Ultra buttons. kind: "
                 "'fullscreen' (window resolution), 'ultra' (16K: 15360 px "
-                "on the long side, the viewport's aspect) or 'custom' "
+                "on the long side, the viewport's aspect), 'atmosphere-debug' "\n                "(one annotated four-panel PNG) or 'custom' "
                 "(width, height up to 16384). Optional path (PNG, or BMP when it ends in .bmp) and "
                 "settle_frames. The view is resized, given frames to "
                 "converge, captured and restored, so this returns at once: "
@@ -646,7 +752,7 @@ void RegisterViewportCaptureRpc(
                     {
                         request.kind = ViewportCaptureService::Kind::Ultra;
                     }
-                    else if (name == "custom")
+                    else if (name == "atmosphere-debug")\n                    {\n                        request.kind = ViewportCaptureService::Kind::AtmosphereDebug;\n                    }\n                    else if (name == "custom")
                     {
                         request.kind = ViewportCaptureService::Kind::Custom;
                     }
@@ -654,7 +760,7 @@ void RegisterViewportCaptureRpc(
                     {
                         throw rpc::Error(
                             -32602,
-                            "kind must be fullscreen, ultra or custom.");
+                            "kind must be fullscreen, ultra, atmosphere-debug or custom.");
                     }
                 }
                 const auto number = [&object](const char* key) -> u32
