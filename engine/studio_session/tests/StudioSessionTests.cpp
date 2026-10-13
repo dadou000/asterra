@@ -417,6 +417,22 @@ int main()
                 "Studio Session Test");
         orbit::studio_session::StudioSession studio(project);
 
+        // M2.49: Physical residency never expands beyond the bounded
+        // local budget, even if a clipmap advertises planetary coverage.
+        orbit::studio_session::StudioTerrainViewportRuntimeSnapshot coverage{};
+        coverage.planet.id = orbit::world::PlanetId::Random();
+        coverage.planet.radiusMeters = 1000.0;
+        coverage.observerPhysicalPage.tile =
+            orbit::world::TileForDirection({1.0, 0.0, 0.0}, 4U);
+        coverage.layout.levels.resize(1U);
+        coverage.layout.levels.front().active = true;
+        coverage.layout.levels.front().outerHalfExtentMeters = 1.e8;
+        Check(orbit::studio_session::PhysicalPageCoverageRadius(coverage) == 2U);
+        coverage.layout.levels.front().outerHalfExtentMeters = 0.0;
+        Check(orbit::studio_session::PhysicalPageCoverageRadius(coverage) == 1U);
+        orbit::studio_session::CorridorConstructionRegistry emptyConstruction;
+        Check(emptyConstruction.PagesForBody({}, 8U).empty());
+
         const auto initialWorldGeneration =
             studio.World().Generation();
         const auto initialUniverseGeneration =
