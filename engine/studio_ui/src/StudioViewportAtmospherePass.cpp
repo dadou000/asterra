@@ -200,6 +200,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                 .terrainOcclusionEnabled = info.layers.terrainOccludedAtmosphere,
                 .sunAngularRadiusRadians = studioDirectLight.sunAngularRadiusRadians,
                 .bodyRadiiMeters = atmosphereBodyRadii,
+                .auditMode = info.layers.atmosphereAuditMode,
+                .auditRadianceOnly = info.layers.atmosphereAuditRadianceOnly,
                 .terrainSunShadow = context.terrainSunShadow
             };
 

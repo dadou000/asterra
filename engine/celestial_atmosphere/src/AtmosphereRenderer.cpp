@@ -68,6 +68,7 @@ struct Constants
     float4 mieExtinctAbsHalf;   // Mie extinction (1/m), absorber half width
     float4 absorptionE;         // absorber extinction (1/m), irradiance scale
     float4 sunOcclusion;        // stellar angular radius, ellipsoid axes xyz (m)
+    float4 audit;               // x mode, y radiance-only, zw reserved
 };
 
 [[vk::push_constant]] Constants g;
@@ -296,6 +297,7 @@ float4 main(VSOutput input) : SV_Target0
         max(leftWeight + rightWeight, 1.0e-6);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
+    float largestSegment = 0.0;
     float visibilityNear = 1.0;
     float visibilityFar = 1.0;
     static const uint kShadowInterval = 16u;
@@ -320,6 +322,7 @@ float4 main(VSOutput input) : SV_Target0
         const float edgeB = AtmosphereMarchBoundary(
             float(i + 1u) / float(steps), tStart, tEnd, closestT, centerIndex);
         const float stepLength = max(edgeB - edgeA, 0.0);
+        largestSegment = max(largestSegment, stepLength);
         const float t = 0.5 * (edgeA + edgeB);
         const float3 position = origin + direction * t;
         // Sparse view-ray knots bound terrain queries independently of
@@ -370,8 +373,9 @@ float4 main(VSOutput input) : SV_Target0
         // source. Never multiply it by the direct planet eclipse mask.
         const float3 multiSource =
             irradiance * multiResponse * (rayleigh + mie) / (4.0 * kPi);
-        radiance += transmittance * multiSource *
-            (1.0 - stepTransmittance) / safeExtinction;
+        if (g.audit.x != 1.0)
+            radiance += transmittance * multiSource *
+                (1.0 - stepTransmittance) / safeExtinction;
 
         // Light may turn on or off INSIDE this segment. A single midpoint
         // sample switches the whole interval at once, causing nested rings
@@ -412,14 +416,39 @@ float4 main(VSOutput input) : SV_Target0
                 exp(-extinction * max(litStart - edgeA, 0.0));
             const float3 opticalEnd =
                 exp(-extinction * max(litEnd - edgeA, 0.0));
-            radiance += transmittance * irradiance * directPhase *
-                sunTransmission * discVisibility * terrainVisibility *
-                (opticalStart - opticalEnd) / safeExtinction;
+            if (g.audit.x != 2.0)
+                radiance += transmittance * irradiance * directPhase *
+                    sunTransmission * discVisibility * terrainVisibility *
+                    (opticalStart - opticalEnd) / safeExtinction;
         }
         transmittance *= stepTransmittance;
     }
 
-    return float4(scene.rgb * transmittance + radiance, scene.a);
+    // Diagnostic modes override the atmosphere composite without affecting
+    // underlying material, cloud, or planet lighting calculations.
+    if (g.audit.x == 3.0)
+    {
+        // White: full ray is illuminated, black: eclipsed; gray:
+        // fraction illuminated. A spatially stepped image here implicates
+        // shadow geometry rather than the scattering LUT or integration.
+        const float shadowLength = max(0.0, eclipse.y - eclipse.x);
+        const float illumination = saturate(
+            1.0 - shadowLength / max(tEnd - tStart, 1.0e-4));
+        return float4(illumination.xxx, 1.0);
+    }
+    if (g.audit.x == 4.0)
+    {
+        // Encode worst single-step length relative to Rayleigh scale
+        // height; dark is well resolved, bright indicates undersampling.
+        const float relativeStep = largestSegment /
+            max(g.radii.z, 1.0);
+        return float4(saturate(relativeStep / 8.0),
+            saturate(relativeStep / 2.0),
+            saturate(relativeStep * 0.5), 1.0);
+    }
+    return float4(
+        (g.audit.y > 0.5 ? float3(0.0, 0.0, 0.0) :
+            scene.rgb * transmittance) + radiance, scene.a);
 }
 )";
 
@@ -493,7 +522,7 @@ float EllipsoidSunVisibility(float3 p, float3 axes,
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 40U,
+            .pushConstantDwords = 44U,
             .shaderResourceBuffers = 1U,
             .sampledTextures = 4U,
             .topology = rhi::PrimitiveTopology::TriangleList,
@@ -533,7 +562,7 @@ void AtmosphereRenderer::Draw(
             return Bits(static_cast<f32>(value));
         };
 
-    const std::array<u32, 40> constants{
+    const std::array<u32, 44> constants{
         f(view.cameraPositionMeters.x),
         f(view.cameraPositionMeters.y),
         f(view.cameraPositionMeters.z),
@@ -584,7 +613,10 @@ void AtmosphereRenderer::Draw(
         Bits(view.bodyRadiiMeters.y > 0.0F
             ? view.bodyRadiiMeters.y : static_cast<f32>(p.bottomRadiusMeters)),
         Bits(view.bodyRadiiMeters.z > 0.0F
-            ? view.bodyRadiiMeters.z : static_cast<f32>(p.bottomRadiusMeters))
+            ? view.bodyRadiiMeters.z : static_cast<f32>(p.bottomRadiusMeters)),
+        Bits(static_cast<f32>(std::min<u8>(view.auditMode, 4U))),
+        Bits(view.auditRadianceOnly ? 1.0F : 0.0F),
+        0U, 0U
     };
 
     commands.SetRenderTarget(target);

@@ -337,6 +337,8 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_near_field_water", layers.bypassNearFieldWater},
         {"bypass_atmosphere", layers.bypassAtmosphere},
         {"terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere},
+        {"atmosphere_audit_mode", static_cast<f64>(layers.atmosphereAuditMode)},
+        {"atmosphere_audit_radiance_only", layers.atmosphereAuditRadianceOnly},
         {"sun_audit_method", static_cast<f64>(layers.sunAuditMethod)},
         {"sun_audit_disc_debug", layers.sunAuditDiscDebug},
         {"sun_audit_relief_debug", layers.sunAuditReliefDebug},
@@ -940,6 +942,21 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
                 applyFlag("bypass_atmosphere", layers.bypassAtmosphere);
                 applyFlag("terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere);
+                applyFlag("atmosphere_audit_radiance_only",
+                    layers.atmosphereAuditRadianceOnly);
+                if (const auto mode = values.find("atmosphere_audit_mode");
+                    mode != values.end())
+                {
+                    if (!mode->second.IsNumber() ||
+                        !std::isfinite(mode->second.AsNumber()) ||
+                        std::floor(mode->second.AsNumber()) != mode->second.AsNumber() ||
+                        mode->second.AsNumber() < 0.0 ||
+                        mode->second.AsNumber() > 4.0)
+                        throw rpc::Error(kInvalid,
+                            "atmosphere_audit_mode must be an integer from 0 to 4.");
+                    layers.atmosphereAuditMode =
+                        static_cast<u8>(mode->second.AsNumber());
+                }
                 applyFlag("sun_audit_disc_debug", layers.sunAuditDiscDebug);
                 applyFlag("sun_audit_relief_debug", layers.sunAuditReliefDebug);
                 applyFlag("sun_audit_sources_debug", layers.sunAuditSourcesDebug);

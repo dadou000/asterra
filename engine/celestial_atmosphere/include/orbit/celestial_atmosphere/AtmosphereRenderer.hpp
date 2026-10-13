@@ -35,6 +35,8 @@ struct AtmosphereRenderView
     // use their reference spherical shell, but solar blockage must follow
     // the body's real silhouette. Zero axes fall back to bottomRadius.
     math::Float3 bodyRadiiMeters{};
+    u8 auditMode{0U};
+    bool auditRadianceOnly{false};
     std::shared_ptr<rhi::Buffer> terrainSunShadow;
 };
 

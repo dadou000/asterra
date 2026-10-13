@@ -288,6 +288,25 @@ void StudioPropertiesPanel::Register()
                         context.Separator();
                         context.Text("Direct Lighting & Shadows");
                         context.Separator();
+                        context.Text("Atmosphere Integrator Council (temporary)");
+                        context.MutedText("Compare at identical camera, time and fixed exposure.");
+                        auto atmosphereAuditSwitch = [&](const char* label, u8 mode)
+                        {
+                            bool selected = layers.atmosphereAuditMode == mode;
+                            if (context.Checkbox(label, selected))
+                            {
+                                layers.atmosphereAuditMode = selected ? mode : 0U;
+                                changed = true;
+                            }
+                        };
+                        atmosphereAuditSwitch("1. Direct scattering only##atm-audit-direct", 1U);
+                        atmosphereAuditSwitch("2. Multiple scattering only##atm-audit-multi", 2U);
+                        atmosphereAuditSwitch("3. Solar shadow interval##atm-audit-shadow", 3U);
+                        atmosphereAuditSwitch("4. View-ray sample spacing##atm-audit-spacing", 4U);
+                        changed |= context.Checkbox("Atmosphere radiance only##atm-audit-radiance",
+                            layers.atmosphereAuditRadianceOnly);
+                        context.MutedText("All modes off = baseline; 3/4 replace the atmosphere output.");
+                        context.Separator();
                         context.Text("Experimental Sun Authority Council (temporary)");
                         context.MutedText("Exclusive A/B tests. All off restores original lighting.");
                         context.MutedText("Colored stripe at top left confirms the method reached this viewport.");
