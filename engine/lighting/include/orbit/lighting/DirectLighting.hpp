@@ -30,6 +30,9 @@ struct DirectLightingSettings
     // Planet-fixed direct stellar visibility at the actual surface point.
     f32 planetRadiusMeters{0.0F};
     f32 stellarAngularRadiusRadians{0.00465F};
+    u8 sunAuditMethod{0U};
+    bool sunAuditDebug{false};
+    rhi::Buffer* sunAuditTerrain{nullptr};
 };
 
 class DirectLightingRenderer
@@ -78,5 +81,6 @@ public:
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::Buffer> dummyParticleLightGrid_;
+    std::unique_ptr<rhi::Buffer> emptySunAuditTerrain_;
 };
 } // namespace orbit::lighting

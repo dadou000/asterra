@@ -1970,6 +1970,13 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         return uses;
     };
 
+    const bool sunAuditDebug = (info.layers.sunAuditMethod == 1U &&
+        info.layers.sunAuditDiscDebug) ||
+        (info.layers.sunAuditMethod == 2U && info.layers.sunAuditReliefDebug) ||
+        (info.layers.sunAuditMethod == 3U && info.layers.sunAuditSourcesDebug);
+    if (sunAuditDebug || info.layers.sunAuditMethod == 3U)
+        nearFieldIndirect = false;
+
     // The sky-only radiance cache fill is read by direct lighting, so
     // the cache buffers join its inputs when it is active.
     const bool skyCacheFill =
@@ -2085,7 +2092,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          frameIndex,
          nearFieldIndirect,
          shape,
-         studioDirectLight](
+         studioDirectLight,
+         terrainSunShadow,
+         sunAuditDebug,
+         auditMethod = info.layers.sunAuditMethod](
             rhi::CommandList& commands,
             const render_graph::Resources&
                 resources)
@@ -2142,7 +2152,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                         ? static_cast<f32>(ReferenceRadiusForShape(*shape))
                         : 0.0F,
                     .stellarAngularRadiusRadians =
-                        studioDirectLight.sunAngularRadiusRadians
+                        studioDirectLight.sunAngularRadiusRadians,
+                    .sunAuditMethod = auditMethod,
+                    .sunAuditDebug = sunAuditDebug,
+                    .sunAuditTerrain = terrainSunShadow.get()
                 });
 
             if (lightingTimestamps != nullptr)
@@ -3323,7 +3336,9 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
     }
 
     recordComposeStage("gi");
-    ComposeAtmospherePasses(context);
+    // Debug heatmaps must not be overwritten by later air/cloud layers.
+    if (!sunAuditDebug)
+        ComposeAtmospherePasses(context);
 
     // Glass Primitives: sun caustics onto the receivers behind them, a copy of
     // the lit scene, then the refracting bodies themselves over it. After the

@@ -337,6 +337,10 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"bypass_near_field_water", layers.bypassNearFieldWater},
         {"bypass_atmosphere", layers.bypassAtmosphere},
         {"terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere},
+        {"sun_audit_method", static_cast<f64>(layers.sunAuditMethod)},
+        {"sun_audit_disc_debug", layers.sunAuditDiscDebug},
+        {"sun_audit_relief_debug", layers.sunAuditReliefDebug},
+        {"sun_audit_sources_debug", layers.sunAuditSourcesDebug},
         {"bypass_hybrid_reflections", layers.bypassHybridReflections},
         {"reflection_exact_triangles", layers.reflectionExactTriangles},
         {"reflection_temporal", layers.reflectionTemporal},
@@ -936,6 +940,19 @@ void RegisterStudioRenderViewRpc(
                 applyFlag("bypass_near_field_water", layers.bypassNearFieldWater);
                 applyFlag("bypass_atmosphere", layers.bypassAtmosphere);
                 applyFlag("terrain_occluded_atmosphere", layers.terrainOccludedAtmosphere);
+                applyFlag("sun_audit_disc_debug", layers.sunAuditDiscDebug);
+                applyFlag("sun_audit_relief_debug", layers.sunAuditReliefDebug);
+                applyFlag("sun_audit_sources_debug", layers.sunAuditSourcesDebug);
+                if (const auto audit = values.find("sun_audit_method");
+                    audit != values.end())
+                {
+                    if (!audit->second.IsNumber() ||
+                        !std::isfinite(audit->second.AsNumber()) ||
+                        std::floor(audit->second.AsNumber()) != audit->second.AsNumber() ||
+                        audit->second.AsNumber() < 0.0 || audit->second.AsNumber() > 3.0)
+                        throw rpc::Error(kInvalid, "sun_audit_method must be an integer from 0 to 3.");
+                    layers.sunAuditMethod = static_cast<u8>(audit->second.AsNumber());
+                }
                 applyFlag("bypass_hybrid_reflections", layers.bypassHybridReflections);
                 applyFlag("reflection_exact_triangles", layers.reflectionExactTriangles);
                 applyFlag("reflection_temporal", layers.reflectionTemporal);

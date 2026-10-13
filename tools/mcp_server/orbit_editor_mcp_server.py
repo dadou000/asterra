@@ -301,6 +301,10 @@ def orbit_view_terrain_layers_set(
     cloud_godray_strength: float | None = None,
     cloud_light_volume: bool | None = None,
     terrain_occluded_atmosphere: bool | None = None,
+    sun_audit_method: int | None = None,
+    sun_audit_disc_debug: bool | None = None,
+    sun_audit_relief_debug: bool | None = None,
+    sun_audit_sources_debug: bool | None = None,
     bypass_cloud_shadow: bool | None = None,
     bypass_proxy_sun_shadow: bool | None = None,
     bypass_proxy_surfaces: bool | None = None,
@@ -334,6 +338,13 @@ def orbit_view_terrain_layers_set(
     fields keep their value. reflection_exact_triangles switches the shared mesh
     BVH for smooth opaque reflections and analytic glass; reflection_temporal
     controls reflection-only history (independent of scene TAA).
+    sun_audit_method: 0=baseline, 1=finite solar disc sphere, 2=terrain ray
+    visibility, 3=isolate direct stellar term from sky/GI. Three independent
+    sun_audit_*_debug switches enable their method's linear-HDR debug view
+    while that method is active; debug bypasses later GI, atmosphere/cloud
+    layers for readable masks. Relief mode can initially fall back to
+    spherical visibility while the height field builds asynchronously.
+    These settings are transient per viewport, not project authority.
     reflection_maximum_roughness [0,1] defaults to 0.25,
     reflection_distance_meters [0.1,1000] defaults to 40.
     reflection_debug_view: 0 scene, 1 reflected radiance, 2 hit distance (magenta
@@ -433,6 +444,10 @@ def orbit_view_terrain_layers_set(
         "cloud_godray_strength": cloud_godray_strength,
         "cloud_light_volume": cloud_light_volume,
         "terrain_occluded_atmosphere": terrain_occluded_atmosphere,
+        "sun_audit_method": sun_audit_method,
+        "sun_audit_disc_debug": sun_audit_disc_debug,
+        "sun_audit_relief_debug": sun_audit_relief_debug,
+        "sun_audit_sources_debug": sun_audit_sources_debug,
         "bypass_cloud_shadow": bypass_cloud_shadow,
         "bypass_proxy_sun_shadow": bypass_proxy_sun_shadow,
         "bypass_proxy_surfaces": bypass_proxy_surfaces,

@@ -1,4 +1,8 @@
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+#include <string>
+#include <stdexcept>
 
 #include <algorithm>
 #include <array>
@@ -135,6 +139,8 @@ Texture2D g_proxySunShadow;
 [[vk::combinedImageSampler]]
 SamplerState g_proxySunShadowSampler;
 
+[[vk::binding(6, 0)]] ByteAddressBuffer g_sunAuditTerrain;
+
 struct Constants
 {
     float4 lightDirectionAndScale;
@@ -145,7 +151,7 @@ struct Constants
     uint4 localGrid;
     float4 cameraFrameAndParticleGrid;
     float4 extra; // x: cloud shadow bound, y: proxy sun shadow bound, z: radiance level count, w: sky cache strength
-    float4 planetShadow; // x: planetary reference radius, y: apparent source angular radius
+    float4 planetShadow; // x planet radius, y stellar angular radius, z audit method, w audit debug
 };
 [[vk::push_constant]] Constants g;
 
@@ -540,6 +546,10 @@ float4 main(VSOutput input) : SV_Target0
     // an orbital camera may see both the daylight and nightside hemisphere.
     // Analytic globe renderers do not always write geometric depth; for these,
     // reconstruct the surface from the view ray's sphere intersection.
+    float sunAuditVisibility = 1.0;
+    float sunAuditSphere = 1.0;
+    bool sunAuditPositionValid = false;
+    bool sunAuditTerrainValid = false;
     if (g.planetShadow.x > 0.0)
     {
         const float3 eye = g.cameraFrameAndParticleGrid.xyz;
@@ -570,14 +580,37 @@ float4 main(VSOutput input) : SV_Target0
         }
         if (surfaceFound)
         {
+            sunAuditPositionValid = true;
             const float radial = length(surface);
             const float ratio = min(g.planetShadow.x /
                 max(radial, g.planetShadow.x), 1.0);
             const float horizonMu = -sqrt(max(1.0 - ratio * ratio, 0.0));
             const float sunMu = dot(surface / max(radial, 1.0), stellarDirection);
             const float angular = max(g.planetShadow.y, 1.0e-5);
-            stellarLinear *= smoothstep(
+            const float legacyVisibility = smoothstep(
                 horizonMu - angular, horizonMu + angular, sunMu);
+            sunAuditVisibility = legacyVisibility;
+            if (g.planetShadow.z > 0.5)
+            {
+                // Use the same finite-disc geometry as the atmospheric
+                // visibility service. Keep the legacy path unchanged at 0.
+                const float3 surfaceOutside = surface *
+                    (1.0 + max(1.0e-6, 0.5 / max(radial, 1.0)));
+                const float biasedRadius = g.planetShadow.x *
+                    (1.0 - 2.0e-7);
+                sunAuditSphere = SphereStellarVisibility(
+                    surfaceOutside, stellarDirection, biasedRadius, angular);
+                sunAuditVisibility = sunAuditSphere;
+                if (g.planetShadow.z > 1.5 && g.planetShadow.z < 2.5)
+                {
+                    sunAuditTerrainValid = g_sunAuditTerrain.Load(12u) >= 4u;
+                    if (sunAuditTerrainValid)
+                        sunAuditVisibility = TerrainSunVisibility(
+                            g_sunAuditTerrain, surfaceOutside,
+                            stellarDirection, biasedRadius, angular);
+                }
+            }
+            stellarLinear *= sunAuditVisibility;
         }
     }
 
@@ -605,10 +638,12 @@ float4 main(VSOutput input) : SV_Target0
     const float ambient =
         max(g.lightColorAndAmbient.w, 0.0);
     const float3 ambientLinear =
-        baseColor *
+        g.planetShadow.z > 2.5 ? float3(0.0, 0.0, 0.0) :
+        (baseColor *
         (1.0 - metallic) *
         ambient +
-        proxySkyFill;
+        proxySkyFill);
+    float3 sunAuditSky = ambientLinear;
     float3 sceneLinear = stellarLinear + ambientLinear;
 
     const float depth =
@@ -637,7 +672,8 @@ float4 main(VSOutput input) : SV_Target0
     const uint skyLevelCount =
         uint(g.extra.z + 0.5);
 
-    if (depth > 0.0 &&
+    if (g.planetShadow.z < 2.5 &&
+        depth > 0.0 &&
         skyLevelCount > 0u &&
         g.extra.w > 0.0 &&
         floor(emissionClass.a + 0.01) != 3.0)
@@ -645,11 +681,13 @@ float4 main(VSOutput input) : SV_Target0
         const float3 skyPosition =
             ReconstructSurfacePosition(depth, cameraRay, cameraForward);
 
-        sceneLinear +=
+        const float3 skyContribution =
             baseColor *
             (1.0 - metallic) *
             CacheSkyIrradiance(skyPosition, n, skyLevelCount) *
             (g.extra.w / 3.14159265);
+        sunAuditSky += skyContribution;
+        sceneLinear += skyContribution;
     }
 
     // Reverse-Z depth 0 is the untouched/far clear value. Analytic globe
@@ -753,6 +791,23 @@ float4 main(VSOutput input) : SV_Target0
     sceneLinear +=
         max(emissionClass.rgb, 0.0);
 
+    if (g.planetShadow.w > 0.5 && g.planetShadow.z > 0.5)
+    {
+        // Linear diagnostic color, not an exposure-dependent shadow fix.
+        // Magenta means no trustworthy body-relative surface position.
+        if (!sunAuditPositionValid)
+            return float4(1.0, 0.0, 1.0, 1.0);
+        if (g.planetShadow.z < 1.5)
+            return float4(sunAuditSphere.xxx, 1.0);
+        if (g.planetShadow.z < 2.5)
+            return float4(sunAuditVisibility, sunAuditSphere,
+                sunAuditTerrainValid ? 1.0 : 0.0, 1.0);
+        return float4(
+            log2(1.0 + max(dot(stellarLinear, float3(0.2126,0.7152,0.0722)), 0.0)) * 0.15,
+            log2(1.0 + max(dot(sunAuditSky, float3(0.2126,0.7152,0.0722)), 0.0)) * 0.15,
+            log2(1.0 + max(dot(emissionClass.rgb, float3(0.2126,0.7152,0.0722)), 0.0)) * 0.15,
+            1.0);
+    }
     return float4(sceneLinear, 1.0);
 }
 )";
@@ -770,9 +825,14 @@ DirectLightingRenderer::DirectLightingRenderer(
             .debug = false
         });
 
+    std::string pixelSource(kPs);
+    const auto entry = pixelSource.find("float4 main(VSOutput input) : SV_Target0");
+    if (entry == std::string::npos)
+        throw std::logic_error("Direct lighting pixel entry point not found.");
+    pixelSource.insert(entry, kSunVisibilityShader);
     const auto ps =
         compiler.Compile({
-            .source = kPs,
+            .source = pixelSource,
             .entryPoint = "main",
             .stage = shader::Stage::Pixel,
             .debug = false
@@ -791,7 +851,7 @@ DirectLightingRenderer::DirectLightingRenderer(
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
             .pushConstantDwords = 36U,
-            .shaderResourceBuffers = 6U,
+            .shaderResourceBuffers = 7U,
             .sampledTextures = 6U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
@@ -806,6 +866,7 @@ DirectLightingRenderer::DirectLightingRenderer(
             .colorAttachmentCount = 1U
         });
 
+    emptySunAuditTerrain_ = CreateEmptyTerrainSunShadowBuffer(device);
     dummyParticleLightGrid_ = device.CreateBuffer({
         .sizeBytes = 2U * sizeof(std::array<u32,4U>),
         .usage = rhi::BufferUsage::Structured,
@@ -913,7 +974,8 @@ void DirectLightingRenderer::Draw(
         bits(std::max(skyCacheStrength, 0.0F)),
         bits(std::max(settings.planetRadiusMeters, 0.0F)),
         bits(std::max(settings.stellarAngularRadiusRadians, 0.0F)),
-        0U, 0U
+        bits(static_cast<f32>(std::min<u8>(settings.sunAuditMethod, 3U))),
+        bits(settings.sunAuditDebug ? 1.0F : 0.0F)
     };
 
     commands.SetRenderTarget(targetSceneColor);
@@ -961,6 +1023,10 @@ void DirectLightingRenderer::Draw(
         radianceLevels != nullptr
             ? *radianceLevels
             : *dummyParticleLightGrid_);
+
+    commands.SetGraphicsBuffer(6U,
+        settings.sunAuditTerrain != nullptr
+            ? *settings.sunAuditTerrain : *emptySunAuditTerrain_);
 
     commands.SetGraphicsTexture(
         0U,

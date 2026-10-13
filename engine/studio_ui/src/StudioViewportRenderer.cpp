@@ -3398,7 +3398,8 @@ StudioViewportRenderer::ComposeBase(
                 sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
                 bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
                 nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters,
-                info.layers.terrainOccludedAtmosphere &&
+                (info.layers.terrainOccludedAtmosphere ||
+                 info.layers.sunAuditMethod == 2U) &&
                     hasMacroGlobe && macroGlobeSurface != nullptr &&
                     macroGlobeSurface->terrain != nullptr &&
                     shape.has_value() && logicalTarget->target.has_value()

@@ -136,6 +136,12 @@ struct StudioTerrainLayerOptions
     bool bypassAtmosphere{false};
     // Experimental direct scattering with body-fixed terrain/stellar visibility.
     bool terrainOccludedAtmosphere{false};
+    // Temporary, per-viewport sun-authority experiments (0 original,
+    // 1 analytic solar disc, 2 relief visibility, 3 source isolation).
+    u8 sunAuditMethod{0U};
+    bool sunAuditDiscDebug{false};
+    bool sunAuditReliefDebug{false};
+    bool sunAuditSourcesDebug{false};
     // Skips only the hybrid reflections stage (the final gather still runs); bypassIndirectLighting skips both.
     bool bypassHybridReflections{false};
     // Smooth surfaces: one shared exact mesh scene for opaque reflections and
