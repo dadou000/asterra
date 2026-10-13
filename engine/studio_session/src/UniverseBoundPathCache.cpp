@@ -38,6 +38,21 @@ bool UniverseBoundPathCache::RefreshBinding()
     return true;
 }
 
+void UniverseBoundPathCache::StoreCorridor(
+    const path_geometry::PathCenterline& centerline,
+    const paths::PathProfile& profile,
+    const path_geometry::CorridorSweep& corridor,
+    const path_geometry::PathBuildOptions options,
+    const path_geometry::CorridorRefinementOptions refinement,
+    const std::optional<u64> routeGeneration)
+{
+    // Build before replacing an existing cache product. A failed candidate
+    // leaves the previous valid revision available for visualization.
+    auto product = path_geometry::BuildCorridorDerived(
+        centerline, profile, corridor, options, refinement);
+    Store(std::move(product), routeGeneration);
+}
+
 void UniverseBoundPathCache::Store(
     path_geometry::PathDerivedProduct product,
     const std::optional<u64> routeGeneration)
