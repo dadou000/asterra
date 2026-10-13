@@ -26,6 +26,18 @@ public:
     // Build a corridor using the shared path derivation pipeline and publish
     // it to the same cache consumed by the existing Studio viewport renderer.
     // Not a per-frame operation: callers must track authored revisions.
+    // Caller supplies a revision that changes whenever centerline, profile,
+    // section, banking or generation settings change. Skip unchanged builds.
+    // Do not use a simulation step counter as this revision.
+    [[nodiscard]] bool StoreCorridorIfChanged(
+        u64 authoredSignature,
+        const path_geometry::PathCenterline& centerline,
+        const paths::PathProfile& profile,
+        const path_geometry::CorridorSweep& corridor,
+        path_geometry::PathBuildOptions options = {},
+        path_geometry::CorridorRefinementOptions refinement = {},
+        std::optional<u64> routeGeneration = std::nullopt);
+
     void StoreCorridor(
         const path_geometry::PathCenterline& centerline,
         const paths::PathProfile& profile,
@@ -64,6 +76,8 @@ private:
         products_;
     std::unordered_map<scene::ObjectId, u64>
         routeGenerations_;
+    std::unordered_map<scene::ObjectId, u64>
+        corridorAuthoredSignatures_;
     u64 observedUniverseGeneration_{~u64{0}};
     u64 bindingGeneration_{0};
 };
