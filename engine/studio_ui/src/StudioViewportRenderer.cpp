@@ -3634,6 +3634,8 @@ StudioViewportRenderer::ComposeBase(
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
+                    const std::array<rhi::Texture*, 3> surfaces{
+                        base, normal, emission};
                     pathRenderer_.Draw(
                         commands,
                         *color,
@@ -3645,8 +3647,7 @@ StudioViewportRenderer::ComposeBase(
                         pathProducts,
                         drawPathDebug,
                         depth,
-                        production ? std::span<rhi::Texture* const>(
-                            std::array<rhi::Texture*, 3>{base, normal, emission}) :
+                        production ? std::span<rhi::Texture* const>(surfaces) :
                             std::span<rhi::Texture* const>{});
                 });
         }
