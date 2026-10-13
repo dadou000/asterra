@@ -68,6 +68,29 @@ int main()
     Check(oldWorkerSnapshot->GenerationRevisions().authoring ==
           newWorkerSnapshot->GenerationRevisions().authoring);
 
+    // On a curved planet the radial elevation is the station radius minus
+    // the reference radius, not the dot product with a local up vector.
+    // A segment along the tangent at 45 degrees must still cut to zero.
+    const double radial = 1000.0 / std::sqrt(2.0);
+    orbit::path_geometry::CorridorTerrainLayer diagonalRoad{};
+    diagonalRoad.edge = orbit::scene::ObjectId::Random();
+    diagonalRoad.footprint = {4, 1, 2};
+    diagonalRoad.stations = {
+        {.stationMeters=0,
+         .position={radial,radial,-20},
+         .up={1/std::sqrt(2.0),1/std::sqrt(2.0),0},
+         .lateral={-1/std::sqrt(2.0),1/std::sqrt(2.0),0}},
+        {.stationMeters=40,
+         .position={radial,radial,20},
+         .up={1/std::sqrt(2.0),1/std::sqrt(2.0),0},
+         .lateral={-1/std::sqrt(2.0),1/std::sqrt(2.0),0}}
+    };
+    orbit::path_geometry::CorridorTerrainSource diagonal(
+        base, planet, {diagonalRoad}, 13);
+    orbit::terrain::TerrainQuery diagonalQuery = query;
+    diagonalQuery.unitDirection = {radial / 1000.0, radial / 1000.0, 0};
+    Check(std::abs(diagonal.Sample(diagonalQuery).elevationMeters) < 1.e-8);
+
     query.planet = orbit::world::PlanetId::Random();
     Check(overlay.Sample(query).elevationMeters == 20.0);
     return 0;
