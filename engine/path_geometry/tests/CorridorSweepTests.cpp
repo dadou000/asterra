@@ -26,6 +26,20 @@ int main()
     CHECK(!SampleCorridorTerrain(stations, {5, 0, 10}, footprint).has_value());
     CHECK(!SampleCorridorTerrain(stations, {5, 0, 0}, {3.5, -1.0, 2.0}).has_value());
     CHECK(onCenter == SampleCorridorTerrain(stations, {5, 15, 0}, footprint));
+    const auto cut = BlendCorridorTerrainHeight(12.0, *onCenter);
+    CHECK(std::abs(cut.heightMeters) < 1.e-9);
+    CHECK(std::abs(cut.cutMeters-12.0) < 1.e-9);
+    CHECK(cut.fillMeters == 0.0);
+    const auto fill = BlendCorridorTerrainHeight(-8.0, *onCenter);
+    CHECK(fill.cutMeters == 0.0 && std::abs(fill.fillMeters-8.0)<1.e-9);
+    const auto partial = BlendCorridorTerrainHeight(10.0, *shoulder);
+    CHECK(partial.heightMeters > 0.0 && partial.heightMeters < 10.0);
+    const auto envelope = CorridorFootprintEnvelope(stations, footprint);
+    CHECK(envelope.has_value());
+    CHECK(envelope->minimum.x <= -7.5);
+    CHECK(envelope->maximum.x >= 27.5);
+    CHECK(!CorridorFootprintEnvelope(stations, {3.5, 0.0, -1.0}).has_value());
+
     const auto roadMesh=BuildCorridorMesh(stations,road);
     CHECK(roadMesh.vertices.size()==9);
     CHECK(roadMesh.indices.size()==24);
