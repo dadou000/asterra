@@ -261,6 +261,17 @@ bool ReportsController::CaptureScreenshot(const u64 id, const bool endCondition)
 std::filesystem::path ReportsController::ExportCapture(
     const u64 id, const bool endCondition)
 {
+    const auto* report = store_->Find(id);
+    if (report && !endCondition &&
+        (report->scopes & studio_reports::ScopeBit(
+            studio_reports::ReportScope::Performance)) != 0U &&
+        !store_->Path().empty())
+    {
+        const auto trace = store_->Path().parent_path() / "Captures" /
+            std::format("report-{}-performance.json", id);
+        if (std::filesystem::is_regular_file(trace))
+            return trace; // Already exported by the profiler capture pipeline.
+    }
     const auto& condition = RequireCondition(id, endCondition);
     if (condition.screenshot.empty())
         throw std::runtime_error("Capture this report condition before exporting it.");
