@@ -53,6 +53,7 @@ struct CorridorTerrainSample
     f64 influence{0.0}; // 0=source terrain, 1=engineered datum
     f64 signedLateralMeters{0.0};
     f64 stationMeters{0.0};
+    [[nodiscard]] bool operator==(const CorridorTerrainSample&) const = default;
 };
 // Works for planar, frame-local height fields. Planetary body-fixed/geodetic
 // projection is deliberately not inferred here.
