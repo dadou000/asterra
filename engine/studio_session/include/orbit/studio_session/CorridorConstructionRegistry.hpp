@@ -31,6 +31,11 @@ public:
         StudioTerrainPhysicalPageService& physical,
         std::size_t maximumPages = 4096);
 
+    // Deterministic bounded construction-page interest. Use this to request
+    // physical work only for authored corridors, never intervening empty tiles.
+    [[nodiscard]] std::vector<terrain::PhysicalTerrainPageAddress>
+    PagesForBody(universe::BodyId body, std::size_t maximumPages) const;
+
     void Clear() noexcept { records_.clear(); }
 
 private:
