@@ -41,6 +41,10 @@ Read `docs/ORBIT_MCP.md` before adding or changing editor capabilities.
 - Anything reachable in Orbit Studio must also be reachable over RPC and MCP. If a workflow step exists only as a UI click, extract the operation the button runs, make the button call it, register an RPC method for it, add a dedicated tool in `tools/mcp_server/orbit_editor_mcp_server.py`, and document it in `docs/ORBIT_MCP.md` in the same change.
 - Do not drive Studio by simulating mouse or keyboard input to reach a goal. A missing RPC/MCP path is a gap to implement.
 
+## Debugging and validation navigation
+
+**Use Orbit Studio → Debug as the canonical UI location for engine tests and debugging.** Route new test actions and diagnostic reports there, grouped by subsystem. Existing domain services, scenario commands, capture pipelines and RPC/MCP endpoints remain authoritative; provide navigation and triggers rather than copying implementations. Clearly distinguish a basic sanity PASS from visual GPU, physics/collision or end-to-end validation. See `engine/studio_ui/docs/debug-center.md`.
+
 ## Documentation upkeep
 
 - Documentation is a tree of small blocks (`docs/ORBIT_DOCS.md`). Blocks live next to the code in `engine/<module>/docs/`.
