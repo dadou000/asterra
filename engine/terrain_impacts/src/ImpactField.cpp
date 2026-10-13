@@ -360,14 +360,9 @@ namespace
     f64 meanRayGain = 0.0;
     if (impact.rayCount > 0U && impact.rayStrength > 0.0)
     {
-        constexpr u32 kRaySamples = 256U;
-        for (u32 i = 0U; i < kRaySamples; ++i)
-        {
-            const f64 angle = 2.0 * std::numbers::pi_v<f64> *
-                static_cast<f64>(i) / static_cast<f64>(kRaySamples);
-            meanRayGain += std::pow(std::max(0.0, std::cos(angle)), 8.0) /
-                static_cast<f64>(kRaySamples);
-        }
+        // Exact angular mean of max(cos(theta), 0)^8. For distorted rays this
+        // remains the same approximate volume normalization used by the fit.
+        meanRayGain = 35.0 / 256.0;
     }
     const f64 ejectaVolumeNormalized = impact.ejectaThicknessRatio *
         ejectaIntegral * (1.0 + impact.rayStrength * meanRayGain);
@@ -380,20 +375,15 @@ namespace
 
 [[nodiscard]] f64 RayModulation(
     const ImpactRecord& impact,
-    const world::PlanetDefinition& planet,
-    const world::SurfaceFrame& impactFrame,
     const f64 phase,
-    const math::Double3& sampleDirection) noexcept
+    const math::Double2& offset,
+    const f64 normalizedRadius) noexcept
 {
     if (impact.rayStrength <= 0.0 ||
         impact.rayCount == 0)
     {
         return 0.0;
     }
-
-    const math::Double2 offset =
-        world::SurfaceOffsetBetweenDirections(
-            planet, impactFrame, sampleDirection);
 
     if (!std::isfinite(offset.x) ||
         !std::isfinite(offset.y))
@@ -403,12 +393,17 @@ namespace
 
     const f64 azimuth =
         std::atan2(offset.y, offset.x);
+    // Smooth, periodic angular distortion avoids face seams and keeps the
+    // ray curve coherent along its length instead of adding per-texel noise.
+    const f64 distortion = impact.rayIrregularity * (
+        0.65 * std::sin(3.0 * azimuth + normalizedRadius * 0.45 + phase) +
+        0.35 * std::sin(5.0 * azimuth - normalizedRadius * 0.23 - phase));
 
     const f64 ray =
         std::max(
             0.0,
             std::cos(
-                azimuth *
+                (azimuth + distortion) *
                     static_cast<f64>(impact.rayCount) +
                 phase));
 
@@ -420,11 +415,9 @@ namespace
     const ImpactRecord& impact,
     const ImpactFieldDefinition& definition,
     const world::PlanetDefinition& planet,
-    const world::SurfaceFrame& impactFrame,
-    const f64 impactPhase,
+    const PreparedImpactGeometry& prepared,
     const math::Double3& positionDirection,
-    const f64 footprintDiameterMeters,
-    const f64 ejectaMassBalanceScale) noexcept
+    const f64 footprintDiameterMeters) noexcept
 {
     CraterProcessSample result{};
 
@@ -443,18 +436,9 @@ namespace
         return result;
     }
 
+    const world::SurfaceFrame& impactFrame = prepared.frame;
+    const f64 impactPhase = prepared.phase;
     const math::Double3& center = impactFrame.up;
-
-    const f64 shapeBound = 1.65 /
-        std::max(1.0 - impact.shapeIrregularity, 0.75);
-    const f64 maximumRadius =
-        impact.radiusMeters *
-        std::max(1.0, impact.ejectaExtentRadii) * shapeBound;
-
-    const f64 maximumAngle =
-        std::min(
-            maximumRadius / planet.radiusMeters,
-            std::numbers::pi_v<f64>);
 
     const f64 cosine =
         std::clamp(
@@ -464,7 +448,7 @@ namespace
             -1.0,
             1.0);
 
-    if (cosine < std::cos(maximumAngle))
+    if (cosine < prepared.influenceCosine)
     {
         return result;
     }
@@ -472,16 +456,11 @@ namespace
     const math::Double2 offset =
         world::SurfaceOffsetBetweenDirections(
             planet, impactFrame, positionDirection);
-    const f64 azimuth = impact.impactAzimuthRadians;
-    const f64 along = offset.x * std::cos(azimuth) +
-        offset.y * std::sin(azimuth);
-    const f64 across = -offset.x * std::sin(azimuth) +
-        offset.y * std::cos(azimuth);
-    const f64 impactAngle = std::clamp(
-        impact.impactAngleDegrees, 0.0, 89.0) *
-        (std::numbers::pi_v<f64> / 180.0);
-    const f64 elongation = 1.0 +
-        0.65 * std::sin(impactAngle) * std::sin(impactAngle);
+    const f64 along = offset.x * prepared.azimuthCosine +
+        offset.y * prepared.azimuthSine;
+    const f64 across = -offset.x * prepared.azimuthSine +
+        offset.y * prepared.azimuthCosine;
+    const f64 elongation = prepared.elongation;
     f64 x = std::sqrt(
         (along / (impact.radiusMeters * elongation)) *
             (along / (impact.radiusMeters * elongation)) +
@@ -498,7 +477,7 @@ namespace
             0.75);
     }
 
-    if (x > impact.ejectaExtentRadii)
+    if (x > impact.InfluenceExtentRadii())
     {
         return result;
     }
@@ -596,18 +575,18 @@ namespace
     const f64 rimWidth = 0.10;
     const f64 rimDistance =
         (x - 1.0) / rimWidth;
-    const f64 rim =
+    const f64 rim = x <= impact.ejectaExtentRadii ?
         impact.radiusMeters *
         impact.rimHeightRatio *
         std::exp(
             -0.5 *
             rimDistance *
-            rimDistance);
+            rimDistance) : 0.0;
 
     if (impact.multiringStrength > 0.0 &&
         impact.radiusMeters >=
             5.0 * definition.complexTransitionRadiusMeters &&
-        x >= 1.0)
+        x >= 1.0 && x <= impact.ejectaExtentRadii)
     {
         const f64 ringPhase = (x - 1.0) *
             (2.0 * std::numbers::pi_v<f64> / 1.35);
@@ -618,6 +597,13 @@ namespace
 
     f64 ejecta = 0.0;
     f64 rayField = 0.0;
+    const f64 angularRay = x >= 1.0
+        ? RayModulation(impact, impactPhase, offset, x) : 0.0;
+    if (impact.rayExtentRadii > 0.0 && x >= 1.0 && x <= impact.rayExtentRadii)
+    {
+        rayField = angularRay * (1.0 - SmoothUnit(
+            (x - 1.0) / std::max(impact.rayExtentRadii - 1.0, 1.0e-9)));
+    }
 
     if (x >= 1.0 &&
         x <= impact.ejectaExtentRadii)
@@ -638,17 +624,9 @@ namespace
             impact.radiusMeters *
             impact.ejectaThicknessRatio *
             std::pow(std::max(x, 1.0), -3.0) *
-            outerFade * ejectaMassBalanceScale;
-
-        rayField =
-            RayModulation(
-                impact,
-                planet,
-                impactFrame,
-                impactPhase,
-                positionDirection);
-
-        ejecta *= 1.0 + rayField;
+            outerFade * prepared.ejectaMassBalanceScale;
+        if (impact.rayExtentRadii == 0.0) rayField = angularRay;
+        ejecta *= 1.0 + angularRay;
     }
 
     result.heightDeltaMeters =
@@ -664,7 +642,7 @@ namespace
         : 0.0;
     result.formationAgeOrder = impact.ageOrder;
     result.formationAgeYears = impact.formationAgeYears;
-    if (result.excavationCoverage > 0.01 || ejecta > 0.0)
+    if (result.excavationCoverage > 0.01 || ejecta > 0.0 || rayField > 0.0)
     {
         result.exposureAgeOrder = impact.ageOrder;
         result.exposureAgeYears = elapsedAgeYears;
@@ -751,7 +729,7 @@ void Accumulate(
     }
     if (contribution.exposureAgeOrder != 0U ||
         contribution.excavationCoverage > 0.01 ||
-        contribution.ejectaThicknessMeters > 0.0)
+        contribution.ejectaThicknessMeters > 0.0 || contribution.rayField > 0.0)
     {
         destination.exposureAgeOrder =
             contribution.exposureAgeOrder;
@@ -795,7 +773,7 @@ f64 ScaleImpactCraterRadiusMeters(const ImpactScalingInput& input)
     const f64 angle = input.impactAngleDegrees *
         (std::numbers::pi_v<f64> / 180.0);
     const f64 incidence = std::pow(
-        std::max(std::sin(angle), 0.05), 1.0 / 3.0);
+        std::max(std::cos(angle), 0.05), 1.0 / 3.0);
     const f64 transientDiameter = 1.6 * diameter *
         std::cbrt(input.impactorDensityKgPerCubicMeter /
                   input.targetDensityKgPerCubicMeter) *
@@ -850,7 +828,7 @@ std::optional<std::vector<GeologicalInfluenceCap>> ChangedAuthoredEventInfluence
             ? ScaleImpactCraterRadiusMeters({
                 .impactorDiameterMeters = event.impactorDiameterMeters,
                 .impactVelocityMetersPerSecond = event.impactVelocityMetersPerSecond,
-                .impactAngleDegrees = std::max(event.impactAngleDegrees, 0.1),
+                .impactAngleDegrees = event.impactAngleDegrees,
                 .impactorDensityKgPerCubicMeter = event.impactorDensityKgPerCubicMeter,
                 .targetDensityKgPerCubicMeter = recipe.targetDensityKgPerCubicMeter,
                 .surfaceGravityMetersPerSecondSquared = recipe.surfaceGravityMetersPerSecondSquared,
@@ -858,7 +836,7 @@ std::optional<std::vector<GeologicalInfluenceCap>> ChangedAuthoredEventInfluence
             : event.radiusMeters;
         const f64 profileBound = 1.65 /
             std::max(1.0 - event.shapeIrregularity, 0.75) * 1.65;
-        const f64 extent = std::max(event.ejectaExtentRadii, 1.0);
+        const f64 extent = event.InfluenceExtentRadii();
         const f64 main = profileBound * extent;
         const f64 binary = event.binarySeparationRadii + profileBound * extent *
             std::max(event.binaryCompanionRadiusRatio, 0.0);
@@ -1016,6 +994,10 @@ bool ImpactRecord::IsValid() const noexcept
         rayStrength >= 0.0 &&
         rayStrength <= 4.0 &&
         rayCount <= 64U &&
+        std::isfinite(rayExtentRadii) &&
+        (rayExtentRadii == 0.0 ||
+         (rayExtentRadii > 1.0 && rayExtentRadii <= 100.0)) &&
+        FiniteUnit(rayIrregularity) &&
         FiniteUnit(degradation) &&
         std::isfinite(formationAgeYears) && formationAgeYears >= 0.0 &&
         std::isfinite(impactAngleDegrees) &&
@@ -1034,6 +1016,12 @@ bool ImpactRecord::IsValid() const noexcept
         std::isfinite(secondaryRadiusRatio) &&
         secondaryRadiusRatio >= 0.01 && secondaryRadiusRatio <= 0.25 &&
         FiniteUnit(secondaryRayAlignment);
+}
+
+f64 ImpactRecord::InfluenceExtentRadii() const noexcept
+{
+    return std::max(std::max(ejectaExtentRadii, 1.0),
+        rayStrength > 0.0 && rayCount > 0U ? rayExtentRadii : 0.0);
 }
 
 bool ResurfacingRecord::IsValid() const noexcept
@@ -1140,7 +1128,7 @@ ImpactField::ImpactField(
             impact.radiusMeters = ScaleImpactCraterRadiusMeters({
                 .impactorDiameterMeters = impact.impactorDiameterMeters,
                 .impactVelocityMetersPerSecond = impact.impactVelocityMetersPerSecond,
-                .impactAngleDegrees = std::max(impact.impactAngleDegrees, 0.1),
+                .impactAngleDegrees = impact.impactAngleDegrees,
                 .impactorDensityKgPerCubicMeter = impact.impactorDensityKgPerCubicMeter,
                 .targetDensityKgPerCubicMeter = definition_.targetDensityKgPerCubicMeter,
                 .surfaceGravityMetersPerSecondSquared = definition_.surfaceGravityMetersPerSecondSquared,
@@ -1172,7 +1160,9 @@ ImpactField::ImpactField(
         definition_.resurfacingEvents.end(),
         [](const ResurfacingRecord& a, const ResurfacingRecord& b)
         {
-            return a.ageOrder < b.ageOrder;
+            if (a.ageOrder != b.ageOrder) return a.ageOrder < b.ageOrder;
+            if (a.id.high != b.id.high) return a.id.high < b.id.high;
+            return a.id.low < b.id.low;
         });
 
     for (ResurfacingRecord& event : definition_.resurfacingEvents)
@@ -1258,6 +1248,9 @@ ImpactField::ImpactField(
                     : 0U,
             .degradation = degradation,
             .ageOrder = static_cast<u64>(index),
+            .formationAgeYears = definition_.surfaceAgeYears *
+                ((static_cast<f64>(index) + 0.5) /
+                 static_cast<f64>(explicitProceduralCount)),
             .enabled = true,
             .authored = false
         });
@@ -1400,11 +1393,24 @@ ImpactField::ImpactField(
     preparedImpactGeometries_.reserve(resolvedImpacts_.size());
     for (const ImpactRecord& impact : resolvedImpacts_)
     {
+        const f64 angle = impact.impactAngleDegrees *
+            (std::numbers::pi_v<f64> / 180.0);
+        const f64 shapeBound = 1.65 /
+            std::max(1.0 - impact.shapeIrregularity, 0.75);
+        const f64 angularRadius = std::min(
+            impact.radiusMeters * impact.InfluenceExtentRadii() *
+                shapeBound / planet_.radiusMeters,
+            std::numbers::pi_v<f64>);
         preparedImpactGeometries_.push_back({
             .frame = world::MakeSurfaceFrame(impact.centerUnitDirection),
             .phase = UnitFloat(Mix64(impact.id.high ^ impact.id.low)) *
                 2.0 * std::numbers::pi_v<f64>,
-            .ejectaMassBalanceScale = EjectaMassBalanceScale(impact, definition_)});
+            .ejectaMassBalanceScale = EjectaMassBalanceScale(impact, definition_),
+            .azimuthCosine = std::cos(impact.impactAzimuthRadians),
+            .azimuthSine = std::sin(impact.impactAzimuthRadians),
+            .elongation = 1.0 + 0.65 * std::sin(angle) * std::sin(angle),
+            .influenceCosine = std::cos(angularRadius),
+            .influenceChordRadius = 2.0 * std::sin(angularRadius * 0.5)});
     }
     BuildSpatialIndex();
     BuildResurfacingSpatialIndex();
@@ -1448,15 +1454,9 @@ void ImpactField::BuildSpatialIndex()
                 node.maximum.x = std::max(node.maximum.x, center.x);
                 node.maximum.y = std::max(node.maximum.y, center.y);
                 node.maximum.z = std::max(node.maximum.z, center.z);
-                const f64 shapeBound = 1.65 /
-                    std::max(1.0 - impact.shapeIrregularity, 0.75);
-                const f64 angularRadius = std::min(
-                    impact.radiusMeters * std::max(1.0, impact.ejectaExtentRadii) * shapeBound /
-                        planet_.radiusMeters,
-                    std::numbers::pi_v<f64>);
                 node.maximumChordRadius = std::max(
                     node.maximumChordRadius,
-                    2.0 * std::sin(angularRadius * 0.5));
+                    preparedImpactGeometries_[spatialOrder_[i]].influenceChordRadius);
             }
 
             if (end - begin <= kLeafCapacity)
@@ -1701,14 +1701,8 @@ void ImpactField::QuerySpatialIndex(
             {
                 const std::size_t impactIndex = spatialOrder_[i];
                 const ImpactRecord& impact = resolvedImpacts_[impactIndex];
-                const f64 shapeBound = 1.65 /
-                    std::max(1.0 - impact.shapeIrregularity, 0.75);
-                const f64 angularRadius = std::min(
-                    impact.radiusMeters * std::max(1.0, impact.ejectaExtentRadii) *
-                        shapeBound / planet_.radiusMeters,
-                    std::numbers::pi_v<f64>);
                 const f64 reach =
-                    2.0 * std::sin(angularRadius * 0.5) + queryChordRadius;
+                    preparedImpactGeometries_[impactIndex].influenceChordRadius + queryChordRadius;
                 const math::Double3 delta = impact.centerUnitDirection - point;
                 if (math::LengthSquared(delta) <= reach * reach)
                     candidates.push_back(impactIndex);
@@ -1868,8 +1862,7 @@ CraterProcessSample ImpactField::SampleCandidates(
         const ImpactRecord& impact = resolvedImpacts_[index];
         const PreparedImpactGeometry& prepared = preparedImpactGeometries_[index];
         Accumulate(result, SampleImpact(impact, definition_, planet_,
-            prepared.frame, prepared.phase, canonical,
-            footprintDiameterMeters, prepared.ejectaMassBalanceScale));
+            prepared, canonical, footprintDiameterMeters));
     };
     const auto applyResurfacing = [&](const std::size_t eventIndex)
     {
@@ -1925,11 +1918,12 @@ CraterProcessSample ImpactField::SampleCandidates(
             result.ejectaThicknessMeters *= retained;
             result.meltThicknessMeters *= retained;
             result.resurfacingThicknessMeters *= retained;
+            result.rayField *= retained;
             result.brecciaField = std::clamp(
                 result.brecciaField * retained + 0.3 * coverage, 0.0, 1.0);
             result.debrisField = std::clamp(
                 result.debrisField * retained + 0.16 * coverage, 0.0, 1.0);
-            result.ejectaThicknessMeters = result.ejectaThicknessMeters * retained +
+            result.ejectaThicknessMeters +=
                 0.04 * event.thicknessMeters * coverage;
             result.excavationCoverage = std::max(
                 result.excavationCoverage, 0.22 * coverage);
@@ -1996,7 +1990,11 @@ CraterProcessSample ImpactField::SampleCandidates(
             static_cast<f64>(statisticalMicroImpactCount_) *
             footprintDiameterMeters * footprintDiameterMeters /
             std::max(surfaceArea, 1.0);
-        const f64 exposureAgeYears = result.exposureAgeYears > 0.0
+        const bool hasExposure = result.exposureAgeOrder != 0U ||
+            result.excavationCoverage > 0.01 ||
+            result.ejectaThicknessMeters > 0.0 ||
+            result.resurfacedMaterialFraction > 0.0 || result.rayField > 0.0;
+        const f64 exposureAgeYears = hasExposure
             ? result.exposureAgeYears
             : definition_.surfaceAgeYears;
         const f64 ageFraction = definition_.surfaceAgeYears > 0.0

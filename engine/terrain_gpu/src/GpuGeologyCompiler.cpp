@@ -181,14 +181,18 @@ void PackImpact(
         static_cast<f32>(impact.rayCount)};
     packet.data[4] = {static_cast<f32>(impact.degradation),
         static_cast<f32>(impact.formationAgeYears),
-        static_cast<f32>(impact.impactAngleDegrees),
-        static_cast<f32>(impact.impactAzimuthRadians)};
+        static_cast<f32>(prepared.elongation),
+        static_cast<f32>(prepared.azimuthCosine)};
     packet.data[5] = {static_cast<f32>(impact.shapeIrregularity),
         static_cast<f32>(impact.meltFraction), static_cast<f32>(impact.brecciaFraction),
         static_cast<f32>(impact.multiringStrength)};
     packet.data[6] = {static_cast<f32>(prepared.ejectaMassBalanceScale),
         static_cast<f32>(prepared.phase), 0.0F, 0.0F};
     packet.data[7][2] = static_cast<f32>(impact.simpleDepthRatio);
+    packet.data[6][2] = static_cast<f32>(prepared.azimuthSine);
+    packet.data[7][0] = static_cast<f32>(impact.rayExtentRadii);
+    packet.data[7][1] = static_cast<f32>(impact.rayIrregularity);
+    packet.data[7][3] = static_cast<f32>(prepared.influenceCosine);
 }
 
 void PackResurfacing(

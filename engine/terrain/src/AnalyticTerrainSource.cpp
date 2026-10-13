@@ -157,6 +157,7 @@ namespace
                      event.simpleDepthRatio, event.complexDepthRatio,
                      event.rimHeightRatio, event.ejectaThicknessRatio,
                      event.ejectaExtentRadii, event.rayStrength,
+                     event.rayExtentRadii, event.rayIrregularity,
                      event.degradation, event.formationAgeYears,
                      event.impactAngleDegrees, event.impactAzimuthRadians,
                      event.shapeIrregularity, event.meltFraction,

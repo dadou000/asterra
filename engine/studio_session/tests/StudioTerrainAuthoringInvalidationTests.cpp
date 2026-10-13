@@ -1,6 +1,7 @@
 #include <orbit/studio_session/StudioTerrainAuthoringInvalidation.hpp>
 
 #include <cstdlib>
+#include <algorithm>
 #include <iostream>
 #include <span>
 #include <string>
@@ -176,6 +177,37 @@ int main()
             Check(!request.scope.global);
             Check(request.scope.planet == planet.id);
         }
+
+        auto moved = recipe;
+        moved.authoredImpacts.front().centerUnitDirection = {0.0, 0.0, 1.0};
+        const auto movement = orbit::studio_session::BuildImpactHistoryInvalidations(
+            planet, newRecipe,
+            orbit::terrain_impacts::SerializeImpactFieldToml(moved), 10U);
+        for (const orbit::math::Double3 point : {
+                 orbit::math::Double3{1.0, 0.0, 0.0},
+                 orbit::math::Double3{0.0, 0.0, 1.0}})
+        {
+            const auto tile = orbit::world::TileForDirection(point, 10U);
+            Check(std::any_of(movement.begin(), movement.end(), [&](const auto& request)
+                { return request.scope.global || request.scope.center == tile; }));
+        }
+
+        auto rays = recipe;
+        auto& rayCrater = rays.authoredImpacts.front();
+        rayCrater.rayStrength = 1.0;
+        rayCrater.rayCount = 8U;
+        rayCrater.rayExtentRadii = 3.0;
+        const std::string rayRecipe = orbit::terrain_impacts::SerializeImpactFieldToml(rays);
+        rayCrater.rayIrregularity = 0.3;
+        const auto shapeEdit = orbit::studio_session::BuildImpactHistoryInvalidations(
+            planet, rayRecipe, orbit::terrain_impacts::SerializeImpactFieldToml(rays), 10U);
+        Check(!shapeEdit.empty() && !shapeEdit.front().scope.global);
+        rayCrater.rayExtentRadii = 16.0;
+        const auto reachEdit = orbit::studio_session::BuildImpactHistoryInvalidations(
+            planet, rayRecipe, orbit::terrain_impacts::SerializeImpactFieldToml(rays), 10U);
+        Check(reachEdit.size() == 1U && reachEdit.front().scope.global);
+        // A ray beyond the 64-tile local scope must use a full invalidation;
+        // truncating its influence would preserve stale physical pages.
 
         recipe.surfaceAgeYears = 3.8e9;
         const std::string agedRecipe =

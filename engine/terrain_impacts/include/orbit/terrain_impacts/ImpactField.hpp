@@ -69,6 +69,11 @@ struct ImpactRecord
     // Optional ejecta-ray/debris modulation.
     f64 rayStrength{0.0};
     u32 rayCount{0};
+    // Zero preserves legacy rays confined to the ejecta blanket. A positive
+    // extent adds a separately fading material-ray field, without stretching
+    // the massive ejecta blanket. Irregularity bends rays smoothly with radius.
+    f64 rayExtentRadii{0.0};
+    f64 rayIrregularity{0.0};
 
     // 0 = pristine, 1 = fully topographically degraded.
     f64 degradation{0.0};
@@ -80,6 +85,8 @@ struct ImpactRecord
     // Optional physical/shape modifiers. Zero values preserve the traditional
     // near-vertical circular event and disable melt/breccia additions.
     f64 formationAgeYears{0.0};
+    // Angle from the surface normal: 0 is vertical, 89 is nearly grazing.
+    // This convention is shared by morphology and physical size scaling.
     f64 impactAngleDegrees{0.0};
     f64 impactAzimuthRadians{0.0};
     f64 shapeIrregularity{0.0};
@@ -102,6 +109,7 @@ struct ImpactRecord
     bool authored{true};
 
     [[nodiscard]] bool IsValid() const noexcept;
+    [[nodiscard]] f64 InfluenceExtentRadii() const noexcept;
 };
 
 enum class ResurfacingKind : u8
@@ -138,6 +146,11 @@ struct PreparedImpactGeometry
     world::SurfaceFrame frame{};
     f64 phase{0.0};
     f64 ejectaMassBalanceScale{1.0};
+    f64 azimuthCosine{1.0};
+    f64 azimuthSine{0.0};
+    f64 elongation{1.0};
+    f64 influenceCosine{-1.0};
+    f64 influenceChordRadius{2.0};
 };
 
 // A connected resurfacing or tectonic-renewal event is authored as a geodesic
@@ -199,6 +212,7 @@ struct ImpactScalingInput
 {
     f64 impactorDiameterMeters{0.0};
     f64 impactVelocityMetersPerSecond{0.0};
+    // Angle from the surface normal, as in ImpactRecord.
     f64 impactAngleDegrees{45.0};
     f64 impactorDensityKgPerCubicMeter{0.0};
     f64 targetDensityKgPerCubicMeter{0.0};
@@ -266,7 +280,7 @@ struct ImpactQueryScratch
 class ImpactField
 {
 public:
-    static constexpr u64 kAlgorithmVersion = 5U;
+    static constexpr u64 kAlgorithmVersion = 6U;
 
     ImpactField(
         world::PlanetDefinition planet,
@@ -363,8 +377,6 @@ private:
     world::PlanetDefinition planet_{};
     ImpactFieldDefinition definition_{};
     std::vector<ImpactRecord> resolvedImpacts_;
-    // Per-event geometry and profile constants are compiled once so repeated
-    // raster samples avoid rebuilding frames and hashing stable event IDs.
     // Per-event geometry/profile constants are compiled once and share the
     // exact resolved-impact indexing for bake and GPU batch consumers.
     std::vector<PreparedImpactGeometry> preparedImpactGeometries_;

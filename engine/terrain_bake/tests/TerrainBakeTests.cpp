@@ -492,6 +492,44 @@ bool ServiceRecompilesOnlyChangedImpactInfluence()
     ok &= Check(updated.geologyBakeSamples > 0U &&
                     updated.geologyBakeSamples < fullRasterSamples,
         "a local crater edit resamples only its bounded influence in the bake grid");
+
+    const u64 beforeRays = terrain::TerrainRecipeHash(planet, edited);
+    auto& crater = history.authoredImpacts.front();
+    crater.rayStrength = 1.0;
+    crater.rayCount = 8U;
+    crater.rayExtentRadii = 12.0;
+    crater.rayIrregularity = 0.2;
+    edited.impactHistory = std::make_shared<const terrain_impacts::ImpactFieldDefinition>(history);
+    const u64 withRays = terrain::TerrainRecipeHash(planet, edited);
+    ok &= Check(withRays != beforeRays, "long rays must change the terrain recipe identity");
+    auto alteredRays = history;
+    alteredRays.authoredImpacts.front().rayIrregularity += 0.1;
+    auto alteredDesc = edited;
+    alteredDesc.impactHistory =
+        std::make_shared<const terrain_impacts::ImpactFieldDefinition>(alteredRays);
+    ok &= Check(terrain::TerrainRecipeHash(planet, alteredDesc) != withRays,
+        "ray shape alone must invalidate the cached recipe");
+    alteredRays = history;
+    alteredRays.authoredImpacts.front().rayExtentRadii += 1.0;
+    alteredDesc.impactHistory =
+        std::make_shared<const terrain_impacts::ImpactFieldDefinition>(alteredRays);
+    ok &= Check(terrain::TerrainRecipeHash(planet, alteredDesc) != withRays,
+        "ray reach alone must invalidate the cached recipe");
+
+    service.Observe(planet.id, planet, edited, settings);
+    ok &= Check(Pump(service, [&]
+        { return service.Status(planet.id).state == terrain_bake::BakeState::Ready; }),
+        "an extended ray edit completes its regional geology rebake");
+    const auto regional = service.ActiveGeology(planet.id);
+    terrain_bake::TerrainBakeService reference(TempDirectory("full_ray_geology"));
+    reference.Observe(planet.id, planet, edited, settings);
+    ok &= Check(Pump(reference, [&]
+        { return reference.Status(planet.id).state == terrain_bake::BakeState::Ready; }),
+        "the equivalent full ray geology bake completes");
+    const auto full = reference.ActiveGeology(planet.id);
+    ok &= Check(regional != nullptr && full != nullptr &&
+                    regional->ContentHash() == full->ContentHash(),
+        "regional ray invalidation must reproduce the complete full-bake raster exactly");
     return ok;
 }
 bool RiverBakeProducesAConsistentGraph()
