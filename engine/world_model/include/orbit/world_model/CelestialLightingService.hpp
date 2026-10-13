@@ -19,6 +19,7 @@ struct DirectBodyLighting
     math::Double3 receiverToEmitterMeters{};
     math::Double3 receiverBodyFixedToEmitterMeters{};
     f64 sourceDistanceMeters{0.0};
+    f64 sourceAngularRadiusRadians{0.0};
     f64 visibleFraction{1.0};
     f64 irradianceWattsPerSquareMeter{0.0};
     std::vector<

@@ -27,6 +27,14 @@ struct DirectLightingSettings
     // atmosphere/sky-visibility term. It is deliberately a shared lighting
     // setting rather than renderer-local preview fill.
     f32 ambientIrradianceScale{0.035F};
+    // Body-frame reference sphere for per-surface stellar visibility.
+    f32 planetRadiusMeters{0.0F};
+    f32 sunAngularRadiusRadians{0.0F};
+    f32 atmosphereBottomRadiusMeters{0.0F};
+    f32 atmosphereTopRadiusMeters{0.0F};
+    rhi::Texture* atmosphereTransmittance{nullptr};
+    std::shared_ptr<rhi::Buffer> terrainSunShadow;
+    std::shared_ptr<rhi::Buffer> cloudSunShadow;
 };
 
 class DirectLightingRenderer
@@ -75,5 +83,6 @@ public:
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
     std::unique_ptr<rhi::Buffer> dummyParticleLightGrid_;
+    std::unique_ptr<rhi::Buffer> dummyTerrainSunShadow_;
 };
 } // namespace orbit::lighting

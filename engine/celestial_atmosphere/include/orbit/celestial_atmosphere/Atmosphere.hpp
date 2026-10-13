@@ -37,14 +37,14 @@ struct AtmosphereParameters
 
 struct AtmosphereLutConfig
 {
-    u32 transmittanceWidth{128};
-    u32 transmittanceHeight{32};
+    u32 transmittanceWidth{256};
+    u32 transmittanceHeight{128};
     u32 multiScatteringWidth{32};
     u32 multiScatteringHeight{16};
     u32 skyViewWidth{128};
     u32 skyViewHeight{64};
 
-    u32 opticalDepthSteps{64};
+    u32 opticalDepthSteps{128};
     u32 multiDirectionSamples{32};
     u32 skyViewSteps{48};
 };

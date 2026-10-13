@@ -91,6 +91,22 @@ int main()
         return 5;
     }
 
+    // A thick atmosphere on a 100 km diameter body exposes interpolated
+    // sunlight below the horizon. Ground occlusion must be exact even when
+    // the transmittance table is deliberately coarse.
+    auto small = earth;
+    small.bottomRadiusMeters = 50'000.0;
+    small.topRadiusMeters = 70'000.0;
+    const auto smallLuts = BuildStaticLuts(small, config);
+    for (const double mu : {-0.001, -0.1, -1.0})
+    {
+        const auto night = SunTransmittanceAt(small, smallLuts, 50'000.0, mu);
+        if (night.x != 0.0 || night.y != 0.0 || night.z != 0.0) return 6;
+    }
+    // A negative local solar elevation can still be visible above the limb.
+    const auto elevatedSun = SunTransmittanceAt(small, smallLuts, 60'000.0, -0.1);
+    if (!(elevatedSun.x > 0.0)) return 7;
+
     const auto sky =
         BuildSkyView(
             earth,

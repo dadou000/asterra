@@ -1,4 +1,8 @@
+#include <orbit/lighting/CloudSunShader.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+#include <string>
 
 #include <algorithm>
 #include <array>
@@ -46,7 +50,7 @@ VSOutput main(uint vertexId : SV_VertexID)
 }
 )";
 
-constexpr const char* kPs = R"(
+const std::string kPs = R"(
 struct GpuLocalLight
 {
     float4 positionType;
@@ -89,51 +93,56 @@ StructuredBuffer<GpuRadianceCell> g_radianceCells;
 [[vk::binding(5, 0)]]
 StructuredBuffer<GpuRadianceLevelInfo> g_radianceLevels;
 
-[[vk::binding(6, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness;
-[[vk::binding(6, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler;
 
-[[vk::binding(7, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic;
-[[vk::binding(7, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler;
 
-[[vk::binding(8, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass;
-[[vk::binding(8, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler;
 
-[[vk::binding(9, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(9, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
 // Sun transmittance through the cloud layer (red), reduced resolution.
-[[vk::binding(10, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_cloudShadow;
-[[vk::binding(10, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_cloudShadowSampler;
 
 // Lighting from authored Visibility Proxies at full resolution (red = sun
 // visibility, 1 = lit; gba = sky irradiance x open hemisphere); written by
 // ProxySunShadowRenderer.
-[[vk::binding(11, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_proxySunShadow;
-[[vk::binding(11, 0)]]
+[[vk::binding(13, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_proxySunShadowSampler;
+
+[[vk::binding(6, 0)]] ByteAddressBuffer g_terrainSunShadow;
+[[vk::binding(7, 0)]] ByteAddressBuffer g_cloudSun;
+[[vk::binding(14, 0)]] [[vk::combinedImageSampler]] Texture2D g_atmosphereSun;
+[[vk::binding(14, 0)]] [[vk::combinedImageSampler]] SamplerState g_atmosphereSunSampler;
 
 struct Constants
 {
@@ -144,6 +153,7 @@ struct Constants
     float4 depthRangeAndPhotometry;
     uint4 localGrid;
     float4 cameraFrameAndParticleGrid;
+    float4 planet; // x: reference radius in metres, zero for a non-body scene
     float4 extra; // x: cloud shadow bound, y: proxy sun shadow bound, z: radiance level count, w: sky cache strength
 };
 [[vk::push_constant]] Constants g;
@@ -454,8 +464,7 @@ float ParticleGridTransmittance(float3 framePosition,float3 direction,float maxi
     return exp(-min(optical,20.0));
 }
 
-)"
-R"(
+)" + std::string(kSunVisibilityShader) + kCloudSunShader + R"(
 float4 main(VSOutput input) : SV_Target0
 {
     const float4 baseRoughness =
@@ -521,8 +530,27 @@ float4 main(VSOutput input) : SV_Target0
         normalize(g.lightDirectionAndScale.xyz);
     const float stellarIrradiance =
         max(g.lightDirectionAndScale.w, 0.0);
-    const float3 stellarColor =
-        max(g.lightColorAndAmbient.rgb, 0.0);
+    float3 stellarColor = max(g.lightColorAndAmbient.rgb, 0.0);
+
+    const float depth =
+        g_depth.Sample(
+            g_depthSampler,
+            input.uv).r;
+    float sunVisibility = 1.0;
+    float cloudTau = 0.0;
+    bool cloudReady = false;
+    if (depth > 0.0 && (g.planet.x > 0.0 || g_terrainSunShadow.Load(12u) > 0u))
+    {
+        const float3 relative = ReconstructSurfacePosition(depth, cameraRay, cameraForward);
+        const float3 positionBody = relative + g.cameraFrameAndParticleGrid.xyz;
+        cloudReady = CloudSunTau(g_cloudSun, positionBody, cloudTau);
+        if (g.planet.w > g.planet.z && g.planet.z > 0.0)
+            stellarColor *= AtmosphereStellarTransmittance(g_atmosphereSun, g_atmosphereSunSampler,
+                length(positionBody), g.planet.z, g.planet.w,
+                dot(normalize(positionBody), stellarDirection), g.planet.y);
+        sunVisibility = TerrainSunVisibility(g_terrainSunShadow,
+            relative + n * 0.5 + g.cameraFrameAndParticleGrid.xyz, stellarDirection, g.planet.x, g.planet.y);
+    }
 
     float3 stellarLinear =
         EvaluateBrdf(
@@ -533,9 +561,10 @@ float4 main(VSOutput input) : SV_Target0
             roughness,
             metallic) *
         stellarColor *
-        stellarIrradiance;
+        stellarIrradiance * sunVisibility;
 
-    if (g.extra.x > 0.0)
+    if (cloudReady) stellarLinear *= exp(-cloudTau);
+    else if (g.extra.x > 0.0)
     {
         stellarLinear *=
             g_cloudShadow.SampleLevel(g_cloudShadowSampler, input.uv, 0).r;
@@ -564,11 +593,6 @@ float4 main(VSOutput input) : SV_Target0
         ambient +
         proxySkyFill;
     float3 sceneLinear = stellarLinear + ambientLinear;
-
-    const float depth =
-        g_depth.Sample(
-            g_depthSampler,
-            input.uv).r;
 
     if (depth > 0.0 && g.cameraFrameAndParticleGrid.w > 0.0)
     {
@@ -716,6 +740,7 @@ DirectLightingRenderer::DirectLightingRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
 {
+    dummyTerrainSunShadow_ = CreateEmptyTerrainSunShadowBuffer(device);
     const auto vs =
         compiler.Compile({
             .source = kVs,
@@ -744,9 +769,9 @@ DirectLightingRenderer::DirectLightingRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 32U,
-            .shaderResourceBuffers = 6U,
-            .sampledTextures = 6U,
+            .pushConstantDwords = 36U,
+            .shaderResourceBuffers = 8U,
+            .sampledTextures = 7U,
             .topology =
                 rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -810,7 +835,7 @@ void DirectLightingRenderer::Draw(
     constexpr f32 kPhotopicLuminousEfficacy =
         683.0F;
 
-    const std::array<u32, 32> constants{
+    const std::array<u32, 36> constants{
         bits(light.directionToLight.x),
         bits(light.directionToLight.y),
         bits(light.directionToLight.z),
@@ -857,6 +882,9 @@ void DirectLightingRenderer::Draw(
         bits(static_cast<f32>(view.cameraPositionInFrameMeters.z)),
         bits(particleLightGrid != nullptr ? 1.0F : 0.0F),
 
+        bits(settings.planetRadiusMeters), bits(settings.sunAngularRadiusRadians),
+        bits(settings.atmosphereBottomRadiusMeters), bits(settings.atmosphereTopRadiusMeters),
+
         bits(cloudShadow != nullptr ? 1.0F : 0.0F),
         bits(proxySunShadow != nullptr ? 1.0F : 0.0F),
         bits(
@@ -884,6 +912,8 @@ void DirectLightingRenderer::Draw(
     });
 
     commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsBuffer(6, settings.terrainSunShadow ? *settings.terrainSunShadow : *dummyTerrainSunShadow_);
+    commands.SetGraphicsBuffer(7, settings.cloudSunShadow ? *settings.cloudSunShadow : *dummyTerrainSunShadow_);
     commands.SetGraphicsConstants(constants);
 
     commands.SetGraphicsBuffer(
@@ -936,6 +966,7 @@ void DirectLightingRenderer::Draw(
             ? *proxySunShadow
             : depth);
 
+    commands.SetGraphicsTexture(6U, settings.atmosphereTransmittance ? *settings.atmosphereTransmittance : depth);
     commands.Draw(6U);
 }
 } // namespace orbit::lighting

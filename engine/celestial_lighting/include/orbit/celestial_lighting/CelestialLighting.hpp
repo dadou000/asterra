@@ -13,6 +13,10 @@ struct ApparentDisc
     f64 radiusMeters{1.0};
 };
 
+// Visible area of a uniform stellar disc above a locally straight horizon.
+// Clearance and source radius are angular values in radians.
+[[nodiscard]] f64 DiscHorizonVisibleFraction(f64 signedAngularClearance, f64 sourceAngularRadius);
+
 struct OccultationResult
 {
     f64 sourceAngularRadiusRadians{0.0};

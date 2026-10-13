@@ -61,7 +61,7 @@ public:
     // re-anchor it back and forth every frame, and no voxel ever stayed valid.
     struct LightVolume
     {
-        std::unique_ptr<rhi::Buffer> buffer;
+        std::shared_ptr<rhi::Buffer> buffer;
         math::Double3 anchor{};
         bool anchorSet{false};
         bool active{false};
@@ -70,6 +70,7 @@ public:
         // Exact skip of redundant refreshes (see UpdateLightVolume): a hash of every input the
         // update reads, and how many consecutive frames it has been unchanged.
         u64 inputFingerprint{0U};
+        u64 transportFingerprint{0U};
         u32 settledFrames{0U};
         // True when the last UpdateLightVolume skipped its dispatch because every voxel already
         // holds the result for the current inputs.
@@ -182,6 +183,12 @@ private:
     std::unique_ptr<rhi::GraphicsPipeline> shadowPipeline_;
     // Baked 32^3 tileable cellular noise (base shape + erosion octaves).
     std::unique_ptr<rhi::Buffer> noise_;
+    std::unique_ptr<rhi::Buffer> dummyTerrainSunShadow_;
+    std::unique_ptr<rhi::Buffer> sunParameters_;
+    std::unique_ptr<rhi::Buffer> sharedSunParameters_;
+    f32 cachedSharedSunAngularRadius_{-1.0F};
+    f32 cachedSunAngularRadius_{-1.0F};
+    rhi::Buffer& SunParameters(f32 angularRadius, bool shared = false);
     // Sun light volume (see UpdateLightVolume): voxels, the pipeline that fills them and the
     // tangent-frame anchor that makes toroidal addressing valid.
     std::unique_ptr<rhi::ComputePipeline> volumePipeline_;

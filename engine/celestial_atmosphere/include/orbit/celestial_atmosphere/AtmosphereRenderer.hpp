@@ -29,6 +29,10 @@ struct AtmosphereRenderView
     // irradiance, so the output is in the same scene-linear radiance units
     // as the shared direct-lighting pass.
     f32 irradianceScale{1.0F};
+    f32 sunAngularRadiusRadians{0.0F};
+    // Immutable derived body-heightfield; shared ownership pins graph callbacks.
+    std::shared_ptr<rhi::Buffer> terrainSunShadow;
+    std::shared_ptr<rhi::Buffer> cloudSunShadow;
 };
 
 // Per-pixel single + multiple scattering composite through the physical
@@ -63,5 +67,6 @@ public:
 
 private:
     std::unique_ptr<rhi::GraphicsPipeline> pipeline_;
+    std::unique_ptr<rhi::Buffer> dummyTerrainSunShadow_;
 };
 } // namespace orbit::celestial_atmosphere

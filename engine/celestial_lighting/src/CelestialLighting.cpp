@@ -539,4 +539,12 @@ ReflectedLightResult LambertSphereReflectedLight(
             phase
     };
 }
+f64 DiscHorizonVisibleFraction(const f64 clearance, const f64 angularRadius)
+{
+    if (angularRadius <= 0.0) return clearance >= 0.0 ? 1.0 : 0.0;
+    const f64 x = std::clamp(clearance / angularRadius, -1.0, 1.0);
+    return std::clamp(0.5 + (std::asin(x) + x * std::sqrt(std::max(1.0 - x * x, 0.0))) /
+        std::numbers::pi, 0.0, 1.0);
+}
+
 } // namespace orbit::celestial_lighting

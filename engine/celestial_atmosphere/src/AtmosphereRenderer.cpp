@@ -1,4 +1,8 @@
+#include <orbit/lighting/CloudSunShader.hpp>
 #include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
+#include <string>
 
 #include <algorithm>
 #include <array>
@@ -46,7 +50,7 @@ VSOutput main(uint vertexId : SV_VertexID)
 }
 )";
 
-constexpr const char* kPixelShader = R"(
+const std::string kPixelShader = R"(
 struct VSOutput
 {
     float4 position : SV_Position;
@@ -63,21 +67,25 @@ struct Constants
     float4 rayleighMieG;        // Rayleigh scattering (1/m), Mie g
     float4 mieScatterAbsCenter; // Mie scattering (1/m), absorber centre (m)
     float4 mieExtinctAbsHalf;   // Mie extinction (1/m), absorber half width
+    float4 star;                // x: luminous stellar angular radius (rad)
     float4 absorptionE;         // absorber extinction (1/m), irradiance scale
 };
 
 [[vk::push_constant]] Constants g;
 
-[[vk::binding(0, 0)]] [[vk::combinedImageSampler]] Texture2D g_scene;
-[[vk::binding(0, 0)]] [[vk::combinedImageSampler]] SamplerState g_sceneSampler;
-[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
-[[vk::binding(1, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
-[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
-[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] Texture2D g_scene;
+[[vk::binding(2, 0)]] [[vk::combinedImageSampler]] SamplerState g_sceneSampler;
+[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
+[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
+[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
+[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
 
-static const uint kSteps = 40u;
+[[vk::binding(0, 0)]] ByteAddressBuffer g_terrainSunShadow;
+[[vk::binding(1, 0)]] ByteAddressBuffer g_cloudSun;
+
+static const uint kSteps = 96u;
 static const float kPi = 3.14159265358979;
 
 float3 ViewRay(float2 uv)
@@ -126,8 +134,7 @@ float2 LutUv(float radius, float sunMu)
 {
     const float rb = g.radii.x;
     const float rt = g.radii.y;
-    const float unit = saturate(
-        (radius * radius - rb * rb) / max(rt * rt - rb * rb, 1.0));
+    const float unit = sqrt(saturate((radius - rb) / max(rt - rb, 1.0)));
     return float2(saturate(sunMu * 0.5 + 0.5), unit);
 }
 
@@ -141,6 +148,20 @@ float MiePhase(float c, float gAnisotropy)
     const float gg = gAnisotropy * gAnisotropy;
     const float d = max(1.0 + gg - 2.0 * gAnisotropy * c, 1.0e-4);
     return (1.0 - gg) / (4.0 * kPi * pow(d, 1.5));
+}
+
+)" + std::string(lighting::kSunVisibilityShader) + lighting::kCloudSunShader + R"(
+// Integrate extinction finely, but reconstruct smoothly varying sunlight from
+// a bounded set of shared transport queries instead of nesting terrain marches.
+float3 SampleDirectSun(float3 position, float3 sun, float bottom, float top)
+{
+    const float radius = length(position);
+    const float visibility = TerrainSunVisibility(g_terrainSunShadow, position, sun, bottom, g.star.x);
+    if (visibility <= 0.0) return 0.0;
+    float cloudTau;
+    const float cloudT = CloudSunTau(g_cloudSun, position, cloudTau) ? exp(-cloudTau) : 1.0;
+    return visibility * cloudT * AtmosphereStellarTransmittance(g_transmittance, g_transmittanceSampler,
+        radius, bottom, top, dot(position / max(radius, 1.0), sun), g.star.x);
 }
 
 float4 main(VSOutput input) : SV_Target0
@@ -206,16 +227,27 @@ float4 main(VSOutput input) : SV_Target0
     // Short paths (every surface pixel of a near-field scene) need few steps:
     // the medium barely changes over tens of metres. Steps stay at most ~300 m
     // apart, which is far below the scale heights, and long paths keep the
-    // full count.
+    // full count with finite-disc visibility, avoiding hard quadrature bands.
     const uint steps =
         clamp(uint(ceil((tEnd - tStart) / 300.0)) + 3u, 4u, kSteps);
     const float step = (tEnd - tStart) / float(steps);
     float3 transmittance = 1.0;
     float3 radiance = 0.0;
 
+    float3 sunA = SampleDirectSun(origin + direction * tStart, sun, bottom, top);
+    float3 sunB = sunA;
+    uint sunlightEnd = 0u;
     [loop]
     for (uint i = 0u; i < steps; ++i)
     {
+        if ((i % 8u) == 0u)
+        {
+            sunA = sunB;
+            sunlightEnd = min(i + 8u, steps);
+            sunB = SampleDirectSun(origin + direction * (tStart + float(sunlightEnd) * step), sun, bottom, top);
+        }
+        const float sunWeight = (float(i % 8u) + 0.5) / float(sunlightEnd - (i / 8u) * 8u);
+        const float3 directSun = lerp(sunA, sunB, sunWeight);
         const float t = tStart + (float(i) + 0.5) * step;
         const float3 position = origin + direction * t;
         const float radius = length(position);
@@ -236,14 +268,10 @@ float4 main(VSOutput input) : SV_Target0
 
         const float sunMu = dot(position / max(radius, 1.0), sun);
         const float2 lut = LutUv(radius, sunMu);
-        const float3 sunTransmittance =
-            g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
-        const float3 multiResponse =
-            g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
-
+        const float3 multiResponse = g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
         const float3 source =
             irradiance *
-            (sunTransmittance * (rayleigh * rayleighPhase + mie * miePhase) +
+            (directSun * (rayleigh * rayleighPhase + mie * miePhase) +
              multiResponse * (rayleigh + mie) / (4.0 * kPi));
 
         const float3 stepTransmittance = exp(-extinction * step);
@@ -268,6 +296,7 @@ AtmosphereRenderer::AtmosphereRenderer(
     rhi::Device& device,
     const shader::Compiler& compiler)
 {
+    dummyTerrainSunShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
     const auto vertex =
         compiler.Compile({
             .source = kVertexShader,
@@ -296,8 +325,8 @@ AtmosphereRenderer::AtmosphereRenderer(
             },
             .vertexAttributes = {},
             .vertexStrideBytes = 0U,
-            .pushConstantDwords = 36U,
-            .shaderResourceBuffers = 0U,
+            .pushConstantDwords = 40U,
+            .shaderResourceBuffers = 2U,
             .sampledTextures = 4U,
             .topology = rhi::PrimitiveTopology::TriangleList,
             .fillMode = rhi::FillMode::Solid,
@@ -336,7 +365,7 @@ void AtmosphereRenderer::Draw(
             return Bits(static_cast<f32>(value));
         };
 
-    const std::array<u32, 36> constants{
+    const std::array<u32, 40> constants{
         f(view.cameraPositionMeters.x),
         f(view.cameraPositionMeters.y),
         f(view.cameraPositionMeters.z),
@@ -377,6 +406,8 @@ void AtmosphereRenderer::Draw(
         f(p.mieExtinctionPerMeter.z),
         f(p.absorptionHalfWidthMeters),
 
+        Bits(view.sunAngularRadiusRadians), 0U, 0U, 0U,
+
         f(p.absorptionExtinctionPerMeter.x),
         f(p.absorptionExtinctionPerMeter.y),
         f(p.absorptionExtinctionPerMeter.z),
@@ -400,6 +431,8 @@ void AtmosphereRenderer::Draw(
     });
 
     commands.SetGraphicsPipeline(*pipeline_);
+    commands.SetGraphicsBuffer(0, view.terrainSunShadow ? *view.terrainSunShadow : *dummyTerrainSunShadow_);
+    commands.SetGraphicsBuffer(1, view.cloudSunShadow ? *view.cloudSunShadow : *dummyTerrainSunShadow_);
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsTexture(0, sceneColor);
     commands.SetGraphicsTexture(1, depth);

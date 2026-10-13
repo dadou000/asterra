@@ -17,7 +17,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         lightingPlan, lightingTimestamps, cpuTimingRecorder, recordComposeStage,
         sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
         bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
-        nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters
+        nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters, terrainSunShadow, cloudSunShadow
     ] = context;
 
     const auto* logicalTarget = session.Viewports().Find(info.id);
@@ -52,44 +52,22 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
     const auto lightingView =
         view->Lighting();
 
-    // Starlight reaches the ground through the atmosphere: tint the
-    // direct term by the same transmittance LUT the sky and clouds use,
-    // evaluated at the surface under the observer (sea level; terrain
-    // relief changes it by a few percent). Without an atmosphere the
-    // light stays untinted.
-    math::Float3 stellarTransmittance{1.0F, 1.0F, 1.0F};
-    if (terrainRuntime.has_value())
+    rhi::Texture* atmosphereSunTexture = nullptr;
+    f32 atmosphereBottom = 0.0F, atmosphereTop = 0.0F;
+    if (const auto atmosphere = atmospherePresentations_.find(info.id);
+        atmosphere != atmospherePresentations_.end() && atmosphere->second.gpu != nullptr &&
+        logicalTarget->target.has_value() && atmosphere->second.body == logicalTarget->target->body)
     {
-        if (const auto atmosphereFound =
-                atmospherePresentations_.find(info.id);
-            atmosphereFound != atmospherePresentations_.end() &&
-            atmosphereFound->second.staticLuts != nullptr)
-        {
-            const auto up =
-                math::Normalize(terrainRuntime->observer.meters);
-            const auto toStar =
-                math::Normalize(math::Double3{
-                    static_cast<f64>(studioDirectLight.directionBody.x),
-                    static_cast<f64>(studioDirectLight.directionBody.y),
-                    static_cast<f64>(studioDirectLight.directionBody.z)});
-            const auto transmittance =
-                celestial_atmosphere::SunTransmittanceAt(
-                    atmosphereFound->second.parameters,
-                    *atmosphereFound->second.staticLuts,
-                    atmosphereFound->second.parameters.bottomRadiusMeters,
-                    math::Dot(up, toStar));
-            stellarTransmittance = {
-                static_cast<f32>(transmittance.x),
-                static_cast<f32>(transmittance.y),
-                static_cast<f32>(transmittance.z)};
-        }
+        atmosphereSunTexture = &atmosphere->second.gpu->Transmittance();
+        atmosphereBottom = static_cast<f32>(atmosphere->second.parameters.bottomRadiusMeters);
+        atmosphereTop = static_cast<f32>(atmosphere->second.parameters.topRadiusMeters);
     }
 
     const lighting::DirectionalLight
         directLight{
             .directionToLight =
                 studioDirectLight.directionBody,
-            .colorLinear = stellarTransmittance,
+            .colorLinear = {1.0F, 1.0F, 1.0F},
             .irradianceScale =
                 studioDirectLight.irradianceScale
         };
@@ -1285,8 +1263,15 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 .nearPlaneMeters = shadowCamera.nearPlaneMeters,
                 .farPlaneMeters = shadowCamera.farPlaneMeters,
                 .sunDirection = studioDirectLight.directionBody,
-                .irradianceScale = studioDirectLight.irradianceScale};
+                .irradianceScale = studioDirectLight.irradianceScale,
+                .sunAngularRadiusRadians = studioDirectLight.sunAngularRadiusRadians};
 
+            auto& volumeSlot = cloudLightVolumes_[info.id];
+            if (!volumeSlot) volumeSlot = cloudRenderer_.CreateLightVolume();
+            auto* sharedVolume = volumeSlot.get();
+            if (info.layers.cloudLightVolume) cloudSunShadow = sharedVolume->buffer;
+            const auto shadowAtmosphereParameters = shadowAtmosphere->second.parameters;
+            const bool sharedVolumeEnabled = info.layers.cloudLightVolume;
             graph.AddPass(
                 prefix + ".CloudShadow",
                 {
@@ -1310,10 +1295,13 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                  shadowLab,
                  shadowTexture = cloudShadowTexture,
                  shadowWidth,
-                 shadowHeight](
+                 shadowHeight, sharedVolume, shadowAtmosphereParameters, sharedVolumeEnabled, frameIndex](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
+                    cloudRenderer_.UpdateLightVolume(commands, *sharedVolume, *shadowGpu,
+                        shadowReferenceRadius, shadowLayer, shadowAtmosphereParameters, shadowView,
+                        shadowLab, frameIndex, sharedVolumeEnabled);
                     cloudRenderer_.DrawShadow(
                         commands,
                         *lightingDepth,
@@ -1559,25 +1547,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 studioDirectLight.directionBody,
                 view->Lighting().cameraPositionInFrameMeters);
 
-            // The sun's real angular size (emitter radius over its
-            // distance) sets how fast shadows soften with distance.
-            if (meshShadowFrame.has_value() &&
-                studioDirectLight.direct.has_value() &&
-                bodies != nullptr &&
-                studioDirectLight.direct->sourceDistanceMeters > 0.0)
-            {
-                if (const auto* emitter = bodies->FindBody(
-                        studioDirectLight.direct->emitter);
-                    emitter != nullptr)
-                {
-                    const f64 sine = std::clamp(
-                        ReferenceRadiusForShape(emitter->shape) /
-                            studioDirectLight.direct->sourceDistanceMeters,
-                        0.0, 0.5);
-                    meshShadowFrame->sunTanHalfAngle =
-                        static_cast<f32>(std::tan(std::asin(sine)));
-                }
-            }
+            if (meshShadowFrame.has_value())
+                meshShadowFrame->sunTanHalfAngle = std::tan(studioDirectLight.sunAngularRadiusRadians);
             if (meshShadowFrame.has_value())
             {
                 // Scale for art direction / debugging (0 = hard shadows).
@@ -2073,7 +2044,12 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          radianceLevelCount,
          lightingTimestamps,
          frameIndex,
-         nearFieldIndirect](
+         nearFieldIndirect,
+         atmosphereSunTexture, atmosphereBottom, atmosphereTop,
+         sunAngularRadius = studioDirectLight.sunAngularRadiusRadians,
+         terrainSunShadow, cloudSunShadow,
+         planetRadius = terrainRuntime.has_value()
+             ? static_cast<f32>(terrainRuntime->planet.radiusMeters) : 0.0F](
             rhi::CommandList& commands,
             const render_graph::Resources&
                 resources)
@@ -2125,7 +2101,14 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                     // side, so ambient comes from the atmosphere/GI
                     // sky summary rather than a constant floor.
                     .ambientIrradianceScale =
-                        0.0F
+                        0.0F,
+                    .planetRadiusMeters = planetRadius,
+                    .sunAngularRadiusRadians = sunAngularRadius,
+                    .atmosphereBottomRadiusMeters = atmosphereBottom,
+                    .atmosphereTopRadiusMeters = atmosphereTop,
+                    .atmosphereTransmittance = atmosphereSunTexture,
+                    .terrainSunShadow = terrainSunShadow,
+                    .cloudSunShadow = cloudSunShadow
                 });
 
             if (lightingTimestamps != nullptr)

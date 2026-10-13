@@ -2852,7 +2852,10 @@ StudioViewportRenderer::ComposeBase(
                 lightingPlan, lightingTimestamps, cpuTimingRecorder, recordComposeStage,
                 sharedRadianceCellsHandle, sharedRadianceLevelsHandle, sharedRadianceLevelCount, shape,
                 bodies, frames, resolvedMagnetosphereForView, composeStageStarted,
-                nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters
+                nearFieldWaterWeight, resolvedOceanForView, nearFieldSeaLevelMeters,
+                hasMacroGlobe && shape.has_value()
+                    ? EnsureTerrainSunShadow(info.id, logicalTarget->target->body,
+                        macroGlobeSurface->terrain, ReferenceRadiusForShape(*shape)) : nullptr
             };
             ComposeLightingPasses(lightingContext);
         }

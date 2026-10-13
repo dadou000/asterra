@@ -18,6 +18,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
 #include <orbit/math/RigidTransform.hpp>
 #include <orbit/lighting/EmissiveInvalidation.hpp>
 #include <orbit/lighting/HardwareRayQueryVisibility.hpp>
@@ -67,6 +68,7 @@
 #include <array>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <map>
 #include <orbit/jobs/JobSystem.hpp>
 
@@ -378,6 +380,11 @@ public:
     // keep rendering at full rate until the view has finished refining.
     [[nodiscard]] bool HasPendingTerrainWork() const noexcept
     {
+        for (const auto& [id, field] : terrainSunShadowPresentations_)
+        {
+            static_cast<void>(id);
+            if (field.pending.valid()) return true;
+        }
         return macroGlobeRenderer_.HasPendingWork() ||
             flatMapRenderer_.Generating();
     }
@@ -522,6 +529,21 @@ private:
         f64 projectedRadiusPixels,
         const std::function<bool(u64)>& acquireGrant,
         const std::function<void(u64)>& completeGrant);
+
+    [[nodiscard]] std::shared_ptr<rhi::Buffer> EnsureTerrainSunShadow(
+        std::string_view viewportId, universe::BodyId body,
+        const std::shared_ptr<const terrain::TerrainSource>& source, f64 radius);
+    struct TerrainSunShadowPresentation
+    {
+        universe::BodyId body{}, pendingBody{};
+        std::shared_ptr<const terrain::TerrainSource> source, pendingSource;
+        f64 radius{0.0}, pendingRadius{0.0};
+        u64 revision{0U};
+        std::shared_ptr<rhi::Buffer> buffer;
+        std::future<lighting::TerrainSunShadowField> pending;
+        std::chrono::steady_clock::time_point retryAfter{};
+    };
+    std::map<std::string, TerrainSunShadowPresentation, std::less<>> terrainSunShadowPresentations_;
 
     struct DebugPresentation
     {

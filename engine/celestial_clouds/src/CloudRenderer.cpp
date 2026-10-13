@@ -1,4 +1,7 @@
+#include <orbit/lighting/CloudSunShader.hpp>
 #include <orbit/celestial_clouds/CloudRenderer.hpp>
+#include <orbit/lighting/SunVisibilityShader.hpp>
+#include <orbit/lighting/TerrainSunShadow.hpp>
 
 #include <algorithm>
 #include <array>
@@ -123,7 +126,7 @@ static const float kMaxStep = 12000.0;
 static const float kEmptySkip = 4.0;
 static const float kBaseVoxelMeters = 700.0;   // 22 km noise period
 static const float kDetailVoxelMeters = 78.0;  // 2.5 km noise period at detailScale 14
-static const uint kShadowSteps = 16u;
+static const uint kShadowSteps = 48u;
 static const float kPi = 3.14159265358979;
 
 float3 ViewRay(float2 uv)
@@ -628,7 +631,7 @@ float2 LutUv(float radius, float sunMu)
 {
     const float rb = g.atmosphere.x;
     const float rt = g.atmosphere.y;
-    const float unit = saturate((radius * radius - rb * rb) / max(rt * rt - rb * rb, 1.0));
+    const float unit = sqrt(saturate((radius - rb) / max(rt - rb, 1.0)));
     return float2(saturate(sunMu * 0.5 + 0.5), unit);
 }
 
@@ -693,6 +696,7 @@ float AltitudeSunTau(float3 origin, float3 sun, uint slabs)
         const float r = length(p);
         tau += Extinction(ColumnData(p / max(r, 1.0)), p, r, max(0.7 * pathLength, 120.0)) * pathLength;
         previousExit = s1;
+        if (tau >= 12.0) break;
     }
     return tau;
 }
@@ -797,10 +801,17 @@ constexpr const char* kDepthBindings = R"(
 [[vk::binding(3, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
 )";
 
-constexpr const char* kMarchBindings = R"([[vk::binding(4, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
-[[vk::binding(4, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
-[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
+constexpr const char* kMarchDepthBindings = R"(
+[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(5, 0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+[[vk::binding(3, 0)]] ByteAddressBuffer g_terrainSunShadow;
+[[vk::binding(4, 0)]] ByteAddressBuffer g_sunParameters;
+)";
+
+constexpr const char* kMarchBindings = R"([[vk::binding(6, 0)]] [[vk::combinedImageSampler]] Texture2D g_transmittance;
+[[vk::binding(6, 0)]] [[vk::combinedImageSampler]] SamplerState g_transmittanceSampler;
+[[vk::binding(7, 0)]] [[vk::combinedImageSampler]] Texture2D g_multi;
+[[vk::binding(7, 0)]] [[vk::combinedImageSampler]] SamplerState g_multiSampler;
 )";
 
 // ---- Sun light volume --------------------------------------------------------------------
@@ -811,6 +822,23 @@ constexpr const char* kMarchBindings = R"([[vk::binding(4, 0)]] [[vk::combinedIm
 // anchored at one direction on the planet; a few voxels refresh every frame (see kVolumeCompute)
 // and a voxel is trusted only while its tag matches the cell it should hold. Readers fall back to
 // marching when a voxel is missing, so a cold or moving volume only costs speed, not correctness.
+constexpr const char* kStellarCloudTau = R"(
+float StellarCloudTau(float3 origin, float3 sun, float angle)
+{
+    if(angle<=1e-6) return AltitudeSunTau(origin,sun,16u);
+    const float3 east=normalize(cross(sun,abs(sun.y)<0.9?float3(0,1,0):float3(1,0,0)));
+    const float3 north=cross(sun,east);
+    float trans=0.0;
+    [unroll] for(uint i=0u;i<4u;++i) {
+        const float phi=6.28318530718*(float(i)*0.61803398875);
+        const float r=sqrt((float(i)+0.5)/4.0)*tan(angle);
+        const float3 ray=normalize(sun+r*(cos(phi)*east+sin(phi)*north));
+        trans+=exp(-AltitudeSunTau(origin,ray,16u));
+    }
+    return -log(max(trans/4.0,1e-8));
+}
+)";
+
 constexpr const char* kVolumeMath = R"(
 static const uint kVolN = 96u;
 static const uint kVolLayers = 32u;
@@ -830,7 +858,7 @@ float VolCell(uint cascade) { return cascade == 0u ? kVolCell0 : (cascade == 1u 
 uint VolWrap(int v) { return uint(v + int(kVolN) * 4096) % kVolN; }
 uint VolAddress(uint cascade, uint layer, uint row, uint column)
 {
-    return (((cascade * kVolLayers + layer) * kVolN + row) * kVolN + column) * 16u;
+    return 64u + (((cascade * kVolLayers + layer) * kVolN + row) * kVolN + column) * 16u;
 }
 
 void VolFrame(out float3 east, out float3 north)
@@ -876,67 +904,10 @@ bool VolSampleVoxel(uint cascade, uint layer, int ai, int aj, out float tau)
 // False when the volume is off, the position is outside both cascades or a voxel is not ready.
 bool VolumeTau(float3 position, out float tau)
 {
-    tau = 0.0;
-    if (!VolActive())
-    {
-        return false;
-    }
-    float2 t;
-    float altitude;
-    VolCoords(position, t, altitude);
-    if (altitude >= VolTop())
-    {
-        return true;                       // above the shell: nothing between here and the sun
-    }
-    float2 cameraT;
-    float cameraAltitude;
-    VolCoords(g.cameraAspect.xyz, cameraT, cameraAltitude);
-    const float2 offset = abs(t - cameraT);
-    const float limit0 = (float(kVolN) * 0.5 - 2.0) * kVolCell0;
-    const float limit1 = (float(kVolN) * 0.5 - 2.0) * kVolCell1;
-    const float limit2 = (float(kVolN) * 0.5 - 2.0) * kVolCell2;
-    uint cascade = 0u;
-    if (offset.x >= limit0 || offset.y >= limit0)
-    {
-        cascade = 1u;
-        if (offset.x >= limit1 || offset.y >= limit1)
-        {
-            if (offset.x >= limit2 || offset.y >= limit2)
-            {
-                return false;
-            }
-            cascade = 2u;
-        }
-    }
-    const float2 f = t / VolCell(cascade) - 0.5;
-    const int2 i0 = int2(floor(f));
-    const float2 w = f - float2(i0);
-    const float fk = clamp(altitude / VolTop() * float(kVolLayers) - 0.5, 0.0, float(kVolLayers - 1u));
-    const uint k0 = uint(floor(fk));
-    const uint k1 = min(k0 + 1u, kVolLayers - 1u);
-    const float wk = fk - float(k0);
-    float sum = 0.0;
-    [unroll]
-    for (uint dk = 0u; dk < 2u; ++dk)
-    {
-        [unroll]
-        for (int dy = 0; dy < 2; ++dy)
-        {
-            [unroll]
-            for (int dx = 0; dx < 2; ++dx)
-            {
-                float v;
-                if (!VolSampleVoxel(cascade, dk == 0u ? k0 : k1, i0.x + dx, i0.y + dy, v))
-                {
-                    return false;
-                }
-                sum += (dk == 0u ? 1.0 - wk : wk) * (dx == 0 ? 1.0 - w.x : w.x) * (dy == 0 ? 1.0 - w.y : w.y) * v;
-            }
-        }
-    }
-    tau = sum;
-    return true;
+    tau=0.0;
+    return VolActive() && CloudSunTau(g_volume, position, tau);
 }
+
 )";
 
 // Debug read of the volume (nearest voxel, no filtering): 0 = outside every cascade, 1 = the voxel for
@@ -999,11 +970,12 @@ uint VolumeDebugSample(float3 position, out float tau, out uint cascade)
 
 constexpr const char* kVolumeCompute = R"(
 [[vk::binding(2, 0)]] RWByteAddressBuffer g_volumeRw : register(u2);
+[[vk::binding(3, 0)]] ByteAddressBuffer g_volumeSun;
 
 // Optical depth from 'origin' along the sun to the edge of the shell (altitude-stratified).
 float VolumeMarch(float3 origin, float3 sun)
 {
-    return AltitudeSunTau(origin, sun, 32u);
+    return StellarCloudTau(origin, sun, asfloat(g_volumeSun.Load(0u)));
 }
 
 [numthreads(8, 8, 1)]
@@ -1012,6 +984,11 @@ void main(uint3 id : SV_DispatchThreadID)
     if (!VolActive() || id.x >= kVolN || id.y >= kVolN)
     {
         return;
+    }
+    if (all(id == uint3(0u,0u,0u))) {
+        g_volumeRw.Store4(0u, asuint(float4(g.volumeAnchor, g.shell.x)));
+        g_volumeRw.Store4(16u, asuint(float4(g.cameraAspect.xyz, VolTop())));
+        g_volumeRw.Store4(32u, asuint(float4(g.temporal.w, 1.0, 0.0, 0.0)));
     }
     const uint cascade = id.z / kVolLayers;
     const uint layer = id.z % kVolLayers;
@@ -1044,6 +1021,23 @@ void main(uint3 id : SV_DispatchThreadID)
     const float3 origin = VolPosition((float2(ai, aj) + 0.5) * cell, altitude);
     const float tau = VolumeMarch(origin, normalize(g.sunFar.xyz));
     g_volumeRw.Store4(address, asuint(float4(tau, float(ai) + kVolTagOffset, float(aj) + kVolTagOffset, g.temporal.w)));
+}
+)";
+
+constexpr const char* kBodyTerrainSunVisibility = R"(
+float BodyTerrainSunVisibility(float3 position, float3 sun)
+{
+    return TerrainSunVisibility(g_terrainSunShadow, position, sun, g.shell.x, asfloat(g_sunParameters.Load(0u)));
+}
+)";
+
+constexpr const char* kCachedCloudSun = R"(
+float CachedCloudSun(float3 position, float3 sun)
+{
+    float tau;
+    if (!VolumeTau(position, tau))
+        tau = StellarCloudTau(position, sun, asfloat(g_sunParameters.Load(0u)));
+    return exp(-tau);
 }
 )";
 
@@ -1110,21 +1104,9 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     const float albedo = g.optics.x;
     const float irradiance = max(g.optics.z, 0.0);
 
-    // Sun colour through the atmosphere once per pixel, at the segment midpoint.
-    // Capped to a few km: a ray that runs along the shell to the horizon has its midpoint
-    // hundreds of km away, which gave a different sun colour above and below the horizon
-    // line (a hard band when the camera is inside cloud).
-    const float3 midPoint = origin + direction * min(0.5 * (tStart + tEnd), tStart + 3000.0);
-    const float midRadius = length(midPoint);
-    const float3 atmosphereSun =
-        g_transmittance.SampleLevel(
-            g_transmittanceSampler, LutUv(midRadius, dot(midPoint / max(midRadius, 1.0), sun)), 0).rgb;
-
     // Phase functions after the reference clouds: single scattering is two strong
     // forward lobes (g 0.95 and 0.8, the silver lining), multiple scattering two broad
     // lobes (g 0.2 and -0.4) that brighten the cloud interior.
-    const float singlePhase = 0.1 * Hg(cosine, 0.95) + 0.2 * Hg(cosine, 0.8);
-    const float multiPhase = 3.0 * Hg(cosine, 0.2) + 0.3 * Hg(cosine, -0.4);
 
     // Steps grow geometrically from the base step; the growth rate is solved per
     // pixel so the whole segment is covered in kMaxSteps steps. A long grazing ray
@@ -1264,73 +1246,22 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float actualStep = min(stepCap, max(inCloudStep, kInCloudScheduleFraction * stepLength));
         cursor = cursorBefore + actualStep;
 
-        const float h = saturate((radius - g.shell.x - g.shell.y) / max(g.shell.z - g.shell.y, 1.0));
-        // Far away the exact sun march is wasted (the billows are filtered anyway):
-        // blend to a column estimate of the optical depth above this point.
-        const float farBlend = SmoothRange(45.0, 140.0, t * g.lod.x);
-        float sunDepth = cachedSunDepth;
-        // Thin samples (cirrus, cloud edges) contribute little: reuse the last full sun
-        // march of this ray instead of marching again for each of them.
-        const bool thinSample = sigma * actualStep < 0.02;
-        if (farBlend < 1.0 && !(thinSample && cachedValid))
-        {
-            // Jittered over most of a step: without jitter the six sun-march steps show as terraces
-            // on cloud flanks. The grain it adds is averaged out by the temporal resolve.
-            // Beyond the explicit steps (6.7 km) the light volume knows the rest of the way to the sun.
-            float volumeTail = -1.0;
-            float volumeTau;
-            if (VolumeTau(position + sun * 6700.0, volumeTau))
-            {
-                volumeTail = volumeTau;
-            }
-            sunDepth = SunOpticalDepth(position, sun, outer, t * g.lod.x, 0.1 + 0.8 * frac(jitter * 7.31 + 0.37), volumeTail);
-            cachedSunDepth = sunDepth;
-            cachedValid = true;
-        }
-        if (farBlend > 0.0)
-        {
-            const float4 estimateType = TypeParams(column.z);
-            const float heightFraction = saturate(h / max(estimateType.x, 0.05));
-            const float slant = 1.0 / clamp(dot(position / max(radius, 1.0), sun), 0.2, 1.0);
-            const float estimate = g.lod.z * column.x * 0.55 * (1.0 - heightFraction) * slant;
-            sunDepth = lerp(sunDepth, estimate, farBlend);
-        }
-        const float skyFacing = saturate(dot(position / max(radius, 1.0), sun) * 0.5 + 0.5);
-        // Multiple scattering as octaves (energy, extinction and anisotropy each x0.5 per
-        // octave): the highest octave decays slowly, so the inside of a thick tower keeps
-        // a soft glow instead of going black.
-        // Diffusion: light reaching deep inside a thick cloud falls off like sqrt(depth)
-        // rather than exponentially, which is what keeps a storm tower white inside.
-        const float multiDepth = 1.6 * sqrt(sunDepth);
-        float multiScatter = 0.0;
-        float octave = 1.0;
-        [unroll]
-        for (uint n = 0u; n < 4u; ++n)
-        {
-            multiScatter += octave *
-                (3.0 * Hg(cosine, 0.2 * octave) + 0.3 * Hg(cosine, -0.4 * octave)) *
-                exp(-multiDepth * 0.8 * octave);
-            octave *= 0.5;
-        }
-        const float multi = singlePhase * 12.0 * exp(-sunDepth * 1.6) + 0.35 * multiScatter;
-        // Sky light from above: tops of towers and billows catch it, the inside and the base
-        // do not (the cloud's own optical depth above the sample shades it).
-        const float ambient = (0.02 + 0.16 * h * h) * skyFacing * (0.35 + 0.65 * exp(-sunDepth * 0.12));
-        // Precipitating cloud is greyer: more absorption, less in-scattered light.
-        const float sampleAlbedo = albedo * (1.0 - 0.4 * column.w);
-        // Soft-limit the forward-scattering peak so a limb or terminator view does
-        // not blow out to white.
-        const float lit = multi + ambient;
-        const float limited = lit / (1.0 + 0.25 * lit);
-        // Thick cores are brighter, thin edges and low-lying cloud darker, which
-        // keeps the weather readable from far away where the billows are filtered.
-        const float thickness01 = saturate(max(column.x, column.y * smoothstep(0.69, 0.72, h)) / 0.8);
-        // A rain-bearing storm has a dark, flat base: the rain-cooled air under the updraft
-        // is thick, grey and shaded by the whole cloud above it.
-        const float baseDark = lerp(1.0, 0.3, (1.0 - smoothstep(0.0, 0.2, h)) * saturate(0.5 + column.w));
-        const float shading = (0.62 + 0.38 * thickness01) * baseDark;
-        const float3 source =
-            irradiance * sampleAlbedo * atmosphereSun * limited * 4.6 * shading * relief;
+        const float terrainVisibility = BodyTerrainSunVisibility(position, sun);
+        float sunDepth = 0.0;
+        if (terrainVisibility > 1.0e-4 && !VolumeTau(position, sunDepth))
+            sunDepth = StellarCloudTau(position, sun, asfloat(g_sunParameters.Load(0u)));
+        // A single view ray can cross the terminator on a small body. Sample
+        // local sunlight and body/terrain visibility at each cloud point, rather than copying the camera's
+        // daylight through the entire cloud shell.
+        const float visibility = terrainVisibility;
+        const float3 atmosphereSun = visibility * AtmosphereStellarTransmittance(
+            g_transmittance, g_transmittanceSampler, radius, g.atmosphere.x, g.atmosphere.y,
+            dot(position / max(radius, 1.0), sun), asfloat(g_sunParameters.Load(0u)));
+        const float3 skyResponse = g_multi.SampleLevel(g_multiSampler,
+            LutUv(radius, dot(position / max(radius, 1.0), sun)), 0).rgb;
+        const float3 source = irradiance * saturate(g.optics.x) *
+            (atmosphereSun * DualHg(cosine, anisotropy) * exp(-sunDepth) +
+             skyResponse / (4.0 * kPi));
 
         const float stepTransmittance = exp(-sigma * actualStep);
         const float contribution = transmittance * (1.0 - stepTransmittance);
@@ -1344,12 +1275,6 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
     // point is the unmarched remainder, not real see-through: drop it, or the (very bright,
     // HDR) atmosphere behind a close opaque cloud still shows through at that fraction.
     transmittance = saturate((transmittance - kOpaqueCutoff) / (1.0 - kOpaqueCutoff));
-
-    // Soft shoulder: a wide sheet seen at a grazing angle accumulates many steps of
-    // in-scattered light and would clip to flat white. Compress towards a ceiling
-    // that tracks the sun brightness, keeping structure in the bright range.
-    const float ceiling = max(irradiance * 0.5, 1.0e-4);
-    radiance = radiance / (1.0 + radiance / ceiling);
 
     // Aerial perspective over the camera-to-cloud distance (the cloud is composited after
     // the atmosphere pass, which only knows the terrain/sky behind it): attenuate the cloud
@@ -1384,10 +1309,14 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             const float3 mie = g.atmG.rgb * exp(-alt / g.atmM.w);
             const float3 extinction = rayleigh + g.atmM.rgb * exp(-alt / g.atmM.w);
             const float2 lut = LutUv(apRadius, dot(ap / max(apRadius, 1.0), sun));
-            const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
+            const float3 sunT = AtmosphereStellarTransmittance(g_transmittance, g_transmittanceSampler,
+                apRadius, g.atmosphere.x, g.atmosphere.y, dot(ap / max(apRadius, 1.0), sun),
+                asfloat(g_sunParameters.Load(0u)));
             const float3 multi = g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
+            const float terrainVisibility = BodyTerrainSunVisibility(ap, sun);
+            const float cloudT = terrainVisibility > 1.0e-4 ? CachedCloudSun(ap, sun) : 1.0;
             const float3 source = irradiance *
-                (sunT * (rayleigh * rayleighPhase + mie * miePhase) +
+                (terrainVisibility * cloudT * sunT * (rayleigh * rayleighPhase + mie * miePhase) +
                  multi * (rayleigh + mie) / (4.0 * kPi));
             const float3 stepT = exp(-extinction * aerialStep);
             inscatter += aerial * source * (1.0 - stepT) / max(extinction, 1.0e-12);
@@ -1405,7 +1334,7 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
 // subtracted again (as negative radiance), so shafts appear in the air under and between
 // clouds, over the terrain and the sky alike.
 constexpr const char* kMarchGodrays = R"(
-static const uint kGodrayStepCount = 40u;
+static const uint kGodrayStepCount = 32u;
 
 float SunVisibility(float3 position, float3 sun)
 {
@@ -1414,44 +1343,7 @@ float SunVisibility(float3 position, float3 sun)
     {
         return exp(-volumeTau);
     }
-    const float radius = length(position);
-    const float inner = g.shell.x + g.shell.y;
-    const float outer = g.shell.x + g.shell.z;
-    if (radius >= outer)
-    {
-        return 1.0;
-    }
-    float o0, o1;
-    if (!RaySphere(position, sun, outer, o0, o1) || o1 <= 0.0)
-    {
-        return 1.0;
-    }
-    float segmentStart = 0.0;
-    if (radius < inner)
-    {
-        float i0, i1;
-        if (RaySphere(position, sun, inner, i0, i1) && i1 > 0.0)
-        {
-            segmentStart = i1;
-        }
-    }
-    const float segmentEnd = min(o1, segmentStart + 60000.0);
-    if (segmentEnd <= segmentStart)
-    {
-        return 1.0;
-    }
-    const float stepLength = (segmentEnd - segmentStart) / 6.0;
-    float opticalDepth = 0.0;
-    [loop]
-    for (uint i = 0u; i < 6u; ++i)
-    {
-        const float3 samplePosition = position + sun * (segmentStart + (float(i) + 0.5) * stepLength);
-        const float sampleRadius = length(samplePosition);
-        opticalDepth +=
-            Extinction(ColumnData(samplePosition / max(sampleRadius, 1.0)), samplePosition, sampleRadius, stepLength) *
-            stepLength;
-    }
-    return exp(-opticalDepth);
+    return exp(-StellarCloudTau(position, sun, asfloat(g_sunParameters.Load(0u))));
 }
 
 float4 CloudWithGodrays(VSOutput input)
@@ -1530,12 +1422,18 @@ float4 CloudWithGodrays(VSOutput input)
         const float3 stepT = exp(-extinction * stepLength);
         if (alt < g.shell.z)
         {
-            const float visibility = SunVisibility(ap, sun);
+            const float terrainVisibility = BodyTerrainSunVisibility(ap, sun);
+            if (terrainVisibility <= 1.0e-4) { aerial *= stepT; continue; }
+            float sharedTau;
+            const bool alreadyIntegrated = (asfloat(g_sunParameters.Load(4u)) > 0.5) && VolumeTau(ap, sharedTau);
+            const float visibility = alreadyIntegrated ? 1.0 : SunVisibility(ap, sun);
             if (visibility < 0.999)
             {
                 const float2 lut = LutUv(apRadius, dot(ap / max(apRadius, 1.0), sun));
-                const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
-                const float3 direct = irradiance * sunT * (rayleigh * rayleighPhase + mie * miePhase) *
+                const float3 sunT = AtmosphereStellarTransmittance(g_transmittance, g_transmittanceSampler,
+                apRadius, g.atmosphere.x, g.atmosphere.y, dot(ap / max(apRadius, 1.0), sun),
+                asfloat(g_sunParameters.Load(0u)));
+                const float3 direct = irradiance * terrainVisibility * sunT * (rayleigh * rayleighPhase + mie * miePhase) *
                     (1.0 - stepT) / max(extinction, 1.0e-12);
                 const float hidden = tm > cloudDistance ? cloud.a : 1.0;
                 loss += aerial * direct * (1.0 - visibility) * hidden;
@@ -1637,7 +1535,9 @@ float4 main(VSOutput input) : SV_Target0
 }
 )";
 
-constexpr const char* kShadowMain = R"(float4 main(VSOutput input) : SV_Target0
+constexpr const char* kShadowMain = R"(
+[[vk::binding(2, 0)]] ByteAddressBuffer g_shadowSun;
+float4 main(VSOutput input) : SV_Target0
 {
     // Sun transmittance through the cloud shell at the surface seen by this
     // pixel, from the same density field the camera march draws.
@@ -1674,23 +1574,23 @@ constexpr const char* kShadowMain = R"(float4 main(VSOutput input) : SV_Target0
     // Altitude-stratified march (see AltitudeSunTau): the shadow of a tower or an anvil lands where the
     // sun ray crosses it, however far that is at a low sun. No per-pixel jitter: exp(-depth)
     // amplifies it into peppered shadow edges.
-    return float4(exp(-AltitudeSunTau(surface, sun, 24u)), 0.0, 0.0, 1.0);
+    return float4(exp(-StellarCloudTau(surface, sun, asfloat(g_shadowSun.Load(0u)))), 0.0, 0.0, 1.0);
 }
 )";
 
 [[nodiscard]] std::string MarchSource()
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kDepthBindings + kMarchBindings + kVolumeRead + kVolumeDebugRead + kMarchMain + kMarchGodrays;
+    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kStellarCloudTau + kVolumeMath + kMarchDepthBindings + kMarchBindings + lighting::kCloudSunShader + kVolumeRead + kVolumeDebugRead + lighting::kSunVisibilityShader + kBodyTerrainSunVisibility + kCachedCloudSun + kMarchMain + kMarchGodrays;
 }
 
 [[nodiscard]] std::string ShadowSource()
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kDepthBindings + kShadowMain;
+    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kStellarCloudTau + kDepthBindings + kShadowMain;
 }
 
 [[nodiscard]] std::string VolumeSource()
 {
-    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kVolumeMath + kVolumeCompute;
+    return std::string(kCloudCommon) + kCloudCommonB + kCloudCommonC + kCloudCommonD + kCloudCommonE + kCloudCommonF + kCloudLife + kStellarCloudTau + kVolumeMath + kVolumeCompute;
 }
 
 
@@ -2111,6 +2011,7 @@ CloudRenderer::CloudRenderer(
     const shader::Compiler& compiler)
     : device_(&device)
 {
+    dummyTerrainSunShadow_ = lighting::CreateEmptyTerrainSunShadowBuffer(device);
     const auto vertex = compiler.Compile({
         .source = kVertexShader,
         .entryPoint = "main",
@@ -2129,7 +2030,7 @@ CloudRenderer::CloudRenderer(
         .vertexAttributes = {},
         .vertexStrideBytes = 0U,
         .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = 5U,
         .sampledTextures = 3U,
         .topology = rhi::PrimitiveTopology::TriangleList,
         .fillMode = rhi::FillMode::Solid,
@@ -2216,7 +2117,7 @@ CloudRenderer::CloudRenderer(
     volumePipeline_ = device.CreateComputePipeline({
         .computeShader = {.data = volumeShader.bytecode.data(), .size = volumeShader.bytecode.size()},
         .pushConstantDwords = 64U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = 4U,
         .storageTextures = 0U,
         .sampledTextures = 0U});
     const auto noise = BakeCloudNoise();
@@ -2235,12 +2136,31 @@ CloudRenderer::CloudRenderer(
 
 CloudRenderer::~CloudRenderer() = default;
 
+rhi::Buffer& CloudRenderer::SunParameters(const f32 angularRadius, const bool shared)
+{
+    auto& buffer = shared ? sharedSunParameters_ : sunParameters_;
+    auto& cachedAngle = shared ? cachedSharedSunAngularRadius_ : cachedSunAngularRadius_;
+    if (!buffer || angularRadius != cachedAngle)
+    {
+        auto candidate = device_->CreateBuffer({.sizeBytes = 16U,
+            .usage = rhi::BufferUsage::Structured, .memory = rhi::MemoryUsage::HostVisible,
+            .initialState = rhi::ResourceState::ShaderResource});
+        const std::array<f32, 4> values{angularRadius, shared ? 1.0F : 0.0F, 0.0F, 0.0F};
+        std::memcpy(candidate->Map(), values.data(), sizeof(values));
+        candidate->Unmap();
+        buffer = std::move(candidate);
+        cachedAngle = angularRadius;
+    }
+    return *buffer;
+}
+
+
 std::unique_ptr<CloudRenderer::LightVolume> CloudRenderer::CreateLightVolume() const
 {
     auto volume = std::make_unique<LightVolume>();
     // 3 cascades x 32 layers x 96 x 96 voxels of 16 bytes (tau, tag, tag, generation).
     volume->buffer = device_->CreateBuffer({
-        .sizeBytes = 3ULL * 32ULL * 96ULL * 96ULL * 16ULL,
+        .sizeBytes = 64ULL + 3ULL * 32ULL * 96ULL * 96ULL * 16ULL,
         .usage = rhi::BufferUsage::Structured,
         .memory = rhi::MemoryUsage::GpuOnly,
         .initialState = rhi::ResourceState::ShaderResource});
@@ -2459,6 +2379,8 @@ void CloudRenderer::Draw(
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
     commands.SetGraphicsBuffer(2, *volume.buffer);
+    commands.SetGraphicsBuffer(3, view.terrainSunShadow ? *view.terrainSunShadow : *dummyTerrainSunShadow_);
+    commands.SetGraphicsBuffer(4, SunParameters(view.sunAngularRadiusRadians, view.cloudSunShadow != nullptr));
     commands.SetGraphicsTexture(0, depth);
     commands.SetGraphicsTexture(1, luts.Transmittance());
     commands.SetGraphicsTexture(2, luts.MultiScattering());
@@ -2509,7 +2431,7 @@ void CloudRenderer::UpdateLightVolume(
             volume.anchor.x * direction.x + volume.anchor.y * direction.y + volume.anchor.z * direction.z,
             -1.0,
             1.0);
-        reanchor = std::acos(cosine) * referenceRadiusMeters > 250000.0;
+        reanchor = std::acos(cosine) * referenceRadiusMeters > std::min(250000.0, referenceRadiusMeters * 0.75);
     }
     if (reanchor)
     {
@@ -2519,7 +2441,7 @@ void CloudRenderer::UpdateLightVolume(
     }
     volume.active = true;
 
-    const auto constants = BuildMarchConstants(
+    auto constants = BuildMarchConstants(
         1U,
         1U,
         1U,
@@ -2542,7 +2464,20 @@ void CloudRenderer::UpdateLightVolume(
     // for them and another refresh would recompute bit-identical values: skip it. Any change
     // (sun, camera, weather, parameters, a re-anchor) restarts the count, and the original
     // refresh schedule runs unchanged until it settles again.
-    const u64 fingerprint = LightVolumeInputFingerprint(constants, field, *volume.buffer);
+    // Retargeted camera windows preserve valid cells; changed medium or source
+    // invalidates them immediately so a previous sun/weather cannot leak through.
+    auto transportConstants = constants;
+    transportConstants[0] = transportConstants[1] = transportConstants[2] = 0U;
+    transportConstants[59] = 0U;
+    const u64 transportFingerprint = LightVolumeInputFingerprint(transportConstants, field, *volume.buffer) ^
+        (static_cast<u64>(Bits(view.sunAngularRadiusRadians)) << 32U);
+    if (transportFingerprint != volume.transportFingerprint)
+    {
+        volume.transportFingerprint = transportFingerprint;
+        volume.generation = (volume.generation + 1U) % 1000000U;
+        constants[59] = Bits(static_cast<f32>(volume.generation));
+    }
+    const u64 fingerprint = LightVolumeInputFingerprint(constants, field, *volume.buffer) ^ (static_cast<u64>(Bits(view.sunAngularRadiusRadians)) << 32U);
     if (fingerprint != volume.inputFingerprint)
     {
         volume.inputFingerprint = fingerprint;
@@ -2565,6 +2500,7 @@ void CloudRenderer::UpdateLightVolume(
     commands.SetComputeBuffer(0U, field.Buffer());
     commands.SetComputeBuffer(1U, *noise_);
     commands.SetComputeBuffer(2U, *volume.buffer);
+    commands.SetComputeBuffer(3U, SunParameters(view.sunAngularRadiusRadians));
     commands.Dispatch(96U / 8U, 96U / 8U, 3U * 32U);
     commands.UavBarrier(*volume.buffer);
     commands.Transition(*volume.buffer, rhi::ResourceState::UnorderedAccess, rhi::ResourceState::ShaderResource);
@@ -2639,7 +2575,7 @@ void CloudRenderer::DrawShadow(
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsBuffer(0, field.Buffer());
     commands.SetGraphicsBuffer(1, *noise_);
-    commands.SetGraphicsBuffer(2, *noise_);   // slot 2 is unused by the shadow shader
+    commands.SetGraphicsBuffer(2, SunParameters(view.sunAngularRadiusRadians));
     commands.SetGraphicsTexture(0, depth);
     commands.Draw(6);
 }
