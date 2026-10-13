@@ -20,6 +20,7 @@ related = ["/rules/ui", "/rules/placement"]
 "terrain runtime bridge, rebuild scheduler, project browser, bezier handle drag" = "studio-session"
 "ImGui shell, panel extensions, DPI scale, previews" = "ui-toolkit"
 "issue reports, capturing a reproducible problem" = "reports"
+"debug tab, validation runs, test experiments, diagnostic panels, debugging location" = "/editor/studio-ui/debug-center"
 "button/shortcut/toolbar change" = "/rules/placement"
 "profiler, hitch capture, performance trace" = "/editor/profiler"
 "shading assets, shader contract" = "/rendering/shading"
