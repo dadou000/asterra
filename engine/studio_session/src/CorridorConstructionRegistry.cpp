@@ -7,6 +7,30 @@
 
 namespace orbit::studio_session
 {
+std::vector<terrain::PhysicalTerrainPageAddress>
+CorridorConstructionRegistry::PagesForBody(
+    const universe::BodyId body, const std::size_t maximumPages) const
+{
+    std::vector<terrain::PhysicalTerrainPageAddress> pages;
+    if (maximumPages == 0U) return pages;
+    const auto found = records_.find(body);
+    if (found == records_.end()) return pages;
+    for (const auto& [id, entry] : found->second.entries)
+    {
+        (void)id;
+        pages.insert(pages.end(), entry.pages.begin(), entry.pages.end());
+    }
+    std::sort(pages.begin(), pages.end(), [](const auto& a, const auto& b) {
+        return std::tuple{a.planet.high, a.planet.low,
+            static_cast<u8>(a.tile.face), a.tile.level, a.tile.x, a.tile.y} <
+            std::tuple{b.planet.high, b.planet.low,
+            static_cast<u8>(b.tile.face), b.tile.level, b.tile.x, b.tile.y};
+    });
+    pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
+    if (pages.size() > maximumPages) pages.resize(maximumPages);
+    return pages;
+}
+
 bool CorridorConstructionRegistry::Publish(
     const universe::BodyId body,
     const world::PlanetDefinition planet,
