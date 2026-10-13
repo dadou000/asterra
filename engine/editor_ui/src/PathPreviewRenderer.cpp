@@ -83,7 +83,7 @@ VSOutput main(VSInput input)
             // so NDC Y is up here exactly as in every other renderer; negating
             // it mirrored path and diagnostic overlays vertically.
             y / tanHalfFov,
-            z * 0.5,
+            g_push.projection.z,
             z);
     output.color = input.color;
     return output;
@@ -237,10 +237,11 @@ public:
                             rhi::FillMode::Solid,
                         .cullMode =
                             rhi::CullMode::None,
-                        .blendMode =
-                            rhi::BlendMode::Alpha,
-                        .depthTest = false,
-                        .depthWrite = false,
+                        .blendMode = topology == rhi::PrimitiveTopology::TriangleList
+                            ? rhi::BlendMode::Opaque : rhi::BlendMode::Alpha,
+                        .depthCompare = rhi::DepthCompare::GreaterEqual,
+                        .depthTest = topology == rhi::PrimitiveTopology::TriangleList,
+                        .depthWrite = topology == rhi::PrimitiveTopology::TriangleList,
                         .colorAttachmentFormats = {
                             rhi::TextureFormat::RGBA16_Float
                         },
@@ -402,7 +403,8 @@ void PathPreviewRenderer::Draw(
         const path_geometry::
             PathDerivedProduct* const>
         products,
-    const bool drawDebugLines)
+    const bool drawDebugLines,
+    rhi::Texture* const depth)
 {
     if (width == 0U ||
         height == 0U ||
@@ -580,7 +582,8 @@ void PathPreviewRenderer::Draw(
             bits(0.0F)
         };
 
-    commands.SetRenderTarget(target);
+    if (depth) commands.SetRenderTargets(target, *depth);
+    else commands.SetRenderTarget(target);
     commands.SetViewport({
         .x = 0.0F,
         .y = 0.0F,
@@ -640,6 +643,7 @@ void PathPreviewRenderer::Draw(
     if (drawDebugLines &&
         !impl_->lineVertices.empty())
     {
+        commands.SetRenderTarget(target);
         impl_->EnsureLineBuffer(
             impl_->lineVertices.size());
 
