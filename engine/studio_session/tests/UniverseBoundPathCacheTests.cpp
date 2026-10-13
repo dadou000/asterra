@@ -90,6 +90,29 @@ int main()
         Check(cache.RouteGeneration(edge).value_or(0U) == 7U);
         Check(cache.Products().size() == 1U);
 
+        orbit::path_geometry::PathCenterline centerline{
+            .edge = edge,
+            .frame = body->frame,
+            .sourceRevision = 2,
+            .samples = {
+                {.position = {0.0, 0.0, 0.0}},
+                {.position = {30.0, 0.0, 0.0}}
+            }
+        };
+        orbit::paths::PathProfile roadProfile{};
+        roadProfile.widthMeters = 6.0;
+        orbit::path_geometry::CorridorSweep roadSection{
+            .bands = {{{{-3.0, 0.0}, {0.0, 0.1}, {3.0, 0.0}}}}
+        };
+        Check(cache.StoreCorridorIfChanged(101U, centerline, roadProfile, roadSection));
+        const auto generatedSignature = cache.Find(edge)->buildSignature;
+        Check(!cache.StoreCorridorIfChanged(101U, centerline, roadProfile, roadSection));
+        Check(cache.Find(edge)->buildSignature == generatedSignature);
+        roadSection.bands[0].profile[1].elevationMeters = 0.2;
+        Check(cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
+        Check(cache.Find(edge)->buildSignature != generatedSignature);
+        Check(cache.Size() == 1U);
+
         bool foreignFrameRejected = false;
         try
         {
