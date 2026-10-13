@@ -160,8 +160,7 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
     if (model_.Paused())
     {
         if (context.PrimaryButton(
-                model_.Loaded() ? "Back to live##profiler-resume"
-                                : "Resume live##profiler-resume"))
+                "Resume##profiler-resume"))
         {
             model_.SetPaused(false, now);
         }
@@ -170,12 +169,12 @@ void ProfilerUi::DrawToolbar(PanelContext& context, const f64 now)
     {
         model_.SetPaused(true, now);
     }
-    context.SameLine();
+    // Keep controls on independent rows: switching Pause to Resume must not
+    // push the trace and viewport capture controls outside a narrow dock.
     if (context.Button("Reset view##profiler-reset-view"))
     {
         model_.ResetView();
     }
-    context.SameLine();
     if (context.Button("Write trace file##profiler-capture"))
     {
         try
