@@ -3597,6 +3597,21 @@ StudioViewportRenderer::ComposeBase(
                                 Write
                     },
                     {
+                        .texture = targets.surfaceBaseRoughness,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.surfaceNormalMetallic,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
+                        .texture = targets.surfaceEmissionClass,
+                        .state = rhi::ResourceState::RenderTarget,
+                        .access = render_graph::Access::Write
+                    },
+                    {
                         .texture = targets.depth,
                         .state = rhi::ResourceState::DepthWrite,
                         .access = render_graph::Access::Write
@@ -3611,7 +3626,11 @@ StudioViewportRenderer::ComposeBase(
                  pathProducts,
                  atTime,
                  drawPathDebug,
-                 depth = &view->Depth()](
+                 depth = &view->Depth(),
+                 base = &view->SurfaceBaseRoughness(),
+                 normal = &view->SurfaceNormalMetallic(),
+                 emission = &view->SurfaceEmissionClass(),
+                 production = presentation == StudioViewportPresentation::ProductionTerrain](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
@@ -3625,7 +3644,10 @@ StudioViewportRenderer::ComposeBase(
                         atTime,
                         pathProducts,
                         drawPathDebug,
-                        depth);
+                        depth,
+                        production ? std::span<rhi::Texture* const>(
+                            std::array<rhi::Texture*, 3>{base, normal, emission}) :
+                            std::span<rhi::Texture* const>{});
                 });
         }
 
