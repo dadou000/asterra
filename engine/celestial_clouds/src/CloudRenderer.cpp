@@ -1422,7 +1422,28 @@ float ThinLayerStepCap(float3 position, float radius, float3 direction, float st
 }
 )";
 
-constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
+constexpr const char* kMarchMain = R"(
+// Optical depth in a cloud does not capture the opaque planet. Direct
+// stellar light must be occluded by the planetary horizon independently.
+// A shared ellipsoid/terrain transport query should replace this temporary
+// spherical approximation when the full unified system is available.
+float PlanetDirectSunVisibility(float3 position, float3 sun)
+{
+    const float radius = max(g.shell.x, 1.0);
+    const float distance = length(position);
+    if (distance <= radius) return 0.0;
+    const float sunMu = dot(position / distance, sun);
+    if (sunMu >= 0.0) return 1.0;
+    const float ratio = saturate(radius / distance);
+    const float horizonMu = -sqrt(max(1.0 - ratio * ratio, 0.0));
+    // Approximate stellar disc for the existing cloud pass.
+    const float angularRadius = 0.00465;
+    const float x = clamp((sunMu - horizonMu) / angularRadius, -1.0, 1.0);
+    return saturate(0.5 + (asin(x) +
+        x * sqrt(max(1.0 - x * x, 0.0))) / 3.14159265359);
+}
+
+float4 CloudMarch(VSOutput input)
 {
     // Output: premultiplied in-scattered radiance (rgb) and transmittance (a),
     // at reduced resolution; the composite pass applies it over the scene.
@@ -1703,8 +1724,12 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         // is thick, grey and shaded by the whole cloud above it.
         const float baseDark = lerp(1.0, 0.3, (1.0 - smoothstep(0.0, 0.2, h)) * saturate(0.5 + column.w));
         const float shading = (0.62 + 0.38 * thickness01) * baseDark;
+        // Sun optical depth is not a planetary shadow; do not illuminate
+        // the nightside cloud volume with full daytime stellar irradiance.
+        const float planetSun = PlanetDirectSunVisibility(position, sun);
         float3 source =
-            irradiance * sampleAlbedo * atmosphereSun * limited * 4.6 * shading * relief;
+            irradiance * planetSun * sampleAlbedo * atmosphereSun *
+            limited * 4.6 * shading * relief;
 #if ORBIT_CLOUD_POINT_LIGHTS
         source += PointLightSource(position, origin, direction, sigma, sampleAlbedo, shading * relief);
 #endif
@@ -1769,7 +1794,8 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
             const float3 multi = g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
             const float3 source = irradiance *
-                (sunT * (rayleigh * rayleighPhase + mie * miePhase) +
+                (sunT * PlanetDirectSunVisibility(ap, sun) *
+                    (rayleigh * rayleighPhase + mie * miePhase) +
                  multi * (rayleigh + mie) / (4.0 * kPi));
             const float3 stepT = exp(-extinction * aerialStep);
             inscatter += aerial * source * (1.0 - stepT) / max(extinction, 1.0e-12);
@@ -1928,7 +1954,12 @@ float4 CloudWithGodrays(VSOutput input)
             {
                 const float2 lut = LutUv(apRadius, dot(ap / max(apRadius, 1.0), sun));
                 const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
-                const float3 direct = irradiance * sunT * (rayleigh * rayleighPhase + mie * miePhase) *
+                // The atmosphere pass already eclipses direct solar
+                // scattering behind the planet. Avoid subtracting cloud
+                // occlusion from nonexistent nightside direct radiance.
+                const float3 direct = irradiance * sunT *
+                    PlanetDirectSunVisibility(ap, sun) *
+                    (rayleigh * rayleighPhase + mie * miePhase) *
                     (1.0 - stepT) / max(extinction, 1.0e-12);
                 const float hidden = tm > cloudDistance ? cloud.a : 1.0;
                 loss += aerial * direct * (1.0 - visibility) * hidden;
