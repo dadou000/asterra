@@ -222,6 +222,11 @@ float2 EllipsoidEclipseInterval(float3 origin, float3 viewDirection,
                   startT + segment * upper);
 }
 
+)";
+
+// Keep each literal below MSVC's 16,380-character string limit.
+// Concatenate at runtime before injecting shared sunlight helpers.
+constexpr const char* kPixelShaderMain = R"(
 float4 main(VSOutput input) : SV_Target0
 {
     const int2 pixel = int2(input.position.xy);
@@ -471,6 +476,7 @@ AtmosphereRenderer::AtmosphereRenderer(
         });
 
     std::string pixelSource(kPixelShader);
+    pixelSource += kPixelShaderMain;
     const auto mainPosition = pixelSource.find("float4 main(VSOutput input) : SV_Target0");
     if (mainPosition == std::string::npos)
         throw std::logic_error("Atmosphere shader entry point not found.");
