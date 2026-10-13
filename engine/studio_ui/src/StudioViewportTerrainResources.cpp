@@ -283,6 +283,8 @@ BuildPhysicalRenderPages(
     const std::size_t localPageCount = neighboringTiles.size();
     u32 localUploads = 0U;
     u32 constructionUploads = 0U;
+    constexpr u64 kUploadByteBudget = 512U * 1024U;
+    u64 attemptedUploadBytes = 0U;
 
     auto& cache =
         services->Cache();
