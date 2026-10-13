@@ -2,6 +2,7 @@
 
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/CorridorSweep.hpp>
 #include <orbit/scene/ObjectStore.hpp>
 
 #include <optional>
@@ -21,6 +22,17 @@ public:
         editor_session::EditorWorldSession& world) noexcept;
 
     [[nodiscard]] bool RefreshBinding();
+
+    // Build a corridor using the shared path derivation pipeline and publish
+    // it to the same cache consumed by the existing Studio viewport renderer.
+    // Not a per-frame operation: callers must track authored revisions.
+    void StoreCorridor(
+        const path_geometry::PathCenterline& centerline,
+        const paths::PathProfile& profile,
+        const path_geometry::CorridorSweep& corridor,
+        path_geometry::PathBuildOptions options = {},
+        path_geometry::CorridorRefinementOptions refinement = {},
+        std::optional<u64> routeGeneration = std::nullopt);
 
     void Store(
         path_geometry::PathDerivedProduct product,
