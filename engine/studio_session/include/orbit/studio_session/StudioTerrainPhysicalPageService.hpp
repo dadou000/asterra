@@ -137,6 +137,10 @@ public:
     // Capture a coherent set of immutable published snapshots once per patch,
     // not once per vertex. Include missing pages in the fingerprint so their
     // later arrival triggers a patch rebuild.
+    [[nodiscard]] HeightPageBatch CaptureHeightTiles(
+        world::PlanetId planet, u8 level,
+        std::span<const world::PlanetTileId> tiles) const;
+
     [[nodiscard]] HeightPageBatch CaptureHeightPages(
         world::PlanetId planet, u8 level,
         std::span<const math::Double3> directions) const;
