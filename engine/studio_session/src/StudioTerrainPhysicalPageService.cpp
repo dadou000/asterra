@@ -3032,7 +3032,8 @@ void StudioTerrainPhysicalPageService::Sync(
         // Match the renderer's complete 3x3 physical-page neighborhood.
         // Diagonal pages are required when crossing corner seams.
         const auto neighborhood = world::TileNeighborhood(
-            runtime.observerPhysicalPage.tile, 1U);
+            runtime.observerPhysicalPage.tile,
+            PhysicalPageCoverageRadius(runtime));
         for (const auto& tile : neighborhood)
         {
             const terrain::PhysicalTerrainPageAddress address{
