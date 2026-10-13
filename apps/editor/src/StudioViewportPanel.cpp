@@ -267,6 +267,15 @@ void StudioViewportPanel::Register()
                         }
                         context.SameLine();
                         if (context.Button(
+                                "Atmosphere Debug##viewport-atmo-debug"))
+                        {
+                            startCapture(
+                                orbit::studio_ui::
+                                    ViewportCaptureService::Kind::
+                                        AtmosphereDebug);
+                        }
+                        context.SameLine();
+                        if (context.Button(
                                 "Ultra 16K##viewport-ultra"))
                         {
                             startCapture(
