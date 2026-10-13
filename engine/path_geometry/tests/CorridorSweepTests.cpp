@@ -86,5 +86,10 @@ int main()
     CHECK(derived==BuildCorridorDerived(source,profile,section));
     section.bands[0].profile[1].elevationMeters=0.2;
     CHECK(BuildCorridorDerived(source,profile,section).buildSignature!=derived.buildSignature);
+    // Equal profile scalars but different band boundaries must not alias.
+    CorridorSweep oneBand{{{{{-2,0},{-1,0},{1,0},{2,0}}}}, {}};
+    CorridorSweep twoBands{{{{{-2,0},{-1,0}}},{{{1,0},{2,0}}}}, {}};
+    CHECK(BuildCorridorDerived(source, profile, oneBand).buildSignature !=
+          BuildCorridorDerived(source, profile, twoBands).buildSignature);
     return 0;
 }
