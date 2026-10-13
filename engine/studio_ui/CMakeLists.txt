@@ -1,6 +1,7 @@
 add_library(OrbitStudioUi STATIC
     src/CelestialAuthoringUi.cpp
     src/DebugViewUi.cpp
+    src/DebugTestRegistry.cpp
     src/DisplayDiagnosticsUi.cpp
     src/DisplayEyeRpc.cpp
     src/ImplementationPlan.cpp
