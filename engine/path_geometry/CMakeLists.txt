@@ -4,6 +4,7 @@ add_library(OrbitPathGeometry STATIC
     src/CorridorSweep.cpp
     src/CorridorRefinement.cpp
     src/CorridorDerived.cpp
+    src/CorridorTerrainSource.cpp
 )
 
 add_library(
@@ -27,6 +28,7 @@ target_link_libraries(
         Orbit::Paths
         Orbit::Scene
         Orbit::Time
+        Orbit::Terrain
         Orbit::Universe
 )
 
