@@ -89,6 +89,39 @@ void TestInvalidation()
     assert(rejected);
 }
 
+void TestMultiViewIsolation()
+{
+    ViewRegistry views;
+    FrameSignature frame{};
+    frame.bodyKey = 42U;
+    frame.worldGeneration = 1U;
+    frame.width = 1024U;
+    frame.height = 768U;
+
+    assert(views.Observe("studio.primary", frame).density);
+    assert(views.Observe("studio.secondary", frame).density);
+    assert(!views.Observe("studio.primary", frame).Any());
+
+    FrameSignature changed = frame;
+    changed.sunRevision++;
+    assert(views.Observe("studio.secondary", changed).sunlight);
+    assert(!views.Observe("studio.primary", frame).Any());
+    views.Forget("studio.primary");
+    assert(views.Size() == 1U);
+    assert(views.Observe("studio.primary", frame).renderTargets);
+    views.Reset();
+    assert(views.Size() == 0U);
+
+    bool refused = false;
+    try { static_cast<void>(views.Observe("", frame)); }
+    catch (const std::invalid_argument&) { refused = true; }
+    assert(refused);
+    assert(ResourceBudget{}.Valid());
+    ResourceBudget invalidBudget{};
+    invalidBudget.maximumUpdatesPerFrame = 0U;
+    assert(!invalidBudget.Valid());
+}
+
 void TestRadianceComposition()
 {
     const IntegratedMedium clear{};
@@ -121,4 +154,5 @@ int main()
     TestBackendIsolation();
     TestInvalidation();
     TestRadianceComposition();
+    TestMultiViewIsolation();
 }
