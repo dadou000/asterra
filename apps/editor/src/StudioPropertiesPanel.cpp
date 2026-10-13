@@ -290,6 +290,7 @@ void StudioPropertiesPanel::Register()
                         context.Separator();
                         context.Text("Experimental Sun Authority Council (temporary)");
                         context.MutedText("Exclusive A/B tests. All off restores original lighting.");
+                        context.MutedText("Colored stripe at top left confirms the method reached this viewport.");
                         auto auditSwitch = [&](const char* label, u8 method)
                         {
                             bool enabled = layers.sunAuditMethod == method;

@@ -41,6 +41,7 @@ add_library(OrbitStudioUi STATIC
     src/StudioViewportTerrainPass.cpp
     src/StudioViewportVolumePass.cpp
     src/StudioViewportLightingPass.cpp
+    src/SunAuditViewportIndicator.cpp
     src/StudioViewportAtmospherePass.cpp
     src/StudioViewportTerrainSunShadow.cpp
     src/StudioViewportStorm.cpp

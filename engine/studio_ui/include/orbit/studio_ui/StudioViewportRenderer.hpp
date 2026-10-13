@@ -18,6 +18,7 @@
 #include <orbit/editor_ui/BodyPreviewRenderer.hpp>
 #include <orbit/editor_ui/PathPreviewRenderer.hpp>
 #include <orbit/lighting/DirectLighting.hpp>
+#include <orbit/studio_ui/SunAuditViewportIndicator.hpp>
 #include <orbit/lighting/TerrainSunShadow.hpp>
 #include <orbit/math/RigidTransform.hpp>
 #include <orbit/lighting/EmissiveInvalidation.hpp>
@@ -826,6 +827,7 @@ private:
     bool particleSimulationTimeValid_{false};
     math::Double3 particlePresentationOriginMeters_{};
     render_view::CompositeRenderer debugComposite_;
+    SunAuditViewportIndicator sunAuditIndicator_;
     lighting::DirectLightingRenderer directLightingRenderer_;
     lighting::MaterialEmissionSurfaceOverrideRenderer materialEmissionSurfaceOverride_;
     lighting::ScreenSpaceFinalGatherRenderer finalGatherRenderer_;

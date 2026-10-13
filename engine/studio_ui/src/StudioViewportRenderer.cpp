@@ -493,6 +493,7 @@ StudioViewportRenderer::StudioViewportRenderer(
       universalVolumeRenderer_(device, compiler),
       volumeParticleRenderer_(device, compiler, framesInFlight),
       debugComposite_(device, compiler),
+      sunAuditIndicator_(device, compiler),
       directLightingRenderer_(device, compiler),
       materialEmissionSurfaceOverride_(device, compiler),
       finalGatherRenderer_(device, compiler),
@@ -3939,6 +3940,33 @@ StudioViewportRenderer::ComposeBase(
         auto* displayColor = &view->DisplayColor();
         ComposePostProcess(graph, view, info, targets, prefix,
             frameIndex, antiAliasingMode);
+
+        // Post-output-transform witness: unlike direct-shader heatmaps, this
+        // stays visible when the frame uses a forward globe/sky representation
+        // or when later atmosphere and clouds overwrite the HDR surface.
+        // Marking the active method is diagnostic only; it never relights.
+        if (info.layers.sunAuditMethod != 0U)
+        {
+            const u8 auditMode = std::min<u8>(info.layers.sunAuditMethod, 3U);
+            const bool auditDebug =
+                (auditMode == 1U && info.layers.sunAuditDiscDebug) ||
+                (auditMode == 2U && info.layers.sunAuditReliefDebug) ||
+                (auditMode == 3U && info.layers.sunAuditSourcesDebug);
+            graph.AddPass(
+                prefix + ".SunAuditWitness",
+                {{
+                    .texture = targets.display,
+                    .state = rhi::ResourceState::RenderTarget,
+                    .access = render_graph::Access::Write
+                }},
+                [this, displayColor, width, height, auditMode, auditDebug](
+                    rhi::CommandList& commands,
+                    const render_graph::Resources&)
+                {
+                    sunAuditIndicator_.Draw(commands, *displayColor,
+                        width, height, auditMode, auditDebug);
+                });
+        }
 
         if (presentation == StudioViewportPresentation::FlatMap)
         {

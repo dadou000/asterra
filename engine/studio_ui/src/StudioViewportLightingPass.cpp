@@ -3337,7 +3337,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
 
     recordComposeStage("gi");
     // Debug heatmaps must not be overwritten by later air/cloud layers.
-    if (!sunAuditDebug)
+    // Method 3 is a genuine isolation: leave out atmosphere and clouds
+    // as well as GI. Otherwise the late volumetric contributions hide what
+    // removing the near-field lighting sources changed.
+    if (!sunAuditDebug && info.layers.sunAuditMethod != 3U)
         ComposeAtmospherePasses(context);
 
     // Glass Primitives: sun caustics onto the receivers behind them, a copy of
