@@ -62,6 +62,31 @@ struct CorridorTerrainSample
     const math::Double3& frameLocalPoint,
     const CorridorTerrainFootprint& footprint);
 
+// Apply the nondestructive construction layer to a raw terrain sample.
+// The source terrain remains authoritative; the overlay can be recomputed,
+// removed, or re-ordered without baking permanent elevation edits.
+struct CorridorTerrainBlend
+{
+    f64 heightMeters{0.0};
+    f64 cutMeters{0.0};
+    f64 fillMeters{0.0};
+    f64 influence{0.0};
+};
+[[nodiscard]] CorridorTerrainBlend BlendCorridorTerrainHeight(
+    f64 sourceHeightMeters,
+    const CorridorTerrainSample& sample);
+
+// A bounded frame-local envelope for mapping to physical planetary pages.
+// The caller MUST explicitly transform it to the target body's tile space.
+struct CorridorTerrainEnvelope
+{
+    math::Double3 minimum{};
+    math::Double3 maximum{};
+};
+[[nodiscard]] std::optional<CorridorTerrainEnvelope> CorridorFootprintEnvelope(
+    const std::vector<PathStation>& stations,
+    const CorridorTerrainFootprint& footprint);
+
 struct RefinedCorridor
 {
     std::vector<PathStation> stations;
