@@ -20,6 +20,7 @@ struct RenderVertex
 {
     math::Float3 position{};
     math::Float4 color{};
+    math::Float3 normal{0.0F, 1.0F, 0.0F};
 };
 
 constexpr const char* kVertexShader = R"(
@@ -35,12 +36,14 @@ struct VSInput
 {
     [[vk::location(0)]] float3 position : POSITION;
     [[vk::location(1)]] float4 color : COLOR0;
+    [[vk::location(2)]] float3 normal : NORMAL0;
 };
 
 struct VSOutput
 {
     float4 position : SV_Position;
     float4 color : COLOR0;
+    float3 normal : TEXCOORD0;
 };
 
 VSOutput main(VSInput input)
@@ -65,6 +68,7 @@ VSOutput main(VSInput input)
         output.position =
             float4(2.0, 2.0, 1.0, 1.0);
         output.color = input.color;
+        output.normal = input.normal;
         return output;
     }
 
@@ -91,6 +95,7 @@ VSOutput main(VSInput input)
                 max(g_push.projection.w - g_push.projection.z, 0.001),
             z);
     output.color = input.color;
+    output.normal = input.normal;
     return output;
 }
 )";
@@ -113,6 +118,7 @@ struct VSOutput
 {
     float4 position : SV_Position;
     float4 color : COLOR0;
+    float3 normal : TEXCOORD0;
 };
 struct SurfaceOutput
 {
@@ -126,7 +132,7 @@ SurfaceOutput main(VSOutput input)
     SurfaceOutput output;
     output.color = float4(input.color.rgb, 1.0);
     output.baseRoughness = float4(input.color.rgb, 0.86);
-    output.normalMetallic = float4(0.0, 1.0, 0.0, 0.0);
+    output.normalMetallic = float4(normalize(input.normal), 0.0);
     output.emissionClass = float4(0.0, 0.0, 0.0, 0.0);
     return output;
 }
@@ -214,7 +220,7 @@ public:
 
         constexpr std::array<
             rhi::VertexAttribute,
-            2> attributes{{
+            3> attributes{{
                 {
                     .location = 0,
                     .format =
@@ -232,6 +238,11 @@ public:
                         offsetof(
                             RenderVertex,
                             color)
+                },
+                {
+                    .location = 2,
+                    .format = rhi::VertexFormat::Float3,
+                    .offsetBytes = offsetof(RenderVertex, normal)
                 }
             }};
 
@@ -501,6 +512,8 @@ void PathPreviewRenderer::Draw(
             continue;
         }
 
+        std::vector<math::Float3> relativeNormals;
+        relativeNormals.reserve(product->visualMesh.vertices.size());
         std::vector<math::Float3>
             relativeVertices;
 
@@ -530,8 +543,18 @@ void PathPreviewRenderer::Draw(
                 break;
             }
 
-            relativeVertices.push_back(
-                *relative);
+            const auto tip = frames.ToCameraRelative(
+                {.frame = product->frame,
+                 .localMeters = vertex.position + vertex.normal},
+                cameraOrigin, atTime);
+            if (!tip.has_value())
+            {
+                connected = false;
+                break;
+            }
+            const auto n = math::Normalize(*tip - *relative);
+            relativeNormals.push_back(n);
+            relativeVertices.push_back(*relative);
         }
 
         if (!connected)
@@ -543,12 +566,13 @@ void PathPreviewRenderer::Draw(
             static_cast<u32>(
                 impl_->meshVertices.size());
 
-        for (const auto& position :
-             relativeVertices)
+        for (std::size_t vertexIndex = 0;
+             vertexIndex < relativeVertices.size(); ++vertexIndex)
         {
             impl_->meshVertices.push_back({
-                .position = position,
-                .color = MeshColor()
+                .position = relativeVertices[vertexIndex],
+                .color = MeshColor(),
+                .normal = relativeNormals[vertexIndex]
             });
         }
 
