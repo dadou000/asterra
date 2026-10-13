@@ -43,6 +43,7 @@ private:
     {
         world::PlanetId planet{};
         u8 level{0};
+        u64 sourceRevision{0};
         std::map<scene::ObjectId, Record> entries;
         u64 publicationRevision{0};
     };
