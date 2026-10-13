@@ -397,6 +397,7 @@ BuildPhysicalRenderPages(
             }
 
             // Count attempts, including failed uploads, to cap frame spikes.
+            attemptedUploadBytes += bytesForBudget;
             if (localPriority) ++localUploads;
             else ++constructionUploads;
             try
