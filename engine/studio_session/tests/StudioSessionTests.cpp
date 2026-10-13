@@ -650,6 +650,19 @@ int main()
         columns->SetCell(1, 1, {.bedrockHeightMeters = 40.0F});
         surface.material = std::move(columns);
         Check(std::abs(*surface.SampleSurfaceHeight(0.5, 0.5) - 25.0) < 1.e-6);
+        orbit::studio_session::StudioTerrainPhysicalPageService::HeightPageBatch
+            batch{};
+        batch.planet = orbit::world::PlanetId::Random();
+        batch.level = 0U;
+        auto ready = std::make_shared<
+            orbit::studio_session::StudioTerrainPhysicalPageSnapshot>(surface);
+        ready->address = {
+            .planet = batch.planet,
+            .tile = orbit::world::TileForDirection({1.0, 0.0, 0.0}, 0U)
+        };
+        batch.pages.emplace(ready->address.tile, ready);
+        Check(std::abs(*batch.Sample({1.0, 0.0, 0.0}) - 25.0) < 1.e-6);
+        Check(!batch.Sample({-1.0, 0.0, 0.0}).has_value());
         Check(!surface.SampleSurfaceHeight(-0.1, 0.5).has_value());
         Check(!surface.SampleSurfaceHeight(0.0,
             std::numeric_limits<double>::quiet_NaN()).has_value());
