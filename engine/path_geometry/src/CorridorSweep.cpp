@@ -1,11 +1,79 @@
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <algorithm>
+#include <orbit/world/PlanetTileNeighborhood.hpp>
+#include <set>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 
 namespace orbit::path_geometry
 {
+std::optional<std::vector<terrain::PhysicalTerrainPageAddress>>
+ProjectCorridorToTerrainPages(
+    const world::PlanetDefinition& planet,
+    const std::vector<math::Double3>& bodyCentredPositions,
+    const f64 influenceRadiusMeters,
+    const u8 pageLevel,
+    const std::size_t maximumPages)
+{
+    if (!planet.id || !std::isfinite(planet.radiusMeters) ||
+        planet.radiusMeters <= 0.0 || !std::isfinite(influenceRadiusMeters) ||
+        influenceRadiusMeters < 0.0 || bodyCentredPositions.size() < 2 ||
+        pageLevel > 24 || maximumPages == 0)
+        return std::nullopt;
+    const world::PlanetTileId sampleTile{
+        .face = world::CubeFace::PositiveX, .level = pageLevel};
+    const f64 tileWidth = world::ApproximateTileWidthMeters(planet, sampleTile);
+    if (!std::isfinite(tileWidth) || tileWidth <= 0.0)
+        return std::nullopt;
+    // Along-track sampling prevents missing an intermediate physical page.
+    // The neighborhood radius encloses the whole construction footprint.
+    const f64 stepMeters = std::max(1.0, tileWidth * 0.25);
+    const u32 radiusTiles = static_cast<u32>(
+        std::ceil(influenceRadiusMeters / tileWidth)) + 2U;
+    if (radiusTiles > 64U) return std::nullopt;
+    std::vector<terrain::PhysicalTerrainPageAddress> result;
+    std::set<std::tuple<u8,u8,u32,u32>> visited;
+    std::size_t samples = 0;
+    for (std::size_t i=1; i<bodyCentredPositions.size(); ++i)
+    {
+        const auto a = bodyCentredPositions[i-1];
+        const auto b = bodyCentredPositions[i];
+        if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
+            !std::isfinite(a.z) || !std::isfinite(b.x) ||
+            !std::isfinite(b.y) || !std::isfinite(b.z) ||
+            math::LengthSquared(a) < 1.0 || math::LengthSquared(b) < 1.0)
+            return std::nullopt;
+        const f64 arc = planet.radiusMeters *
+            std::acos(std::clamp(math::Dot(math::Normalize(a),
+                math::Normalize(b)), -1.0, 1.0));
+        const auto steps = static_cast<std::size_t>(
+            std::ceil(arc / stepMeters));
+        if (steps > 32768U || samples + steps + 1U > 32768U)
+            return std::nullopt;
+        samples += steps + 1U;
+        for (std::size_t j=0; j<=steps; ++j)
+        {
+            const f64 t = steps ? static_cast<f64>(j)/steps : 0.0;
+            const auto direction = math::Normalize(a*(1.0-t) + b*t);
+            if (math::LengthSquared(direction) < 0.5) return std::nullopt;
+            const auto tile = world::TileForDirection(direction, pageLevel);
+            for (const auto& neighbor : world::TileNeighborhood(tile, radiusTiles))
+            {
+                const auto key = std::make_tuple(
+                    static_cast<u8>(neighbor.face), neighbor.level,
+                    neighbor.x, neighbor.y);
+                if (visited.insert(key).second)
+                {
+                    if (result.size() >= maximumPages) return std::nullopt;
+                    result.push_back({.planet=planet.id, .tile=neighbor});
+                }
+            }
+        }
+    }
+    return result;
+}
+
 CorridorTerrainBlend BlendCorridorTerrainHeight(
     const f64 sourceHeightMeters,
     const CorridorTerrainSample& sample)
