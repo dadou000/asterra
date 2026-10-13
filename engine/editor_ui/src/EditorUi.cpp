@@ -3481,8 +3481,9 @@ void EditorUi::DrawStudioShell()
         {
             const UpdateIndicator& update = impl_->updateIndicator;
             const ImGuiStyle& style = ImGui::GetStyle();
+            const std::string buttonLabel = update.label + "    ";
             const f32 updateWidth =
-                ImGui::CalcTextSize(update.label.c_str()).x +
+                ImGui::CalcTextSize(buttonLabel.c_str()).x +
                 style.FramePadding.x * 2.0F;
             f32 projectWidth = 0.0F;
             if (!impl_->projectIndicator.name.empty())
@@ -3506,9 +3507,27 @@ void EditorUi::DrawStudioShell()
             ImGui::PushStyleColor(ImGuiCol_Button,
                 Rgb(0x4b, 0x7b, 0xec, 0.16F));
             if (ImGui::SmallButton(
-                    (update.label + "##orbit-github-update").c_str()) &&
+                    (buttonLabel + "##orbit-github-update").c_str()) &&
                 update.onClick)
                 update.onClick();
+            // Compact circular-refresh glyph inside the same button,
+            // not a separate launcher or an extra toolbar row.
+            const ImVec2 edge = ImGui::GetItemRectMax();
+            const ImVec2 top = ImGui::GetItemRectMin();
+            const ImVec2 centre(edge.x - 10.0F * g_uiScale,
+                (top.y + edge.y) * 0.5F);
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const ImU32 ink = ImGui::GetColorU32(
+                update.enabled ? ImGuiCol_Text : ImGuiCol_TextDisabled);
+            draw->PathArcTo(centre, 4.0F * g_uiScale,
+                -2.35F, 2.1F, 18);
+            draw->PathStroke(ink, 0, 1.3F * g_uiScale);
+            draw->AddLine(
+                ImVec2(centre.x + 3.2F * g_uiScale,
+                    centre.y - 3.0F * g_uiScale),
+                ImVec2(centre.x + 4.1F * g_uiScale,
+                    centre.y + 0.7F * g_uiScale),
+                ink, 1.3F * g_uiScale);
             ImGui::PopStyleColor();
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(
