@@ -59,6 +59,7 @@ struct Constants {
     float4 sunDirectionAngularRadius;
     float4 dimensionsMethod;
     float4 depthRange;
+    float4 ellipsoidRadii; // xyz real semi-axes, w reserved
 };
 [[vk::push_constant]] Constants g;
 
@@ -84,14 +85,18 @@ float4 main(float4 pixel : SV_Position) : SV_Target0
     // This analytic body hit is independent of the geometry depth buffer.
     // Comparing it with metadata coverage reveals whether the direct-light
     // pass is discarding a visibly drawn terrain/globe pixel.
-    const float b = dot(eye, ray);
-    const float discriminant = b * b - (dot(eye, eye) - radius * radius);
+    const float3 semiAxes = max(g.ellipsoidRadii.xyz, float3(1.0, 1.0, 1.0));
+    const float3 scaledEye = eye / semiAxes;
+    const float3 scaledRay = ray / semiAxes;
+    const float a = dot(scaledRay, scaledRay);
+    const float b = dot(scaledEye, scaledRay);
+    const float discriminant = b * b - a * (dot(scaledEye, scaledEye) - 1.0);
     float3 position = 0.0;
-    bool sphereHit = false;
-    if (radius > 0.0 && discriminant >= 0.0)
+    bool sphereHit = false; // Legacy identifier: now the actual ellipsoid hit.
+    if (a > 1.0e-20 && discriminant >= 0.0)
     {
         const float root = sqrt(discriminant);
-        const float t = -b - root;
+        const float t = (-b - root) / a;
         if (t > 0.0)
         {
             position = eye + ray * t;
@@ -108,8 +113,7 @@ float4 main(float4 pixel : SV_Position) : SV_Target0
     }
     else if (sphereHit)
     {
-        // Avoid self-occultation caused by finite precision at the exact
-        // analytic ground boundary.
+        // Avoid exact ellipsoid self-occultation at the surface.
         position *= (1.0 + max(1.0e-6, 0.5 / max(radius, 1.0)));
     }
     const bool hasPosition = hasDepth || sphereHit;
@@ -117,8 +121,18 @@ float4 main(float4 pixel : SV_Position) : SV_Target0
     const float sunRadius = max(g.sunDirectionAngularRadius.w, 0.0);
     const bool terrainReady = g_terrain.Load(12u) > 0u &&
         g_terrain.Load(16u) > 0u;
+    // Occlusion in ellipsoid-scaled coordinates. At the physical surface,
+    // this gives the true ellipsoid tangent plane instead of treating its
+    // polar terrain as INSIDE a max-axis bounding sphere.
+    // Finite-disc widths are approximate under nonuniform scaling; the
+    // central ray and terminator sign are geometrically consistent.
+    const float3 scaledPosition = position / semiAxes;
+    const float scaledDistance = length(scaledPosition);
+    const float3 scaledSun = normalize(sun / semiAxes);
+    const float3 outside = scaledPosition *
+        (max(scaledDistance, 1.0 + 1.0e-6) / max(scaledDistance, 1.0e-8));
     const float sphereVisibility = hasPosition
-        ? SphereStellarVisibility(position, sun, radius * (1.0 - 2.0e-7), sunRadius)
+        ? SphereStellarVisibility(outside, scaledSun, 1.0, sunRadius)
         : 0.0;
     const float method = g.dimensionsMethod.z;
 
@@ -135,10 +149,12 @@ float4 main(float4 pixel : SV_Position) : SV_Target0
     }
     if (method < 2.5)
     {
+        if (!hasPosition) return float4(0.0, 0.0, 0.0, 1.0);
+        // Report readiness before metadata classification; otherwise the
+        // entire nightside appeared magenta while the field was missing.
+        if (!terrainReady) return float4(0.0, 0.0, 1.0, 1.0);
         if (hasSurface && !hasPosition) return float4(1.0, 0.0, 1.0, 1.0);
         if (sphereHit && !hasSurface) return float4(1.0, 0.0, 1.0, 1.0);
-        if (!hasPosition) return float4(0.0, 0.0, 0.0, 1.0);
-        if (!terrainReady) return float4(0.0, 0.0, 1.0, 1.0);
         const float terrainVisibility = TerrainSunVisibility(
             g_terrain, position, sun, radius, sunRadius);
         // R=terrain visibility, G=analytic planet visibility,
@@ -198,7 +214,7 @@ SunAuditViewportIndicator::SunAuditViewportIndicator(
     diagnosticDesc.pixelShader = {
         .data = diagnosticPs.bytecode.data(),
         .size = diagnosticPs.bytecode.size()};
-    diagnosticDesc.pushConstantDwords = 24U;
+    diagnosticDesc.pushConstantDwords = 28U;
     diagnosticDesc.shaderResourceBuffers = 1U;
     diagnosticDesc.sampledTextures = 3U;
     diagnosticPipeline_ = device.CreateGraphicsPipeline(diagnosticDesc);
@@ -223,7 +239,7 @@ void SunAuditViewportIndicator::Draw(
         inputs.emissionMetadata != nullptr && inputs.depth != nullptr)
     {
         const auto& c = inputs.camera;
-        const std::array<u32, 24> diagnosticConstants{
+        const std::array<u32, 28> diagnosticConstants{
             bits(static_cast<f32>(c.localPositionMeters.x)),
             bits(static_cast<f32>(c.localPositionMeters.y)),
             bits(static_cast<f32>(c.localPositionMeters.z)),
@@ -237,7 +253,9 @@ void SunAuditViewportIndicator::Draw(
             bits(inputs.sunAngularRadiusRadians),
             bits(static_cast<f32>(width)), bits(static_cast<f32>(height)),
             bits(static_cast<f32>(method)), 1U,
-            bits(c.nearPlaneMeters), bits(c.farPlaneMeters), 0U, 0U
+            bits(c.nearPlaneMeters), bits(c.farPlaneMeters), 0U, 0U,
+            bits(inputs.bodyRadiiMeters.x), bits(inputs.bodyRadiiMeters.y),
+            bits(inputs.bodyRadiiMeters.z), 0U
         };
         commands.SetGraphicsPipeline(*diagnosticPipeline_);
         commands.SetGraphicsConstants(diagnosticConstants);

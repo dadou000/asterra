@@ -23,6 +23,7 @@ struct SunAuditViewportInputs
     render_view::CameraState camera{};
     math::Float3 sunDirection{};
     f32 planetRadiusMeters{0.0F};
+    math::Float3 bodyRadiiMeters{}; // Actual ellipsoid, not the max-radius bounding sphere.
     f32 sunAngularRadiusRadians{0.0F};
 };
 

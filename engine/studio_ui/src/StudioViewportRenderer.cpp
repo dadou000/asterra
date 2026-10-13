@@ -22,6 +22,26 @@ namespace
 constexpr f64 kNodeJitterMeters = 125.0;
 
 // ORBIT_REFRACT_SUN=1 turns on atmospheric refraction of the sun direction (applied where studioDirectLight is resolved). Read once.
+[[nodiscard]] math::Float3 SunAuditBodyRadii(const universe::BodyShape& shape)
+{
+    return std::visit([](const auto& body) -> math::Float3
+    {
+        if constexpr (std::is_same_v<
+            std::decay_t<decltype(body)>, universe::SphereShape>)
+        {
+            const f32 r = static_cast<f32>(body.radiusMeters);
+            return {r, r, r};
+        }
+        else
+        {
+            return {
+                static_cast<f32>(body.radiiMeters.x),
+                static_cast<f32>(body.radiiMeters.y),
+                static_cast<f32>(body.radiiMeters.z)};
+        }
+    }, shape);
+}
+
 [[nodiscard]] bool RefractSunEnabled()
 {
     static const bool enabled = [] {
@@ -4002,6 +4022,8 @@ StudioViewportRenderer::ComposeBase(
                      .planetRadiusMeters = shape.has_value()
                          ? static_cast<f32>(ReferenceRadiusForShape(*shape))
                          : 0.0F,
+                     .bodyRadiiMeters = shape.has_value()
+                         ? SunAuditBodyRadii(*shape) : math::Float3{},
                      .sunAngularRadiusRadians =
                          studioDirectLight.sunAngularRadiusRadians
                  },

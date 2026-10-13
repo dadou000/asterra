@@ -1974,7 +1974,10 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         info.layers.sunAuditDiscDebug) ||
         (info.layers.sunAuditMethod == 2U && info.layers.sunAuditReliefDebug) ||
         (info.layers.sunAuditMethod == 3U && info.layers.sunAuditSourcesDebug);
-    if (sunAuditDebug || info.layers.sunAuditMethod == 3U)
+    // Debug 3 observes the composed scene without altering its lighting.
+    // Mode 3 without debug continues to be the intentional GI isolation.
+    if ((sunAuditDebug && info.layers.sunAuditMethod != 3U) ||
+        (info.layers.sunAuditMethod == 3U && !sunAuditDebug))
         nearFieldIndirect = false;
 
     // The sky-only radiance cache fill is read by direct lighting, so
@@ -2095,7 +2098,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
          studioDirectLight,
          terrainSunShadow,
          sunAuditDebug,
-         auditMethod = info.layers.sunAuditMethod](
+         auditMethod = info.layers.sunAuditMethod,
+         auditInputsOnly = info.layers.sunAuditMethod == 3U && sunAuditDebug](
             rhi::CommandList& commands,
             const render_graph::Resources&
                 resources)
@@ -2153,7 +2157,7 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                         : 0.0F,
                     .stellarAngularRadiusRadians =
                         studioDirectLight.sunAngularRadiusRadians,
-                    .sunAuditMethod = auditMethod,
+                    .sunAuditMethod = auditInputsOnly ? 0U : auditMethod,
                     .sunAuditDebug = sunAuditDebug,
                     .sunAuditTerrain = terrainSunShadow.get()
                 });
@@ -3340,7 +3344,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
     // Method 3 is a genuine isolation: leave out atmosphere and clouds
     // as well as GI. Otherwise the late volumetric contributions hide what
     // removing the near-field lighting sources changed.
-    if (!sunAuditDebug && info.layers.sunAuditMethod != 3U)
+    if ((!sunAuditDebug && info.layers.sunAuditMethod != 3U) ||
+        (sunAuditDebug && info.layers.sunAuditMethod == 3U))
         ComposeAtmospherePasses(context);
 
     // Glass Primitives: sun caustics onto the receivers behind them, a copy of

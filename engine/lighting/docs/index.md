@@ -129,3 +129,23 @@ All views sample the existing scene, G-buffer, and depth, do not use exposure,
 bloom, color correction, or TAA histories, and preserve the red/green/blue
 method witness stripe. All debugging is opt-in. Compiled/runtime tests remain
 pending; the binding fix is source-proven by `VulkanPipeline.cpp`.
+
+### Ellipsoid diagnostic correction and unbiased composed-scene probe
+
+The initial debug assumed `ReferenceRadiusForShape` (largest body semi-axis) described
+the actual planet. On an ellipsoid it is a conservative *bounding sphere*;
+valid surface points at smaller radii are inside it and
+`SphereStellarVisibility` returns zero. The debug now intersects the actual
+body ellipsoid using scaled ray/position coordinates and evaluates geometric
+visibility in those coordinates. This corrects false *full occlusion* on an
+oblate body's terminator, though solar-disc penumbra scaling remains an
+approximation until sampled exact ellipsoid visibility is implemented.
+The terrain reference field remains spherical and coarse: lack of readiness
+is shown explicitly in blue before any metadata diagnostics.
+
+When source-mode 3's debug toggle is on, the scene is composed normally
+(including atmosphere, GI and clouds) before the last-display diagnostic.
+Previously the debug evaluated a scene its own mode had intentionally
+darkened, making cyan an uninformative measurement. Source-mode 3 without
+the debug checkbox remains the existing A/B isolation. Diagnostic
+`R` represents log scene HDR luminance, not a decomposition of its sources.
