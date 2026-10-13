@@ -2615,15 +2615,12 @@ int orbit::editor_app::StudioApplication::Run(
                     lastActivity = paceNow;
                 }
                 else if (
-                    (ecoMode.load(std::memory_order_relaxed)
-                        ? 1
-                        : idleFramesPerSecond) > 0 &&
+                    !ecoMode.load(std::memory_order_relaxed) &&
+                    idleFramesPerSecond > 0 &&
                     paceNow - lastActivity > kIdleAfter)
                 {
-                    const orbit::i32 targetFps =
-                        ecoMode.load(std::memory_order_relaxed)
-                            ? 1
-                            : idleFramesPerSecond;
+                    // Non-eco idle pacing remains independent of the Eco cap.
+                    const orbit::i32 targetFps = idleFramesPerSecond;
                     const auto target =
                         std::chrono::microseconds(
                             1'000'000 / targetFps);
@@ -2638,7 +2635,10 @@ int orbit::editor_app::StudioApplication::Run(
                     }
                 }
 
-                if (ecoMode.load(std::memory_order_relaxed) && busy &&
+                // Eco mode is a continuous 15 FPS application cap, not a
+                // mouse-activity detector. Leaving the viewport must never
+                // make the terrain, lighting and profiler fall to 1 FPS.
+                if (ecoMode.load(std::memory_order_relaxed) &&
                     !rpcActivity)
                 {
                     constexpr auto kEcoActiveFrame =
