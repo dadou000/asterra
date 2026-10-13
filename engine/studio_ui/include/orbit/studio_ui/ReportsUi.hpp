@@ -61,8 +61,8 @@ public:
     [[nodiscard]] std::filesystem::path ExportCapture(u64 id, bool endCondition);
     // Open the shared report capture directory in the native file browser.
     [[nodiscard]] std::filesystem::path OpenCaptureFolder();
-    // Restores the recorded starting condition, then captures after viewport
-    // convergence from Tick(). Returns false while queued or on failure.
+    // Restores the report condition and records a profiler trace after settling.
+    // Returns false while the nonblocking capture is queued.
     [[nodiscard]] bool CapturePerformanceIssue(u64 id);
     [[nodiscard]] bool PerformanceCapturePending() const noexcept
     {
@@ -143,6 +143,7 @@ private:
     {
         u64 reportId{0U};
         u32 settleFrames{8U};
+        u32 profileFrames{120U};
         bool waitingForPose{false};
     };
     std::optional<PendingPerformanceCapture> performanceCapture_;
