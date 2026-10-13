@@ -108,6 +108,30 @@ float4 main(VSOutput input) : SV_Target0
 }
 )";
 
+constexpr const char* kSurfacePixelShader = R"(
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float4 color : COLOR0;
+};
+struct SurfaceOutput
+{
+    float4 color : SV_Target0;
+    float4 baseRoughness : SV_Target1;
+    float4 normalMetallic : SV_Target2;
+    float4 emissionClass : SV_Target3;
+};
+SurfaceOutput main(VSOutput input)
+{
+    SurfaceOutput output;
+    output.color = float4(input.color.rgb, 1.0);
+    output.baseRoughness = float4(input.color.rgb, 0.86);
+    output.normalMetallic = float4(0.0, 1.0, 0.0, 0.0);
+    output.emissionClass = float4(0.0, 0.0, 0.0, 0.0);
+    return output;
+}
+)";
+
 [[nodiscard]] math::Float4 MeshColor() noexcept
 {
     return {
@@ -175,6 +199,14 @@ public:
         const shader::Binary pixel =
             compiler.Compile({
                 .source = kPixelShader,
+                .entryPoint = "main",
+                .stage = shader::Stage::Pixel,
+                .debug = false
+            });
+
+        const shader::Binary surfacePixel =
+            compiler.Compile({
+                .source = kSurfacePixelShader,
                 .entryPoint = "main",
                 .stage = shader::Stage::Pixel,
                 .debug = false
@@ -258,6 +290,29 @@ public:
             makePipeline(
                 rhi::PrimitiveTopology::
                     TriangleList);
+        surfacePipeline = device.CreateGraphicsPipeline({
+            .vertexShader = {.data = vertex.bytecode.data(),
+                             .size = vertex.bytecode.size()},
+            .pixelShader = {.data = surfacePixel.bytecode.data(),
+                            .size = surfacePixel.bytecode.size()},
+            .vertexAttributes = attributes,
+            .vertexStrideBytes = sizeof(RenderVertex),
+            .pushConstantDwords = 12,
+            .topology = rhi::PrimitiveTopology::TriangleList,
+            .fillMode = rhi::FillMode::Solid,
+            .cullMode = rhi::CullMode::None,
+            .blendMode = rhi::BlendMode::Opaque,
+            .depthCompare = rhi::DepthCompare::GreaterEqual,
+            .depthTest = true,
+            .depthWrite = true,
+            .colorAttachmentFormats = {
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float,
+                rhi::TextureFormat::RGBA16_Float
+            },
+            .colorAttachmentCount = 4U
+        });
         linePipeline =
             makePipeline(
                 rhi::PrimitiveTopology::
@@ -362,6 +417,8 @@ public:
     rhi::Device& device;
     std::unique_ptr<rhi::GraphicsPipeline>
         meshPipeline;
+    std::unique_ptr<rhi::GraphicsPipeline>
+        surfacePipeline;
     std::unique_ptr<rhi::GraphicsPipeline>
         linePipeline;
 
@@ -592,7 +649,14 @@ void PathPreviewRenderer::Draw(
             bits(0.0F)
         };
 
-    if (depth) commands.SetRenderTargets(target, *depth);
+    if (!surfaceAttachments.empty())
+    {
+        const std::array<rhi::Texture*, 4> attachments{
+            &target, surfaceAttachments[0], surfaceAttachments[1],
+            surfaceAttachments[2]};
+        commands.SetRenderTargets(attachments, depth);
+    }
+    else if (depth) commands.SetRenderTargets(target, *depth);
     else commands.SetRenderTarget(target);
     commands.SetViewport({
         .x = 0.0F,
@@ -635,7 +699,7 @@ void PathPreviewRenderer::Draw(
         impl_->meshIndexBuffer->Unmap();
 
         commands.SetGraphicsPipeline(
-            *impl_->meshPipeline);
+            surfaceAttachments.empty() ? *impl_->meshPipeline : *impl_->surfacePipeline);
         commands.SetGraphicsConstants(
             constants);
         commands.SetVertexBuffer(
