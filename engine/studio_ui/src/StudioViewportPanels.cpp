@@ -1702,6 +1702,12 @@ void ActivateWorkspace(
         OpenPanels(ui, {"Planning", "Properties"});
         break;
 
+    case WorkspaceMode::Debug:
+        CloseSpecialistPanels(ui);
+        ClosePanels(ui, {"Build", "Output"});
+        OpenPanels(ui, {"Viewport", "Debug", "Display Diagnostics"});
+        break;
+
     case WorkspaceMode::Plugins:
         CloseSpecialistPanels(ui);
         ClosePanels(ui, {"Viewport", "Build", "Output"});
@@ -1769,6 +1775,12 @@ void RegisterWorkspaceActions(editor_ui::EditorUi& ui)
         .menu = "Home",
         .label = "Workspace: Planning",
         .invoke = [&ui] { ActivateWorkspace(ui, WorkspaceMode::Planning); }
+    });
+
+    ui.RegisterMenuAction({
+        .menu = "Home",
+        .label = "Workspace: Debug",
+        .invoke = [&ui] { ActivateWorkspace(ui, WorkspaceMode::Debug); }
     });
 
     ui.RegisterMenuAction({
@@ -4185,14 +4197,15 @@ void StudioViewportPanels::DrawWorkspaceBand(
     }
 
     using editor_ui::NavigationIcon;
-    static constexpr std::array<editor_ui::NavigationTab, 7> kWorkspaceModes{{
+    static constexpr std::array<editor_ui::NavigationTab, 8> kWorkspaceModes{{
         {"Build", NavigationIcon::Build},
         {"Planet", NavigationIcon::Planet},
         {"Universe", NavigationIcon::Universe},
         {"Simulation", NavigationIcon::Simulation},
         {"Shading", NavigationIcon::Shading},
         {"Planning", NavigationIcon::Planning},
-        {"Plugins", NavigationIcon::Plugins}
+        {"Plugins", NavigationIcon::Plugins},
+        {"Debug", NavigationIcon::Simulation}
     }};
 
     i32 workspace = static_cast<i32>(g_workspaceMode);
@@ -4201,7 +4214,7 @@ void StudioViewportPanels::DrawWorkspaceBand(
             kWorkspaceModes,
             workspace))
     {
-        workspace = std::clamp(workspace, 0, 6);
+        workspace = std::clamp(workspace, 0, 7);
         ActivateWorkspace(
             *g_workspaceUi,
             static_cast<WorkspaceMode>(workspace));
@@ -4260,6 +4273,7 @@ i32 StudioViewportPanels::QuickCreateCommandPriority(
 
     case WorkspaceMode::Planning:
     case WorkspaceMode::Plugins:
+    case WorkspaceMode::Debug:
         return 0;
     }
 
