@@ -66,5 +66,25 @@ int main()
         (void)BuildCorridorMesh(stations,broken);
     } catch (const std::invalid_argument&) {badKey=true;}
     CHECK(badKey);
+    PathCenterline source{};
+    source.edge=orbit::scene::ObjectId::Random();
+    source.frame=orbit::frames::FrameId::Random();
+    source.sourceRevision=3;
+    source.samples={
+        {.position={0,0,0}, .up={0,1,0}},
+        {.position={20,0,0}, .up={0,1,0}}
+    };
+    orbit::paths::PathProfile profile{};
+    profile.widthMeters=6;
+    profile.lanes=2;
+    const auto basic=BuildPathDerived(source,profile);
+    CorridorSweep section{{{{{-3,0},{0,0.1},{3,0}}}}, {}};
+    const auto derived=BuildCorridorDerived(source,profile,section);
+    CHECK(derived.visualMesh.vertices.size()>basic.visualMesh.vertices.size());
+    CHECK(derived.collision.size()==derived.visualMesh.indices.size()/3);
+    CHECK(derived.buildSignature!=basic.buildSignature);
+    CHECK(derived==BuildCorridorDerived(source,profile,section));
+    section.bands[0].profile[1].elevationMeters=0.2;
+    CHECK(BuildCorridorDerived(source,profile,section).buildSignature!=derived.buildSignature);
     return 0;
 }
