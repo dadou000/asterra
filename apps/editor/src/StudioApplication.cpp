@@ -1124,7 +1124,7 @@ int orbit::editor_app::StudioApplication::Run(
 
         orbit::studio_ui::DebugViewUi
             debugViewUi(
-                studioViews);
+                studioViews, studioSession);
         debugViewUi.Register(ui);
 
         struct ViewportOnlyCapture
