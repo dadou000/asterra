@@ -31,6 +31,26 @@ bool CorridorConstructionRegistry::Publish(
     if (old != records_.end() && old->second.planet != planet.id)
         throw std::invalid_argument("Planet changed without clearing construction registry.");
 
+    // Fast path before any planetary projection. Editing unrelated scene
+    // objects must not walk every road's stations on every Studio tick.
+    if (old != records_.end() &&
+        old->second.level == physicalPageLevel &&
+        old->second.entries.size() == entries.size())
+    {
+        bool revisionsMatch = true;
+        for (const auto& entry : entries)
+        {
+            const auto previous = old->second.entries.find(entry.layer.edge);
+            if (previous == old->second.entries.end() ||
+                previous->second.revision != entry.revision)
+            {
+                revisionsMatch = false;
+                break;
+            }
+        }
+        if (revisionsMatch) return false;
+    }
+
     BodyState next{};
     next.planet = planet.id;
     next.level = physicalPageLevel;
