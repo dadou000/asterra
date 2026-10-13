@@ -330,6 +330,19 @@ int main()
             profileOverride ==
         edgeProfileId);
 
+    paths.SetInfrastructureIntent(bezier.id, "ballasted-rail", 1, "supported", 120.0, true);
+    ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->infrastructureCatalogId == "ballasted-rail");
+    ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->constructionMode == "supported");
+    ORBIT_TEST_CHECK(Near(paths.FindEdge(bezier.id)->designSpeedKmh, 120.0));
+    commands.Undo();
+    ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->infrastructureCatalogId.empty());
+    commands.Redo();
+    ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->infrastructureCatalogId == "ballasted-rail");
+    bool rejectedBadSpeed = false;
+    try { paths.SetInfrastructureIntent(bezier.id, "ballasted-rail", 1, "terrain", -2.0, true); }
+    catch (const std::invalid_argument&) { rejectedBadSpeed = true; }
+    ORBIT_TEST_CHECK(rejectedBadSpeed);
+
     // Entity/socket anchors are persistent semantic anchors rather than
     // resolved world positions. Runtime entity motion therefore does not
     // mutate the authored path node.
