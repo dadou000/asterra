@@ -2282,10 +2282,11 @@ InitialRevisions(
                     Revision(),
                 1U),
         .authoring =
-            std::max<u64>(
-                inputs.
-                    surfaceSourceRevision,
-                1U),
+            inputs.corridorOverlay
+                ? terrain::StableCombine64(
+                    std::max<u64>(inputs.surfaceSourceRevision, 1U),
+                    inputs.corridorOverlay->GenerationRevisions().authoring)
+                : std::max<u64>(inputs.surfaceSourceRevision, 1U),
         .biome =
             std::max<u64>(
                 inputs.biomes.
