@@ -23,7 +23,7 @@ public:
     };
 
 private:
-    void Draw(editor_ui::PanelContext& context);
+    void Draw(editor_ui::EditorUi& ui, editor_ui::PanelContext& context);
     void DrawViewportRow(
         editor_ui::PanelContext& context,
         const StudioRenderViewInfo& info);
