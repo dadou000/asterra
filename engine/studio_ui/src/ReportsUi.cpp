@@ -257,6 +257,54 @@ bool ReportsController::CaptureScreenshot(const u64 id, const bool endCondition)
     }
 }
 
+std::filesystem::path ReportsController::ExportCapture(
+    const u64 id, const bool endCondition)
+{
+    const auto& condition = RequireCondition(id, endCondition);
+    if (condition.screenshot.empty())
+        throw std::runtime_error("Capture this report condition before exporting it.");
+    const auto source = store_->AssetPath(condition.screenshot);
+    if (!std::filesystem::is_regular_file(source))
+        throw std::runtime_error("Report screenshot file is missing.");
+    if (store_->Path().empty())
+        throw std::runtime_error("Save the report store before exporting captures.");
+    const auto targetFolder = store_->Path().parent_path() / "Captures";
+    std::filesystem::create_directories(targetFolder);
+    const auto target = targetFolder /
+        (std::format("report-{}-{}.png", id, endCondition ? "end" : "start"));
+    if (std::filesystem::equivalent(source, target))
+        return target;
+    std::filesystem::copy_file(source, target,
+        std::filesystem::copy_options::overwrite_existing);
+    return target;
+}
+
+std::filesystem::path ReportsController::OpenCaptureFolder()
+{
+    if (store_->Path().empty())
+        throw std::runtime_error("Save the report store before opening captures.");
+    if (!openHook_)
+        throw std::runtime_error("Native file browser is unavailable.");
+    const auto folder = store_->Path().parent_path() / "Captures";
+    std::filesystem::create_directories(folder);
+    openHook_(folder);
+    return folder;
+}
+
+bool ReportsController::CapturePerformanceIssue(const u64 id)
+{
+    const auto* report = store_->Find(id);
+    if (!report)
+        throw std::out_of_range("Report not found.");
+    if ((report->scopes & studio_reports::ScopeBit(
+            studio_reports::ReportScope::Performance)) == 0U)
+        throw std::invalid_argument(
+            "Mark Performance issue on this report before capturing.");
+    // Preserve the report's original condition metadata. Attach a fresh
+    // viewport screenshot to its existing starting condition.
+    return CaptureScreenshot(id, false);
+}
+
 void ReportsController::SetOpenHook(OpenHook hook)
 {
     openHook_ = std::move(hook);
