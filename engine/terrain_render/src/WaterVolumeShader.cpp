@@ -303,7 +303,9 @@ std::string BuildClipmapBedPixelShader(const std::string_view baseShader)
 
     constexpr std::string_view kStart =
         "    // Depth gives a continuous shallow shoreline without a lifted overlay.";
-    constexpr std::string_view kEnd = "    SurfaceOutputs output;\n";
+    // Preserve the existing emissive shading diagnostic after the water
+    // branch. Replacing up to material output silently deleted it as well.
+    constexpr std::string_view kEnd = "    if (input.waterDepth > 4.0)\n";
     const auto start = Require(result, kStart, 0, "the standing-water block");
     const auto end = Require(result, kEnd, start, "the end of the standing-water block");
     result.replace(start, end - start, kBedWaterReplacement);
