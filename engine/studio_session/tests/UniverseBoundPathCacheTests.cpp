@@ -119,6 +119,33 @@ int main()
         Check(!cache.IsDirty(edge));
         Check(!cache.StoreCorridorIfChanged(102U, centerline, roadProfile, roadSection));
 
+        cache.MarkDirty(edge);
+        Check(cache.DirtyCount() == 1U);
+        const auto built = cache.RebuildDirty([&](const orbit::scene::ObjectId id)
+            -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+            if (id != edge) return std::nullopt;
+            orbit::studio_session::UniverseBoundPathCache::RebuildRequest req{};
+            req.authoredSignature = 103U;
+            req.centerline = centerline;
+            req.profile = roadProfile;
+            req.corridor = roadSection;
+            return req;
+        }, 1U);
+        Check(built == 1U);
+        Check(cache.DirtyCount() == 0U);
+        cache.MarkDirty(edge);
+        Check(cache.RebuildDirty([](const orbit::scene::ObjectId)
+            -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+            return std::nullopt;
+        }, 1U) == 1U);
+        Check(!cache.RebuildError(edge).empty());
+        Check(cache.RebuildDirty([](const orbit::scene::ObjectId)
+            -> std::optional<orbit::studio_session::UniverseBoundPathCache::RebuildRequest> {
+            return std::nullopt;
+        }, 1U) == 0U);
+        cache.MarkDirty(edge);
+        Check(cache.RebuildError(edge).empty());
+
         bool foreignFrameRejected = false;
         try
         {
