@@ -96,7 +96,8 @@ struct Invalidation
         result.density = true;
         result.sunlight = true;
         result.receiverShadows = true;
-        result.temporalHistory = true;
+        // Ordinary weather advection is continuous: reproject history using
+        // motion vectors. A discontinuous storm/time jump sets discontinuity.
     }
     if (previous->terrainRevision != next.terrainRevision)
     {
@@ -109,7 +110,8 @@ struct Invalidation
         result.sunlight = true;
         result.aerialPerspective = true;
         result.receiverShadows = true;
-        result.temporalHistory = true;
+        // The Sun moves continuously; invalidating history here every frame
+        // would disable temporal reconstruction in normal gameplay.
     }
     if (previous->atmosphereRevision != next.atmosphereRevision)
     {
