@@ -28,5 +28,19 @@ int main()
     try { CorridorSweep bad{{{{{1,0},{0,0}}}}, {}}; (void)BuildCorridorMesh(stations,bad); }
     catch(const std::invalid_argument&) { rejected=true; }
     CHECK(rejected);
+    // Curvature, length and cant generate extra stations only where needed.
+    auto refined = RefineCorridor(stations, rails,
+        {.maximumChordErrorMeters=0.01, .maximumBankStepRadians=0.015,
+         .maximumSegmentLengthMeters=4.0, .maximumSubdivisions=10});
+    CHECK(refined.stations.size()>stations.size());
+    CHECK(refined.stations.front().position==stations.front().position);
+    CHECK(refined.stations.back().position==stations.back().position);
+    CHECK(refined.corridor.bankRadians.size()==refined.stations.size());
+    CHECK(BuildCorridorMesh(refined.stations,refined.corridor).vertices.size() >
+          railMesh.vertices.size());
+    auto again=RefineCorridor(stations,rails,
+        {.maximumChordErrorMeters=0.01, .maximumBankStepRadians=0.015,
+         .maximumSegmentLengthMeters=4.0, .maximumSubdivisions=10});
+    CHECK(refined.stations==again.stations);
     return 0;
 }
