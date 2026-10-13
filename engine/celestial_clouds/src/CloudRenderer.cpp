@@ -1422,7 +1422,21 @@ float ThinLayerStepCap(float3 position, float radius, float3 direction, float st
 }
 )";
 
-constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
+constexpr const char* kMarchMain = R"(
+float PlanetDiscVisibility(float3 position, float3 sun, float planetRadius)
+{
+    const float r = length(position);
+    if (r <= planetRadius || planetRadius <= 0.0) return 0.0;
+    // The horizon of a sphere from this atmospheric position. Unlike a
+    // simple dot(normal, sun) test, distant clouds can see past the local
+    // ground horizon. Only the narrow stellar-disc edge is softened.
+    const float ratio = clamp(planetRadius / r, 0.0, 1.0);
+    const float horizonMu = -sqrt(max(1.0 - ratio * ratio, 0.0));
+    const float sunMu = dot(position / r, sun);
+    return smoothstep(horizonMu - 0.00465, horizonMu + 0.00465, sunMu);
+}
+
+float4 CloudMarch(VSOutput input)
 {
     // Output: premultiplied in-scattered radiance (rgb) and transmittance (a),
     // at reduced resolution; the composite pass applies it over the scene.
@@ -1704,7 +1718,8 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
         const float baseDark = lerp(1.0, 0.3, (1.0 - smoothstep(0.0, 0.2, h)) * saturate(0.5 + column.w));
         const float shading = (0.62 + 0.38 * thickness01) * baseDark;
         float3 source =
-            irradiance * sampleAlbedo * atmosphereSun * limited * 4.6 * shading * relief;
+            irradiance * sampleAlbedo * atmosphereSun * limited * 4.6 * shading * relief *
+            PlanetDiscVisibility(position, sun, g.shell.x);
 #if ORBIT_CLOUD_POINT_LIGHTS
         source += PointLightSource(position, origin, direction, sigma, sampleAlbedo, shading * relief);
 #endif
@@ -1769,7 +1784,8 @@ constexpr const char* kMarchMain = R"(float4 CloudMarch(VSOutput input)
             const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
             const float3 multi = g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
             const float3 source = irradiance *
-                (sunT * (rayleigh * rayleighPhase + mie * miePhase) +
+                (sunT * PlanetDiscVisibility(ap, sun, g.shell.x) *
+                    (rayleigh * rayleighPhase + mie * miePhase) +
                  multi * (rayleigh + mie) / (4.0 * kPi));
             const float3 stepT = exp(-extinction * aerialStep);
             inscatter += aerial * source * (1.0 - stepT) / max(extinction, 1.0e-12);
