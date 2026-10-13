@@ -225,44 +225,18 @@ BuildPhysicalRenderPages(
         return result;
     }
 
-    std::array<
-        terrain::PhysicalTerrainPageAddress,
-        5U>
-        addresses{};
-
-    addresses[0] =
-        runtime.observerPhysicalPage;
-
-    constexpr std::array<
-        world::TileEdge,
-        4U>
-        edges{
-            world::TileEdge::North,
-            world::TileEdge::East,
-            world::TileEdge::South,
-            world::TileEdge::West
-        };
-
-    for (u32 index = 0U;
-         index < edges.size();
-         ++index)
-    {
-        const auto neighbor =
-            world::NeighborAcrossTileEdge(
-                runtime.
-                    observerPhysicalPage.
-                    tile,
-                edges[index]);
-
-        addresses[index + 1U] = {
-            .planet =
-                runtime.
-                    observerPhysicalPage.
-                    planet,
-            .tile =
-                neighbor.tile
-        };
-    }
+    // Keep all adjacent physical pages available to the clipmap compositor.
+    // Edge-only coverage leaves gaps when an observer or road crosses a page
+    // corner; TileNeighborhood handles cube-face orientation at those seams.
+    const auto neighboringTiles = world::TileNeighborhood(
+        runtime.observerPhysicalPage.tile, 1U);
+    std::vector<terrain::PhysicalTerrainPageAddress> addresses;
+    addresses.reserve(neighboringTiles.size());
+    for (const auto& tile : neighboringTiles)
+        addresses.push_back({
+            .planet = runtime.observerPhysicalPage.planet,
+            .tile = tile
+        });
 
     auto& cache =
         services->Cache();
