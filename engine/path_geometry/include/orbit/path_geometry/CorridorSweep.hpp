@@ -2,6 +2,8 @@
 #include <orbit/path_geometry/PathDerived.hpp>
 #include <vector>
 #include <optional>
+#include <orbit/world/Planet.hpp>
+#include <orbit/terrain/TerrainContracts.hpp>
 
 namespace orbit::path_geometry
 {
@@ -87,6 +89,15 @@ struct CorridorTerrainEnvelope
     const std::vector<PathStation>& stations,
     const CorridorTerrainFootprint& footprint);
 
+// Maps an explicitly body-centred planetary polyline to bounded physical
+// pages. No arbitrary editor-frame coordinates may be passed as body space.
+[[nodiscard]] std::optional<std::vector<terrain::PhysicalTerrainPageAddress>>
+ProjectCorridorToTerrainPages(
+    const world::PlanetDefinition& planet,
+    const std::vector<math::Double3>& bodyCentredPositions,
+    f64 influenceRadiusMeters,
+    u8 pageLevel,
+    std::size_t maximumPages = 4096);
 struct RefinedCorridor
 {
     std::vector<PathStation> stations;
