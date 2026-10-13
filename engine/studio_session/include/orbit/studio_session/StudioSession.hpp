@@ -6,6 +6,7 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/editor_session/WorldDocumentsModel.hpp>
 #include <orbit/studio_session/SimulationClock.hpp>
+#include <orbit/studio_session/CorridorConstructionRegistry.hpp>
 #include <orbit/studio_session/StudioTerrainPerformanceDiagnostics.hpp>
 #include <orbit/studio_session/StudioTerrainBakeController.hpp>
 #include <orbit/studio_session/StudioTerrainPhysicalPageService.hpp>
@@ -184,6 +185,7 @@ private:
     WorldBoundPathNetwork pathNetwork_;
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
+    CorridorConstructionRegistry corridorConstruction_;
     terrain_debug::TerrainDebugLivePages terrainDebugPages_;
     StudioTerrainBakeController terrainBake_;
     StudioTerrainPhysicalPageService terrainPhysicalPages_;
