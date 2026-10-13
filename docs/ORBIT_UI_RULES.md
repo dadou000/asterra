@@ -380,6 +380,12 @@ The root executable is a developer convenience contract and does not change the 
 
 ---
 
+## Canonical debugging location
+
+Orbit Studio's **Debug** workspace is the default user-facing entry point for tests, diagnostics, reproducible experiments, and validation results. Specialized panels (Terrain, Shading, Display Diagnostics, Profiler, Body Map, reports) remain the implementation owners and may still expose contextual controls, but user documentation and new test entry points should lead through the Debug center. Do not duplicate the underlying validators, capture pipeline, or test registries; expose the same operations through RPC/MCP where supported.
+
+The current construction-terrain check validates page readiness, revision identity and a finite sampled height only; it is **not** a complete road/rail GPU or collision test. The contract and verification steps live in `engine/studio_ui/docs/debug-center.md`.
+
 # UI review checklist
 
 A new or changed editor surface should be reviewed against these questions:
