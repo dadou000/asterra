@@ -549,7 +549,7 @@ public:
     [[nodiscard]] bool QueueGitHubUpdate()
     {
         std::scoped_lock lock(updateMutex_);
-        if (!running_.load() || updateState_.busy || relaunchScheduled_)
+        if (!running_.load() || updateState_.busy)
             return false;
         updateState_ = {
             .available = true,
@@ -719,7 +719,7 @@ private:
             return false;
         }
         relaunchScheduled_ = true;
-        SetUpdateState("Restarting", "New Studio launched.", false);
+        SetUpdateState("Restarting", "New Studio launched.", true);
         return true;
     }
 
