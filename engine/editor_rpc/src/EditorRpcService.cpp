@@ -1084,9 +1084,13 @@ PathEdgeToRpc(
                 }
             },
             {
-                "profile_override",
-                edge.profileOverride
-            }
+                "profile_override", edge.profileOverride
+            },
+            {"infrastructure_catalog", edge.infrastructureCatalogId},
+            {"infrastructure_version", edge.infrastructureCatalogVersion},
+            {"construction_mode", edge.constructionMode},
+            {"design_speed_kmh", edge.designSpeedKmh},
+            {"ease_turns", edge.easeTurns}
         });
 }
 
@@ -2600,6 +2604,30 @@ EditorRpcService::EditorRpcService(
                         profile
                     }
                 });
+        });
+
+    Register(
+        {
+            .name = "infrastructure.set_intent",
+            .description = "Set road/rail catalog and construction intent on a path edge in one undoable transaction.",
+            .mutating = true
+        },
+        [&objects, &commandService](const rpc::Value& params)
+        {
+            const auto& values = RequireObject(params);
+            const auto edge = RequireObjectId(values, "edge");
+            const auto& cat = Require(values, "catalog_id");
+            const auto& ver = Require(values, "catalog_version");
+            const auto& mode = Require(values, "construction_mode");
+            const auto& speed = Require(values, "design_speed_kmh");
+            const auto& ease = Require(values, "ease_turns");
+            if (!cat.IsString() || !ver.IsInteger() || !mode.IsString() ||
+                !speed.IsNumber() || !ease.IsBool())
+                throw rpc::Error(-32602, "Invalid infrastructure intent parameter types.");
+            paths::PathNetworkService service(objects, commandService);
+            service.SetInfrastructureIntent(edge, cat.AsString(), ver.AsInteger(),
+                mode.AsString(), speed.AsDouble(), ease.AsBool());
+            return PathEdgeToRpc(*service.FindEdge(edge));
         });
 
     Register(
