@@ -127,5 +127,21 @@ int main()
     CorridorSweep twoBands{{{{{-2,0},{-1,0}}},{{{1,0},{2,0}}}}, {}};
     CHECK(BuildCorridorDerived(source, profile, oneBand).buildSignature !=
           BuildCorridorDerived(source, profile, twoBands).buildSignature);
+    // A body-centred corridor maps to stable planetary physical page IDs.
+    orbit::world::PlanetDefinition planet{};
+    planet.id = orbit::world::PlanetId::Random();
+    planet.radiusMeters = 6000000.0;
+    const std::vector<orbit::math::Double3> bodyPath{
+        {6000000, 0, 0}, {6000000, 0, 500}
+    };
+    const auto pages = ProjectCorridorToTerrainPages(
+        planet, bodyPath, 5.0, 10, 4096);
+    CHECK(pages.has_value() && !pages->empty());
+    CHECK(pages == ProjectCorridorToTerrainPages(
+        planet, bodyPath, 5.0, 10, 4096));
+    CHECK(!ProjectCorridorToTerrainPages(
+        planet, bodyPath, 5.0, 10, 1).has_value());
+    CHECK(!ProjectCorridorToTerrainPages(
+        planet, bodyPath, -1.0, 10).has_value());
     return 0;
 }
