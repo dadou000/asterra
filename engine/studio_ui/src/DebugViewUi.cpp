@@ -81,7 +81,7 @@ void DebugViewUi::Draw(
     open("Surface Authoring", "Terrain authoring##dbg-terrain");
     context.SameLine();
     open("Body Map / Debug View", "Terrain map##dbg-map");
-    context.MutedText("Road cut, railway grading, physical-page residency and displacement tests use the existing terrain tools. An automated validation experiment is not registered yet.");
+    context.MutedText("Registered terrain tests appear below. Road grading, rendered displacement and collision end-to-end tests are not yet available.");
 
     context.Heading("Registered experiments");
     for (const auto& test : tests_.Catalog())
@@ -100,6 +100,16 @@ void DebugViewUi::Draw(
         case DebugTestOutcome::NotReady: state = "NOT READY"; break;
         }
         context.KeyValue(state, result.detail);
+        const auto history = tests_.History(test.id);
+        if (!history.empty())
+        {
+            const auto& latest = history.back();
+            context.KeyValue("Last run",
+                std::to_string(latest.sequence) + " / " +
+                std::to_string(latest.elapsedMilliseconds) +
+                " ms / world " + std::to_string(latest.worldGeneration));
+            context.KeyValue("Recorded runs", std::to_string(history.size()));
+        }
     }
 
     context.Separator();
