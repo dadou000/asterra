@@ -519,6 +519,10 @@ public:
             this->layoutPath.string();
         io.IniFilename =
             layoutPathUtf8.c_str();
+        // Save the current dock arrangement after the user stops dragging.
+        // ImGui tracks dirty dock/window settings and persists them on its
+        // built-in timer; shutdown save remains as a final fallback.
+        io.IniSavingRate = 2.0F;
 
         // ImGui loads this file on the first frame. If it does not dock
         // anything (missing, or every panel floating) the default arrangement
