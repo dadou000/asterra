@@ -9,6 +9,22 @@
 
 namespace orbit::celestial_lighting
 {
+f64 DiscHorizonVisibleFraction(
+    const f64 centerElevationRadians,
+    const f64 stellarAngularRadiusRadians) noexcept
+{
+    if (!std::isfinite(centerElevationRadians) ||
+        !std::isfinite(stellarAngularRadiusRadians) ||
+        stellarAngularRadiusRadians <= 0.0)
+        return centerElevationRadians >= 0.0 ? 1.0 : 0.0;
+    if (centerElevationRadians <= -stellarAngularRadiusRadians) return 0.0;
+    if (centerElevationRadians >= stellarAngularRadiusRadians) return 1.0;
+    const f64 x = std::clamp(
+        centerElevationRadians / stellarAngularRadiusRadians, -1.0, 1.0);
+    return (std::acos(-x) + x * std::sqrt(std::max(0.0, 1.0 - x * x))) /
+        std::numbers::pi_v<f64>;
+}
+
 namespace
 {
 void RequireFinitePositive(
