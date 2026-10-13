@@ -3182,17 +3182,17 @@ StudioTerrainPhysicalPageService::HeightPageBatch::Sample(
         math::LengthSquared(direction) < 0.5)
         return std::nullopt;
     const auto tile = world::TileForDirection(direction, level);
-    for (const auto& page : pages)
+    const auto found = pages.find(tile);
+    if (found != pages.end() && found->second &&
+        found->second->address.planet == planet)
     {
-        if (!page || page->address.tile != tile ||
-            page->address.planet != planet) continue;
         const auto coordinate = world::UnitDirectionToCube(
             math::Normalize(direction));
         const auto bounds = world::TileBounds(tile);
         const f64 du = bounds.maximumUv.x - bounds.minimumUv.x;
         const f64 dv = bounds.maximumUv.y - bounds.minimumUv.y;
         if (du <= 0 || dv <= 0) return std::nullopt;
-        return page->SampleSurfaceHeight(
+        return found->second->SampleSurfaceHeight(
             std::clamp((coordinate.uv.x - bounds.minimumUv.x)/du,0.0,1.0),
             std::clamp((coordinate.uv.y - bounds.minimumUv.y)/dv,0.0,1.0));
     }
@@ -3231,7 +3231,7 @@ StudioTerrainPhysicalPageService::CaptureHeightPages(
         result.revisionFingerprint = terrain::StableCombine64(
             result.revisionFingerprint,
             snapshot ? snapshot->revisionFingerprint : 0U);
-        if (snapshot) result.pages.push_back(snapshot);
+        if (snapshot) result.pages.emplace(tile, snapshot);
     }
     return result;
 }
