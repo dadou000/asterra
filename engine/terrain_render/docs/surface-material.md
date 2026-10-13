@@ -32,7 +32,8 @@ symbols = [
 invariants = [
   "PhysicalSurfaceRenderInput is built only from the canonical ExposedSurfaceState (MakePhysicalSurfaceRenderInput) so rendering never picks rock identity from biome weights; BedrockExposed() is simply material == Bedrock.",
   "PhysicalSurfaceRenderInput is not consumed by a shader or by TerrainPreviewRenderer at this revision (only tests include it). The visible terrain colour comes from biome0/biome1 and drySurface in TerrainSurfaceShader.hpp; changing a material/physical-surface value cannot change pixels until a binding is written.",
-  "SurfaceEffectGpuStamp is 32 bytes (static_assert) and matches the HLSL SurfaceEffectStamp field for field: float3 body-fixed direction, angular radius (rad), amount, effect id, two reserved floats. Stamps store a unit body-fixed direction, not a metre position, so footprints stay sub-metre at planet scale and survive floating-origin shifts.",
+  "SurfaceEffectGpuStamp is 32 bytes (static_assert) and matches the HLSL SurfaceEffectStamp field for field: float3 body-fixed direction, angular radius (rad), amount, effect id, two reserved floats. Body-fixed directions survive floating-origin shifts, but float3 quantization still limits tiny footprints at arbitrary planet directions.",
+  "CPU and GPU use angle = 2 * asin(clamp(length(normalize(a) - normalize(b)) / 2, 0, 1)). Never use acos(dot) for small planetary stamps: the dot rounds to 1 while direction differences remain nonzero, over-expanding the deposit.",
   "SurfaceEffectKind values are the shader's integer ids: Wetness 0, Soot 1, Ash 2, Sediment 3, Heat 4. Adding a kind changes the enum, SurfaceEffectInfluence, EvaluateSurfaceEffects, ApplySurfaceEffects and the HLSL if/else chain together.",
   "Capacity is SurfaceEffectGpuBinding::MaximumStampCount = 512, equal to the shader's loop bound; Set copies at most 512 stamps and zero-fills the rest. angularRadiusRadians <= 0 is the end sentinel: the shader breaks at the first such entry, so valid stamps must be packed first with a positive radius.",
   "Influence of one stamp is amount * (1 - angle/radius)^2 inside the radius and 0 outside; wetness/soot/ash/sediment sum then saturate to [0,1], heat sums and is only floored at 0. The CPU functions and the HLSL implement the same formula and the same coating constants; edit both and Orbit.TerrainSurfaceEffects together.",
@@ -48,15 +49,16 @@ related = [
   "/legacy/v0-0-7-spec/m38-particle-surface-output-coupling"]
 depends_on = ["/rendering/terrain/clipmaps", "/rendering/terrain/material-column", "/rendering/rhi"]
 verify = [
-  "ctest -R Orbit.TerrainSurfaceEffects (CPU falloff, saturation and coating results).",
+  "ctest -R Orbit.TerrainSurfaceEffects (CPU falloff, saturation, coating and planetary 0.25/2/16 metre footprints, including samples outside support).",
   "ctest -R Orbit.TerrainSurfaceShader (the effect variant compiles with DXC).",
   "In Studio, toggle surface_effects (orbit_view_terrain_layers_set) with stamps present: the coating must appear and vanish with it."]
-verified = "db348ce94035630577b705cffe0c69c6f8a6061f"
+verified = "8dc17324af29e897a3eb204ad9d93e3319b832c4"
 
 [routes]
 "terrain has the wrong base colour or biome palette" = "/rendering/terrain/clipmaps/shaders"
 "standing water colour, shoreline or silt under water" = "/rendering/terrain/water-volume-shader"
 "where the stamps come from (particles, volume solver)" = "/rendering/volumes/render"
+"close-up wetness, lighting artifacts or vector terrain detail" = "/rendering/terrain/clipmaps/close-range-review"
 
 [[diagnose]]
 symptom = "a surface effect (soot, ash, wetness, sediment, heat) does not show on the terrain"

@@ -27,7 +27,7 @@ symbols = [
   "CreateWaterPipeline",
 ]
 invariants = [
-  "The clipmap terrain pass draws the true bed and never water; standing water is the separate NearFieldWater pass. Its page water-depth sample may contain sea, lake or river depth; the bed variant replaces the standing-water block with waterCoverage = 0 and swaps the ocean biome colour for silt (0.30, 0.27, 0.20), because that is what shows through the water.",
+  "The clipmap terrain pass draws the true bed and never water; standing water is the separate NearFieldWater pass. Its page water-depth sample may contain sea, lake or river depth; the bed variant replaces only the standing-water block with waterCoverage = 0, preserves the following emissive shading diagnostic, and swaps the ocean biome colour for silt (0.30, 0.27, 0.20).",
   "The water vertex shader is the terrain vertex shader with one block replaced, so morph, toroidal residency and the finer-level hole are identical. Do not fork it: edit ClipmapVertexShader.hpp and keep the markers (the vertex elevation block, `output.waterDepth = 0.0;`, the VSOutput closing brace, the final `return output;`) intact, or construction throws 'Orbit water pass could not locate ...'.",
   "Water vertices sit at sea level (push-constant dword 43, g_centerOffsetMeters.w) or at bed + depth where the sample has standing water. A triangle is drawn only if at least one of its three corners has water depth > 0; the corner sample coordinates in kWaterVertexElevation must match the vertex shader's corner order.",
   "The shoreline is not geometry: the plane over dry corners lies under the terrain and the pixel stage discards fragments whose terrain view depth is not farther than the water's (behind <= 0). The pass therefore needs the terrain depth texture at graphics texture slot 0 (shader binding 2) from the same frame.",
@@ -48,7 +48,7 @@ verify = [
   "ctest -R Orbit.TerrainSurfaceShader (all four clipmap variants compile; the bed variant no longer contains the depth-based water coverage and the water pixel shader reads g_terrainDepth).",
   "Toggle bypass_near_field_water (orbit_view_terrain_layers_set): the water plane disappears and the bed shows silt-coloured ground under the sea, with no other pass changing.",
 ]
-verified = "55d48117"
+verified = "8dc17324af29e897a3eb204ad9d93e3319b832c4"
 
 [routes]
 "what the standing-water pass looked like when it was introduced" = "/legacy/standing-water-rendering"
@@ -80,7 +80,7 @@ marker is missing, so a refactor of the base shader fails at renderer constructi
 
 | Builder | Input | What it changes |
 | --- | --- | --- |
-| `BuildClipmapBedPixelShader` | `kTerrainSurfacePixelShader` | injects `lodFade` (TEXCOORD13) into the pixel input and the dither discard (`ditherNoise >= lodFade.x \|\| ditherNoise < lodFade.y`); silt instead of ocean colour; cuts out the standing-water block between the "Depth gives a continuous shallow shoreline" comment and `SurfaceOutputs output;` and substitutes `waterCoverage = 0` |
+| `BuildClipmapBedPixelShader` | `kTerrainSurfacePixelShader` | injects `lodFade` (TEXCOORD13) and the dither discard; silt instead of ocean colour; replaces standing-water shading up to `if (input.waterDepth > 4.0)` with `waterCoverage = 0`, preserving the emissive diagnostic |
 | `BuildClipmapWaterVertexShader` | `kClipmapVertexShader` | elevation = water surface; evaluates the three corners of the current triangle for water depth; adds `waterDepth` and `bodyFixedRay` (TEXCOORD12) outputs; sets `horizonClip = -1` when no corner is wet |
 | `BuildClipmapWaterPixelShader` | the water vertex shader | takes its `VSOutput` struct text and appends `kWaterPixelBody` |
 
