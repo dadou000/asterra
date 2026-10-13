@@ -314,7 +314,6 @@ bool ReportsController::CapturePerformanceIssue(const u64 id)
     performanceCapture_ = PendingPerformanceCapture{
         .reportId = id,
         .settleFrames = 8U,
-        .profileFrames = 120U,
         .waitingForPose = restored.pose == "pending"
     };
     screenshotError_.clear();
@@ -528,14 +527,18 @@ void ReportsController::Tick()
             --performanceCapture_->settleFrames;
             return;
         }
-        // Collect frames AFTER the saved condition and viewport have settled.
+        // Collect a time-bounded trace AFTER the saved condition and viewport have settled.
         // profiler::Capture serializes the recent circular trace window; it
         // must not be invoked on the first restored frame.
-        if (performanceCapture_->profileFrames > 0U)
+        const auto now = std::chrono::steady_clock::now();
+        if (!performanceCapture_->profileStarted)
         {
-            --performanceCapture_->profileFrames;
+            performanceCapture_->profileStarted = now;
             return;
         }
+        if (now - *performanceCapture_->profileStarted <
+            std::chrono::seconds(2))
+            return;
         const u64 id = performanceCapture_->reportId;
         performanceCapture_.reset();
         const auto* report = store_->Find(id);
