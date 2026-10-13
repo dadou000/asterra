@@ -309,7 +309,7 @@ void StudioPropertiesPanel::Register()
                         auditSwitch("3. Separate direct vs sky/GI sources##sun-audit-sources", 3U);
                         changed |= context.Checkbox("Debug 3: full scene R=luminance G=metadata B=depth##sun-audit-d3",
                             layers.sunAuditSourcesDebug);
-                        context.MutedText("Debug bypasses later atmosphere/GI so colors remain legible.");
+                        context.MutedText("Debug 1/2 isolate shadow geometry; Debug 3 inspects full scene inputs.");
                         context.Separator();
                         f64 softness = layers.meshShadowSoftness;
                         changed |= context.InputDouble("Sun Shadow Softness", softness);
