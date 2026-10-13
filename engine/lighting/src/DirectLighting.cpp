@@ -93,49 +93,49 @@ StructuredBuffer<GpuRadianceCell> g_radianceCells;
 [[vk::binding(5, 0)]]
 StructuredBuffer<GpuRadianceLevelInfo> g_radianceLevels;
 
-[[vk::binding(6, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_baseRoughness;
-[[vk::binding(6, 0)]]
+[[vk::binding(7, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_baseSampler;
 
-[[vk::binding(7, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_normalMetallic;
-[[vk::binding(7, 0)]]
+[[vk::binding(8, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_normalSampler;
 
-[[vk::binding(8, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_emissionClass;
-[[vk::binding(8, 0)]]
+[[vk::binding(9, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_emissionSampler;
 
-[[vk::binding(9, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_depth;
-[[vk::binding(9, 0)]]
+[[vk::binding(10, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_depthSampler;
 
 // Sun transmittance through the cloud layer (red), reduced resolution.
-[[vk::binding(10, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_cloudShadow;
-[[vk::binding(10, 0)]]
+[[vk::binding(11, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_cloudShadowSampler;
 
 // Lighting from authored Visibility Proxies at full resolution (red = sun
 // visibility, 1 = lit; gba = sky irradiance x open hemisphere); written by
 // ProxySunShadowRenderer.
-[[vk::binding(11, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 Texture2D g_proxySunShadow;
-[[vk::binding(11, 0)]]
+[[vk::binding(12, 0)]]
 [[vk::combinedImageSampler]]
 SamplerState g_proxySunShadowSampler;
 
