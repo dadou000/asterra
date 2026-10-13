@@ -1719,7 +1719,7 @@ float4 CloudMarch(VSOutput input)
         const float shading = (0.62 + 0.38 * thickness01) * baseDark;
         float3 source =
             irradiance * sampleAlbedo * atmosphereSun * limited * 4.6 * shading * relief *
-            PlanetDiscVisibility(position, sun, g.shell.x);
+            PlanetDiscVisibility(position, sun, g.atmosphere.x);
 #if ORBIT_CLOUD_POINT_LIGHTS
         source += PointLightSource(position, origin, direction, sigma, sampleAlbedo, shading * relief);
 #endif
@@ -1784,7 +1784,7 @@ float4 CloudMarch(VSOutput input)
             const float3 sunT = g_transmittance.SampleLevel(g_transmittanceSampler, lut, 0).rgb;
             const float3 multi = g_multi.SampleLevel(g_multiSampler, lut, 0).rgb;
             const float3 source = irradiance *
-                (sunT * PlanetDiscVisibility(ap, sun, g.shell.x) *
+                (sunT * PlanetDiscVisibility(ap, sun, g.atmosphere.x) *
                     (rayleigh * rayleighPhase + mie * miePhase) +
                  multi * (rayleigh + mie) / (4.0 * kPi));
             const float3 stepT = exp(-extinction * aerialStep);
