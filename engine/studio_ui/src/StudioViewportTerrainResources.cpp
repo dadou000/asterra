@@ -361,6 +361,15 @@ BuildPhysicalRenderPages(
                 ? localUploads >= kLocalUploadBudget
                 : constructionUploads >= kConstructionUploadBudget)
                 continue;
+            const u64 resolutionForBudget = snapshot->material->Resolution();
+            if (resolutionForBudget == 0U ||
+                resolutionForBudget > 4096U)
+                continue;
+            const u64 bytesForBudget = resolutionForBudget *
+                resolutionForBudget *
+                sizeof(terrain_gpu::GpuPhysicalSurfaceTexel);
+            if (bytesForBudget > kUploadByteBudget - attemptedUploadBytes)
+                continue;
             const auto uploadRevision =
                 session.
                     TerrainPhysicalPages().
