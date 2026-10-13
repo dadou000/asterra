@@ -1,6 +1,7 @@
 #include <orbit/studio_session/CorridorConstructionRegistry.hpp>
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <tuple>
 #include <utility>
@@ -29,23 +30,13 @@ CorridorConstructionRegistry::PagesForBody(
             static_cast<u8>(b.tile.face), b.tile.level, b.tile.x, b.tile.y};
     });
     pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
-    if (observerDirection && math::LengthSquared(*observerDirection) > 0.5)
-    {
-        const auto direction = math::Normalize(*observerDirection);
-        std::stable_sort(pages.begin(), pages.end(),
-            [&](const auto& a, const auto& b) {
-                const f64 da = math::Dot(direction,
-                    world::CubeToUnitDirection(world::TileCenter(a.tile)));
-                const f64 db = math::Dot(direction,
-                    world::CubeToUnitDirection(world::TileCenter(b.tile)));
-                return da > db;
-            });
-    }
-    // Existing resident pages retain a small angular preference, so tiny
-    // observer motion does not continuously replace the final budget slot.
-    // The bias is bounded: a substantially closer page still takes priority.
-    if (observerDirection && math::LengthSquared(*observerDirection) > 0.5 &&
-        !previous.empty())
+    // M2.48: Apply distance and sticky-residency weighting in one sort.
+    // Ignore invalid directions rather than making an unstable ordering.
+    if (observerDirection &&
+        std::isfinite(observerDirection->x) &&
+        std::isfinite(observerDirection->y) &&
+        std::isfinite(observerDirection->z) &&
+        math::LengthSquared(*observerDirection) > 0.5)
     {
         const auto direction = math::Normalize(*observerDirection);
         const auto score = [&](const auto& page) {
