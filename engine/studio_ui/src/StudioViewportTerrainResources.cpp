@@ -449,9 +449,13 @@ BuildPhysicalRenderPages(
                                         static_cast<f32>(std::max(
                                             seaLevelMeters - static_cast<f64>(elevation),
                                             0.0)),
-                                        RiverWaterDepthAt(
+                                        std::isfinite(RiverWaterDepthAt(
                                             snapshot->rivers.get(), x, y, resolution,
-                                            snapshot->material->SpacingMeters(), elevation),
+                                            snapshot->material->SpacingMeters(), elevation))
+                                            ? std::max(0.0F, RiverWaterDepthAt(
+                                                snapshot->rivers.get(), x, y, resolution,
+                                                snapshot->material->SpacingMeters(), elevation))
+                                            : 0.0F,
                                         snapshot->lakes != nullptr
                                             ? static_cast<f32>(terrain_water::SampleLakeWater(
                                                 *snapshot->lakes,
