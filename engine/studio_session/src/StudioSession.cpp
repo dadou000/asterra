@@ -547,54 +547,9 @@ StudioSession::DispatchRpc(
     static_cast<void>(
         terrainRuntime_.Refresh());
 
-    const auto terrainBindings = terrainRuntime_.Catalog();
-    terrainPhysicalPages_.Sync(terrainBindings, clock_.Time());
-
-    // Publish only body-fixed corridors. Moving-deck/inertial alignments
-    // require dynamic construction semantics and must not excavate a planet.
-    // Registry revisions suppress rebuilds on steady-state ticks.
-    const auto corridorProducts = pathProducts_.Products();
-    for (const auto& binding : terrainBindings)
-    {
-        const auto* body = world_.Universe().Bodies().FindBody(binding.body);
-        if (!body || !terrainRuntime_.IsCurrent(binding)) continue;
-        std::vector<CorridorConstructionEntry> entries;
-        for (const auto* product : corridorProducts)
-        {
-            if (!product || product->frame != body->frame ||
-                pathProducts_.IsDirty(product->edge) ||
-                product->stations.size() < 2U) continue;
-            const auto edge = pathNetwork_.Service().FindEdge(product->edge);
-            if (!edge || edge->infrastructureCatalogVersion != 1U) continue;
-            const bool road = edge->infrastructureCatalogId == "rural-road";
-            const bool rail = edge->infrastructureCatalogId == "ballasted-rail";
-            if (!road && !rail) continue;
-            CorridorConstructionEntry entry{};
-            entry.layer.edge = product->edge;
-            entry.layer.stations = product->stations;
-            entry.layer.footprint = road ?
-                path_geometry::CorridorTerrainFootprint{3.5, 1.0, 3.0} :
-                path_geometry::CorridorTerrainFootprint{1.5, 1.0, 3.0};
-            entry.revision = product->buildSignature != 0U ?
-                product->buildSignature : 1U;
-            entries.push_back(std::move(entry));
-        }
-        // Empty snapshot matters: deleting the last corridor must restore
-        // its old construction footprint.
-        try
-        {
-            static_cast<void>(corridorConstruction_.Publish(
-                binding.body, binding.planet,
-                terrainRuntime_.TerrainSource(binding),
-                binding.physicalPageLevel, std::move(entries),
-                terrainPhysicalPages_));
-        }
-        catch (const std::invalid_argument&)
-        {
-            // Unsupported/oversized mapping is not a reason to issue a
-            // global terrain invalidation. Keep the previous publication.
-        }
-    }
+    terrainPhysicalPages_.Sync(
+        terrainRuntime_.Catalog(),
+        clock_.Time());
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();
@@ -789,9 +744,54 @@ StudioTickResult StudioSession::Tick(
     result.terrainRuntimeChanged =
         terrainRuntime_.Refresh();
 
-    terrainPhysicalPages_.Sync(
-        terrainRuntime_.Catalog(),
-        clock_.Time());
+    const auto terrainBindings = terrainRuntime_.Catalog();
+    terrainPhysicalPages_.Sync(terrainBindings, clock_.Time());
+
+    // Publish only body-fixed corridors. Moving-deck/inertial alignments
+    // require dynamic construction semantics and must not excavate a planet.
+    // Registry revisions suppress rebuilds on steady-state ticks.
+    const auto corridorProducts = pathProducts_.Products();
+    for (const auto& binding : terrainBindings)
+    {
+        const auto* body = world_.Universe().Bodies().FindBody(binding.body);
+        if (!body || !terrainRuntime_.IsCurrent(binding)) continue;
+        std::vector<CorridorConstructionEntry> entries;
+        for (const auto* product : corridorProducts)
+        {
+            if (!product || product->frame != body->frame ||
+                pathProducts_.IsDirty(product->edge) ||
+                product->stations.size() < 2U) continue;
+            const auto edge = pathNetwork_.Service().FindEdge(product->edge);
+            if (!edge || edge->infrastructureCatalogVersion != 1U) continue;
+            const bool road = edge->infrastructureCatalogId == "rural-road";
+            const bool rail = edge->infrastructureCatalogId == "ballasted-rail";
+            if (!road && !rail) continue;
+            CorridorConstructionEntry entry{};
+            entry.layer.edge = product->edge;
+            entry.layer.stations = product->stations;
+            entry.layer.footprint = road ?
+                path_geometry::CorridorTerrainFootprint{3.5, 1.0, 3.0} :
+                path_geometry::CorridorTerrainFootprint{1.5, 1.0, 3.0};
+            entry.revision = product->buildSignature != 0U ?
+                product->buildSignature : 1U;
+            entries.push_back(std::move(entry));
+        }
+        // Empty snapshot matters: deleting the last corridor must restore
+        // its old construction footprint.
+        try
+        {
+            static_cast<void>(corridorConstruction_.Publish(
+                binding.body, binding.planet,
+                terrainRuntime_.TerrainSource(binding),
+                binding.physicalPageLevel, std::move(entries),
+                terrainPhysicalPages_));
+        }
+        catch (const std::invalid_argument&)
+        {
+            // Unsupported/oversized mapping is not a reason to issue a
+            // global terrain invalidation. Keep the previous publication.
+        }
+    }
     terrainPhysicalPages_.QueueChanges(
         TakeTerrainInvalidations());
     terrainPhysicalPages_.Tick();
