@@ -150,11 +150,17 @@ std::vector<std::filesystem::path> ProjectBrowserModel::InternalProjectFolders()
 {
     std::vector<std::filesystem::path> result;
     std::error_code error;
-    const auto examples = platform::ExecutablePath().parent_path() / "examples";
-    if (std::filesystem::is_directory(examples, error) && !error)
+    const auto addIfPresent = [&](const std::filesystem::path& path)
     {
-        result.push_back(examples);
-    }
+        error.clear();
+        if (std::filesystem::is_directory(path, error) && !error &&
+            std::find(result.begin(), result.end(), path) == result.end())
+            result.push_back(path);
+    };
+    addIfPresent(platform::ExecutablePath().parent_path() / "examples");
+    // Development generations run from out/unpacked; they keep the
+    // repository root as the current working directory.
+    addIfPresent(std::filesystem::current_path() / "examples");
     return result;
 }
 
