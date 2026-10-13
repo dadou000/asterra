@@ -1695,6 +1695,23 @@ int orbit::editor_app::StudioApplication::Run(
                         return studioViewportRenderer.
                             HasPendingTerrainWork();
                     },
+                .debugMode =
+                    [&studioViews]()
+                    {
+                        for (const auto& view : studioViews.Catalog())
+                        {
+                            if (view.id == "studio.primary")
+                                return static_cast<orbit::u32>(view.surfaceDebugMode);
+                        }
+                        return 0U;
+                    },
+                .setDebugMode =
+                    [&studioViews](const orbit::u32 mode)
+                    {
+                        studioViews.SetSurfaceDebugMode(
+                            "studio.primary",
+                            static_cast<orbit::lighting::SurfaceDebugMode>(mode));
+                    },
                 .openPath =
                     [](const std::filesystem::path& path)
                     {
