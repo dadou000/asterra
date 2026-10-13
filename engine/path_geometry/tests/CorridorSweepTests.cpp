@@ -16,12 +16,21 @@ int main()
     const auto roadMesh=BuildCorridorMesh(stations,road);
     CHECK(roadMesh.vertices.size()==9);
     CHECK(roadMesh.indices.size()==24);
+    CHECK(roadMesh.vertices[0].normal.y > 0.9);
+    CHECK(roadMesh.vertices[1].normal.y > 0.9);
+    CHECK(std::abs(roadMesh.vertices[0].normal.z) > 0.005);
+    CHECK(std::abs(roadMesh.vertices[2].normal.z) > 0.005);
+    CHECK(roadMesh.vertices[0].normal.z * roadMesh.vertices[2].normal.z < 0.0);
+
     CHECK(roadMesh.vertices[1].position.y==0.07);
     // Rails use the exact same multi-band sweep, never a second mesher.
     CorridorSweep rails{{{{{-0.77,0},{-0.73,0.15}}},{{{0.73,0.15},{0.77,0}}}}, {0,0.05,0.1}};
     const auto railMesh=BuildCorridorMesh(stations,rails);
     CHECK(railMesh.vertices.size()==12);
     CHECK(railMesh.indices.size()==24);
+    CHECK(railMesh.vertices[0].normal.y > 0.0);
+    CHECK(railMesh.vertices[0].normal != roadMesh.vertices[0].normal);
+
     CHECK(railMesh.vertices[4].position.y != railMesh.vertices[0].position.y);
     CHECK(BuildCorridorMesh(stations,rails)==railMesh);
     bool rejected=false;
