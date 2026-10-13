@@ -259,9 +259,11 @@ StudioSession::TerrainDebugPages() const noexcept
 
 std::vector<terrain::PhysicalTerrainPageAddress>
 StudioSession::ConstructionPhysicalPages(
-    const universe::BodyId body, const std::size_t maximumPages) const
+    const universe::BodyId body, const std::size_t maximumPages,
+    const math::Double3* observerDirection) const
 {
-    return corridorConstruction_.PagesForBody(body, maximumPages);
+    return corridorConstruction_.PagesForBody(body, maximumPages,
+        observerDirection);
 }
 
 StudioTerrainPhysicalPageService&
