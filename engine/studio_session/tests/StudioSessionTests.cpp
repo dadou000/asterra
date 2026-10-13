@@ -12,6 +12,8 @@
 #include <orbit/world_model/WorldSchemas.hpp>
 
 #include <cmath>
+#include <array>
+#include <stdexcept>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -599,6 +601,40 @@ int main()
             roots.AsArray().front().
                 Find("name")->AsString() ==
             "World");
+
+        // Infrastructure construction must queue precise, deduplicated
+        // terrain-authoring invalidations, never a global page change.
+        const orbit::world::PlanetId testPlanet =
+            orbit::world::PlanetId::Random();
+        const std::array<orbit::terrain::PhysicalTerrainPageAddress, 3> corridorPages{{
+            {.planet = testPlanet,
+             .tile = {.face = orbit::world::CubeFace::PositiveX,
+                      .level = 8, .x = 10, .y = 11}},
+            {.planet = testPlanet,
+             .tile = {.face = orbit::world::CubeFace::PositiveX,
+                      .level = 8, .x = 10, .y = 11}},
+            {.planet = testPlanet,
+             .tile = {.face = orbit::world::CubeFace::PositiveX,
+                      .level = 8, .x = 10, .y = 12}}
+        }};
+        const auto previousRequests = studio.PendingTerrainInvalidations().size();
+        Check(studio.QueueInfrastructureTerrainPages(corridorPages) == 2U);
+        Check(studio.PendingTerrainInvalidations().size() == previousRequests + 2U);
+        Check(studio.QueueInfrastructureTerrainPages(corridorPages) == 0U);
+        for (std::size_t k = previousRequests;
+             k < studio.PendingTerrainInvalidations().size(); ++k)
+        {
+            const auto& request = studio.PendingTerrainInvalidations()[k];
+            Check(!request.scope.global);
+            Check(request.scope.radiusTiles == 0U);
+            Check(request.kind ==
+                orbit::terrain_dependency::TerrainChangeKind::TerrainAuthoring);
+        }
+        bool rejectedInfrastructurePages = false;
+        try { static_cast<void>(studio.QueueInfrastructureTerrainPages(
+            corridorPages, 1U)); }
+        catch (const std::invalid_argument&) { rejectedInfrastructurePages = true; }
+        Check(rejectedInfrastructurePages);
 
         const auto beforeCloseUniverseGeneration =
             studio.World().UniverseGeneration();
