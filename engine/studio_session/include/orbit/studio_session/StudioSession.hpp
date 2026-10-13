@@ -110,6 +110,14 @@ public:
     void QueueTerrainInvalidation(
         const terrain_dependency::TerrainInvalidationRequest& request);
 
+    // Explicit physical-page bridge for infrastructure construction. The caller
+    // must project from the owning planetary body before calling this method.
+    // One radius-zero authoring request per unique page; never global.
+    // Returns the number of newly queued requests.
+    [[nodiscard]] std::size_t QueueInfrastructureTerrainPages(
+        std::span<const terrain::PhysicalTerrainPageAddress> pages,
+        std::size_t maximumPages = 4096);
+
     void QueueTerrainInvalidations(
         std::span<const terrain_dependency::TerrainInvalidationRequest> requests);
 
