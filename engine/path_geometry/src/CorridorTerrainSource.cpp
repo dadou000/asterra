@@ -30,12 +30,22 @@ CorridorTerrainSource::CorridorTerrainSource(
     }
 }
 
+namespace
+{
+const terrain::TerrainSource& RequireTerrainSource(
+    const std::shared_ptr<const terrain::TerrainSource>& source)
+{
+    if (!source) throw std::invalid_argument("Null owned terrain source.");
+    return *source;
+}
+}
+
 CorridorTerrainSource::CorridorTerrainSource(
     std::shared_ptr<const terrain::TerrainSource> source,
     const world::PlanetDefinition planet,
     std::vector<CorridorTerrainLayer> layers,
     const u64 revision)
-    : CorridorTerrainSource(*source, planet, std::move(layers), revision)
+    : CorridorTerrainSource(RequireTerrainSource(source), planet, std::move(layers), revision)
 {
     ownedSource_ = std::move(source);
     source_ = ownedSource_.get();
