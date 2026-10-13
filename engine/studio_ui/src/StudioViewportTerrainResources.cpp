@@ -430,9 +430,11 @@ BuildPhysicalRenderPages(
                                     x,
                                     y);
 
-                        const f32 elevation =
+                        const f32 rawElevation =
                             cell.
                                 SurfaceHeightMeters();
+                        const f32 elevation = std::isfinite(rawElevation)
+                            ? rawElevation : 0.0F;
 
                         texels[
                             static_cast<
