@@ -758,8 +758,12 @@ StudioTickResult StudioSession::Tick(
         std::vector<CorridorConstructionEntry> entries;
         for (const auto* product : corridorProducts)
         {
+            // Dirty means an authoritative edit is waiting for its derived
+            // replacement. The path cache intentionally retains the
+            // last-valid product, so keep its terrain cut until a successful
+            // rebuild replaces it. Only a truly deleted/unsupported edge
+            // should remove its previous footprint.
             if (!product || product->frame != body->frame ||
-                pathProducts_.IsDirty(product->edge) ||
                 product->stations.size() < 2U) continue;
             const auto edge = pathNetwork_.Service().FindEdge(product->edge);
             if (!edge || edge->infrastructureCatalogVersion != 1U) continue;
