@@ -3474,9 +3474,7 @@ StudioViewportRenderer::ComposeBase(
         if (usesPhysicalSurfaceLighting)
         {
             activeAuditTerrainShadow =
-                (info.layers.terrainOccludedAtmosphere ||
-                 info.layers.sunAuditMethod == 2U) &&
-                    hasMacroGlobe && macroGlobeSurface != nullptr &&
+                hasMacroGlobe && macroGlobeSurface != nullptr &&
                     macroGlobeSurface->terrain != nullptr &&
                     shape.has_value() && logicalTarget->target.has_value()
                     ? EnsureTerrainSunShadow(info.id, logicalTarget->target->body,

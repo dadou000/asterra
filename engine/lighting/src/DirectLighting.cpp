@@ -610,6 +610,12 @@ float4 main(VSOutput input) : SV_Target0
                             stellarDirection, biasedRadius, angular);
                 }
             }
+            // Diagnostic methods retain their explicit comparison semantics;
+            // the normal path uses the same offscreen relief field as air/clouds.
+            if (g.planetShadow.z < 0.5 && g_sunAuditTerrain.Load(12u) >= 4u)
+                sunAuditVisibility = TerrainSunVisibility(g_sunAuditTerrain,
+                    surface + normalize(surface) * 0.5, stellarDirection,
+                    g.planetShadow.x, g.planetShadow.y);
             stellarLinear *= sunAuditVisibility;
         }
     }

@@ -20,16 +20,17 @@ sources = [
 ]
 symbols = ["kShadowSteps", "kVolCascades", "DirectLightingRenderer", "cloudShadow", "cloudLightVolume", "cloudGodrayStrength", "cloudVolumeDebugAltitude"]
 invariants = [
+  "Clouds use the same body-fixed TerrainSunShadowField as direct surface lighting and atmospheric direct scattering. CloudRenderView pins the shared field in graph closures until commands are submitted; field replacements do not destroy a buffer still used by a submitted frame.",
   "The shadow texture is produced by <view>.CloudShadow (half resolution) before <view>.SharedDirectLighting and is multiplied into the stellar term only; the sky ambient is untouched, so ground under overcast switches from sun-lit to sky-lit.",
   "DirectLightingRenderer::Draw receives it through the `cloudShadow` argument (binding 8, flag in extra.x); the shadow march uses the same density as the camera march (base shape plus half-strength erosion) so shadows follow the visible clouds and move with the wind.",
   "The shadow march takes kShadowSteps (16) steps through the shell up to 60 km along the sun ray.",
   "The shadow shares the per-view `clouds` toggle; bypass_cloud_shadow skips just the shadow read in direct lighting.",
   "The light volume has three toroidal cascades (kVolCascades = 3) of 250 m, 2 km and 8 km cells, usable out to about 11, 92 and 368 km from the camera, refreshed a few voxels per frame; voxels are tagged with their lattice index and a generation so stale voxels read as 'not ready' rather than wrong.",
   "The light volume update is its own graph pass (<view>.CloudLightVolume), ordered before <view>.Clouds by the shared cloud target; it was part of <view>.Clouds, which made the ray march look about four times as expensive as it is (about 0.6 ms against 1.7 ms for the refresh in the Sponza Atrium).",
-  "The voxels are a pure function of: camera position, sun direction, shell and layer parameters, the cloud lab, the voxel generation and anchor, and the cloud field. When none of those has changed for kLightVolumeSettleFrames (24) consecutive frames, every voxel has been refreshed at least once with the current inputs (a valid voxel every 6th frame, 12th for the far cascade, a missing one every 3rd), so UpdateLightVolume skips the dispatch: the result is bit-identical to refreshing. Any change restarts the count and the original schedule runs until it settles again; a moving camera or a running simulation (the sun moves every frame) therefore never skips.",
+  "Light-volume voxels store cloud optical depth and extra terrain attenuation (planetary eclipse excluded) as two f16 values in the first dword; the other three dwords remain lattice x/y tags and generation. GPU cache storage remains 16 bytes per voxel. A changed terrain-buffer identity advances generation before sampling it.",
   "The refresh schedule uses frameIndex % 4096, and 4096 is not a multiple of 12, so a window that straddles the wrap sees the refresh residues in two runs. Two full cycles (24) guarantee one run covers every residue; a single cycle (12) is NOT enough and fails Orbit.CloudLightVolume's wrap case.",
-  "The skip fingerprint hashes exactly the Constants dwords the volume shader's main() can reach (camera xyz, sun xyz, shell, optics.w, atmosphere.z, lod.yzw, lab, labParams, labLife, temporal.z/w, anchor) plus the field fingerprint and the volume buffer. If the shader starts reading another constant, add it to LightVolumeInputFingerprint or the skip becomes wrong.",
-  "cloud_light_volume (default on) lets cloud lighting see shadows from other clouds beyond the short in-march sun steps; off marches everything per sample (for comparison only).",
+  "The settled-refresh fingerprint includes stellar angular radius (optics.y), all prior density/volume inputs and the terrain buffer identity. Changing terrain, star size, sun, camera or weather resumes refresh; the 24-frame settle window remains necessary.",
+  "cloud_light_volume (default on) caches cloud-on-cloud optical depth and terrain direct visibility. Ready adjacent cascades blend over the outer 65-95 percent of their radius; missing data falls back to the existing optical/terrain queries, never to stale tags.",
   "God rays (cloud_godray_strength, default 1, range 0-2) remove the direct in-scatter of air that sits in cloud shadow from what the atmosphere pass added; 0 turns them off and skips the extra march.",
   "cloud_volume_debug_altitude (metres, 0-40000, 0 = off, -1 = scene depth as log view-space distance) draws a horizontal slice of the volume as a heatmap of optical depth toward the sun; magenta = voxel not ready; nothing outside the three cascades.",
 ]
@@ -40,7 +41,7 @@ verify = [
   "Straight down at 0.8 km, clouds on vs off differ in about 3.5 % of pixels by more than 24/255; on vs on differs by 0.0 % (deterministic).",
   "cloud_volume_debug_altitude at a known cloud altitude shows heat inside the cascades and nothing outside.",
 ]
-verified = "b0a0de7f"
+verified = "283b7b066432087a3acd420afc2e112b30ca3482"
 
 [[diagnose]]
 symptom = "no cloud shadows on the ground, or shadows that do not match the visible clouds"

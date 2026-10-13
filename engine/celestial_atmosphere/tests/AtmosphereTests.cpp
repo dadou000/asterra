@@ -229,6 +229,36 @@ int main()
         return 5;
     }
 
+    // A homogeneous shell has closed-form transmission. Grazing rays must
+    // not interpolate ground-blocked texels into a second eclipse mask.
+    AtmosphereParameters homogeneous;
+    homogeneous.bottomRadiusMeters = 1000.0;
+    homogeneous.topRadiusMeters = 1100.0;
+    homogeneous.rayleighScaleHeightMeters = 1.0e12;
+    homogeneous.rayleighScatteringPerMeter = {0.001, 0.001, 0.001};
+    homogeneous.mieScatteringPerMeter = {};
+    homogeneous.mieExtinctionPerMeter = {};
+    homogeneous.absorptionExtinctionPerMeter = {};
+    auto grazingConfig = config;
+    grazingConfig.transmittanceWidth = 128U;
+    grazingConfig.transmittanceHeight = 128U;
+    const auto grazingLuts = BuildStaticLuts(homogeneous, grazingConfig);
+    for (const double radius : {1001.0, 1020.0, 1050.0, 1080.0})
+    {
+        const double horizon = -std::sqrt(1.0 - 1000000.0 / (radius * radius));
+        for (const double clearance : {0.0001, 0.001, 0.01, 0.1})
+        {
+            const double mu = horizon + clearance;
+            const double path = -radius * mu + std::sqrt(
+                radius * radius * mu * mu + 1210000.0 - radius * radius);
+            const double exact = std::exp(-0.001 * path);
+            const auto actual = SunTransmittanceAt(homogeneous, grazingLuts, radius, mu);
+            if (std::abs(actual.x - exact) > 0.004) return 31;
+        }
+        if (SunTransmittanceAt(homogeneous, grazingLuts, radius, horizon - 0.001).x != 0.0)
+            return 32;
+    }
+
     const auto sky =
         BuildSkyView(
             earth,

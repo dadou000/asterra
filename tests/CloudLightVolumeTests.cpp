@@ -229,6 +229,17 @@ int main()
         {
             return 2;
         }
+        // With no terrain field every voxel's EXTRA relief attenuation is 1,
+        // including behind the planet. Planetary eclipse must be evaluated at
+        // the scattering point, never interpolated through these altitude cells.
+        auto data = ReadBack(h, *reference->buffer);
+        const auto* words = reinterpret_cast<const u32*>(data->Map());
+        bool reliefOnly = true;
+        for (u64 offset = 0U; offset < kVolumeBytes / sizeof(u32); offset += 4U)
+            reliefOnly = reliefOnly && (words[offset] >> 16U) == 0x3c00U;
+        data->Unmap();
+        if (!Check(reliefOnly, "empty terrain field must cache unit relief attenuation"))
+            return 9;
     }
 
     // 2. The sun moves: refreshing must resume at once and the volumes must still match.

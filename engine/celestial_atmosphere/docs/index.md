@@ -21,6 +21,8 @@ sources = [
 ]
 symbols = ["RefractDirection", "AtmosphereParameters", "AtmosphereRenderer", "GpuAtmosphereLuts", "ResolveAtmosphereBody", "SunTransmittanceAt"]
 invariants = [
+  "The finite stellar disc is integrated on both sides of the point-sun eclipse. Conservative penumbra/umbra intervals partition each density segment; transition intervals use four-point Gauss quadrature, full-lit intervals one sample and full-umbra intervals none.",
+  "TerrainSunReliefVisibility separates extra terrain attenuation from planetary eclipse before sparse atmospheric knots are interpolated. The analytic ellipsoid disc visibility supplies the planetary horizon exactly once; indirect scattering is unaffected.",
   "AtmosphereRefraction.hpp derives refraction from AtmosphereParameters alone: radius = bottomRadiusMeters, scale height = rayleighScaleHeightMeters, surface refractivity = 2.78e-4 x (green Rayleigh scattering / 13.558e-6), which assumes an Earth-like gas (Rayleigh ~ N a^2, refractivity ~ N a). RefractDirection rotates a true direction toward the local vertical by the table's bending in the vertical plane; an object hidden even after refraction, an observer in space or a ducting atmosphere get the true direction back. It is applied in StudioViewportRenderer when ORBIT_REFRACT_SUN=1 (read once, default off): right after ResolveStudioDirectLight, from the camera's body-centric position and the previous frame's atmosphere presentation, it replaces studioDirectLight.directionBody with the apparent direction (unless the cloud-lab sun override is active, the observer is outside the atmosphere, or the sun stays hidden). directionBody is the one sun direction the atmosphere pass and sky, direct light, proxy shadow, glass, SDF light and clouds all read, so a single refraction keeps them consistent; refracting at any other single consumer would leave shadows and the disc up to 0.5 degrees off the light. Unverified: compiled with -fsyntax-only, never run or seen on screen; the first frame after a body change is unrefracted.",
   "The Atmosphere capability is the only persistent atmosphere authority: there is exactly one enabled Physical Scattering capability per body (duplicates are rejected) and ResolveAtmosphereBody maps it to AtmosphereParameters. Do not add a second atmosphere representation or cache.",
   "Nothing Earth-specific is baked into the runtime: body radius, atmosphere radius, density profiles, scattering coefficients and LUT resolutions are explicit inputs (the struct defaults are only an Earth-like starting point).",
@@ -38,7 +40,7 @@ verify = [
   "ctest -R Orbit.CelestialAtmosphere (Atmosphere and SkyIrradiance tests), Orbit.CelestialAtmosphereBinding and Orbit.AtmospherePropertySolver.",
   "orbit_view_terrain_layers_set(bypass_atmosphere=true): the sky, haze and limb disappear; restoring false brings them back without a restart.",
 ]
-verified = "74906ec"
+verified = "283b7b066432087a3acd420afc2e112b30ca3482"
 
 [routes]
 "how the LUTs are built, fingerprints, what invalidates what, sky view, limb" = "lut-pipeline"

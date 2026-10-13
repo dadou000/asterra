@@ -134,8 +134,8 @@ struct StudioTerrainLayerOptions
     bool bypassIndirectLighting{false};
     bool bypassNearFieldWater{false};
     bool bypassAtmosphere{false};
-    // Experimental direct scattering with body-fixed terrain/stellar visibility.
-    bool terrainOccludedAtmosphere{false};
+    // Body-fixed terrain visibility for direct air/cloud scattering.
+    bool terrainOccludedAtmosphere{true};
     // Temporary per-viewport atmospheric integrator experiments.
     // 0=original, 1=direct scattering only, 2=multiple scattering only,
     // 3=shadow-interval diagnostic, 4=view-march step-size diagnostic.

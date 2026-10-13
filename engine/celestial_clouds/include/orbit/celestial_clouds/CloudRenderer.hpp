@@ -69,6 +69,7 @@ public:
         bool anchorSet{false};
         bool active{false};
         u32 generation{0U};
+        std::shared_ptr<rhi::Buffer> terrainShadow;
 
         // Exact skip of redundant refreshes (see UpdateLightVolume): a hash of every input the
         // update reads, and how many consecutive frames it has been unchanged.
@@ -262,6 +263,7 @@ private:
     std::unique_ptr<rhi::GraphicsPipeline> shadowPipeline_;
     // Baked 32^3 tileable cellular noise (base shape + erosion octaves).
     std::unique_ptr<rhi::Buffer> noise_;
+    std::unique_ptr<rhi::Buffer> emptyTerrainShadow_;
     std::unique_ptr<rhi::Buffer> stormDummy_;
     rhi::Buffer* storm_{nullptr};
     [[nodiscard]] rhi::Buffer& StormBuffer() const noexcept { return storm_ != nullptr ? *storm_ : *stormDummy_; }

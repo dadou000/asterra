@@ -24,6 +24,7 @@ target_link_libraries(
         Orbit::CelestialAtmosphere
         Orbit::Core
         Orbit::Math
+        Orbit::Lighting
         Orbit::OpticalTransport
         Orbit::RHI
         Orbit::Shader

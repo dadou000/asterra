@@ -179,6 +179,17 @@ add_executable(OrbitCloudLightVolumeTests
     CloudLightVolumeTests.cpp
 )
 
+add_executable(OrbitTerrainSunShadowGpuTests TerrainSunShadowGpuTests.cpp)
+target_link_libraries(OrbitTerrainSunShadowGpuTests PRIVATE
+    Orbit::Lighting Orbit::RhiVulkan Orbit::ShaderDxc)
+target_compile_features(OrbitTerrainSunShadowGpuTests PRIVATE cxx_std_23)
+orbit_enable_warnings(OrbitTerrainSunShadowGpuTests)
+add_custom_command(TARGET OrbitTerrainSunShadowGpuTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ORBIT_DXCOMPILER_DLL}"
+        "$<TARGET_FILE_DIR:OrbitTerrainSunShadowGpuTests>")
+add_test(NAME Orbit.TerrainSunShadowGpu COMMAND OrbitTerrainSunShadowGpuTests)
+set_tests_properties(Orbit.TerrainSunShadowGpu PROPERTIES LABELS "gpu")
+
 target_link_libraries(OrbitCloudLightVolumeTests
     PRIVATE
         Orbit::CelestialClouds

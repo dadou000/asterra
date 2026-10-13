@@ -58,8 +58,9 @@ float3 AtmosphereStellarTransmittance(Texture2D table, SamplerState tableSampler
         effectiveMu += spread * discCentre;
     }
     effectiveMu = max(effectiveMu, horizon + 1.0e-5);
-    const float unit = sqrt(saturate((radial - bottom) / max(top - bottom, 1.0)));
-    return table.SampleLevel(tableSampler, float2(saturate(effectiveMu * 0.5 + 0.5), unit), 0).rgb;
+    const float unit = saturate((radial * radial - bottom * bottom) / max(top * top - bottom * bottom, 1.0));
+    const float u = sqrt(saturate((effectiveMu - horizon) / max(1.0 - horizon, 1.0e-6)));
+    return table.SampleLevel(tableSampler, float2(u, unit), 0).rgb;
 }
 
 float PlanetSunVisibility(float3 position, float3 sun, float radius)
@@ -99,6 +100,12 @@ float TerrainSunVisibility(ByteAddressBuffer field, float3 position, float3 sun,
     const float minimumElevation = asfloat(field.Load(4u));
     const float maximumElevation = asfloat(field.Load(8u));
     const float bias = max(0.5, radius * 2.0e-7);
+    // The tallest relief sphere bounds every possible caster. A fully
+    // visible stellar disc outside it proves the ray needs no height reads.
+    const float maximumRadius = radius + maximumElevation + bias;
+    if (length(position) > maximumRadius &&
+        SphereStellarVisibility(position, sun, maximumRadius, angularRadius) >= 1.0)
+        return 1.0;
     const float along = dot(position, sun);
     const float3 perpendicular = position - along * sun;
     const float perpendicular2 = dot(perpendicular, perpendicular);
@@ -112,12 +119,12 @@ float TerrainSunVisibility(ByteAddressBuffer field, float3 position, float3 sun,
     const float root = sqrt(discriminant);
     const float start = max(-along - root, 0.0), end = -along + root;
     if (end <= start) return visibility;
-    const float stepLength = max(asfloat(field.Load(20u)) * 0.5, (end - start) / 30.0);
+    const float stepLength = max(asfloat(field.Load(20u)) * 0.5, (end - start) / 510.0);
     // Samples lie on planes fixed to the body origin along the sun axis.
     // Camera movement or a caster leaving the framebuffer cannot move them.
     float t = max(start, ceil((along + start) / stepLength) * stepLength - along);
     [loop]
-    for (uint i = 0u; i < 32u && t <= end; ++i, t += stepLength)
+    for (uint i = 0u; i < 512u && t <= end; ++i, t += stepLength)
     {
         const float3 probe = position + sun * t;
         const float surface = radius + TerrainShadowElevation(field, probe, width, height);
@@ -133,6 +140,17 @@ float TerrainSunVisibility(ByteAddressBuffer field, float3 position, float3 sun,
         }
     }
     return visibility;
+}
+
+// Extra terrain attenuation, separated from the analytic planet horizon.
+// Interpolating the total eclipse mask along an air ray smears a kilometre
+// penumbra across a whole quadrature block and applies the horizon twice.
+float TerrainSunReliefVisibility(ByteAddressBuffer field, float3 position,
+    float3 sun, float radius, float angularRadius)
+{
+    const float body = SphereStellarVisibility(position, sun, radius, angularRadius);
+    if (body <= 1.0e-5) return 1.0;
+    return saturate(TerrainSunVisibility(field, position, sun, radius, angularRadius) / body);
 }
 )";
 } // namespace orbit::lighting

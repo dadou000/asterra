@@ -24,6 +24,7 @@ sources = [
 ]
 symbols = ["CityLightTree", "TransientLightsFromFlash", "DirectLightingRenderer", "HybridReflectionRenderer", "ScreenSpaceFinalGatherRenderer", "RadianceClipmapConfig", "GpuRadianceCell"]
 invariants = [
+  "Body-fixed direct stellar terrain visibility is shared by surfaces, air and clouds; its derived field and GPU/CPU validation are documented in /rendering/lighting/terrain-sun-visibility.",
   "Occlusion for lighting is answered through the shared visibility registry (terrain, authored proxies, analytic bodies); do not add a parallel occlusion path for one effect.",
   "The near-field indirect stack is off when the planet is seen from orbit and whenever bypass_indirect_lighting is set; fills that depend on it vanish with it.",
   "Without sunlight (night side, space) the atmosphere's sky summary is zero, so sky-derived fills are zero too.",
@@ -49,7 +50,7 @@ verify = [
   "ctest -R Orbit.LightingCityLightTree (energy, budget, level of detail, accuracy at and away from the receiver).",
   "ctest -R Orbit.LightingTransientLights (energy preservation, bounded budget, tile-grid flux).",
 ]
-verified = "288b42a"
+verified = "283b7b066432087a3acd420afc2e112b30ca3482"
 
 [routes]
 "cache cells, residency, dark slabs, relighting, 96-byte cell" = "radiance-cache"

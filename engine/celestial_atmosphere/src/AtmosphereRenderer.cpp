@@ -318,6 +318,21 @@ float4 main(VSOutput input) : SV_Target0
     // subinterval(s) with the correct Beer-Lambert camera attenuation.
     const float2 eclipse = EllipsoidEclipseInterval(
         origin, direction, bodyRadii, scaledSun, tStart, tEnd);
+    // Bound the finite-disc transition using the largest perpendicular ray
+    // displacement at either endpoint. This only partitions quadrature;
+    // exact local disc visibility determines how much sunlight is received.
+    const float shadowReach = max(max(-dot(origin + direction * tStart, sun),
+        -dot(origin + direction * tEnd, sun)), 0.0);
+    const float margin = shadowReach * tan(g.sunOcclusion.x);
+    const float3 outerAxes = bodyRadii + margin;
+    const float3 innerAxes = max(bodyRadii - margin, bodyRadii * 0.5);
+    const float2 penumbra = EllipsoidEclipseInterval(origin, direction,
+        outerAxes, normalize(sun / outerAxes), tStart, tEnd);
+    float2 umbra = EllipsoidEclipseInterval(origin, direction,
+        innerAxes, normalize(sun / innerAxes), tStart, tEnd);
+    if (umbra.y <= umbra.x)
+        umbra = (penumbra.x + penumbra.y) * 0.5;
+    umbra = clamp(umbra, penumbra.x, penumbra.y);
 
     [loop]
     for (uint i = 0u; i < steps; ++i)
@@ -340,9 +355,9 @@ float4 main(VSOutput input) : SV_Target0
             const float endB = AtmosphereMarchBoundary(
                 float(endIndex + 1u) / float(steps), tStart, tEnd, closestT, centerIndex);
             const float endT = 0.5 * (endA + endB);
-            visibilityNear = TerrainSunVisibility(g_terrainSunShadow, position,
+            visibilityNear = TerrainSunReliefVisibility(g_terrainSunShadow, position,
                 sun, bottom, g.sunOcclusion.x);
-            visibilityFar = TerrainSunVisibility(g_terrainSunShadow,
+            visibilityFar = TerrainSunReliefVisibility(g_terrainSunShadow,
                 origin + direction * endT, sun, bottom, g.sunOcclusion.x);
         }
         const uint remaining = steps - (i / kShadowInterval) * kShadowInterval;
@@ -382,48 +397,43 @@ float4 main(VSOutput input) : SV_Target0
             radiance += transmittance * multiSource *
                 (1.0 - stepTransmittance) / safeExtinction;
 
-        // Light may turn on or off INSIDE this segment. A single midpoint
-        // sample switches the whole interval at once, causing nested rings
-        // in the dawn sky and stripes around an orbital terminator.
-        // Analytically subtract the planet's eclipse interval from this
-        // segment. Most segments have exactly one full lit interval or
-        // none; only a segment straddling both boundaries has two.
-        const float3 directPhase =
-            rayleigh * rayleighPhase + mie * miePhase;
-        [unroll]
-        for (uint region = 0u; region < 2u; ++region)
+        // Integrate both sides of the solar-disc horizon. Clipping at the
+        // point-sun eclipse discards the shadow-side half of the penumbra and
+        // produces a hard seam. Split at conservative penumbra/umbra edges
+        // so a long atmospheric step cannot miss the narrow transition.
+        const float cuts[6] = {tStart, penumbra.x, umbra.x,
+            umbra.y, penumbra.y, tEnd};
+        const float3 directPhase = rayleigh * rayleighPhase + mie * miePhase;
+        [loop]
+        for (uint region = 0u; region < 5u; ++region)
         {
-            const float litStart = region == 0u
-                ? edgeA : max(edgeA, eclipse.y);
-            const float litEnd = region == 0u
-                ? min(edgeB, eclipse.x) : edgeB;
-            if (litEnd <= litStart + 1.0e-4) continue;
-
-            // Sample the solar transmittance in the LIT portion rather
-            // than the eclipsed step midpoint. In particular, the LUT
-            // can be zero at a shadowed midpoint even if half the segment
-            // receives sunlight.
-            const float litMid = 0.5 * (litStart + litEnd);
-            const float3 sunPoint = origin + direction * litMid;
-            const float sunRadius = length(sunPoint);
-            const float sunMuLit =
-                dot(sunPoint / max(sunRadius, 1.0), sun);
-            const float3 sunTransmission =
-                g_transmittance.SampleLevel(g_transmittanceSampler,
-                    LutUv(sunRadius, sunMuLit), 0).rgb;
-            const float discVisibility = EllipsoidSunVisibility(
-                sunPoint, bodyRadii, scaledSun, g.sunOcclusion.x);
-
-            // Integral of T_camera(s) on the lit interval. The camera
-            // extinction is evaluated at the original density midpoint;
-            // its variation is a separate, smooth quadrature error.
-            const float3 opticalStart =
-                exp(-extinction * max(litStart - edgeA, 0.0));
-            const float3 opticalEnd =
-                exp(-extinction * max(litEnd - edgeA, 0.0));
+            const float litStart = max(edgeA, cuts[region]);
+            const float litEnd = min(edgeB, cuts[region + 1u]);
+            if (litEnd <= litStart + 1.0e-4 || region == 2u) continue;
+            const bool transition = region == 1u || region == 3u;
+            const uint samples = transition ? 4u : 1u;
+            const float nodes[4] = {0.0694318442, 0.3300094782, 0.6699905218, 0.9305681558};
+            const float weights[4] = {0.1739274226, 0.3260725774, 0.3260725774, 0.1739274226};
+            float3 sunlight = 0.0;
+            [loop]
+            for (uint q = 0u; q < samples; ++q)
+            {
+                const float sampleT = lerp(litStart, litEnd, transition ? nodes[q] : 0.5);
+                const float3 sunPoint = origin + direction * sampleT;
+                const float sunRadius = length(sunPoint);
+                const float sunMuLit = dot(sunPoint / max(sunRadius, 1.0), sun);
+                const float discVisibility = EllipsoidSunVisibility(
+                    sunPoint, bodyRadii, scaledSun, g.sunOcclusion.x);
+                const float3 sunTransmission = AtmosphereStellarTransmittance(
+                    g_transmittance, g_transmittanceSampler,
+                    sunRadius, bottom, top, sunMuLit, g.sunOcclusion.x);
+                sunlight += (transition ? weights[q] : 1.0) * sunTransmission *
+                    discVisibility * terrainVisibility;
+            }
+            const float3 opticalStart = exp(-extinction * max(litStart - edgeA, 0.0));
+            const float3 opticalEnd = exp(-extinction * max(litEnd - edgeA, 0.0));
             if (g.audit.x != 2.0)
-                radiance += transmittance * irradiance * directPhase *
-                    sunTransmission * discVisibility * terrainVisibility *
+                radiance += transmittance * irradiance * directPhase * sunlight *
                     (opticalStart - opticalEnd) / safeExtinction;
         }
         transmittance *= stepTransmittance;
@@ -500,7 +510,7 @@ float EllipsoidSunVisibility(float3 p, float3 axes,
     // Uniform solar disc above a locally straight ellipsoid horizon.
     // The curvature effect is negligible within the thin atmosphere;
     // the width correction also avoids calling asin on full day/night.
-    const float spread = angularRadius * inverseD;
+    const float spread = angularRadius * sqrt(max(1.0 - mu * mu, 0.0));
     if (spread <= 1.0e-7) return clearance >= 0.0 ? 1.0 : 0.0;
     if (clearance >= spread) return 1.0;
     if (clearance <= -spread) return 0.0;
