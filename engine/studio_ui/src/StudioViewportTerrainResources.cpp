@@ -238,6 +238,12 @@ BuildPhysicalRenderPages(
             .planet = runtime.observerPhysicalPage.planet,
             .tile = tile
         });
+    // M2.46: The camera's own physical tile must get first chance
+    // under the limited upload budget; the rest remain deterministic.
+    const auto center = runtime.observerPhysicalPage;
+    const auto centerIt = std::find(addresses.begin(), addresses.end(), center);
+    if (centerIt != addresses.end() && centerIt != addresses.begin())
+        std::iter_swap(addresses.begin(), centerIt);
     // Sparse construction pages are already tracked by the async page owner.
     // Append only authored footprints; do not fill the intervening terrain.
     const auto observerDirection = math::Normalize(runtime.observer.meters);
