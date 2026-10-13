@@ -272,8 +272,6 @@ std::filesystem::path ReportsController::ExportCapture(
     std::filesystem::create_directories(targetFolder);
     const auto target = targetFolder /
         (std::format("report-{}-{}.png", id, endCondition ? "end" : "start"));
-    if (std::filesystem::equivalent(source, target))
-        return target;
     std::filesystem::copy_file(source, target,
         std::filesystem::copy_options::overwrite_existing);
     return target;
@@ -1018,6 +1016,71 @@ void ReportsUi::DrawDetail(editor_ui::PanelContext& context)
     {
         patch.resolutionNote = resolution_;
         changed = true;
+    }
+
+    context.Heading("Capture tools");
+    if (context.Button("Export capture" + suffix + "-export-capture"))
+    {
+        try
+        {
+            status_ = "Capture exported: " +
+                controller_->ExportCapture(id, false).generic_string();
+            statusError_ = false;
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+            statusError_ = true;
+        }
+    }
+    context.SameLine();
+    if (context.Button("Open capture folder" + suffix + "-open-captures"))
+    {
+        try
+        {
+            status_ = "Opened: " +
+                controller_->OpenCaptureFolder().generic_string();
+            statusError_ = false;
+        }
+        catch (const std::exception& exception)
+        {
+            status_ = exception.what();
+            statusError_ = true;
+        }
+    }
+    if ((scopes & studio_reports::ScopeBit(ReportScope::Performance)) != 0U)
+    {
+        if (context.Button("Auto-capture performance issue" +
+                suffix + "-perf-capture"))
+        {
+            try
+            {
+                // When the checkbox was just ticked, persist the new scope
+                // before testing the controller's authoritative report state.
+                if (changed)
+                {
+                    store.Update(id, patch);
+                    changed = false;
+                    editRevision_ = store.Revision();
+                }
+                if (controller_->CapturePerformanceIssue(id))
+                {
+                    status_ = "Performance capture attached to this report.";
+                    statusError_ = false;
+                }
+                else
+                {
+                    status_ = controller_->ScreenshotError();
+                    statusError_ = true;
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                status_ = exception.what();
+                statusError_ = true;
+            }
+        }
+        context.MutedText("Captures the current viewport for this selected performance report.");
     }
 
     bool deleted = false;
