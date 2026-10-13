@@ -7,6 +7,7 @@
 #include <exception>
 #include <format>
 #include <future>
+#include <fstream>
 #include <stdexcept>
 #include <thread>
 
@@ -577,6 +578,32 @@ void ViewportCaptureService::ShootDebugPanel()
     {
         result_ = render_view::WriteImageRgba8(
             path_, sheetWidth, panelHeight * 2U, debugComposite_.data());
+        // Keep capture provenance next to the image. This is deliberately
+        // created by the existing screenshot service, not a second system.
+        std::filesystem::path metadata = path_;
+        metadata += ".json";
+        std::ofstream manifest(metadata, std::ios::binary | std::ios::trunc);
+        if (!manifest)
+            throw std::runtime_error("Could not write diagnostic metadata.");
+        manifest << "{\n"
+                 << "  \"schema\": \"orbit.atmosphere-debug.v1\",\n"
+                 << "  \"capture_kind\": \"atmosphere-debug\",\n"
+                 << "  \"source_width\": " << w << ",\n"
+                 << "  \"source_height\": " << h << ",\n"
+                 << "  \"output_width\": " << sheetWidth << ",\n"
+                 << "  \"output_height\": " << panelHeight * 2U << ",\n"
+                 << "  \"header_height\": " << kDebugHeaderHeight << ",\n"
+                 << "  \"initial_debug_mode\": " << originalDebugMode_ << ",\n"
+                 << "  \"simulation_was_playing\": "
+                 << (wasPlaying_ ? "true" : "false") << ",\n"
+                 << "  \"exposure_locked_for_capture\": "
+                 << (hooks_.lockExposure ? "true" : "false") << ",\n"
+                 << "  \"panels\": [\"lit\", \"base_roughness\", "
+                    "\"normal_metallic\", \"emission_metadata\"]\n"
+                 << "}\n";
+        manifest.flush();
+        if (!manifest)
+            throw std::runtime_error("Could not flush diagnostic metadata.");
         Finish({});
         return;
     }
