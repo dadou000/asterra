@@ -286,8 +286,15 @@ BuildPhysicalRenderPages(
     constexpr u64 kUploadByteBudget = 512U * 1024U;
     u64 attemptedUploadBytes = 0U;
 
-    addresses.erase(std::unique(addresses.begin(), addresses.end()),
-        addresses.end());
+    // Preserve local-first ordering while deduplicating non-adjacent
+    // construction addresses (a second occurrence must not trigger upload).
+    std::vector<terrain::PhysicalTerrainPageAddress> uniqueAddresses;
+    uniqueAddresses.reserve(addresses.size());
+    for (const auto& address : addresses)
+        if (std::find(uniqueAddresses.begin(), uniqueAddresses.end(),
+                address) == uniqueAddresses.end())
+            uniqueAddresses.push_back(address);
+    addresses = std::move(uniqueAddresses);
     result.pages.reserve(addresses.size());
 
     auto& cache =
@@ -437,8 +444,10 @@ BuildPhysicalRenderPages(
                         const f32 rawElevation =
                             cell.
                                 SurfaceHeightMeters();
-                        const f32 elevation = std::isfinite(rawElevation)
-                            ? rawElevation : 0.0F;
+                        if (!std::isfinite(rawElevation))
+                            throw std::runtime_error(
+                                "Physical terrain surface contains a nonfinite elevation.");
+                        const f32 elevation = rawElevation;
 
                         texels[
                             static_cast<
