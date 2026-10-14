@@ -118,6 +118,12 @@ int main()
     const auto derived=BuildCorridorDerived(source,profile,section);
     CHECK(derived.visualMesh.vertices.size()>basic.visualMesh.vertices.size());
     CHECK(derived.collision.size()==derived.visualMesh.indices.size()/3);
+    CHECK(derived.navigation.size()==derived.stations.size());
+    CHECK(derived.lanes.size()==profile.lanes);
+    CHECK(derived.lanes.front().points.size()==derived.stations.size());
+    CHECK(derived.referenceGraph.nodes.size()==derived.stations.size()*profile.lanes);
+    // Crowned pavement must raise the lane reference with the real surface.
+    CHECK(std::abs(derived.lanes[0].points[1].position.y-0.05)<1.e-8);
     CHECK(derived.buildSignature!=basic.buildSignature);
     CHECK(derived==BuildCorridorDerived(source,profile,section));
     section.bands[0].profile[1].elevationMeters=0.2;

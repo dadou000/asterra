@@ -52,10 +52,14 @@ The new APIs are compiled into OrbitPathGeometry as a small native increment usi
 
 Long corridors should be sliced into bounded tiles, keep sleeper transforms as GPU instances and only instantiate contact solids near active vehicles. Nearby physical railway gauge cannot be approximated by distant render LOD. Do not synchronously generate sleepers for a planetary-length line; the current function explicitly rejects excessive instance counts until an incremental chunk consumer is in place.
 
-Before enabling driving/trains, fix a pre-existing mismatch: BuildCorridorDerived refines product.stations and visual/collision mesh, but lane/reference/navigation products remain derived at the older BuildPathDerived resolution. They must be regenerated using identical refined geometry and kept in a single revision-stamped product.
+The same increment now addresses an earlier data-consistency bug in BuildCorridorDerived: after refinement, lane points, lane reference graph, navigation stations and boundary/debug lines are regenerated from the refined station product. Lane points follow the swept primary surface for crown and bank. This aligns sample counts and geometry at the per-edge level. Remaining scope: exact junction connections, independent road-versus-rail navigation semantics, physics contact cooking, and a shared revision-fenced cross-subsystem publication.
 
 # Tests and remaining proof
 
 TransportSectionsTests covers road sweep output, railhead gauge/cant geometry, sleeper spacing, bounded work, invalid profile and invalid station/cant combinations. TransportTopologyTests covers road/rail components, one-way arcs, explicit mixed crossings, ordering stability and rejected invalid links. They are isolated CPU checks; native build and execution, Studio Debug registration, GPU rendering and physics contact parity are still unverified.
 
 Next: bind the profile catalog and Build panel; implement sectional physical rail profiles, wheel-rail dynamics, turnout/junction generators, road marking/signal rules, earthwork and bridge/tunnel construction, and streaming contact/render cache ownership.
+
+## Second increment: refined references
+
+CorridorDerived now regenerates lane positions, graph nodes/edges, navigation samples and debugging lines after adaptive corridor refinement. Primary lane references interpolate the actual swept pavement/formation vertices, so crossfall and banking affect the generated positions rather than just visual mesh vertices. Both collision and the derived references share the same station revision and count. The extended CorridorSweepTests asserts lane count, station parity, graph-node parity and crowned road lane elevations. This is still a CPU derivation test, not an NPC or wheel physics integration test.

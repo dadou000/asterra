@@ -42,3 +42,7 @@ This is the **engineering foundation**, not yet a full rail standards solver (tu
 The pure TransportSections API now builds road crowns and shoulders, railway formation and railhead strips, cant-consistent rail contact reference points, and deterministic bounded sleeper placements. The pure TransportTopology API compiles explicit node/link IDs into directed mode-aware route arcs, connected components and intentional junction/crossing annotations. Both are derived data, not new authoring authorities. See /world/roads-railways/transport-foundations for API limitations and integration steps.
 
 Validation: ctest -R Orbit.TransportSections and ctest -R Orbit.TransportTopology. Native build execution is still pending.
+
+### Refined corridor navigation parity
+
+CorridorDerived now regenerates lane/graph/navigation/debug references after geometric refinement, and road lane positions sample the swept primary surface including crown and bank instead of retaining stale coarse path references. Verify via Orbit.CorridorSweep; Studio runtime validation is still pending.
