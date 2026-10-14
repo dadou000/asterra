@@ -1207,21 +1207,7 @@ GpuCloudFieldProduct::GpuCloudFieldProduct(
     layerDescriptors.reserve(product.layers.size());
     for (const auto& layer : product.layers)
     {
-        const CloudLayerParameters& p = layer.parameters;
-        layerDescriptors.push_back({
-            .shell = {
-                static_cast<f32>(p.baseAltitudeMeters),
-                static_cast<f32>(p.topAltitudeMeters),
-                static_cast<f32>(p.peakOpticalDepth),
-                static_cast<f32>(p.coverageBias)
-            },
-            .material = {
-                static_cast<f32>(p.densityExponent),
-                static_cast<f32>(p.singleScatteringAlbedo),
-                static_cast<f32>(p.anisotropy),
-                p.shadowParticipation ? 1.0F : 0.0F
-            }
-        });
+        layerDescriptors.push_back(EncodeGpuCloudLayer(layer.parameters));
     }
     const std::size_t texelBytes = packed.size() * sizeof(GpuCloudTexel);
     const std::size_t descriptorBytes =
