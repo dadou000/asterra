@@ -192,7 +192,15 @@ float4 ReceiverShadow(V input) : SV_Target0
         return float4(1,1,1,1);
     float segmentStart = max(0., enterT);
     float segmentEnd = max(segmentStart, exitT);
-    // Do not shadow terrain by clouds behind the surface or outside the shell.
+    // The far-side cloud shell must never cast a shadow through the planet.
+    float planetNear, planetFar;
+    if (SphereInterval(surface, sun, g.shell.x, planetNear, planetFar))
+    {
+        if (planetNear > 1.)
+            segmentEnd = min(segmentEnd, planetNear);
+        else if (planetFar > 1. && planetNear <= 0.)
+            return float4(1,1,1,1);
+    }
     if (segmentEnd <= segmentStart) return float4(1,1,1,1);
     const float delta = (segmentEnd - segmentStart) / 12.;
     float tau = 0.;
