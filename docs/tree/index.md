@@ -20,6 +20,7 @@ related = ["/docs-system"]
 "add or change an editor capability, RPC method, MCP tool" = "/editor/mcp-rpc"
 "projects, worlds, scene, commands, undo, assets, plugins" = "/authoring"
 "planet coordinates, universe, fields, paths, procedural graph" = "/world"
+"roads, railways, corridors, bridges, tunnels, moving ships and infrastructure" = "/world/roads-railways"
 "types, math, jobs, time, frames, platform, window, hot reload core" = "/foundation"
 "executables: Studio, player, build CLI" = "/apps"
 "dev server, probes, python tooling" = "/tools"
