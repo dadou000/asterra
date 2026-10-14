@@ -1,5 +1,6 @@
 #include <orbit/path_geometry/CorridorEarthworks.hpp>
 #include <cmath>
+#include <algorithm>
 #include <stdexcept>
 
 namespace orbit::path_geometry
