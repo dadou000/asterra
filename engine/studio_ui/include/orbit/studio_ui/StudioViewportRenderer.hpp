@@ -5,6 +5,7 @@
 #include <orbit/celestial_atmosphere/AtmosphereRenderer.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
 #include <orbit/celestial_clouds/CloudRenderer.hpp>
+#include <orbit/celestial_clouds/UnifiedCloudRenderer.hpp>
 #include <orbit/celestial_compact_render/CompactObjectRenderer.hpp>
 #include <orbit/celestial_ocean/OceanOptics.hpp>
 #include <orbit/celestial_globe/MacroGlobe.hpp>
@@ -810,6 +811,10 @@ private:
     celestial_compact_render::CompactObjectRenderer compactObjectRenderer_;
     celestial_atmosphere::AtmosphereRenderer atmosphereRenderer_;
     celestial_clouds::CloudRenderer cloudRenderer_;
+    // Lazily compiled: a broken experimental B shader must never prevent A boot.
+    std::unique_ptr<celestial_clouds::unified::UnifiedCloudRenderer> unifiedCloudRenderer_;
+    std::string unifiedCloudInitError_;
+    [[nodiscard]] bool EnsureUnifiedCloudRenderer();
     StormDomainMailbox stormMailbox_;
     struct StormRuntime;
     std::shared_ptr<StormRuntime> storm_;   // shared_ptr: the deleter is captured where the type is complete
@@ -938,6 +943,7 @@ private:
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> atmosphereScratch_;
     // Half-resolution cloud march result (radiance + transmittance) per view.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudTargets_;
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> unifiedCloudTargets_;
     // Temporal accumulation of the cloud march: two resolved targets used as history and
     // output on alternate frames, and the camera the history was resolved for.
     struct CloudTemporal
@@ -956,6 +962,7 @@ private:
         cloudLightVolumes_;
     // Half-resolution sun transmittance through the clouds, read by direct lighting.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudShadowTargets_;
+    std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> unifiedCloudShadowTargets_;
     // Full-resolution sun visibility against authored Visibility Proxies, read by direct lighting.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> proxySunShadowTargets_;
     // Where each view's cloud lab cloud was placed (body-fixed unit direction).
