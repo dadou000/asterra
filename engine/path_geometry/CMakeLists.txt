@@ -6,6 +6,7 @@ add_library(OrbitPathGeometry STATIC
     src/CorridorDerived.cpp
     src/CorridorTerrainSource.cpp
     src/CorridorEngineering.cpp
+    src/CorridorEarthworks.cpp
 )
 
 add_library(
@@ -115,4 +116,12 @@ if(BUILD_TESTING)
     target_compile_features(OrbitCorridorEngineeringTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitCorridorEngineeringTests)
     add_test(NAME Orbit.CorridorEngineering COMMAND OrbitCorridorEngineeringTests)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitCorridorEarthworksTests tests/CorridorEarthworksTests.cpp)
+    target_link_libraries(OrbitCorridorEarthworksTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitCorridorEarthworksTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitCorridorEarthworksTests)
+    add_test(NAME Orbit.CorridorEarthworks COMMAND OrbitCorridorEarthworksTests)
 endif()
