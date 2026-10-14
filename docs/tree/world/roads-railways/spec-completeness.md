@@ -39,7 +39,7 @@ Status legend: **DOMAIN** = functional CPU/domain API present, not necessarily i
 | C05 | Drainage, culverts, waterways and wet friction | design only | PLAN | Hydrology-authoritative flow interfaces and draining failure test |
 | C06 | Road/track condition, rut/pothole/wear/repair | design only | PLAN | Sparse persistent damage with physical contact and repair transitions |
 | J01 | Explicit ID junction topology; no spatial auto-connect | `TransportTopology` | DOMAIN | Real turn-object semantics and grade-separated tests in Studio |
-| J02 | Junction lane movement curve previews | `TransportJunctions` + read-only RPC | PARTIAL | Actual trim/weld/mesh collision and bidirectional lane rules |
+| J02 | Junction lane movement and pavement construction | `TransportJunctions`, `RoadJunctionConstruction` + read-only RPC | PARTIAL | Actual atomic world publication of trimmed meshes/collision, material bands and driven junction acceptance |
 | J03 | Road overlap/merge/conflict graph | `JunctionConflicts` | DOMAIN | Pedestrian conflict, vehicle envelopes and clearance timing |
 | J04 | Advisory compatible traffic phase sets | `JunctionSignalPhases` | DOMAIN | Persistent signal layout, actual phase timing and traffic actor enforcement |
 | J05 | Turnouts, railway track transitions | rail branch preview | PARTIAL | True switches, blades, frog/guard rails, continuous gauge/contact |
@@ -99,3 +99,40 @@ Status legend: **DOMAIN** = functional CPU/domain API present, not necessarily i
 A single authored edge is not permitted to allocate an unbounded source or derived polyline. PathSourceRequest.maximumSamples (default 16384, allowed 2..131072) controls source Bézier/routed evaluation; PathBuildOptions.maximumStations (default 16384, allowed 2..131072) controls the subsequent distance-resampled corridor and lane/reference products. On overflow or excessive input, the builder produces a clear exception/error; it must not truncate geometry and inadvertently connect unrelated endpoints. The budgets are per edge, not planet-global. Actual chunk boundary handling and LOD remain unimplemented.
 
 The expanded Orbit.PathSplit test includes project database checkpoint/reopen and verifies that split identities, the new junction anchor, bridge construction mode and design speed persist. CI execution is still required; test code existence is not proof of a passing persistence gate.
+
+## Road junction CPU construction increment
+
+RoadJunctionConstruction now derives an explicit replacement bundle for same-frame T/cross road junctions: cut and retained copies of ALL built-in pavement/shoulder bands, a shared patch with exact five-point cross-section seams, matching collision triangles and lane movements retargeted onto surviving stations. The design is deliberately restricted to bounded star-shaped junctions with supported source sections. Source signatures allow later atomic runtime publication. Path.junction_preview optionally builds this bundle, exposes cut stations, collision counts, provenance and failure findings, and always reports construction_committed_to_world=false. Build → Procedurals shows the status. This is a CPU integration milestone only: until StudioSession/render/physics atomically replace their old products, a player cannot rely on this patch as the physical intersection.
+
+Domain acceptance: Orbit.RoadJunctionConstruction. Runtime gate C (physical road) and source revision publication remain OPEN. See road-junction-construction.md for the supported slice and forbidden approximations.
+
+## Junction failure atomicity follow-up
+
+The first road junction CPU replacement bundle now also preserves cut-vertex source normals and survives variable input order with a stable signature. The restricted 3+2+2 format validates indexed triangle topology; failures detected after staging clear all mesh, collision and lane output. This protects a future asynchronous handoff from accidentally consuming a partially constructed product. It does **not** replace the need for the runtime's world-generation transaction and source-revision fence. Release gate C remains open.
+
+## CPU production publication and pipeline ownership
+
+New `RoadJunctionPublication` composes a whole frame's junction products and incident road replacements, verifies raw build-signature/revision, dirty state, collision/mesh agreement, and prevents duplicate claims for the same end. Roads with junctions at both ends receive **one** doubly trimmed derived product; lane station/reference graphs are cropped to that retained range. `StudioRoadJunctionPipeline` discovers authored incidence once per scene/cache fingerprint, builds bounded frame-local batches and swaps complete immutable CPU packets. StudioSession::Tick runs this stage after raw corridor rebuild; `path.geometry` prefers its replacement product. `infrastructure.junction_pipeline_status` exposes frame generations, patch/edge/connection counts and failures.
+
+Stages S0–S8 are partially or fully implemented in the limited rural-road slice; S9 Vulkan draw submission and physical collider publication, S10 vehicle traffic and S11 profiler fixture **remain open**. New unverified test targets: `Orbit.RoadJunctionPublication` and `Orbit.StudioRoadJunctionPipeline`. Full architecture/acceptance at [pipeline.md](pipeline.md). Source present is not a passing compiler/runtime test.
+
+## Rendering/contact handoff increment
+
+The existing Vulkan-backed Studio Paths pass is now wired to a coherent replacement draw-list view from the published frame packet, including one patch proxy per junction. It skips the raw road meshes displaced by trimmed products; raw cache/source authority remains untouched. Frame/world-generation and source-signature validation prevent drawing stale packets; test coverage extends StudioRoadJunctionPipeline.RenderProducts for the three-road T and pending-dirty edge fallback. A new bounded CPU raycast contact probe traverses the published patch and cropped edge collision lists, including frame-local owner attribution, and is exposed through infrastructure.junction_contact_probe. This **does not** mark native Vulkan P4 or vehicle physics P5 passed; those require hardware captures and a real physics-world contact consumer.
+
+
+## Generational contact-scene synchronization
+
+Source includes \`RoadContactScene\`: bounded immutable static CPU shapes cooked from exactly the replacement mesh/collision arrays in \`RoadJunctionScenePacket\`. Each shape has the stable road or junction owner ID, frame-local bounds and clipped triangles. The Studio road-junction pipeline commits a prepared contact scene together with the CPU render packet; a shared packet/world/source eligibility guard prevents drawing a replacement junction while CPU contact is stale or vice versa. The existing contact RPC now uses this owner and fails closed for dirty sources. The contact scene can be queried with bounded double-precision raycasts and per-shape broadphase pruning.
+
+**Not complete:** these static CPU shapes have not been registered in a rigid-body world, no physics fixed-step barrier exists, no bogie/tire friction or spring-damper physics has been exercised, and no hardware rendering capture has passed. Tests are committed but not considered passing without a native build. The physics/drivability gates remain outstanding.
+
+## Fixed-step vehicle seam fixture status
+
+A bounded CPU `RoadVehicleFixture` now exercises four sprung ray wheels across staged collision surfaces and computes heave, pitch/roll, longitudinal traction/braking and wheel ownership changes. The test is entirely read-only, runs explicit fixed steps independent of real frame rate, and requires an active frame/signature-matched contact scene. RPC `infrastructure.road_vehicle_fixture` and Build → Procedurals call the same code. `Orbit.RoadVehicleFixture` includes a continuous flat seam and a deliberate gap regression; Studio's test calls the RPC.
+
+**Do not mark R01, R02, gate P5 or gate H complete**: this is a CPU feasibility fixture, not live NPC/player vehicle physics, native tire contacts, rigid-body-world shapes, or a fully drivable road scene. No native test result or profiler capture has been verified.
+
+## Vehicle-world development gate
+
+RoadVehicleWorld.hpp/.cpp supplies a transient physics state container, persistent steering/throttle/brake state across fixed steps and an explicit same-packet two-edge road route. Studio RPC and Build → Procedurals controls share one runtime owner. A content rebuild makes the old actor generation ineligible, and world close clears it. This improves CPU pipeline continuity but does NOT close player/NPC physics, multi-junction routing, physics-safe scheduling or the Vulkan driving-validation gate. New Orbit.RoadVehicleWorld CTest and updated StudioRoadJunctionPipeline RPC test await native execution. See vehicle-world.md.

@@ -205,16 +205,16 @@ float2 StormMedium(float3 position, float radius)
     if (edge <= 0.) return float2(0.,0.);
     const float blend = smoothstep(0.,max(g_storm[20],1.),edge)*
         saturate(g_storm[21])*Influence(x,y);
-)";
-
-constexpr const char* kMediumPart2 = R"(    if (blend <= 0.) return float2(0.,0.);
+    if (blend <= 0.) return float2(0.,0.);
     const float altitude = radius - planetR;
     const float dz = max(g_storm[16],1.);
     const float z = altitude/dz-0.5;
     if (z < -1. || z > g_storm[19]) return float2(0.,blend);
     const float3 parentCoord = float3(
         x/max(g_storm[14],1.)+0.5*g_storm[17]-0.5,
-        y/max(g_storm[15],1.)+0.5*g_storm[18]-0.5,z);
+)";
+
+constexpr const char* kMediumPart2 = R"(        y/max(g_storm[15],1.)+0.5*g_storm[18]-0.5,z);
     float sigma = SampleParent(parentCoord);
     if (g_storm[22] > 0.5)
     {
@@ -388,9 +388,7 @@ float4 Density(float3 position, bool receiver,
             max(0.30,topHeight);
         // Upper cirrus and detached convective anvil outflow use a
         // thinner, broader optical density than the dense low layer.
-)";
-
-constexpr const char* kMediumPart3 = R"(        const float cirrus=saturate(w.y)*
+        const float cirrus=saturate(w.y)*
             smoothstep(0.65,0.79,h)*
             (1.-smoothstep(0.92,1.,h))*
             smoothstep(0.35,0.75,baseValue);
@@ -404,7 +402,9 @@ constexpr const char* kMediumPart3 = R"(        const float cirrus=saturate(w.y)
         other+=sigma*(1.-cv);
         conv+=sigma*cv;
         otherScatter+=scattering*(1.-cv);
-        convScatter+=scattering*cv;
+)";
+
+constexpr const char* kMediumPart3 = R"(        convScatter+=scattering*cv;
         otherPhase+=phase*(1.-cv);
         convPhase+=phase*cv;
     }
@@ -591,34 +591,61 @@ float4 March(V input) : SV_Target0
     const float outer = g.shell.x + g.shell.z;
     if (!SphereInterval(g.cameraAspect.xyz, direction, outer, first, last))
         return float4(0,0,0,1);
-    float groundA, groundB;
-    // When the live storm export participates, its low-level inflow and
+    // The physical planet is opaque. A valid planet intersection is an
+    // unconditional far bound, even if the depth buffer is clear there.
+    first=max(first,0.);
+    last=min(last,SceneStop(input.uv,direction));
+    float planetNear,planetFar;
+    if(SphereInterval(g.cameraAspect.xyz,direction,
+        g.shell.x,planetNear,planetFar))
+    {
+        if(planetNear>0.)
+            last=min(last,planetNear);
+        else if(planetFar>0.)
+            return float4(0,0,0,1);
+    }
+    if(last<=first) return float4(0,0,0,1);
+
+    // An observer can see cloud medium before AND after dipping below
+    // cloud base on a grazing ray that does NOT intersect the planet.
+    // The previous B renderer stopped at the first cloud-base crossing
+    // and discarded the entire distant second shell segment.
+    float secondFirst=last,secondLast=last;
+    const float innerRadius=g.shell.x+
+        (g.material.z>0.5?0.:max(0.,g.shell.y));
+    float innerNear,innerFar;
 )";
 
-constexpr const char* kMediumPart4 = R"(    // precipitation regions may extend below the first procedural deck.
-    // Do not clip those cells away at the authored cloud base.
-    const float innerRadius=g.shell.x+
-        (g.material.z>0.5 ? 0. : max(0.,g.shell.y));
-    if (SphereInterval(g.cameraAspect.xyz, direction, innerRadius, groundA, groundB))
+constexpr const char* kMediumPart4 = R"(    if(SphereInterval(g.cameraAspect.xyz,direction,
+        innerRadius,innerNear,innerFar))
     {
-        if (groundA > 0.) last = min(last, groundA);
-        else if (groundB > 0.) first = max(first,groundB);
+        if(innerNear<=first && innerFar>first)
+        {
+            first=max(first,innerFar);
+        }
+        else if(innerNear>first && innerNear<last)
+        {
+            if(innerFar<last)
+            {
+                secondFirst=max(first,innerFar);
+                secondLast=last;
+            }
+            last=innerNear;
+        }
     }
-    first = max(first, 0.);
-    last = min(last, SceneStop(input.uv, direction));
-    if (last <= first)
-        return float4(0,0,0,1);
+    const float firstSpan=max(0.,last-first);
+    const float secondSpan=max(0.,secondLast-secondFirst);
+    const float totalSpan=firstSpan+secondSpan;
+    if(totalSpan<=0.) return float4(0,0,0,1);
 
-    // Progressive, *complete* view-ray integration: uniform 64 steps
-    // discarded near-field silhouette detail while overallocating the
-    // same number of samples to the unimportant far end of long rays.
-    // A monotonic quadratic schedule covers the ENTIRE intersected
-    // segment, with 0.35x step width near the camera and 1.65x far away.
-    // Unlike unbounded fine stepping it cannot silently truncate a long
-    // tangent ray when the iteration budget is exhausted.
+    // The same bounded 128-sample budget covers BOTH disjoint occupied
+    // intervals, allocated by their length. Each receives a complete
+    // near-to-far progressive schedule; samples never land in clear air
+    // in between and cannot skip the far cloud bank.
     const uint steps=128u;
-    const float span=last-first;
-    const float invSteps=1./float(steps);
+    const uint firstSteps=(secondSpan<=0.)?128u:
+        ((firstSpan<=0.)?0u:clamp(
+            (uint)round(float(steps)*firstSpan/totalSpan),1u,steps-1u));
     const uint2 pixel=uint2(input.position.xy);
     uint seed=pixel.x*747796405u+pixel.y*2891336453u+0x9e3779b9u;
     seed=((seed>>((seed>>28u)+4u))^seed)*277803737u;
@@ -630,10 +657,17 @@ constexpr const char* kMediumPart4 = R"(    // precipitation regions may extend 
     [loop]
     for(uint i=0u;i<steps && T>0.004;++i)
     {
-        const float u=float(i)*invSteps;
-        const float v=float(i+1u)*invSteps;
-        const float t0=first+span*u*(0.35+0.65*u);
-        const float t1=first+span*v*(0.35+0.65*v);
+        const bool second=i>=firstSteps;
+        const uint localIndex=second?(i-firstSteps):i;
+        const uint localSteps=second?(steps-firstSteps):firstSteps;
+        if(localSteps==0u) continue;
+        const float invLocal=1./float(localSteps);
+        const float u=float(localIndex)*invLocal;
+        const float v=float(localIndex+1u)*invLocal;
+        const float span=second?secondSpan:firstSpan;
+        const float startT=second?secondFirst:first;
+        const float t0=startT+span*u*(0.35+0.65*u);
+        const float t1=startT+span*v*(0.35+0.65*v);
         const float dt=t1-t0;
         const float cameraDistance=t0+jitter*dt;
         const float3 p=g.cameraAspect.xyz+direction*cameraDistance;

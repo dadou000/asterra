@@ -46,6 +46,16 @@ verified = "69bafa8"
 "unified B2 layered cloud extinction, nested storm integration and tests" = "unified-system-b-density"
 "unified B3 independent sunlight optical depth cache" = "unified-system-b-sun-cache"
 "system B multiscale 3D cloud morphology and visual parity tests" = "unified-system-b-morphology"
+"frozen EVE V5 reference full system integration specification" = "reference-eve-v5"
+"EVE V5 reference source and preset inventory" = "reference-eve-v5-01-package-and-presets"
+"EVE V5 config parser asset paths and cloud authoring" = "reference-eve-v5-02-config-and-assets"
+"EVE V5 cloud medium geometry and raymarch" = "reference-eve-v5-03-medium-and-geometry"
+"EVE V5 atmosphere skylight shadow volume and godrays" = "reference-eve-v5-04-atmosphere-and-lighting"
+"EVE V5 terrain ocean wetness and cloud shadow integration" = "reference-eve-v5-05-terrain-and-water"
+"EVE V5 lightning rain particles droplets and sound" = "reference-eve-v5-06-events-and-fx"
+"EVE V5 Vulkan render graph data ownership and temporal" = "reference-eve-v5-07-render-graph"
+"EVE V5 validation golden captures and performance gates" = "reference-eve-v5-08-validation-and-migration"
+"EVE V5 exact implementation task ledger" = "reference-eve-v5-09-implementation-ledger"
 "blackrack EVE release 5 archive and rendering techniques" = "blackrack-eve-release5-reference"
 "blackrack-inspired optimization plan and code mapping for Orbit" = "blackrack-eve-orbit-design"
 "papers, open-source examples and volumetric clouds resource library" = "cloud-rendering-reference-library"
@@ -62,6 +72,23 @@ verified = "69bafa8"
 - [B2 unified density and storm data contract](unified-system-b-density.md): GPU weather metadata append-only ABI, multi-layer extinction, nested storm interpolation, conflict register, and local validation.
 - [B3 independent sunlight cache](unified-system-b-sun-cache.md): physical optical depth, 16-frame sliced GPU updates, invalidation, safe cache-miss fallback, profiler and A/B testing.
 - [B morphology quality upgrade](unified-system-b-morphology.md): 3D tileable cell noise, cloud-type profiles, footprint-based erosion, independent resource lifetime and explicit A-parity gate.
+
+## Frozen V5 reference port: complete technical specification
+
+This is a **documentation-first** design for a separate EveV5Reference renderer, NOT a completed port. The supplied August 2026 preview ZIP is a proprietary compiled KSP release: source shaders and **103 cloud texture/sound paths (76 images, 27 audio)** are missing from it. No private binaries or assets may be copied into this public repository. A faithful line-by-line Vulkan port cannot be claimed until the original source/permissions and visual reference assets are available. Preserve existing A and B.
+
+- [00 Reference architecture and evidence boundaries](reference-eve-v5.md)
+- [01 Full package/config/preset inventory](reference-eve-v5-01-package-and-presets.md)
+- [02 Typed config importer, Hermite cloud types and asset validation](reference-eve-v5-02-config-and-assets.md)
+- [03 Cloud medium, 3D noise, grazing geometry, LOD, raymarch code](reference-eve-v5-03-medium-and-geometry.md)
+- [04 Atmosphere, physical Sun/sky light, multiple scattering, shadows and godrays](reference-eve-v5-04-atmosphere-and-lighting.md)
+- [05 Terrain, ocean, glass, rain wetness and puddle contracts](reference-eve-v5-05-terrain-and-water.md)
+- [06 Storm lightning, precipitation, droplets, particle fields and sound-domain events](reference-eve-v5-06-events-and-fx.md)
+- [07 Vulkan render graph, GPU ABI, barriers, snapshots, multi-view and profiler](reference-eve-v5-07-render-graph.md)
+- [08 26-scene validation matrix, image/GPU error metrics and gates](reference-eve-v5-08-validation-and-migration.md)
+- [09 52-item implementation ledger with exact Orbit touch points](reference-eve-v5-09-implementation-ledger.md)
+
+Use the original self-contained private ZIP audit: `python tools/audit_eve_reference.py "path/to/release.zip" --strict-manifest`. The audit never extracts the ZIP or uploads proprietary payloads.
 
 ## Reference research (Release 5 / planetary volumetrics)
 

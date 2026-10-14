@@ -58,3 +58,28 @@ InfrastructureSectionBuilder supplies deterministic road/rail sections from one 
 ## Defensive planetary-scale allocation limits
 
 PathSourceRequest.maximumSamples bounds Bezier/routed centreline expansion. PathBuildOptions.maximumStations bounds the next Resample stage before it allocates station arrays, reference graphs or vertex/collision products. Both defaults are 16384 samples and reject excess work; spatial tiling and streaming are not yet integrated. Orbit.PathSource and Orbit.PathGeometry tests exercise these cases.
+
+## Road junction construction and collision (CPU product)
+
+The source-level BuildRoadJunctionConstruction consumes existing JunctionPlan and built road PathDerivedProducts and returns a disposable frame-local replacement bundle: all clipped pavement/shoulder meshes, one exact-boundary junction surface and matching collision triangles, and cut-aligned lane connectors. It rejects stale/unsupported/mixed-mode sources and sets a reproducible dependencySignature. Currently exposed through path.junction_preview(include_construction=true) and Build → Procedurals, NOT as a committed runtime collider. Test: Orbit.RoadJunctionConstruction. See docs/tree/world/roads-railways/road-junction-construction.md.
+
+## Atomic road junction publication CPU stage
+
+`RoadJunctionPublication` validates current raw corridor signatures, composes multi-junction single/double-ended cuts, retains one per-edge mesh/collider/reference graph, and stages one immutable `RoadJunctionScenePacket` per frame with patch and lane-connection records. `StudioRoadJunctionPipeline` (under studio_session) owns the publication lifetime. Neither mutates the authoritative path network or raw path cache. Native test: `Orbit.RoadJunctionPublication`; Studio session test: `Orbit.StudioRoadJunctionPipeline`. GPU/physics publication pending.
+
+## GPU draw-list bridge and CPU contact probe
+
+`StudioRoadJunctionPipeline::RenderProducts` creates one revision-fenced draw list for the existing `StudioViewportRenderer`/ `PathPreviewRenderer`, replacing raw roads with cropped meshes and adding one patch proxy per junction. The new `RoadJunctionContact` module supports bounded double-precision nearest-surface queries over the same clipped collision data; no vehicle physics integration is claimed. Test targets: Orbit.StudioRoadJunctionPipeline and Orbit.RoadJunctionContact. Native validation remains outstanding.
+
+
+## Shared-generation road collision ownership
+
+\`RoadContactScene.hpp/.cpp\` prepares complete, bounded static road-contact generations from a road junction publication. The owning scene atomically swaps complete prepared shapes; invalid candidates retain the last valid generation. Collision/mesh parity, unique owner IDs, frame and triangle budgets are enforced. A shape AABB reduces contact test work, with double-precision per-triangle queries. The Studio road pipeline requires contact preparation before a replacement draw packet becomes eligible. The same raw path revision/world-generation guard is shared by drawing and contact RPC. This remains a physics-facing CPU adapter, not a rigid-body solver or physics-engine collider. Native unit target: \`Orbit.RoadContactScene\`.
+
+## RoadVehicleFixture: deterministic collision-driving feasibility
+
+`RoadVehicleFixture.hpp/.cpp` models four spring/damper wheel rays, body heave, small-angle pitch and roll, longitudinal traction/braking and yaw at an explicit fixed step (default 120 Hz). It queries only the published `RoadContactSceneOwner` surface generation and records physical seam owner transitions, ground-contact continuity, bottoming and oscillation. Budgets cap steps and triangle queries. `Orbit.RoadVehicleFixture` includes deterministic replay and deliberate gap detection; StudioSession's read-only RPC and Build → Procedurals use the same fixture. There is no full vehicle actor, tire-slip model or live rigid-body integration yet.
+
+## Persistent four-wheel runtime world
+
+RoadVehicleWorld.hpp/.cpp owns a bounded transient actor container using the same validated integrator as RoadVehicleFixture. The runtime requires an explicit RoadContactSceneOwner generation; copied-actor transactional steps prevent partial states on invalid contacts, and rebind clears actors on generation change. CompileRoadVehicleRoute uses exact authored road/lane movement endpoints. StudioSession owns the actor world and exposes it through infrastructure.vehicle_world; the unified Procedurals UI offers spawn/step/control/inspect/remove. Test: Orbit.RoadVehicleWorld. It is not yet a full 6-DoF vehicle physics or a real-time NPC simulator.

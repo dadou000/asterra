@@ -14,6 +14,7 @@
 #include <orbit/path_geometry/TransportJunctions.hpp>
 #include <orbit/path_geometry/JunctionConflicts.hpp>
 #include <orbit/path_geometry/JunctionSignalPhases.hpp>
+#include <orbit/path_geometry/RoadJunctionConstruction.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -416,6 +417,9 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
         }
     }
 
+    if(observedJunctionPublicationRevision_!=
+        studioSession_.RoadJunctions().Revision())
+        requiresRefresh=true;
     // The StudioSession infrastructure cache owns the actual swept
     // construction geometry. Detect its later asynchronous publication even
     // when scene/content revisions did not change this particular frame.
@@ -613,8 +617,11 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
             // generic ribbon with inconsistent banks or railheads.
             const auto* constructed =
                 studioSession_.PathProducts().Find(edgeId);
-            auto product = constructed != nullptr ?
-                *constructed :
+            const auto* replacement =
+                studioSession_.RoadJunctions().FindEdge(edgeId);
+            auto product = replacement != nullptr ?
+                replacement->product :
+                constructed != nullptr ? *constructed :
                 orbit::path_geometry::BuildPathDerived(
                     *centerline, resolvedProfile.profile,
                     {.sampleSpacingMeters = sampleSpacing});
@@ -711,6 +718,8 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
         objects().Revision();
     derivedContentRevision_ =
         content_.Revision();
+    observedJunctionPublicationRevision_=
+        studioSession_.RoadJunctions().Revision();
 }
 
 void StudioPathNetworkHost::AttachRpc()
@@ -1311,6 +1320,14 @@ void StudioPathNetworkHost::AttachRpc()
                 throw orbit::rpc::Error(-32602,"node must be a UUID string");
             const auto node=orbit::scene::ObjectId::Parse(requested->AsString());
             if (!node)throw orbit::rpc::Error(-32602,"Invalid node UUID");
+            bool includeConstruction=false;
+            if(const auto* value=params.Find("include_construction"))
+            {
+                if(!value->IsBool())
+                    throw orbit::rpc::Error(-32602,
+                        "include_construction must be a boolean");
+                includeConstruction=value->AsBool();
+            }
             bool includeSamples=false;
             if (const auto* value=params.Find("include_samples"))
             {
@@ -1327,6 +1344,7 @@ void StudioPathNetworkHost::AttachRpc()
                 return orbit::rpc::Value::Object{
                     {"ready",false},{"reason","Node not found"},
                     {"node",node->ToString()}};
+            bool constructionSourcesDirty=false;
             std::vector<orbit::path_geometry::JunctionApproach> approaches;
             const auto edgeIds=FindPathEdges(objects(),service);
             for (const auto id:edgeIds)
@@ -1337,6 +1355,8 @@ void StudioPathNetworkHost::AttachRpc()
                 const bool road=edge->infrastructureCatalogId=="rural-road";
                 const bool rail=edge->infrastructureCatalogId=="ballasted-rail";
                 if (!road && !rail)continue;
+                if(studioSession_.PathProducts().IsDirty(id))
+                    constructionSourcesDirty=true;
                 const auto* geometry=studioSession_.PathProducts().Find(id);
                 if (!geometry)
                 {
@@ -1358,11 +1378,20 @@ void StudioPathNetworkHost::AttachRpc()
             }
             const auto plan=orbit::path_geometry::BuildTransportJunction(
                 *node,approaches);
+            orbit::path_geometry::RoadJunctionConstruction construction;
+            orbit::path_geometry::JunctionPlan navigationPlan=plan;
+            if(includeConstruction && !constructionSourcesDirty)
+            {
+                construction=orbit::path_geometry::BuildRoadJunctionConstruction(
+                    plan,approaches);
+                if(construction.Ready())
+                    navigationPlan.movements=construction.laneConnectors;
+            }
             const auto conflictReport =
-                orbit::path_geometry::AnalyzeJunctionConflicts(plan);
+                orbit::path_geometry::AnalyzeJunctionConflicts(navigationPlan);
             const auto phasePlan =
                 orbit::path_geometry::SuggestRoadJunctionPhases(
-                    plan,conflictReport);
+                    navigationPlan,conflictReport);
             orbit::rpc::Value::Array advisoryPhases;
             for(const auto& phase:phasePlan.phases)
             {
@@ -1378,7 +1407,7 @@ void StudioPathNetworkHost::AttachRpc()
                     {"edge",finding.edge.ToString()},
                     {"message",finding.explanation}
                 });
-            for(const auto& move:plan.movements)
+            for(const auto& move:navigationPlan.movements)
             {
                 orbit::rpc::Value::Object record{
                     {"from_edge",move.incomingEdge.ToString()},
@@ -1405,13 +1434,86 @@ void StudioPathNetworkHost::AttachRpc()
                         vertex.position.x,vertex.position.y,vertex.position.z});
             const bool hasRail=std::any_of(approaches.begin(),approaches.end(),
                 [](const auto& a){return a.mode==orbit::path_geometry::TransportMode::Rail;});
+            orbit::rpc::Value::Array constructionFindings;
+            orbit::rpc::Value::Array constructionEdges;
+            orbit::rpc::Value::Array constructionMesh;
+            orbit::rpc::Value::Array constructionIndices;
+            if(includeConstruction)
+            {
+                if(constructionSourcesDirty)
+                    constructionFindings.emplace_back(orbit::rpc::Value::Object{
+                        {"edge",""},
+                        {"kind",static_cast<orbit::i64>(
+                            orbit::path_geometry::RoadJunctionBuildIssue::MissingCorridor)},
+                        {"message","Input corridor generation is dirty; wait for current products before construction."}
+                    });
+                for(const auto& finding:construction.findings)
+                    constructionFindings.emplace_back(orbit::rpc::Value::Object{
+                        {"edge",finding.edge.ToString()},
+                        {"kind",static_cast<orbit::i64>(finding.issue)},
+                        {"message",finding.message}
+                    });
+                if(construction.Ready())
+                {
+                    for(const auto& edge:construction.edges)
+                        constructionEdges.emplace_back(orbit::rpc::Value::Object{
+                            {"edge",edge.edge.ToString()},
+                            {"cut_station_index",
+                                static_cast<orbit::i64>(edge.sourceCutStation)},
+                            {"cut_station_meters",edge.cutStationMeters},
+                            {"retained_vertices",static_cast<orbit::i64>(
+                                edge.retainedMesh.vertices.size())},
+                            {"retained_collision_triangles",static_cast<orbit::i64>(
+                                edge.collision.size())}
+                        });
+                    if(includeSamples)
+                    {
+                        for(const auto& vertex:construction.pavement.vertices)
+                            constructionMesh.emplace_back(
+                                orbit::rpc::Value::Array{
+                                    vertex.position.x,vertex.position.y,
+                                    vertex.position.z});
+                        for(const auto index:construction.pavement.indices)
+                            constructionIndices.emplace_back(
+                                static_cast<orbit::i64>(index));
+                    }
+                }
+            }
             return orbit::rpc::Value::Object{
                 {"ready",true},{"valid",plan.Valid()},
                 {"node",node->ToString()},
                 {"frame",plan.frame.ToString()},
                 {"approaches",static_cast<orbit::i64>(approaches.size())},
                 {"valid_edges",static_cast<orbit::i64>(plan.validEdges.size())},
-                {"movement_count",static_cast<orbit::i64>(plan.movements.size())},
+                {"movement_count",static_cast<orbit::i64>(navigationPlan.movements.size())},
+                {"construction_requested",includeConstruction},
+                {"construction_ready",
+                    includeConstruction && !constructionSourcesDirty &&
+                        construction.Ready()},
+                {"construction_sources_dirty",constructionSourcesDirty},
+                {"construction_dependency_signature",static_cast<orbit::i64>(
+                    construction.dependencySignature & 0x7fffffffffffffffULL)},
+                {"construction_committed_to_world",false},
+                {"construction_published_cpu",
+                    studioSession_.RoadJunctions().CurrentContact(
+                        *node,studioSession_.PathProducts())!=nullptr},
+                {"construction_contact_scene_active",
+                    studioSession_.RoadJunctions().CurrentContact(
+                        *node,studioSession_.PathProducts())!=nullptr},
+                {"construction_physics_world_committed",false},
+                {"construction_publication_revision",
+                    static_cast<orbit::i64>(
+                        studioSession_.RoadJunctions().Revision())},
+                {"construction_findings",std::move(constructionFindings)},
+                {"construction_trimmed_edges",std::move(constructionEdges)},
+                {"construction_patch_vertices",static_cast<orbit::i64>(
+                    construction.pavement.vertices.size())},
+                {"construction_patch_collision_triangles",static_cast<orbit::i64>(
+                    construction.pavementCollision.size())},
+                {"construction_patch_frame_local_vertices",std::move(constructionMesh)},
+                {"construction_patch_triangle_indices",std::move(constructionIndices)},
+                {"construction_lane_connectors",static_cast<orbit::i64>(
+                    construction.laneConnectors.size())},
                 {"conflict_count",static_cast<orbit::i64>(
                     conflictReport.conflicts.size())},
                 {"conflict_analysis_truncated",conflictReport.truncated},
