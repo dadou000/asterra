@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <numbers>
 #include <stdexcept>
@@ -1199,12 +1200,38 @@ GpuCloudFieldProduct::GpuCloudFieldProduct(
         packed.push_back({});
     }
 
+    // Append descriptors after the existing texels. No A shader offset
+    // changes: even the first layer still starts at byte zero. B reads the
+    // descriptor tail at faceResolution^2 * 6 * layerCount * 16.
+    std::vector<GpuCloudLayerDescriptor> layerDescriptors;
+    layerDescriptors.reserve(product.layers.size());
+    for (const auto& layer : product.layers)
+    {
+        const CloudLayerParameters& p = layer.parameters;
+        layerDescriptors.push_back({
+            .shell = {
+                static_cast<f32>(p.baseAltitudeMeters),
+                static_cast<f32>(p.topAltitudeMeters),
+                static_cast<f32>(p.peakOpticalDepth),
+                static_cast<f32>(p.coverageBias)
+            },
+            .material = {
+                static_cast<f32>(p.densityExponent),
+                static_cast<f32>(p.singleScatteringAlbedo),
+                static_cast<f32>(p.anisotropy),
+                p.shadowParticipation ? 1.0F : 0.0F
+            }
+        });
+    }
+    const std::size_t texelBytes = packed.size() * sizeof(GpuCloudTexel);
+    const std::size_t descriptorBytes =
+        layerDescriptors.size() * sizeof(GpuCloudLayerDescriptor);
+
     buffer_ =
         device.CreateBuffer({
             .sizeBytes =
                 static_cast<u64>(
-                    packed.size() *
-                    sizeof(GpuCloudTexel)),
+                    texelBytes + descriptorBytes),
             .usage =
                 rhi::BufferUsage::Structured,
             .memory =
@@ -1220,11 +1247,13 @@ GpuCloudFieldProduct::GpuCloudFieldProduct(
             "Failed to allocate GPU cloud field.");
     }
 
-    std::memcpy(
-        buffer_->Map(),
-        packed.data(),
-        packed.size() *
-            sizeof(GpuCloudTexel));
+    void* const mapped = buffer_->Map();
+    std::memcpy(mapped, packed.data(), texelBytes);
+    if (!layerDescriptors.empty())
+    {
+        std::memcpy(static_cast<std::byte*>(mapped) + texelBytes,
+            layerDescriptors.data(), descriptorBytes);
+    }
     buffer_->Unmap();
 }
 
