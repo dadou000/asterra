@@ -409,6 +409,12 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
     return false;
 }
 [numthreads(8,8,1)]
+void ClearSunCache(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x>=kCacheSide || id.y>=kCacheSide || id.z>=kCacheHeight) return;
+    g_lightCache.Store4(CacheIndex(id), uint4(0u,0u,0u,0u));
+}
+[numthreads(8,8,1)]
 void UpdateSunCache(uint3 id : SV_DispatchThreadID)
 {
     if(id.x>=kCacheSide || id.y>=kCacheSide ||
@@ -593,6 +599,20 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
     });
     if (!sunCachePipeline_)
         throw std::runtime_error("Unified System B Sun cache compute pipeline unavailable");
+    const auto clearShader = compiler.Compile({
+        .source = computeSource, .entryPoint = "ClearSunCache",
+        .stage = shader::Stage::Compute, .debug = false});
+    sunCacheClearPipeline_ = device.CreateComputePipeline({
+        .computeShader = {
+            .data = clearShader.bytecode.data(),
+            .size = clearShader.bytecode.size()},
+        .pushConstantDwords = 32U,
+        .shaderResourceBuffers = 3U,
+        .storageTextures = 0U,
+        .sampledTextures = 0U
+    });
+    if (!sunCacheClearPipeline_)
+        throw std::runtime_error("Unified System B Sun cache clear pipeline unavailable");
 }
 UnifiedCloudRenderer::~UnifiedCloudRenderer() = default;
 
@@ -712,6 +732,20 @@ void UnifiedCloudRenderer::UpdateSunCache(
     commands.Transition(*cache.buffer,
         rhi::ResourceState::ShaderResource,
         rhi::ResourceState::UnorderedAccess);
+    if (!cache.initialized)
+    {
+        // No reliance on undefined GPU allocation contents. Clear once,
+        // then validate every read with explicit generation tags.
+        commands.SetComputePipeline(*sunCacheClearPipeline_);
+        commands.SetComputeConstants(constants);
+        commands.SetComputeBuffer(0U,field.Buffer());
+        commands.SetComputeBuffer(1U,
+            stormExport ? *stormExport : *emptyStorm_);
+        commands.SetComputeBuffer(2U,*cache.buffer);
+        commands.Dispatch(4U,4U,16U);
+        commands.UavBarrier(*cache.buffer);
+        cache.initialized=true;
+    }
     commands.SetComputePipeline(*sunCachePipeline_);
     commands.SetComputeConstants(constants);
     commands.SetComputeBuffer(0U,field.Buffer());
