@@ -369,6 +369,21 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         std::ceil(static_cast<f32>(width) * bScale)));
                     const u32 bHeight = std::max(1U, static_cast<u32>(
                         std::ceil(static_cast<f32>(height) * bScale)));
+                    const u64 mediumBytes =
+                        static_cast<u64>(bWidth) * static_cast<u64>(bHeight) * 8U;
+                    if (!celestial_clouds::unified::ResourceBudget{}.
+                        FitsPreviewTarget(bWidth, bHeight))
+                    {
+                        if (mediumBytes != lastUnifiedCloudBudgetWarningBytes_)
+                        {
+                            lastUnifiedCloudBudgetWarningBytes_ = mediumBytes;
+                            log::Warning(
+                                "Unified Cloud B preview skipped: cloud target "
+                                "exceeds its 128 MiB share of the resource budget.");
+                        }
+                    }
+                    else
+                    {
                     auto& bTarget = unifiedCloudTargets_[info.id];
                     if (!bTarget || bTarget->Width() != bWidth ||
                         bTarget->Height() != bHeight)
@@ -427,6 +442,7 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                             unifiedCloudRenderer_->Composite(
                                 commands, *bTexture, *color, width, height);
                         });
+                    }
                 }
                 // On compile failure, show the unmodified scene and log the
                 // explicit B error; do not secretly substitute A's clouds.
