@@ -14,10 +14,12 @@ sources = [
   "engine/path_geometry/src/TransportJunctions.cpp",
   "engine/path_geometry/include/orbit/path_geometry/RailInterlocking.hpp",
   "engine/path_geometry/src/RailInterlocking.cpp",
+  "engine/path_geometry/include/orbit/path_geometry/JunctionConflicts.hpp",
+  "engine/path_geometry/src/JunctionConflicts.cpp",
   "engine/path_geometry/include/orbit/path_geometry/InfrastructureSectionBuilder.hpp",
   "engine/path_geometry/src/InfrastructureSectionBuilder.cpp",
 ]
-symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology", "PlanInfrastructureSection", "BuildTransportJunction", "RailInterlocking"]
+symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology", "PlanInfrastructureSection", "BuildTransportJunction", "RailInterlocking", "AnalyzeJunctionConflicts"]
 invariants = [
   "Network authority remains in engine/paths; road/rail representations are disposable derived products.",
   "Railhead contact reference coordinates match the swept railhead strip station frame, gauge and cant.",
@@ -111,3 +113,7 @@ BuildTransportJunction takes exact authored node identity, explicit endpoint ori
 RailInterlocking is a pure ephemeral switch reservation model requiring an explicit stem, straight and diverging edge. It blocks conflicting reservations, locks alignment during reservations, rejects unauthorized releases and disallows throwing a switch while occupied. It is not a persistent rail signal system or safety-certified control.
 
 StudioPathNetworkHost registers read-only path.junction_preview(node UUID, optional include_samples bool) returning frame, connection candidates, preview hull dimensions and typed findings. Build → Procedurals exposes the same RPC through a node browser, with no independent topology store. Only bounded geometry is emitted. Tests: Orbit.TransportJunctions and Orbit.RailInterlocking. The actual runtime build, switch geometry, continuous junction collision and GPU/physics smoke test remain outstanding.
+
+## Intersection conflict pairs
+
+AnalyzeJunctionConflicts consumes the exact frame-local movement polylines produced by BuildTransportJunction and computes deterministic pairs which share a vehicle entry/exit lane or physically overlap within configurable road/rail vehicle sweep envelopes. It uses true double-precision 3D segment distance, so elevated crossings clear the underlying road when there is sufficient vertical separation. Pair counts, segment comparisons and returned conflicts are separately capped; truncation is explicit, never described as a complete traffic phase safety result. Studio's path.junction_preview and Build → Procedurals surface the conflict count and truncation indicator. This supports future phase grouping/interlocking but does not yet control traffic lights, signal aspects, player vehicle behaviour or any collider.

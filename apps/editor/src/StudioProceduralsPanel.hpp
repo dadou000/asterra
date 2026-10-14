@@ -398,6 +398,15 @@ private:
                         if(const auto* v=junctionReport_.Find(field);
                            v && v->IsInteger())
                             context.KeyValue(field,std::to_string(v->AsInteger()));
+                    if(const auto* conflicts=junctionReport_.Find("conflict_count");
+                       conflicts && conflicts->IsInteger())
+                        context.KeyValue("Conflicting movement pairs",
+                            std::to_string(conflicts->AsInteger()));
+                    if(const auto* truncated=junctionReport_.Find(
+                           "conflict_analysis_truncated");
+                       truncated && truncated->IsBool() && truncated->AsBool())
+                        context.ErrorText(
+                            "Conflict scan reached its evaluation budget. Results are incomplete.");
                     if(const auto* f=junctionReport_.Find("frame");
                        f && f->IsString())
                         context.KeyValue("Station frame",f->AsString());

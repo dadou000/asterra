@@ -12,6 +12,7 @@
 #include <orbit/path_geometry/CorridorEngineering.hpp>
 #include <orbit/path_geometry/RailCantDesign.hpp>
 #include <orbit/path_geometry/TransportJunctions.hpp>
+#include <orbit/path_geometry/JunctionConflicts.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -1312,6 +1313,8 @@ void StudioPathNetworkHost::AttachRpc()
             }
             const auto plan=orbit::path_geometry::BuildTransportJunction(
                 *node,approaches);
+            const auto conflictReport =
+                orbit::path_geometry::AnalyzeJunctionConflicts(plan);
             orbit::rpc::Value::Array findings, movements;
             for(const auto& finding:plan.findings)
                 findings.emplace_back(orbit::rpc::Value::Object{
@@ -1353,6 +1356,10 @@ void StudioPathNetworkHost::AttachRpc()
                 {"approaches",static_cast<orbit::i64>(approaches.size())},
                 {"valid_edges",static_cast<orbit::i64>(plan.validEdges.size())},
                 {"movement_count",static_cast<orbit::i64>(plan.movements.size())},
+                {"conflict_count",static_cast<orbit::i64>(
+                    conflictReport.conflicts.size())},
+                {"conflict_analysis_truncated",conflictReport.truncated},
+                {"conflict_analysis_valid",conflictReport.valid},
                 {"road_footprint_vertices",
                     static_cast<orbit::i64>(plan.roadFootprint.vertices.size())},
                 {"road_footprint_triangles",
