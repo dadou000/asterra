@@ -122,6 +122,7 @@ JunctionPlan BuildTransportJunction(
     std::set<scene::ObjectId> visitedEdges;
     for(const auto& approach:approaches)
     {
+        if(approach.mode==TransportMode::Rail)out.hasRailApproach=true;
         if(approach.edge && !visitedEdges.insert(approach.edge).second)
         {
             problem(JunctionIssue::InvalidInput,approach.edge,
@@ -284,15 +285,16 @@ JunctionPlan BuildTransportJunction(
             const auto hull=Hull(std::move(corners),out.centre,ax,ay);
             if(hull.size()>=3 && hull.size()<std::numeric_limits<u32>::max()-1U)
             {
-                out.roadFootprint.vertices.push_back({
-                    .position=out.centre,.normal=up});
+                // Triangulate from a hull vertex, never from the node:
+                // the semantic node may lie outside an asymmetric road
+                // footprint, and fan triangulation from it would overlap.
                 for(const auto& p:hull)
                     out.roadFootprint.vertices.push_back({
                         .position=p,.normal=up});
-                for(u32 i=1;i<=hull.size();++i)
+                for(u32 i=1;i+1U<hull.size();++i)
                     out.roadFootprint.indices.insert(
                         out.roadFootprint.indices.end(),{
-                            0U,i,i==hull.size()?1U:i+1U});
+                            0U,i,i+1U});
             }
         }
     }

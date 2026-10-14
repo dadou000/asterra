@@ -55,6 +55,10 @@ int main()
     conflicts.truncated=true;
     CHECK(!SuggestRoadJunctionPhases(road,conflicts).valid);
     conflicts.truncated=false;
+    road.hasRailApproach=true;
+    const auto adjacentRail=SuggestRoadJunctionPhases(road,conflicts);
+    CHECK(!adjacentRail.valid && adjacentRail.requiresRailInterlocking);
+    road.hasRailApproach=false;
     road.movements[3].mode=TransportMode::Rail;
     const auto mixed=SuggestRoadJunctionPhases(road,conflicts);
     CHECK(!mixed.valid && mixed.requiresRailInterlocking);

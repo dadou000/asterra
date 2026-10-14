@@ -64,6 +64,7 @@ struct JunctionPlan
     std::vector<scene::ObjectId> validEdges;
     std::vector<JunctionMovement> movements;
     std::vector<JunctionFinding> findings;
+    bool hasRailApproach{false};
     // Preview-only convex footprint around road approaches. It is not a
     // watertight curb/sidewalk patch and is not published as terrain collision.
     PathMesh roadFootprint;

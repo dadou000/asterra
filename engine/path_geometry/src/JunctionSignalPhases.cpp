@@ -9,6 +9,7 @@ JunctionPhasePlan SuggestRoadJunctionPhases(
     const u32 maximumPhases)
 {
     JunctionPhasePlan result;
+    result.requiresRailInterlocking=plan.hasRailApproach;
     for(const auto& m:plan.movements)
         if(m.mode!=TransportMode::Road)
             result.requiresRailInterlocking=true;

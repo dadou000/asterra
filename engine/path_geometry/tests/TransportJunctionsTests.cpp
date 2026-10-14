@@ -60,7 +60,7 @@ int main()
     CHECK(three.movements.size()==6);
     CHECK(three.validEdges.size()==3);
     CHECK(three.roadFootprint.vertices.size()>=4);
-    CHECK(three.roadFootprint.indices.size()>=9);
+    CHECK(three.roadFootprint.indices.size()>=6);
     for(const auto& move:three.movements)
     {
         CHECK(move.incomingEdge!=move.outgoingEdge);
@@ -89,6 +89,7 @@ int main()
     reversed[2].mode=TransportMode::Rail;
     const auto crossing=BuildTransportJunction(node,reversed);
     CHECK(crossing.Valid());
+    CHECK(crossing.hasRailApproach);
     CHECK(crossing.movements.size()==2); // no road-to-rail transfers
     reversed=approaches;
     // Railway movement previews follow the rendered railhead contact height,
