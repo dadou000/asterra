@@ -825,6 +825,14 @@ private:
     StormDomainMailbox stormMailbox_;
     struct StormRuntime;
     std::shared_ptr<StormRuntime> storm_;   // shared_ptr: the deleter is captured where the type is complete
+    // The solver's shared read-only GPU export, not A's cached illumination.
+    // Published when UpdateStormDomain finishes, then consumed by A and B.
+    rhi::Buffer* sharedStormCloudExport_{nullptr};
+    void PublishStormCloudExport(rhi::Buffer* buffer) noexcept
+    {
+        sharedStormCloudExport_ = buffer;
+        cloudRenderer_.SetStormBuffer(buffer);
+    }
     // Builds, steps (in lockstep with `now`) and exports the storm domain and points the cloud renderer at it; call once per frame that
     // draws clouds on `body`.
     void UpdateStormDomain(
