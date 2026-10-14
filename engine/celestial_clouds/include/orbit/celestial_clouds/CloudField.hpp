@@ -6,6 +6,7 @@
 #include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/time/SimulationTime.hpp>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -144,6 +145,21 @@ struct GpuCloudTexel
     f32 precipitation{0.0F};
     f32 cloudType{0.5F};
 };
+
+// Appended read-only per-layer GPU material descriptors. System A continues
+// indexing its existing 16-byte weather texels at exactly the same offsets.
+// System B reads this tail to integrate all authored layers in one medium.
+// ByteAddressBuffer layout: two float4 records, 32 bytes per layer.
+struct GpuCloudLayerDescriptor
+{
+    // x base altitude (m), y top altitude (m), z peak optical depth,
+    // w coverage bias; all in physical/body-fixed units.
+    std::array<f32, 4> shell{};
+    // x density exponent, y single-scattering albedo, z phase g,
+    // w whether this layer casts receiver shadows (0/1).
+    std::array<f32, 4> material{};
+};
+static_assert(sizeof(GpuCloudLayerDescriptor) == 32U);
 
 class GpuCloudFieldProduct
 {
