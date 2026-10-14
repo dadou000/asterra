@@ -421,24 +421,45 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
             .colorAttachmentCount = 1U
         });
     };
-    march_ = pipeline(pixel, 24U, 1U, 1U, rhi::BlendMode::Opaque);
-    receiverShadow_ = pipeline(shadowPixel, 24U, 1U, 1U, rhi::BlendMode::Opaque);
+    march_ = pipeline(pixel, 24U, 2U, 1U, rhi::BlendMode::Opaque);
+    receiverShadow_ = pipeline(shadowPixel, 24U, 2U, 1U, rhi::BlendMode::Opaque);
     composite_ = pipeline(compPixel, 0U, 0U, 1U, rhi::BlendMode::Alpha);
     if (!march_ || !receiverShadow_ || !composite_)
         throw std::runtime_error("Unified System B cloud pipelines unavailable");
+    emptyStorm_ = device.CreateBuffer({
+        .sizeBytes = 64ULL * sizeof(f32),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!emptyStorm_)
+        throw std::runtime_error("Unified System B inactive storm allocation failed");
+    std::memset(emptyStorm_->Map(), 0, 64U * sizeof(f32));
+    emptyStorm_->Unmap();
 }
 UnifiedCloudRenderer::~UnifiedCloudRenderer() = default;
 
 void UnifiedCloudRenderer::DrawMedium(
     rhi::CommandList& commands, const bool shadow,
     rhi::Texture& depth, GpuCloudFieldProduct& field, rhi::Texture& target,
-    const f64 bodyRadiusMeters, const CloudLayerParameters& layer,
-    const celestial_atmosphere::AtmosphereRenderView& view)
+    const f64 bodyRadiusMeters, const CloudFieldProduct& source,
+    const celestial_atmosphere::AtmosphereRenderView& view,
+    rhi::Buffer* const stormExport)
 {
-    if (!target.Width() || !target.Height() || field.FaceResolution() < 2U)
+    if (!target.Width() || !target.Height() || field.FaceResolution() < 2U ||
+        source.layers.empty() || field.LayerCount() != source.layers.size() ||
+        field.FaceResolution() != source.faceResolution)
         return;
-    const f32 threshold = std::clamp(
-        0.52F - static_cast<f32>(layer.coverageBias) * 0.35F, 0.05F, 0.95F);
+    // Every B density layer uses its own altitude interval. The outer
+    // intersection and inner bound must encompass all of them, including
+    // cirrus and optically thin foreground fog.
+    f64 base = std::numeric_limits<f64>::max();
+    f64 top = 0.0;
+    for (const auto& layer : source.layers)
+    {
+        base = std::min(base, layer.parameters.baseAltitudeMeters);
+        top = std::max(top, layer.parameters.topAltitudeMeters);
+    }
+    if (!(top > base)) return;
     const std::array<u32, 24> constants{
         Bits(static_cast<f32>(view.cameraPositionMeters.x)),
         Bits(static_cast<f32>(view.cameraPositionMeters.y)),
@@ -451,11 +472,12 @@ void UnifiedCloudRenderer::DrawMedium(
         Bits(view.sunDirection.x), Bits(view.sunDirection.y), Bits(view.sunDirection.z),
         Bits(view.farPlaneMeters),
         Bits(static_cast<f32>(bodyRadiusMeters)),
-        Bits(static_cast<f32>(layer.baseAltitudeMeters)),
-        Bits(static_cast<f32>(layer.topAltitudeMeters)),
+        Bits(static_cast<f32>(base)),
+        Bits(static_cast<f32>(top)),
         Bits(static_cast<f32>(field.FaceResolution())),
-        Bits(threshold), Bits(static_cast<f32>(layer.peakOpticalDepth)),
-        Bits(static_cast<f32>(layer.densityExponent)),
+        Bits(static_cast<f32>(field.LayerCount())),
+        0U,
+        0U,
         Bits(view.irradianceScale)
     };
     commands.SetRenderTarget(target);
@@ -469,24 +491,31 @@ void UnifiedCloudRenderer::DrawMedium(
     commands.SetGraphicsPipeline(shadow ? *receiverShadow_ : *march_);
     commands.SetGraphicsConstants(constants);
     commands.SetGraphicsBuffer(0, field.Buffer());
+    commands.SetGraphicsBuffer(1,
+        stormExport != nullptr ? *stormExport : *emptyStorm_);
     commands.SetGraphicsTexture(0, depth);
     commands.Draw(6);
 }
+
 void UnifiedCloudRenderer::Draw(
     rhi::CommandList& commands, rhi::Texture& depth,
     GpuCloudFieldProduct& field, rhi::Texture& target,
-    const f64 radius, const CloudLayerParameters& layer,
-    const celestial_atmosphere::AtmosphereRenderView& view)
+    const f64 radius, const CloudFieldProduct& source,
+    const celestial_atmosphere::AtmosphereRenderView& view,
+    rhi::Buffer* const stormExport)
 {
-    DrawMedium(commands, false, depth, field, target, radius, layer, view);
+    DrawMedium(commands, false, depth, field, target, radius, source, view,
+        stormExport);
 }
 void UnifiedCloudRenderer::DrawReceiverShadow(
     rhi::CommandList& commands, rhi::Texture& depth,
     GpuCloudFieldProduct& field, rhi::Texture& target,
-    const f64 radius, const CloudLayerParameters& layer,
-    const celestial_atmosphere::AtmosphereRenderView& view)
+    const f64 radius, const CloudFieldProduct& source,
+    const celestial_atmosphere::AtmosphereRenderView& view,
+    rhi::Buffer* const stormExport)
 {
-    DrawMedium(commands, true, depth, field, target, radius, layer, view);
+    DrawMedium(commands, true, depth, field, target, radius, source, view,
+        stormExport);
 }
 void UnifiedCloudRenderer::Composite(
     rhi::CommandList& commands, rhi::Texture& medium, rhi::Texture& scene,
