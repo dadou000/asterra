@@ -1254,6 +1254,50 @@ void StudioPathNetworkHost::AttachRpc()
             return orbit::rpc::Value(std::move(output));
         });
 
+    // The Studio panel, CLI and agents all use the same transactional path
+    // mutation, preserving the original first edge's stable ID and shape.
+    rpcHost_.Dispatcher().Register(
+        {.name="path.edge_split",
+         .description="Split a direct or Bezier FramePoint infrastructure edge without altering its curve. Params: edge (UUID), fraction (strictly 0..1), optional node_name.",
+         .mutating=true},
+        [this](const orbit::rpc::Value& params)->orbit::rpc::Value
+        {
+            const auto* id=params.Find("edge");
+            const auto* fraction=params.Find("fraction");
+            if(!id || !id->IsString() || !fraction || !fraction->IsNumber())
+                throw orbit::rpc::Error(-32602,
+                    "edge must be UUID and fraction must be numeric.");
+            const auto edge=orbit::scene::ObjectId::Parse(id->AsString());
+            if(!edge)throw orbit::rpc::Error(-32602,"Invalid edge UUID");
+            if(!worldSession_.HasWorld())
+                throw orbit::rpc::Error(-32001,"Open a world first.");
+            std::string name="Split Junction";
+            if(const auto* n=params.Find("node_name"))
+            {
+                if(!n->IsString())throw orbit::rpc::Error(-32602,
+                    "node_name must be a string");
+                name=n->AsString();
+            }
+            try
+            {
+                const auto result=studioSession_.PathNetwork().Service().SplitEdge(
+                    *edge,fraction->AsNumber(),std::move(name));
+                // Existing semantic revision invalidation handles both new
+                // and shortened edges through the normal StudioSession tick.
+                return orbit::rpc::Value::Object{
+                    {"original_edge",result.firstEdge.id.ToString()},
+                    {"first_edge",result.firstEdge.id.ToString()},
+                    {"junction_node",result.junctionNode.id.ToString()},
+                    {"second_edge",result.secondEdge.id.ToString()},
+                    {"fraction",fraction->AsNumber()}
+                };
+            }
+            catch(const std::invalid_argument& error)
+            {
+                throw orbit::rpc::Error(-32602,error.what());
+            }
+        });
+
     // Bounded, on-demand junction preview. It consumes exactly the same
     // revisioned path products as path.geometry, not a second editable graph.
     rpcHost_.Dispatcher().Register(

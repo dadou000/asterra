@@ -169,6 +169,15 @@ struct PathEdgeRecord
 
 void RegisterSchemas(schema::SchemaRegistry& schemas);
 
+// A transactional, shape-preserving split. The original edge keeps its ID
+// and becomes the first segment; the second edge/new node receive new IDs.
+struct PathSplitResult
+{
+    PathNodeRecord junctionNode;
+    PathEdgeRecord firstEdge;
+    PathEdgeRecord secondEdge;
+};
+
 class PathNetworkService
 {
 public:
@@ -206,6 +215,13 @@ public:
     void SetNodeAnchor(
         scene::ObjectId node,
         PathAnchor anchor);
+
+    // Shape-preserving De Casteljau split in one explicit FramePoint frame.
+    // Routed/surface/socket/mixed-frame segments are rejected until their
+    // anchor and dependency remapping semantics are implemented.
+    [[nodiscard]] PathSplitResult SplitEdge(
+        scene::ObjectId edge, f64 fraction,
+        std::string nodeName = "Split Junction");
 
     void SetBezierHandles(
         scene::ObjectId edge,

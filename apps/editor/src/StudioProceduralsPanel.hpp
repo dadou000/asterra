@@ -184,6 +184,49 @@ private:
         }
         catch (const std::exception& e) { error_ = e.what(); }
     }
+    void SplitSelectedEdge()
+    {
+        error_.clear();
+        if(!scene::ObjectId::Parse(edgeId_))
+        {
+            error_="Select an existing infrastructure segment first.";
+            return;
+        }
+        try
+        {
+            rpc::Value request(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id",static_cast<i64>(1)},
+                {"method","path.edge_split"},
+                {"params",rpc::Value(rpc::Value::Object{
+                    {"edge",edgeId_},
+                    {"fraction",splitFraction_},
+                    {"node_name",splitNodeName_}})}
+            });
+            const auto response=rpc_->Dispatch(rpc::Serialize(request));
+            if(!response)throw std::runtime_error("Split RPC returned no response.");
+            const auto parsed=rpc::ParseValue(*response);
+            if(const auto* err=parsed.Find("error"))
+                throw std::runtime_error(rpc::Serialize(*err));
+            const auto* payload=parsed.Find("result");
+            if(!payload || !payload->IsObject())
+                throw std::runtime_error("Malformed split result.");
+            const auto* junction=payload->Find("junction_node");
+            const auto* second=payload->Find("second_edge");
+            if(!junction || !junction->IsString() ||
+               !second || !second->IsString())
+                throw std::runtime_error("Split returned incomplete identities.");
+            status_="Split created junction "+junction->AsString()+
+                " and second edge "+second->AsString()+
+                ". The original edge ID was preserved. Undo reverts both.";
+            junctionNodeId_=junction->AsString();
+            junctionReport_=rpc::Value{};
+            report_=rpc::Value{};
+            Refresh();
+            if(const auto original=scene::ObjectId::Parse(edgeId_))
+                SelectEdge(*original);
+        }
+        catch(const std::exception& e){error_=e.what();}
+    }
     void Analyze()
     {
         error_.clear();
@@ -512,6 +555,15 @@ private:
             static_cast<void>(context.InputDouble3("End tangent (m)##proc-end", endHandle_));
         }
         if (context.PrimaryButton("Apply to authored segment##proc-apply")) Apply();
+        if (context.Section("Split infrastructure segment##proc-split",false))
+        {
+            context.MutedText(
+                "Preserves the original curve and first edge ID. Only direct/Bezier endpoints in one reference frame are supported.");
+            static_cast<void>(context.InputDouble("Split fraction (0-1)##proc-split-frac",splitFraction_));
+            static_cast<void>(context.InputText("New node label##proc-split-name",splitNodeName_));
+            if(context.PrimaryButton("Split edge (undoable)##proc-split-run"))
+                SplitSelectedEdge();
+        }
         if (!status_.empty()) context.MutedText(status_);
         if (!error_.empty()) context.ErrorText(error_);
 
@@ -616,6 +668,8 @@ private:
     math::Double3 newEndHandle_{-5.0,0.0,0.0};
     std::string edgeId_;
     double speed_{20.0};
+    double splitFraction_{0.5};
+    std::string splitNodeName_{"Split Junction"};
     std::string error_;
     rpc::Value report_;
     rpc::Value junctionReport_;

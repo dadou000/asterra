@@ -661,6 +661,79 @@ void PathNetworkService::SetNodeAnchor(
     }
 }
 
+PathSplitResult PathNetworkService::SplitEdge(
+    const scene::ObjectId edgeId, const f64 fraction,
+    std::string nodeName)
+{
+    if (!std::isfinite(fraction) || fraction <= 0.001 ||
+        fraction >= 0.999 || nodeName.empty())
+        throw std::invalid_argument("Split fraction must lie strictly inside the edge and node name must be set.");
+    const auto old=FindEdge(edgeId);
+    if(!old || old->mode==EdgeMode::Routed)
+        throw std::invalid_argument("Only existing direct or Bezier edges can be split.");
+    const auto start=FindNode(old->startNode),end=FindNode(old->endNode);
+    if(!start || !end || start->network!=old->network ||
+       end->network!=old->network)
+        throw std::invalid_argument("Split edge endpoints must resolve in the same network.");
+    const auto* a=std::get_if<FramePointAnchor>(&start->anchor);
+    const auto* b=std::get_if<FramePointAnchor>(&end->anchor);
+    if(!a || !b || !a->frame || a->frame!=b->frame)
+        throw std::invalid_argument("Split requires endpoint FramePoint anchors in one reference frame.");
+    const auto finite=[](const math::Double3 v) {
+        return std::isfinite(v.x)&&std::isfinite(v.y)&&std::isfinite(v.z);
+    };
+    if(!finite(a->localMeters) || !finite(b->localMeters) ||
+       !finite(old->startHandleMeters)||!finite(old->endHandleMeters) ||
+       math::LengthSquared(b->localMeters-a->localMeters)<1.e-12)
+        throw std::invalid_argument("Split requires finite nondegenerate geometry.");
+
+    const auto mix=[&](const math::Double3 x,const math::Double3 y) {
+        return x*(1.0-fraction)+y*fraction;
+    };
+    const auto p0=a->localMeters,p3=b->localMeters;
+    const auto p1=old->mode==EdgeMode::Bezier?p0+old->startHandleMeters:p0+(p3-p0)*(1.0/3.0);
+    const auto p2=old->mode==EdgeMode::Bezier?p3+old->endHandleMeters:p0+(p3-p0)*(2.0/3.0);
+    const auto q0=mix(p0,p1),q1=mix(p1,p2),q2=mix(p2,p3);
+    const auto r0=mix(q0,q1),r1=mix(q1,q2);
+    const auto joined=mix(r0,r1);
+    // Preserve *exact* direct edges without unnecessary Bezier sampling.
+    const auto record=objects_.Find(edgeId);
+    const std::string originalName=record?record->name:std::string("Path");
+    const bool ownsTransaction=!commands_.HasActiveTransaction();
+    if(ownsTransaction)commands_.BeginTransaction("Split Infrastructure Edge");
+    try
+    {
+        const auto node=CreateNode(old->network,std::move(nodeName),
+            FramePointAnchor{.frame=a->frame,.localMeters=joined});
+        // Retain the original edge ID to preserve references to its entry.
+        commands_.SetProperty(edgeId,kEdgeEndNode,ToReference(node.id));
+        PathEdgeRecord second{};
+        if(old->mode==EdgeMode::Bezier)
+        {
+            commands_.SetProperty(edgeId,kBezierStartHandle,q0-p0);
+            commands_.SetProperty(edgeId,kBezierEndHandle,r0-joined);
+            second=ConnectBezier(node.id,old->endNode,r1-joined,
+                                 q2-p3,originalName+" (2)");
+        }
+        else
+            second=ConnectDirect(node.id,old->endNode,originalName+" (2)");
+        if(!old->profileOverride.empty())
+            SetProfile(second.id,old->profileOverride);
+        if(!old->infrastructureCatalogId.empty())
+            SetInfrastructureIntent(second.id,old->infrastructureCatalogId,
+                old->infrastructureCatalogVersion,old->constructionMode,
+                old->designSpeedKmh,old->easeTurns);
+        if(ownsTransaction)commands_.CommitTransaction();
+        return {node,*FindEdge(edgeId),*FindEdge(second.id)};
+    }
+    catch(...)
+    {
+        if(ownsTransaction && commands_.HasActiveTransaction())
+            commands_.RollbackTransaction();
+        throw;
+    }
+}
+
 void PathNetworkService::SetBezierHandles(
     const scene::ObjectId edge,
     const math::Double3 startHandleMeters,
