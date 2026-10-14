@@ -27,10 +27,12 @@ struct Cut
     Double3 up{};
     Double3 centre{};
     std::vector<Double3> boundary;
+    std::vector<Double3> normals;
 };
 struct RingPoint
 {
     Double3 position{};
+    Double3 normal{};
     scene::ObjectId edge{};
     u32 column{};
     f64 angle{0};
@@ -107,6 +109,13 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
     const auto fail=[&](RoadJunctionBuildIssue issue,
                         scene::ObjectId edge,const char* message)
     {
+        // Failed construction is never a partially usable mesh bundle.
+        // Retain diagnostics, but discard all previously staged geometry.
+        result.edges.clear();
+        result.pavement={};
+        result.pavementCollision.clear();
+        result.laneConnectors.clear();
+        result.dependencySignature=0;
         result.findings.push_back({issue,edge,message});
     };
     if(!junction.node || !junction.frame ||
@@ -118,7 +127,10 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
        options.maximumJointElevationDifferenceMeters<0 ||
        options.connectorSegments<2U || options.connectorSegments>128U ||
        options.maximumApproaches<2U || options.maximumApproaches>16U ||
-       options.maximumInputVertices<32U || options.maximumOutputVertices<32U)
+       options.maximumInputVertices<32U ||
+       options.maximumInputVertices>262144U ||
+       options.maximumOutputVertices<32U ||
+       options.maximumOutputVertices>262144U)
     {
         fail(RoadJunctionBuildIssue::InvalidInput,{},"Invalid junction construction options.");
         return result;
@@ -145,6 +157,13 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
     }
     for(const auto& approach:approaches)
     {
+        if(std::find(junction.validEdges.begin(),junction.validEdges.end(),
+                     approach.edge)==junction.validEdges.end())
+        {
+            fail(RoadJunctionBuildIssue::InvalidTopology,approach.edge,
+                "Input road is not incident to the validated semantic node.");
+            return result;
+        }
         const auto* geom=approach.geometry;
         if(approach.mode!=TransportMode::Road)
         {
@@ -167,7 +186,7 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
         }
         const auto n=geom->stations.size();
         if(geom->visualMesh.vertices.size()!=n*7U ||
-           geom->visualMesh.indices.size()%3U!=0U ||
+           geom->visualMesh.indices.size()!=(n-1U)*24U ||
            geom->lanes.empty())
         {
             fail(RoadJunctionBuildIssue::UnsupportedSection,approach.edge,
@@ -246,7 +265,10 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
         Cut record;
         record.input=&approach;
         record.stationIndex=cutIndex;
-        record.outward=outward;
+        // Drive-through connectors meet the ACTUAL cut-station tangent,
+        // not the old node tangent that was trimmed away.
+        record.outward=math::Normalize(
+            cut.tangent*(approach.atStart?1.0:-1.0));
         record.up=normal;
         record.centre=cut.position;
         // The construction patch must close BOTH shoulders as well as
@@ -260,14 +282,16 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
         };
         for(const auto vertex:cutVertices)
         {
-            const auto v=geom->visualMesh.vertices[vertex].position;
-            if(!Finite(v))
+            const auto& sourceVertex=geom->visualMesh.vertices[vertex];
+            if(!Finite(sourceVertex.position)||
+               !Finite(sourceVertex.normal))
             {
                 fail(RoadJunctionBuildIssue::InvalidInput,approach.edge,
-                    "Nonfinite road cut boundary.");
+                    "Nonfinite road cut boundary or normal.");
                 return result;
             }
-            record.boundary.push_back(v);
+            record.boundary.push_back(sourceVertex.position);
+            record.normals.push_back(sourceVertex.normal);
         }
         if(!cuts.emplace(approach.edge,std::move(record)).second)
         {
@@ -302,7 +326,8 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
                      "Cut ring point lies too close to the junction centre.");
                 return result;
             }
-            ring.push_back({cut.boundary[column],id,column,std::atan2(y,x)});
+            ring.push_back({cut.boundary[column],cut.normals[column],
+                id,column,std::atan2(y,x)});
         }
     std::sort(ring.begin(),ring.end(),[](const RingPoint& a,const RingPoint& b){
         if(a.angle!=b.angle)return a.angle<b.angle;
@@ -383,7 +408,7 @@ RoadJunctionConstruction BuildRoadJunctionConstruction(
     });
     for(const auto& v:ring)
         result.pavement.vertices.push_back({
-            .position=v.position,.normal=up});
+            .position=v.position,.normal=v.normal});
     for(u32 i=1;i<=ring.size();++i)
         result.pavement.indices.insert(result.pavement.indices.end(),
             {0U,i,i==ring.size()?1U:i+1U});

@@ -60,3 +60,9 @@ Build → Procedurals → Junction and turnout preview requests this product, re
 4. Extend to asymmetric road widths and lane splits, genuine road material bands, sidewalks/curbs, crossing controls, intersections with grade, non-star-shaped merge geometries and ray-stable planetary tangent-plane operation.
 
 The CPU builder and test target are in source, but the native compilation/execution and real-world publication gates have not been marked passed.
+
+## Additional material and failure invariants
+
+The junction seam preserves the constructed cut boundary vertex *normals*, not only positions. Connector Hermite tangents follow the surviving cut station (not the removed semantic-node station) so a curved road approaches the patch in the correct local direction. A built-in road section must carry the complete expected 3+2+2 surface and indexed triangle topology; coincident vertex counts from an unrelated profile are not sufficient. Work budgets have hard maxima independent of caller configuration.
+
+If a connector, index or source check fails after any temporary geometry has been staged, the builder discards the staged patch, all fragments, contact triangles, lane links and dependency fingerprint while preserving typed findings. Only Ready() output can be handed to a downstream publisher. Regression cases cover post-staging invalidation, curve/source-dependent fingerprints, cut shoulder seam normals and unsupported acute joins.

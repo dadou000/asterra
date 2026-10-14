@@ -97,7 +97,10 @@ int main()
             const auto point=source->visualMesh.vertices[vertex].position;
             CHECK(std::any_of(built.pavement.vertices.begin(),
                 built.pavement.vertices.end(),
-                [&](const auto& v){return v.position==point;}));
+                [&](const auto& v){
+                    return v.position==point &&
+                        v.normal==source->visualMesh.vertices[vertex].normal;
+                }));
         }
     }
     for(const auto& move:built.laneConnectors)
@@ -133,12 +136,54 @@ int main()
     CHECK(shuffled.pavement==built.pavement);
     CHECK(shuffled.edges.size()==built.edges.size());
 
+    // Geometry changes invalidate the entire revision-fenced replacement.
+    auto editedEast=Road({10,1},frame,{36,0,0});
+    auto modified=approaches;
+    for(auto& a:modified)
+        if(a.edge==east.edge)a.geometry=&editedEast;
+    const auto modifiedPlan=BuildTransportJunction(node,modified);
+    CHECK(modifiedPlan.Valid());
+    const auto modifiedProduct=
+        BuildRoadJunctionConstruction(modifiedPlan,modified);
+    CHECK(modifiedProduct.Ready());
+    CHECK(modifiedProduct.dependencySignature!=built.dependencySignature);
+
+    // An invalid connector detected AFTER patch staging must return no
+    // publishable geometry. No partial mesh/contact generation may leak.
+    auto brokenPlan=plan;
+    brokenPlan.movements.push_back({
+        .incomingEdge={99,99},
+        .outgoingEdge=east.edge,
+        .mode=TransportMode::Road
+    });
+    const auto brokenBuild=BuildRoadJunctionConstruction(
+        brokenPlan,approaches);
+    CHECK(!brokenBuild.Ready());
+    CHECK(brokenBuild.pavement.vertices.empty());
+    CHECK(brokenBuild.pavementCollision.empty());
+    CHECK(brokenBuild.edges.empty());
+    CHECK(brokenBuild.dependencySignature==0U);
+
     auto tooSmall=BuildRoadJunctionConstruction(plan,approaches,
         {.trimDistanceMeters=500.0});
     CHECK(!tooSmall.Ready());
     const auto tooLarge=BuildRoadJunctionConstruction(plan,approaches,
         {.maximumInputVertices=32U});
     CHECK(!tooLarge.Ready());
+    const auto tooSmallOutput=BuildRoadJunctionConstruction(plan,approaches,
+        {.maximumOutputVertices=32U});
+    CHECK(!tooSmallOutput.Ready());
+    // Reject non-star-shaped/incomplete two-arm acute approaches instead of
+    // leaving overlapping patch and corridor collider triangles.
+    auto northeast=Road({10,4},frame,{28,0,6});
+    std::vector<JunctionApproach> acute{
+        {east.edge,frame,TransportMode::Road,true,true,&east},
+        {northeast.edge,frame,TransportMode::Road,true,true,&northeast}
+    };
+    const auto acutePlan=BuildTransportJunction(node,acute);
+    CHECK(acutePlan.Valid());
+    CHECK(!BuildRoadJunctionConstruction(acutePlan,acute).Ready());
+
     auto rail=approaches;
     rail[0].mode=TransportMode::Rail;
     CHECK(!BuildRoadJunctionConstruction(plan,rail).Ready());
