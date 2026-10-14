@@ -21,6 +21,13 @@ int main()
         {.stationMeters=10,.position={10,0,0},.tangent={1,0,0}},
         {.stationMeters=20,.position={20,0,0},.tangent={1,0,0}}
     };
+    orbit::paths::PathProfile authored;
+    authored.minimumRadiusMeters = 42.0;
+    authored.maximumGrade = 0.035;
+    const auto adapted = EngineeringRulesForProfile(authored, rules);
+    CHECK(adapted.minimumRadiusMeters == 42.0);
+    CHECK(adapted.maximumGrade == 0.035);
+    CHECK(adapted.designSpeedMetersPerSecond == rules.designSpeedMetersPerSecond);
     const auto straight = AnalyzeCorridorEngineering(flat,rules);
     CHECK(straight.Valid());
     CHECK(straight.findings.empty());
