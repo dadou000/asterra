@@ -62,8 +62,9 @@ private:
         if (!session_->World().HasWorld()) { report_=rpc::Value{}; return; }
         const auto& store=session_->World().Objects();
         auto pending=store.Roots();
-        std::size_t visited=0;
-        while (!pending.empty() && visited++<20000 && edges_.size()<512)
+        // Traverse the complete authored scene. The former 512-edge / 20k-object
+        // cutoff silently hid roads and networks in large worlds.
+        while (!pending.empty())
         {
             const auto record=pending.back();
             pending.pop_back();
@@ -82,6 +83,15 @@ private:
             if(!session_->PathNetwork().Service().FindEdge(*it))
                 it=selectedRoads_.erase(it);
             else ++it;
+        if(newNetworkId_ && !session_->PathNetwork().Service().FindNetwork(newNetworkId_))
+        {
+            newNetworkId_={};
+            if(viewportTool_)
+            {
+                viewportTool_->activePathNetwork.reset();
+                viewportTool_->lastPlacedPathNode.reset();
+            }
+        }
         knownWorldGeneration_=session_->World().Objects().Revision();
         std::sort(edges_.begin(),edges_.end(),
             [](const auto& a,const auto& b) {
@@ -94,7 +104,6 @@ private:
         edgeId_ = id.ToString();
         selectedFinding_ = 0;
         report_ = rpc::Value{};
-        selectedFinding_ = 0;
         error_.clear();
         const auto edge = session_->PathNetwork().Service().FindEdge(id);
         if (!edge) { error_ = "The selected edge no longer exists."; return; }
@@ -122,6 +131,10 @@ private:
             const auto created=session_->PathNetwork().Service().CreateNetwork(
                 newNetworkName_);
             newNetworkId_=created.id;
+            if(viewportTool_) {
+                viewportTool_->activePathNetwork=newNetworkId_;
+                viewportTool_->lastPlacedPathNode.reset();
+            }
             status_="Network created. Add anchor nodes through the existing node tools or connect nodes below.";
             error_.clear();
             Refresh();
