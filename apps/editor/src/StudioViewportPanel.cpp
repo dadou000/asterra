@@ -423,7 +423,8 @@ void StudioViewportPanel::Register()
 
                 // Cloud split view: a draggable divider with an A / B label either side. While it is grabbed the press is not a
                 // selection click.
-                if (studioViewportRenderer.CloudSplitEnabled())
+                if (!studioViews.TerrainLayers("studio.primary").cloudBPreview &&
+                    studioViewportRenderer.CloudSplitEnabled())
                 {
                     const orbit::f32 shownWidth = scaledRender ? available.width : imageSize.width;
                     const orbit::f32 shownHeight = scaledRender ? available.height : imageSize.height;
