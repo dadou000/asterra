@@ -1100,7 +1100,8 @@ void StudioViewportPanel::Register()
                                uv->v<0.0F || uv->v>1.0F)
                                 return std::nullopt;
                             return orbit::math::Float2{
-                                uv->u*previewWidth,uv->v*previewHeight};
+                                (1.0F-uv->u)*previewWidth,
+                                uv->v*previewHeight};
                         };
                         std::vector<orbit::editor_ui::OverlaySegment> strokes;
                         std::vector<orbit::editor_ui::OverlayDisc> markers;
@@ -1542,28 +1543,46 @@ void StudioViewportPanel::Register()
                             activePathNetwork =
                                 targetNetwork;
 
-                            if (lastPlacedPathNode.
-                                    has_value())
+                            // Constructing roads must not change the editor
+                            // selection: selecting newly authored nodes can
+                            // trigger selection-driven camera framing/reset.
+                            // Leave explicit node selection to normal path tools.
+                            if(!infrastructureDrawMode)
                             {
-                                const auto previous =
-                                    pathService.
-                                        FindNode(
-                                            *lastPlacedPathNode);
-
-                                if (previous.
-                                        has_value() &&
-                                    previous->network ==
-                                        *targetNetwork)
+                                if (lastPlacedPathNode.
+                                        has_value())
                                 {
-                                    const std::array
-                                        selected{
-                                            *lastPlacedPathNode,
-                                            node.id
-                                        };
-
-                                    selection().Set(
-                                        std::span(
-                                            selected));
+                                    const auto previous =
+                                        pathService.
+                                            FindNode(
+                                                *lastPlacedPathNode);
+    
+                                    if (previous.
+                                            has_value() &&
+                                        previous->network ==
+                                            *targetNetwork)
+                                    {
+                                        const std::array
+                                            selected{
+                                                *lastPlacedPathNode,
+                                                node.id
+                                            };
+    
+                                        selection().Set(
+                                            std::span(
+                                                selected));
+                                    }
+                                    else
+                                    {
+                                        const std::array
+                                            selected{
+                                                node.id
+                                            };
+    
+                                        selection().Set(
+                                            std::span(
+                                                selected));
+                                    }
                                 }
                                 else
                                 {
@@ -1571,23 +1590,13 @@ void StudioViewportPanel::Register()
                                         selected{
                                             node.id
                                         };
-
+    
                                     selection().Set(
                                         std::span(
                                             selected));
                                 }
-                            }
-                            else
-                            {
-                                const std::array
-                                    selected{
-                                        node.id
-                                    };
-
-                                selection().Set(
-                                    std::span(
-                                        selected));
-                            }
+    
+                                }
 
                             lastPlacedPathNode =
                                 node.id;
