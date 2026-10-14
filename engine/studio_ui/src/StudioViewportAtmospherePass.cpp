@@ -1,4 +1,5 @@
 #include "StudioViewportInternals.hpp"
+#include <orbit/core/Log.hpp>
 
 namespace orbit::studio_ui
 {
