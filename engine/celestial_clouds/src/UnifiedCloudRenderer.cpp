@@ -31,7 +31,7 @@ V main(uint id : SV_VertexID)
 // Independent B shader; not a copy of A's ray marcher, Sun cache, history,
 // density profile or shader defines. The sole shared *data* is the packed,
 // read-only cubemap weather product from CloudField.
-constexpr const char* kMedium = R"(
+constexpr const char* kMediumPart1 = R"(
 struct V { float4 position : SV_Position; float2 uv : TEXCOORD0; };
 struct Config
 {
@@ -154,7 +154,9 @@ float SampleParent(float3 fractional)
     const float x0 = lerp(ParentCell(a),ParentCell(a+int3(1,0,0)),t.x);
     const float x1 = lerp(ParentCell(a+int3(0,1,0)),ParentCell(a+int3(1,1,0)),t.x);
     const float y0 = lerp(ParentCell(a+int3(0,0,1)),ParentCell(a+int3(1,0,1)),t.x);
-    const float y1 = lerp(ParentCell(a+int3(0,1,1)),ParentCell(a+int3(1,1,1)),t.x);
+)";
+
+constexpr const char* kMediumPart2 = R"(    const float y1 = lerp(ParentCell(a+int3(0,1,1)),ParentCell(a+int3(1,1,1)),t.x);
     return lerp(lerp(x0,x1,t.y),lerp(y0,y1,t.y),t.z);
 }
 float SampleChild(float3 fractional)
@@ -263,7 +265,9 @@ float4 Density(float3 position, bool receiver)
         float coverage = saturate((w.x-(0.52-shell.w*0.35-0.26))/0.52);
         if (coverage <= 0.015 && w.y <= 0.015) continue;
         const float h = saturate((altitude-shell.x)/max(shell.y-shell.x,1.));
-        const float type = saturate(w.w);
+)";
+
+constexpr const char* kMediumPart3 = R"(        const float type = saturate(w.w);
         const float low = smoothstep(0.,0.07,h) * (1.-smoothstep(0.7,1.,h));
         const float fair = smoothstep(0.,0.12,h) *
             (1.-smoothstep(0.62+0.18*type,1.,h));
@@ -389,7 +393,9 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
             for(uint dx=0u;dx<2u;++dx)
             {
                 const uint3 c=first+uint3(dx,dy,dz);
-                const float4 v=asfloat(g_lightCache.Load4(CacheIndex(c)));
+)";
+
+constexpr const char* kMediumPart4 = R"(                const float4 v=asfloat(g_lightCache.Load4(CacheIndex(c)));
                 if(v.y != g.cacheAnchor.w || !isfinite(v.x))
                     return false;
                 const float w=(dx==0u?1.-weight.x:weight.x)*
@@ -522,6 +528,21 @@ float4 ReceiverShadow(V input) : SV_Target0
     return float4(visibility,visibility,visibility,1);
 }
 )";
+// Assemble the HLSL at runtime: MSVC rejects a single 20 KiB raw string
+// (C2026), and adjacent C++ string literals would still be concatenated
+// by the compiler. Each fragment stays below the MSVC literal limit.
+// Do not change the fragment boundaries without updating the shader validator.
+[[nodiscard]] std::string BuildMediumShaderSource()
+{
+    std::string source;
+    source.reserve(sizeof(kMediumPart1) + sizeof(kMediumPart2) + sizeof(kMediumPart3) + sizeof(kMediumPart4) + 1U);
+    source += kMediumPart1;
+    source += kMediumPart2;
+    source += kMediumPart3;
+    source += kMediumPart4;
+    return source;
+}
+
 constexpr const char* kComposite = R"(
 struct V { float4 position : SV_Position; float2 uv : TEXCOORD0; };
 [[vk::binding(0,0)]] [[vk::combinedImageSampler]] Texture2D g_clouds;
@@ -540,12 +561,13 @@ float4 main(V input) : SV_Target0
 
 UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Compiler& compiler)
 {
+    const std::string mediumSource = BuildMediumShaderSource();
     const auto vertex = compiler.Compile({
         .source = kVertex, .entryPoint = "main", .stage = shader::Stage::Vertex, .debug = false});
     const auto pixel = compiler.Compile({
-        .source = kMedium, .entryPoint = "March", .stage = shader::Stage::Pixel, .debug = false});
+        .source = mediumSource, .entryPoint = "March", .stage = shader::Stage::Pixel, .debug = false});
     const auto shadowPixel = compiler.Compile({
-        .source = kMedium, .entryPoint = "ReceiverShadow", .stage = shader::Stage::Pixel, .debug = false});
+        .source = mediumSource, .entryPoint = "ReceiverShadow", .stage = shader::Stage::Pixel, .debug = false});
     const auto compPixel = compiler.Compile({
         .source = kComposite, .entryPoint = "main", .stage = shader::Stage::Pixel, .debug = false});
     const auto pipeline = [&device,&vertex](const auto& fragment,
@@ -588,7 +610,7 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
     emptySunCache_->Unmap();
 
     const std::string computeSource =
-        std::string("#define B3_WRITE_CACHE 1\n") + kMedium;
+        std::string("#define B3_WRITE_CACHE 1\n") + mediumSource;
     const auto compute = compiler.Compile({
         .source = computeSource, .entryPoint = "UpdateSunCache",
         .stage = shader::Stage::Compute, .debug = false});
