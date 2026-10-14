@@ -816,6 +816,12 @@ private:
     std::string unifiedCloudInitError_;
     u64 lastUnifiedCloudBudgetWarningBytes_{0U};
     [[nodiscard]] bool EnsureUnifiedCloudRenderer();
+public:
+    [[nodiscard]] const std::string& UnifiedCloudInitError() const noexcept
+    {
+        return unifiedCloudInitError_;
+    }
+private:
     StormDomainMailbox stormMailbox_;
     struct StormRuntime;
     std::shared_ptr<StormRuntime> storm_;   // shared_ptr: the deleter is captured where the type is complete
