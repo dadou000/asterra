@@ -36,6 +36,8 @@ public:
         bool anchored{false};
         u32 generation{1U};
         u32 phase{0U};
+        math::Float3 lastSun{};
+        bool sunSet{false};
         u64 sourceFingerprint{0U};
         const rhi::Buffer* lastStorm{nullptr};
         f64 lastRadius{0.0};
