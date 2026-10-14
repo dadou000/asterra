@@ -428,14 +428,17 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                              cloudReferenceRadius, cloudView,
                              simulationSeconds =
                                  static_cast<f64>(
-                                     context.atTime.microsecondsFromEpoch) * 1.0e-6](
+                                     context.atTime.microsecondsFromEpoch) * 1.0e-6,
+                             bodyHigh = cloudFound->second.body.high,
+                             bodyLow = cloudFound->second.body.low](
                                 rhi::CommandList& commands,
                                 const render_graph::Resources&)
                             {
                                 unifiedCloudRenderer_->UpdateSunCache(
                                     commands, *bSunCache, *cloudGpu, *source,
                                     cloudReferenceRadius, cloudView,
-                                    sharedStormCloudExport_, simulationSeconds);
+                                    sharedStormCloudExport_, simulationSeconds,
+                                    bodyHigh, bodyLow);
                             });
                     }
                     graph.AddPass(
