@@ -7,6 +7,7 @@ add_library(OrbitPathGeometry STATIC
     src/CorridorTerrainSource.cpp
     src/CorridorEngineering.cpp
     src/CorridorEarthworks.cpp
+    src/CorridorDesignPreview.cpp
 )
 
 add_library(
