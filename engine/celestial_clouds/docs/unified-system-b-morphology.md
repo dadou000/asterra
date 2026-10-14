@@ -46,6 +46,24 @@ This is deterministic and cheap but cannot produce believable separate cloud cel
 - Empty single-layer weather columns are rejected before expensive noise-buffer lookups, including in Sun-cache generation. B keeps the live nested-storm replacement semantics and all authored layer descriptors from B2.
 - The view march has been upgraded from 64 uniform samples to 128 **nonuniform but complete** samples. Its camera-to-cloud partition is a monotonic quadratic schedule: t(u)=tNear+span*u*(0.35+0.65*u). This preferentially samples near the viewer without leaving a long grazing ray partially unrendered at budget exhaustion. A stable per-pixel PCG offset stratifies each sample inside its segment, with no temporal phase until B has reliable history.
 
+# Matched-scenario A/B review from user captures (2026-10-14)
+
+The user supplied two near-horizontal cloud-views: the first explicitly displays **Cloud renderer: A (reference)**, and the second is B. They share approximately similar horizon orientation and reported cloud-field statistics, but are not accompanied by identical physical timestamps, camera transform, exposure, or GPU trace. Therefore this is a qualitative visual comparison, **not** a controlled parity or speed benchmark.
+
+Observed:
+- A has more distinct broken cumulus silhouettes, many separate white billows, taller apparent masses and stronger sun-facing volume.
+- B appears as a broader, lower-contrast grey cloud bank, with very dark bases and weaker separation into individual structures; its morphology is still insufficient even after the first 32-cubed noise upgrade.
+- A has visibly clipped or nearly clipped white highlights. B should not reproduce that clipping as a target; it should reproduce the readable shape and illumination without sacrificing energy consistency.
+- The screenshot does not distinguish whether missing B towers come from coverage mapping, type/vertical profile, under-sampled ray segments, perspective/framing differences, or over-dark lighting. It must not be cited as proof of a specific shader bug.
+
+Immediate source-level lighting finding: System A has a broad multiple-scattering closure, several phase lobes and an atmosphere-aware Sun term. B previously used only a normalized HG single lobe plus weak approximate daylight sky access. It therefore made cloud faces and interiors much darker even when the same optical-depth input was valid.
+
+An independent B-only multiple-scattering closure has now been introduced in `UnifiedCloudRenderer.cpp`: a bounded directional single term, two broad HG lobes weighted into diffuse multi-order scattering, a slower optical-depth fade for scattered light, and a stronger daylight-gated sky-access term. This does **not** copy A's shader implementation, consume A's Sun-cache buffers, or replace its physically shared weather/storm inputs. Phase lobes are normalized; the broad lobes use reciprocal square roots instead of general pow calls in the per-sample shader. B still lacks authoritative atmosphere LUT sky-radiance and true multiple-scattering transport, so this is an intermediate visual correction, not a physically calibrated sky solver.
+
+**Required evaluation after rebuilding:** capture the same body/time/weather, camera, Sun, resolution and eye-exposure with A then B. Check B daylight (should be noticeably brighter and less charcoal-grey); cloud bases (should remain darker than tops); night side (should not acquire constant glow); Sun-cache ON/OFF (should produce broadly consistent lit shapes after cache warmup); and whether flat silhouettes remain despite improved brightness. Use B receiver-shadow OFF as a separate ground-shadow diagnostic. Obtain profiler median/p95; B's independently baked 3D noise, 128 view samples and broad-light evaluation may exceed A's GPU budget.
+
+**Next morphology work after this correction:** profile/mask matching to authoritative cloud types, noise-scale/coverage clustering, physically coherent vertical top growth, and selective adaptive fine stepping. Do not tweak illumination to disguise missing cloud volumes. No Vulkan run has been performed by the assistant for this update.
+
 # What this DOES NOT claim
 
 No Windows Vulkan runtime, HLSL compiler or matched A/B screenshots were available for this change. The new morphology has not been visually validated. It may still have banding or brightness discontinuities on some orbital grazing angles. No GPU performance improvement is asserted from adding 3D noise. The shader and larger raymarch budget are more expensive than B's former sine/64-step variant; correctness/performance checks are mandatory.
