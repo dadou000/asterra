@@ -81,3 +81,9 @@ The current Debug physical-page sanity check only verifies presence, revision an
 **Gate 8: polish and deployment** — planet-scale async cache budgets, multi-resolution LOD, report/profiler captures, RPC/MCP parity, full UI and performance/regression gate.
 
 At every gate: demonstrable native Studio test scene, executable Debug check, automated assertions, failure diagnostics and source-verified implementation state. Do not claim completion from a button existing alone.
+
+## Current implementation increment: unified design preview
+
+The engine now provides `path_geometry::BuildCorridorDesignPreview` (header `CorridorDesignPreview.hpp`) as a read-only adapter for a real `PathCenterline` and authored `PathProfile`. It shares `BuildPathDerived` output with the engineering analyzer and advisory cant/bank solver, and optionally supplies the terrain-offset sampler to the earthworks estimator. `CorridorDesignPreview` returns geometry, station-by-station findings, suggested bank values and optional cut/fill quantities without editing the source network. `Orbit.CorridorDesignPreview` is the integration test target.
+
+**Known boundary:** This is a domain API for a future Studio corridor inspector; the current editor does not yet expose a dedicated road/rail inspector or a terrain sampler resolved from the active planetary frame. The supplied terrain callback must already express heights relative to the designed corridor datum. No claim is made that dragging a road in Studio will automatically update its warnings yet. The test and executable have not been compiled here.
