@@ -327,15 +327,15 @@ float4 March(V input) : SV_Target0
     {
         float3 p = g.cameraAspect.xyz +
             direction * (first + (float(i)+0.5)*dt);
-        float4 sample = Density(p,false);
-        float sigma = sample.x;
+        float4 mediumAtPoint = Density(p,false);
+        float sigma = mediumAtPoint.x;
         if (sigma < 1.e-8) continue;
         float upSun = saturate(dot(normalize(p), sun)*0.5+0.5);
         float angle = dot(direction, sun);
-        float meanG = clamp(sample.z/max(sample.y,1.e-7),-0.95,0.95);
+        float meanG = clamp(mediumAtPoint.z/max(mediumAtPoint.y,1.e-7),-0.95,0.95);
         float d = max(1.+meanG*meanG-2.*meanG*angle,0.02);
         float phase = (1.-meanG*meanG)/(d*sqrt(d));
-        float albedo = saturate(sample.y/max(sigma,1.e-8));
+        float albedo = saturate(mediumAtPoint.y/max(sigma,1.e-8));
         float sunlight = max(0., g.material.w) * upSun * phase * albedo;
         float ambient = (0.13 + 0.20 * upSun) * albedo;
         float alpha = 1. - exp(-sigma * dt);
