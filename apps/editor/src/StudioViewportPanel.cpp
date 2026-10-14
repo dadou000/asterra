@@ -348,6 +348,21 @@ void StudioViewportPanel::Register()
                         static_cast<void>(studioViewportRenderer.SetCloudSplit(false, "", 0.5F));
                     }
                 }
+                if (cloudBackendLayers.cloudBPreview)
+                {
+                    if (!studioViewportRenderer.UnifiedCloudInitError().empty())
+                    {
+                        context.Text(
+                            "Cloud B shader error: " +
+                            studioViewportRenderer.UnifiedCloudInitError());
+                    }
+                    else
+                    {
+                        context.Text(
+                            "B1 preview: independent weather-cloud renderer; "
+                            "storm-grid detail and temporal reuse pending.");
+                    }
+                }
 
                 // End the toolbar row before measuring the viewport. Without
                 // this, ImGui reports only the unused width after the Zoom
