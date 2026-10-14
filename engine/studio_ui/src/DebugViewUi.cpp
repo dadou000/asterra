@@ -118,6 +118,7 @@ void DebugViewUi::Draw(
             {
                 engineeringEdgeId_ = edge.id.ToString();
                 engineeringResult_.clear();
+                engineeringData_ = rpc::Value{};
             }
         }
     }
@@ -150,6 +151,7 @@ void DebugViewUi::Draw(
             const auto* result = parsed.Find("result");
             if (!result)
                 throw std::runtime_error("Engineering response has no result.");
+            engineeringSelectedFinding_ = 0U;
             engineeringData_ = *result;
             engineeringResult_ = rpc::Serialize(*result);
         }
@@ -181,15 +183,48 @@ void DebugViewUi::Draw(
                 {
                     context.KeyValue("Engineering findings",
                         std::to_string(warnings->AsArray().size()));
-                    for (const auto& finding : warnings->AsArray())
+                    const auto& items = warnings->AsArray();
+                    for (std::size_t i = 0; i < items.size(); ++i)
                     {
+                        const auto& finding = items[i];
                         if (!finding.IsObject()) continue;
                         const auto* message = finding.Find("message");
                         const auto* station = finding.Find("station_meters");
-                        if (message && message->IsString())
-                            context.Text(std::format("At {:.1f} m: {}",
-                                station && station->IsNumber() ? station->AsNumber() : 0.0,
-                                message->AsString()));
+                        if (!message || !message->IsString()) continue;
+                        const double at = station && station->IsNumber()
+                            ? station->AsNumber() : 0.0;
+                        if (context.Button(std::format(
+                                "{} {:.1f} m: {}##road-finding-{}",
+                                engineeringSelectedFinding_ == i ? ">" : " ",
+                                at, message->AsString(), i)))
+                            engineeringSelectedFinding_ = i;
+                    }
+                    if (!items.empty() && engineeringSelectedFinding_ < items.size())
+                    {
+                        const auto& finding = items[engineeringSelectedFinding_];
+                        if (finding.IsObject())
+                        {
+                            if (const auto* frame = finding.Find("position_frame");
+                                frame && frame->IsString())
+                                context.KeyValue("Reference frame", frame->AsString());
+                            if (const auto* pos = finding.Find("position_local_meters");
+                                pos && pos->IsArray() && pos->AsArray().size() == 3U)
+                            {
+                                const auto& xyz = pos->AsArray();
+                                context.KeyValue("Local position (m)",
+                                    std::format("{:.2f}, {:.2f}, {:.2f}",
+                                        xyz[0].AsNumber(), xyz[1].AsNumber(),
+                                        xyz[2].AsNumber()));
+                            }
+                            if (const auto* measured = finding.Find("measured");
+                                measured && measured->IsNumber())
+                                context.KeyValue("Measured",
+                                    std::format("{:.4f}", measured->AsNumber()));
+                            if (const auto* permitted = finding.Find("permitted");
+                                permitted && permitted->IsNumber())
+                                context.KeyValue("Limit",
+                                    std::format("{:.4f}", permitted->AsNumber()));
+                        }
                     }
                 }
                 if (const auto* banks = engineeringData_.Find("suggested_bank_radians");
