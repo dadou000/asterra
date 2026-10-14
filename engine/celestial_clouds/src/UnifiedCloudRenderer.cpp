@@ -204,10 +204,10 @@ float2 StormMedium(float3 position, float radius)
     const float edge = min(halfX-abs(x),halfY-abs(y));
     if (edge <= 0.) return float2(0.,0.);
     const float blend = smoothstep(0.,max(g_storm[20],1.),edge)*
+        saturate(g_storm[21])*Influence(x,y);
 )";
 
-constexpr const char* kMediumPart2 = R"(        saturate(g_storm[21])*Influence(x,y);
-    if (blend <= 0.) return float2(0.,0.);
+constexpr const char* kMediumPart2 = R"(    if (blend <= 0.) return float2(0.,0.);
     const float altitude = radius - planetR;
     const float dz = max(g_storm[16],1.);
     const float z = altitude/dz-0.5;
@@ -386,11 +386,11 @@ float4 Density(float3 position, bool receiver,
             cloudThreshold+edgeWidth,shiftedBase);
         const float profile=bottom*top/
             max(0.30,topHeight);
+        // Upper cirrus and detached convective anvil outflow use a
+        // thinner, broader optical density than the dense low layer.
 )";
 
-constexpr const char* kMediumPart3 = R"(        // Upper cirrus and detached convective anvil outflow use a
-        // thinner, broader optical density than the dense low layer.
-        const float cirrus=saturate(w.y)*
+constexpr const char* kMediumPart3 = R"(        const float cirrus=saturate(w.y)*
             smoothstep(0.65,0.79,h)*
             (1.-smoothstep(0.92,1.,h))*
             smoothstep(0.35,0.75,baseValue);
@@ -590,12 +590,12 @@ float4 March(V input) : SV_Target0
     float first, last;
     const float outer = g.shell.x + g.shell.z;
     if (!SphereInterval(g.cameraAspect.xyz, direction, outer, first, last))
-)";
-
-constexpr const char* kMediumPart4 = R"(        return float4(0,0,0,1);
+        return float4(0,0,0,1);
     float groundA, groundB;
     // When the live storm export participates, its low-level inflow and
-    // precipitation regions may extend below the first procedural deck.
+)";
+
+constexpr const char* kMediumPart4 = R"(    // precipitation regions may extend below the first procedural deck.
     // Do not clip those cells away at the authored cloud base.
     const float innerRadius=g.shell.x+
         (g.material.z>0.5 ? 0. : max(0.,g.shell.y));
@@ -683,13 +683,17 @@ constexpr const char* kMediumPart4 = R"(        return float4(0,0,0,1);
         const float singleScattered=
             sunDisc*1.45*phase*exp(-1.15*optical);
         const float spread=sqrt(optical);
-        const float broadPhase=
-            0.65*(1.-0.32*0.32)/
-                (12.5663706144*pow(max(
-                    1.+0.32*0.32-2.*0.32*angle,0.06),1.5))+
-            0.35*(1.-0.20*0.20)/
-                (12.5663706144*pow(max(
-                    1.+0.20*0.20+2.*0.20*angle,0.06),1.5));
+        // Reciprocal square roots avoid two pow() evaluations for
+        // every contributing view-ray sample on the GPU.
+        const float broadDenom0=max(
+            1.+0.32*0.32-2.*0.32*angle,0.06);
+        const float broadDenom1=max(
+            1.+0.20*0.20+2.*0.20*angle,0.06);
+        const float inv0=rsqrt(broadDenom0);
+        const float inv1=rsqrt(broadDenom1);
+        const float broadPhase=0.07957747155*(
+            0.65*(1.-0.32*0.32)*inv0*inv0*inv0+
+            0.35*(1.-0.20*0.20)*inv1*inv1*inv1);
         // Directional diffusion is less sensitive to optical depth than
         // first-order scattering. Do not turn it into constant ambient.
         const float multiScattered=sunDisc*
