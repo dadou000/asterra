@@ -3389,29 +3389,47 @@ void EditorUi::DrawStudioShell()
                 continue;
             }
 
-            for (const MenuAction& action :
-                 impl_->menuActions)
+            // Slash-separated action labels form shallow nested menus.
+            // This keeps Build > Procedurals > Paths & Roads in the single
+            // canonical EditorUi menu dispatcher, not a separate popup.
+            std::string currentSubmenu;
+            bool submenuOpen = false;
+            for (const MenuAction& action : impl_->menuActions)
             {
                 if (action.menu != menu)
-                {
                     continue;
-                }
-
-                const bool enabled =
-                    !action.enabled ||
-                    action.enabled();
-
-                if (ImGui::MenuItem(
-                        action.label.c_str(),
-                        action.shortcut.empty()
-                            ? nullptr
-                            : action.shortcut.c_str(),
-                        false,
-                        enabled))
+                const auto separator = action.label.find(" / ");
+                std::string displayLabel = action.label;
+                if (separator != std::string::npos)
                 {
-                    action.invoke();
+                    const auto parent = action.label.substr(0, separator);
+                    displayLabel = action.label.substr(separator + 3);
+                    if (currentSubmenu != parent)
+                    {
+                        if (submenuOpen)
+                            ImGui::EndMenu();
+                        currentSubmenu = parent;
+                        submenuOpen = ImGui::BeginMenu(parent.c_str());
+                    }
+                    if (!submenuOpen)
+                        continue;
                 }
+                else
+                {
+                    if (submenuOpen)
+                        ImGui::EndMenu();
+                    submenuOpen = false;
+                    currentSubmenu.clear();
+                }
+                const bool enabled = !action.enabled || action.enabled();
+                if (ImGui::MenuItem(
+                        displayLabel.c_str(),
+                        action.shortcut.empty() ? nullptr : action.shortcut.c_str(),
+                        false, enabled))
+                    action.invoke();
             }
+            if (submenuOpen)
+                ImGui::EndMenu();
 
             if (isView)
             {

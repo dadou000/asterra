@@ -163,8 +163,8 @@ void StudioViewportPanel::Register()
 
                     if (!pathPlacementMode)
                     {
-                        lastPlacedPathNode.
-                            reset();
+                        lastPlacedPathNode.reset();
+                        infrastructureDrawMode=false;
                     }
                 }
 
@@ -994,7 +994,11 @@ void StudioViewportPanel::Register()
                             orbit::paths::NetworkId>
                             targetNetwork;
 
-                        if (selection().Ordered().
+                        // The builder's chosen network takes priority.
+                        if(infrastructureDrawMode && activePathNetwork &&
+                           pathService.FindNetwork(*activePathNetwork))
+                            targetNetwork=activePathNetwork;
+                        if(!targetNetwork && selection().Ordered().
                                 size() == 1)
                         {
                             const auto selectedObject =
@@ -1071,7 +1075,12 @@ void StudioViewportPanel::Register()
                                 const auto network =
                                     pathService.
                                         CreateNetwork(
-                                            "Path Network",
+                                            infrastructureDrawMode ?
+                                                infrastructureCatalogId=="ballasted-rail" ?
+                                                    "Rail Network" :
+                                                infrastructureCatalogId=="rural-road" ?
+                                                    "Road Network" : "Path Network" :
+                                                "Path Network",
                                             bodyObject);
 
                                 targetNetwork =
@@ -1102,29 +1111,116 @@ void StudioViewportPanel::Register()
                                 }
                             }
 
-                            const auto node =
-                                pathService.
-                                    CreateNode(
-                                        *targetNetwork,
-                                        std::format(
-                                            "Path Node {}",
-                                            nodeCount +
-                                                1U),
-                                        orbit::paths::
-                                            SurfaceAnchor{
-                                                .body =
-                                                    bodyId,
-                                                .coordinate = {
-                                                    coordinate->
-                                                        latitudeRadians,
-                                                    coordinate->
-                                                        longitudeRadians,
-                                                    0.0
-                                                }
-                                            });
+                            orbit::paths::PathNodeRecord node{};
+                            // Snap to the SAME semantic network, not to any
+                            // nearby but topologically unrelated road.
+                            if(infrastructureDrawMode &&
+                               infrastructureSnapNodes)
+                            {
+                                f64 best=infrastructureNodeSnapMeters;
+                                for(const auto& child:
+                                    objects().Children(networkObject))
+                                {
+                                    if(child.type!=orbit::paths::kPathNodeType)
+                                        continue;
+                                    const auto existing=pathService.FindNode(
+                                        child.id);
+                                    if(!existing)continue;
+                                    const auto* anchor=std::get_if<
+                                        orbit::paths::FramePointAnchor>(
+                                            &existing->anchor);
+                                    if(!anchor || anchor->frame!=body->frame)
+                                        continue;
+                                    const f64 meters=orbit::math::Length(
+                                        anchor->localMeters-*hit);
+                                    if(meters<best)
+                                    {
+                                        best=meters;
+                                        node=*existing;
+                                    }
+                                }
+                            }
+                            if(!node.id)
+                            {
+                                node=pathService.CreateNode(
+                                    *targetNetwork,
+                                    std::format("Path Node {}",nodeCount+1U),
+                                    infrastructureDrawMode ?
+                                        orbit::paths::PathAnchor{
+                                            orbit::paths::FramePointAnchor{
+                                                .frame=body->frame,
+                                                .localMeters=*hit}} :
+                                        orbit::paths::PathAnchor{
+                                            orbit::paths::SurfaceAnchor{
+                                                .body=bodyId,
+                                                .coordinate={
+                                                    coordinate->latitudeRadians,
+                                                    coordinate->longitudeRadians,
+                                                    0.0}}});
+                            }
 
-                            commandService().
-                                CommitTransaction();
+                            // City-builder construction is opt-in: the
+                            // ordinary Path Tool continues to place nodes.
+                            // One undo transaction contains the new node,
+                            // linked edge and infrastructure metadata.
+                            if(infrastructureDrawMode &&
+                               lastPlacedPathNode &&
+                               *lastPlacedPathNode!=node.id)
+                            {
+                                const auto previous=pathService.FindNode(
+                                    *lastPlacedPathNode);
+                                if(previous && previous->network==*targetNetwork)
+                                {
+                                    orbit::paths::PathEdgeRecord connected{};
+                                    if(infrastructureAlignmentMode==2)
+                                        connected=pathService.ConnectRouted(
+                                            previous->id,node.id,
+                                            "Terrain-routed segment");
+                                    else if(infrastructureAlignmentMode==1)
+                                    {
+                                        orbit::math::Double3 direction{5,0,0};
+                                        if(const auto* fixed=std::get_if<
+                                            orbit::paths::FramePointAnchor>(
+                                                &previous->anchor);
+                                            fixed && fixed->frame==body->frame)
+                                        {
+                                            direction=(*hit-fixed->localMeters)*0.33;
+                                        }
+                                        else if(const auto* anchor=std::get_if<
+                                            orbit::paths::SurfaceAnchor>(
+                                                &previous->anchor);
+                                            anchor && anchor->body==bodyId)
+                                        {
+                                            const auto from=orbit::universe::
+                                                ReferenceSurfacePoint(body->shape,{
+                                                    anchor->coordinate.x,
+                                                    anchor->coordinate.y,
+                                                    anchor->coordinate.z});
+                                            direction=(*hit-from)*0.33;
+                                        }
+                                        const auto side=orbit::math::Cross(
+                                            orbit::math::Normalize(*hit),
+                                            direction)*infrastructureCurveBias;
+                                        connected=pathService.ConnectBezier(
+                                            previous->id,node.id,
+                                            direction+side,
+                                            direction*-1.0+side,
+                                            "Curved segment");
+                                    }
+                                    else
+                                        connected=pathService.ConnectDirect(
+                                            previous->id,node.id,
+                                            "Straight segment");
+                                    if(!infrastructureCatalogId.empty())
+                                        pathService.SetInfrastructureIntent(
+                                            connected.id,
+                                            infrastructureCatalogId,1,
+                                            infrastructureConstructionMode,
+                                            infrastructureDesignSpeedKmh,
+                                            infrastructureEaseTurns);
+                                }
+                            }
+                            commandService().CommitTransaction();
 
                             activePathNetwork =
                                 targetNetwork;

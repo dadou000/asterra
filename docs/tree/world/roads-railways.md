@@ -5,7 +5,7 @@ kind = "subsystem"
 status = "planned"
 summary = "Canonical architectural contract for Orbit's unified, editable road/rail/path infrastructure: authored networks, alignment, terrain and structural construction, frame-aware dynamics, persistence, editor automation and planet-scale LOD."
 keywords = ["roads", "railways", "infrastructure", "corridors", "alignment", "terrain grading", "moving frames", "bridges", "tunnels"]
-related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations", "/world/roads-railways/spec-completeness", "/world/roads-railways/road-junction-construction", "/world/roads-railways/pipeline", "/world/roads-railways/vehicle-world"]
+related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations", "/world/roads-railways/spec-completeness", "/world/roads-railways/road-junction-construction", "/world/roads-railways/pipeline", "/world/roads-railways/vehicle-world", "/world/roads-railways/editor-builder"]
 +++
 
 # Status and provenance
@@ -68,3 +68,7 @@ The [spec-completeness matrix](roads-railways/spec-completeness.md) is the autho
 The production chain now goes beyond individual CPU preview objects: StudioSession builds an immutable per-frame road-junction publication set from raw path products and semantic incidence, merging two junction cuts on a shared road into one retained surface, contact and trimmed lane graph. The path geometry RPC can read the packet's replaced edge product. The package has a deterministic generation signature and explicit lifecycle invalidation; it remains distinct from the raw cache to prevent double trimming.
 
 **No Vulkan upload, runtime physics shape cooking, traffic dispatcher or end-to-end driving acceptance is implied by this CPU publication.** The precise owner, stage-by-stage contracts, next handoff types and gates are in [pipeline.md](roads-railways/pipeline.md).
+
+## Cities-style road authoring surface
+
+[Procedural Paths & Roads](roads-railways/editor-builder.md) is reachable through Build → Procedurals → Procedural Paths & Roads, or the Procedurals landing page. This opens the same docked panel as the expert infrastructure editor with a focused palette: five genuine road-width presets, ballasted rail and reference paths, cross-section preview, straight/Bezier/routed construction, ground/structural intent, design-speed and endpoint-snap controls, and a Start/Finish viewport-placement action. Multiple successive viewport clicks create a connected authored path chain in undoable transactions, using existing PathNetworkService authority. Native corridor construction receives body-fixed FramePoint anchors instead of unsupported surface anchors for this specific builder. Physical terrain-height matching, bridge/tunnel assembly and genuine City Skylines-style upgrade/demolish/road snapping are not implied.
