@@ -825,7 +825,7 @@ private:
             "never roads that only visually cross.");
         context.Separator();
         context.KeyValue("Placement elevation",
-            std::format("{:+.1f} m above reference surface",
+            std::format("{:+.1f} m above sampled terrain",
                 elevationMeters_));
         if(context.Button("Lower 1 m##roads-elevation-down"))
         {
@@ -854,8 +854,9 @@ private:
         }
         context.MutedText(
             "Page Up / Page Down adjust height in the viewport "
-            "(Shift: 5 m). Height is relative to the reference ellipsoid, "
-            "not automatically sampled terrain.");
+            "(Shift: 5 m). Road points use the composed terrain height "
+            "plus this offset; reference paths and structures may have "
+            "different elevation behavior.");
 
         if(context.Section("Road level and engineering##road-levels",false))
         {
