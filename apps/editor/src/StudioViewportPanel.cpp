@@ -337,7 +337,7 @@ void StudioViewportPanel::Register()
                 // compare (clouds.split_set compares two A variants).
                 auto cloudBackendLayers = studioViews.TerrainLayers("studio.primary");
                 if (context.Button(cloudBackendLayers.cloudBPreview
-                        ? "Cloud renderer: B1 PREVIEW##cloud-backend"
+                        ? "Cloud renderer: B2 PREVIEW##cloud-backend"
                         : "Cloud renderer: A (reference)##cloud-backend"))
                 {
                     cloudBackendLayers.cloudBPreview = !cloudBackendLayers.cloudBPreview;
@@ -350,6 +350,12 @@ void StudioViewportPanel::Register()
                 }
                 if (cloudBackendLayers.cloudBPreview)
                 {
+                    if (cloudBackendLayers.cloudLab.enabled)
+                    {
+                        context.Text(
+                            "B2: Cloud Lab override is not supported yet. "
+                            "Disable lab for B2 previews.");
+                    }
                     if (!studioViewportRenderer.UnifiedCloudInitError().empty())
                     {
                         context.Text(
@@ -359,8 +365,8 @@ void StudioViewportPanel::Register()
                     else
                     {
                         context.Text(
-                            "B1 preview: independent weather-cloud renderer; "
-                            "storm-grid detail and temporal reuse pending.");
+                            "B2 preview: multi-layer weather and nested storm extinctions; "
+                            "temporal and sun cache pending.");
                     }
                 }
 
