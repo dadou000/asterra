@@ -42,6 +42,7 @@ verified = "69bafa8"
 
 [routes]
 "how the near-field cloud march works, why it is blurry/striped/slow" = "raymarch"
+"independent unified cloud System B architecture and A/B isolation" = "unified-system-b"
 "blackrack EVE release 5 archive and rendering techniques" = "blackrack-eve-release5-reference"
 "blackrack-inspired optimization plan and code mapping for Orbit" = "blackrack-eve-orbit-design"
 "papers, open-source examples and volumetric clouds resource library" = "cloud-rendering-reference-library"
@@ -50,6 +51,10 @@ verified = "69bafa8"
 "weather model, orbital weather representation" = "/legacy/tree-history-research-v006-cloud-weather"
 "universal volumetrics (clouds, fog, generic media)" = "/legacy/tree-history-research-v007-universal-volumetrics"
 +++
+
+## Unified rendering System B (experimental)
+
+- [System B foundation, independence and integration contracts](unified-system-b.md): B0 implemented as separate C++ header with CPU contract tests. A remains the default. B GPU renderer and actual A/B selector are not yet implemented; do not label the existing A shader split as System B.
 
 ## Reference research (Release 5 / planetary volumetrics)
 
