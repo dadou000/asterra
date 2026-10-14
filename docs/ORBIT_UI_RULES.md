@@ -419,3 +419,7 @@ Build → Procedurals → Procedural Paths & Roads must open the canonical docke
 ## Procedural road construction UI
 
 Build → Procedurals → Procedural Paths & Roads remains in the single dockable editor UI. The palette must show only backed section recipes. Its live viewport ghost shares the existing reference-ray and authored snap interpretation and cannot write to the network. Straight and Bezier previews show real configured width boundaries, while routed mode must be marked as an uncomputed chord. A successful click uses one undoable CommandService transaction; re-clicking a snapped endpoint is a no-op, and an invalid short segment is rejected with local feedback. Right-click ends the chain, Escape leaves the tool, and Page Up/Down adjusts the explicit reference-ellipsoid elevation. Precise numeric entry and expert construction access remain available. A separate road graph or overlay renderer is forbidden.
+
+## Procedural infrastructure manager
+
+The same Build → Procedurals → Procedural Paths & Roads dock now includes a searchable bulk road manager. UI row selections are ephemeral only; segment ID and profile changes are sent to PathNetworkService/CommandService as a single undoable transaction, so there is no duplicate editable road model. Readiness labels come from the native cache's Find, IsDirty and RebuildError. Filtering and selecting never mutate authored world state. Native acceptance must include bulk Undo/Redo, invalidated construction products and scoped network selection.

@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
+#include <set>
 #include <format>
 #include <stdexcept>
 #include <string>
@@ -75,6 +77,11 @@ private:
             [](const auto& a,const auto& b){return a.name<b.name;});
         std::sort(networks_.begin(),networks_.end(),
             [](const auto& a,const auto& b){return a.name<b.name;});
+        // Never keep deleted edge IDs selected for a future batch edit.
+        for(auto it=selectedRoads_.begin();it!=selectedRoads_.end();)
+            if(!session_->PathNetwork().Service().FindEdge(*it))
+                it=selectedRoads_.erase(it);
+            else ++it;
         knownWorldGeneration_=session_->World().Objects().Revision();
         std::sort(edges_.begin(),edges_.end(),
             [](const auto& a,const auto& b) {
@@ -382,6 +389,100 @@ private:
             junctionReport_=*payload;
         }
         catch(const std::exception& ex){junctionError_=ex.what();}
+    }
+    [[nodiscard]] bool RoadMatchesFilter(
+        const scene::ObjectRecord& record) const
+    {
+        const auto road=session_->PathNetwork().Service().FindEdge(record.id);
+        if(!road || !path_geometry::FindRoadCatalog(
+            road->infrastructureCatalogId))return false;
+        if(roadInventoryFilter_.empty())return true;
+        auto normalize=[](std::string value)
+        {
+            std::transform(value.begin(),value.end(),value.begin(),
+                [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                });
+            return value;
+        };
+        const std::string needle=normalize(roadInventoryFilter_);
+        const auto* catalog=path_geometry::FindRoadCatalog(
+            road->infrastructureCatalogId);
+        return normalize(record.name).find(needle)!=std::string::npos ||
+            normalize(std::string(catalog->label)).find(needle)!=
+                std::string::npos ||
+            normalize(std::string(catalog->id)).find(needle)!=
+                std::string::npos;
+    }
+    void UpgradeSelectedRoads()
+    {
+        error_.clear();
+        if(category_!=0 || !path_geometry::FindRoadCatalog(catalogId_))
+        {
+            error_="Choose a valid paved road profile first.";
+            return;
+        }
+        if(!session_->World().HasWorld())
+        {
+            error_="Open a world before upgrading infrastructure.";
+            return;
+        }
+        auto& commands=session_->World().Commands();
+        if(commands.HasActiveTransaction())
+        {
+            error_="Finish the current authored operation before batch upgrading.";
+            return;
+        }
+        auto& service=session_->PathNetwork().Service();
+        std::vector<scene::ObjectId> eligible;
+        eligible.reserve(selectedRoads_.size());
+        for(const auto& id:selectedRoads_)
+        {
+            const auto road=service.FindEdge(id);
+            if(!road || !path_geometry::FindRoadCatalog(
+                road->infrastructureCatalogId))
+                continue;
+            if(newNetworkId_ && upgradeOnlyActiveNetwork_ &&
+               road->network!=newNetworkId_)
+                continue;
+            if(road->infrastructureCatalogId!=catalogId_ ||
+               road->designSpeedKmh!=designSpeedKmh_ ||
+               road->easeTurns!=easeTurns_)
+                eligible.push_back(id);
+        }
+        if(eligible.empty())
+        {
+            status_="No selected roads require a profile change.";
+            return;
+        }
+        try
+        {
+            commands.BeginTransaction("Upgrade Road Sections");
+            for(const auto& id:eligible)
+            {
+                const auto road=service.FindEdge(id);
+                if(!road)
+                    throw std::runtime_error(
+                        "A selected segment vanished during batch upgrade.");
+                // Preserve construction mode, alignment, incident node IDs,
+                // junction authority and segment identity.
+                service.SetInfrastructureIntent(id,catalogId_,1,
+                    road->constructionMode,designSpeedKmh_,easeTurns_);
+            }
+            commands.CommitTransaction();
+            status_=std::format(
+                "Upgraded {} road segments as one undoable edit.",
+                eligible.size());
+            selectedRoads_.clear();
+            if(viewportTool_)viewportTool_->lastPlacedPathNode.reset();
+            Refresh();
+        }
+        catch(const std::exception& e)
+        {
+            if(commands.HasActiveTransaction())
+                commands.RollbackTransaction();
+            error_=e.what();
+        }
     }
     void UpgradeRoadSection()
     {
@@ -818,7 +919,101 @@ private:
         if(!status_.empty())context.MutedText(status_);
         if(!error_.empty())context.ErrorText(error_);
 
-        if(context.Section("Upgrade an existing road##roads-upgrade",false))
+        if(context.Section("Road manager / bulk upgrade##roads-upgrade",false))
+        {
+            context.MutedText(
+                "Select multiple authored roads and update their geometry "
+                "profiles together. Alignment, construction mode and "
+                "junction identity are preserved.");
+            static_cast<void>(context.InputText(
+                "Filter roads##roads-inventory-search",roadInventoryFilter_));
+            static_cast<void>(context.Checkbox(
+                "Only selected network##roads-upgrade-network",
+                upgradeOnlyActiveNetwork_));
+            static_cast<void>(context.Checkbox(
+                "Show build errors only##roads-upgrade-errors",
+                showOnlyConstructionErrors_));
+            const auto& cache=session_->PathProducts();
+            std::size_t matching=0;
+            for(const auto& edge:edges_)
+            {
+                if(!RoadMatchesFilter(edge))continue;
+                const auto road=session_->PathNetwork().Service().FindEdge(edge.id);
+                if(!road)continue;
+                if(upgradeOnlyActiveNetwork_ && newNetworkId_ &&
+                   road->network!=newNetworkId_)continue;
+                if(showOnlyConstructionErrors_ &&
+                   cache.RebuildError(edge.id).empty())continue;
+                ++matching;
+            }
+            context.KeyValue("Matching roads",std::to_string(matching));
+            if(context.Button("Select visible##roads-manager-all"))
+            {
+                for(const auto& edge:edges_)
+                {
+                    if(!RoadMatchesFilter(edge))continue;
+                    const auto road=session_->PathNetwork().Service().FindEdge(edge.id);
+                    if(!road)continue;
+                    if(upgradeOnlyActiveNetwork_ && newNetworkId_ &&
+                       road->network!=newNetworkId_)continue;
+                    if(showOnlyConstructionErrors_ &&
+                       cache.RebuildError(edge.id).empty())continue;
+                    selectedRoads_.insert(edge.id);
+                }
+            }
+            context.SameLine();
+            if(context.Button("Clear selection##roads-manager-clear"))
+                selectedRoads_.clear();
+            context.KeyValue("Selected",std::to_string(selectedRoads_.size()));
+            if(context.BeginChild("roads-manager-list",
+                {.width=0.0F,.height=235.0F},true))
+            {
+                for(const auto& edge:edges_)
+                {
+                    if(!RoadMatchesFilter(edge))continue;
+                    const auto road=session_->PathNetwork().Service().FindEdge(edge.id);
+                    if(!road)continue;
+                    if(upgradeOnlyActiveNetwork_ && newNetworkId_ &&
+                       road->network!=newNetworkId_)continue;
+                    const auto failure=cache.RebuildError(edge.id);
+                    if(showOnlyConstructionErrors_ && failure.empty())continue;
+                    const auto* preset=path_geometry::FindRoadCatalog(
+                        road->infrastructureCatalogId);
+                    const char* state=!failure.empty()?"ERROR":
+                        cache.IsDirty(edge.id)?"BUILDING":
+                        cache.Find(edge.id)?"READY":"NOT BUILT";
+                    const auto label=std::format(
+                        "[{}] {} | {} / {} lane(s)##roads-manager-{}",
+                        state,edge.name,preset->label,preset->laneCount,
+                        edge.id.ToString());
+                    if(context.Selectable(label,
+                        selectedRoads_.contains(edge.id)))
+                    {
+                        if(!selectedRoads_.erase(edge.id))
+                            selectedRoads_.insert(edge.id);
+                        upgradeTargetEdgeId_=edge.id.ToString();
+                    }
+                     if(!failure.empty())
+                        context.ErrorText(failure);
+                }
+            }
+            context.EndChild();
+            const auto* target=path_geometry::FindRoadCatalog(catalogId_);
+            if(target)
+                context.KeyValue("Target profile",
+                    std::format("{} | {} lanes | {:.1f} m",
+                        target->label,target->laneCount,
+                        target->pavedWidthMeters));
+            if(context.PrimaryButton("Upgrade selected roads (undoable)##roads-batch-upgrade"))
+                UpgradeSelectedRoads();
+            if(context.Button("Inspect last selected segment##roads-manager-expert"))
+            {
+                if(const auto id=scene::ObjectId::Parse(upgradeTargetEdgeId_))
+                    SelectEdge(*id);
+                page_=2;
+            }
+        }
+        if(context.Section("Single road quick upgrade##roads-upgrade-legacy",false))
         {
             context.MutedText(
                 "Change only an existing road's section profile. "
@@ -1446,6 +1641,11 @@ private:
     f64 curveBias_{0.25};
     f64 elevationMeters_{0.0};
     std::string upgradeTargetEdgeId_;
+    std::set<scene::ObjectId> selectedRoads_;
+    std::string roadInventoryFilter_;
+    bool upgradeOnlyActiveNetwork_{false};
+    bool showOnlyConstructionErrors_{false};
+
 
     bool snapToNodes_{true};
     f64 nodeSnapMeters_{10.0};

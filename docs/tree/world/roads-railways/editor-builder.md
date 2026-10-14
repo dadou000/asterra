@@ -73,3 +73,11 @@ The construction page now starts with a prominent Start/Finish button, followed 
 6. Change world and verify transient draw state and snap cache do not leak. Try bridge/tunnel/routed modes; keep their incomplete physical construction explicitly labelled pending.
 
 Source-level changes alone are not a passing Windows runtime, Vulkan capture or Cities: Skylines feature-completeness test.
+
+## Bulk road management workflow
+
+The Roads palette now has **Road manager / bulk upgrade**, a bounded scrollable list showing authored road name, native preset, lane count and one of READY / BUILDING / NOT BUILT / ERROR from the existing generation cache. Case-insensitive search matches road name, catalog ID or catalog label. "Only selected network" and "Show build errors only" narrow the list. "Select visible" and "Clear selection" keep multi-selection explicit. Selecting a row also defines the road eligible for detailed inspection.
+
+**Upgrade selected roads (undoable)** changes selected eligible road profiles to the currently selected palette preset, design speed and curve-easing setting. It uses one CommandService transaction for all edges; any thrown write rolls the whole transaction back. For every edge, original alignment, endpoint/node identities and terrain/bridge/tunnel/deck construction intent remain unchanged. Edges already using those exact parameters are skipped. Editing a new world prunes missing ID selections rather than sending stale IDs to the service. The operation changes authored catalog intents; async native geometry and contact publication follow the usual rebuild budget.
+
+This does not claim retroactive roadway lane routing, traffic rerouting or an automated Cities: Skylines road-lane junction designer. Native Windows UI smoke must verify multi-selection with mixed sections, upgrade, Undo, Redo, edited cache rebuild and saving/reopening.
