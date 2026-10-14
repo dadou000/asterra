@@ -45,6 +45,11 @@ struct CorridorEngineeringReport
     std::vector<CorridorEngineeringFinding> findings;
     [[nodiscard]] bool Valid() const noexcept;
 };
+// Uses the authored road/rail profile's geometric constraints, while speed,
+ // comfort and banking caps remain supplied by the caller.
+[[nodiscard]] CorridorEngineeringRules EngineeringRulesForProfile(
+    const paths::PathProfile& profile,
+    CorridorEngineeringRules defaults = {});
 [[nodiscard]] CorridorEngineeringReport AnalyzeCorridorEngineering(
     const std::vector<PathStation>& stations,
     const CorridorEngineeringRules& rules,
