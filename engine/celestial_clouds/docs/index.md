@@ -44,6 +44,7 @@ verified = "69bafa8"
 "how the near-field cloud march works, why it is blurry/striped/slow" = "raymarch"
 "independent unified cloud System B architecture and A/B isolation" = "unified-system-b"
 "unified B2 layered cloud extinction, nested storm integration and tests" = "unified-system-b-density"
+"unified B3 independent sunlight optical depth cache" = "unified-system-b-sun-cache"
 "blackrack EVE release 5 archive and rendering techniques" = "blackrack-eve-release5-reference"
 "blackrack-inspired optimization plan and code mapping for Orbit" = "blackrack-eve-orbit-design"
 "papers, open-source examples and volumetric clouds resource library" = "cloud-rendering-reference-library"
@@ -55,9 +56,10 @@ verified = "69bafa8"
 
 ## Unified rendering System B (experimental)
 
-- [System B foundation, independence and integration contracts](unified-system-b.md): B0 contracts, B1 independent Vulkan pipelines and B2 multi-layer/nested storm density implemented (B2 not runtime-validated). A is still the default; B remains an opt-in preview. Long-range sunlight cache, temporal reconstruction and Cloud Lab parity are outstanding. The old A shader split is NOT System B.
+- [System B foundation, independence and integration contracts](unified-system-b.md): B0 contracts, B1 Vulkan rendering, B2 multilayer/nested storms and B3 time-sliced sunlight cache implemented (B3 not runtime-validated). A is still the default; B remains an opt-in preview. Far-field sunlight cascades, sky ambient cache, temporal reconstruction and Cloud Lab parity are outstanding. The old A shader split is NOT System B.
 
 - [B2 unified density and storm data contract](unified-system-b-density.md): GPU weather metadata append-only ABI, multi-layer extinction, nested storm interpolation, conflict register, and local validation.
+- [B3 independent sunlight cache](unified-system-b-sun-cache.md): physical optical depth, 16-frame sliced GPU updates, invalidation, safe cache-miss fallback, profiler and A/B testing.
 
 ## Reference research (Release 5 / planetary volumetrics)
 
