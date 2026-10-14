@@ -199,14 +199,14 @@ float2 StormMedium(float3 position, float radius)
     const float planetR = g_storm[13];
     const float x = planetR*dot(direction,float3(g_storm[4],g_storm[5],g_storm[6]));
     const float y = planetR*dot(direction,float3(g_storm[7],g_storm[8],g_storm[9]));
-)";
-
-constexpr const char* kMediumPart2 = R"(    const float halfX = 0.5*g_storm[17]*g_storm[14];
+    const float halfX = 0.5*g_storm[17]*g_storm[14];
     const float halfY = 0.5*g_storm[18]*g_storm[15];
     const float edge = min(halfX-abs(x),halfY-abs(y));
     if (edge <= 0.) return float2(0.,0.);
     const float blend = smoothstep(0.,max(g_storm[20],1.),edge)*
-        saturate(g_storm[21])*Influence(x,y);
+)";
+
+constexpr const char* kMediumPart2 = R"(        saturate(g_storm[21])*Influence(x,y);
     if (blend <= 0.) return float2(0.,0.);
     const float altitude = radius - planetR;
     const float dz = max(g_storm[16],1.);
@@ -374,9 +374,7 @@ float4 Density(float3 position, bool receiver,
             lerp(0.70,0.80,tower),1.,hn);
         // Tall updrafts narrow toward the crown; the anvil is another
         // medium component rather than an extension of the tower stem.
-)";
-
-constexpr const char* kMediumPart3 = R"(        const float taper=tower*0.24*
+        const float taper=tower*0.24*
             pow(saturate(hn),1.4);
         const float cloudThreshold=lerp(
             0.73,0.32,saturate(coverage)) + taper;
@@ -388,7 +386,9 @@ constexpr const char* kMediumPart3 = R"(        const float taper=tower*0.24*
             cloudThreshold+edgeWidth,shiftedBase);
         const float profile=bottom*top/
             max(0.30,topHeight);
-        // Upper cirrus and detached convective anvil outflow use a
+)";
+
+constexpr const char* kMediumPart3 = R"(        // Upper cirrus and detached convective anvil outflow use a
         // thinner, broader optical density than the dense low layer.
         const float cirrus=saturate(w.y)*
             smoothstep(0.65,0.79,h)*
@@ -562,9 +562,7 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
 {
     opticalDepth=0.;
     return false;
-)";
-
-constexpr const char* kMediumPart4 = R"(}
+}
 [numthreads(8,8,1)]
 void ClearSunCache(uint3 id : SV_DispatchThreadID)
 {
@@ -592,7 +590,9 @@ float4 March(V input) : SV_Target0
     float first, last;
     const float outer = g.shell.x + g.shell.z;
     if (!SphereInterval(g.cameraAspect.xyz, direction, outer, first, last))
-        return float4(0,0,0,1);
+)";
+
+constexpr const char* kMediumPart4 = R"(        return float4(0,0,0,1);
     float groundA, groundB;
     // When the live storm export participates, its low-level inflow and
     // precipitation regions may extend below the first procedural deck.
@@ -671,28 +671,50 @@ float4 March(V input) : SV_Target0
         float tauSun=0.;
         if(!CachedSunDepth(p,tauSun))
             tauSun=SunDepthDirect(p,6u);
-        const float irradiance = max(0.,g.material.w);
-        const float sunlight = irradiance*sunDisc*phase*
-            albedo*exp(-tauSun);
+        const float irradiance=max(0.,g.material.w);
+        const float optical=clamp(tauSun,0.,24.);
+        const float dayFraction=smoothstep(
+            -0.15,0.09,sunMu-horizonMu);
+        // B needs a multiple-scattering approximation in addition to a
+        // normalized phase function. A bright cloud is not merely one
+        // narrowly forward-scattered Sun ray; light takes many paths
+        // through its high-albedo droplets before escaping at the skin.
+        // Retain strict planet-daylight gating: no permanent nightside fill.
+        const float singleScattered=
+            sunDisc*1.45*phase*exp(-1.15*optical);
+        const float spread=sqrt(optical);
+        const float broadPhase=
+            0.65*(1.-0.32*0.32)/
+                (12.5663706144*pow(max(
+                    1.+0.32*0.32-2.*0.32*angle,0.06),1.5))+
+            0.35*(1.-0.20*0.20)/
+                (12.5663706144*pow(max(
+                    1.+0.20*0.20+2.*0.20*angle,0.06),1.5));
+        // Directional diffusion is less sensitive to optical depth than
+        // first-order scattering. Do not turn it into constant ambient.
+        const float multiScattered=sunDisc*
+            (0.19+0.72*broadPhase)*
+            exp(-0.42*spread);
+        const float directLit=irradiance*albedo*
+            (singleScattered+multiScattered);
 
-        // Temporary bounded skylight proxy until B owns an atmosphere-LUT
-        // driven hemispherical irradiance / multiple-scattering cache.
-        // Crucially: no permanent light on the unlit hemisphere, and no
-        // unoccluded 0.13+0.20 source injected into opaque cloud interiors.
-        const float twilight = smoothstep(
-            -0.14,0.10,sunMu-horizonMu);
-        const float height01 = saturate(
+        // Explicitly approximate the daylight SKY hemisphere; this is
+        // NOT an atmosphere LUT or a second Sun. Dark bases retain a small
+        // sky-access term while sun-facing billows can become near-white.
+        const float height01=saturate(
             (radius-g.shell.x-g.shell.y)/
             max(g.shell.z-g.shell.y,1.));
-        const float skyAccess =
-            (0.12+0.88*height01*height01)*
-            exp(-0.20*min(tauSun,24.));
-        const float skyAmbient =
-            irradiance*0.055*twilight*skyAccess*albedo;
-        const float alpha = 1.-exp(-sigma*dt);
-        const float3 source =
-            float3(1.0,0.96,0.91)*sunlight +
-            float3(0.42,0.57,0.83)*skyAmbient;
+        const float topAccess=smoothstep(
+            0.04,0.75,height01);
+        const float skyVisibility=
+            (0.20+0.80*topAccess)*
+            exp(-0.13*optical);
+        const float skyDiffuse=irradiance*albedo*
+            (0.12+0.16*topAccess)*dayFraction*skyVisibility;
+        const float alpha=1.-exp(-sigma*dt);
+        const float3 source=
+            float3(1.0,0.965,0.93)*directLit+
+            float3(0.74,0.84,1.0)*skyDiffuse;
         L += T * alpha * source;
         T *= 1. - alpha;
     }
