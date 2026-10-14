@@ -362,7 +362,11 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                 if (const auto old = cloudTemporal_.find(info.id + ".B");
                     old != cloudTemporal_.end()) old->second.valid = false;
 
-                if (EnsureUnifiedCloudRenderer())
+                // A's Cloud Lab currently replaces the entire authored
+                // weather field. B2 has no equivalent synthetic source yet;
+                // refuse that unsupported comparison rather than displaying
+                // unrelated background clouds as a supposed B result.
+                if (!cloudLab.enabled && EnsureUnifiedCloudRenderer())
                 {
                     const f32 bScale =
                         std::clamp(info.layers.cloudResolutionScale, 0.25F, 1.0F);
