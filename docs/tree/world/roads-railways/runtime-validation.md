@@ -1,7 +1,7 @@
 +++
 path = "/world/roads-railways/runtime-validation"
 title = "Road/rail runtime frames, authoring, tests and delivery gates"
-kind = "design"
+kind = "concept"
 status = "planned"
 summary = "Frame-relative vehicles and trains, NPC traffic, Studio authoring and MCP parity, diagnostics, physical test matrix and staged integration roadmap."
 keywords = ["ship", "cruise ship", "car", "moving frame", "train", "physics", "npc", "editor", "mcp", "validation"]

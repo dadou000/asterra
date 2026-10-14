@@ -1,7 +1,7 @@
 +++
 path = "/world/roads-railways/construction"
 title = "Corridor construction, physical contact, structures and LOD"
-kind = "design"
+kind = "concept"
 status = "planned"
 summary = "Nondestructive earthworks, supported decks and tunnels, shared collision and rendering derivation, material condition, hydrology, caching and planet-scale streaming."
 keywords = ["cut fill", "grading", "bridge", "viaduct", "tunnel", "collision", "LOD", "material column", "corridor", "rail sleeper"]

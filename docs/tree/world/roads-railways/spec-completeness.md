@@ -1,8 +1,8 @@
 +++
 path = "/world/roads-railways/spec-completeness"
 title = "Road and railway specification completeness and implementation traceability"
-kind = "design"
-status = "partial"
+kind = "concept"
+status = "experimental"
 summary = "Coverage of every core roads/railways requirement against authoritative Orbit code, UI/RPC, tests, and objective acceptance gates; design inclusion is distinguished from working functionality."
 keywords = ["roads", "railways", "coverage", "acceptance", "construction", "runtime", "junction", "turnout", "specification", "QA"]
 related = ["/world/roads-railways", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations"]

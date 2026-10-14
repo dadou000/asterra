@@ -1,7 +1,7 @@
 +++
 path = "/world/roads-railways/alignment"
 title = "Road and rail network, alignment and engineering rules"
-kind = "design"
+kind = "concept"
 status = "planned"
 summary = "Authored path network and profiles, Bézier and routed alignments, road and railway constraints, lane and track topology, nodes and junction generation."
 keywords = ["road profile", "rail profile", "spline", "bezier", "curvature", "cant", "superelevation", "junction", "routing", "speed"]
