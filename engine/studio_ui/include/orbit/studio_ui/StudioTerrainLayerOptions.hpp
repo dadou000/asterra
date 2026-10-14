@@ -209,6 +209,18 @@ struct StudioTerrainLayerOptions
         const StudioTerrainLayerOptions&) const noexcept = default;
 };
 
+// A uses its existing macro-globe handoff. Independent System B always
+// permits a ray-marched atmosphere/cloud shell, including in orbital macro
+// mode. Keep the condition shared by main clouds AND receiver shadows so
+// the two passes cannot accidentally disagree about whether clouds exist.
+[[nodiscard]] constexpr bool ShouldRenderCloudVolume(
+    const StudioTerrainLayerOptions& layers) noexcept
+{
+    return layers.cloudBPreview ||
+        layers.fullClipmap ||
+        !layers.macroGlobe;
+}
+
 // The built cloud field of the view's target body (read-only diagnostics).
 struct StudioCloudReport
 {
