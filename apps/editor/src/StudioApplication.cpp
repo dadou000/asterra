@@ -2595,6 +2595,7 @@ int orbit::editor_app::StudioApplication::Run(
         }
         constexpr auto kIdleAfter = std::chrono::milliseconds(1500);
         auto lastActivity = Clock::now();
+        auto lastUserInteraction = Clock::now();
         auto lastIterationStart = Clock::now();
         orbit::u64 lastRpcRequestCount = 0U;
 
@@ -2641,6 +2642,7 @@ int orbit::editor_app::StudioApplication::Run(
                 const orbit::u64 rpcRequests = rpcHost.RequestCount();
                 const bool inputActivity = window.ConsumeInputActivity();
                 const bool rpcActivity = rpcRequests != lastRpcRequestCount;
+                if(inputActivity) lastUserInteraction = paceNow;
                 const bool busy =
                     inputActivity ||
                     rpcActivity ||
@@ -2719,7 +2721,7 @@ int orbit::editor_app::StudioApplication::Run(
                 {
                     const bool foreground = window.IsForeground();
                     const bool active = foreground &&
-                        (busy || paceNow - lastActivity <= kIdleAfter);
+                        (inputActivity || paceNow - lastUserInteraction <= kIdleAfter);
                     const double fps = !foreground
                         ? (mode == 1 ? 1.0 : 0.05)
                         : active
