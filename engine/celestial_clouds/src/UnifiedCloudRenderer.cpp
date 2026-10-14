@@ -687,7 +687,8 @@ void UnifiedCloudRenderer::UpdateSunCache(
     const CloudFieldProduct& source,
     const f64 referenceRadiusMeters,
     const celestial_atmosphere::AtmosphereRenderView& view,
-    rhi::Buffer* const stormExport, const f64 simulationSeconds)
+    rhi::Buffer* const stormExport, const f64 simulationSeconds,
+    const u64 bodyHigh, const u64 bodyLow)
 {
     cache.active=false;
     if (!cache.buffer || source.layers.empty() ||
@@ -716,6 +717,8 @@ void UnifiedCloudRenderer::UpdateSunCache(
         simulationSeconds+0.001<cache.lastSimulationSeconds ||
         simulationSeconds-cache.lastSimulationSeconds>60.0);
     const bool changed = reanchor || largeSunChange || timeJump ||
+        !cache.bodySet || cache.bodyHigh != bodyHigh ||
+        cache.bodyLow != bodyLow ||
         cache.sourceFingerprint!=field.Fingerprint() ||
         cache.lastStorm!=stormExport ||
         cache.lastRadius!=referenceRadiusMeters;
@@ -728,6 +731,9 @@ void UnifiedCloudRenderer::UpdateSunCache(
         cache.anchor=direction;
         cache.anchored=true;
     }
+    cache.bodyHigh=bodyHigh;
+    cache.bodyLow=bodyLow;
+    cache.bodySet=true;
     cache.sourceFingerprint=field.Fingerprint();
     cache.lastStorm=stormExport;
     cache.lastRadius=referenceRadiusMeters;
