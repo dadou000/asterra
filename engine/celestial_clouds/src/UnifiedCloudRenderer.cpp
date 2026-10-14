@@ -195,12 +195,12 @@ float2 StormMedium(float3 position, float radius)
     if (g_storm[0] < 0.5) return float2(0.,0.);
     const float3 direction = position / max(radius,1.);
     const float3 centre = normalize(float3(g_storm[1],g_storm[2],g_storm[3]));
-)";
-
-constexpr const char* kMediumPart2 = R"(    if (dot(direction,centre) <= 0.) return float2(0.,0.);
+    if (dot(direction,centre) <= 0.) return float2(0.,0.);
     const float planetR = g_storm[13];
     const float x = planetR*dot(direction,float3(g_storm[4],g_storm[5],g_storm[6]));
-    const float y = planetR*dot(direction,float3(g_storm[7],g_storm[8],g_storm[9]));
+)";
+
+constexpr const char* kMediumPart2 = R"(    const float y = planetR*dot(direction,float3(g_storm[7],g_storm[8],g_storm[9]));
     const float halfX = 0.5*g_storm[17]*g_storm[14];
     const float halfY = 0.5*g_storm[18]*g_storm[15];
     const float edge = min(halfX-abs(x),halfY-abs(y));
@@ -362,9 +362,7 @@ float4 Density(float3 position, bool receiver,
         if(coverage<0.015 && w.y<0.015) continue;
         const float type=saturate(w.w);
         const float tower=smoothstep(0.52,0.94,type);
-)";
-
-constexpr const char* kMediumPart3 = R"(        const float lowToFair=smoothstep(0.18,0.52,type);
+        const float lowToFair=smoothstep(0.18,0.52,type);
         const float cloudTop=lerp(0.20,0.49,lowToFair);
         const float topHeight=lerp(cloudTop,0.94,tower)*
             lerp(0.89,1.08,coarse);
@@ -373,7 +371,9 @@ constexpr const char* kMediumPart3 = R"(        const float lowToFair=smoothstep
         const float hn=h/max(topHeight,0.10);
         const float bottom=smoothstep(0.,0.075,hn);
         const float top=1.-smoothstep(
-            lerp(0.70,0.80,tower),1.,hn);
+)";
+
+constexpr const char* kMediumPart3 = R"(            lerp(0.70,0.80,tower),1.,hn);
         // Tall updrafts narrow toward the crown; the anvil is another
         // medium component rather than an extension of the tower stem.
         const float taper=tower*0.24*
@@ -535,9 +535,7 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
     float optical=0.;
     [unroll]
     for(uint dz=0u;dz<2u;++dz)
-)";
-
-constexpr const char* kMediumPart4 = R"(    {
+    {
         [unroll]
         for(uint dy=0u;dy<2u;++dy)
         {
@@ -554,7 +552,9 @@ constexpr const char* kMediumPart4 = R"(    {
                 optical+=v.x*w;
             }
         }
-    }
+)";
+
+constexpr const char* kMediumPart4 = R"(    }
     opticalDepth=clamp(optical,0.,24.);
     return true;
 }
@@ -604,22 +604,38 @@ float4 March(V input) : SV_Target0
     if (last <= first)
         return float4(0,0,0,1);
 
-    // B1 intentionally bounded, independent shading; B3 replaces the local
-    // sun approximation with a versioned long-range optical-depth cache.
-    const uint steps = 64u;
-    const float dt = (last - first) / float(steps);
-    float T = 1.;
-    float3 L = 0;
-    const float3 sun = normalize(g.sunFar.xyz);
+    // Progressive, *complete* view-ray integration: uniform 64 steps
+    // discarded near-field silhouette detail while overallocating the
+    // same number of samples to the unimportant far end of long rays.
+    // A monotonic quadratic schedule covers the ENTIRE intersected
+    // segment, with 0.35x step width near the camera and 1.65x far away.
+    // Unlike unbounded fine stepping it cannot silently truncate a long
+    // tangent ray when the iteration budget is exhausted.
+    const uint steps=128u;
+    const float span=last-first;
+    const float invSteps=1./float(steps);
+    const uint2 pixel=uint2(input.position.xy);
+    uint seed=pixel.x*747796405u+pixel.y*2891336453u+0x9e3779b9u;
+    seed=((seed>>((seed>>28u)+4u))^seed)*277803737u;
+    seed=(seed>>22u)^seed;
+    const float jitter=0.35+0.30*(float(seed)*(1./4294967296.));
+    float T=1.;
+    float3 L=0.;
+    const float3 sun=normalize(g.sunFar.xyz);
     [loop]
-    for (uint i=0u; i<steps && T>0.004; ++i)
+    for(uint i=0u;i<steps && T>0.004;++i)
     {
-        float3 p = g.cameraAspect.xyz +
-            direction * (first + (float(i)+0.5)*dt);
-        const float cameraDistance=first+(float(i)+0.5)*dt;
+        const float u=float(i)*invSteps;
+        const float v=float(i+1u)*invSteps;
+        const float t0=first+span*u*(0.35+0.65*u);
+        const float t1=first+span*v*(0.35+0.65*v);
+        const float dt=t1-t0;
+        const float cameraDistance=t0+jitter*dt;
+        const float3 p=g.cameraAspect.xyz+direction*cameraDistance;
         const float footprint=max(2.,cameraDistance*
             2.*g.forwardFov.w*g.cacheState.z);
-        float4 mediumAtPoint = Density(p,false,footprint,true);
+        const float4 mediumAtPoint=Density(
+            p,false,footprint,true);
         float sigma = mediumAtPoint.x;
         if (sigma < 1.e-8) continue;
         // Solar elevation measured against the horizon of the spherical
