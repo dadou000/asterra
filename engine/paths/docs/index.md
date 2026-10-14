@@ -27,3 +27,7 @@ verified = "b0a0de7f"
 +++
 
 
+
+## Canonical road / rail specification
+
+The complete road, railway and supported-construction design contract lives at **`/world/roads-railways`** (source: `docs/tree/world/roads-railways.md`), including alignment, earthworks, bridge/tunnel support, vehicles aboard moving ships, Studio authoring, traffic and validation. This module implements only a portion of the complete contract; do not infer feature completion from source presence.
