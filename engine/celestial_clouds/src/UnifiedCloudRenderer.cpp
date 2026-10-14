@@ -905,6 +905,7 @@ void UnifiedCloudRenderer::UpdateSunCache(
     commands.SetComputeBuffer(1U,
         stormExport ? *stormExport : *emptyStorm_);
     commands.SetComputeBuffer(2U,*cache.buffer);
+    commands.SetComputeBuffer(3U,*densityNoise_);
     commands.Dispatch(4U,4U,1U);
     commands.UavBarrier(*cache.buffer);
     commands.Transition(*cache.buffer,
