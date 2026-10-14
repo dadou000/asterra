@@ -97,6 +97,11 @@ void TestInvalidation()
 void TestLayerPackingAndOverlap()
 {
     using namespace orbit::celestial_clouds;
+    // GPU ABI encodes double source parameters to 32-bit floats.
+    const auto nearPacked = [](const double a, const double b)
+    {
+        return std::abs(a-b) < 1.0e-5;
+    };
     static_assert(sizeof(GpuCloudTexel) == 16U);
     static_assert(sizeof(GpuCloudLayerDescriptor) == 32U);
 
@@ -117,14 +122,14 @@ void TestLayerPackingAndOverlap()
 
     const auto a = EncodeGpuCloudLayer(low);
     const auto b = EncodeGpuCloudLayer(high);
-    assert(Near(a.shell[0], 500.0) && Near(a.shell[1], 1800.0));
-    assert(Near(a.shell[2], 6.0) && Near(a.shell[3], 0.1));
-    assert(Near(a.material[0], 1.4));
-    assert(Near(a.material[1], 0.95));
-    assert(Near(a.material[2], 0.6));
-    assert(Near(a.material[3], 0.0));
-    assert(Near(b.shell[0], 1400.0) && Near(b.shell[1], 8500.0));
-    assert(Near(b.material[3], 1.0));
+    assert(nearPacked(a.shell[0], 500.0) && nearPacked(a.shell[1], 1800.0));
+    assert(nearPacked(a.shell[2], 6.0) && nearPacked(a.shell[3], 0.1));
+    assert(nearPacked(a.material[0], 1.4));
+    assert(nearPacked(a.material[1], 0.95));
+    assert(nearPacked(a.material[2], 0.6));
+    assert(nearPacked(a.material[3], 0.0));
+    assert(nearPacked(b.shell[0], 1400.0) && nearPacked(b.shell[1], 8500.0));
+    assert(nearPacked(b.material[3], 1.0));
 
     // GPU layout is six cube faces per layer, 16 bytes per texel,
     // followed by 32 bytes per layer descriptor. A's texel offsets
@@ -147,7 +152,7 @@ void TestLayerPackingAndOverlap()
     // Receiver-shadow participation is independently authored per layer.
     const double groundTau = lowSigma*a.material[3] +
         highSigma*b.material[3];
-    assert(Near(groundTau, highSigma));
+    assert(nearPacked(groundTau, highSigma));
 }
 
 void TestMultiViewIsolation()
