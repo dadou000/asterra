@@ -331,6 +331,24 @@ void StudioViewportPanel::Register()
                     }
                 }
 
+                // Independent cloud backend selector. Keep it on its own row:
+                // the viewport toolbar is already wider than narrow docks.
+                // B1 is visibly experimental and is not the existing shader
+                // compare (clouds.split_set compares two A variants).
+                auto cloudBackendLayers = studioViews.TerrainLayers("studio.primary");
+                if (context.Button(cloudBackendLayers.cloudBPreview
+                        ? "Cloud renderer: B1 PREVIEW##cloud-backend"
+                        : "Cloud renderer: A (reference)##cloud-backend"))
+                {
+                    cloudBackendLayers.cloudBPreview = !cloudBackendLayers.cloudBPreview;
+                    studioViews.SetTerrainLayers("studio.primary", cloudBackendLayers);
+                    if (cloudBackendLayers.cloudBPreview &&
+                        studioViewportRenderer.CloudSplitEnabled())
+                    {
+                        static_cast<void>(studioViewportRenderer.SetCloudSplit(false, "", 0.5F));
+                    }
+                }
+
                 // End the toolbar row before measuring the viewport. Without
                 // this, ImGui reports only the unused width after the Zoom
                 // input, shrinking both the rendered image and its hit area.
