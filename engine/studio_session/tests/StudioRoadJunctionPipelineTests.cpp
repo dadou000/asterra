@@ -112,6 +112,26 @@ int main()
         CHECK(dirtyRender.size()==3U); // Suppress entire stale frame packet.
         CHECK(dirtyRender[0]->edge!=centre.id);
         CHECK(pipeline.CurrentContact(centre.id,studio.PathProducts())==nullptr);
+        // No contact packet => no stepping old actors or silently resetting
+        // their physics states while the road rebuild is in flight.
+        {
+            const rpc::Value step(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id","dirty-step"},
+                {"method","infrastructure.vehicle_world"},
+                {"params",rpc::Value::Object{
+                    {"action","step"},{"node",centre.id.ToString()},
+                    {"steps",static_cast<i64>(1)}}
+            });
+            const auto reply=studio.DispatchRpc(rpc::Serialize(step));
+            CHECK(reply.has_value());
+            const auto value=rpc::ParseValue(*reply);
+            const auto* result=value.Find("result");
+            CHECK(result && result->IsObject());
+            const auto* ready=result->Find("ready");
+            CHECK(ready && ready->IsBool() && !ready->AsBool());
+            CHECK(studio.Vehicles().Tick()==60U);
+        }
+
         CHECK(!pipeline.ProbeContact(centre.id,studio.PathProducts(),
             {.frame=frame,.origin={2,10,3}}).has_value());
         for(int i=0;i<12;++i)static_cast<void>(studio.Tick(false));
@@ -145,16 +165,68 @@ int main()
             CHECK(signature && signature->IsString() &&
                   !signature->AsString().empty());
         }
+        // Persistent runtime vehicles use the same generation-fenced
+        // contact owner. They are transient (not scene DB objects).
+        scene::ObjectId runtimeVehicle{};
+        {
+            const rpc::Value spawn(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id","spawn"},
+                {"method","infrastructure.vehicle_world"},
+                {"params",rpc::Value::Object{
+                    {"action","spawn"},{"node",centre.id.ToString()}}
+            });
+            const auto reply=studio.DispatchRpc(rpc::Serialize(spawn));
+            CHECK(reply.has_value());
+            const auto parsed=rpc::ParseValue(*reply);
+            CHECK(parsed.Find("error")==nullptr);
+            const auto* data=parsed.Find("result");
+            CHECK(data && data->IsObject());
+            const auto* created=data->Find("vehicle");
+            CHECK(created && created->IsString());
+            const auto id=scene::ObjectId::Parse(created->AsString());
+            CHECK(id.has_value());
+            runtimeVehicle=*id;
+            CHECK(studio.Vehicles().Find(runtimeVehicle)!=nullptr);
+            const rpc::Value step(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id","step"},
+                {"method","infrastructure.vehicle_world"},
+                {"params",rpc::Value::Object{
+                    {"action","step"},{"node",centre.id.ToString()},
+                    {"steps",static_cast<i64>(60)}}
+            });
+            const auto stepped=studio.DispatchRpc(rpc::Serialize(step));
+            CHECK(stepped.has_value());
+            const auto stepValue=rpc::ParseValue(*stepped);
+            CHECK(stepValue.Find("error")==nullptr);
+            const auto* stepResult=stepValue.Find("result");
+            CHECK(stepResult && stepResult->IsObject());
+            const auto* ready=stepResult->Find("ready");
+            CHECK(ready && ready->IsBool() && ready->AsBool());
+            CHECK(studio.Vehicles().Tick()==60U);
+        }
         const auto previous=pipeline.Revision();
+        const auto beforeContact=pipeline.CurrentContact(
+            centre.id,studio.PathProducts());
+        CHECK(beforeContact!=nullptr);
+        const auto beforeSignature=beforeContact->packetSignature;
         paths.SetNodeAnchor(east.id,paths::FramePointAnchor{
             .frame=frame,.localMeters={38,0,0}});
         for(int i=0;i<12;++i)static_cast<void>(studio.Tick(false));
         CHECK(studio.RoadJunctions().Revision()>previous);
         CHECK(studio.RoadJunctions().FindPatch(centre.id)!=nullptr);
+        const auto afterContact=studio.RoadJunctions().CurrentContact(
+            centre.id,studio.PathProducts());
+        CHECK(afterContact!=nullptr);
+        CHECK(afterContact->packetSignature!=beforeSignature);
+        // The previous temporary vehicle remains explicit but cannot step
+        // using the new geometry until re-bound (which clears old actors).
+        CHECK(studio.Vehicles().Find(runtimeVehicle)!=nullptr);
         studio.CloseWorld();
         CHECK(studio.RoadJunctions().FindPatch(centre.id)==nullptr);
         CHECK(studio.RoadJunctions().Packets().empty());
         CHECK(studio.RoadJunctions().ActiveContactScenes()==0U);
+        CHECK(studio.Vehicles().Count()==0U);
+
 
     }
     std::filesystem::remove_all(root);

@@ -79,3 +79,7 @@ The source-level BuildRoadJunctionConstruction consumes existing JunctionPlan an
 ## RoadVehicleFixture: deterministic collision-driving feasibility
 
 `RoadVehicleFixture.hpp/.cpp` models four spring/damper wheel rays, body heave, small-angle pitch and roll, longitudinal traction/braking and yaw at an explicit fixed step (default 120 Hz). It queries only the published `RoadContactSceneOwner` surface generation and records physical seam owner transitions, ground-contact continuity, bottoming and oscillation. Budgets cap steps and triangle queries. `Orbit.RoadVehicleFixture` includes deterministic replay and deliberate gap detection; StudioSession's read-only RPC and Build → Procedurals use the same fixture. There is no full vehicle actor, tire-slip model or live rigid-body integration yet.
+
+## Persistent four-wheel runtime world
+
+RoadVehicleWorld.hpp/.cpp owns a bounded transient actor container using the same validated integrator as RoadVehicleFixture. The runtime requires an explicit RoadContactSceneOwner generation; copied-actor transactional steps prevent partial states on invalid contacts, and rebind clears actors on generation change. CompileRoadVehicleRoute uses exact authored road/lane movement endpoints. StudioSession owns the actor world and exposes it through infrastructure.vehicle_world; the unified Procedurals UI offers spawn/step/control/inspect/remove. Test: Orbit.RoadVehicleWorld. It is not yet a full 6-DoF vehicle physics or a real-time NPC simulator.

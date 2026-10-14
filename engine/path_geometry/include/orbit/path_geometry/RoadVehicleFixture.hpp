@@ -88,6 +88,19 @@ struct RoadVehicleFixtureReport
     std::string error;
 };
 
+// Shared validated one-step integrator used by both one-shot fixtures and
+// persistent runtime vehicles. On failure, the vehicle state stays unchanged.
+[[nodiscard]] bool AdvanceRoadVehicleStep(
+    const RoadContactSceneOwner& contact,
+    frames::FrameId frame,
+    const RoadVehicleParameters& parameters,
+    const RoadVehicleInput& input,
+    f64 fixedStepSeconds,
+    std::size_t triangleBudget,
+    RoadVehicleState& state,
+    RoadVehicleStepReport& report,
+    std::string* error = nullptr);
+
 // Fixed timestep independent of viewport FPS or SimulationClock::Rate.
 // Each wheel uses exactly the same revision-fenced static contact scene
 // consumed by the Studio junction renderer. Failed contact/budget input

@@ -132,3 +132,7 @@ Source includes \`RoadContactScene\`: bounded immutable static CPU shapes cooked
 A bounded CPU `RoadVehicleFixture` now exercises four sprung ray wheels across staged collision surfaces and computes heave, pitch/roll, longitudinal traction/braking and wheel ownership changes. The test is entirely read-only, runs explicit fixed steps independent of real frame rate, and requires an active frame/signature-matched contact scene. RPC `infrastructure.road_vehicle_fixture` and Build → Procedurals call the same code. `Orbit.RoadVehicleFixture` includes a continuous flat seam and a deliberate gap regression; Studio's test calls the RPC.
 
 **Do not mark R01, R02, gate P5 or gate H complete**: this is a CPU feasibility fixture, not live NPC/player vehicle physics, native tire contacts, rigid-body-world shapes, or a fully drivable road scene. No native test result or profiler capture has been verified.
+
+## Vehicle-world development gate
+
+RoadVehicleWorld.hpp/.cpp supplies a transient physics state container, persistent steering/throttle/brake state across fixed steps and an explicit same-packet two-edge road route. Studio RPC and Build → Procedurals controls share one runtime owner. A content rebuild makes the old actor generation ineligible, and world close clears it. This improves CPU pipeline continuity but does NOT close player/NPC physics, multi-junction routing, physics-safe scheduling or the Vulkan driving-validation gate. New Orbit.RoadVehicleWorld CTest and updated StudioRoadJunctionPipeline RPC test await native execution. See vehicle-world.md.

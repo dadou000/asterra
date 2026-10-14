@@ -163,6 +163,54 @@ RoadVehicleStepReport Step(const RoadContactSceneOwner& contact,
 }
 } // namespace
 
+bool AdvanceRoadVehicleStep(
+    const RoadContactSceneOwner& contact,
+    const frames::FrameId frame,
+    const RoadVehicleParameters& parameters,
+    const RoadVehicleInput& input,
+    const f64 fixedStepSeconds,
+    const std::size_t triangleBudget,
+    RoadVehicleState& state,
+    RoadVehicleStepReport& report,
+    std::string* error)
+{
+    const auto fail=[&](const char* message)
+    {
+        if(error)*error=message;
+        return false;
+    };
+    const auto* active=contact.Snapshot();
+    if(!active || active->frame!=frame ||
+       !Valid(parameters) || !Valid(state) ||
+       !Finite(input.throttle) || input.throttle<0 || input.throttle>1 ||
+       !Finite(input.brake) || input.brake<0 || input.brake>1 ||
+       !Finite(input.steerRadians) || std::abs(input.steerRadians)>0.6 ||
+       !Finite(fixedStepSeconds) || fixedStepSeconds<1.0/480.0 ||
+       fixedStepSeconds>1.0/30.0 ||
+       triangleBudget==0U || triangleBudget>4096U)
+        return fail("Invalid vehicle step parameters or contact generation.");
+    RoadVehicleState proposed=state;
+    try
+    {
+        const auto produced=Step(
+            contact,frame,parameters,input,fixedStepSeconds,
+            triangleBudget,proposed);
+        if(produced.queryBudgetExceeded)
+            return fail("Vehicle wheel contact query reached its triangle budget.");
+        if(!Valid(proposed))
+            return fail("Vehicle state diverged.");
+        state=proposed;
+        report=produced;
+        if(error)error->clear();
+        return true;
+    }
+    catch(const std::exception& exception)
+    {
+        if(error)*error=exception.what();
+        return false;
+    }
+}
+
 RoadVehicleFixtureReport RunRoadVehicleFixture(
     const RoadContactSceneOwner& scene,
     const RoadVehicleFixtureRequest& request)

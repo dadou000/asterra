@@ -86,6 +86,9 @@ public:
     PathProducts() const noexcept;
     [[nodiscard]] const StudioRoadJunctionPipeline& RoadJunctions() const noexcept;
     [[nodiscard]] StudioRoadJunctionPipeline& RoadJunctions() noexcept;
+    [[nodiscard]] const path_geometry::RoadVehicleRuntimeWorld&
+    Vehicles() const noexcept;
+
 
     [[nodiscard]] terrain_debug::TerrainDebugLivePages&
     TerrainDebugPages() noexcept;
@@ -198,6 +201,7 @@ private:
     UniverseBoundRoutePlanner pathRouting_;
     UniverseBoundPathCache pathProducts_;
     StudioRoadJunctionPipeline roadJunctionPipeline_;
+    path_geometry::RoadVehicleRuntimeWorld vehicleWorld_;
     CorridorConstructionRegistry corridorConstruction_;
     struct ConstructionSelection
     {

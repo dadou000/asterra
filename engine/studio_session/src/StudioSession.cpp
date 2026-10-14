@@ -16,6 +16,7 @@
 #include <orbit/volume_representation/VolumeOutputRuntime.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <stdexcept>
 #include <utility>
@@ -389,6 +390,205 @@ StudioSession::StudioSession(
                     result->finalState.forwardSpeedMetersPerSecond}
             };
         });
+    rpc_.Dispatcher().Register(
+        {.name="infrastructure.vehicle_world",
+         .description="Transient fixed-step road vehicle world. action=status|spawn|controls|follow|step|remove|clear. Spawn/follow/step require a junction node UUID; existing vehicle actions require vehicle UUID.",
+         .mutating=true},
+        [this](const rpc::Value& params)->rpc::Value
+        {
+            const auto* operation=params.Find("action");
+            if(!operation || !operation->IsString())
+                throw rpc::Error(-32602,"action must be a string.");
+            const auto& action=operation->AsString();
+            const auto parseId=[&](const char* field)->scene::ObjectId
+            {
+                const auto* value=params.Find(field);
+                if(!value || !value->IsString())
+                    throw rpc::Error(-32602,std::string(field)+" UUID is required.");
+                const auto parsed=scene::ObjectId::Parse(value->AsString());
+                if(!parsed)throw rpc::Error(-32602,
+                    std::string(field)+" UUID is malformed.");
+                return *parsed;
+            };
+            if(action=="clear")
+            {
+                vehicleWorld_.Clear();
+                return rpc::Value::Object{{"cleared",true},{"vehicle_count",0}};
+            }
+            if(action=="remove")
+            {
+                const auto id=parseId("vehicle");
+                return rpc::Value::Object{{"removed",vehicleWorld_.Remove(id)},
+                    {"vehicle_count",static_cast<i64>(vehicleWorld_.Count())}};
+            }
+            if(action=="controls")
+            {
+                const auto id=parseId("vehicle");
+                path_geometry::RoadVehicleInput input;
+                for(const auto [key,dst]:std::array<
+                    std::pair<const char*,f64*>,3>{
+                    std::pair{"throttle",&input.throttle},
+                    std::pair{"brake",&input.brake},
+                    std::pair{"steer_radians",&input.steerRadians}
+                })
+                {
+                    const auto* v=params.Find(key);
+                    if(v)
+                    {
+                        if(!v->IsNumber())throw rpc::Error(-32602,
+                            std::string(key)+" must be numeric.");
+                        *dst=v->AsNumber();
+                    }
+                }
+                if(!vehicleWorld_.SetControls(id,input))
+                    throw rpc::Error(-32602,"Unknown vehicle or invalid controls.");
+                return rpc::Value::Object{{"updated",true}};
+            }
+            if(action=="status")
+            {
+                rpc::Value::Object status{
+                    {"vehicle_count",static_cast<i64>(vehicleWorld_.Count())},
+                    {"tick",static_cast<i64>(vehicleWorld_.Tick())},
+                    {"frame",vehicleWorld_.Frame().ToString()},
+                    {"packet_signature",
+                        std::to_string(vehicleWorld_.PacketSignature())},
+                    {"runtime_only",true},
+                    {"simulation_fixed_step_hz",120},
+                    {"vehicle_physics_world_committed",false}
+                };
+                if(const auto* vehicle=params.Find("vehicle"))
+                {
+                    if(!vehicle->IsString())
+                        throw rpc::Error(-32602,"vehicle must be a UUID string.");
+                    const auto id=parseId("vehicle");
+                    if(const auto* actor=vehicleWorld_.Find(id))
+                    {
+                        status.emplace("found",true);
+                        status.emplace("vehicle",id.ToString());
+                        status.emplace("position_frame_local_meters",
+                            rpc::Value::Array{
+                                actor->state.centre.x,
+                                actor->state.centre.y,
+                                actor->state.centre.z});
+                        status.emplace("speed_mps",
+                            actor->state.forwardSpeedMetersPerSecond);
+                        status.emplace("yaw_radians",actor->state.yawRadians);
+                        status.emplace("following_route",actor->followRoute);
+                        status.emplace("next_waypoint",
+                            static_cast<i64>(actor->nextWaypoint));
+                    }
+                    else status.emplace("found",false);
+                }
+                return status;
+            }
+            if(action!="spawn" && action!="follow" && action!="step")
+                throw rpc::Error(-32602,"Unknown road vehicle world action.");
+            const auto junction=parseId("node");
+            const auto* owner=roadJunctionPipeline_.ActiveContactOwner(
+                junction,pathProducts_);
+            if(!owner)return rpc::Value::Object{
+                {"ready",false},
+                {"reason","Road contact scene absent, stale or rebuilding."}
+            };
+            const auto* generation=owner->Snapshot();
+            const path_geometry::RoadJunctionScenePacket* packet=nullptr;
+            for(const auto* candidate:roadJunctionPipeline_.Packets())
+                if(candidate->frame==generation->frame &&
+                   candidate->buildSignature==generation->packetSignature &&
+                   std::any_of(candidate->patches.begin(),
+                        candidate->patches.end(),
+                        [&](const auto& patch){return patch.node==junction;}))
+                    packet=candidate;
+            if(!packet)throw rpc::Error(-32001,
+                "Generation-matched junction geometry unavailable.");
+            if(action=="spawn")
+            {
+                if(!vehicleWorld_.Bind(*owner))
+                    throw rpc::Error(-32001,"Cannot bind vehicle contact world.");
+                scene::ObjectId preferred{};
+                if(params.Find("edge"))preferred=parseId("edge");
+                const path_geometry::RoadJunctionPublishedEdge* road=nullptr;
+                bool atStart=false;
+                for(const auto& item:packet->edges)
+                {
+                    const auto semantic=pathNetwork_.Service().FindEdge(item.edge);
+                    if(!semantic || item.product.stations.empty())continue;
+                    if(preferred && item.edge!=preferred)continue;
+                    if(semantic->startNode!=junction &&
+                       semantic->endNode!=junction)continue;
+                    road=&item;
+                    atStart=semantic->startNode==junction;
+                    break;
+                }
+                if(!road)return rpc::Value::Object{
+                    {"ready",false},
+                    {"reason","No retained incident road for requested edge."}
+                };
+                const auto& stations=road->product.stations;
+                const auto& cut=atStart?stations.front():stations.back();
+                const math::Double3 horizontal{
+                    cut.tangent.x*(atStart?-1.0:1.0),0.0,
+                    cut.tangent.z*(atStart?-1.0:1.0)};
+                const f64 length=math::Length(horizontal);
+                if(!std::isfinite(length)||length<0.5)
+                    throw rpc::Error(-32602,
+                        "Approach cannot support planar vehicle heading.");
+                const auto heading=horizontal/length;
+                path_geometry::RoadVehicleState state;
+                const path_geometry::RoadVehicleParameters vehicle;
+                state.centre=cut.position-heading*4.0;
+                state.centre.y=cut.position.y+
+                    vehicle.wheelRadiusMeters+vehicle.suspensionRestMeters-
+                    vehicle.massKg*vehicle.gravityMetersPerSecond2/
+                        (4.0*vehicle.springNewtonsPerMeter);
+                state.yawRadians=std::atan2(heading.z,heading.x);
+                state.forwardSpeedMetersPerSecond=4.0;
+                const auto id=scene::ObjectId::Random();
+                if(!vehicleWorld_.Spawn(*owner,id,state))
+                    throw rpc::Error(-32001,"Vehicle spawn rejected.");
+                return rpc::Value::Object{
+                    {"ready",true},{"vehicle",id.ToString()},
+                    {"source_edge",road->edge.ToString()},
+                    {"frame",generation->frame.ToString()},
+                    {"packet_signature",
+                        std::to_string(generation->packetSignature)},
+                    {"vehicle_count",static_cast<i64>(vehicleWorld_.Count())}
+                };
+            }
+            if(action=="follow")
+            {
+                const auto id=parseId("vehicle");
+                const auto from=parseId("from_edge");
+                const auto to=parseId("to_edge");
+                const auto route=path_geometry::CompileRoadVehicleRoute(
+                    *packet,from,to);
+                if(!route ||
+                   !vehicleWorld_.FollowRoute(id,*route,5.0))
+                    throw rpc::Error(-32602,
+                        "No explicit lane movement or vehicle generation mismatch.");
+                return rpc::Value::Object{
+                    {"ready",true},
+                    {"waypoints",static_cast<i64>(route->waypoints.size())}
+                };
+            }
+            u32 steps=1U;
+            if(const auto* requested=params.Find("steps"))
+            {
+                if(!requested->IsInteger() || requested->AsInteger()<1 ||
+                   requested->AsInteger()>120)
+                    throw rpc::Error(-32602,"steps must be between 1 and 120.");
+                steps=static_cast<u32>(requested->AsInteger());
+            }
+            const auto result=vehicleWorld_.Step(*owner,steps);
+            return rpc::Value::Object{
+                {"ready",result.success},
+                {"error",result.error},
+                {"completed_steps",static_cast<i64>(result.completedSteps)},
+                {"tick",static_cast<i64>(result.tick)},
+                {"vehicle_count",static_cast<i64>(result.actorCount)},
+                {"packet_signature",std::to_string(result.packetSignature)}
+            };
+        });
     static_cast<void>(activeBody_.Refresh());
     static_cast<void>(pathNetwork_.RefreshBinding());
     static_cast<void>(pathRouting_.RefreshBinding());
@@ -474,6 +674,11 @@ const StudioRoadJunctionPipeline& StudioSession::RoadJunctions() const noexcept
 StudioRoadJunctionPipeline& StudioSession::RoadJunctions() noexcept
 {
     return roadJunctionPipeline_;
+}
+const path_geometry::RoadVehicleRuntimeWorld&
+StudioSession::Vehicles() const noexcept
+{
+    return vehicleWorld_;
 }
 
 
@@ -744,6 +949,7 @@ void StudioSession::OpenWorld(
     const std::filesystem::path& relativePath)
 {
     roadJunctionPipeline_.Clear();
+    vehicleWorld_.Clear();
     pendingTerrainInvalidations_.clear();
     corridorConstruction_.Clear();
     terrainPhysicalPages_.Clear();
@@ -758,6 +964,7 @@ void StudioSession::OpenWorld(
 void StudioSession::CloseWorld()
 {
     roadJunctionPipeline_.Clear();
+    vehicleWorld_.Clear();
     DispatchWorldLifecycle(
         "world.close",
         std::nullopt);
@@ -858,6 +1065,7 @@ StudioTickResult StudioSession::Tick(
     if (!world_.HasWorld())
     {
         roadJunctionPipeline_.Clear();
+        vehicleWorld_.Clear();
         const bool hadBody =
             activeBody_.Active().has_value();
         activeBody_.Clear();

@@ -2,6 +2,7 @@
 #include <orbit/path_geometry/RoadJunctionPublication.hpp>
 #include <orbit/path_geometry/RoadContactScene.hpp>
 #include <orbit/path_geometry/RoadVehicleFixture.hpp>
+#include <orbit/path_geometry/RoadVehicleWorld.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
@@ -32,6 +33,9 @@ public:
     [[nodiscard]] const path_geometry::RoadContactSceneGeneration*
     CurrentContact(scene::ObjectId junction,
                    const UniverseBoundPathCache& raw) const noexcept;
+    [[nodiscard]] const path_geometry::RoadContactSceneOwner*
+    ActiveContactOwner(scene::ObjectId junction,
+                       const UniverseBoundPathCache& raw) const noexcept;
     [[nodiscard]] std::size_t ActiveContactScenes() const noexcept;
     // Fails closed on a dirty source or unmatched packet generation.
     [[nodiscard]] std::optional<path_geometry::RoadContactHit>

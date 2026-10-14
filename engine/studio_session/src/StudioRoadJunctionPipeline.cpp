@@ -98,6 +98,17 @@ StudioRoadJunctionPipeline::CurrentContact(
     }
     return nullptr;
 }
+const path_geometry::RoadContactSceneOwner*
+StudioRoadJunctionPipeline::ActiveContactOwner(
+    const scene::ObjectId junction,
+    const UniverseBoundPathCache& raw) const noexcept
+{
+    const auto* snapshot=CurrentContact(junction,raw);
+    if(!snapshot)return nullptr;
+    const auto it=contactScenes_.find(snapshot->frame);
+    if(it==contactScenes_.end())return nullptr;
+    return &it->second;
+}
 std::optional<path_geometry::RoadContactHit>
 StudioRoadJunctionPipeline::ProbeContact(
     const scene::ObjectId junction,
@@ -181,6 +192,7 @@ void StudioRoadJunctionPipeline::Refresh(
     if(fingerprint==observedFingerprint_)return;
     observedFingerprint_=fingerprint;
     frames_.clear();
+    contactScenes_.clear();
     renderPatches_.clear();
     lastError_.clear();
     ++revision_;

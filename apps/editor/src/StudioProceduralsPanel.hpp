@@ -256,6 +256,56 @@ private:
         }
         catch(const std::exception& e){error_=e.what();}
     }
+    void RunRoadVehicleWorldAction(std::string_view action)
+    {
+        runtimeVehicleError_.clear();
+        try
+        {
+            rpc::Value::Object args{{"action",std::string(action)}};
+            if(action=="spawn" || action=="step" || action=="follow")
+            {
+                if(!scene::ObjectId::Parse(junctionNodeId_))
+                    throw std::invalid_argument("Choose a junction node.");
+                args.emplace("node",junctionNodeId_);
+            }
+            if(action=="step")
+                args.emplace("steps",static_cast<i64>(60));
+            if(action=="controls")
+            {
+                if(runtimeVehicleId_.empty())
+                    throw std::invalid_argument("Spawn a car first.");
+                args.emplace("vehicle",runtimeVehicleId_);
+                args.emplace("throttle",runtimeThrottle_);
+                args.emplace("brake",runtimeBrake_);
+                args.emplace("steer_radians",runtimeSteer_);
+            }
+            if(action=="remove" || action=="status")
+                if(!runtimeVehicleId_.empty())
+                    args.emplace("vehicle",runtimeVehicleId_);
+            const rpc::Value request(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id",static_cast<i64>(1)},
+                {"method","infrastructure.vehicle_world"},
+                {"params",rpc::Value(std::move(args))}
+            });
+            const auto reply=rpc_->Dispatch(rpc::Serialize(request));
+            if(!reply)throw std::runtime_error("No runtime vehicle RPC response.");
+            const auto parsed=rpc::ParseValue(*reply);
+            if(const auto* err=parsed.Find("error"))
+                throw std::runtime_error(rpc::Serialize(*err));
+            const auto* result=parsed.Find("result");
+            if(!result || !result->IsObject())
+                throw std::runtime_error("Malformed runtime vehicle reply.");
+            runtimeVehicleReport_=*result;
+            if(action=="spawn")
+            {
+                if(const auto* id=result->Find("vehicle");id && id->IsString())
+                    runtimeVehicleId_=id->AsString();
+            }
+            if(action=="remove" || action=="clear")
+                runtimeVehicleId_.clear();
+        }
+        catch(const std::exception& ex){runtimeVehicleError_=ex.what();}
+    }
     void RunJunctionDriveFixture()
     {
         driveError_.clear();
@@ -326,6 +376,8 @@ private:
             report_ = rpc::Value{};
             junctionReport_ = rpc::Value{};
             driveReport_ = rpc::Value{};
+            runtimeVehicleReport_=rpc::Value{};
+            runtimeVehicleId_.clear();
             junctionNodeId_.clear();
             knownWorldGeneration_ = ~u64{0};
         }
@@ -500,6 +552,52 @@ private:
                         context.MutedText(
                             "Fixture runs a simplified planar car body. It does not certify physics-world colliders, tire simulation or playable vehicles.");
                     }
+                }
+            }
+            if(context.Section("Temporary vehicle runtime##proc-vehicle-runtime",false))
+            {
+                context.MutedText(
+                    "Transient simulation actors use the current contact generation. Each button advances only the requested fixed steps; no game vehicle is created.");
+                if(context.Button("Spawn car##proc-runtime-spawn"))
+                    RunRoadVehicleWorldAction("spawn");
+                context.SameLine();
+                if(context.Button("Step 60 ticks##proc-runtime-step"))
+                    RunRoadVehicleWorldAction("step");
+                context.SameLine();
+                if(context.Button("Inspect car##proc-runtime-status"))
+                    RunRoadVehicleWorldAction("status");
+                if(!runtimeVehicleId_.empty())
+                {
+                    context.KeyValue("Runtime car",runtimeVehicleId_);
+                    static_cast<void>(context.InputDouble(
+                        "Throttle (0..1)##proc-runtime-throttle",runtimeThrottle_));
+                    static_cast<void>(context.InputDouble(
+                        "Brake (0..1)##proc-runtime-brake",runtimeBrake_));
+                    static_cast<void>(context.InputDouble(
+                        "Steering (rad)##proc-runtime-steer",runtimeSteer_));
+                    if(context.Button("Apply controls##proc-runtime-control"))
+                        RunRoadVehicleWorldAction("controls");
+                    context.SameLine();
+                    if(context.Button("Remove car##proc-runtime-remove"))
+                        RunRoadVehicleWorldAction("remove");
+                }
+                if(!runtimeVehicleError_.empty())
+                    context.ErrorText(runtimeVehicleError_);
+                if(runtimeVehicleReport_.IsObject())
+                {
+                    if(const auto* reason=runtimeVehicleReport_.Find("reason");
+                       reason && reason->IsString())
+                        context.ErrorText(reason->AsString());
+                    for(const auto* key:{"vehicle_count","tick",
+                        "completed_steps"})
+                        if(const auto* value=runtimeVehicleReport_.Find(key);
+                           value && value->IsInteger())
+                            context.KeyValue(key,
+                                std::to_string(value->AsInteger()));
+                    if(const auto* speed=runtimeVehicleReport_.Find("speed_mps");
+                       speed && speed->IsNumber())
+                        context.KeyValue("Speed m/s",
+                            std::format("{:.2f}",speed->AsNumber()));
                 }
             }
             if(!junctionError_.empty())context.ErrorText(junctionError_);
@@ -811,6 +909,12 @@ private:
     rpc::Value junctionReport_;
     rpc::Value driveReport_;
     std::string driveError_;
+    rpc::Value runtimeVehicleReport_;
+    std::string runtimeVehicleId_;
+    std::string runtimeVehicleError_;
+    double runtimeThrottle_{0.15};
+    double runtimeBrake_{0.0};
+    double runtimeSteer_{0.0};
     std::string junctionNodeId_;
     std::string junctionError_;
     std::size_t selectedFinding_{0};
