@@ -110,6 +110,17 @@ public:
         InstallQol(nullptr);
     }
 
+    void SetOpenProceduralRoadsAction(std::function<void()> action)
+    {
+        openProceduralRoadsAction_ = std::move(action);
+    }
+
+    void OpenProceduralRoads()
+    {
+        if (openProceduralRoadsAction_)
+            openProceduralRoadsAction_();
+    }
+
     void RequestCommandPaletteOpen() noexcept
     {
         expansion_.RequestCommandPaletteOpen();
@@ -171,6 +182,7 @@ private:
 
     struct ViewportModeCommandState;
     math::Float2 gizmoRelativeMouseDelta_{};
+    std::function<void()> openProceduralRoadsAction_;
     std::function<bool()> ecoModeGetter_;
     std::function<void(bool)> ecoModeSetter_;
     std::optional<std::pair<u32, u32>> viewportCaptureResolution_;
