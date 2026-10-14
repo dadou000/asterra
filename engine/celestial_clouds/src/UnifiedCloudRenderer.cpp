@@ -402,6 +402,12 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
     return true;
 }
 #else
+// The compute translation unit still parses the other entrypoints.
+bool CachedSunDepth(float3 p,out float opticalDepth)
+{
+    opticalDepth=0.;
+    return false;
+}
 [numthreads(8,8,1)]
 void UpdateSunCache(uint3 id : SV_DispatchThreadID)
 {
@@ -548,8 +554,8 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
             .colorAttachmentCount = 1U
         });
     };
-    march_ = pipeline(pixel, 24U, 2U, 1U, rhi::BlendMode::Opaque);
-    receiverShadow_ = pipeline(shadowPixel, 24U, 2U, 1U, rhi::BlendMode::Opaque);
+    march_ = pipeline(pixel, 32U, 3U, 1U, rhi::BlendMode::Opaque);
+    receiverShadow_ = pipeline(shadowPixel, 32U, 3U, 1U, rhi::BlendMode::Opaque);
     composite_ = pipeline(compPixel, 0U, 0U, 1U, rhi::BlendMode::Alpha);
     if (!march_ || !receiverShadow_ || !composite_)
         throw std::runtime_error("Unified System B cloud pipelines unavailable");
@@ -562,23 +568,43 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
         throw std::runtime_error("Unified System B inactive storm allocation failed");
     std::memset(emptyStorm_->Map(), 0, 64U * sizeof(f32));
     emptyStorm_->Unmap();
+    emptySunCache_ = device.CreateBuffer({
+        .sizeBytes = 16ULL,
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!emptySunCache_)
+        throw std::runtime_error("Unified System B inactive Sun cache allocation failed");
+    std::memset(emptySunCache_->Map(), 0, 16U);
+    emptySunCache_->Unmap();
+
+    const std::string computeSource =
+        std::string("#define B3_WRITE_CACHE 1\n") + kMedium;
+    const auto compute = compiler.Compile({
+        .source = computeSource, .entryPoint = "UpdateSunCache",
+        .stage = shader::Stage::Compute, .debug = false});
+    sunCachePipeline_ = device.CreateComputePipeline({
+        .computeShader = {
+            .data = compute.bytecode.data(), .size = compute.bytecode.size()},
+        .pushConstantDwords = 32U,
+        .shaderResourceBuffers = 3U,
+        .sampledTextures = 0U,
+        .storageTextures = 0U
+    });
+    if (!sunCachePipeline_)
+        throw std::runtime_error("Unified System B Sun cache compute pipeline unavailable");
 }
 UnifiedCloudRenderer::~UnifiedCloudRenderer() = default;
 
-void UnifiedCloudRenderer::DrawMedium(
-    rhi::CommandList& commands, const bool shadow,
-    rhi::Texture& depth, GpuCloudFieldProduct& field, rhi::Texture& target,
-    const f64 bodyRadiusMeters, const CloudFieldProduct& source,
-    const celestial_atmosphere::AtmosphereRenderView& view,
-    rhi::Buffer* const stormExport)
+namespace
 {
-    if (!target.Width() || !target.Height() || field.FaceResolution() < 2U ||
-        source.layers.empty() || field.LayerCount() != source.layers.size() ||
-        field.FaceResolution() != source.faceResolution)
-        return;
-    // Every B density layer uses its own altitude interval. The outer
-    // intersection and inner bound must encompass all of them, including
-    // cirrus and optically thin foreground fog.
+[[nodiscard]] std::array<u32,32> PackedInputs(
+    const f64 radius, const CloudFieldProduct& source,
+    const GpuCloudFieldProduct& field,
+    const celestial_atmosphere::AtmosphereRenderView& view,
+    const u32 width, const u32 height,
+    const UnifiedCloudRenderer::SunCache* cache)
+{
     f64 base = std::numeric_limits<f64>::max();
     f64 top = 0.0;
     for (const auto& layer : source.layers)
@@ -586,74 +612,168 @@ void UnifiedCloudRenderer::DrawMedium(
         base = std::min(base, layer.parameters.baseAltitudeMeters);
         top = std::max(top, layer.parameters.topAltitudeMeters);
     }
-    // The weather_gpu domain exports 40 levels at 500 m spacing in the
-    // current Studio integration. Do not truncate an active convective
-    // storm just because the procedural layer stops near 6 km. This broad
-    // bound is conservative; actual sim extinction is zero outside its grid.
-    if (stormExport != nullptr) top = std::max(top, 21000.0);
-    if (!(top > base)) return;
-    const bool castsShadows = std::any_of(
-        source.layers.begin(), source.layers.end(),
-        [](const CloudLayerField& layer)
-        {
-            return layer.parameters.shadowParticipation;
-        });
-    const std::array<u32, 24> constants{
-        Bits(static_cast<f32>(view.cameraPositionMeters.x)),
-        Bits(static_cast<f32>(view.cameraPositionMeters.y)),
-        Bits(static_cast<f32>(view.cameraPositionMeters.z)),
-        Bits(static_cast<f32>(target.Width())/static_cast<f32>(target.Height())),
-        Bits(view.forward.x), Bits(view.forward.y), Bits(view.forward.z),
-        Bits(std::tan(view.verticalFovRadians * 0.5F)),
-        Bits(view.up.x), Bits(view.up.y), Bits(view.up.z),
+    // The active solver currently publishes 40 vertical cells of 500 m.
+    if (cache == nullptr || cache->lastStorm != nullptr)
+        top = std::max(top, 21000.0);
+    const bool casts = std::any_of(source.layers.begin(),source.layers.end(),
+        [](const auto& layer) { return layer.parameters.shadowParticipation; });
+    const auto f=[](const f64 x) { return Bits(static_cast<f32>(x)); };
+    return {
+        f(view.cameraPositionMeters.x),f(view.cameraPositionMeters.y),
+        f(view.cameraPositionMeters.z),
+        Bits(static_cast<f32>(width)/static_cast<f32>(height)),
+        Bits(view.forward.x),Bits(view.forward.y),Bits(view.forward.z),
+        Bits(std::tan(view.verticalFovRadians*0.5F)),
+        Bits(view.up.x),Bits(view.up.y),Bits(view.up.z),
         Bits(view.nearPlaneMeters),
-        Bits(view.sunDirection.x), Bits(view.sunDirection.y), Bits(view.sunDirection.z),
-        Bits(view.farPlaneMeters),
-        Bits(static_cast<f32>(bodyRadiusMeters)),
-        Bits(static_cast<f32>(base)),
-        Bits(static_cast<f32>(top)),
+        Bits(view.sunDirection.x),Bits(view.sunDirection.y),
+        Bits(view.sunDirection.z),Bits(view.farPlaneMeters),
+        f(radius),f(base),f(top),
         Bits(static_cast<f32>(field.FaceResolution())),
         Bits(static_cast<f32>(field.LayerCount())),
-        Bits(castsShadows ? 1.0F : 0.0F),
-        0U,
-        Bits(view.irradianceScale)
+        Bits(casts?1.0F:0.0F),0U,Bits(view.irradianceScale),
+        f(cache && cache->anchored?cache->anchor.x:0.0),
+        f(cache && cache->anchored?cache->anchor.y:0.0),
+        f(cache && cache->anchored?cache->anchor.z:0.0),
+        Bits(cache ? static_cast<f32>(cache->generation) : 0.0F),
+        Bits(cache ? static_cast<f32>(cache->phase) : 0.0F),
+        Bits(cache && cache->active?1.0F:0.0F),
+        0U,0U
     };
+}
+} // namespace
+
+std::unique_ptr<UnifiedCloudRenderer::SunCache>
+UnifiedCloudRenderer::CreateSunCache(rhi::Device& device) const
+{
+    auto cache=std::make_unique<SunCache>();
+    cache->buffer=device.CreateBuffer({
+        .sizeBytes = 32ULL*32ULL*16ULL*16ULL,
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::GpuOnly,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if(!cache->buffer)
+        throw std::runtime_error("Unified B sunlight cache allocation failed");
+    return cache;
+}
+void UnifiedCloudRenderer::UpdateSunCache(
+    rhi::CommandList& commands,
+    SunCache& cache,
+    GpuCloudFieldProduct& field,
+    const CloudFieldProduct& source,
+    const f64 referenceRadiusMeters,
+    const celestial_atmosphere::AtmosphereRenderView& view,
+    rhi::Buffer* const stormExport)
+{
+    cache.active=false;
+    if (!cache.buffer || source.layers.empty() ||
+        field.LayerCount()!=source.layers.size()) return;
+    const auto& position=view.cameraPositionMeters;
+    const f64 length=std::sqrt(position.x*position.x+
+        position.y*position.y+position.z*position.z);
+    if (!(length>1.0) || !(referenceRadiusMeters>1.0)) return;
+    const math::Double3 direction{position.x/length,
+        position.y/length,position.z/length};
+    bool reanchor=!cache.anchored;
+    if (!reanchor)
+    {
+        const f64 dot=std::clamp(
+            direction.x*cache.anchor.x+
+            direction.y*cache.anchor.y+
+            direction.z*cache.anchor.z,-1.0,1.0);
+        reanchor=std::acos(dot)*referenceRadiusMeters>16000.0;
+    }
+    const f64 sunCos=static_cast<f64>(view.sunDirection.x)*cache.lastSun.x+
+        static_cast<f64>(view.sunDirection.y)*cache.lastSun.y+
+        static_cast<f64>(view.sunDirection.z)*cache.lastSun.z;
+    const bool largeSunChange=cache.sunSet && sunCos<0.9998;
+    const bool changed = reanchor || largeSunChange ||
+        cache.sourceFingerprint!=field.Fingerprint() ||
+        cache.lastStorm!=stormExport ||
+        cache.lastRadius!=referenceRadiusMeters;
+    if(changed)
+    {
+        cache.generation=cache.generation>=1000000U?1U:cache.generation+1U;
+    }
+    if(reanchor)
+    {
+        cache.anchor=direction;
+        cache.anchored=true;
+    }
+    cache.sourceFingerprint=field.Fingerprint();
+    cache.lastStorm=stormExport;
+    cache.lastRadius=referenceRadiusMeters;
+    cache.lastSun=view.sunDirection;
+    cache.sunSet=true;
+    cache.active=true;
+    cache.phase=(cache.phase+1U)%16U;
+    auto constants=PackedInputs(referenceRadiusMeters,source,field,view,
+        1U,1U,&cache);
+    commands.Transition(*cache.buffer,
+        rhi::ResourceState::ShaderResource,
+        rhi::ResourceState::UnorderedAccess);
+    commands.SetComputePipeline(*sunCachePipeline_);
+    commands.SetComputeConstants(constants);
+    commands.SetComputeBuffer(0U,field.Buffer());
+    commands.SetComputeBuffer(1U,
+        stormExport ? *stormExport : *emptyStorm_);
+    commands.SetComputeBuffer(2U,*cache.buffer);
+    commands.Dispatch(4U,4U,1U);
+    commands.UavBarrier(*cache.buffer);
+    commands.Transition(*cache.buffer,
+        rhi::ResourceState::UnorderedAccess,
+        rhi::ResourceState::ShaderResource);
+}
+void UnifiedCloudRenderer::DrawMedium(
+    rhi::CommandList& commands, const bool shadow,
+    rhi::Texture& depth, GpuCloudFieldProduct& field, rhi::Texture& target,
+    const f64 bodyRadiusMeters, const CloudFieldProduct& source,
+    const celestial_atmosphere::AtmosphereRenderView& view,
+    rhi::Buffer* const stormExport, const SunCache* const sunCache)
+{
+    if (!target.Width() || !target.Height() ||
+        field.FaceResolution()<2U || source.layers.empty() ||
+        field.LayerCount()!=source.layers.size() ||
+        field.FaceResolution()!=source.faceResolution) return;
+    const auto constants=PackedInputs(bodyRadiusMeters,source,field,view,
+        target.Width(),target.Height(),sunCache);
     commands.SetRenderTarget(target);
-    commands.SetViewport({.x = 0.0F, .y = 0.0F,
-        .width = static_cast<f32>(target.Width()),
-        .height = static_cast<f32>(target.Height()),
-        .minDepth = 0.0F, .maxDepth = 1.0F});
-    commands.SetScissor({.left = 0, .top = 0,
-        .right = static_cast<i32>(target.Width()),
-        .bottom = static_cast<i32>(target.Height())});
-    commands.SetGraphicsPipeline(shadow ? *receiverShadow_ : *march_);
+    commands.SetViewport({.x=0.0F,.y=0.0F,
+        .width=static_cast<f32>(target.Width()),
+        .height=static_cast<f32>(target.Height()),
+        .minDepth=0.0F,.maxDepth=1.0F});
+    commands.SetScissor({.left=0,.top=0,
+        .right=static_cast<i32>(target.Width()),
+        .bottom=static_cast<i32>(target.Height())});
+    commands.SetGraphicsPipeline(shadow?*receiverShadow_:*march_);
     commands.SetGraphicsConstants(constants);
-    commands.SetGraphicsBuffer(0, field.Buffer());
-    commands.SetGraphicsBuffer(1,
-        stormExport != nullptr ? *stormExport : *emptyStorm_);
-    commands.SetGraphicsTexture(0, depth);
+    commands.SetGraphicsBuffer(0,field.Buffer());
+    commands.SetGraphicsBuffer(1,stormExport?*stormExport:*emptyStorm_);
+    commands.SetGraphicsBuffer(2,
+        sunCache && sunCache->active ? *sunCache->buffer : *emptySunCache_);
+    commands.SetGraphicsTexture(0,depth);
     commands.Draw(6);
 }
-
 void UnifiedCloudRenderer::Draw(
-    rhi::CommandList& commands, rhi::Texture& depth,
-    GpuCloudFieldProduct& field, rhi::Texture& target,
-    const f64 radius, const CloudFieldProduct& source,
+    rhi::CommandList& commands,rhi::Texture& depth,
+    GpuCloudFieldProduct& field,rhi::Texture& target,
+    const f64 radius,const CloudFieldProduct& source,
     const celestial_atmosphere::AtmosphereRenderView& view,
-    rhi::Buffer* const stormExport)
+    rhi::Buffer* const stormExport,const SunCache* const sunCache)
 {
-    DrawMedium(commands, false, depth, field, target, radius, source, view,
-        stormExport);
+    DrawMedium(commands,false,depth,field,target,radius,source,
+        view,stormExport,sunCache);
 }
 void UnifiedCloudRenderer::DrawReceiverShadow(
-    rhi::CommandList& commands, rhi::Texture& depth,
-    GpuCloudFieldProduct& field, rhi::Texture& target,
-    const f64 radius, const CloudFieldProduct& source,
+    rhi::CommandList& commands,rhi::Texture& depth,
+    GpuCloudFieldProduct& field,rhi::Texture& target,
+    const f64 radius,const CloudFieldProduct& source,
     const celestial_atmosphere::AtmosphereRenderView& view,
     rhi::Buffer* const stormExport)
 {
-    DrawMedium(commands, true, depth, field, target, radius, source, view,
-        stormExport);
+    // Receiver shadows still trace their own depth-bounded path.
+    DrawMedium(commands,true,depth,field,target,radius,source,
+        view,stormExport,nullptr);
 }
 void UnifiedCloudRenderer::Composite(
     rhi::CommandList& commands, rhi::Texture& medium, rhi::Texture& scene,
