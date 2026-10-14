@@ -200,6 +200,14 @@ ctest --test-dir build -C Debug -R Orbit.UnifiedCloudFoundation --output-on-fail
 ```
 The test is hardware-independent and requires no Vulkan device, but it was not run remotely at documentation-commit time. Later B milestones require DXC/Vulkan shader build and real GPU testing.
 
+B1 includes a separate shader compilation harness:
+```
+python tools/check_unified_cloud_shaders.py
+```
+It extracts the actual embedded B vertex/march/receiver-shadow/compositor source and compiles each entrypoint with glslangValidator for Vulkan 1.3 (requires the Vulkan SDK or glslang-tools). Shader compilation is NOT a GPU visual validation. The first B preview selection compiles lazily via Orbit's normal shader::Compiler; if it fails, the viewport displays the error and A remains launchable. No hosted Windows build or physical Vulkan run was available in this commit sequence.
+
+To switch on the experimental preview with MCP/RPC: `view.terrain_layers_set` using `{"id":"studio.primary","values":{"cloud_b_preview":true}}`, or use the viewport's `Cloud renderer: B1 PREVIEW` button. The reverse choice `false` restores A. Benchmark pass names are `studio.primary.UnifiedB.March`, `studio.primary.UnifiedB.ReceiverShadow` and `studio.primary.UnifiedB.Composite`; these are diagnostic timings only until the backends have equivalent features and identical workload. Capture both radiance differences and CPU/GPU timings once B reaches full readiness.
+
 Use the repository's existing Debug Center and Profiler for all B test modes; do not add a second standalone launcher or screenshot pipeline.
 
 # Research grounding
