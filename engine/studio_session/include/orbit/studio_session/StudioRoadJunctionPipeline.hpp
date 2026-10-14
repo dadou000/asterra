@@ -24,6 +24,13 @@ public:
     FindPatch(scene::ObjectId node) const noexcept;
     [[nodiscard]] std::vector<const path_geometry::RoadJunctionScenePacket*>
     Packets() const;
+    // Renderer-facing coherent view: trim affected raw corridors and include
+    // the junction patches exactly once, leaving all other paths untouched.
+    // Returned product pointers remain owned by the raw cache or this
+    // pipeline and are valid through the current Studio render-graph frame.
+    [[nodiscard]] std::vector<const path_geometry::PathDerivedProduct*>
+    RenderProducts(const UniverseBoundPathCache& raw) const;
+
     [[nodiscard]] const std::string& LastError() const noexcept {
         return lastError_;
     }
@@ -31,6 +38,7 @@ public:
     [[nodiscard]] std::size_t ActiveJunctions() const noexcept;
 private:
     std::map<frames::FrameId,path_geometry::RoadJunctionScenePublisher> frames_;
+    std::map<scene::ObjectId,path_geometry::PathDerivedProduct> renderPatches_;
     u64 observedFingerprint_{0U};
     u64 revision_{0U};
     std::string lastError_;

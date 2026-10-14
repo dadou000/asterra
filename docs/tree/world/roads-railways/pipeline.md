@@ -153,9 +153,17 @@ Backpressure: if an edit invalidates generation \`G\`, cancel pending uploads/co
 | P1 | Single road used by junctions at both ends becomes one nonoverlapping cropped product | Source/test added, native CTest unverified |
 | P2 | CPU publication rejects dirty/stale/foreign-frame/oversized/duplicate-end products without partial replacement | Source/test added, native CTest unverified |
 | P3 | StudioSession lifecycle publishes and invalidates by world/scene revision; RPC and panel show exact packet state | Source wired, Windows smoke unverified |
-| P4 | GPU drawn T junction with no duplicated raw road triangles across trim | NOT DONE |
+| P4 | Vulkan Paths pass consumes replacement strips and unique junction patch instead of raw roads | Source wired into existing render graph; native GPU capture and material/overdraw verification pending |
 | P5 | Physics-driven vehicle traverses patch and retained strips without contact duplication or gaps | NOT DONE |
 | P6 | Respects road materials, drainage, bridges and moving support frames | NOT DONE |
 | P7 | Planetary asynchronous incremental rebuild/capture benchmarks | NOT DONE |
 
 Do not mark the road network "fully implemented" until P4–P7 have demonstrated runtime evidence.
+
+## Vulkan presentation bridge and CPU contact diagnostic (Oct 2026 increment)
+
+`StudioViewportRenderer::ComposeBase` now obtains its path draw list from `StudioRoadJunctionPipeline::RenderProducts(rawCache)` rather than drawing all raw corridors. For each frame packet with current universe generation and matching, non-dirty source build signatures, the draw list **replaces affected raw road edges with cropped replacement products** and appends one persistent patch proxy product per authored junction. Unaffected roads and railways keep their raw products. A failed signature check suppresses that entire packet in the draw list, never just one side of a junction. The existing `PathPreviewRenderer` GPU pipeline, depth, MRT surface outputs and camera-relative transforms are reused; no extra draw overlay is introduced.
+
+`ProbeRoadJunctionContact(packet, probe)` reads exactly those published clipped-edge and patch collision triangles using a bounded, double-precision ray/triangle test in one explicit frame. The `infrastructure.junction_contact_probe` read-only RPC takes node, origin_frame_local_meters, direction_frame_local and optional maximum_distance_meters, returning nearest hit, normal, owner ID, patch attribution, packet signature and triangle budget. This tests CPU contact parity against the published geometry but is **not** the engine's vehicle dynamics, native physics broad phase, shape cooker or scene shape registration.
+
+Pending before P4 can pass: run Windows Studio, inspect a T junction against terrain, capture Vulkan frame with exact build fingerprint, verify no duplicate raw-corridor drawcalls and correct normal/material/depth. Pending before P5: physics-world shape commit at fixed-step boundary, physical traction/wheel contact and drive-through fixture, while reusing the same publication token for Vulkan/physics/nav.

@@ -1,6 +1,7 @@
 #include <orbit/studio_session/StudioSession.hpp>
 #include <orbit/world_model/WorldSchemas.hpp>
 #include <orbit/documents/ProjectDocument.hpp>
+#include <orbit/rpc/JsonRpc.hpp>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -59,6 +60,54 @@ int main()
         CHECK(pipeline.FindEdge(e.id)->product.visualMesh.indices.size()<
               studio.PathProducts().Find(e.id)->visualMesh.indices.size());
         CHECK(pipeline.Packets().size()==1U);
+        const auto render=studio.RoadJunctions().RenderProducts(
+            studio.PathProducts());
+        CHECK(render.size()==4U); // Three corridors + one unique patch.
+        bool sawPatch=false,sawTrimmedEast=false;
+        for(const auto* p:render)
+        {
+            if(p->edge==centre.id) {
+                sawPatch=true;
+                CHECK(!p->visualMesh.indices.empty());
+            }
+            if(p->edge==e.id) {
+                sawTrimmedEast=true;
+                CHECK(p->visualMesh.indices.size()<
+                      studio.PathProducts().Find(e.id)->visualMesh.indices.size());
+            }
+        }
+        CHECK(sawPatch && sawTrimmedEast);
+        studio.PathProducts().MarkDirty(e.id);
+        const auto dirtyRender=studio.RoadJunctions().RenderProducts(
+            studio.PathProducts());
+        CHECK(dirtyRender.size()==3U); // Suppress entire stale frame packet.
+        CHECK(dirtyRender[0]->edge!=centre.id);
+
+        // Exercise the same read-only CPU contact RPC available to agents.
+        {
+            const rpc::Value request(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id","probe"},
+                {"method","infrastructure.junction_contact_probe"},
+                {"params",rpc::Value::Object{
+                    {"node",centre.id.ToString()},
+                    {"origin_frame_local_meters",
+                        rpc::Value::Array{2.0,10.0,3.0}},
+                    {"direction_frame_local",
+                        rpc::Value::Array{0.0,-1.0,0.0}},
+                    {"maximum_distance_meters",30.0}
+                }}
+            });
+            const auto response=studio.DispatchRpc(rpc::Serialize(request));
+            CHECK(response.has_value());
+            const auto value=rpc::ParseValue(*response);
+            CHECK(value.Find("error")==nullptr);
+            const auto* result=value.Find("result");
+            CHECK(result && result->IsObject());
+            const auto* ready=result->Find("ready");
+            CHECK(ready && ready->IsBool() && ready->AsBool());
+            const auto* cpu=result->Find("cpu_only");
+            CHECK(cpu && cpu->IsBool() && cpu->AsBool());
+        }
         const auto previous=pipeline.Revision();
         paths.SetNodeAnchor(east.id,paths::FramePointAnchor{
             .frame=frame,.localMeters={38,0,0}});

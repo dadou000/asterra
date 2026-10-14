@@ -19,6 +19,7 @@ struct FrameBatch {
 }
 void StudioRoadJunctionPipeline::Clear() noexcept {
     frames_.clear();
+    renderPatches_.clear();
     observedFingerprint_=0;
     lastError_.clear();
     ++revision_;
@@ -52,6 +53,56 @@ StudioRoadJunctionPipeline::FindPatch(scene::ObjectId node) const noexcept {
                 if(patch.node==node)return &patch;
     return nullptr;
 }
+std::vector<const path_geometry::PathDerivedProduct*>
+StudioRoadJunctionPipeline::RenderProducts(
+    const UniverseBoundPathCache& raw) const
+{
+    const auto sources=raw.Products();
+    std::map<scene::ObjectId,const path_geometry::PathDerivedProduct*> live;
+    for(const auto* product:sources)
+        live.emplace(product->edge,product);
+
+    std::map<scene::ObjectId,const path_geometry::PathDerivedProduct*> replaced;
+    std::vector<const path_geometry::PathDerivedProduct*> patches;
+    for(const auto& [frame,publisher]:frames_)
+    {
+        const auto* packet=publisher.Snapshot();
+        if(!packet || packet->worldGeneration!=raw.ObservedUniverseGeneration())
+            continue;
+        bool current=true;
+        for(const auto& edge:packet->edges)
+        {
+            const auto it=live.find(edge.edge);
+            if(it==live.end() || raw.IsDirty(edge.edge) ||
+               it->second->frame!=frame ||
+               it->second->buildSignature!=edge.rawBuildSignature)
+            {
+                current=false;
+                break;
+            }
+        }
+        if(!current)continue; // Never partially replace a frame's geometry.
+        for(const auto& edge:packet->edges)
+            replaced.emplace(edge.edge,&edge.product);
+        for(const auto& patch:packet->patches)
+        {
+            const auto it=renderPatches_.find(patch.node);
+            if(it!=renderPatches_.end() && it->second.frame==frame &&
+               it->second.buildSignature==packet->buildSignature)
+                patches.push_back(&it->second);
+        }
+    }
+    std::vector<const path_geometry::PathDerivedProduct*> render;
+    render.reserve(sources.size()+patches.size());
+    for(const auto* product:sources)
+    {
+        const auto it=replaced.find(product->edge);
+        render.push_back(it==replaced.end()?product:it->second);
+    }
+    render.insert(render.end(),patches.begin(),patches.end());
+    return render;
+}
+
 void StudioRoadJunctionPipeline::Refresh(
     editor_session::EditorWorldSession& world,
     paths::PathNetworkService& network,
@@ -76,6 +127,7 @@ void StudioRoadJunctionPipeline::Refresh(
     if(fingerprint==observedFingerprint_)return;
     observedFingerprint_=fingerprint;
     frames_.clear();
+    renderPatches_.clear();
     lastError_.clear();
     ++revision_;
 
@@ -169,7 +221,20 @@ void StudioRoadJunctionPipeline::Refresh(
         if(candidate.Ready()) {
             path_geometry::RoadJunctionScenePublisher publisher;
             if(publisher.Publish(std::move(candidate)))
+            {
                 frames_.emplace(frame,std::move(publisher));
+                if(const auto* packet=frames_.at(frame).Snapshot())
+                    for(const auto& patch:packet->patches)
+                    {
+                        path_geometry::PathDerivedProduct product;
+                        product.edge=patch.node;
+                        product.frame=patch.frame;
+                        product.sourceRevision=packet->worldGeneration;
+                        product.buildSignature=packet->buildSignature;
+                        product.visualMesh=patch.mesh;
+                        renderPatches_.emplace(patch.node,std::move(product));
+                    }
+            }
         }
         else if(!candidate.findings.empty())
             lastError_=candidate.findings.front().message;

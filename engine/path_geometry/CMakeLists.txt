@@ -18,6 +18,7 @@ add_library(OrbitPathGeometry STATIC
     src/JunctionSignalPhases.cpp
     src/RoadJunctionConstruction.cpp
     src/RoadJunctionPublication.cpp
+    src/RoadJunctionContact.cpp
 )
 
 add_library(
@@ -215,6 +216,12 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(OrbitRoadJunctionContactTests tests/RoadJunctionContactTests.cpp)
+    target_link_libraries(OrbitRoadJunctionContactTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitRoadJunctionContactTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRoadJunctionContactTests)
+    add_test(NAME Orbit.RoadJunctionContact COMMAND OrbitRoadJunctionContactTests)
+
     add_executable(OrbitRoadJunctionPublicationTests tests/RoadJunctionPublicationTests.cpp)
     target_link_libraries(OrbitRoadJunctionPublicationTests PRIVATE Orbit::PathGeometry)
     target_compile_features(OrbitRoadJunctionPublicationTests PRIVATE cxx_std_23)

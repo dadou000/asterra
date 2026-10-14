@@ -4,6 +4,7 @@
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <orbit/path_geometry/InfrastructureSectionBuilder.hpp>
+#include <orbit/path_geometry/RoadJunctionContact.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/studio_session/StudioMeshRpc.hpp>
 #include <orbit/studio_session/StudioTerrainSampleRpc.hpp>
@@ -190,8 +191,91 @@ StudioSession::StudioSession(
                 {"last_error",roadJunctionPipeline_.LastError()},
                 {"cpu_published",!packets.empty()},
                 {"gpu_committed",false},
+                {"vulkan_paths_draw_list_connected",true},
+                {"cpu_contact_probe_available",true},
                 {"physics_committed",false},
                 {"packets",std::move(packets)}
+            };
+        });
+    rpc_.Dispatcher().Register(
+        {.name="infrastructure.junction_contact_probe",
+         .description="CPU-only double-precision ray contact against the exact published trimmed-road and junction collision packet. Params: node UUID, origin_frame_local_meters [x,y,z], direction_frame_local [x,y,z], optional maximum_distance_meters. Not a physics body or live vehicle collision.",
+         .mutating=false},
+        [this](const rpc::Value& params)->rpc::Value
+        {
+            const auto* id=params.Find("node");
+            const auto* origin=params.Find("origin_frame_local_meters");
+            const auto* direction=params.Find("direction_frame_local");
+            if(!id || !id->IsString())
+                throw rpc::Error(-32602,"node UUID is required.");
+            const auto node=scene::ObjectId::Parse(id->AsString());
+            if(!node)throw rpc::Error(-32602,"Invalid junction node UUID.");
+            const auto vector=[&](const rpc::Value* input,
+                                  const char* field)->math::Double3 {
+                if(!input || !input->IsArray() ||
+                   input->AsArray().size()!=3U)
+                    throw rpc::Error(-32602,std::string(field)+
+                        " must have three numeric coordinates.");
+                const auto& a=input->AsArray();
+                for(const auto& value:a)
+                    if(!value.IsNumber())
+                        throw rpc::Error(-32602,std::string(field)+
+                            " must contain numbers.");
+                return {a[0].AsNumber(),a[1].AsNumber(),a[2].AsNumber()};
+            };
+            const auto position=vector(origin,"origin_frame_local_meters");
+            const auto directionValue=vector(direction,"direction_frame_local");
+            f64 distance=100.0;
+            if(const auto* range=params.Find("maximum_distance_meters"))
+            {
+                if(!range->IsNumber())
+                    throw rpc::Error(-32602,"maximum_distance_meters must be numeric.");
+                distance=range->AsNumber();
+            }
+            for(const auto* packet:roadJunctionPipeline_.Packets())
+            {
+                const auto found=std::find_if(
+                    packet->patches.begin(),packet->patches.end(),
+                    [&](const auto& patch){return patch.node==*node;});
+                if(found==packet->patches.end())continue;
+                try
+                {
+                    const auto hit=path_geometry::ProbeRoadJunctionContact(
+                        *packet,{.frame=packet->frame,
+                                 .origin=position,
+                                 .direction=directionValue,
+                                 .maximumDistanceMeters=distance});
+                    return rpc::Value::Object{
+                        {"ready",true},
+                        {"cpu_only",true},
+                        {"physics_committed",false},
+                        {"frame",packet->frame.ToString()},
+                        {"packet_build_signature",
+                            std::to_string(packet->buildSignature)},
+                        {"hit",hit.hit},
+                        {"budget_exceeded",hit.budgetExceeded},
+                        {"owner",hit.owner.ToString()},
+                        {"junction_patch",hit.junctionPatch},
+                        {"distance_meters",hit.distanceMeters},
+                        {"position_frame_local_meters",
+                            rpc::Value::Array{hit.position.x,hit.position.y,
+                                              hit.position.z}},
+                        {"normal_frame_local",
+                            rpc::Value::Array{hit.normal.x,hit.normal.y,
+                                              hit.normal.z}},
+                        {"tested_triangles",
+                            static_cast<i64>(hit.testedTriangles)}
+                    };
+                }
+                catch(const std::invalid_argument& error)
+                {
+                    throw rpc::Error(-32602,error.what());
+                }
+            }
+            return rpc::Value::Object{
+                {"ready",false},
+                {"reason","No current CPU-published road junction packet for node."},
+                {"physics_committed",false}
             };
         });
     static_cast<void>(activeBody_.Refresh());

@@ -72,3 +72,9 @@ If a connector, index or source check fails after any temporary geometry has bee
 The formerly preview-only CPU product now feeds `RoadJunctionPublication`, which assembles replacement strips, patches, contact triangles and lane links into a revision-fenced frame packet. It supports one road shared by junctions at both ends through a single doubly cropped product, never two overlapping source meshes. `StudioRoadJunctionPipeline` is bound to StudioSession's authoritative world and raw cache, and `path.geometry` can inspect published edge products. Studio provides `infrastructure.junction_pipeline_status` and `path.junction_preview.construction_published_cpu`.
 
 **The GPU and physics consumers are not connected.** There is no native roadway rendered/cooked collider assertion until the S9 handoff described in [pipeline.md](pipeline.md). The source-level publication is an important boundary but must not be described as a drivable completed intersection.
+
+## Live viewport handoff versus physics readiness
+
+The primary Studio Vulkan Paths pass now uses published road-junction replacement surfaces when their source signatures remain current. Junction patches are persistent synthetic `PathDerivedProduct` rendering proxies tied to authored junction node IDs and frame-local coordinates; drawing occurs through the existing PathPreviewRenderer, not a second overlay. The edited/raw caches are never mutated, and invalid packets fall back as a whole to raw geometry rather than leaving half a patch.
+
+The CPU contact probe reads the same packet collision triangles but is only a diagnostic. A cooked physics collider and drivable car are still outstanding, as is native GPU verification. See pipeline.md for the handoff contract.

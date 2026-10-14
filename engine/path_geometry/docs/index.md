@@ -66,3 +66,7 @@ The source-level BuildRoadJunctionConstruction consumes existing JunctionPlan an
 ## Atomic road junction publication CPU stage
 
 `RoadJunctionPublication` validates current raw corridor signatures, composes multi-junction single/double-ended cuts, retains one per-edge mesh/collider/reference graph, and stages one immutable `RoadJunctionScenePacket` per frame with patch and lane-connection records. `StudioRoadJunctionPipeline` (under studio_session) owns the publication lifetime. Neither mutates the authoritative path network or raw path cache. Native test: `Orbit.RoadJunctionPublication`; Studio session test: `Orbit.StudioRoadJunctionPipeline`. GPU/physics publication pending.
+
+## GPU draw-list bridge and CPU contact probe
+
+`StudioRoadJunctionPipeline::RenderProducts` creates one revision-fenced draw list for the existing `StudioViewportRenderer`/ `PathPreviewRenderer`, replacing raw roads with cropped meshes and adding one patch proxy per junction. The new `RoadJunctionContact` module supports bounded double-precision nearest-surface queries over the same clipped collision data; no vehicle physics integration is claimed. Test targets: Orbit.StudioRoadJunctionPipeline and Orbit.RoadJunctionContact. Native validation remains outstanding.

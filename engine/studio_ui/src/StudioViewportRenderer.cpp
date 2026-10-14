@@ -645,7 +645,11 @@ StudioViewportRenderer::ComposeBase(
     {
         bodies = &runtime.Bodies(snapshot);
         frames = &runtime.Frames(snapshot);
-        products = runtime.PathProducts(snapshot).Products();
+        // One Vulkan Paths pass consumes the coherent CPU publication view:
+        // affected raw road meshes are replaced by trimmed products and
+        // a single patch mesh. No second graphics pipeline or draw overlay.
+        products = session.RoadJunctions().RenderProducts(
+            runtime.PathProducts(snapshot));
     }
 
     const auto celestialFrameGrants =
