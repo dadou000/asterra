@@ -30,3 +30,9 @@ verified = "b0a0de7f"
 ## Canonical road / rail specification
 
 The complete road, railway and supported-construction design contract lives at **`/world/roads-railways`** (source: `docs/tree/world/roads-railways.md`), including alignment, earthworks, bridge/tunnel support, vehicles aboard moving ships, Studio authoring, traffic and validation. This module implements only a portion of the complete contract; do not infer feature completion from source presence.
+
+## Corridor engineering validation (Harmony)
+
+`CorridorEngineering.hpp/.cpp` now supplies a **pure, deterministic and non-mutating** analysis of derived `PathStation` sequences against caller-provided design limits. The result includes per-station grade, curvature/radius, lateral acceleration and recommended bank/cant, plus station-local findings for excessive grade, tight radius, excessive lateral acceleration, excessive bank and abrupt cant transition. Invalid/non-finite geometry or limits produce `InvalidInput` findings. The companion `SuggestCorridorBankProfile` generates a bounded advisory profile with forward/backward slope limiting; applying it remains an explicit authoring action.
+
+This is the **engineering foundation**, not yet a full rail standards solver (turnout envelope, cant deficiency and exact clothoids), geometry auto-fixer, traffic simulator or an integrated Studio editor panel. `ctest -R Orbit.CorridorEngineering` is the dedicated test target. Compiling and running the test still requires local/CI verification.
