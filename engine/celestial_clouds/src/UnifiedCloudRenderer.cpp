@@ -687,7 +687,7 @@ void UnifiedCloudRenderer::UpdateSunCache(
     const CloudFieldProduct& source,
     const f64 referenceRadiusMeters,
     const celestial_atmosphere::AtmosphereRenderView& view,
-    rhi::Buffer* const stormExport)
+    rhi::Buffer* const stormExport, const f64 simulationSeconds)
 {
     cache.active=false;
     if (!cache.buffer || source.layers.empty() ||
@@ -711,7 +711,11 @@ void UnifiedCloudRenderer::UpdateSunCache(
         static_cast<f64>(view.sunDirection.y)*cache.lastSun.y+
         static_cast<f64>(view.sunDirection.z)*cache.lastSun.z;
     const bool largeSunChange=cache.sunSet && sunCos<0.9998;
-    const bool changed = reanchor || largeSunChange ||
+    const bool timeJump=cache.timeSet && (
+        !std::isfinite(simulationSeconds) ||
+        simulationSeconds+0.001<cache.lastSimulationSeconds ||
+        simulationSeconds-cache.lastSimulationSeconds>60.0);
+    const bool changed = reanchor || largeSunChange || timeJump ||
         cache.sourceFingerprint!=field.Fingerprint() ||
         cache.lastStorm!=stormExport ||
         cache.lastRadius!=referenceRadiusMeters;
@@ -729,6 +733,8 @@ void UnifiedCloudRenderer::UpdateSunCache(
     cache.lastRadius=referenceRadiusMeters;
     cache.lastSun=view.sunDirection;
     cache.sunSet=true;
+    cache.lastSimulationSeconds=simulationSeconds;
+    cache.timeSet=true;
     cache.active=true;
     cache.phase=(cache.phase+1U)%16U;
     auto constants=PackedInputs(referenceRadiusMeters,source,field,view,
