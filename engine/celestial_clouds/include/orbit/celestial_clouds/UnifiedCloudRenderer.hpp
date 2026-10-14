@@ -42,6 +42,7 @@ public:
         const rhi::Buffer* lastStorm{nullptr};
         f64 lastRadius{0.0};
         bool active{false};
+        bool initialized{false};
     };
 
     [[nodiscard]] std::unique_ptr<SunCache> CreateSunCache(rhi::Device& device) const;
@@ -91,6 +92,7 @@ private:
         const SunCache* sunCache);
 
     std::unique_ptr<rhi::ComputePipeline> sunCachePipeline_;
+    std::unique_ptr<rhi::ComputePipeline> sunCacheClearPipeline_;
     std::unique_ptr<rhi::GraphicsPipeline> march_;
     std::unique_ptr<rhi::GraphicsPipeline> receiverShadow_;
     std::unique_ptr<rhi::GraphicsPipeline> composite_;
