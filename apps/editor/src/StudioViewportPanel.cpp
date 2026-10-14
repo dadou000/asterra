@@ -59,6 +59,7 @@
 #include <orbit/shading/ShadingWorkspace.hpp>
 #include <orbit/studio_session/StudioRuntimeBinding.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
+#include <orbit/terrain/TerrainSource.hpp>
 #include <orbit/studio_session/StudioTerrainRoundTripVerifier.hpp>
 #include <orbit/studio_session/StudioWorkspace.hpp>
 #include <orbit/studio_ui/CelestialAuthoringUi.hpp>
@@ -980,6 +981,31 @@ void StudioViewportPanel::Register()
                 }
                 infrastructurePageUpWasDown=pageUp;
                 infrastructurePageDownWasDown=pageDown;
+                // Road placement follows the authored composed terrain instead
+                // of the ellipsoid. Preview and committed nodes share this
+                // sample, avoiding two competing altitude conventions.
+                const auto roadSurfacePoint =
+                    [&](const orbit::universe::BodyId targetBody,
+                        const orbit::math::Double3 referencePoint)
+                        -> orbit::math::Double3
+                {
+                    const auto radial=orbit::math::Normalize(referencePoint);
+                    double elevation=infrastructureElevationMeters;
+                    const auto& registry=studioSession.World().Surfaces().Registry();
+                    const auto planet=registry.SphericalPlanetDefinition(targetBody);
+                    const auto* surface=registry.FindTerrainSurface(targetBody);
+                    if(planet && surface && surface->terrain)
+                    {
+                        const auto sample=surface->terrain->Sample({
+                            .unitDirection=radial,
+                            .footprintMeters=1.0,
+                            .planet=planet->id,
+                            .radialOffsetMeters=0.0});
+                        if(std::isfinite(sample.elevationMeters))
+                            elevation+=sample.elevationMeters;
+                    }
+                    return referencePoint+radial*elevation;
+                };
                 // Cities-style live construction preview: use the exact
                 // same surface ray, semantic network and snap radius that
                 // the committed click will use. No authored state is touched.
@@ -1001,11 +1027,7 @@ void StudioViewportPanel::Register()
                             activeBody->shape,ray->origin,ray->direction);
                     if(previewPoint)
                     {
-                        // Explicit body-fixed reference-elevation offset.
-                        // Never mistake this for a terrain-height query.
-                        *previewPoint=*previewPoint+
-                            orbit::math::Normalize(*previewPoint)*
-                                infrastructureElevationMeters;
+                        *previewPoint=roadSurfacePoint(bodyId,*previewPoint);
                         infrastructureHoverValid=true;
                         auto& service=studioSession.PathNetwork().Service();
                         std::optional<orbit::paths::NetworkId> network;
@@ -1274,10 +1296,8 @@ void StudioViewportPanel::Register()
                                 "Path placement could not resolve the body surface coordinate.");
                         }
 
-                        const auto authoredPoint=*hit+
-                            orbit::math::Normalize(*hit)*
-                                (infrastructureDrawMode ?
-                                    infrastructureElevationMeters:0.0);
+                        const auto authoredPoint=infrastructureDrawMode ?
+                            roadSurfacePoint(bodyId,*hit) : *hit;
                         auto& pathService =
                             studioSession.PathNetwork().Service();
 
