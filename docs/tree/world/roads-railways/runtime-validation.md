@@ -97,3 +97,9 @@ This is a real Studio integration point for agents and future contextual propert
 ## Studio Debug road/rail engineering inspector (current integration)
 
 Under **Debug → Terrain / Infrastructure → Road / Railway engineering**, enter a real authored path edge UUID and design speed (m/s), then click **Analyze edge**. The panel calls the *same* `path.engineering` RPC used by agents and displays its returned engineering data or a failure message. It does not create/modify geometry, write a new path, or guess the selection. This is a functional read-only integration surface; the result is currently displayed as serialized structured data rather than a refined inspector table. Planned next: selection-aware edge discovery, station warning drill-down, direct camera framing and editable banking suggestions. Runtime verification remains outstanding.
+
+## Debug edge discovery and warning navigation (next increment)
+
+The **Road / Railway engineering** section now has a **Refresh path edges** action. It enumerates authored path-edge objects from the active scene hierarchy (bounded to 8,192 visited objects / 128 displayed edges), displaying their names as selectable buttons that populate the engineering UUID. **Analyze edge** uses the existing RPC, then presents station count, generation signature, warning count, per-station descriptions and suggested bank/cant sample count. It retains manual UUID input for large or external scenes.
+
+This is intentionally **on-demand** enumeration so an open Debug panel does not repeatedly scan the scene every render frame. Results can become stale after a world switch; refresh to discover the active world's edges. The UI currently lists warning stations rather than navigating the camera or editing geometry. Build and runtime checks remain outstanding.
