@@ -59,6 +59,26 @@ constexpr f64 kNodeJitterMeters = 125.0;
 }
 } // namespace
 
+bool StudioViewportRenderer::EnsureUnifiedCloudRenderer()
+{
+    if (unifiedCloudRenderer_) return true;
+    if (!unifiedCloudInitError_.empty()) return false;
+    try
+    {
+        unifiedCloudRenderer_ =
+            std::make_unique<celestial_clouds::unified::UnifiedCloudRenderer>(
+                *device_, *compiler_);
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        unifiedCloudInitError_ = exception.what();
+        log::Warning("Unified Cloud B preview failed (A remains available): " +
+            unifiedCloudInitError_);
+        return false;
+    }
+}
+
 void StudioViewportRenderer::TickFlashClock(const time::SimulationTime atTime)
 {
     const f64 wall = std::chrono::duration<f64>(std::chrono::steady_clock::now().time_since_epoch()).count();
