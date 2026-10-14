@@ -4738,16 +4738,14 @@ void StudioViewportPanels::DrawActivityBand(
         context.SameLine();
         context.MutedText("|");
         context.SameLine();
-        const bool enabled = ecoModeGetter_();
+        const int mode = ecoModeGetter_();
         const editor_ui::ActionPresentation ecoAction{
-            .label = enabled ? "[Eco]" : "Eco",
+            .label = mode == 0 ? "Normal" : mode == 1 ? "[Eco]" : "[Eco+]",
             .enabled = true,
-            .invoke = [this, enabled]
+            .invoke = [this, mode]
             {
                 if (ecoModeSetter_)
-                {
-                    ecoModeSetter_(!enabled);
-                }
+                    ecoModeSetter_((mode + 1) % 3);
             }};
         context.Toolbar(std::span{&ecoAction, 1});
     }
