@@ -159,7 +159,7 @@ Texture import pipeline:
 3. Decode into linear scalar coverage/type/flow maps or explicit display-encoded color as appropriate. Scalar channel values are NOT automatically sRGB-decoded unless source semantics require it. Preserve alpha precision; avoid BC/DDS decode differences that change cloud boundaries.
 4. Validate dimensions, mip chain, missing face, component bit-depth, channel swizzle, alpha-mask validity, clamp/repeat and seam continuity; emit texture hash, origin and effective sampler settings.
 5. Generate offline mipmaps using an optical/statistical filtering policy, **not naive averaging of opacity before nonlinear Beer attenuation**. See medium chapter.
-6. Report 75 missing logical texture/audio paths from THIS ZIP; do not silently substitute whitened maps. Synthetic fallback permitted only in a labeled debug lab.
+6. Report 103 missing logical texture/audio paths from THIS ZIP; do not silently substitute whitened maps. Synthetic fallback permitted only in a labeled debug lab.
 7. Update a `CloudInputRevision` when any texture is reimported or painted. Existing A and B cloud sources must remain unchanged unless user explicitly selects the imported reference.
 
 # Temporal wind, flow and painter
