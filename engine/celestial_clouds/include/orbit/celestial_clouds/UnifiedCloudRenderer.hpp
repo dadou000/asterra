@@ -38,6 +38,8 @@ public:
         u32 phase{0U};
         math::Float3 lastSun{};
         bool sunSet{false};
+        f64 lastSimulationSeconds{0.0};
+        bool timeSet{false};
         u64 sourceFingerprint{0U};
         const rhi::Buffer* lastStorm{nullptr};
         f64 lastRadius{0.0};
@@ -53,7 +55,8 @@ public:
         const CloudFieldProduct& source,
         f64 referenceRadiusMeters,
         const celestial_atmosphere::AtmosphereRenderView& view,
-        rhi::Buffer* stormExport);
+        rhi::Buffer* stormExport,
+        f64 simulationSeconds);
 
     void Draw(
         rhi::CommandList& commands,
