@@ -994,7 +994,8 @@ void StudioViewportPanel::Register()
                     const auto* activeBody=bodies().FindBody(bodyId);
                     const auto ray=orbit::render_view::ViewportRay(
                         primaryView->Camera(),primaryView->Width(),
-                        primaryView->Height(),interaction.u,interaction.v);
+                        primaryView->Height(),
+                        1.0F-interaction.u,interaction.v);
                     if(activeBody && ray)
                         previewPoint=orbit::universe::IntersectReferenceSurfaceRay(
                             activeBody->shape,ray->origin,ray->direction);
@@ -1237,7 +1238,8 @@ void StudioViewportPanel::Register()
                                     primaryView->Camera(),
                                     primaryView->Width(),
                                     primaryView->Height(),
-                                    interaction.u,
+                                    infrastructureDrawMode ?
+                                        1.0F-interaction.u : interaction.u,
                                     interaction.v);
 
                         if (body == nullptr ||
