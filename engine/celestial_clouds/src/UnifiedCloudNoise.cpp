@@ -137,3 +137,4 @@ std::vector<f32> BuildUnifiedCloudNoise()
     }
     return values;
 }
+} // namespace orbit::celestial_clouds::unified
