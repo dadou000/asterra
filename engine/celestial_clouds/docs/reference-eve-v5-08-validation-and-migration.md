@@ -149,7 +149,7 @@ For each M scenario:
 # Mandatory missing dependencies / no-go conditions
 
 - No source shader from this ZIP: prevents line-for-line exact port.
-- 75 omitted referenced cloud texture/sound logical paths: prevents reference image parity.
+- 103 omitted referenced cloud texture/sound logical paths: prevents reference image parity.
 - Unverified Unity/KSP render callback and shadow/atmosphere internal stage ordering: requires public relevant version source or GPU trace.
 - Unity compiled shader bundles cannot be linked as Vulkan shader modules; decompilation/distribution permission should not be presumed.
 - Released license all-rights-reserved; never commit packages or derivatives containing proprietary code or protected asset contents to this public repo.
