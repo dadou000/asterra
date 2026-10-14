@@ -59,6 +59,17 @@ int main()
         abrupt |= f.issue == CorridorIssue::AbruptBankTransition;
     }
     CHECK(bank && abrupt);
+    const auto advised = SuggestCorridorBankProfile(bend, rules);
+    CHECK(advised.size() == bend.stations.size());
+    for (std::size_t i = 1; i < advised.size(); ++i)
+    {
+        const auto delta = bend.stations[i].stationMeters -
+            bend.stations[i-1].stationMeters;
+        CHECK(std::abs(advised[i] - advised[i-1]) <=
+            rules.maximumBankGradientRadiansPerMeter * delta + 1.e-12);
+    }
+    CHECK(SuggestCorridorBankProfile(
+        AnalyzeCorridorEngineering(flat, rules, {1.0}), rules).empty());
     CHECK(!AnalyzeCorridorEngineering(flat,rules,{0}).Valid());
     auto invalid = flat;
     invalid[1].stationMeters = 0;
