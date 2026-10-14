@@ -106,5 +106,7 @@ private:
     // B-owned inactive placeholder; never reuses A's mutable storm binding.
     std::unique_ptr<rhi::Buffer> emptyStorm_;
     std::unique_ptr<rhi::Buffer> emptySunCache_;
+    // Immutable System B volume, never an alias of A's noise_ allocation.
+    std::unique_ptr<rhi::Buffer> densityNoise_;
 };
 } // namespace orbit::celestial_clouds::unified
