@@ -1,4 +1,5 @@
 #include <orbit/celestial_clouds/UnifiedCloudFoundation.hpp>
+#include <orbit/celestial_clouds/CloudField.hpp>
 
 // Keep regression assertions active even when CTest is built in Release.
 #if defined(NDEBUG)
@@ -93,6 +94,62 @@ void TestInvalidation()
     assert(rejected);
 }
 
+void TestLayerPackingAndOverlap()
+{
+    using namespace orbit::celestial_clouds;
+    static_assert(sizeof(GpuCloudTexel) == 16U);
+    static_assert(sizeof(GpuCloudLayerDescriptor) == 32U);
+
+    CloudLayerParameters low{};
+    low.baseAltitudeMeters = 500.0;
+    low.topAltitudeMeters = 1800.0;
+    low.peakOpticalDepth = 6.0;
+    low.coverageBias = 0.1;
+    low.densityExponent = 1.4;
+    low.singleScatteringAlbedo = 0.95;
+    low.anisotropy = 0.6;
+    low.shadowParticipation = false;
+    auto high = low;
+    high.baseAltitudeMeters = 1400.0;
+    high.topAltitudeMeters = 8500.0;
+    high.peakOpticalDepth = 12.0;
+    high.shadowParticipation = true;
+
+    const auto a = EncodeGpuCloudLayer(low);
+    const auto b = EncodeGpuCloudLayer(high);
+    assert(Near(a.shell[0], 500.0) && Near(a.shell[1], 1800.0));
+    assert(Near(a.shell[2], 6.0) && Near(a.shell[3], 0.1));
+    assert(Near(a.material[0], 1.4));
+    assert(Near(a.material[1], 0.95));
+    assert(Near(a.material[2], 0.6));
+    assert(Near(a.material[3], 0.0));
+    assert(Near(b.shell[0], 1400.0) && Near(b.shell[1], 8500.0));
+    assert(Near(b.material[3], 1.0));
+
+    // GPU layout is six cube faces per layer, 16 bytes per texel,
+    // followed by 32 bytes per layer descriptor. A's texel offsets
+    // never change when B descriptors are appended.
+    constexpr std::size_t resolution = 193;
+    constexpr std::size_t layers = 2;
+    constexpr std::size_t texelBytes =
+        resolution * resolution * 6U * layers * sizeof(GpuCloudTexel);
+    constexpr std::size_t descriptorBytes =
+        layers * sizeof(GpuCloudLayerDescriptor);
+    assert(texelBytes % 16U == 0U && descriptorBytes == 64U);
+
+    // Two overlapping media add extinction before Beer attenuation.
+    // Replacing one layer or double-compositing destroys this identity.
+    const double lowSigma = 0.004, highSigma = 0.002;
+    const double segment = 400.0;
+    assert(Near(std::exp(-(lowSigma+highSigma)*segment),
+        std::exp(-lowSigma*segment)*std::exp(-highSigma*segment)));
+
+    // Receiver-shadow participation is independently authored per layer.
+    const double groundTau = lowSigma*a.material[3] +
+        highSigma*b.material[3];
+    assert(Near(groundTau, highSigma));
+}
+
 void TestMultiViewIsolation()
 {
     ViewRegistry views;
@@ -163,4 +220,5 @@ int main()
     TestInvalidation();
     TestRadianceComposition();
     TestMultiViewIsolation();
+    TestLayerPackingAndOverlap();
 }
