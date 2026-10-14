@@ -228,6 +228,9 @@ float2 StormMedium(float3 position, float radius)
 // remain. Returns (total sigma_t, sigma_s, sum(sigma_s*g), unused).
 float4 Density(float3 position, bool receiver)
 {
+    // The user can disable cloud shadows for every authored layer. That
+    // choice must affect simulated storm cloud shadows as well.
+    if (receiver && g.material.y < 0.5) return float4(0.,0.,0.,0.);
     const float radius = length(position);
     if (radius <= g.shell.x) return 0.;
     const float altitude = radius - g.shell.x;
@@ -332,9 +335,9 @@ float4 March(V input) : SV_Target0
         float meanG = clamp(sample.z/max(sample.y,1.e-7),-0.95,0.95);
         float d = max(1.+meanG*meanG-2.*meanG*angle,0.02);
         float phase = (1.-meanG*meanG)/(d*sqrt(d));
-        float sunlight = max(0., g.material.w) * upSun * phase *
-            saturate(sample.y/max(sigma,1.e-8));
-        float ambient = 0.13 + 0.20 * upSun;
+        float albedo = saturate(sample.y/max(sigma,1.e-8));
+        float sunlight = max(0., g.material.w) * upSun * phase * albedo;
+        float ambient = (0.13 + 0.20 * upSun) * albedo;
         float alpha = 1. - exp(-sigma * dt);
         float3 source = float3(1.0,0.96,0.91) * sunlight +
             float3(0.42,0.57,0.83) * ambient;
@@ -465,6 +468,12 @@ void UnifiedCloudRenderer::DrawMedium(
     // bound is conservative; actual sim extinction is zero outside its grid.
     if (stormExport != nullptr) top = std::max(top, 21000.0);
     if (!(top > base)) return;
+    const bool castsShadows = std::any_of(
+        source.layers.begin(), source.layers.end(),
+        [](const CloudLayerField& layer)
+        {
+            return layer.parameters.shadowParticipation;
+        });
     const std::array<u32, 24> constants{
         Bits(static_cast<f32>(view.cameraPositionMeters.x)),
         Bits(static_cast<f32>(view.cameraPositionMeters.y)),
@@ -481,7 +490,7 @@ void UnifiedCloudRenderer::DrawMedium(
         Bits(static_cast<f32>(top)),
         Bits(static_cast<f32>(field.FaceResolution())),
         Bits(static_cast<f32>(field.LayerCount())),
-        0U,
+        Bits(castsShadows ? 1.0F : 0.0F),
         0U,
         Bits(view.irradianceScale)
     };
