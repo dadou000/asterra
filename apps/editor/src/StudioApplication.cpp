@@ -3446,20 +3446,14 @@ int orbit::editor_app::StudioApplication::Run(
                 pendingProjectSwitch.reset();
             }
 
-            if (window.KeyDown(
-                    orbit::platform::
-                        Key::Escape) &&
-                !ui.WantsKeyboard())
+            // Escape may dismiss viewport fullscreen, but never terminates
+            // Orbit Studio. Popup and active-tool Escape handling is owned
+            // by the corresponding UI components.
+            if (window.KeyDown(orbit::platform::Key::Escape) &&
+                !ui.WantsKeyboard() &&
+                viewportFullscreen.load(std::memory_order_relaxed))
             {
-                // Esc first leaves full screen; only a further press closes Studio.
-                if (viewportFullscreen.load(std::memory_order_relaxed))
-                {
-                    viewportFullscreen.store(false, std::memory_order_relaxed);
-                }
-                else
-                {
-                    break;
-                }
+                viewportFullscreen.store(false, std::memory_order_relaxed);
             }
 
             cpuFrameTelemetry.Record(
