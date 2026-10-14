@@ -411,3 +411,7 @@ A new or changed editor surface should be reviewed against these questions:
 A feature that fails the common-case test should be simplified.
 
 A feature that fails the expert-control or non-restriction test should be redesigned rather than stripped down.
+
+## Procedural Paths & Roads editor behavior
+
+Build → Procedurals → Procedural Paths & Roads must open the canonical docked Procedurals panel in a beginner-friendly city-builder palette. The palette may contain only actually backed catalog entries; additional road widths/station assets remain clearly marked planned until supported by the native geometry, materials, contact and network services. Straight, Bezier and routed drawing share one existing viewport tool and the PathNetworkService transactional authority. Direct clicks create connected segment chains while enabled; normal Path Tool is unchanged. Endpoint snapping must use authored network+frame identities, not only screen-space overlap, and cannot silently connect mid-edge or at a bridge grade separation. The panel retains a one-click link to expert settings, engineering, junction and debug tools. Manual UI acceptance is specified in docs/tree/world/roads-railways/editor-builder.md.

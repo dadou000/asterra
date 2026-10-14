@@ -4,6 +4,7 @@
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/CorridorSweep.hpp>
 #include <orbit/path_geometry/InfrastructureSectionBuilder.hpp>
+#include <orbit/path_geometry/RoadCatalog.hpp>
 #include <orbit/path_geometry/RoadJunctionContact.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/studio_session/StudioMeshRpc.hpp>
@@ -1173,17 +1174,18 @@ StudioTickResult StudioSession::Tick(
                 return std::nullopt;
             if (edge->mode == paths::EdgeMode::Routed)
                 return std::nullopt;
-            const bool isRoad = edge->infrastructureCatalogId == "rural-road";
-            const bool isRail = edge->infrastructureCatalogId == "ballasted-rail";
+            const auto* roadPreset=path_geometry::FindRoadCatalog(
+                edge->infrastructureCatalogId);
+            const bool isRoad=roadPreset!=nullptr;
+            const bool isRail=edge->infrastructureCatalogId=="ballasted-rail";
             if ((!isRoad && !isRail) || edge->infrastructureCatalogVersion != 1)
                 return std::nullopt;
             paths::PathProfile profile{};
-            profile.name = isRail ? "Ballasted Rail" : "Rural Road";
-            profile.kind = isRail ? paths::PathProfileKind::Rail : paths::PathProfileKind::Road;
-            // Formation includes both railheads plus the ballast margins.
-            // Width is the usable pavement for a road and formation for rail.
-            profile.widthMeters = isRail ? 4.035 : 7.0;
-            profile.lanes = isRail ? 1U : 2U;
+            profile.name=isRail?"Ballasted Rail":std::string(roadPreset->label);
+            profile.kind=isRail?paths::PathProfileKind::Rail:
+                paths::PathProfileKind::Road;
+            profile.widthMeters=isRail?4.035:roadPreset->pavedWidthMeters;
+            profile.lanes=isRail?1U:roadPreset->laneCount;
             // Advisory catalog limits; the user can later supply custom
             // engineering profile constraints through the profile system.
             profile.maximumGrade = isRail ? 0.035 : 0.10;
@@ -1205,7 +1207,8 @@ StudioTickResult StudioSession::Tick(
             const auto planned = path_geometry::PlanInfrastructureSection(
                 *centerline, profile, {},
                 edge->designSpeedKmh > 0.0 ?
-                    edge->designSpeedKmh / 3.6 : 0.0,
+                    edge->designSpeedKmh / 3.6 :
+                    (isRail?85.0:roadPreset->designSpeedKmh)/3.6,
                 edge->easeTurns);
             UniverseBoundPathCache::RebuildRequest request{};
             request.authoredSignature = world_.Objects().Revision();
@@ -1259,8 +1262,9 @@ StudioTickResult StudioSession::Tick(
                 product->stations.size() < 2U) continue;
             const auto edge = pathNetwork_.Service().FindEdge(product->edge);
             if (!edge || edge->infrastructureCatalogVersion != 1U) continue;
-            const bool road = edge->infrastructureCatalogId == "rural-road";
-            const bool rail = edge->infrastructureCatalogId == "ballasted-rail";
+            const bool road=path_geometry::FindRoadCatalog(
+                edge->infrastructureCatalogId)!=nullptr;
+            const bool rail=edge->infrastructureCatalogId=="ballasted-rail";
             if (!road && !rail) continue;
             // Elevated supports may contact terrain at isolated foundations,
             // but their decks must never grade the ground continuously.

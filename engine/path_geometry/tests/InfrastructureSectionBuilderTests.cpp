@@ -1,4 +1,5 @@
 #include <orbit/path_geometry/InfrastructureSectionBuilder.hpp>
+#include <orbit/path_geometry/RoadCatalog.hpp>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -28,6 +29,27 @@ int main()
     CHECK(pavement.lanes.size()==2U);
     CHECK(pavement.lanes[0].points.size()==pavement.stations.size());
     CHECK(pavement.collision.size()==pavement.visualMesh.indices.size()/3U);
+
+    // Every road listed in the city-builder palette must build an actual
+    // lane graph and swept surface at its selected width; no fake presets.
+    CHECK(FindRoadCatalog("not-a-road")==nullptr);
+    for(const auto& preset:kRoadCatalog)
+    {
+        CHECK(FindRoadCatalog(preset.id)!=nullptr);
+        CHECK(preset.laneCount>=1U);
+        CHECK(preset.pavedWidthMeters>0.0);
+        road.name=std::string(preset.label);
+        road.widthMeters=preset.pavedWidthMeters;
+        road.lanes=preset.laneCount;
+        const auto section=PlanInfrastructureSection(
+            line,road,{},preset.designSpeedKmh/3.6,true);
+        CHECK(section.section.bands.size()==3U);
+        const auto built=BuildCorridorDerived(line,road,section.section);
+        CHECK(built.widthMeters==preset.pavedWidthMeters);
+        CHECK(built.laneCount==preset.laneCount);
+        CHECK(built.lanes.size()==preset.laneCount);
+        CHECK(built.collision.size()==built.visualMesh.indices.size()/3U);
+    }
 
     paths::PathProfile rail{};
     rail.kind=paths::PathProfileKind::Rail;

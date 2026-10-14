@@ -2161,6 +2161,8 @@ int orbit::editor_app::StudioApplication::Run(
 
         orbit::editor_app::StudioViewportPanel viewportPanel(panelEnvironment);
         viewportPanel.Register();
+        // Build / Procedurals palette and the viewport share one tool state.
+        proceduralsPanel.BindViewportTool(viewportPanel);
         orbit::editor_app::StudioExplorerPanel explorerPanel(panelEnvironment);
         explorerPanel.Register();
         orbit::editor_app::StudioPropertiesPanel propertiesPanel(panelEnvironment);
@@ -2437,10 +2439,26 @@ int orbit::editor_app::StudioApplication::Run(
             "Material Service",
             kContentPanel);
 
-        registerPanelMenu(
-            "Build",
-            "Procedurals",
-            orbit::editor_app::StudioProceduralsPanel::kPanelId);
+        ui.RegisterMenuAction({
+            .menu="Build",
+            .label="Procedurals / Procedural Paths & Roads",
+            .invoke=[&ui,&proceduralsPanel]
+            {
+                proceduralsPanel.OpenPathsAndRoads();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            }
+        });
+        ui.RegisterMenuAction({
+            .menu="Build",
+            .label="Procedurals / All Procedural Tools",
+            .invoke=[&ui,&proceduralsPanel]
+            {
+                proceduralsPanel.OpenOverview();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            }
+        });
         registerPanelMenu(
             "Build",
             "Build Settings",

@@ -277,6 +277,17 @@ public:
     // Viewport and path-placement interaction state. The frame loop reads and resets the parts it
     // drives (frame mouse delta, right-button gesture, path placement mode).
     bool pathPlacementMode = false;
+    // Presentation-only construction tool state. Authored geometry remains
+    // exclusively in PathNetworkService/CommandService.
+    bool infrastructureDrawMode = false;
+    i32 infrastructureAlignmentMode = 0; // 0 direct, 1 Bezier, 2 routed.
+    std::string infrastructureCatalogId{"rural-road"}; // empty = reference path
+    std::string infrastructureConstructionMode{"terrain"};
+    f64 infrastructureDesignSpeedKmh{60.0};
+    bool infrastructureEaseTurns = true;
+    f64 infrastructureCurveBias = 0.25;
+    bool infrastructureSnapNodes = true;
+    f64 infrastructureNodeSnapMeters = 10.0;
     bool pathDebugVisualization = true;
     std::optional<orbit::paths::NetworkId>
         activePathNetwork;

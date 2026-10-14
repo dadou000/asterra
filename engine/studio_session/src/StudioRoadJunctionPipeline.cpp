@@ -1,6 +1,7 @@
 #include <orbit/studio_session/StudioRoadJunctionPipeline.hpp>
 #include <orbit/path_geometry/TransportJunctions.hpp>
 #include <orbit/path_geometry/RoadJunctionConstruction.hpp>
+#include <orbit/path_geometry/RoadCatalog.hpp>
 #include <algorithm>
 #include <map>
 #include <set>
@@ -221,7 +222,8 @@ void StudioRoadJunctionPipeline::Refresh(
             const auto edge=network.FindEdge(child.id);
             if(!edge || edge->infrastructureCatalogVersion!=1U ||
                edge->constructionMode!="terrain")continue;
-            const bool road=edge->infrastructureCatalogId=="rural-road";
+            const bool road=path_geometry::FindRoadCatalog(
+                edge->infrastructureCatalogId)!=nullptr;
             const bool rail=edge->infrastructureCatalogId=="ballasted-rail";
             if(!road && !rail)continue;
             if(rail) {
