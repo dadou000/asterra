@@ -588,8 +588,8 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
             .data = compute.bytecode.data(), .size = compute.bytecode.size()},
         .pushConstantDwords = 32U,
         .shaderResourceBuffers = 3U,
-        .sampledTextures = 0U,
-        .storageTextures = 0U
+        .storageTextures = 0U,
+        .sampledTextures = 0U
     });
     if (!sunCachePipeline_)
         throw std::runtime_error("Unified System B Sun cache compute pipeline unavailable");
