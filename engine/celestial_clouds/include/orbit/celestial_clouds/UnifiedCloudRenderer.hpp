@@ -31,8 +31,9 @@ public:
         GpuCloudFieldProduct& field,
         rhi::Texture& target,
         f64 bodyRadiusMeters,
-        const CloudLayerParameters& layer,
-        const celestial_atmosphere::AtmosphereRenderView& view);
+        const CloudFieldProduct& source,
+        const celestial_atmosphere::AtmosphereRenderView& view,
+        rhi::Buffer* stormExport);
 
     void DrawReceiverShadow(
         rhi::CommandList& commands,
@@ -40,8 +41,9 @@ public:
         GpuCloudFieldProduct& field,
         rhi::Texture& target,
         f64 bodyRadiusMeters,
-        const CloudLayerParameters& layer,
-        const celestial_atmosphere::AtmosphereRenderView& view);
+        const CloudFieldProduct& source,
+        const celestial_atmosphere::AtmosphereRenderView& view,
+        rhi::Buffer* stormExport);
 
     void Composite(
         rhi::CommandList& commands,
@@ -53,11 +55,14 @@ private:
     void DrawMedium(
         rhi::CommandList& commands, bool shadow,
         rhi::Texture& depth, GpuCloudFieldProduct& field, rhi::Texture& target,
-        f64 bodyRadiusMeters, const CloudLayerParameters& layer,
-        const celestial_atmosphere::AtmosphereRenderView& view);
+        f64 bodyRadiusMeters, const CloudFieldProduct& source,
+        const celestial_atmosphere::AtmosphereRenderView& view,
+        rhi::Buffer* stormExport);
 
     std::unique_ptr<rhi::GraphicsPipeline> march_;
     std::unique_ptr<rhi::GraphicsPipeline> receiverShadow_;
     std::unique_ptr<rhi::GraphicsPipeline> composite_;
+    // B-owned inactive placeholder; never reuses A's mutable storm binding.
+    std::unique_ptr<rhi::Buffer> emptyStorm_;
 };
 } // namespace orbit::celestial_clouds::unified
