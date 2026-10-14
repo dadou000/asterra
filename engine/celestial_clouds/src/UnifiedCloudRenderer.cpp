@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <stdexcept>
 
 namespace orbit::celestial_clouds::unified
@@ -39,15 +40,22 @@ struct Config
     float4 upNear;       // view up, near plane
     float4 sunFar;       // Sun direction, far plane
     float4 shell;        // planet radius, cloud base and top, cubemap face size
-    float4 material;     // total layer count, reserved, reserved, irradiance
+    float4 material;     // layer count, receiver-shadow flag, reserved, irradiance
+    float4 cacheAnchor;  // body-fixed unit tangent anchor xyz, generation w
+    float4 cacheState;   // slab phase [0,16), active flag, other reserved
 };
 [[vk::push_constant]] Config g;
 [[vk::binding(0,0)]] ByteAddressBuffer g_weather;
 // Authoritative GPU simulation export, optional. Only the input buffer is
 // shared with A; B uses its own storm sampling and optical integration.
 [[vk::binding(1,0)]] StructuredBuffer<float> g_storm;
-[[vk::binding(2,0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
-[[vk::binding(2,0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+#ifdef B3_WRITE_CACHE
+[[vk::binding(2,0)]] RWByteAddressBuffer g_lightCache;
+#else
+[[vk::binding(2,0)]] ByteAddressBuffer g_lightCache;
+#endif
+[[vk::binding(3,0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(3,0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
 
 float3 CameraRay(float2 uv)
 {
@@ -297,6 +305,118 @@ float4 Density(float3 position, bool receiver)
     return float4(max(sigma,0.),max(scattered,0.),phaseWeight,0.);
 }
 
+// Local optical-depth volume. Each cell corresponds to a fixed point on the
+// planet within the anchor's tangent frame (not a camera-relative floating
+// origin). Existing generation tags prevent stale data from becoming valid.
+static const uint kCacheSide = 32u;
+static const uint kCacheHeight = 16u;
+static const float kCacheCellMeters = 2000.0;
+void CacheAxes(out float3 east, out float3 north)
+{
+    const float3 a = normalize(g.cacheAnchor.xyz);
+    const float3 reference = abs(a.y) < 0.92 ? float3(0,1,0) : float3(1,0,0);
+    east = normalize(cross(reference,a));
+    north = normalize(cross(a,east));
+}
+uint CacheIndex(uint3 q)
+{
+    return ((q.z*kCacheSide+q.y)*kCacheSide+q.x)*16u;
+}
+float3 CachePoint(uint3 q)
+{
+    float3 east,north;
+    CacheAxes(east,north);
+    const float2 metres =
+        (float2(q.xy)+0.5-float(kCacheSide)*0.5)*kCacheCellMeters;
+    const float altitude = (float(q.z)+0.5) /
+        float(kCacheHeight)*max(g.shell.z,1000.);
+    const float3 d = normalize(g.cacheAnchor.xyz +
+        (east*metres.x+north*metres.y)/max(g.shell.x,1.));
+    return d*(g.shell.x+altitude);
+}
+float SunDepthDirect(float3 p)
+{
+    const float3 sun=normalize(g.sunFar.xyz);
+    float a,b;
+    if (!SphereInterval(p,sun,g.shell.x+g.shell.z,a,b))
+        return 0.;
+    // A light ray intercepted by the planet cannot reach the Sun.
+    float groundA,groundB;
+    if (SphereInterval(p,sun,g.shell.x,groundA,groundB))
+    {
+        if (groundA>0.01 && groundA<b) return 24.;
+        if (groundA<=0.01 && groundB>0.01) return 24.;
+    }
+    const float distance = min(max(b,0.),1000000.);
+    if (distance<=0.) return 0.;
+    const float dt = distance/12.;
+    float tau=0.;
+    [loop]
+    for(uint j=0u;j<12u;++j)
+    {
+        tau += Density(p+sun*(float(j)+0.5)*dt,false).x*dt;
+    }
+    return min(max(tau,0.),24.);
+}
+#ifndef B3_WRITE_CACHE
+bool CachedSunDepth(float3 p,out float opticalDepth)
+{
+    opticalDepth=0.;
+    if(g.cacheState.y<0.5 || dot(g.cacheAnchor.xyz,g.cacheAnchor.xyz)<0.95)
+        return false;
+    float3 east,north;
+    CacheAxes(east,north);
+    const float3 dir=normalize(p);
+    const float2 xy=float2(dot(dir,east),dot(dir,north))*g.shell.x;
+    const float z=(length(p)-g.shell.x) /
+        max(g.shell.z,1000.)*float(kCacheHeight)-0.5;
+    const float2 horizontal=xy/kCacheCellMeters+float(kCacheSide)*0.5-0.5;
+    const float3 q=float3(horizontal,z);
+    if(any(q<0.) || q.x>=float(kCacheSide-1u) ||
+        q.y>=float(kCacheSide-1u) || q.z>=float(kCacheHeight-1u))
+        return false;
+    const uint3 first=(uint3)floor(q);
+    const float3 weight=frac(q);
+    float optical=0.;
+    [unroll]
+    for(uint dz=0u;dz<2u;++dz)
+    {
+        [unroll]
+        for(uint dy=0u;dy<2u;++dy)
+        {
+            [unroll]
+            for(uint dx=0u;dx<2u;++dx)
+            {
+                const uint3 c=first+uint3(dx,dy,dz);
+                const float4 v=asfloat(g_lightCache.Load4(CacheIndex(c)));
+                if(v.y != g.cacheAnchor.w || !isfinite(v.x))
+                    return false;
+                const float w=(dx==0u?1.-weight.x:weight.x)*
+                    (dy==0u?1.-weight.y:weight.y)*
+                    (dz==0u?1.-weight.z:weight.z);
+                optical+=v.x*w;
+            }
+        }
+    }
+    opticalDepth=clamp(optical,0.,24.);
+    return true;
+}
+#else
+[numthreads(8,8,1)]
+void UpdateSunCache(uint3 id : SV_DispatchThreadID)
+{
+    if(id.x>=kCacheSide || id.y>=kCacheSide ||
+        g.cacheState.y<0.5) return;
+    const uint z=(uint)g.cacheState.x;
+    if(z>=kCacheHeight) return;
+    const uint3 cell=uint3(id.xy,z);
+    const float3 p=CachePoint(cell);
+    const float tau=SunDepthDirect(p);
+    g_lightCache.Store4(CacheIndex(cell),
+        asuint(float4(tau,g.cacheAnchor.w,0.,0.)));
+}
+#endif
+
 float4 March(V input) : SV_Target0
 {
     float3 direction = CameraRay(input.uv);
@@ -336,7 +456,11 @@ float4 March(V input) : SV_Target0
         float d = max(1.+meanG*meanG-2.*meanG*angle,0.02);
         float phase = (1.-meanG*meanG)/(d*sqrt(d));
         float albedo = saturate(mediumAtPoint.y/max(sigma,1.e-8));
-        float sunlight = max(0., g.material.w) * upSun * phase * albedo;
+        float tauSun=0.;
+        if(!CachedSunDepth(p,tauSun))
+            tauSun=SunDepthDirect(p);
+        float sunlight = max(0., g.material.w) * upSun * phase *
+            albedo * exp(-tauSun);
         float ambient = (0.13 + 0.20 * upSun) * albedo;
         float alpha = 1. - exp(-sigma * dt);
         float3 source = float3(1.0,0.96,0.91) * sunlight +
