@@ -161,6 +161,27 @@ struct GpuCloudLayerDescriptor
 };
 static_assert(sizeof(GpuCloudLayerDescriptor) == 32U);
 
+// Pure CPU/GPU ABI encoder. Kept in a common header so tests can verify the
+// renderer's packed layer metadata independently of a Vulkan device.
+[[nodiscard]] constexpr GpuCloudLayerDescriptor EncodeGpuCloudLayer(
+    const CloudLayerParameters& p) noexcept
+{
+    return {
+        .shell = {
+            static_cast<f32>(p.baseAltitudeMeters),
+            static_cast<f32>(p.topAltitudeMeters),
+            static_cast<f32>(p.peakOpticalDepth),
+            static_cast<f32>(p.coverageBias)
+        },
+        .material = {
+            static_cast<f32>(p.densityExponent),
+            static_cast<f32>(p.singleScatteringAlbedo),
+            static_cast<f32>(p.anisotropy),
+            p.shadowParticipation ? 1.0F : 0.0F
+        }
+    };
+}
+
 class GpuCloudFieldProduct
 {
 public:
