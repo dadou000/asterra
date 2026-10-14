@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -31,6 +32,22 @@ const LaneReference* LaneAt(const Port& port,u32 index)
 }
 Double3 InteriorPoint(const Port& port,u32 index)
 {
+    const auto& product=*port.approach.geometry;
+    const std::size_t n=product.stations.size();
+    // For the supported one-track rail recipe the primary lane reference
+    // lies on ballast formation, not the wheel contact plane. Derive the
+    // track centre from the actual rendered paired railheads instead.
+    // Formation: 3*n vertices; left/right contact strips: 2*n each.
+    if(port.approach.mode==TransportMode::Rail && index==0 &&
+       n>=2 && product.visualMesh.vertices.size()==n*7U)
+    {
+        const std::size_t i=port.approach.atStart?1U:n-2U;
+        const auto& v=product.visualMesh.vertices;
+        return (v[3U*n+2U*i].position+
+                v[3U*n+2U*i+1U].position+
+                v[5U*n+2U*i].position+
+                v[5U*n+2U*i+1U].position)*0.25;
+    }
     const auto* lane=LaneAt(port,index);
     const auto& points=lane->points;
     return port.approach.atStart?points[1].position:points[points.size()-2].position;
@@ -102,8 +119,15 @@ JunctionPlan BuildTransportJunction(
     }
     std::vector<Port> ports;
     ports.reserve(approaches.size());
+    std::set<scene::ObjectId> visitedEdges;
     for(const auto& approach:approaches)
     {
+        if(approach.edge && !visitedEdges.insert(approach.edge).second)
+        {
+            problem(JunctionIssue::InvalidInput,approach.edge,
+                "Duplicate incident edge at a junction.");
+            continue;
+        }
         if(!approach.edge || !approach.frame || !approach.geometry ||
            approach.geometry->edge!=approach.edge ||
            approach.geometry->frame!=approach.frame ||
@@ -180,7 +204,11 @@ JunctionPlan BuildTransportJunction(
             // moves need an authored turnout map, not all-to-all lane mixing.
             if(in.approach.mode==TransportMode::Rail &&
                (in.approach.geometry->lanes.size()!=1 ||
-                dest.approach.geometry->lanes.size()!=1))
+                dest.approach.geometry->lanes.size()!=1 ||
+                in.approach.geometry->visualMesh.vertices.size()!=
+                    in.approach.geometry->stations.size()*7U ||
+                dest.approach.geometry->visualMesh.vertices.size()!=
+                    dest.approach.geometry->stations.size()*7U))
             {
                 problem(JunctionIssue::UnsupportedRailTracks,in.approach.edge,
                     "Multi-track rail switch requires explicit track correspondence.");

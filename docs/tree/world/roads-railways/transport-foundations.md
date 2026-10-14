@@ -16,10 +16,12 @@ sources = [
   "engine/path_geometry/src/RailInterlocking.cpp",
   "engine/path_geometry/include/orbit/path_geometry/JunctionConflicts.hpp",
   "engine/path_geometry/src/JunctionConflicts.cpp",
+  "engine/path_geometry/include/orbit/path_geometry/JunctionSignalPhases.hpp",
+  "engine/path_geometry/src/JunctionSignalPhases.cpp",
   "engine/path_geometry/include/orbit/path_geometry/InfrastructureSectionBuilder.hpp",
   "engine/path_geometry/src/InfrastructureSectionBuilder.cpp",
 ]
-symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology", "PlanInfrastructureSection", "BuildTransportJunction", "RailInterlocking", "AnalyzeJunctionConflicts"]
+symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology", "PlanInfrastructureSection", "BuildTransportJunction", "RailInterlocking", "AnalyzeJunctionConflicts", "SuggestRoadJunctionPhases"]
 invariants = [
   "Network authority remains in engine/paths; road/rail representations are disposable derived products.",
   "Railhead contact reference coordinates match the swept railhead strip station frame, gauge and cant.",
@@ -117,3 +119,9 @@ StudioPathNetworkHost registers read-only path.junction_preview(node UUID, optio
 ## Intersection conflict pairs
 
 AnalyzeJunctionConflicts consumes the exact frame-local movement polylines produced by BuildTransportJunction and computes deterministic pairs which share a vehicle entry/exit lane or physically overlap within configurable road/rail vehicle sweep envelopes. It uses true double-precision 3D segment distance, so elevated crossings clear the underlying road when there is sufficient vertical separation. Pair counts, segment comparisons and returned conflicts are separately capped; truncation is explicit, never described as a complete traffic phase safety result. Studio's path.junction_preview and Build → Procedurals surface the conflict count and truncation indicator. This supports future phase grouping/interlocking but does not yet control traffic lights, signal aspects, player vehicle behaviour or any collider.
+
+## Advisory road conflict-free phase groups
+
+SuggestRoadJunctionPhases deterministically groups the complete road candidate movement graph into independent sets with no known route conflict inside any group. It refuses truncated/invalid conflict reports, excessive candidate counts and mixed rail traffic (which requires separately authored rail interlocking). Its result is solely a planning suggestion: no signal timing, priority, pedestrian clearance, yellow/all-red phases or automatic control. path.junction_preview includes grouping status and movement indices; Build → Procedurals exposes the phase count. Tests cover determinism, safe grouping, capacity rejection, truncated conflicts and rail interlocking exclusion.
+
+The railway connection preview now samples paired swept railhead vertices for the supported single-track 7-vertex-per-station formation/rail geometry instead of misreporting the formation lane datum as track height. Unsupported or generic unconstructed rail meshes cannot claim validated track connection geometry. Duplicate incident edges are rejected to avoid phantom repeated movements.

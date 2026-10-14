@@ -402,6 +402,18 @@ private:
                        conflicts && conflicts->IsInteger())
                         context.KeyValue("Conflicting movement pairs",
                             std::to_string(conflicts->AsInteger()));
+                    if(const auto* valid=junctionReport_.Find(
+                           "advisory_road_phase_valid");
+                       valid && valid->IsBool() && valid->AsBool())
+                    {
+                        if(const auto* phases=junctionReport_.Find(
+                               "advisory_road_phase_count");
+                           phases && phases->IsInteger())
+                            context.KeyValue("Advisory road phases",
+                                std::to_string(phases->AsInteger()));
+                        context.MutedText(
+                            "Conflict-free grouping only; signal timing, priorities and control are not applied.");
+                    }
                     if(const auto* truncated=junctionReport_.Find(
                            "conflict_analysis_truncated");
                        truncated && truncated->IsBool() && truncated->AsBool())

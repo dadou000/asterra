@@ -1,4 +1,5 @@
 #include <orbit/path_geometry/TransportJunctions.hpp>
+#include <orbit/path_geometry/TransportSections.hpp>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -90,6 +91,24 @@ int main()
     CHECK(crossing.Valid());
     CHECK(crossing.movements.size()==2); // no road-to-rail transfers
     reversed=approaches;
+    // Railway movement previews follow the rendered railhead contact height,
+    // not the ballast formation centreline.
+    auto railA=MakeEdge({6,1},frame,{20,0,0});
+    auto railB=MakeEdge({6,2},frame,{0,0,20});
+    railA.visualMesh=BuildCorridorMesh(railA.stations,MakeRailSweep({}));
+    railB.visualMesh=BuildCorridorMesh(railB.stations,MakeRailSweep({}));
+    const std::vector<JunctionApproach> railApproaches{
+        {{6,1},frame,TransportMode::Rail,true,true,&railA},
+        {{6,2},frame,TransportMode::Rail,true,true,&railB}
+    };
+    const auto railPreview=BuildTransportJunction(node,railApproaches);
+    CHECK(railPreview.Valid());
+    CHECK(railPreview.movements.size()==2);
+    CHECK(railPreview.roadFootprint.indices.empty());
+    CHECK(std::abs(railPreview.movements[0].points.front().y-0.20)<1.e-8);
+    auto unsupported=railApproaches;
+    unsupported[0].geometry=&east;
+    CHECK(!BuildTransportJunction(node,unsupported).Valid());
     auto foreignNorth=north;
     foreignNorth.frame=anotherFrame;
     reversed[2].frame=anotherFrame;

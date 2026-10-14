@@ -13,6 +13,7 @@
 #include <orbit/path_geometry/RailCantDesign.hpp>
 #include <orbit/path_geometry/TransportJunctions.hpp>
 #include <orbit/path_geometry/JunctionConflicts.hpp>
+#include <orbit/path_geometry/JunctionSignalPhases.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -1315,6 +1316,17 @@ void StudioPathNetworkHost::AttachRpc()
                 *node,approaches);
             const auto conflictReport =
                 orbit::path_geometry::AnalyzeJunctionConflicts(plan);
+            const auto phasePlan =
+                orbit::path_geometry::SuggestRoadJunctionPhases(
+                    plan,conflictReport);
+            orbit::rpc::Value::Array advisoryPhases;
+            for(const auto& phase:phasePlan.phases)
+            {
+                orbit::rpc::Value::Array indices;
+                for(const auto move:phase.movementIndices)
+                    indices.emplace_back(static_cast<orbit::i64>(move));
+                advisoryPhases.emplace_back(std::move(indices));
+            }
             orbit::rpc::Value::Array findings, movements;
             for(const auto& finding:plan.findings)
                 findings.emplace_back(orbit::rpc::Value::Object{
@@ -1360,6 +1372,12 @@ void StudioPathNetworkHost::AttachRpc()
                     conflictReport.conflicts.size())},
                 {"conflict_analysis_truncated",conflictReport.truncated},
                 {"conflict_analysis_valid",conflictReport.valid},
+                {"advisory_road_phase_count",
+                    static_cast<orbit::i64>(phasePlan.phases.size())},
+                {"advisory_road_phase_valid",phasePlan.valid},
+                {"advisory_phase_requires_rail_interlocking",
+                    phasePlan.requiresRailInterlocking},
+                {"advisory_road_phases",std::move(advisoryPhases)},
                 {"road_footprint_vertices",
                     static_cast<orbit::i64>(plan.roadFootprint.vertices.size())},
                 {"road_footprint_triangles",
