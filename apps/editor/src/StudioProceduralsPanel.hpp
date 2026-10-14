@@ -40,9 +40,7 @@ private:
         edges_.clear();
         nodes_.clear();
         networks_.clear();
-        report_=rpc::Value{};
-        error_.clear();
-        if (!session_->World().HasWorld()) return;
+        if (!session_->World().HasWorld()) { report_=rpc::Value{}; return; }
         const auto& store=session_->World().Objects();
         auto pending=store.Roots();
         std::size_t visited=0;
@@ -60,6 +58,7 @@ private:
             [](const auto& a,const auto& b){return a.name<b.name;});
         std::sort(networks_.begin(),networks_.end(),
             [](const auto& a,const auto& b){return a.name<b.name;});
+        knownWorldGeneration_=session_->World().Objects().Revision();
         std::sort(edges_.begin(),edges_.end(),
             [](const auto& a,const auto& b) {
                 if(a.name!=b.name) return a.name<b.name;
@@ -69,6 +68,7 @@ private:
     void SelectEdge(const scene::ObjectId id)
     {
         edgeId_ = id.ToString();
+        selectedFinding_ = 0;
         report_ = rpc::Value{};
         selectedFinding_ = 0;
         error_.clear();
@@ -205,6 +205,19 @@ private:
     }
     void Draw(editor_ui::PanelContext& context)
     {
+        if (session_->World().HasWorld())
+        {
+            const auto revision = session_->World().Objects().Revision();
+            if (revision != knownWorldGeneration_)
+                Refresh();
+        }
+        else if (!edges_.empty() || !networks_.empty() || !nodes_.empty())
+        {
+            edges_.clear(); nodes_.clear(); networks_.clear();
+            edgeId_.clear(); newNetworkId_ = {};
+            report_ = rpc::Value{};
+            knownWorldGeneration_ = ~u64{0};
+        }
         context.Heading("Build / Procedurals");
         context.MutedText("Infrastructure builder · Roads / Railways");
         static constexpr std::array<std::string_view,2> categories{"Roads","Railways"};
@@ -219,6 +232,22 @@ private:
         {
             static_cast<void>(context.InputText("Network name##proc-new-network",newNetworkName_));
             if (context.Button("Create network##proc-create-network")) CreateNetwork();
+            if (!networks_.empty() && context.Section("Use existing network##proc-networks",true))
+            {
+                for (const auto& network : networks_)
+                {
+                    const auto found = session_->PathNetwork().Service().FindNetwork(
+                        paths::NetworkId{network.id.high,network.id.low});
+                    if (!found) continue;
+                    if (context.Selectable(network.name+"##proc-network-"+network.id.ToString(),
+                        newNetworkId_ == found->id))
+                    {
+                        newNetworkId_ = found->id;
+                        startNodeId_ = {};
+                        endNodeId_ = {};
+                    }
+                }
+            }
             if (newNetworkId_ && context.Section("Add frame-anchored node##proc-node-create",true))
             {
                 context.MutedText("Positions are local metres in an existing frame, not global world coordinates.");
@@ -368,6 +397,7 @@ private:
     }
     studio_session::StudioSession* session_;
     rpc::Dispatcher* rpc_;
+    u64 knownWorldGeneration_{~u64{0}};
     std::vector<scene::ObjectRecord> edges_;
     std::vector<scene::ObjectRecord> nodes_;
     std::vector<scene::ObjectRecord> networks_;
