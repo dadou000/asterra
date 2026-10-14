@@ -45,6 +45,7 @@ verified = "69bafa8"
 "independent unified cloud System B architecture and A/B isolation" = "unified-system-b"
 "unified B2 layered cloud extinction, nested storm integration and tests" = "unified-system-b-density"
 "unified B3 independent sunlight optical depth cache" = "unified-system-b-sun-cache"
+"system B multiscale 3D cloud morphology and visual parity tests" = "unified-system-b-morphology"
 "blackrack EVE release 5 archive and rendering techniques" = "blackrack-eve-release5-reference"
 "blackrack-inspired optimization plan and code mapping for Orbit" = "blackrack-eve-orbit-design"
 "papers, open-source examples and volumetric clouds resource library" = "cloud-rendering-reference-library"
@@ -56,10 +57,11 @@ verified = "69bafa8"
 
 ## Unified rendering System B (experimental)
 
-- [System B foundation, independence and integration contracts](unified-system-b.md): B0 contracts, B1 Vulkan rendering, B2 multilayer/nested storms and B3 time-sliced sunlight cache implemented (B3 not runtime-validated). A is still the default; B remains an opt-in preview. Far-field sunlight cascades, sky ambient cache, temporal reconstruction and Cloud Lab parity are outstanding. The old A shader split is NOT System B.
+- [System B foundation, independence and integration contracts](unified-system-b.md): B0 contracts, B1 Vulkan rendering, B2 multilayer/nested storms, B3 time-sliced Sun cache and a later morphology upgrade (3D noise + progressive raymarch) implemented. New morphology is not GPU/visual-validated. A is still the default; B remains an opt-in preview. Far-field sunlight cascades, sky ambient cache, temporal reconstruction and Cloud Lab parity are outstanding. The old A shader split is NOT System B.
 
 - [B2 unified density and storm data contract](unified-system-b-density.md): GPU weather metadata append-only ABI, multi-layer extinction, nested storm interpolation, conflict register, and local validation.
 - [B3 independent sunlight cache](unified-system-b-sun-cache.md): physical optical depth, 16-frame sliced GPU updates, invalidation, safe cache-miss fallback, profiler and A/B testing.
+- [B morphology quality upgrade](unified-system-b-morphology.md): 3D tileable cell noise, cloud-type profiles, footprint-based erosion, independent resource lifetime and explicit A-parity gate.
 
 ## Reference research (Release 5 / planetary volumetrics)
 
