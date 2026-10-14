@@ -29,7 +29,7 @@ int main()
     const auto contacts=RailContactReferences(stations,railway,cant);
     CHECK(contacts.size()==6U);
     for (const auto& c:contacts)
-        CHECK(std::abs(math::Length(c.rightRail-c.leftRail) -
+        CHECK(std::abs(orbit::math::Length(c.rightRail-c.leftRail) -
                        railway.gaugeMeters)<1.e-10);
     CHECK(std::abs(contacts[2].rightRail.y-contacts[2].leftRail.y)>0.01);
     const auto sleepers=RailSleeperPlacements(stations,railway,cant);

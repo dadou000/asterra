@@ -333,6 +333,7 @@ int main()
     paths.SetInfrastructureIntent(bezier.id, "ballasted-rail", 1, "supported", 120.0, true);
     ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->infrastructureCatalogId == "ballasted-rail");
     ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->constructionMode == "supported");
+
     ORBIT_TEST_CHECK(Near(paths.FindEdge(bezier.id)->designSpeedKmh, 120.0));
     commands.Undo();
     ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->infrastructureCatalogId.empty());
@@ -342,6 +343,13 @@ int main()
     try { paths.SetInfrastructureIntent(bezier.id, "ballasted-rail", 1, "terrain", -2.0, true); }
     catch (const std::invalid_argument&) { rejectedBadSpeed = true; }
     ORBIT_TEST_CHECK(rejectedBadSpeed);
+    for (const char* method : {"bridge", "deck", "tunnel", "terrain"})
+    {
+        paths.SetInfrastructureIntent(bezier.id, "ballasted-rail", 1, method, 80.0, true);
+        ORBIT_TEST_CHECK(paths.FindEdge(bezier.id)->constructionMode == method);
+    }
+    paths.SetInfrastructureIntent(bezier.id, "ballasted-rail", 1, "supported", 120.0, true);
+
 
     // Entity/socket anchors are persistent semantic anchors rather than
     // resolved world positions. Runtime entity motion therefore does not

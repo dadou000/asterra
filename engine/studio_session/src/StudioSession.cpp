@@ -3,6 +3,7 @@
 #include <orbit/rpc/JsonRpc.hpp>
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/CorridorSweep.hpp>
+#include <orbit/path_geometry/InfrastructureSectionBuilder.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/studio_session/StudioMeshRpc.hpp>
 #include <orbit/studio_session/StudioTerrainSampleRpc.hpp>
@@ -736,7 +737,9 @@ StudioTickResult StudioSession::Tick(
             paths::PathProfile profile{};
             profile.name = isRail ? "Ballasted Rail" : "Rural Road";
             profile.kind = isRail ? paths::PathProfileKind::Rail : paths::PathProfileKind::Road;
-            profile.widthMeters = isRail ? 1.5 : 7.0;
+            // Formation includes both railheads plus the ballast margins.
+            // Width is the usable pavement for a road and formation for rail.
+            profile.widthMeters = isRail ? 4.035 : 7.0;
             profile.lanes = isRail ? 1U : 2U;
             path_geometry::PathSourceRequest source{};
             source.edge = *edge;
@@ -749,24 +752,20 @@ StudioTickResult StudioSession::Tick(
             source.sourceRevision = world_.Objects().Revision();
             const auto centerline = path_geometry::BuildPathCenterline(source);
             if (!centerline) return std::nullopt;
-            path_geometry::CorridorSweep section{};
-            if (isRail)
-            {
-                section.bands = {
-                    {{{-0.77, 0.0}, {-0.73, 0.15}}},
-                    {{{0.73, 0.15}, {0.77, 0.0}}}
-                };
-            }
-            else
-            {
-                section.bands = {{{{-3.5, 0.0}, {0.0, 0.07}, {3.5, 0.0}}}};
-            }
+            // Domain recipe, not another hand-authored Studio-specific
+            // triangle set. Curvature and design speed can generate bounded
+            // railway cant in the same station frame as the swept railhead.
+            const auto planned = path_geometry::PlanInfrastructureSection(
+                *centerline, profile, {},
+                edge->designSpeedKmh > 0.0 ?
+                    edge->designSpeedKmh / 3.6 : 0.0,
+                edge->easeTurns);
             UniverseBoundPathCache::RebuildRequest request{};
             request.authoredSignature = world_.Objects().Revision();
             if (request.authoredSignature == 0U) request.authoredSignature = 1U;
             request.centerline = *centerline;
             request.profile = std::move(profile);
-            request.corridor = std::move(section);
+            request.corridor = planned.section;
             return request;
         }, 2U));
     result.viewportTargetsChanged =
@@ -813,12 +812,18 @@ StudioTickResult StudioSession::Tick(
             const bool road = edge->infrastructureCatalogId == "rural-road";
             const bool rail = edge->infrastructureCatalogId == "ballasted-rail";
             if (!road && !rail) continue;
+            // Elevated supports may contact terrain at isolated foundations,
+            // but their decks must never grade the ground continuously.
+            // Tunnels need volume excavation, not heightfield flattening.
+            if (edge->constructionMode != "terrain") continue;
             CorridorConstructionEntry entry{};
             entry.layer.edge = product->edge;
             entry.layer.stations = product->stations;
-            entry.layer.footprint = road ?
-                path_geometry::CorridorTerrainFootprint{3.5, 1.0, 3.0} :
-                path_geometry::CorridorTerrainFootprint{1.5, 1.0, 3.0};
+            entry.layer.footprint = {
+                .halfWidthMeters = product->widthMeters * 0.5,
+                .shoulderMeters = road ? 0.75 : 0.60,
+                .blendMeters = 3.0
+            };
             entry.revision = product->buildSignature != 0U ?
                 product->buildSignature : 1U;
             entries.push_back(std::move(entry));

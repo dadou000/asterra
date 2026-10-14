@@ -719,7 +719,9 @@ void PathNetworkService::SetInfrastructureIntent(
     if (!FindEdge(edge).has_value())
         throw std::invalid_argument("Infrastructure intent requires a valid path edge.");
     if (catalogId.empty() || catalogVersion < 1 ||
-        (constructionMode != "terrain" && constructionMode != "supported") ||
+        (constructionMode != "terrain" && constructionMode != "supported" &&
+         constructionMode != "bridge" && constructionMode != "deck" &&
+         constructionMode != "tunnel") ||
         !std::isfinite(designSpeedKmh) || designSpeedKmh < 0.0)
         throw std::invalid_argument("Invalid infrastructure catalog, version, construction or design speed.");
     const bool ownsTransaction = !commands_.HasActiveTransaction();

@@ -50,3 +50,7 @@ CorridorDerived now regenerates lane/graph/navigation/debug references after geo
 ### Railway cant as a height-difference constraint
 
 RailCantDesign computes advisory railway cant in metres and signed radians, including multiple operating speeds, deficiency/excess warnings, and a bounded runout gradient. The output is non-mutating. Verify via Orbit.RailCantDesign. Station frame validity now requires orthonormal handedness for physical railhead contact consistency.
+
+### Native infrastructure recipe integration
+
+InfrastructureSectionBuilder supplies deterministic road/rail sections from one source centreline, path profile, sampling spacing and requested operating speed. It delegates to the existing section and rail cant solvers and does not add semantic authority. StudioSession's infrastructure path cache now consumes the recipe directly and publishes swept geometry/collision for supported catalog IDs. The CMake test Orbit.InfrastructureSectionBuilder checks road and railway production and invalid dimensions. Actual Windows compilation and GPU rendering need verification.

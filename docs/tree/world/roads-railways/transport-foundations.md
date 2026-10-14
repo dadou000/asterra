@@ -81,3 +81,11 @@ Test targets: Orbit.RailCantDesign, Orbit.TransportSections, Orbit.TransportTopo
 ## Variable-width travel references
 
 The refined geometry adapter also maps road lane centrelines to the actual usable cross-section width of the first sweep band at every station. Width keys and gradual widening/tapering now move the lane samples and adjust NavSample half-width, rather than leaving navigation lanes at the fixed initial width. The CorridorSweep regression checks narrowing/widening geometry, lane centres, and NavSample width. LaneReference.lateralOffsetMeters is a nominal legacy value; station-specific points are authoritative for dynamic cross-section position. Junction lane-count transitions and true lane merges still require explicit topology products.
+
+## Studio end-to-end integration increment
+
+StudioSession's existing rebuild resolver now invokes PlanInfrastructureSection for the supported rural-road and ballasted-rail catalog IDs instead of independently hard-coded triangle bands. The road recipe derives crowned pavement and real shoulders; railway recipes derive formation, paired railhead strips and optional speed-aware cant from the same station sampling used to build the physical/path mesh. Rail formation width is 4.035 metres by default (configurable through profile integration in subsequent stages).
+
+The authoring service accepts terrain, supported, bridge, deck and tunnel construction intents. Ground grading is only published for mode terrain; changing to bridge/deck/tunnel/supported removes the continuous grading influence and waits for the appropriate future foundation/excavation runtime rather than incorrectly flattening the surface. The canonical Studio Build → Procedurals panel assigns a supported catalog to new segments and shows the real cache's derived vertex/contact counts, pending state and errors.
+
+The Studio path.geometry and path.engineering reports should consume this same derived construction cache when available; integration verification must ensure there is no duplicate generic mesh masking a newer construction result.

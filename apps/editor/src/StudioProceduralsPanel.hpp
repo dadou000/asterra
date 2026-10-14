@@ -75,6 +75,8 @@ private:
         const auto edge = session_->PathNetwork().Service().FindEdge(id);
         if (!edge) { error_ = "The selected edge no longer exists."; return; }
         catalogId_ = edge->infrastructureCatalogId;
+        if (catalogId_ == "ballasted-rail") category_ = 1;
+        else if (catalogId_ == "rural-road") category_ = 0;
         catalogVersion_ = edge->infrastructureCatalogVersion;
         constructionMode_ = edge->constructionMode;
         speed_ = edge->designSpeedKmh > 0.0 ? edge->designSpeedKmh/3.6 : 20.0;
@@ -144,9 +146,14 @@ private:
                 edge=service.ConnectRouted(startNodeId_,endNodeId_,newEdgeName_);
             else
                 edge=service.ConnectDirect(startNodeId_,endNodeId_,newEdgeName_);
+            // Creation commits supported catalog intent through the normal
+            // undoable path service, instead of requiring Advanced editing.
+            service.SetInfrastructureIntent(
+                edge.id,category_==1 ? "ballasted-rail" : "rural-road",
+                1,"terrain",speed_*3.6,easeTurns_);
             Refresh();
             SelectEdge(edge.id);
-            status_="Created path edge through the authoritative command service.";
+            status_="Infrastructure edge created with construction intent.";
             error_.clear();
         }
         catch(const std::exception& e){error_=e.what();}
@@ -165,6 +172,8 @@ private:
             auto& service = session_->PathNetwork().Service();
             const auto edge = service.FindEdge(*id);
             if (!edge) throw std::runtime_error("Edge no longer exists.");
+            if (catalogId_.empty())
+                catalogId_ = category_ == 1 ? "ballasted-rail" : "rural-road";
             service.SetInfrastructureIntent(*id, catalogId_, catalogVersion_,
                 constructionMode_, speed_*3.6, easeTurns_);
             if (edge->mode == paths::EdgeMode::Bezier)
@@ -222,8 +231,13 @@ private:
         context.Heading("Build / Procedurals");
         context.MutedText("Infrastructure builder · Roads / Railways");
         static constexpr std::array<std::string_view,2> categories{"Roads","Railways"};
-        static_cast<void>(context.SegmentedControl("Infrastructure##proc-category",
-            categories, category_));
+        if (context.SegmentedControl("Infrastructure##proc-category",
+            categories, category_))
+        {
+            if (catalogId_.empty() || catalogId_ == "rural-road" ||
+                catalogId_ == "ballasted-rail")
+                catalogId_ = category_ == 1 ? "ballasted-rail" : "rural-road";
+        }
         context.MutedText(category_ == 0
             ? "Road layouts, grades, surface construction and junction-ready splines."
             : "Track alignments, design speed, rail curves and cant diagnostics.");
@@ -320,6 +334,26 @@ private:
         {
             context.MutedText("Select an authored segment to configure it.");
             return;
+        }
+        const auto selectedObject = scene::ObjectId::Parse(edgeId_);
+        if (selectedObject)
+        {
+            const auto& cache = session_->PathProducts();
+            const auto* built = cache.Find(*selectedObject);
+            if (built)
+            {
+                context.KeyValue("Constructed vertices",
+                    std::to_string(built->visualMesh.vertices.size()));
+                context.KeyValue("Constructed collision triangles",
+                    std::to_string(built->collision.size()));
+                context.KeyValue("Construction revision",
+                    std::to_string(built->buildSignature));
+            }
+            if (cache.IsDirty(*selectedObject))
+                context.MutedText("Construction update pending.");
+            const auto failure = cache.RebuildError(*selectedObject);
+            if (!failure.empty()) context.ErrorText(
+                "Construction blocked: " + failure);
         }
         context.Heading("2. Construction");
         static constexpr std::array<std::string_view,4> methods{
