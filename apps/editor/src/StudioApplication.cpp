@@ -103,6 +103,7 @@
 #include "StudioBuildHost.hpp"
 #include "StudioPanels.hpp"
 #include "StudioPathNetworkHost.hpp"
+#include "StudioProceduralsPanel.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1127,6 +1128,9 @@ int orbit::editor_app::StudioApplication::Run(
                 studioViews, studioSession);
         debugViewUi.SetEngineeringDispatcher(rpcHost.Dispatcher());
         debugViewUi.Register(ui);
+        orbit::editor_app::StudioProceduralsPanel proceduralsPanel(
+            studioSession, rpcHost.Dispatcher());
+        proceduralsPanel.Register(ui);
 
         struct ViewportOnlyCapture
         {
@@ -2433,6 +2437,10 @@ int orbit::editor_app::StudioApplication::Run(
             "Material Service",
             kContentPanel);
 
+        registerPanelMenu(
+            "Build",
+            "Procedurals",
+            orbit::editor_app::StudioProceduralsPanel::kPanelId);
         registerPanelMenu(
             "Build",
             "Build Settings",
