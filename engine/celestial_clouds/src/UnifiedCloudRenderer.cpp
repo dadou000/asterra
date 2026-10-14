@@ -564,10 +564,19 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
     const std::string mediumSource = BuildMediumShaderSource();
     const auto vertex = compiler.Compile({
         .source = kVertex, .entryPoint = "main", .stage = shader::Stage::Vertex, .debug = false});
+    // Orbit's Vulkan pipelines select SPIR-V entrypoint "main"; DXC
+    // otherwise preserves the requested HLSL entrypoint name. Rename
+    // only the selected System B entrypoint before compiling each stage.
+    const std::string marchSource =
+        std::string("#define March main\n") + mediumSource;
+    const std::string shadowSource =
+        std::string("#define ReceiverShadow main\n") + mediumSource;
     const auto pixel = compiler.Compile({
-        .source = mediumSource, .entryPoint = "March", .stage = shader::Stage::Pixel, .debug = false});
+        .source = marchSource, .entryPoint = "main",
+        .stage = shader::Stage::Pixel, .debug = false});
     const auto shadowPixel = compiler.Compile({
-        .source = mediumSource, .entryPoint = "ReceiverShadow", .stage = shader::Stage::Pixel, .debug = false});
+        .source = shadowSource, .entryPoint = "main",
+        .stage = shader::Stage::Pixel, .debug = false});
     const auto compPixel = compiler.Compile({
         .source = kComposite, .entryPoint = "main", .stage = shader::Stage::Pixel, .debug = false});
     const auto pipeline = [&device,&vertex](const auto& fragment,
@@ -611,8 +620,10 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
 
     const std::string computeSource =
         std::string("#define B3_WRITE_CACHE 1\n") + mediumSource;
+    const std::string updateSource =
+        std::string("#define UpdateSunCache main\n") + computeSource;
     const auto compute = compiler.Compile({
-        .source = computeSource, .entryPoint = "UpdateSunCache",
+        .source = updateSource, .entryPoint = "main",
         .stage = shader::Stage::Compute, .debug = false});
     sunCachePipeline_ = device.CreateComputePipeline({
         .computeShader = {
@@ -624,8 +635,10 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
     });
     if (!sunCachePipeline_)
         throw std::runtime_error("Unified System B Sun cache compute pipeline unavailable");
+    const std::string clearSource =
+        std::string("#define ClearSunCache main\n") + computeSource;
     const auto clearShader = compiler.Compile({
-        .source = computeSource, .entryPoint = "ClearSunCache",
+        .source = clearSource, .entryPoint = "main",
         .stage = shader::Stage::Compute, .debug = false});
     sunCacheClearPipeline_ = device.CreateComputePipeline({
         .computeShader = {
