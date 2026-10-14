@@ -1495,7 +1495,12 @@ void StudioPathNetworkHost::AttachRpc()
                     construction.dependencySignature & 0x7fffffffffffffffULL)},
                 {"construction_committed_to_world",false},
                 {"construction_published_cpu",
-                    studioSession_.RoadJunctions().FindPatch(*node)!=nullptr},
+                    studioSession_.RoadJunctions().CurrentContact(
+                        *node,studioSession_.PathProducts())!=nullptr},
+                {"construction_contact_scene_active",
+                    studioSession_.RoadJunctions().CurrentContact(
+                        *node,studioSession_.PathProducts())!=nullptr},
+                {"construction_physics_world_committed",false},
                 {"construction_publication_revision",
                     static_cast<orbit::i64>(
                         studioSession_.RoadJunctions().Revision())},

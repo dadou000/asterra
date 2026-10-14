@@ -481,8 +481,14 @@ private:
                                 cpu && cpu->IsBool() && cpu->AsBool()?
                                 "Published to StudioSession packet":
                                 "Preview only");
+                            if(const auto* contact=junctionReport_.Find(
+                                "construction_contact_scene_active");
+                               contact && contact->IsBool())
+                                context.KeyValue("Static contact generation",
+                                    contact->AsBool()?"Current / CPU active":
+                                    "Pending, missing or stale");
                             context.MutedText(
-                                "Scene packet includes trimmed roads, shared patch, contact and lane routes. GPU/physics publication remains pending.");
+                                "The Vulkan Paths pass consumes the same coherent CPU packet. Static contact is queryable; rigid-body world / vehicle physics is not yet connected.");
                         }
                         if(const auto* errors=junctionReport_.Find(
                             "construction_findings");
