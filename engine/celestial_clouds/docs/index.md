@@ -54,7 +54,7 @@ verified = "69bafa8"
 
 ## Unified rendering System B (experimental)
 
-- [System B foundation, independence and integration contracts](unified-system-b.md): B0 implemented as separate C++ header with CPU contract tests. A remains the default. B GPU renderer and actual A/B selector are not yet implemented; do not label the existing A shader split as System B.
+- [System B foundation, independence and integration contracts](unified-system-b.md): B0 foundation and B1 experimental Vulkan preview implemented. A is still the default, with dedicated B march, receiver-shadow and composite GPU pipelines, per-viewport preview selector and independent B targets. B1 lacks full storm/lab density, long-range light-volume and temporal reuse and is not yet a fair A/B benchmark; the old A shader split is not System B.
 
 ## Reference research (Release 5 / planetary volumetrics)
 
