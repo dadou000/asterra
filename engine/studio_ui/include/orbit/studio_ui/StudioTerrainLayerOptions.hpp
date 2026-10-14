@@ -103,6 +103,10 @@ struct StudioTerrainLayerOptions
     // Ray-march the body's cloud layer in this view (ground to orbit). The
     // cloud field itself is still built and used for shadows/orbital globes.
     bool clouds{true};
+    // B1 experimental, independent System B GPU preview. This is NOT the
+    // finished A/B backend: its advanced sun cache, storm detail and temporal
+    // reconstruction have not yet been wired. A remains default and unchanged.
+    bool cloudBPreview{false};
     // Resolution of the cloud ray-march relative to the viewport, [0.25, 1]. The
     // default 0.5 marches at half resolution (cheap, soft); 1 marches every pixel
     // (crisp edges and fine detail, about four times the cost).
