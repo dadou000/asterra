@@ -38,6 +38,7 @@ def main() -> int:
         ("vertex", "kVertex", "vert", "main"),
         ("march", "kMedium", "frag", "March"),
         ("shadow", "kMedium", "frag", "ReceiverShadow"),
+        ("sun-cache", "kMedium", "comp", "UpdateSunCache"),
         ("composite", "kComposite", "frag", "main"),
     ]
     failures = 0
@@ -45,7 +46,8 @@ def main() -> int:
         temporary = pathlib.Path(directory)
         for label, key, stage, entry in variants:
             shader = temporary / f"{label}.hlsl"
-            shader.write_text(blocks[key], encoding="utf-8")
+            prefix = "#define B3_WRITE_CACHE 1\\n" if label == "sun-cache" else ""
+            shader.write_text(prefix + blocks[key], encoding="utf-8")
             command = [
                 validator, "-D", "-V", "-S", stage,
                 "-e", entry, "--target-env", "vulkan1.3",
