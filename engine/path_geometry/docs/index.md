@@ -70,3 +70,8 @@ The source-level BuildRoadJunctionConstruction consumes existing JunctionPlan an
 ## GPU draw-list bridge and CPU contact probe
 
 `StudioRoadJunctionPipeline::RenderProducts` creates one revision-fenced draw list for the existing `StudioViewportRenderer`/ `PathPreviewRenderer`, replacing raw roads with cropped meshes and adding one patch proxy per junction. The new `RoadJunctionContact` module supports bounded double-precision nearest-surface queries over the same clipped collision data; no vehicle physics integration is claimed. Test targets: Orbit.StudioRoadJunctionPipeline and Orbit.RoadJunctionContact. Native validation remains outstanding.
+
+
+## Shared-generation road collision ownership
+
+\`RoadContactScene.hpp/.cpp\` prepares complete, bounded static road-contact generations from a road junction publication. The owning scene atomically swaps complete prepared shapes; invalid candidates retain the last valid generation. Collision/mesh parity, unique owner IDs, frame and triangle budgets are enforced. A shape AABB reduces contact test work, with double-precision per-triangle queries. The Studio road pipeline requires contact preparation before a replacement draw packet becomes eligible. The same raw path revision/world-generation guard is shared by drawing and contact RPC. This remains a physics-facing CPU adapter, not a rigid-body solver or physics-engine collider. Native unit target: \`Orbit.RoadContactScene\`.

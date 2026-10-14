@@ -77,12 +77,10 @@ int main()
             }
         }
         CHECK(sawPatch && sawTrimmedEast);
-        studio.PathProducts().MarkDirty(e.id);
-        const auto dirtyRender=studio.RoadJunctions().RenderProducts(
-            studio.PathProducts());
-        CHECK(dirtyRender.size()==3U); // Suppress entire stale frame packet.
-        CHECK(dirtyRender[0]->edge!=centre.id);
-
+        CHECK(pipeline.ActiveContactScenes()==1U);
+        CHECK(pipeline.CurrentContact(centre.id,studio.PathProducts())!=nullptr);
+        CHECK(pipeline.ProbeContact(centre.id,studio.PathProducts(),
+            {.frame=frame,.origin={2,10,3},.direction={0,-1,0}}).has_value());
         // Exercise the same read-only CPU contact RPC available to agents.
         {
             const rpc::Value request(rpc::Value::Object{
@@ -108,6 +106,18 @@ int main()
             const auto* cpu=result->Find("cpu_only");
             CHECK(cpu && cpu->IsBool() && cpu->AsBool());
         }
+        studio.PathProducts().MarkDirty(e.id);
+        const auto dirtyRender=studio.RoadJunctions().RenderProducts(
+            studio.PathProducts());
+        CHECK(dirtyRender.size()==3U); // Suppress entire stale frame packet.
+        CHECK(dirtyRender[0]->edge!=centre.id);
+        CHECK(pipeline.CurrentContact(centre.id,studio.PathProducts())==nullptr);
+        CHECK(!pipeline.ProbeContact(centre.id,studio.PathProducts(),
+            {.frame=frame,.origin={2,10,3}}).has_value());
+        for(int i=0;i<12;++i)static_cast<void>(studio.Tick(false));
+        CHECK(pipeline.CurrentContact(centre.id,studio.PathProducts())!=nullptr);
+
+
         const auto previous=pipeline.Revision();
         paths.SetNodeAnchor(east.id,paths::FramePointAnchor{
             .frame=frame,.localMeters={38,0,0}});
@@ -117,6 +127,8 @@ int main()
         studio.CloseWorld();
         CHECK(studio.RoadJunctions().FindPatch(centre.id)==nullptr);
         CHECK(studio.RoadJunctions().Packets().empty());
+        CHECK(studio.RoadJunctions().ActiveContactScenes()==0U);
+
     }
     std::filesystem::remove_all(root);
     return 0;

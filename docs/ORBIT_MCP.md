@@ -719,3 +719,8 @@ The read-only RPC `infrastructure.junction_pipeline_status` returns `revision`, 
 ## Read-only road junction contact diagnostic
 
 `infrastructure.junction_contact_probe` accepts `{"node":"UUID","origin_frame_local_meters":[0,10,0],"direction_frame_local":[0,-1,0],"maximum_distance_meters":30}`. This looks up the current published junction's explicit reference frame, traces against its clipped-edge and patch collision triangles, and returns `ready`, `hit`, `owner`, `junction_patch`, `distance_meters`, `position_frame_local_meters`, `normal_frame_local`, `tested_triangles`, `budget_exceeded` and `packet_build_signature`. Response explicitly reports `cpu_only=true` and `physics_committed=false`. It is for regression/profiler diagnosis and automation, not a native rigid-body physics step. The viewport's existing Vulkan Paths pass now consumes the same packet's mesh products when source revisions match.
+
+
+## Road junction contact owner status
+
+The \`infrastructure.junction_pipeline_status\` result adds \`contact_scene_count\` and \`contact_scene_staged\`. The \`infrastructure.junction_contact_probe\` result adds \`contact_scene_active\` and returns \`ready=false\` when the owning packet no longer matches the current raw source signatures or is dirty. Queries use \`RoadContactSceneOwner\` shape bounds and collision triangles; no second road topology is stored. \`physics_committed\` remains false because these are not attached to a rigid-body world and no fixed-step shape swap has been implemented. The same coherent packet is used by the existing Vulkan Paths pass.

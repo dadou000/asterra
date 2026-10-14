@@ -193,6 +193,9 @@ StudioSession::StudioSession(
                 {"gpu_committed",false},
                 {"vulkan_paths_draw_list_connected",true},
                 {"cpu_contact_probe_available",true},
+                {"contact_scene_count",static_cast<i64>(
+                    roadJunctionPipeline_.ActiveContactScenes())},
+                {"contact_scene_staged",roadJunctionPipeline_.ActiveContactScenes()>0},
                 {"physics_committed",false},
                 {"packets",std::move(packets)}
             };
@@ -232,26 +235,29 @@ StudioSession::StudioSession(
                     throw rpc::Error(-32602,"maximum_distance_meters must be numeric.");
                 distance=range->AsNumber();
             }
-            for(const auto* packet:roadJunctionPipeline_.Packets())
+            const auto* scene=roadJunctionPipeline_.CurrentContact(
+                *node,pathProducts_);
+            if(scene)
             {
-                const auto found=std::find_if(
-                    packet->patches.begin(),packet->patches.end(),
-                    [&](const auto& patch){return patch.node==*node;});
-                if(found==packet->patches.end())continue;
                 try
                 {
-                    const auto hit=path_geometry::ProbeRoadJunctionContact(
-                        *packet,{.frame=packet->frame,
-                                 .origin=position,
-                                 .direction=directionValue,
-                                 .maximumDistanceMeters=distance});
+                    const auto result=roadJunctionPipeline_.ProbeContact(
+                        *node,pathProducts_,
+                        {.frame=scene->frame,
+                         .origin=position,
+                         .direction=directionValue,
+                         .maximumDistanceMeters=distance});
+                    if(!result)throw rpc::Error(-32000,
+                        "Contact scene changed during query.");
+                    const auto& hit=*result;
                     return rpc::Value::Object{
                         {"ready",true},
                         {"cpu_only",true},
+                        {"contact_scene_active",true},
                         {"physics_committed",false},
-                        {"frame",packet->frame.ToString()},
+                        {"frame",scene->frame.ToString()},
                         {"packet_build_signature",
-                            std::to_string(packet->buildSignature)},
+                            std::to_string(scene->packetSignature)},
                         {"hit",hit.hit},
                         {"budget_exceeded",hit.budgetExceeded},
                         {"owner",hit.owner.ToString()},
@@ -274,7 +280,8 @@ StudioSession::StudioSession(
             }
             return rpc::Value::Object{
                 {"ready",false},
-                {"reason","No current CPU-published road junction packet for node."},
+                {"reason","No current generation-matched road contact scene for node; source may be dirty."},
+                {"contact_scene_active",false},
                 {"physics_committed",false}
             };
         });

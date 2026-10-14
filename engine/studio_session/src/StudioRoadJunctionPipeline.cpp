@@ -19,6 +19,7 @@ struct FrameBatch {
 }
 void StudioRoadJunctionPipeline::Clear() noexcept {
     frames_.clear();
+    contactScenes_.clear();
     renderPatches_.clear();
     observedFingerprint_=0;
     lastError_.clear();
@@ -53,35 +54,75 @@ StudioRoadJunctionPipeline::FindPatch(scene::ObjectId node) const noexcept {
                 if(patch.node==node)return &patch;
     return nullptr;
 }
+bool StudioRoadJunctionPipeline::PacketCurrent(
+    const path_geometry::RoadJunctionScenePacket& packet,
+    const UniverseBoundPathCache& raw) const noexcept
+{
+    if(packet.worldGeneration!=raw.ObservedUniverseGeneration())return false;
+    const auto contact=contactScenes_.find(packet.frame);
+    if(contact==contactScenes_.end())return false;
+    const auto* scene=contact->second.Snapshot();
+    if(!scene || scene->worldGeneration!=packet.worldGeneration ||
+       scene->packetSignature!=packet.buildSignature ||
+       scene->frame!=packet.frame)return false;
+    for(const auto& edge:packet.edges)
+    {
+        const auto* source=raw.Find(edge.edge);
+        if(!source || raw.IsDirty(edge.edge) ||
+           source->frame!=packet.frame ||
+           source->buildSignature!=edge.rawBuildSignature)
+            return false;
+    }
+    return true;
+}
+std::size_t StudioRoadJunctionPipeline::ActiveContactScenes() const noexcept
+{
+    return contactScenes_.size();
+}
+const path_geometry::RoadContactSceneGeneration*
+StudioRoadJunctionPipeline::CurrentContact(
+    const scene::ObjectId junction,
+    const UniverseBoundPathCache& raw) const noexcept
+{
+    for(const auto& [frame,publisher]:frames_)
+    {
+        const auto* packet=publisher.Snapshot();
+        if(!packet || !PacketCurrent(*packet,raw))continue;
+        const bool found=std::any_of(
+            packet->patches.begin(),packet->patches.end(),
+            [&](const auto& patch){return patch.node==junction;});
+        if(!found)continue;
+        const auto contact=contactScenes_.find(frame);
+        return contact==contactScenes_.end()?nullptr:
+            contact->second.Snapshot();
+    }
+    return nullptr;
+}
+std::optional<path_geometry::RoadContactHit>
+StudioRoadJunctionPipeline::ProbeContact(
+    const scene::ObjectId junction,
+    const UniverseBoundPathCache& raw,
+    path_geometry::RoadContactProbe probe) const
+{
+    const auto* current=CurrentContact(junction,raw);
+    if(!current)return std::nullopt;
+    const auto found=contactScenes_.find(current->frame);
+    if(found==contactScenes_.end())return std::nullopt;
+    probe.frame=current->frame;
+    return found->second.Probe(probe);
+}
 std::vector<const path_geometry::PathDerivedProduct*>
 StudioRoadJunctionPipeline::RenderProducts(
     const UniverseBoundPathCache& raw) const
 {
     const auto sources=raw.Products();
-    std::map<scene::ObjectId,const path_geometry::PathDerivedProduct*> live;
-    for(const auto* product:sources)
-        live.emplace(product->edge,product);
-
     std::map<scene::ObjectId,const path_geometry::PathDerivedProduct*> replaced;
     std::vector<const path_geometry::PathDerivedProduct*> patches;
     for(const auto& [frame,publisher]:frames_)
     {
         const auto* packet=publisher.Snapshot();
-        if(!packet || packet->worldGeneration!=raw.ObservedUniverseGeneration())
-            continue;
-        bool current=true;
-        for(const auto& edge:packet->edges)
-        {
-            const auto it=live.find(edge.edge);
-            if(it==live.end() || raw.IsDirty(edge.edge) ||
-               it->second->frame!=frame ||
-               it->second->buildSignature!=edge.rawBuildSignature)
-            {
-                current=false;
-                break;
-            }
-        }
-        if(!current)continue; // Never partially replace a frame's geometry.
+        if(!packet || !PacketCurrent(*packet,raw))
+            continue; // No visual replacement without coherent contact data.
         for(const auto& edge:packet->edges)
             replaced.emplace(edge.edge,&edge.product);
         for(const auto& patch:packet->patches)
@@ -219,9 +260,25 @@ void StudioRoadJunctionPipeline::Refresh(
         auto candidate=path_geometry::AssembleRoadJunctionScene(
             frame,generation,batch.junctions,batch.products,batch.dirty);
         if(candidate.Ready()) {
+            // Cook/validate contact shapes in a staging generation before
+            // publishing any render packet. Both become active together.
+            auto cooked=path_geometry::PrepareRoadContactScene(
+                candidate.packet);
+            if(!cooked.Ready())
+            {
+                lastError_=cooked.error;
+                continue;
+            }
+            path_geometry::RoadContactSceneOwner contact;
+            if(!contact.Commit(std::move(cooked)))
+            {
+                lastError_=contact.LastError();
+                continue;
+            }
             path_geometry::RoadJunctionScenePublisher publisher;
             if(publisher.Publish(std::move(candidate)))
             {
+                contactScenes_.emplace(frame,std::move(contact));
                 frames_.emplace(frame,std::move(publisher));
                 if(const auto* packet=frames_.at(frame).Snapshot())
                     for(const auto& patch:packet->patches)

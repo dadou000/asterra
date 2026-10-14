@@ -119,3 +119,10 @@ Stages S0–S8 are partially or fully implemented in the limited rural-road slic
 ## Rendering/contact handoff increment
 
 The existing Vulkan-backed Studio Paths pass is now wired to a coherent replacement draw-list view from the published frame packet, including one patch proxy per junction. It skips the raw road meshes displaced by trimmed products; raw cache/source authority remains untouched. Frame/world-generation and source-signature validation prevent drawing stale packets; test coverage extends StudioRoadJunctionPipeline.RenderProducts for the three-road T and pending-dirty edge fallback. A new bounded CPU raycast contact probe traverses the published patch and cropped edge collision lists, including frame-local owner attribution, and is exposed through infrastructure.junction_contact_probe. This **does not** mark native Vulkan P4 or vehicle physics P5 passed; those require hardware captures and a real physics-world contact consumer.
+
+
+## Generational contact-scene synchronization
+
+Source includes \`RoadContactScene\`: bounded immutable static CPU shapes cooked from exactly the replacement mesh/collision arrays in \`RoadJunctionScenePacket\`. Each shape has the stable road or junction owner ID, frame-local bounds and clipped triangles. The Studio road-junction pipeline commits a prepared contact scene together with the CPU render packet; a shared packet/world/source eligibility guard prevents drawing a replacement junction while CPU contact is stale or vice versa. The existing contact RPC now uses this owner and fails closed for dirty sources. The contact scene can be queried with bounded double-precision raycasts and per-shape broadphase pruning.
+
+**Not complete:** these static CPU shapes have not been registered in a rigid-body world, no physics fixed-step barrier exists, no bogie/tire friction or spring-damper physics has been exercised, and no hardware rendering capture has passed. Tests are committed but not considered passing without a native build. The physics/drivability gates remain outstanding.

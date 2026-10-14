@@ -1,9 +1,11 @@
 #pragma once
 #include <orbit/path_geometry/RoadJunctionPublication.hpp>
+#include <orbit/path_geometry/RoadContactScene.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,18 @@ public:
     FindPatch(scene::ObjectId node) const noexcept;
     [[nodiscard]] std::vector<const path_geometry::RoadJunctionScenePacket*>
     Packets() const;
+    // Contact scene and renderer use the SAME packet signature/frame only
+    // while each authored source is current and no source is dirty.
+    [[nodiscard]] const path_geometry::RoadContactSceneGeneration*
+    CurrentContact(scene::ObjectId junction,
+                   const UniverseBoundPathCache& raw) const noexcept;
+    [[nodiscard]] std::size_t ActiveContactScenes() const noexcept;
+    // Fails closed on a dirty source or unmatched packet generation.
+    [[nodiscard]] std::optional<path_geometry::RoadContactHit>
+    ProbeContact(scene::ObjectId junction,
+                 const UniverseBoundPathCache& raw,
+                 path_geometry::RoadContactProbe probe) const;
+
     // Renderer-facing coherent view: trim affected raw corridors and include
     // the junction patches exactly once, leaving all other paths untouched.
     // Returned product pointers remain owned by the raw cache or this
@@ -38,6 +52,10 @@ public:
     [[nodiscard]] std::size_t ActiveJunctions() const noexcept;
 private:
     std::map<frames::FrameId,path_geometry::RoadJunctionScenePublisher> frames_;
+    std::map<frames::FrameId,path_geometry::RoadContactSceneOwner> contactScenes_;
+    [[nodiscard]] bool PacketCurrent(
+        const path_geometry::RoadJunctionScenePacket& packet,
+        const UniverseBoundPathCache& raw) const noexcept;
     std::map<scene::ObjectId,path_geometry::PathDerivedProduct> renderPatches_;
     u64 observedFingerprint_{0U};
     u64 revision_{0U};
