@@ -107,6 +107,24 @@ Capture low Sun, near dense storm, thin layers, orbit and fast camera movement. 
 - Guard against terminator rings caused by stepping across invalid cache cells or coarse-to-fine transitions. Compare fixed-camera animated Sun captures with cache on/off.
 - Cache occupancy, optical-depth reconstruction accuracy and coherence are not GPU-tested yet.
 
+# Orbital B3 ray-length alias diagnosis (2026-10-14)
+
+User evidence: one enabled cloud layer with mean coverage approximately 0.54 and mean optical depth 4.25, GPU field ready. The first visible B3 result showed nearly uniform grey cloud lighting; after normalized scattering and reduced ambient, the updated planet view showed a stronger day/night distinction but also a narrow jagged dark streak around the terminator and repetitive small-scale patterns. These are screenshot observations, not measured GPU attribution.
+
+A source audit identified a separate **sunlight-quadrature bug**: SunDepthDirect previously traced six samples evenly through up to one million metres of the solar ray, even if the ray was mostly outside the actual cloud shell or below its base. Near grazing directions, the distance between samples can greatly exceed cloud thickness. Depending on quadrature phase, the algorithm can report zero extinction or an exaggerated optical depth. That is capable of creating abrupt false bright/dark regions independent of the cache.
+
+The B shader now computes intersections with the inner and outer cloud spheres; it integrates only the occupied segments, distributing its existing bounded sample budget over the two shell intervals if the solar ray dips below cloud base before emerging again. It retains planet solid-occlusion rejection, and B's storm-active flag preserves support for extinction extending down to ground. The local cache uses the same corrected integrator for its slice updates. This does **not** implement fine Sun penumbra, terrain mountain occlusion or long-distance accurate secondary transport, and six samples may still undersample a long grazing cloud path. Tests must include orbital sunrise/sunset and cache enabled/disabled.
+
+The existing viewport now exposes two local controls when B is active:
+- B Sun cache ON/OFF: compare cached 12-sample shell optical depth against direct 6-sample fallback, with 16+ warmup frames.
+- B receiver shadows ON/OFF: isolate the 12-step surface receiver-shadow pass from the cloud's own in-scattered radiance.
+
+Isolation protocol at identical camera, atmosphere/exposure and simulation time: first toggle receiver shadows OFF; if the jagged dark streak disappears on the planet surface, inspect B receiver shadow depth and compositing. If not, leave receiver shadows OFF and toggle the Sun cache OFF; if that fixes the pattern, inspect cache granularity, generation transition and interpolation. If neither removes it, instrument B's cloud primary step schedule, density and weather/texture sampling before tuning cloud lighting constants. The initial 64-step uniform view march remains a likely source of aliasing at long orbital grazing paths.
+
+The broad pale cloud sheet is a *separate* morphology/LOD issue. B2's density still uses a wide cloud-coverage threshold and a single inexpensive sinusoidal shape modifier. This cannot reproduce fine coherent cauliflower structures and may over-fill most columns at high mean coverage. Do not attempt to solve it by increasing ambient or raising Sun brightness; next stage should analyze coverage-to-opacity statistics and evaluate footprint-aware high-frequency detail with correct far-field optical-depth preservation.
+
+No local Vulkan/DXC build, profiler run or visual regression was completed as part of this fix; these findings remain hypotheses until isolated by the added controls.
+
 # Local checks
 
 1. Run python tools/check_unified_cloud_shaders.py (now compiles vertex, march, ground shadow, Sun-cache compute, Sun-cache clear compute, composite).
