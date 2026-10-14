@@ -1650,7 +1650,7 @@ private:
         context.MutedText("Engineering is advisory; rail cant is generated only when turn easing is enabled.");
     }
     StudioViewportPanel* viewportTool_{nullptr};
-    i32 page_{0}; // Hub, city-builder palette, advanced editor.
+    i32 page_{1}; // Open directly in the road builder, including via View > Procedurals.
     f64 curveBias_{0.25};
     f64 elevationMeters_{0.0};
     std::string upgradeTargetEdgeId_;
