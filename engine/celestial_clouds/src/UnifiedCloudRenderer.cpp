@@ -594,9 +594,27 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
             .colorAttachmentCount = 1U
         });
     };
-    march_ = pipeline(pixel, 32U, 3U, 1U, rhi::BlendMode::Opaque);
-    receiverShadow_ = pipeline(shadowPixel, 32U, 3U, 1U, rhi::BlendMode::Opaque);
-    composite_ = pipeline(compPixel, 0U, 0U, 1U, rhi::BlendMode::Alpha);
+    // Report WHICH B pipeline failed; a generic Vulkan exception previously
+    // hid the distinction between march, receiver shadow and composite.
+    const auto checkedPipeline = [&](const char* name, const auto& fragment,
+        const u32 constants, const u32 buffers, const u32 textures,
+        const rhi::BlendMode blend)
+    {
+        try
+        {
+            return pipeline(fragment, constants, buffers, textures, blend);
+        }
+        catch (const std::exception& e)
+        {
+            throw std::runtime_error(
+                std::string("Unified Cloud B ") + name + " pipeline: " + e.what());
+        }
+    };
+    march_ = checkedPipeline("March", pixel, 32U, 3U, 1U, rhi::BlendMode::Opaque);
+    receiverShadow_ = checkedPipeline("ReceiverShadow", shadowPixel,
+        32U, 3U, 1U, rhi::BlendMode::Opaque);
+    composite_ = checkedPipeline("Composite", compPixel,
+        0U, 0U, 1U, rhi::BlendMode::Alpha);
     if (!march_ || !receiverShadow_ || !composite_)
         throw std::runtime_error("Unified System B cloud pipelines unavailable");
     emptyStorm_ = device.CreateBuffer({
