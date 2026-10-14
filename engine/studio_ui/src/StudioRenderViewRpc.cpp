@@ -321,6 +321,7 @@ constexpr OverlayFlag kOverlayFlags[] = {
         {"clipmap_partial_updates", layers.clipmapPartialUpdates},
         {"physical_pages", layers.physicalPages},
         {"clouds", layers.clouds},
+        {"cloud_b_preview", layers.cloudBPreview},
         {"cloud_resolution_scale", static_cast<f64>(layers.cloudResolutionScale)},
         {"cloud_temporal", layers.cloudTemporal},
         {"cloud_godray_strength", static_cast<f64>(layers.cloudGodrayStrength)},
@@ -928,6 +929,7 @@ void RegisterStudioRenderViewRpc(
                     layers.clipmapPartialUpdates);
                 applyFlag("physical_pages", layers.physicalPages);
                 applyFlag("clouds", layers.clouds);
+                applyFlag("cloud_b_preview", layers.cloudBPreview);
                 applyFlag("cloud_temporal", layers.cloudTemporal);
                 applyFlag("cloud_light_volume", layers.cloudLightVolume);
                 applyFlag("bypass_cloud_shadow", layers.bypassCloudShadow);
