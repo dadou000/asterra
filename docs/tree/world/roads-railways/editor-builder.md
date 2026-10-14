@@ -48,3 +48,28 @@ Bezier construction handles use the body-local segment delta with adjustable lat
 - Manual smoke gate: open a body/world, use Build → Procedurals → Procedural Paths & Roads, create a two- or three-segment road; confirm it appears in the existing Procedurals list, inspect source metadata, undo one click transaction, reconnect to an existing node via snapping, edit alignment, save/reopen world, and verify resulting road construction/error status.
 - Manual regression gate: toggle original viewport Path Tool outside palette and confirm it continues placing ordinary nodes, not automatically creating roads. Switch road/rail/reference categories and verify native type and stored catalog ID. Test a bridge selection reports intent-only, not claimed physical geometry.
 - Native Windows compile/UI smoke and screenshot/profiler results are not verified by source edits alone.
+
+## Builder usability and end-to-end authoring contract
+
+The construction page now starts with a prominent Start/Finish button, followed by real catalog sections, an accurate lane-count and width schematic, alignment and snap controls, and numeric placement elevation. Network editing, engineering, road upgrades and construction diagnostics are progressive-disclosure sections. Expert path editing is one click away, with no second graph authority.
+
+**Viewport preview:** while armed, hovering projects a body-reference ray and renders a ghost chord or cubic Bezier with two pavement-boundary guides using the currently selected catalog's actual width. Railway preview uses its formation width. Routed edges explicitly show a dashed chord only because a computed terrain route can differ. A ring indicates a valid snapped node. The status reports mode, length, snap and the last created edge ID.
+
+**Snapping and safety:** the preview and click share a nearest authored endpoint lookup restricted to the selected network and body-fixed frame. Its presentation cache is keyed by object-store revision, network and frame to avoid a fresh full scan on every pointer movement. Clicking the same endpoint rolls back the empty transaction; segments shorter than 0.5 m reject before committing. A successful click writes new node, edge and catalog intent using the preexisting CommandService transaction. No automatic crossing/intersection is inferred from visual proximity.
+
+**Placement controls:** left click creates/extends a chain; right click ends that chain without exiting the construction mode; Escape exits. Page Up / Page Down adjust placement elevation by 1 m, or 5 m with Shift; numeric entry and Raise/Lower/Reset controls use the same state. Values are clamped between -10,000 m and +100,000 m. Height is relative to the celestial reference ellipsoid normal, NOT sampled terrain height or a built bridge support. Switching alignment preserves the current chain; switching network or road/rail/path family resets it. World close resets all editor-only preview caches, counters and errors.
+
+**Road section upgrade:** choose an already authored catalog-backed road, choose a replacement real catalog profile, and run Upgrade. The existing authored edge ID, anchors, alignment and construction level are preserved; profile width/lane count and design-speed/easing intent change via the existing undoable SetInfrastructureIntent command. Corridor, junction and engineering products rebuild through their normal pipeline. This is not a full multi-lane traffic/intersection regulation system.
+
+**Built-in diagnostics:** expandable inventory shows authored networks/nodes/edges, number of cached native corridors, dirty pending builds and errors. This does not declare tunnels/bridges, routed physical corridors, NPC traffic or drivable vehicle physics complete.
+
+### Native acceptance checklist (not yet executed)
+
+1. Open Build → Procedurals → Procedural Paths & Roads; select five paved road profiles and verify diagram width/lanes.
+2. Start construction, hover to see accurate ghost boundaries, place three connected segments and verify undo of the last node+edge+intent as one transaction.
+3. Snap an endpoint; click the same node again and verify no extra edge or undo history. Right-click to end a chain, place a second chain, Escape to exit; verify the original Path Tool remains node-only.
+4. Use Page Up/Down and exact height: verify frame-local authored node positions change by the intended body-normal offset and survive world save/reopen.
+5. Upgrade a two-lane edge to the four- or six-lane catalog, inspect its native mesh and lane references, and Undo to recover the old section.
+6. Change world and verify transient draw state and snap cache do not leak. Try bridge/tunnel/routed modes; keep their incomplete physical construction explicitly labelled pending.
+
+Source-level changes alone are not a passing Windows runtime, Vulkan capture or Cities: Skylines feature-completeness test.

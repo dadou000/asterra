@@ -140,3 +140,9 @@ RoadVehicleWorld.hpp/.cpp supplies a transient physics state container, persiste
 ## UI authoring usability pass
 
 Build → Procedurals now has an actual nested Procedural Paths & Roads entry. Its palette exposes the five road sections plus a ballasted rail and reference path without presenting missing street/highway catalogs as if implemented. The existing viewport Path Tool has an opt-in construction mode: consecutive clicks connect path nodes and apply infrastructure intent in one command transaction; snapping reuses nearby authored endpoint nodes within the same network and frame. Normal node-only Path Tool behavior remains unchanged. Body-local FramePoint anchors let the native construction cache attempt the new road products. Native acceptance requires a Windows UI test for menu hierarchy, multiple clicked segments, undo, snapping, persistence and construction geometry. This remains source-level until verified. See editor-builder.md.
+
+## Builder usability, preview and upgrade increment
+
+The Procedural Paths & Roads workspace now has a top-level construction toggle; live straight/Bezier ghost and width-boundary overlay; a clearly labelled routed-mode chord rather than a false final route; revision-cached same-network/frame endpoint snapping; explicit right-click new-chain and Escape exit; zero-length/re-click transaction protection; placement elevation including Page Up/Down with Shift and exact numeric controls; road catalog upgrade through the existing undoable SetInfrastructureIntent; and constructed/dirty/error counts. The section schematic reflects the selected real lane count.
+
+**Open:** terrain-accurate placement instead of the reference ellipsoid, mid-edge splits/snapping, full bridge/tunnel assemblies, traffic control, true driving physics and Windows build/UI smoke verification. See editor-builder.md.

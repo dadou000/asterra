@@ -3116,6 +3116,14 @@ int orbit::editor_app::StudioApplication::Run(
                 viewportPanel.activePathNetwork.reset();
                 viewportPanel.lastPlacedPathNode.reset();
                 viewportPanel.pathPlacementMode = false;
+                viewportPanel.infrastructureDrawMode=false;
+                viewportPanel.infrastructureHoverValid=false;
+                viewportPanel.infrastructureSnapCache.clear();
+                viewportPanel.infrastructureSnapCacheRevision=~orbit::u64{0};
+                viewportPanel.infrastructureLastEdge={};
+                viewportPanel.infrastructureBuiltEdges=0U;
+                viewportPanel.infrastructureLastAction.clear();
+                viewportPanel.infrastructurePlacementError.clear();
             }
 
             pluginReloadAccumulator +=
@@ -3378,6 +3386,14 @@ int orbit::editor_app::StudioApplication::Run(
                 viewportPanel.activePathNetwork.reset();
                 viewportPanel.lastPlacedPathNode.reset();
                 viewportPanel.pathPlacementMode = false;
+                viewportPanel.infrastructureDrawMode=false;
+                viewportPanel.infrastructureHoverValid=false;
+                viewportPanel.infrastructureSnapCache.clear();
+                viewportPanel.infrastructureSnapCacheRevision=~orbit::u64{0};
+                viewportPanel.infrastructureLastEdge={};
+                viewportPanel.infrastructureBuiltEdges=0U;
+                viewportPanel.infrastructureLastAction.clear();
+                viewportPanel.infrastructurePlacementError.clear();
             }
 
             if (worldSession.HasWorld())
