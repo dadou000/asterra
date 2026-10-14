@@ -959,6 +959,7 @@ private:
     // Half-resolution cloud march result (radiance + transmittance) per view.
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> cloudTargets_;
     std::map<std::string, std::unique_ptr<rhi::Texture>, std::less<>> unifiedCloudTargets_;
+    std::map<std::string, std::unique_ptr<celestial_clouds::unified::UnifiedCloudRenderer::SunCache>, std::less<>> unifiedCloudSunCaches_;
     // Temporal accumulation of the cloud march: two resolved targets used as history and
     // output on alternate frames, and the camera the history was resolved for.
     struct CloudTemporal
