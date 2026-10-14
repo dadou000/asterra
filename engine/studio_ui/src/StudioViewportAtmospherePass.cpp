@@ -350,6 +350,89 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                 cloudView.sunDirection = labSun;
             }
 
+            // System B owns a separate render target and fragment pipeline.
+            // This B1 preview intentionally has no temporal accumulation yet:
+            // an unfinished history must never be misreported as a valid A/B result.
+            if (info.layers.cloudBPreview)
+            {
+                // Switching back to A must not resurrect an obsolete A history.
+                if (const auto old = cloudTemporal_.find(info.id);
+                    old != cloudTemporal_.end()) old->second.valid = false;
+                if (const auto old = cloudTemporal_.find(info.id + ".B");
+                    old != cloudTemporal_.end()) old->second.valid = false;
+
+                if (EnsureUnifiedCloudRenderer())
+                {
+                    const f32 bScale =
+                        std::clamp(info.layers.cloudResolutionScale, 0.25F, 1.0F);
+                    const u32 bWidth = std::max(1U, static_cast<u32>(
+                        std::ceil(static_cast<f32>(width) * bScale)));
+                    const u32 bHeight = std::max(1U, static_cast<u32>(
+                        std::ceil(static_cast<f32>(height) * bScale)));
+                    auto& bTarget = unifiedCloudTargets_[info.id];
+                    if (!bTarget || bTarget->Width() != bWidth ||
+                        bTarget->Height() != bHeight)
+                    {
+                        bTarget = device_->CreateTexture({
+                            .width = bWidth,
+                            .height = bHeight,
+                            .format = rhi::TextureFormat::RGBA16_Float,
+                            .initialState = rhi::ResourceState::ShaderResource});
+                    }
+                    auto* bTexture = bTarget.get();
+                    const auto bHandle = graph.ImportTexture(
+                        prefix + ".UnifiedB.CloudMedium", *bTexture,
+                        rhi::ResourceState::ShaderResource);
+                    graph.AddPass(
+                        prefix + ".UnifiedB.March",
+                        {
+                            {
+                                .texture = targets.depth,
+                                .state = rhi::ResourceState::DepthRead,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = bHandle,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this, lightingDepth, cloudGpu, bTexture,
+                         cloudReferenceRadius, cloudLayer, cloudView](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            unifiedCloudRenderer_->Draw(
+                                commands, *lightingDepth, *cloudGpu, *bTexture,
+                                cloudReferenceRadius, cloudLayer, cloudView);
+                        });
+                    graph.AddPass(
+                        prefix + ".UnifiedB.Composite",
+                        {
+                            {
+                                .texture = bHandle,
+                                .state = rhi::ResourceState::ShaderResource,
+                                .access = render_graph::Access::Read
+                            },
+                            {
+                                .texture = targets.color,
+                                .state = rhi::ResourceState::RenderTarget,
+                                .access = render_graph::Access::Write
+                            }
+                        },
+                        [this, bTexture, color, width, height](
+                            rhi::CommandList& commands,
+                            const render_graph::Resources&)
+                        {
+                            unifiedCloudRenderer_->Composite(
+                                commands, *bTexture, *color, width, height);
+                        });
+                }
+                // On compile failure, show the unmodified scene and log the
+                // explicit B error; do not secretly substitute A's clouds.
+            }
+            else
+            {
             // Half-resolution march, then a depth-bounded bilinear composite.
             const f32 cloudScale =
                 std::clamp(info.layers.cloudResolutionScale, 0.25F, 1.0F);
@@ -751,6 +834,8 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                         width,
                         height);
                 });
+
+            }
 
             WatchStrikes(atmosphereCamera, width, height);
 
