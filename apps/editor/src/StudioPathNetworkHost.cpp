@@ -9,6 +9,7 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/CorridorEngineering.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -1110,5 +1111,68 @@ void StudioPathNetworkHost::AttachRpc()
                     });
             }
     });
+
+    // Read-only engineering RPC consumes the same revisioned derived
+    // geometry used by Studio's path viewport and path.geometry RPC.
+    rpcHost_.Dispatcher().Register(
+        {.name = "path.engineering",
+         .description = "Road/rail grade, curvature, lateral acceleration and suggested banking for a derived path edge. Params: edge (UUID), optional design_speed_mps.",
+         .mutating = false},
+        [this](const orbit::rpc::Value& params) -> orbit::rpc::Value
+        {
+            const auto* id = params.Find("edge");
+            if (!id || !id->IsString())
+                throw orbit::rpc::Error(-32602, "edge must be a UUID string");
+            const auto edge = orbit::scene::ObjectId::Parse(id->AsString());
+            if (!edge)
+                throw orbit::rpc::Error(-32602, "Invalid edge UUID");
+            const auto found = derivedPaths_.find(*edge);
+            if (found == derivedPaths_.end())
+                return orbit::rpc::Value::Object{
+                    {"ready", false}, {"edge", id->AsString()}};
+            const auto authored = studioSession_.PathNetwork().Service().FindEdge(*edge);
+            if (!authored)
+                return orbit::rpc::Value::Object{
+                    {"ready", false}, {"edge", id->AsString()}};
+            const auto resolved = ResolveRoutingProfile(
+                *authored, studioSession_.PathNetwork().Service(),
+                content_, project_.RootDirectory());
+            orbit::path_geometry::CorridorEngineeringRules rules;
+            if (const auto* speed = params.Find("design_speed_mps"))
+            {
+                if (!speed->IsNumber())
+                    throw orbit::rpc::Error(-32602, "design_speed_mps must be numeric");
+                rules.designSpeedMetersPerSecond = speed->AsNumber();
+            }
+            rules = orbit::path_geometry::EngineeringRulesForProfile(
+                resolved.profile, rules);
+            const auto report = orbit::path_geometry::AnalyzeCorridorEngineering(
+                found->second.stations, rules);
+            orbit::rpc::Value::Array warnings;
+            for (const auto& finding : report.findings)
+            {
+                warnings.emplace_back(orbit::rpc::Value::Object{
+                    {"kind", static_cast<orbit::i64>(finding.issue)},
+                    {"station_meters", finding.stationMeters},
+                    {"measured", finding.measured},
+                    {"permitted", finding.permitted},
+                    {"message", finding.explanation}
+                });
+            }
+            const auto suggested =
+                orbit::path_geometry::SuggestCorridorBankProfile(report, rules);
+            orbit::rpc::Value::Array banks;
+            for (const double angle : suggested)
+                banks.emplace_back(angle);
+            return orbit::rpc::Value::Object{
+                {"ready", true}, {"valid", report.Valid()},
+                {"edge", id->AsString()},
+                {"signature", static_cast<orbit::i64>(
+                    found->second.buildSignature & 0x7fffffffffffffffULL)},
+                {"station_count", static_cast<orbit::i64>(report.stations.size())},
+                {"warnings", std::move(warnings)},
+                {"suggested_bank_radians", std::move(banks)}
+            };
+        });
 }
 } // namespace orbit::editor_app
