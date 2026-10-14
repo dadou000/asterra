@@ -121,3 +121,12 @@ The existing **Procedurals** panel is now organized as an infrastructure constru
 **Apply to authored segment** uses `PathNetworkService::SetInfrastructureIntent` and, for Bézier edges, `SetBezierHandles`, instead of directly mutating scene objects. These existing authoring APIs integrate with Orbit's command/undo architecture. Engineering reports remain non-destructive. This is a **panel builder**, not yet a Cities: Skylines-style point-and-click terrain placement tool: Roads/Railways category selection is currently a workspace choice, not a profile-catalog filter, and bridge/tunnel/deck modes persist intent but do not imply finished structural geometry. Next gates are world-space placement previews, snapping, graphical node manipulation, profile card catalog and active-frame navigation.
 
 Native build and runtime validation are pending.
+
+
+## Build → Procedurals interactive creation (Harmony implementation)
+
+Studio's existing **Build → Procedurals** panel is registered in `StudioApplication.cpp` and implemented by `apps/editor/src/StudioProceduralsPanel.hpp`. It supports Roads / Railways switching, browsing authored edges, construction mode, design speed, easing, Bézier tangent editing, undoable infrastructure intent edits and the existing engineering-analysis RPC.
+
+The new **Create networks and segments** section additionally calls the *existing* `PathNetworkService` command-authoritative API to create named networks, create frame-point anchor nodes in the newly created network (explicit frame UUID and local coordinates), and connect any two existing nodes belonging to one network. Connections support direct, Bézier (editable endpoint tangent handles) and routed modes. Created edges are selected in the panel and listed after refresh; no parallel path serialization is introduced.
+
+**Current limitations:** the frame UUID must refer to an existing valid frame; this UI does not automatically pick a terrain/geodetic anchor. Node creation currently targets networks created in this panel during the current session. The category switch is a UI workflow distinction rather than automatic road/rail profile assignment; the user still needs to set a suitable authored profile. Bridge/deck/tunnel options persist construction *intent* and do not imply geometry, support simulation or tunnel excavation exists. The tool has not undergone native compilation or runtime validation.
