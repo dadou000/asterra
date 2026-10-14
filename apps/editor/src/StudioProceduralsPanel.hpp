@@ -268,6 +268,12 @@ private:
             {
                 context.MutedText("Positions are local metres in an existing frame, not global world coordinates.");
                 static_cast<void>(context.InputText("Node name##proc-node-name",newNodeName_));
+                if (context.Button("Use active body frame##proc-active-frame"))
+                {
+                    const auto& target = session_->ActiveBody().Active();
+                    if (target) { newNodeFrame_ = target->frame.ToString(); error_.clear(); }
+                    else error_ = "No active celestial body frame is available.";
+                }
                 static_cast<void>(context.InputText("Frame UUID##proc-node-frame",newNodeFrame_));
                 static_cast<void>(context.InputDouble3("Local position (m)##proc-node-position",newNodePoint_));
                 if (context.Button("Create anchor node##proc-node-action"))
@@ -431,11 +437,41 @@ private:
                     context.KeyValue("Reference frame",frame->AsString());
             }
         }
+        if (const auto* built=report_.Find("construction_ready");
+            built && built->IsBool() && !built->AsBool())
+            context.MutedText("Engineering is using a preview; physical construction is not ready.");
         if (const auto* banks=report_.Find("suggested_bank_radians");
             banks && banks->IsArray())
-            context.KeyValue("Bank / cant suggestions",
+            context.KeyValue("Generic bank suggestions",
                 std::to_string(banks->AsArray().size()));
-        context.MutedText("Analysis suggestions are read-only; no automatic banking is applied.");
+        if (const auto* cant=report_.Find("rail_cant_meters");
+            cant && cant->IsArray())
+            context.KeyValue("Rail cant samples (metres)",
+                std::to_string(cant->AsArray().size()));
+        if (const auto* issues=report_.Find("rail_cant_warnings");
+            issues && issues->IsArray())
+        {
+            context.KeyValue("Rail cant warnings",
+                std::to_string(issues->AsArray().size()));
+            if (context.Section("Rail cant issues##proc-cant-issues",false))
+            {
+                for (const auto& issue:issues->AsArray())
+                {
+                    if (!issue.IsObject()) continue;
+                    const auto* station=issue.Find("station_meters");
+                    const auto* measured=issue.Find("measured_meters");
+                    const auto* permitted=issue.Find("permitted_meters");
+                    if (!station || !measured || !permitted ||
+                        !station->IsNumber() || !measured->IsNumber() ||
+                        !permitted->IsNumber()) continue;
+                    context.MutedText(std::format(
+                        "{:.1f} m: {:.3f} m vs {:.3f} m permitted",
+                        station->AsNumber(),measured->AsNumber(),
+                        permitted->AsNumber()));
+                }
+            }
+        }
+        context.MutedText("Engineering is advisory; rail cant is generated only when turn easing is enabled.");
     }
     studio_session::StudioSession* session_;
     rpc::Dispatcher* rpc_;

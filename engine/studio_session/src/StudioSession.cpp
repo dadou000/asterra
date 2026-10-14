@@ -741,6 +741,10 @@ StudioTickResult StudioSession::Tick(
             // Width is the usable pavement for a road and formation for rail.
             profile.widthMeters = isRail ? 4.035 : 7.0;
             profile.lanes = isRail ? 1U : 2U;
+            // Advisory catalog limits; the user can later supply custom
+            // engineering profile constraints through the profile system.
+            profile.maximumGrade = isRail ? 0.035 : 0.10;
+            profile.minimumRadiusMeters = isRail ? 150.0 : 0.0;
             path_geometry::PathSourceRequest source{};
             source.edge = *edge;
             source.startNode = *a;

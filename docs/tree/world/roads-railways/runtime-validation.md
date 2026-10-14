@@ -136,3 +136,11 @@ The new **Create networks and segments** section additionally calls the *existin
 Orbit Studio already has a **Build → Procedurals** panel (`apps/editor/src/StudioProceduralsPanel.hpp`) registered in the editor application. It exposes the existing authoritative path-network service for creating networks, frame-anchored nodes, direct/Bézier/routed connections, construction intent, design-speed/easing changes, handle edits and the `path.engineering` analyzer. This is the canonical authoring UI, not a parallel network implementation.
 
 The panel now refreshes its network/node/edge inventory on authored object revision changes and clears its inventory when the world closes. It can select an **existing** network for subsequent node creation and filters start/end node choices to the selected network. Engineering findings reset their selection on re-analysis. Remaining work includes viewport click-to-place anchors, reference-frame discovery, auto-cant apply, and actual terrain-linked construction previews. Native build/runtime verification remains outstanding.
+
+## Construction cache connected to authored UI (Harmony increment)
+
+The Build → Procedurals panel now gives newly authored network segments a supported road/rail catalog ID on creation using SetInfrastructureIntent. The active body frame is offered as a non-destructive shortcut for creating explicit frame-point anchors. The panel reports the StudioSession path construction cache's build signature, vertices, collision triangles, dirty state and blocked-build errors.
+
+Road/rail catalog sections are built through PlanInfrastructureSection in engine/path_geometry and the existing UniverseBoundPathCache; the generic independent path-ribbon remains fallback for non-infrastructure paths. The existing path.engineering RPC now returns actual committed construction sampling when present, construction readiness/dirty flags and railway cant findings/suggested offsets (metres) without applying edits. Construction modes bridge/deck/tunnel/supported remain persisted intent only and no longer incorrectly grade terrain like a surface road.
+
+This does NOT complete click-to-place terrain nodes, tunnel excavation, elevated deck structure/physics, full railway railhead-web solid profile, visual GPU validation or finished junctions. Build and runtime checks are outstanding.

@@ -10,8 +10,10 @@ sources = [
   "engine/path_geometry/src/TransportSections.cpp",
   "engine/path_geometry/include/orbit/path_geometry/TransportTopology.hpp",
   "engine/path_geometry/src/TransportTopology.cpp",
+  "engine/path_geometry/include/orbit/path_geometry/InfrastructureSectionBuilder.hpp",
+  "engine/path_geometry/src/InfrastructureSectionBuilder.cpp",
 ]
-symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology"]
+symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology", "PlanInfrastructureSection"]
 invariants = [
   "Network authority remains in engine/paths; road/rail representations are disposable derived products.",
   "Railhead contact reference coordinates match the swept railhead strip station frame, gauge and cant.",
@@ -89,3 +91,11 @@ StudioSession's existing rebuild resolver now invokes PlanInfrastructureSection 
 The authoring service accepts terrain, supported, bridge, deck and tunnel construction intents. Ground grading is only published for mode terrain; changing to bridge/deck/tunnel/supported removes the continuous grading influence and waits for the appropriate future foundation/excavation runtime rather than incorrectly flattening the surface. The canonical Studio Build → Procedurals panel assigns a supported catalog to new segments and shows the real cache's derived vertex/contact counts, pending state and errors.
 
 The Studio path.geometry and path.engineering reports should consume this same derived construction cache when available; integration verification must ensure there is no duplicate generic mesh masking a newer construction result.
+
+## Build → Procedurals construction cache coherence
+
+The editor's StudioPathNetworkHost now prefers the committed construction product from StudioSession.PathProducts when one exists. A late cache publication causes RPC derived geometry to refresh even if authoring revisions have not changed; the path.geometry and path.engineering RPCs thereby describe the same production geometry as the terrain construction path. The engineering response exposes construction readiness, dirty state, and rail-specific cant samples/warnings for the ballasted-rail catalog. Both generic and rail-specific bank recommendations remain advisory; turn easing controls application of generated rail cant in the cache, not persistent modification of control points.
+
+The panel's category selection sets actual catalog intent for newly connected edges, and selecting an existing edge restores its category. The panel shows derived mesh/collision counts, revision, blocked builds and pending work; new frame point nodes can use the active celestial body's explicit reference frame without manually copying its UUID. Existing workflows with manually supplied frame IDs remain supported.
+
+User-created bridges, supported decks and tunnels store their construction intent and can be inspected, but do not yet generate structural supports or tunnel voids. No continuous terrain cut/fill is published for those modes. A native end-to-end visual/simulation smoke test is still required.

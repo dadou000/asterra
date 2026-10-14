@@ -10,6 +10,7 @@
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
 #include <orbit/path_geometry/CorridorEngineering.hpp>
+#include <orbit/path_geometry/RailCantDesign.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -412,6 +413,20 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
         }
     }
 
+    // The StudioSession infrastructure cache owns the actual swept
+    // construction geometry. Detect its later asynchronous publication even
+    // when scene/content revisions did not change this particular frame.
+    for (const auto* built : studioSession_.PathProducts().Products())
+    {
+        const auto existing = derivedPaths_.find(built->edge);
+        if (existing == derivedPaths_.end() ||
+            existing->second.buildSignature != built->buildSignature)
+        {
+            requiresRefresh = true;
+            break;
+        }
+    }
+
     if (!requiresRefresh)
     {
         return;
@@ -589,16 +604,17 @@ void StudioPathNetworkHost::RefreshDerivedPaths()
                         : failure);
             }
 
-            auto product =
-                orbit::path_geometry::
-                    BuildPathDerived(
-                        *centerline,
-                        resolvedProfile.
-                            profile,
-                        {
-                            .sampleSpacingMeters =
-                                sampleSpacing
-                        });
+            // Always prefer the committed physical construction product
+            // when one exists. This is the identical geometry used by the
+            // world terrain/collision consumers, rather than a second
+            // generic ribbon with inconsistent banks or railheads.
+            const auto* constructed =
+                studioSession_.PathProducts().Find(edgeId);
+            auto product = constructed != nullptr ?
+                *constructed :
+                orbit::path_geometry::BuildPathDerived(
+                    *centerline, resolvedProfile.profile,
+                    {.sampleSpacingMeters = sampleSpacing});
 
             const auto existing =
                 derivedPaths_.find(
@@ -1138,6 +1154,22 @@ void StudioPathNetworkHost::AttachRpc()
             const auto resolved = ResolveRoutingProfile(
                 *authored, studioSession_.PathNetwork().Service(),
                 content_, project_.RootDirectory());
+            // Construction catalog owns the native built-in engineering
+            // classification, even if its network has no external
+            // .orbitpathprofile asset attached.
+            auto designProfile = resolved.profile;
+            const bool isRail =
+                authored->infrastructureCatalogId == "ballasted-rail";
+            const bool isRoad =
+                authored->infrastructureCatalogId == "rural-road";
+            if (isRail || isRoad)
+            {
+                designProfile.kind = isRail ?
+                    orbit::paths::PathProfileKind::Rail :
+                    orbit::paths::PathProfileKind::Road;
+                designProfile.maximumGrade = isRail ? 0.035 : 0.10;
+                designProfile.minimumRadiusMeters = isRail ? 150.0 : 0.0;
+            }
             orbit::path_geometry::CorridorEngineeringRules rules;
             if (const auto* speed = params.Find("design_speed_mps"))
             {
@@ -1146,7 +1178,7 @@ void StudioPathNetworkHost::AttachRpc()
                 rules.designSpeedMetersPerSecond = speed->AsNumber();
             }
             rules = orbit::path_geometry::EngineeringRulesForProfile(
-                resolved.profile, rules);
+                designProfile, rules);
             const auto report = orbit::path_geometry::AnalyzeCorridorEngineering(
                 found->second.stations, rules);
             orbit::rpc::Value::Array warnings;
@@ -1178,15 +1210,45 @@ void StudioPathNetworkHost::AttachRpc()
             orbit::rpc::Value::Array banks;
             for (const double angle : suggested)
                 banks.emplace_back(angle);
-            return orbit::rpc::Value::Object{
+            orbit::rpc::Value::Object output{
                 {"ready", true}, {"valid", report.Valid()},
                 {"edge", id->AsString()},
                 {"signature", static_cast<orbit::i64>(
                     found->second.buildSignature & 0x7fffffffffffffffULL)},
                 {"station_count", static_cast<orbit::i64>(report.stations.size())},
+                {"construction_ready",
+                    studioSession_.PathProducts().Find(*edge) != nullptr},
+                {"construction_dirty",
+                    studioSession_.PathProducts().IsDirty(*edge)},
                 {"warnings", std::move(warnings)},
                 {"suggested_bank_radians", std::move(banks)}
             };
+            if (isRail)
+            {
+                orbit::path_geometry::RailCantLimits limits;
+                limits.designSpeedMetersPerSecond =
+                    rules.designSpeedMetersPerSecond;
+                limits.minimumOperatingSpeedMetersPerSecond =
+                    rules.designSpeedMetersPerSecond * 0.5;
+                limits.maximumOperatingSpeedMetersPerSecond =
+                    rules.designSpeedMetersPerSecond;
+                const auto cant =
+                    orbit::path_geometry::DesignRailCant(report, limits);
+                orbit::rpc::Value::Array values;
+                orbit::rpc::Value::Array railWarnings;
+                for (const auto& station : cant.stations)
+                    values.emplace_back(station.suggestedCantMeters);
+                for (const auto& finding : cant.findings)
+                    railWarnings.emplace_back(orbit::rpc::Value::Object{
+                        {"kind", static_cast<orbit::i64>(finding.issue)},
+                        {"station_meters", finding.stationMeters},
+                        {"measured_meters", finding.measuredMeters},
+                        {"permitted_meters", finding.permittedMeters}
+                    });
+                output.emplace("rail_cant_meters", std::move(values));
+                output.emplace("rail_cant_warnings", std::move(railWarnings));
+            }
+            return orbit::rpc::Value(std::move(output));
         });
 }
 } // namespace orbit::editor_app
