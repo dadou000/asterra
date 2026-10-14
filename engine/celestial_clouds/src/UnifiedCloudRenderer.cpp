@@ -190,14 +190,14 @@ float Influence(float x, float y)
 }
 // Returns world-space inverse-metre storm extinction and spatial blend weight.
 // The parent/child sponge and influence mask must be smooth at boundaries.
-)";
-
-constexpr const char* kMediumPart2 = R"(float2 StormMedium(float3 position, float radius)
+float2 StormMedium(float3 position, float radius)
 {
     if (g_storm[0] < 0.5) return float2(0.,0.);
     const float3 direction = position / max(radius,1.);
     const float3 centre = normalize(float3(g_storm[1],g_storm[2],g_storm[3]));
-    if (dot(direction,centre) <= 0.) return float2(0.,0.);
+)";
+
+constexpr const char* kMediumPart2 = R"(    if (dot(direction,centre) <= 0.) return float2(0.,0.);
     const float planetR = g_storm[13];
     const float x = planetR*dot(direction,float3(g_storm[4],g_storm[5],g_storm[6]));
     const float y = planetR*dot(direction,float3(g_storm[7],g_storm[8],g_storm[9]));
@@ -297,6 +297,28 @@ float4 Density(float3 position, bool receiver,
     const uint size=max(2u,(uint)g.shell.w);
     const float2 coord=saturate(cube*0.5+0.5)*float(size-1u);
     const uint layers=(uint)g.material.x;
+    if(layers==0u || altitude>g.shell.z ||
+        (altitude<g.shell.y && g.material.z<0.5)) return 0.;
+
+    // Single-layer planets are common. Reject entirely empty columns
+    // BEFORE touching the 3D noise buffer: the Sun cache queries many
+    // clear locations and should not pay eight noise loads for each.
+    float4 firstLayerWeather=0.;
+    bool hasFirstWeather=false;
+    if(layers==1u && g_storm[0]<0.5)
+    {
+        float4 firstShell,firstOptics;
+        LayerDescriptor(0u,firstShell,firstOptics);
+        if(altitude<=firstShell.x || altitude>=firstShell.y ||
+            (receiver && firstOptics.w<0.5)) return 0.;
+        firstLayerWeather=WeatherLayer(0u,face,coord,size);
+        hasFirstWeather=true;
+        const float coverage0=saturate(
+            (firstLayerWeather.x-
+             (0.52-firstShell.w*0.35-0.26))/0.52);
+        if(coverage0<0.015 && firstLayerWeather.y<0.015)
+            return 0.;
+    }
     float other=0.,conv=0.;
     float otherScatter=0.,convScatter=0.;
     float otherPhase=0.,convPhase=0.;
@@ -333,13 +355,16 @@ float4 Density(float3 position, bool receiver,
         LayerDescriptor(layer,shell,optics);
         if(altitude<=shell.x || altitude>=shell.y) continue;
         if(receiver && optics.w<0.5) continue;
-        const float4 w=WeatherLayer(layer,face,coord,size);
+        const float4 w=(layer==0u && hasFirstWeather)?
+            firstLayerWeather:WeatherLayer(layer,face,coord,size);
         const float coverage=saturate(
             (w.x-(0.52-shell.w*0.35-0.26))/0.52);
         if(coverage<0.015 && w.y<0.015) continue;
         const float type=saturate(w.w);
         const float tower=smoothstep(0.52,0.94,type);
-        const float lowToFair=smoothstep(0.18,0.52,type);
+)";
+
+constexpr const char* kMediumPart3 = R"(        const float lowToFair=smoothstep(0.18,0.52,type);
         const float cloudTop=lerp(0.20,0.49,lowToFair);
         const float topHeight=lerp(cloudTop,0.94,tower)*
             lerp(0.89,1.08,coarse);
@@ -350,9 +375,7 @@ float4 Density(float3 position, bool receiver,
         const float top=1.-smoothstep(
             lerp(0.70,0.80,tower),1.,hn);
         // Tall updrafts narrow toward the crown; the anvil is another
-)";
-
-constexpr const char* kMediumPart3 = R"(        // medium component rather than an extension of the tower stem.
+        // medium component rather than an extension of the tower stem.
         const float taper=tower*0.24*
             pow(saturate(hn),1.4);
         const float cloudThreshold=lerp(
@@ -512,7 +535,9 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
     float optical=0.;
     [unroll]
     for(uint dz=0u;dz<2u;++dz)
-    {
+)";
+
+constexpr const char* kMediumPart4 = R"(    {
         [unroll]
         for(uint dy=0u;dy<2u;++dy)
         {
@@ -521,9 +546,7 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
             {
                 const uint3 c=first+uint3(dx,dy,dz);
                 const float4 v=asfloat(g_lightCache.Load4(CacheIndex(c)));
-)";
-
-constexpr const char* kMediumPart4 = R"(                if(v.y != g.cacheAnchor.w || !isfinite(v.x))
+                if(v.y != g.cacheAnchor.w || !isfinite(v.x))
                     return false;
                 const float w=(dx==0u?1.-weight.x:weight.x)*
                     (dy==0u?1.-weight.y:weight.y)*
