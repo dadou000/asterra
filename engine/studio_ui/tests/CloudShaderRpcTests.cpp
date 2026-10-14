@@ -1,4 +1,5 @@
 #include <orbit/studio_ui/CloudShaderRpc.hpp>
+#include <orbit/studio_ui/StudioTerrainLayerOptions.hpp>
 
 #include <cstdio>
 #include <string>
@@ -21,6 +22,22 @@ Value Call(const orbit::rpc::Dispatcher& d, const std::string& method, const std
 
 int main()
 {
+    // A preserves its original macro-globe handoff; independent B has
+    // its own volumetric path, including while the macro globe is active.
+    orbit::studio_ui::StudioTerrainLayerOptions clouds{};
+    Check(orbit::studio_ui::ShouldRenderCloudVolume(clouds),
+          "default full-clipmap renders clouds");
+    clouds.fullClipmap = false;
+    clouds.macroGlobe = true;
+    Check(!orbit::studio_ui::ShouldRenderCloudVolume(clouds),
+          "A leaves orbital macro-globe near-field alone");
+    clouds.cloudBPreview = true;
+    Check(orbit::studio_ui::ShouldRenderCloudVolume(clouds),
+          "B remains visible with macro-globe enabled");
+    clouds.cloudBPreview = false;
+    clouds.macroGlobe = false;
+    Check(orbit::studio_ui::ShouldRenderCloudVolume(clouds),
+          "volumetric clouds render without macro globe");
     std::string current;
     orbit::studio_ui::CloudSplitState split;
     int compiles = 0;
