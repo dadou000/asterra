@@ -107,3 +107,9 @@ This is intentionally **on-demand** enumeration so an open Debug panel does not 
 ## Navigable engineering findings increment
 
 `path.engineering` warnings now include `position_frame` and `position_local_meters` from the cached derived path's closest station. These coordinates are **frame-local**, not camera/world coordinates. Studio Debug presents findings as selectable rows, with details for measured value, limit, frame and local XYZ. Selection is reset on reanalysis and stale results clear when changing edges. Camera framing/viewport highlight are **not yet wired**: they require transforming the reported position through the active frame graph and a supported viewport navigation command. Compilation and runtime verification are pending.
+
+## Build → Procedurals workspace (implementation)
+
+A dedicated **Build → Procedurals** panel is now registered in Studio from `StudioProceduralsPanel.hpp`. The first Road/Rail workspace lists actual authored scene path edges on demand, selects by friendly name, accepts a design speed, calls `path.engineering`, and displays geometry revision, station count, a selectable engineering findings list, measured/limit values, reference frame and number of bank/cant recommendations. This is the canonical authoring entry point; **Debug** remains a diagnostic/testing surface. It does not create an alternative path authority or duplicate the analyzer.
+
+**Current limitations:** read-only engineering inspection, no curve manipulation or write-back, no in-viewport warning overlay, no earthworks sampler yet. Refresh is required after modifying the world; the panel doesn't perform a full scene scan per frame. Build/runtime verification remains pending.
