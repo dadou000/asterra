@@ -1,6 +1,7 @@
 #pragma once
 #include <orbit/path_geometry/RoadJunctionPublication.hpp>
 #include <orbit/path_geometry/RoadContactScene.hpp>
+#include <orbit/path_geometry/RoadVehicleFixture.hpp>
 #include <orbit/studio_session/UniverseBoundPathCache.hpp>
 #include <orbit/paths/PathNetwork.hpp>
 #include <orbit/editor_session/EditorWorldSession.hpp>
@@ -37,6 +38,10 @@ public:
     ProbeContact(scene::ObjectId junction,
                  const UniverseBoundPathCache& raw,
                  path_geometry::RoadContactProbe probe) const;
+    [[nodiscard]] std::optional<path_geometry::RoadVehicleFixtureReport>
+    RunVehicleFixture(scene::ObjectId junction,
+                      const UniverseBoundPathCache& raw,
+                      path_geometry::RoadVehicleFixtureRequest request) const;
 
     // Renderer-facing coherent view: trim affected raw corridors and include
     // the junction patches exactly once, leaving all other paths untouched.

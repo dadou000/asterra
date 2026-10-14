@@ -156,3 +156,9 @@ The UI's selected-segment Alignment section includes an optional undoable Split 
 PathSourceRequest.maximumSamples defaults to 16384 (hard validator upper bound 131072). Route/Bezier sources exceeding the budget return nullopt with an actionable error; this is not seamless planet-scale spatial streaming. Unit gate: Orbit.PathSource must verify finite and excessive sampling cases.
 
 Release gates, regression evidence and other requirement gaps are tracked in spec-completeness.md. UI, RPC and CPU tests do not imply actual road collision, railway vehicle dynamics or live native integration until executed and recorded.
+
+## Driving seam test – reproducible CPU fixture
+
+For a simple terrain-mode T junction with generated corridors, open Build → Procedurals, select the centre authored path node in Junction and turnout preview, and run **Driving seam regression**. The test runs four suspension-contact rays at 120 Hz for 480 steps, seeded from the first incident retained authored road and oriented toward its junction. It reports full-contact steps, road/patch contact steps, owner-ID transitions, maximum suspension bottom-out, travelled distance and the contact packet signature. No actor or project object is created.
+
+Use `infrastructure.road_vehicle_fixture` for the identical RPC path. Run `Orbit.RoadVehicleFixture` and `Orbit.StudioRoadJunctionPipeline` CTests on the native build; then capture a Vulkan viewport of the same junction. The fixture is a planar spring-body approximation and must not be reported as a full moving-vehicle physics system. Future test conditions include real chassis rigid-body integration, tire traction/slip, shock travel, moving reference-frame gravity, wheel contact material, fixed-step shape swap and a saved profiler artifact.

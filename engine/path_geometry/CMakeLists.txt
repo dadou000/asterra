@@ -20,6 +20,7 @@ add_library(OrbitPathGeometry STATIC
     src/RoadJunctionPublication.cpp
     src/RoadJunctionContact.cpp
     src/RoadContactScene.cpp
+    src/RoadVehicleFixture.cpp
 )
 
 add_library(
@@ -217,6 +218,12 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(OrbitRoadVehicleFixtureTests tests/RoadVehicleFixtureTests.cpp)
+    target_link_libraries(OrbitRoadVehicleFixtureTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitRoadVehicleFixtureTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRoadVehicleFixtureTests)
+    add_test(NAME Orbit.RoadVehicleFixture COMMAND OrbitRoadVehicleFixtureTests)
+
     add_executable(OrbitRoadContactSceneTests tests/RoadContactSceneTests.cpp)
     target_link_libraries(OrbitRoadContactSceneTests PRIVATE Orbit::PathGeometry)
     target_compile_features(OrbitRoadContactSceneTests PRIVATE cxx_std_23)

@@ -118,6 +118,33 @@ int main()
         CHECK(pipeline.CurrentContact(centre.id,studio.PathProducts())!=nullptr);
 
 
+        // The same fixed-step, four-wheel seam fixture is reachable through
+        // the existing Studio RPC dispatcher, without spawning a game actor.
+        {
+            const rpc::Value request(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id","drive"},
+                {"method","infrastructure.road_vehicle_fixture"},
+                {"params",rpc::Value::Object{
+                    {"node",centre.id.ToString()},
+                    {"steps",static_cast<i64>(480)}
+                }}
+            });
+            const auto reply=studio.DispatchRpc(rpc::Serialize(request));
+            CHECK(reply.has_value());
+            const auto parsed=rpc::ParseValue(*reply);
+            CHECK(parsed.Find("error")==nullptr);
+            const auto* result=parsed.Find("result");
+            CHECK(result && result->IsObject());
+            const auto* ready=result->Find("ready");
+            CHECK(ready && ready->IsBool() && ready->AsBool());
+            const auto* complete=result->Find("completed");
+            CHECK(complete && complete->IsBool() && complete->AsBool());
+            const auto* steps=result->Find("steps");
+            CHECK(steps && steps->IsInteger() && steps->AsInteger()==480);
+            const auto* signature=result->Find("packet_signature");
+            CHECK(signature && signature->IsString() &&
+                  !signature->AsString().empty());
+        }
         const auto previous=pipeline.Revision();
         paths.SetNodeAnchor(east.id,paths::FramePointAnchor{
             .frame=frame,.localMeters={38,0,0}});

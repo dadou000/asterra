@@ -285,6 +285,110 @@ StudioSession::StudioSession(
                 {"physics_committed",false}
             };
         });
+    rpc_.Dispatcher().Register(
+        {.name="infrastructure.road_vehicle_fixture",
+         .description="Read-only fixed-step four-wheel junction seam test. Params: node UUID, optional steps (1..600). CPU fixture only.",
+         .mutating=false},
+        [this](const rpc::Value& params)->rpc::Value
+        {
+            const auto* id=params.Find("node");
+            if(!id || !id->IsString())
+                throw rpc::Error(-32602,"node UUID required.");
+            const auto node=scene::ObjectId::Parse(id->AsString());
+            if(!node)throw rpc::Error(-32602,"Invalid node UUID.");
+            const auto* contact=roadJunctionPipeline_.CurrentContact(
+                *node,pathProducts_);
+            if(!contact)return rpc::Value::Object{
+                {"ready",false},{"reason","No current junction contact scene."}};
+            path_geometry::RoadVehicleFixtureRequest input;
+            input.frame=contact->frame;
+            input.initial.forwardSpeedMetersPerSecond=4.0;
+            input.control.throttle=0.12;
+            input.steps=480;
+            if(const auto* n=params.Find("steps"))
+            {
+                if(!n->IsInteger() || n->AsInteger()<1 ||
+                   n->AsInteger()>600)
+                    throw rpc::Error(-32602,"steps must be 1..600.");
+                input.steps=static_cast<u32>(n->AsInteger());
+            }
+            const path_geometry::RoadJunctionPublishedEdge* approach=nullptr;
+            bool start=false;
+            for(const auto* packet:roadJunctionPipeline_.Packets())
+            {
+                if(packet->frame!=contact->frame ||
+                   packet->buildSignature!=contact->packetSignature)continue;
+                for(const auto& edge:packet->edges)
+                {
+                    const auto authored=pathNetwork_.Service().FindEdge(edge.edge);
+                    if(!authored || edge.product.stations.empty())continue;
+                    if(authored->startNode==*node || authored->endNode==*node)
+                    {
+                        approach=&edge;
+                        start=authored->startNode==*node;
+                        break;
+                    }
+                }
+                if(approach)break;
+            }
+            if(!approach)return rpc::Value::Object{
+                {"ready",false},{"reason","No incident built road."}};
+            const auto& stations=approach->product.stations;
+            const auto& cut=start?stations.front():stations.back();
+            const math::Double3 heading{
+                cut.tangent.x*(start?-1.0:1.0),0.0,
+                cut.tangent.z*(start?-1.0:1.0)};
+            const f64 horizontalLength=math::Length(heading);
+            if(!std::isfinite(horizontalLength)||horizontalLength<0.5)
+                return rpc::Value::Object{
+                    {"ready",false},{"reason","Approach tangent too steep."}};
+            const auto direction=heading/horizontalLength;
+            const auto& config=input.vehicle;
+            input.initial.centre=cut.position-direction*4.0;
+            input.initial.centre.y=cut.position.y+
+                config.wheelRadiusMeters+config.suspensionRestMeters-
+                config.massKg*config.gravityMetersPerSecond2/
+                    (4.0*config.springNewtonsPerMeter);
+            input.initial.yawRadians=std::atan2(direction.z,direction.x);
+            input.maximumTrianglesPerWheel=1024U;
+            const auto result=roadJunctionPipeline_.RunVehicleFixture(
+                *node,pathProducts_,input);
+            if(!result)return rpc::Value::Object{
+                {"ready",false},{"reason","Contact scene changed."}};
+            const bool smooth=result->completed &&
+                result->stepsWithFullContact*100U>=
+                    result->simulatedSteps*95U &&
+                result->stepsWithPatchContact>0U &&
+                result->wheelOwnerTransitions>0U &&
+                result->maximumBottomOutMeters<0.03;
+            return rpc::Value::Object{
+                {"ready",true},{"cpu_only",true},
+                {"vehicle_physics_committed",false},
+                {"completed",result->completed},
+                {"seam_continuity_passed",smooth},
+                {"error",result->error},
+                {"node",node->ToString()},
+                {"source_edge",approach->edge.ToString()},
+                {"frame",contact->frame.ToString()},
+                {"packet_signature",
+                    std::to_string(result->contactPacketSignature)},
+                {"steps",static_cast<i64>(result->simulatedSteps)},
+                {"full_contact_steps",
+                    static_cast<i64>(result->stepsWithFullContact)},
+                {"patch_contact_steps",
+                    static_cast<i64>(result->stepsWithPatchContact)},
+                {"road_contact_steps",
+                    static_cast<i64>(result->stepsWithRoadContact)},
+                {"wheel_owner_transitions",
+                    static_cast<i64>(result->wheelOwnerTransitions)},
+                {"maximum_bottom_out_meters",result->maximumBottomOutMeters},
+                {"maximum_vertical_acceleration_mps2",
+                    result->maximumAbsVerticalAcceleration},
+                {"distance_meters",result->pathDistanceMeters},
+                {"final_speed_mps",
+                    result->finalState.forwardSpeedMetersPerSecond}
+            };
+        });
     static_cast<void>(activeBody_.Refresh());
     static_cast<void>(pathNetwork_.RefreshBinding());
     static_cast<void>(pathRouting_.RefreshBinding());

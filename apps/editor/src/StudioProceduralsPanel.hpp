@@ -256,6 +256,34 @@ private:
         }
         catch(const std::exception& e){error_=e.what();}
     }
+    void RunJunctionDriveFixture()
+    {
+        driveError_.clear();
+        driveReport_=rpc::Value{};
+        try
+        {
+            if(!scene::ObjectId::Parse(junctionNodeId_))
+                throw std::invalid_argument("Select a junction node first.");
+            const rpc::Value request(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id",static_cast<i64>(1)},
+                {"method","infrastructure.road_vehicle_fixture"},
+                {"params",rpc::Value::Object{
+                    {"node",junctionNodeId_},
+                    {"steps",static_cast<i64>(480)}
+                }}
+            });
+            const auto reply=rpc_->Dispatch(rpc::Serialize(request));
+            if(!reply)throw std::runtime_error("No vehicle fixture RPC reply.");
+            const auto parsed=rpc::ParseValue(*reply);
+            if(const auto* err=parsed.Find("error"))
+                throw std::runtime_error(rpc::Serialize(*err));
+            const auto* result=parsed.Find("result");
+            if(!result || !result->IsObject())
+                throw std::runtime_error("Vehicle fixture response malformed.");
+            driveReport_=*result;
+        }
+        catch(const std::exception& e){driveError_=e.what();}
+    }
     void AnalyzeJunction()
     {
         junctionError_.clear();
@@ -297,6 +325,7 @@ private:
             edgeId_.clear(); newNetworkId_ = {};
             report_ = rpc::Value{};
             junctionReport_ = rpc::Value{};
+            driveReport_ = rpc::Value{};
             junctionNodeId_.clear();
             knownWorldGeneration_ = ~u64{0};
         }
@@ -421,12 +450,58 @@ private:
                     {
                         junctionNodeId_=node.id.ToString();
                         junctionReport_=rpc::Value{};
+                        driveReport_=rpc::Value{};
                     }
             }
             if (context.Section("Advanced node UUID##proc-junction-id",false))
                 static_cast<void>(context.InputText("Node UUID##proc-junction-manual",junctionNodeId_));
             if (context.Button("Analyze junction##proc-junction-run"))
                 AnalyzeJunction();
+            if(context.Section("Driving seam regression##proc-junction-drive",false))
+            {
+                context.MutedText(
+                    "Runs 480 deterministic steps at 120 Hz using four sprung wheel contacts. CPU fixture only; no gameplay vehicle is spawned.");
+                if(context.Button("Run junction drive test##proc-junction-drive-run"))
+                    RunJunctionDriveFixture();
+                if(!driveError_.empty())context.ErrorText(driveError_);
+                if(driveReport_.IsObject())
+                {
+                    const auto* ready=driveReport_.Find("ready");
+                    if(ready && ready->IsBool() && !ready->AsBool())
+                    {
+                        if(const auto* reason=driveReport_.Find("reason");
+                           reason && reason->IsString())
+                            context.ErrorText(reason->AsString());
+                    }
+                    else
+                    {
+                        const auto* passed=driveReport_.Find(
+                            "seam_continuity_passed");
+                        if(passed && passed->IsBool())
+                            context.KeyValue("CPU seam continuity",
+                                passed->AsBool()?"Pass (fixture)":"Failed / incomplete");
+                        for(const auto* key:{"steps","full_contact_steps",
+                            "patch_contact_steps","wheel_owner_transitions"})
+                            if(const auto* n=driveReport_.Find(key);
+                               n && n->IsInteger())
+                                context.KeyValue(key,
+                                    std::to_string(n->AsInteger()));
+                        for(const auto* key:{"distance_meters",
+                            "maximum_bottom_out_meters",
+                            "maximum_vertical_acceleration_mps2"})
+                            if(const auto* n=driveReport_.Find(key);
+                               n && n->IsNumber())
+                                context.KeyValue(key,
+                                    std::format("{:.4f}",n->AsNumber()));
+                        if(const auto* error=driveReport_.Find("error");
+                           error && error->IsString() &&
+                           !error->AsString().empty())
+                            context.ErrorText(error->AsString());
+                        context.MutedText(
+                            "Fixture runs a simplified planar car body. It does not certify physics-world colliders, tire simulation or playable vehicles.");
+                    }
+                }
+            }
             if(!junctionError_.empty())context.ErrorText(junctionError_);
             if(junctionReport_.IsObject())
             {
@@ -734,6 +809,8 @@ private:
     std::string error_;
     rpc::Value report_;
     rpc::Value junctionReport_;
+    rpc::Value driveReport_;
+    std::string driveError_;
     std::string junctionNodeId_;
     std::string junctionError_;
     std::size_t selectedFinding_{0};

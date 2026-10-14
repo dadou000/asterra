@@ -111,6 +111,19 @@ StudioRoadJunctionPipeline::ProbeContact(
     probe.frame=current->frame;
     return found->second.Probe(probe);
 }
+std::optional<path_geometry::RoadVehicleFixtureReport>
+StudioRoadJunctionPipeline::RunVehicleFixture(
+    const scene::ObjectId junction,
+    const UniverseBoundPathCache& raw,
+    path_geometry::RoadVehicleFixtureRequest request) const
+{
+    const auto* current=CurrentContact(junction,raw);
+    if(!current)return std::nullopt;
+    const auto found=contactScenes_.find(current->frame);
+    if(found==contactScenes_.end())return std::nullopt;
+    request.frame=current->frame;
+    return path_geometry::RunRoadVehicleFixture(found->second,request);
+}
 std::vector<const path_geometry::PathDerivedProduct*>
 StudioRoadJunctionPipeline::RenderProducts(
     const UniverseBoundPathCache& raw) const
