@@ -736,7 +736,35 @@ int orbit::editor_app::StudioApplication::Run(
 
         orbit::platform::Window& window =
             runtime.Window();
-        std::atomic_bool ecoMode{false};
+        // Per-user preference shared between projects and Studio restarts.
+        const auto ecoSettingsPath =
+            orbit::platform::UserDataDirectory() / "studio_eco_mode.txt";
+        int storedEcoMode = 0;
+        try
+        {
+            std::ifstream file(ecoSettingsPath);
+            int value = 0;
+            if(file >> value && value >= 0 && value <= 2)
+                storedEcoMode = value;
+        }
+        catch(const std::exception&) {}
+        std::atomic_int ecoMode{storedEcoMode};
+        const auto setEcoMode = [&](int mode)
+        {
+            mode = std::clamp(mode, 0, 2);
+            ecoMode.store(mode, std::memory_order_relaxed);
+            try
+            {
+                std::filesystem::create_directories(ecoSettingsPath.parent_path());
+                std::ofstream file(ecoSettingsPath, std::ios::trunc);
+                if(file) file << mode << '\\n';
+            }
+            catch(const std::exception& exception)
+            {
+                orbit::log::Warning(exception.what());
+            }
+            window.WakeForActivity();
+        };
         // Requested state of the viewport's full-screen mode; the frame loop animates towards it.
         std::atomic_bool viewportFullscreen{false};
         rpcHost.Dispatcher().Register(
@@ -771,22 +799,27 @@ int orbit::editor_app::StudioApplication::Run(
             [&ecoMode](const orbit::rpc::Value&)
             {
                 return orbit::rpc::Value::Object{
-                    {"enabled", ecoMode.load(std::memory_order_relaxed)}};
+                    {"enabled", ecoMode.load(std::memory_order_relaxed) != 0},
+                    {"mode", static_cast<orbit::i64>(ecoMode.load(std::memory_order_relaxed))}};
             });
         rpcHost.Dispatcher().Register(
             {.name = "studio.eco_mode_set",
              .description = "Enable or disable Eco mode.",
              .mutating = true},
-            [&ecoMode](const orbit::rpc::Value& params)
+            [&setEcoMode, &ecoMode](const orbit::rpc::Value& params)
             {
+                const auto* mode = params.Find("mode");
                 const auto* enabled = params.Find("enabled");
-                if (enabled == nullptr || !enabled->IsBool())
-                {
-                    throw std::invalid_argument("enabled must be a boolean");
-                }
-                ecoMode.store(enabled->AsBool(), std::memory_order_relaxed);
+                if(mode && mode->IsInteger() &&
+                   mode->AsInteger() >= 0 && mode->AsInteger() <= 2)
+                    setEcoMode(static_cast<int>(mode->AsInteger()));
+                else if(enabled && enabled->IsBool())
+                    setEcoMode(enabled->AsBool() ? 1 : 0);
+                else
+                    throw std::invalid_argument("Provide mode (0=Normal, 1=Eco, 2=Eco+) or enabled (boolean).");
                 return orbit::rpc::Value::Object{
-                    {"enabled", enabled->AsBool()}};
+                    {"enabled", ecoMode.load(std::memory_order_relaxed) != 0},
+                    {"mode", static_cast<orbit::i64>(ecoMode.load(std::memory_order_relaxed))}};
             });
         orbit::rhi::Device& device =
             runtime.Device();
@@ -1069,10 +1102,7 @@ int orbit::editor_app::StudioApplication::Run(
         studioViewportPanels.SetContentService(&content);
         studioViewportPanels.SetEcoModeAccessors(
             [&ecoMode] { return ecoMode.load(std::memory_order_relaxed); },
-            [&ecoMode](const bool enabled)
-            {
-                ecoMode.store(enabled, std::memory_order_relaxed);
-            });
+            [&setEcoMode](const int mode) { setEcoMode(mode); });
 
         shortcuts.RegisterCallback(
             {
@@ -2661,7 +2691,7 @@ int orbit::editor_app::StudioApplication::Run(
                     lastActivity = paceNow;
                 }
                 else if (
-                    !ecoMode.load(std::memory_order_relaxed) &&
+                    ecoMode.load(std::memory_order_relaxed) == 0 &&
                     idleFramesPerSecond > 0 &&
                     paceNow - lastActivity > kIdleAfter)
                 {
@@ -2681,29 +2711,34 @@ int orbit::editor_app::StudioApplication::Run(
                     }
                 }
 
-                // Eco mode is a continuous 15 FPS application cap, not a
-                // mouse-activity detector. Leaving the viewport must never
-                // make the terrain, lighting and profiler fall to 1 FPS.
-                if (ecoMode.load(std::memory_order_relaxed) &&
-                    !rpcActivity)
+                // Eco policy: foreground activity -> active cap; foreground
+                // inactivity -> idle cap; unfocused -> background cap.
+                // Use frame deadlines instead of integer FPS to support 0.05 FPS.
+                const int mode = ecoMode.load(std::memory_order_relaxed);
+                if(mode != 0 && !rpcActivity)
                 {
-                    constexpr auto kEcoActiveFrame =
-                        std::chrono::milliseconds(67);
-                    const auto elapsed =
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            paceNow - lastIterationStart);
-                    if (elapsed < kEcoActiveFrame)
+                    const bool foreground = window.IsForeground();
+                    const bool active = foreground &&
+                        (busy || paceNow - lastActivity <= kIdleAfter);
+                    const double fps = !foreground
+                        ? (mode == 1 ? 1.0 : 0.05)
+                        : active
+                            ? (mode == 1 ? 60.0 : 45.0)
+                            : (mode == 1 ? 15.0 : 0.5);
+                    const auto target =
+                        std::chrono::duration_cast<Clock::duration>(
+                            std::chrono::duration<double>(1.0 / fps));
+                    const auto elapsed = paceNow - lastIterationStart;
+                    if(elapsed < target)
                     {
+                        const auto remaining = std::chrono::duration_cast<
+                            std::chrono::milliseconds>(target - elapsed).count();
+                        // Recheck messages and RPCs periodically; background
+                        // Eco+ must not introduce 20-second input latency.
                         window.WaitForActivity(static_cast<orbit::u32>(
-                            (kEcoActiveFrame - elapsed).count()));
-                        // Input wakes may arrive before the frame deadline.
-                        // Keep servicing the message queue, but defer CPU and
-                        // render work until 15 FPS is due. RPC bypasses this
-                        // gate so automation always gets its immediate frame.
-                        if (rpcHost.RequestCount() == lastRpcRequestCount)
-                        {
+                            std::clamp<std::int64_t>(remaining, 1, 100)));
+                        if(rpcHost.RequestCount() == lastRpcRequestCount)
                             continue;
-                        }
                     }
                 }
 
