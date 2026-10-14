@@ -106,6 +106,7 @@ int main()
     CHECK(first.FollowRoute(id,*route,4.0));
     CHECK(first.Step(contact,120).success);
     CHECK(first.Find(id)->followRoute);
+    CHECK(first.Find(id)->nextWaypoint>0U);
     CHECK(first.StopFollowing(id));
     CHECK(!first.Find(id)->followRoute);
     CHECK(first.Remove(id));

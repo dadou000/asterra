@@ -425,7 +425,7 @@ StudioSession::StudioSession(
             {
                 const auto id=parseId("vehicle");
                 path_geometry::RoadVehicleInput input;
-                for(const auto [key,dst]:std::array<
+                for(const auto& [key,dst]:std::array<
                     std::pair<const char*,f64*>,3>{
                     std::pair{"throttle",&input.throttle},
                     std::pair{"brake",&input.brake},
