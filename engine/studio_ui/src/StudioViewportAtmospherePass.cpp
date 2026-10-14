@@ -413,14 +413,16 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                                 .access = render_graph::Access::Write
                             }
                         },
-                        [this, lightingDepth, cloudGpu, bTexture,
-                         cloudReferenceRadius, cloudLayer, cloudView](
+                        [this, lightingDepth, cloudGpu,
+                         cloudSource = cloudFound->second.field.get(),
+                         bTexture, cloudReferenceRadius, cloudView](
                             rhi::CommandList& commands,
                             const render_graph::Resources&)
                         {
                             unifiedCloudRenderer_->Draw(
                                 commands, *lightingDepth, *cloudGpu, *bTexture,
-                                cloudReferenceRadius, cloudLayer, cloudView);
+                                cloudReferenceRadius, *cloudSource, cloudView,
+                                sharedStormCloudExport_);
                         });
                     graph.AddPass(
                         prefix + ".UnifiedB.Composite",
