@@ -210,6 +210,16 @@ To switch on the experimental preview with MCP/RPC: `view.terrain_layers_set` us
 
 Use the repository's existing Debug Center and Profiler for all B test modes; do not add a second standalone launcher or screenshot pipeline.
 
+# B3 orbital visibility incident (2026-10-14)
+
+User screenshot showed an apparently cloudless planet after multiple System B stages. Root code audit identified a silent **render-graph gate** in `StudioViewportAtmospherePass.cpp` and `StudioViewportLightingPass.cpp`: the volumetric near-field cloud pass only ran when `fullClipmap || !macroGlobe`. Consequently, using the non-full-clipmap orbital macro globe suppressed B as well as A, regardless of working GPU shaders or light caches. System B is an independent renderer and needs to run at orbital distances for development and A/B testing; A's existing handoff behavior must remain unchanged.
+
+The two gates now share `ShouldRenderCloudVolume(layers)`, defined in `StudioTerrainLayerOptions.hpp`. It returns `cloudBPreview || fullClipmap || !macroGlobe`. This keeps A's prior near-field gate while allowing B in macro-globe orbit. The `Orbit.CloudShaderRpc` regression tests check all three configurations. This does **not** prove B's shader emits opaque cloud fragments, and does not automatically create physical cloud data when none is authored.
+
+Second silent failure category: Cloud presentation is built only from enabled `Cloud Layer` capabilities resolved from the selected Celestial Body. It is absent when no usable layer is present, when the configured source cannot be resolved, or while a build is still pending. The compositor previously silently skipped the pass. `StudioViewportPanel.cpp` now prints cloud layer count, mean coverage, mean optical depth, GPU readiness, and explicit messages for disabled clouds, atmosphere bypass, empty/no-ready GPU field, or A macro-globe handoff. Use these messages before investigating B light-cache or noise functions.
+
+**Reproduce and validate:** run the editor with B3 preview and macroGlobe=true/fullClipmap=false; verify `.UnifiedB.March` and `.UnifiedB.Composite` GPU pass names appear. Confirm a nonzero Cloud Layer count and measurable mean coverage/optical depth. Compare with fullClipmap=true. For an authored planet with no layers, intentionally expect `No ready cloud field`, and add/configure a Cloud Layer through the authoring system instead of silently fabricating clouds. A macro mode should retain its original behavior. Capture the profiler and exact version if field diagnostics report good coverage but B remains invisible. Do not assert this fixes ground-mode/cloud-data failures without a run.
+
 # Research grounding
 
 - /rendering/clouds/references/blackrack-eve-release5: evidence-ranked inspection of the user-supplied EVE Release 5 distribution (binary-only) and its lighting/temporal/cache approach.
