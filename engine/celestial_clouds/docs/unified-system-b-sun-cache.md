@@ -28,6 +28,21 @@ B1/B2 used an unoccluded view-to-Sun brightness approximation. B3's view-ray mar
 
 Cached optical depth is interpolated as tau then exponentiated; interpolating already-exponentiated transmittance would have different error properties. The cache does not store tone-mapped RGB and is independent of eye exposure and the final scene target.
 
+# B3 provisional skylight correction (2026-10-14)
+
+The first successful System B screenshot showed an excessively uniform grey cloud blanket. A source audit found two lighting errors in UnifiedCloudRenderer.cpp, unrelated to whether its Sun cache was valid:
+
+- The old ambient source (0.13 + 0.20 * skyFacing) was emitted even on the planetary nightside, without solar daylight gating or any optical-depth reduction within cloud interiors.
+- The single-scattering Henyey-Greenstein phase was missing the 1/(4*pi) solid-angle normalization, over-amplifying directional scattering by approximately 12.566.
+
+The new direct source calculates the solar disc's visibility relative to the geometric horizon of the reference planet from the cloud's current altitude. For body radius R and sample radius r, the horizon cosine is -sqrt(max(0, 1-(R/r)^2)). A finite solar angular radius is taken from AtmosphereRenderView::sunAngularRadiusRadians. Direct scattering is proportional to the actual daylit fraction, stellar irradiance, the normalized HG phase and exp(-tauSun). This avoids sunlight being added to the night side simply because the previous skyFacing mapping remained positive.
+
+Sky ambient is now a deliberately limited, **temporary** illumination term: 0.055 * stellar irradiance, scaled by local twilight/daylight, vertical cloud position, scattering albedo and an attenuation factor exp(-0.20*tauSun). Cloud bottoms and optically thick regions should be darker. It remains an approximation: optical depth toward the Sun is NOT equivalent to hemispherical skylight access. The complete B backend still needs an atmosphere-LUT-driven sky radiance input and/or its own directional ambient optical-depth cache. Do not treat the new constants as calibrated physical cloud illumination.
+
+At typical g=0.72, numerical evaluation of the phase function over the sphere integrates to approximately one after normalization. On an Earth-sized body, the geometric horizon drops by approximately 2.6 degrees at 6.5 km altitude. Planet ellipsoid and offscreen terrain horizon occlusion are intentionally NOT claimed by this spherical B3 approximation.
+
+**Validation:** compare B3 with Sun-cache on and off under noon, low Sun and planet night. Persistent grey on the nightside should disappear. The cloud deck may still appear globally smooth because B2 uses inexpensive sinusoidal density shaping and 64 fixed march steps; that is a separate density and detail representation issue. System A is unchanged.
+
 # Allocation and cache topology
 
 One B-owned SunCache per Studio viewport, stored in unifiedCloudSunCaches_, not in A's cloudLightVolumes_ or cloudTemporal_. Its GPU buffer is 32x32x16 cells, 16 bytes per cell = 262144 bytes (256 KiB). Horizontal tangent-plane sample spacing is 2 km. The volume is centred at a body-fixed unit-direction anchor, not the changing camera float origin, and covers approximately 64 km x 64 km horizontally. Vertically it covers the full current procedural/simulated shell up to the greater of its authored cloud-top altitude and 21 km while a simulated storm is bound.
