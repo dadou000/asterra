@@ -110,6 +110,9 @@ public:
     // such as an RPC request.
     virtual void WakeForActivity() = 0;
 
+    // Whether this window is currently foreground (not merely hovered).
+    [[nodiscard]] virtual bool IsForeground() const noexcept = 0;
+
     virtual void SetTitle(std::string_view title) = 0;
 
     [[nodiscard]] virtual bool KeyDown(
