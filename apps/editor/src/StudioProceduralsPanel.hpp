@@ -268,7 +268,8 @@ private:
                 {"jsonrpc","2.0"},{"id",static_cast<i64>(1)},
                 {"method","path.junction_preview"},
                 {"params",rpc::Value(rpc::Value::Object{
-                    {"node",junctionNodeId_},{"include_samples",false}})}
+                    {"node",junctionNodeId_},{"include_samples",false},
+                    {"include_construction",true}})}
             });
             const auto response=rpc_->Dispatch(rpc::Serialize(request));
             if(!response)throw std::runtime_error("No junction RPC response.");
@@ -441,6 +442,54 @@ private:
                         if(const auto* v=junctionReport_.Find(field);
                            v && v->IsInteger())
                             context.KeyValue(field,std::to_string(v->AsInteger()));
+                    if(const auto* built=junctionReport_.Find("construction_ready");
+                       built && built->IsBool())
+                    {
+                        context.KeyValue("Stitched construction preview",
+                            built->AsBool()?"Valid CPU product":"Not available");
+                        if(built->AsBool())
+                        {
+                            for(const auto* field:{"construction_patch_vertices",
+                                "construction_patch_collision_triangles",
+                                "construction_lane_connectors"})
+                                if(const auto* n=junctionReport_.Find(field);
+                                   n && n->IsInteger())
+                                    context.KeyValue(field,
+                                        std::to_string(n->AsInteger()));
+                            if(const auto* edges=junctionReport_.Find(
+                                "construction_trimmed_edges");
+                               edges && edges->IsArray() &&
+                               context.Section("Cut stations##proc-junction-cuts",false))
+                                for(const auto& cut:edges->AsArray())
+                                {
+                                    if(!cut.IsObject())continue;
+                                    const auto* edge=cut.Find("edge");
+                                    const auto* dist=cut.Find("cut_station_meters");
+                                    const auto* triangles=cut.Find(
+                                        "retained_collision_triangles");
+                                    if(!edge || !dist || !triangles ||
+                                       !edge->IsString() || !dist->IsNumber() ||
+                                       !triangles->IsInteger())continue;
+                                    context.MutedText(std::format(
+                                        "{}: cut {:.2f} m, {} retained collision triangles",
+                                        edge->AsString(),dist->AsNumber(),
+                                        triangles->AsInteger()));
+                                }
+                            context.MutedText(
+                                "CPU patch/trim mesh and collision agree. Not yet published as the live world collider.");
+                        }
+                        if(const auto* errors=junctionReport_.Find(
+                            "construction_findings");
+                           errors && errors->IsArray() &&
+                           context.Section("Construction findings##proc-junction-build-errors",true))
+                            for(const auto& item:errors->AsArray())
+                            {
+                                if(!item.IsObject())continue;
+                                const auto* msg=item.Find("message");
+                                if(msg && msg->IsString())
+                                    context.ErrorText(msg->AsString());
+                            }
+                    }
                     if(const auto* conflicts=junctionReport_.Find("conflict_count");
                        conflicts && conflicts->IsInteger())
                         context.KeyValue("Conflicting movement pairs",

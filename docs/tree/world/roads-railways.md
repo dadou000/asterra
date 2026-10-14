@@ -5,7 +5,7 @@ kind = "subsystem"
 status = "planned"
 summary = "Canonical architectural contract for Orbit's unified, editable road/rail/path infrastructure: authored networks, alignment, terrain and structural construction, frame-aware dynamics, persistence, editor automation and planet-scale LOD."
 keywords = ["roads", "railways", "infrastructure", "corridors", "alignment", "terrain grading", "moving frames", "bridges", "tunnels"]
-related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations", "/world/roads-railways/spec-completeness"]
+related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations", "/world/roads-railways/spec-completeness", "/world/roads-railways/road-junction-construction"]
 +++
 
 # Status and provenance
@@ -47,6 +47,7 @@ The renderer never authors its own road geometry. Network graph, route and colli
 - [Runtime, frame physics, editor UX, validation and staged delivery](roads-railways/runtime-validation.md)
 - [Implemented transport section and topology foundations](roads-railways/transport-foundations.md)
 - [Specification completeness, implementation evidence and acceptance gates](roads-railways/spec-completeness.md)
+- [Road junction trimmed construction product, exact seams and collision](roads-railways/road-junction-construction.md)
 
 No independent road/rail specification may silently supersede this root. New component documents should link back here and state scope.
 

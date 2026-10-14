@@ -58,3 +58,7 @@ InfrastructureSectionBuilder supplies deterministic road/rail sections from one 
 ## Defensive planetary-scale allocation limits
 
 PathSourceRequest.maximumSamples bounds Bezier/routed centreline expansion. PathBuildOptions.maximumStations bounds the next Resample stage before it allocates station arrays, reference graphs or vertex/collision products. Both defaults are 16384 samples and reject excess work; spatial tiling and streaming are not yet integrated. Orbit.PathSource and Orbit.PathGeometry tests exercise these cases.
+
+## Road junction construction and collision (CPU product)
+
+The source-level BuildRoadJunctionConstruction consumes existing JunctionPlan and built road PathDerivedProducts and returns a disposable frame-local replacement bundle: all clipped pavement/shoulder meshes, one exact-boundary junction surface and matching collision triangles, and cut-aligned lane connectors. It rejects stale/unsupported/mixed-mode sources and sets a reproducible dependencySignature. Currently exposed through path.junction_preview(include_construction=true) and Build → Procedurals, NOT as a committed runtime collider. Test: Orbit.RoadJunctionConstruction. See docs/tree/world/roads-railways/road-junction-construction.md.

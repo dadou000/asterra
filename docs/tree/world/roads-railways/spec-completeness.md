@@ -39,7 +39,7 @@ Status legend: **DOMAIN** = functional CPU/domain API present, not necessarily i
 | C05 | Drainage, culverts, waterways and wet friction | design only | PLAN | Hydrology-authoritative flow interfaces and draining failure test |
 | C06 | Road/track condition, rut/pothole/wear/repair | design only | PLAN | Sparse persistent damage with physical contact and repair transitions |
 | J01 | Explicit ID junction topology; no spatial auto-connect | `TransportTopology` | DOMAIN | Real turn-object semantics and grade-separated tests in Studio |
-| J02 | Junction lane movement curve previews | `TransportJunctions` + read-only RPC | PARTIAL | Actual trim/weld/mesh collision and bidirectional lane rules |
+| J02 | Junction lane movement and pavement construction | `TransportJunctions`, `RoadJunctionConstruction` + read-only RPC | PARTIAL | Actual atomic world publication of trimmed meshes/collision, material bands and driven junction acceptance |
 | J03 | Road overlap/merge/conflict graph | `JunctionConflicts` | DOMAIN | Pedestrian conflict, vehicle envelopes and clearance timing |
 | J04 | Advisory compatible traffic phase sets | `JunctionSignalPhases` | DOMAIN | Persistent signal layout, actual phase timing and traffic actor enforcement |
 | J05 | Turnouts, railway track transitions | rail branch preview | PARTIAL | True switches, blades, frog/guard rails, continuous gauge/contact |
@@ -99,3 +99,9 @@ Status legend: **DOMAIN** = functional CPU/domain API present, not necessarily i
 A single authored edge is not permitted to allocate an unbounded source or derived polyline. PathSourceRequest.maximumSamples (default 16384, allowed 2..131072) controls source Bézier/routed evaluation; PathBuildOptions.maximumStations (default 16384, allowed 2..131072) controls the subsequent distance-resampled corridor and lane/reference products. On overflow or excessive input, the builder produces a clear exception/error; it must not truncate geometry and inadvertently connect unrelated endpoints. The budgets are per edge, not planet-global. Actual chunk boundary handling and LOD remain unimplemented.
 
 The expanded Orbit.PathSplit test includes project database checkpoint/reopen and verifies that split identities, the new junction anchor, bridge construction mode and design speed persist. CI execution is still required; test code existence is not proof of a passing persistence gate.
+
+## Road junction CPU construction increment
+
+RoadJunctionConstruction now derives an explicit replacement bundle for same-frame T/cross road junctions: cut and retained copies of ALL built-in pavement/shoulder bands, a shared patch with exact five-point cross-section seams, matching collision triangles and lane movements retargeted onto surviving stations. The design is deliberately restricted to bounded star-shaped junctions with supported source sections. Source signatures allow later atomic runtime publication. Path.junction_preview optionally builds this bundle, exposes cut stations, collision counts, provenance and failure findings, and always reports construction_committed_to_world=false. Build → Procedurals shows the status. This is a CPU integration milestone only: until StudioSession/render/physics atomically replace their old products, a player cannot rely on this patch as the physical intersection.
+
+Domain acceptance: Orbit.RoadJunctionConstruction. Runtime gate C (physical road) and source revision publication remain OPEN. See road-junction-construction.md for the supported slice and forbidden approximations.

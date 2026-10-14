@@ -16,6 +16,7 @@ add_library(OrbitPathGeometry STATIC
     src/RailInterlocking.cpp
     src/JunctionConflicts.cpp
     src/JunctionSignalPhases.cpp
+    src/RoadJunctionConstruction.cpp
 )
 
 add_library(
@@ -201,4 +202,13 @@ if(BUILD_TESTING)
     target_compile_features(OrbitJunctionSignalPhasesTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitJunctionSignalPhasesTests)
     add_test(NAME Orbit.JunctionSignalPhases COMMAND OrbitJunctionSignalPhasesTests)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitRoadJunctionConstructionTests
+        tests/RoadJunctionConstructionTests.cpp)
+    target_link_libraries(OrbitRoadJunctionConstructionTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitRoadJunctionConstructionTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRoadJunctionConstructionTests)
+    add_test(NAME Orbit.RoadJunctionConstruction COMMAND OrbitRoadJunctionConstructionTests)
 endif()
