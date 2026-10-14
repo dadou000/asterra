@@ -113,3 +113,11 @@ This is intentionally **on-demand** enumeration so an open Debug panel does not 
 A dedicated **Build → Procedurals** panel is now registered in Studio from `StudioProceduralsPanel.hpp`. The first Road/Rail workspace lists actual authored scene path edges on demand, selects by friendly name, accepts a design speed, calls `path.engineering`, and displays geometry revision, station count, a selectable engineering findings list, measured/limit values, reference frame and number of bank/cant recommendations. This is the canonical authoring entry point; **Debug** remains a diagnostic/testing surface. It does not create an alternative path authority or duplicate the analyzer.
 
 **Current limitations:** read-only engineering inspection, no curve manipulation or write-back, no in-viewport warning overlay, no earthworks sampler yet. Refresh is required after modifying the world; the panel doesn't perform a full scene scan per frame. Build/runtime verification remains pending.
+
+## Build → Procedurals: Cities: Skylines-inspired builder (Harmony update)
+
+The existing **Procedurals** panel is now organized as an infrastructure construction workflow: Roads/Railways category choice; numbered selection, construction, alignment, and engineering preview sections; selectable authored segment browser; terrain/bridge/tunnel/deck construction modes; design speed and turn easing; editable Bézier handles; collapsible advanced catalog/version fields; and station-specific engineering findings.
+
+**Apply to authored segment** uses `PathNetworkService::SetInfrastructureIntent` and, for Bézier edges, `SetBezierHandles`, instead of directly mutating scene objects. These existing authoring APIs integrate with Orbit's command/undo architecture. Engineering reports remain non-destructive. This is a **panel builder**, not yet a Cities: Skylines-style point-and-click terrain placement tool: Roads/Railways category selection is currently a workspace choice, not a profile-catalog filter, and bridge/tunnel/deck modes persist intent but do not imply finished structural geometry. Next gates are world-space placement previews, snapping, graphical node manipulation, profile card catalog and active-frame navigation.
+
+Native build and runtime validation are pending.
