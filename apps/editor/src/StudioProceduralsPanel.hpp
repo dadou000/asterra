@@ -100,6 +100,29 @@ private:
         }
         catch(const std::exception& e){error_=e.what();}
     }
+    void CreateAnchorNode()
+    {
+        try
+        {
+            if (!session_->World().HasWorld() || !newNetworkId_)
+                throw std::invalid_argument("Create a network in this panel first.");
+            const auto frame=frames::FrameId::Parse(newNodeFrame_);
+            if (!frame)
+                throw std::invalid_argument("Enter an existing reference-frame UUID.");
+            if (!std::isfinite(newNodePoint_.x) || !std::isfinite(newNodePoint_.y) ||
+                !std::isfinite(newNodePoint_.z))
+                throw std::invalid_argument("Node coordinates must be finite.");
+            const auto node=session_->PathNetwork().Service().CreateNode(
+                newNetworkId_,newNodeName_,
+                paths::FramePointAnchor{.frame=*frame,.localMeters=newNodePoint_});
+            Refresh();
+            if (!startNodeId_) startNodeId_=node.id;
+            else endNodeId_=node.id;
+            status_="Anchor node created using the selected frame.";
+            error_.clear();
+        }
+        catch(const std::exception& e){error_=e.what();}
+    }
     void ConnectNodes()
     {
         try
@@ -196,6 +219,15 @@ private:
         {
             static_cast<void>(context.InputText("Network name##proc-new-network",newNetworkName_));
             if (context.Button("Create network##proc-create-network")) CreateNetwork();
+            if (newNetworkId_ && context.Section("Add frame-anchored node##proc-node-create",true))
+            {
+                context.MutedText("Positions are local metres in an existing frame, not global world coordinates.");
+                static_cast<void>(context.InputText("Node name##proc-node-name",newNodeName_));
+                static_cast<void>(context.InputText("Frame UUID##proc-node-frame",newNodeFrame_));
+                static_cast<void>(context.InputDouble3("Local position (m)##proc-node-position",newNodePoint_));
+                if (context.Button("Create anchor node##proc-node-action"))
+                    CreateAnchorNode();
+            }
             context.MutedText(std::format("{} networks / {} anchor nodes",
                 networks_.size(),nodes_.size()));
             if (context.Section("Connect existing nodes##proc-connect",true))
@@ -340,6 +372,9 @@ private:
     std::vector<scene::ObjectRecord> nodes_;
     std::vector<scene::ObjectRecord> networks_;
     paths::NetworkId newNetworkId_{};
+    std::string newNodeName_{"Control Point"};
+    std::string newNodeFrame_;
+    math::Double3 newNodePoint_{};
     std::string newNetworkName_{"New Infrastructure"};
     scene::ObjectId startNodeId_{};
     scene::ObjectId endNodeId_{};
