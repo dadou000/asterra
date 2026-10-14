@@ -63,12 +63,23 @@ void RebuildRefinedReferences(PathDerivedProduct& product,
     // The first band is the construction's primary usable surface (pavement
     // or formation). Other bands (shoulders, railheads) are separate products.
     const std::size_t primaryColumns=corridor.bands.front().profile.size();
-    const auto surfaceAt=[&](std::size_t index, f64 offset)
+    const auto surfaceAt=[&](std::size_t index, f64 fraction)
     {
         const auto& s=stations[index];
         const f64 bank=corridor.bankRadians.empty()?0.0:
             corridor.bankRadians[index];
         const auto sideways=s.lateral*std::cos(bank)+s.up*std::sin(bank);
+        // Lane centres are fractions of the *current* usable surface
+        // cross-section, not constant offsets from the original profile.
+        // This keeps routing continuous through authored width keys/tapers.
+        const auto& first=product.visualMesh.vertices[index*primaryColumns].position;
+        const auto& last=product.visualMesh.vertices[
+            index*primaryColumns+primaryColumns-1U].position;
+        const f64 from=math::Dot(first-s.position,sideways);
+        const f64 to=math::Dot(last-s.position,sideways);
+        if (!(to>from)) throw std::invalid_argument(
+            "Primary corridor section has no usable lateral width.");
+        const f64 offset=from+(to-from)*fraction;
         for (std::size_t j=0;j+1<primaryColumns;++j)
         {
             const auto& a=product.visualMesh.vertices[index*primaryColumns+j].position;
@@ -80,13 +91,25 @@ void RebuildRefinedReferences(PathDerivedProduct& product,
         }
         return s.position+sideways*offset;
     };
-    for (const auto& s:stations)
+    for (std::size_t i=0;i<stations.size();++i)
+    {
+        const auto& s=stations[i];
+        const auto& first=product.visualMesh.vertices[i*primaryColumns].position;
+        const auto& last=product.visualMesh.vertices[
+            i*primaryColumns+primaryColumns-1U].position;
+        const f64 bank=corridor.bankRadians.empty()?0.0:
+            corridor.bankRadians[i];
+        const auto lateral=s.lateral*std::cos(bank)+s.up*std::sin(bank);
+        const f64 usableWidth=math::Dot(last-first,lateral);
+        if (!(usableWidth>0.0)) throw std::invalid_argument(
+            "Nonpositive usable width at refined corridor station.");
         product.navigation.push_back({
             .stationMeters=s.stationMeters,
             .position=s.position,
             .tangent=s.tangent,
-            .halfWidthMeters=halfWidth,
+            .halfWidthMeters=usableWidth*0.5,
             .lanes=product.laneCount});
+    }
     for (std::size_t i=1;i<stations.size();++i)
     {
         product.debugLines.push_back({stations[i-1].position,
@@ -108,7 +131,9 @@ void RebuildRefinedReferences(PathDerivedProduct& product,
         for (std::size_t i=0;i<stations.size();++i)
         {
             const auto& s=stations[i];
-            const auto at=surfaceAt(i,offset);
+            const f64 fraction=(static_cast<f64>(lane)+0.5)/
+                static_cast<f64>(product.laneCount);
+            const auto at=surfaceAt(i,fraction);
             reference.points.push_back({s.stationMeters,at,s.tangent});
             const u32 index=static_cast<u32>(product.referenceGraph.nodes.size());
             product.referenceGraph.nodes.push_back({

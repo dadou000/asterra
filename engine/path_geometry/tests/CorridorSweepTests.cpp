@@ -126,6 +126,18 @@ int main()
     CHECK(std::abs(derived.lanes[0].points[1].position.y-0.05)<1.e-8);
     CHECK(derived.buildSignature!=basic.buildSignature);
     CHECK(derived==BuildCorridorDerived(source,profile,section));
+    // Authored width keys must carry lane centres and navigation width.
+    CorridorSweep tapered{{{{{-3,0},{0,0.1},{3,0}}}},{}};
+    tapered.sectionKeys={
+        {0, {{{{-3,0},{0,0.1},{3,0}}}}},
+        {20, {{{{-5,0},{0,0.1},{5,0}}}}}
+    };
+    const auto widening=BuildCorridorDerived(source,profile,tapered);
+    CHECK(std::abs(widening.lanes[0].points.front().position.z+1.5)<1.e-9);
+    CHECK(std::abs(widening.lanes[0].points.back().position.z+2.5)<1.e-9);
+    CHECK(std::abs(widening.lanes[1].points.back().position.z-2.5)<1.e-9);
+    CHECK(std::abs(widening.navigation.front().halfWidthMeters-3.0)<1.e-9);
+    CHECK(std::abs(widening.navigation.back().halfWidthMeters-5.0)<1.e-9);
     section.bands[0].profile[1].elevationMeters=0.2;
     CHECK(BuildCorridorDerived(source,profile,section).buildSignature!=derived.buildSignature);
     // Equal profile scalars but different band boundaries must not alias.

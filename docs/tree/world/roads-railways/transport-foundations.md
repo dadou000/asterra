@@ -77,3 +77,7 @@ RailCantDesign (RailCantDesign.hpp/.cpp) adds a railway-specific advisory solver
 The contact reference validator additionally requires normalized, mutually perpendicular, consistently handed station frames so contact points agree with the already-authored section geometry. Any malformed source basis is rejected rather than quietly constructing a different contact plane.
 
 Test targets: Orbit.RailCantDesign, Orbit.TransportSections, Orbit.TransportTopology, Orbit.CorridorSweep and Orbit.CorridorEngineering. Compile and runtime checks still depend on Windows Studio/CI.
+
+## Variable-width travel references
+
+The refined geometry adapter also maps road lane centrelines to the actual usable cross-section width of the first sweep band at every station. Width keys and gradual widening/tapering now move the lane samples and adjust NavSample half-width, rather than leaving navigation lanes at the fixed initial width. The CorridorSweep regression checks narrowing/widening geometry, lane centres, and NavSample width. LaneReference.lateralOffsetMeters is a nominal legacy value; station-specific points are authoritative for dynamic cross-section position. Junction lane-count transitions and true lane merges still require explicit topology products.
