@@ -62,7 +62,7 @@ Important **EXACT-ARCHIVE** numeric parameters:
 
 Actual top-level config roots: EVE_CLOUDS, EVE_LIGHTNING_CONFIG, EVE_PARTICLE_FIELD_CONFIG, EVE_DROPLETS_CONFIG, EVE_WET_SURFACES_CONFIG, EVE_RAYMARCHED_CLOUDS_QUALITY, EVE_SHADOWS, PQS_MANAGER, Scatterer_config, Scatterer_quality_preset, Scatterer_atmosphere, Scatterer_ocean, Scatterer_planetsList.
 
-Within 19 cloud layers: 19 settings, 19 raymarchingSettings, 19 noise, 19 lightVolumeSettings, 19 phaseFunctions, 19 cloudTypes; 70 coverageCurve and 70 densityCurve sections; 46 coverageMap, 31 cloudTypeMap, 11 cloudColorMap; 5 flowMap; 3 curlNoise; 3 painterTiles; 2 painterTileMasks; 5 lightning links; 7 particleField links; 5 droplet links; 2 wetSurfaces links; 9 timeSettings; 10 layer2D; 12 ambientSound. The presence of a node with no keys may still represent an enabled feature or a default profile; **do not interpret empty sections as zero values**.
+Within 19 cloud layers: 19 settings, 19 raymarchingSettings, 19 noise, 19 lightVolumeSettings, 19 phaseFunctions, 19 cloudTypes; 70 coverageCurve and 70 densityCurve sections; 46 coverageMap, 31 cloudTypeMap, 4 cloudColorMap; 5 flowMap; 3 curlNoise; 3 painterTiles; 2 painterTileMasks; 5 lightning links; 7 particleField links; 5 droplet links; 2 wetSurfaces links; 9 timeSettings; 10 layer2D; 12 ambientSound. The presence of a node with no keys may still represent an enabled feature or a default profile; **do not interpret empty sections as zero values**.
 
 Each curve consists of keys with up to four floats (time, value, incoming tangent, outgoing tangent). Preserve input order and tangent semantics; do not approximate these as linear control points.
 
@@ -83,7 +83,7 @@ Release 5 (3.0.0 and later) introduces improved noise erosion/persistence/lacuna
 
 ## Known missing inputs, fail-closed behavior
 
-The 75 distinct unresolved paths include Kerbin base/top coverage/type/scaled/normal maps and painter stamps, Duna duststorm flow and SDF, Jool flow/type/SDF, droplets noise, particle sheets, splash atlas and ambience audio. The actual map contents determine where each cloud appears. No generated Perlin map may be represented as "the exact V5 reference" without its original pixels. The importer must report (layer, role, logical path, missing/resolved, checksum, format, channel swizzle and dimensionality). No copy of the shipped configs or binaries is stored in this public repo by this documentation pass.
+The 103 distinct unresolved paths (76 texture and 27 sound logical paths, including spaces within proprietary sound filenames) include Kerbin base/top coverage/type/scaled/normal maps and painter stamps, Duna duststorm flow and SDF, Jool flow/type/SDF, droplets noise, particle sheets, splash atlas and ambience audio. The actual map contents determine where each cloud appears. No generated Perlin map may be represented as "the exact V5 reference" without its original pixels. The importer must report (layer, role, logical path, missing/resolved, checksum, format, channel swizzle and dimensionality). No copy of the shipped configs or binaries is stored in this public repo by this documentation pass.
 
 # Exactness verification checklist
 
