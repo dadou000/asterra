@@ -315,7 +315,7 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
         // over the camera-to-cloud distance.
         if (const auto cloudFound = cloudPresentations_.find(info.id);
             info.layers.clouds &&
-            (info.layers.fullClipmap || !info.layers.macroGlobe) &&
+            (info.layers.cloudBPreview || info.layers.fullClipmap || !info.layers.macroGlobe) &&
             cloudFound != cloudPresentations_.end() &&
             cloudFound->second.gpu != nullptr &&
             cloudFound->second.field != nullptr &&
