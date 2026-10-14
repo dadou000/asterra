@@ -38,6 +38,8 @@ private:
     void Refresh()
     {
         edges_.clear();
+        nodes_.clear();
+        networks_.clear();
         report_=rpc::Value{};
         error_.clear();
         if (!session_->World().HasWorld()) return;
@@ -49,9 +51,15 @@ private:
             const auto record=pending.back();
             pending.pop_back();
             if (record.type==paths::kPathEdgeType) edges_.push_back(record);
+            if (record.type==paths::kPathNodeType) nodes_.push_back(record);
+            if (record.type==paths::kPathNetworkType) networks_.push_back(record);
             const auto children=store.Children(record.id);
             pending.insert(pending.end(),children.begin(),children.end());
         }
+        std::sort(nodes_.begin(),nodes_.end(),
+            [](const auto& a,const auto& b){return a.name<b.name;});
+        std::sort(networks_.begin(),networks_.end(),
+            [](const auto& a,const auto& b){return a.name<b.name;});
         std::sort(edges_.begin(),edges_.end(),
             [](const auto& a,const auto& b) {
                 if(a.name!=b.name) return a.name<b.name;
@@ -74,6 +82,51 @@ private:
         startHandle_ = edge->startHandleMeters;
         endHandle_ = edge->endHandleMeters;
         mode_ = edge->mode;
+    }
+    void CreateNetwork()
+    {
+        try
+        {
+            if (!session_->World().HasWorld())
+                throw std::runtime_error("Open a world first.");
+            if (newNetworkName_.empty())
+                throw std::invalid_argument("Network name cannot be empty.");
+            const auto created=session_->PathNetwork().Service().CreateNetwork(
+                newNetworkName_);
+            newNetworkId_=created.id;
+            status_="Network created. Add anchor nodes through the existing node tools or connect nodes below.";
+            error_.clear();
+            Refresh();
+        }
+        catch(const std::exception& e){error_=e.what();}
+    }
+    void ConnectNodes()
+    {
+        try
+        {
+            if (!session_->World().HasWorld())
+                throw std::runtime_error("Open a world first.");
+            if (startNodeId_==endNodeId_ || !startNodeId_ || !endNodeId_)
+                throw std::invalid_argument("Choose two different path nodes.");
+            auto& service=session_->PathNetwork().Service();
+            const auto a=service.FindNode(startNodeId_);
+            const auto b=service.FindNode(endNodeId_);
+            if (!a || !b || a->network != b->network)
+                throw std::invalid_argument("Both nodes must exist in the same network.");
+            paths::PathEdgeRecord edge{};
+            if (newEdgeMode_==1)
+                edge=service.ConnectBezier(startNodeId_,endNodeId_,
+                    newStartHandle_,newEndHandle_,newEdgeName_);
+            else if (newEdgeMode_==2)
+                edge=service.ConnectRouted(startNodeId_,endNodeId_,newEdgeName_);
+            else
+                edge=service.ConnectDirect(startNodeId_,endNodeId_,newEdgeName_);
+            Refresh();
+            SelectEdge(edge.id);
+            status_="Created path edge through the authoritative command service.";
+            error_.clear();
+        }
+        catch(const std::exception& e){error_=e.what();}
     }
     void Apply()
     {
@@ -139,6 +192,43 @@ private:
             : "Track alignments, design speed, rail curves and cant diagnostics.");
 
         if (context.Button("Refresh infrastructure##proc-refresh")) Refresh();
+        if (context.Section("Create networks and segments##proc-create",false))
+        {
+            static_cast<void>(context.InputText("Network name##proc-new-network",newNetworkName_));
+            if (context.Button("Create network##proc-create-network")) CreateNetwork();
+            context.MutedText(std::format("{} networks / {} anchor nodes",
+                networks_.size(),nodes_.size()));
+            if (context.Section("Connect existing nodes##proc-connect",true))
+            {
+                for (const auto& node:nodes_)
+                {
+                    const std::string id=node.id.ToString();
+                    if (context.Selectable("Start: "+node.name+"##proc-start-"+id,
+                        startNodeId_==node.id))
+                        startNodeId_=node.id;
+                }
+                context.Separator();
+                for (const auto& node:nodes_)
+                {
+                    const std::string id=node.id.ToString();
+                    if (context.Selectable("End: "+node.name+"##proc-end-"+id,
+                        endNodeId_==node.id))
+                        endNodeId_=node.id;
+                }
+                static constexpr std::array<std::string_view,3> modes{
+                    "Direct","Bezier","Terrain routed"};
+                static_cast<void>(context.SegmentedControl(
+                    "Connection##proc-new-mode",modes,newEdgeMode_));
+                static_cast<void>(context.InputText("Segment name##proc-new-edge-name",newEdgeName_));
+                if (newEdgeMode_==1)
+                {
+                    static_cast<void>(context.InputDouble3("Initial handle##proc-new-handle-a",newStartHandle_));
+                    static_cast<void>(context.InputDouble3("Final handle##proc-new-handle-b",newEndHandle_));
+                }
+                if (context.PrimaryButton("Connect selected nodes##proc-connect-action"))
+                    ConnectNodes();
+            }
+        }
         context.SameLine();
         context.MutedText(std::format("{} authored edges", edges_.size()));
 
@@ -247,6 +337,16 @@ private:
     studio_session::StudioSession* session_;
     rpc::Dispatcher* rpc_;
     std::vector<scene::ObjectRecord> edges_;
+    std::vector<scene::ObjectRecord> nodes_;
+    std::vector<scene::ObjectRecord> networks_;
+    paths::NetworkId newNetworkId_{};
+    std::string newNetworkName_{"New Infrastructure"};
+    scene::ObjectId startNodeId_{};
+    scene::ObjectId endNodeId_{};
+    i32 newEdgeMode_{1};
+    std::string newEdgeName_{"New Segment"};
+    math::Double3 newStartHandle_{5.0,0.0,0.0};
+    math::Double3 newEndHandle_{-5.0,0.0,0.0};
     std::string edgeId_;
     double speed_{20.0};
     std::string error_;
