@@ -86,7 +86,7 @@ The file tree is an implementation target, not a claim that all these files exis
 | R01 | ConfigNode parser with repeated values and nested nodes | P/ReferenceConfigParser | R00 | no loss of 293 Hermite key entries |
 | R02 | Typed V5 cloud material schema | O/CloudField.hpp for source authority | R01 | 19 layers / 70 types / 27 stamps with optional fields |
 | R03 | Hermite curve LUT bake and interpolation | P/ReferenceMedium | R02 | CPU/GPU eval agreement; correct tangent handling |
-| R04 | Private asset path resolver, hash and error diagnostics | P/ReferenceAssetRegistry | R01 | all 75 missing logical paths individually reported |
+| R04 | Private asset path resolver, hash and error diagnostics | P/ReferenceAssetRegistry | R01 | all 103 missing logical paths individually reported |
 | R05 | Coverage/type/color/flow/SDF texture import and swizzles | O/CloudField.cpp GPU input | R04 | equirectangular/cube-six test and seam continuity |
 | R06 | Imported painter tiles/masks and undo/redo | O/Studio Build Procedurals UI | R05 | world-anchored updates, map revisions and trace |
 | R07 | Typed layer FX links and time profiles | P/ReferenceEvents | R02 | no unknown implicit settings discarded |
