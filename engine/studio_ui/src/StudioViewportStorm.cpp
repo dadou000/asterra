@@ -707,7 +707,7 @@ void StudioViewportRenderer::UpdateStormDomain(
     if (!wanted.valid || rt.body != body)
     {
         rt.active.valid = false;
-        cloudRenderer_.SetStormBuffer(nullptr);
+        PublishStormCloudExport(nullptr);
         if (rt.autoRequest.enabled && !rt.manualActive)
         {
             status.message = "no scheduled storm is alive near the camera";
@@ -875,11 +875,11 @@ void StudioViewportRenderer::UpdateStormDomain(
                 rt.solver->ExportCloud(placement);
                 rt.exported = true;
             }
-            cloudRenderer_.SetStormBuffer(&rt.solver->CloudBuffer());
+            PublishStormCloudExport(&rt.solver->CloudBuffer());
         }
         else
         {
-            cloudRenderer_.SetStormBuffer(nullptr);
+            PublishStormCloudExport(nullptr);
         }
 
         // ---- lightning from the storm's own charge (the flashes light the clouds when ORBIT_CLOUD_POINT_LIGHTS=1)
@@ -1013,7 +1013,7 @@ void StudioViewportRenderer::UpdateStormDomain(
         rt.solver.reset();
         rt.active.valid = false;
         rt.haveState = false;
-        cloudRenderer_.SetStormBuffer(nullptr);
+        PublishStormCloudExport(nullptr);
         status.state = StormStatus::State::Failed;
         status.message = exception.what();
         log::Warning(std::string("Storm domain failed: ") + exception.what());
