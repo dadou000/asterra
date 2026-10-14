@@ -11,6 +11,7 @@
 #include <orbit/path_geometry/PathDerived.hpp>
 #include <orbit/path_geometry/CorridorEngineering.hpp>
 #include <orbit/path_geometry/RailCantDesign.hpp>
+#include <orbit/path_geometry/TransportJunctions.hpp>
 #include <orbit/path_routing/RouteDomains.hpp>
 #include <orbit/path_routing/RoutePlanner.hpp>
 #include <orbit/studio_session/StudioSession.hpp>
@@ -1249,6 +1250,118 @@ void StudioPathNetworkHost::AttachRpc()
                 output.emplace("rail_cant_warnings", std::move(railWarnings));
             }
             return orbit::rpc::Value(std::move(output));
+        });
+
+    // Bounded, on-demand junction preview. It consumes exactly the same
+    // revisioned path products as path.geometry, not a second editable graph.
+    rpcHost_.Dispatcher().Register(
+        {.name = "path.junction_preview",
+         .description = "Preview a semantic node's road turn connectors, railway branch candidates, and road footprint without mutating geometry. Params: node (UUID), optional include_samples (bool).",
+         .mutating = false},
+        [this](const orbit::rpc::Value& params) -> orbit::rpc::Value
+        {
+            const auto* requested=params.Find("node");
+            if (!requested || !requested->IsString())
+                throw orbit::rpc::Error(-32602,"node must be a UUID string");
+            const auto node=orbit::scene::ObjectId::Parse(requested->AsString());
+            if (!node)throw orbit::rpc::Error(-32602,"Invalid node UUID");
+            bool includeSamples=false;
+            if (const auto* value=params.Find("include_samples"))
+            {
+                if (!value->IsBool())
+                    throw orbit::rpc::Error(-32602,"include_samples must be a boolean");
+                includeSamples=value->AsBool();
+            }
+            if (!worldSession_.HasWorld())
+                return orbit::rpc::Value::Object{
+                    {"ready",false},{"reason","No world open"}};
+            auto& service=studioSession_.PathNetwork().Service();
+            const auto semantic=service.FindNode(*node);
+            if (!semantic)
+                return orbit::rpc::Value::Object{
+                    {"ready",false},{"reason","Node not found"},
+                    {"node",node->ToString()}};
+            std::vector<orbit::path_geometry::JunctionApproach> approaches;
+            const auto edgeIds=FindPathEdges(objects(),service);
+            for (const auto id:edgeIds)
+            {
+                const auto edge=service.FindEdge(id);
+                if (!edge || (edge->startNode!=*node && edge->endNode!=*node))
+                    continue;
+                const bool road=edge->infrastructureCatalogId=="rural-road";
+                const bool rail=edge->infrastructureCatalogId=="ballasted-rail";
+                if (!road && !rail)continue;
+                const auto* geometry=studioSession_.PathProducts().Find(id);
+                if (!geometry)
+                {
+                    const auto it=derivedPaths_.find(id);
+                    if (it!=derivedPaths_.end())geometry=&it->second;
+                }
+                approaches.push_back({
+                    .edge=id,
+                    .frame=geometry?geometry->frame:orbit::frames::FrameId{},
+                    .mode=road?orbit::path_geometry::TransportMode::Road:
+                               orbit::path_geometry::TransportMode::Rail,
+                    .atStart=edge->startNode==*node,
+                    // The current authored edge has no directional restriction.
+                    // Never infer one-way behaviour from lane count.
+                    .bidirectional=true,
+                    .geometry=geometry
+                });
+                if (approaches.size()>16U)break;
+            }
+            const auto plan=orbit::path_geometry::BuildTransportJunction(
+                *node,approaches);
+            orbit::rpc::Value::Array findings, movements;
+            for(const auto& finding:plan.findings)
+                findings.emplace_back(orbit::rpc::Value::Object{
+                    {"kind",static_cast<orbit::i64>(finding.issue)},
+                    {"edge",finding.edge.ToString()},
+                    {"message",finding.explanation}
+                });
+            for(const auto& move:plan.movements)
+            {
+                orbit::rpc::Value::Object record{
+                    {"from_edge",move.incomingEdge.ToString()},
+                    {"to_edge",move.outgoingEdge.ToString()},
+                    {"from_lane",static_cast<orbit::i64>(move.incomingLane)},
+                    {"to_lane",static_cast<orbit::i64>(move.outgoingLane)},
+                    {"mode",move.mode==orbit::path_geometry::TransportMode::Rail?
+                        "rail":"road"},
+                    {"length_meters",move.lengthMeters}
+                };
+                if(includeSamples)
+                {
+                    orbit::rpc::Value::Array samples;
+                    for(const auto& p:move.points)
+                        samples.emplace_back(orbit::rpc::Value::Array{p.x,p.y,p.z});
+                    record.emplace("points_frame_local_meters",std::move(samples));
+                }
+                movements.emplace_back(std::move(record));
+            }
+            orbit::rpc::Value::Array footprint;
+            if(includeSamples)
+                for(const auto& vertex:plan.roadFootprint.vertices)
+                    footprint.emplace_back(orbit::rpc::Value::Array{
+                        vertex.position.x,vertex.position.y,vertex.position.z});
+            const bool hasRail=std::any_of(approaches.begin(),approaches.end(),
+                [](const auto& a){return a.mode==orbit::path_geometry::TransportMode::Rail;});
+            return orbit::rpc::Value::Object{
+                {"ready",true},{"valid",plan.Valid()},
+                {"node",node->ToString()},
+                {"frame",plan.frame.ToString()},
+                {"approaches",static_cast<orbit::i64>(approaches.size())},
+                {"valid_edges",static_cast<orbit::i64>(plan.validEdges.size())},
+                {"movement_count",static_cast<orbit::i64>(plan.movements.size())},
+                {"road_footprint_vertices",
+                    static_cast<orbit::i64>(plan.roadFootprint.vertices.size())},
+                {"road_footprint_triangles",
+                    static_cast<orbit::i64>(plan.roadFootprint.indices.size()/3U)},
+                {"rail_requires_explicit_turnout",hasRail},
+                {"movements",std::move(movements)},
+                {"findings",std::move(findings)},
+                {"footprint_frame_local_meters",std::move(footprint)}
+            };
         });
 }
 } // namespace orbit::editor_app

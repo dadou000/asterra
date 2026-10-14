@@ -144,3 +144,7 @@ The Build → Procedurals panel now gives newly authored network segments a supp
 Road/rail catalog sections are built through PlanInfrastructureSection in engine/path_geometry and the existing UniverseBoundPathCache; the generic independent path-ribbon remains fallback for non-infrastructure paths. The existing path.engineering RPC now returns actual committed construction sampling when present, construction readiness/dirty flags and railway cant findings/suggested offsets (metres) without applying edits. Construction modes bridge/deck/tunnel/supported remain persisted intent only and no longer incorrectly grade terrain like a surface road.
 
 This does NOT complete click-to-place terrain nodes, tunnel excavation, elevated deck structure/physics, full railway railhead-web solid profile, visual GPU validation or finished junctions. Build and runtime checks are outstanding.
+
+## Junction and turnout diagnostics
+
+The pure junction builder produces explicit-ID movement previews with no cross-mode transfer, plus a bounded road footprint visualization. A separate RailInterlocking prototype exercises one-owner turnout reservation and occupancy locks. The canonical editor Build → Procedurals panel and agents call path.junction_preview through the existing dispatcher; this is a read-only probe, not a runtime junction collider or authored switch controller. Do not equate lane candidate connections with a validated physical intersection. Tests: Orbit.TransportJunctions and Orbit.RailInterlocking.

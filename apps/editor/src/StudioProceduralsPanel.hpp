@@ -213,6 +213,32 @@ private:
         }
         catch(const std::exception& e){error_=e.what();}
     }
+    void AnalyzeJunction()
+    {
+        junctionError_.clear();
+        junctionReport_=rpc::Value{};
+        try
+        {
+            const auto node=scene::ObjectId::Parse(junctionNodeId_);
+            if(!node)throw std::invalid_argument("Select a valid path node.");
+            const rpc::Value request(rpc::Value::Object{
+                {"jsonrpc","2.0"},{"id",static_cast<i64>(1)},
+                {"method","path.junction_preview"},
+                {"params",rpc::Value(rpc::Value::Object{
+                    {"node",junctionNodeId_},{"include_samples",false}})}
+            });
+            const auto response=rpc_->Dispatch(rpc::Serialize(request));
+            if(!response)throw std::runtime_error("No junction RPC response.");
+            const auto parsed=rpc::ParseValue(*response);
+            if(const auto* e=parsed.Find("error"))
+                throw std::runtime_error(rpc::Serialize(*e));
+            const auto* payload=parsed.Find("result");
+            if(!payload || !payload->IsObject())
+                throw std::runtime_error("Malformed junction result.");
+            junctionReport_=*payload;
+        }
+        catch(const std::exception& ex){junctionError_=ex.what();}
+    }
     void Draw(editor_ui::PanelContext& context)
     {
         if (session_->World().HasWorld())
@@ -226,6 +252,8 @@ private:
             edges_.clear(); nodes_.clear(); networks_.clear();
             edgeId_.clear(); newNetworkId_ = {};
             report_ = rpc::Value{};
+            junctionReport_ = rpc::Value{};
+            junctionNodeId_.clear();
             knownWorldGeneration_ = ~u64{0};
         }
         context.Heading("Build / Procedurals");
@@ -334,6 +362,81 @@ private:
             }
             if (context.Section("Advanced edge lookup##proc-lookup",false))
                 static_cast<void>(context.InputText("Edge UUID##proc-id",edgeId_));
+        }
+
+        // Junction inspection stays available before selecting an individual
+        // edge and shares the same RPC used by external agents.
+        if (context.Section("Junction and turnout preview##proc-junction",false))
+        {
+            context.MutedText("Exact authored node identity; no proximity guessing or persistent changes.");
+            if (context.Section("Choose junction node##proc-junction-nodes",false))
+            {
+                for (const auto& node:nodes_)
+                    if (context.Selectable(node.name+"##proc-junction-"+node.id.ToString(),
+                        junctionNodeId_==node.id.ToString()))
+                    {
+                        junctionNodeId_=node.id.ToString();
+                        junctionReport_=rpc::Value{};
+                    }
+            }
+            if (context.Section("Advanced node UUID##proc-junction-id",false))
+                static_cast<void>(context.InputText("Node UUID##proc-junction-manual",junctionNodeId_));
+            if (context.Button("Analyze junction##proc-junction-run"))
+                AnalyzeJunction();
+            if(!junctionError_.empty())context.ErrorText(junctionError_);
+            if(junctionReport_.IsObject())
+            {
+                if(const auto* ready=junctionReport_.Find("ready");
+                   ready && ready->IsBool() && !ready->AsBool())
+                {
+                    context.MutedText("Junction unavailable or world closed.");
+                }
+                else
+                {
+                    for(const auto* field:{"approaches","movement_count",
+                        "road_footprint_triangles"})
+                        if(const auto* v=junctionReport_.Find(field);
+                           v && v->IsInteger())
+                            context.KeyValue(field,std::to_string(v->AsInteger()));
+                    if(const auto* f=junctionReport_.Find("frame");
+                       f && f->IsString())
+                        context.KeyValue("Station frame",f->AsString());
+                    if(const auto* r=junctionReport_.Find("rail_requires_explicit_turnout");
+                       r && r->IsBool() && r->AsBool())
+                        context.MutedText(
+                            "Rail branches are candidate connections only. An authored turnout and interlocking are required.");
+                    if(const auto* findings=junctionReport_.Find("findings");
+                       findings && findings->IsArray())
+                    {
+                        context.KeyValue("Topology/geometry findings",
+                            std::to_string(findings->AsArray().size()));
+                        if(context.Section("Junction findings##proc-junction-errors",true))
+                            for(const auto& finding:findings->AsArray())
+                            {
+                                if(!finding.IsObject())continue;
+                                const auto* msg=finding.Find("message");
+                                if(msg && msg->IsString())context.ErrorText(msg->AsString());
+                            }
+                    }
+                    if(const auto* moves=junctionReport_.Find("movements");
+                       moves && moves->IsArray() &&
+                       context.Section("Route candidates##proc-junction-moves",false))
+                    {
+                        for(const auto& move:moves->AsArray())
+                        {
+                            if(!move.IsObject())continue;
+                            const auto* from=move.Find("from_edge");
+                            const auto* to=move.Find("to_edge");
+                            const auto* distance=move.Find("length_meters");
+                            if(from && to && distance && from->IsString() &&
+                               to->IsString() && distance->IsNumber())
+                                context.MutedText(std::format("{} -> {}: {:.1f} m",
+                                    from->AsString(),to->AsString(),
+                                    distance->AsNumber()));
+                        }
+                    }
+                }
+            }
         }
 
         if (edgeId_.empty())
@@ -494,6 +597,9 @@ private:
     double speed_{20.0};
     std::string error_;
     rpc::Value report_;
+    rpc::Value junctionReport_;
+    std::string junctionNodeId_;
+    std::string junctionError_;
     std::size_t selectedFinding_{0};
     i32 category_{0};
     std::string catalogId_;

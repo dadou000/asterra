@@ -10,10 +10,14 @@ sources = [
   "engine/path_geometry/src/TransportSections.cpp",
   "engine/path_geometry/include/orbit/path_geometry/TransportTopology.hpp",
   "engine/path_geometry/src/TransportTopology.cpp",
+  "engine/path_geometry/include/orbit/path_geometry/TransportJunctions.hpp",
+  "engine/path_geometry/src/TransportJunctions.cpp",
+  "engine/path_geometry/include/orbit/path_geometry/RailInterlocking.hpp",
+  "engine/path_geometry/src/RailInterlocking.cpp",
   "engine/path_geometry/include/orbit/path_geometry/InfrastructureSectionBuilder.hpp",
   "engine/path_geometry/src/InfrastructureSectionBuilder.cpp",
 ]
-symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology", "PlanInfrastructureSection"]
+symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology", "PlanInfrastructureSection", "BuildTransportJunction", "RailInterlocking"]
 invariants = [
   "Network authority remains in engine/paths; road/rail representations are disposable derived products.",
   "Railhead contact reference coordinates match the swept railhead strip station frame, gauge and cant.",
@@ -99,3 +103,11 @@ The editor's StudioPathNetworkHost now prefers the committed construction produc
 The panel's category selection sets actual catalog intent for newly connected edges, and selecting an existing edge restores its category. The panel shows derived mesh/collision counts, revision, blocked builds and pending work; new frame point nodes can use the active celestial body's explicit reference frame without manually copying its UUID. Existing workflows with manually supplied frame IDs remain supported.
 
 User-created bridges, supported decks and tunnels store their construction intent and can be inspected, but do not yet generate structural supports or tunnel voids. No continuous terrain cut/fill is published for those modes. A native end-to-end visual/simulation smoke test is still required.
+
+## Junctions and rail-switch reservation (Harmony large pass)
+
+BuildTransportJunction takes exact authored node identity, explicit endpoint orientation, a common frame, and the existing derived corridor station/lane products. It generates stable same-mode Hermite road-turn and rail-branch alignment previews, a bounded road footprint hull and typed findings for invalid geometry, distant endpoints, mixed frames or excess workload. The footprint is **NOT yet collidable junction pavement**, and all road/rail alignments are candidates, never authority. Rail and road route movements do not interchange; an overpass cannot create a junction by spatial overlap alone.
+
+RailInterlocking is a pure ephemeral switch reservation model requiring an explicit stem, straight and diverging edge. It blocks conflicting reservations, locks alignment during reservations, rejects unauthorized releases and disallows throwing a switch while occupied. It is not a persistent rail signal system or safety-certified control.
+
+StudioPathNetworkHost registers read-only path.junction_preview(node UUID, optional include_samples bool) returning frame, connection candidates, preview hull dimensions and typed findings. Build → Procedurals exposes the same RPC through a node browser, with no independent topology store. Only bounded geometry is emitted. Tests: Orbit.TransportJunctions and Orbit.RailInterlocking. The actual runtime build, switch geometry, continuous junction collision and GPU/physics smoke test remain outstanding.

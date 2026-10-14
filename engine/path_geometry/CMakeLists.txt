@@ -12,6 +12,8 @@ add_library(OrbitPathGeometry STATIC
     src/TransportTopology.cpp
     src/RailCantDesign.cpp
     src/InfrastructureSectionBuilder.cpp
+    src/TransportJunctions.cpp
+    src/RailInterlocking.cpp
 )
 
 add_library(
@@ -167,4 +169,18 @@ if(BUILD_TESTING)
     target_compile_features(OrbitInfrastructureSectionBuilderTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitInfrastructureSectionBuilderTests)
     add_test(NAME Orbit.InfrastructureSectionBuilder COMMAND OrbitInfrastructureSectionBuilderTests)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTransportJunctionsTests tests/TransportJunctionsTests.cpp)
+    target_link_libraries(OrbitTransportJunctionsTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitTransportJunctionsTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTransportJunctionsTests)
+    add_test(NAME Orbit.TransportJunctions COMMAND OrbitTransportJunctionsTests)
+
+    add_executable(OrbitRailInterlockingTests tests/RailInterlockingTests.cpp)
+    target_link_libraries(OrbitRailInterlockingTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitRailInterlockingTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRailInterlockingTests)
+    add_test(NAME Orbit.RailInterlocking COMMAND OrbitRailInterlockingTests)
 endif()
