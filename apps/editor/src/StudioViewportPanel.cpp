@@ -376,6 +376,27 @@ void StudioViewportPanel::Register()
                 }
                 if (cloudBackendLayers.cloudBPreview)
                 {
+                    // Two fully independent A/B3 diagnostics. Changing
+                    // either only updates this viewport's layered settings;
+                    // it cannot modify System A shaders or caches.
+                    if (context.Button(cloudBackendLayers.cloudLightVolume
+                            ? "B Sun cache: ON##b-sun-cache"
+                            : "B Sun cache: OFF##b-sun-cache"))
+                    {
+                        cloudBackendLayers.cloudLightVolume =
+                            !cloudBackendLayers.cloudLightVolume;
+                        studioViews.SetTerrainLayers(
+                            "studio.primary", cloudBackendLayers);
+                    }
+                    if (context.Button(cloudBackendLayers.bypassCloudShadow
+                            ? "B receiver shadows: OFF##b-receiver-shadow"
+                            : "B receiver shadows: ON##b-receiver-shadow"))
+                    {
+                        cloudBackendLayers.bypassCloudShadow =
+                            !cloudBackendLayers.bypassCloudShadow;
+                        studioViews.SetTerrainLayers(
+                            "studio.primary", cloudBackendLayers);
+                    }
                     if (cloudBackendLayers.cloudLab.enabled)
                     {
                         context.Text(
