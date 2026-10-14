@@ -1125,6 +1125,7 @@ int orbit::editor_app::StudioApplication::Run(
         orbit::studio_ui::DebugViewUi
             debugViewUi(
                 studioViews, studioSession);
+        debugViewUi.SetEngineeringDispatcher(rpcHost.Dispatcher());
         debugViewUi.Register(ui);
 
         struct ViewportOnlyCapture
