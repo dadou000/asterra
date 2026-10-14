@@ -348,6 +348,32 @@ void StudioViewportPanel::Register()
                         static_cast<void>(studioViewportRenderer.SetCloudSplit(false, "", 0.5F));
                     }
                 }
+                // Report all silent reasons for an empty cloud frame.
+                if (!cloudBackendLayers.clouds)
+                    context.Text("Clouds disabled in view layers.");
+                else if (cloudBackendLayers.bypassAtmosphere)
+                    context.Text("Clouds blocked by atmosphere bypass.");
+                else if (!cloudBackendLayers.cloudBPreview &&
+                         cloudBackendLayers.macroGlobe &&
+                         !cloudBackendLayers.fullClipmap)
+                    context.Text("Cloud A near-field disabled in macro-globe mode.");
+                else if (const auto status =
+                         studioViewportRenderer.CloudDiagnostics("studio.primary");
+                         !status.has_value())
+                    context.Text("No ready cloud field: check enabled Cloud Layer "
+                                 "capabilities, source, and field generation.");
+                else
+                {
+                    const auto& d = *status;
+                    context.Text("Cloud field: " +
+                                 std::to_string(d.layerCount) + " layers; coverage " +
+                                 std::to_string(d.meanCoverage) + "; optical depth " +
+                                 std::to_string(d.meanOpticalDepth) +
+                                 (d.gpuResident ? " [GPU ready]" : " [GPU pending]"));
+                    if (d.meanCoverage < 0.005)
+                        context.Text("Cloud field is almost empty: inspect "
+                                     "coverage and weather inputs.");
+                }
                 if (cloudBackendLayers.cloudBPreview)
                 {
                     if (cloudBackendLayers.cloudLab.enabled)
