@@ -1,12 +1,15 @@
 #include <orbit/celestial_clouds/UnifiedCloudFoundation.hpp>
 #include <orbit/celestial_clouds/CloudField.hpp>
+#include <orbit/celestial_clouds/UnifiedCloudNoise.hpp>
 
 // Keep regression assertions active even when CTest is built in Release.
 #if defined(NDEBUG)
 #undef NDEBUG
 #endif
 #include <cassert>
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <optional>
 #include <stdexcept>
 
@@ -92,6 +95,37 @@ void TestInvalidation()
     try { static_cast<void>(Invalidate(a, b)); }
     catch (const std::invalid_argument&) { rejected = true; }
     assert(rejected);
+}
+
+void TestUnifiedNoise()
+{
+    using namespace orbit::celestial_clouds::unified;
+    const auto values = BuildUnifiedCloudNoise();
+    constexpr std::size_t expected =
+        static_cast<std::size_t>(kUnifiedNoiseSide) *
+        kUnifiedNoiseSide * kUnifiedNoiseSide * kUnifiedNoiseChannels;
+    assert(values.size() == expected);
+    double sums[4]{};
+    float lows[4]{1.F,1.F,1.F,1.F};
+    float highs[4]{0.F,0.F,0.F,0.F};
+    for (std::size_t index = 0; index < values.size(); ++index)
+    {
+        const float v = values[index];
+        assert(std::isfinite(v) && v >= 0.F && v <= 1.F);
+        const std::size_t channel = index % 4U;
+        sums[channel] += v;
+        lows[channel] = std::min(lows[channel],v);
+        highs[channel] = std::max(highs[channel],v);
+    }
+    const double voxels = static_cast<double>(expected / 4U);
+    for (std::size_t c = 0; c < 4U; ++c)
+    {
+        // An almost constant field would recreate B's flat cloud blanket.
+        assert(lows[c] < 0.01F && highs[c] > 0.99F);
+        assert(sums[c] / voxels > 0.18 && sums[c] / voxels < 0.82);
+    }
+    const auto rerun = BuildUnifiedCloudNoise();
+    assert(rerun == values); // CPU bake must be deterministic across frames.
 }
 
 void TestLayerPackingAndOverlap()
@@ -226,4 +260,5 @@ int main()
     TestRadianceComposition();
     TestMultiViewIsolation();
     TestLayerPackingAndOverlap();
+    TestUnifiedNoise();
 }
