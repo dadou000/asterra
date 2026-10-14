@@ -45,6 +45,9 @@ public:
         f64 lastRadius{0.0};
         bool active{false};
         bool initialized{false};
+        u64 bodyHigh{0U};
+        u64 bodyLow{0U};
+        bool bodySet{false};
     };
 
     [[nodiscard]] std::unique_ptr<SunCache> CreateSunCache(rhi::Device& device) const;
@@ -56,7 +59,8 @@ public:
         f64 referenceRadiusMeters,
         const celestial_atmosphere::AtmosphereRenderView& view,
         rhi::Buffer* stormExport,
-        f64 simulationSeconds);
+        f64 simulationSeconds,
+        u64 bodyHigh, u64 bodyLow);
 
     void Draw(
         rhi::CommandList& commands,
