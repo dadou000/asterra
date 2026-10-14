@@ -40,7 +40,7 @@ struct Config
     float4 upNear;       // view up, near plane
     float4 sunFar;       // Sun direction, far plane
     float4 shell;        // planet radius, cloud base and top, cubemap face size
-    float4 material;     // layer count, receiver-shadow flag, reserved, irradiance
+    float4 material;     // layer count, receiver shadows, live storm, irradiance
     float4 cacheAnchor;  // body-fixed unit tangent anchor xyz, generation w
     float4 cacheState;   // slice phase, cache active, reserved, stellar half-angle (rad)
 };
@@ -154,9 +154,7 @@ float SampleParent(float3 fractional)
     const float x0 = lerp(ParentCell(a),ParentCell(a+int3(1,0,0)),t.x);
     const float x1 = lerp(ParentCell(a+int3(0,1,0)),ParentCell(a+int3(1,1,0)),t.x);
     const float y0 = lerp(ParentCell(a+int3(0,0,1)),ParentCell(a+int3(1,0,1)),t.x);
-)";
-
-constexpr const char* kMediumPart2 = R"(    const float y1 = lerp(ParentCell(a+int3(0,1,1)),ParentCell(a+int3(1,1,1)),t.x);
+    const float y1 = lerp(ParentCell(a+int3(0,1,1)),ParentCell(a+int3(1,1,1)),t.x);
     return lerp(lerp(x0,x1,t.y),lerp(y0,y1,t.y),t.z);
 }
 float SampleChild(float3 fractional)
@@ -175,7 +173,9 @@ float Influence(float x, float y)
     const int offset = (int)g_storm[10];
     if (offset <= 0) return 1.;
     const int2 dims = max(int2(g_storm[17],g_storm[18]),int2(1,1));
-    const float2 coord = float2(
+)";
+
+constexpr const char* kMediumPart2 = R"(    const float2 coord = float2(
         x/max(g_storm[14],1.)+0.5*float(dims.x)-0.5,
         y/max(g_storm[15],1.)+0.5*float(dims.y)-0.5);
     const int2 a = clamp((int2)floor(coord),int2(0,0),dims-1);
@@ -265,9 +265,7 @@ float4 Density(float3 position, bool receiver)
         float coverage = saturate((w.x-(0.52-shell.w*0.35-0.26))/0.52);
         if (coverage <= 0.015 && w.y <= 0.015) continue;
         const float h = saturate((altitude-shell.x)/max(shell.y-shell.x,1.));
-)";
-
-constexpr const char* kMediumPart3 = R"(        const float type = saturate(w.w);
+        const float type = saturate(w.w);
         const float low = smoothstep(0.,0.07,h) * (1.-smoothstep(0.7,1.,h));
         const float fair = smoothstep(0.,0.12,h) *
             (1.-smoothstep(0.62+0.18*type,1.,h));
@@ -296,7 +294,9 @@ constexpr const char* kMediumPart3 = R"(        const float type = saturate(w.w)
         otherScatter += extinction*(1.-conv)*a;
         convScatter += extinction*conv*a;
         otherPhase += extinction*(1.-conv)*a*g;
-        convPhase += extinction*conv*a*g;
+)";
+
+constexpr const char* kMediumPart3 = R"(        convPhase += extinction*conv*a*g;
     }
     const float2 sim = StormMedium(position,radius);
     const float storm = sim.x;
@@ -338,30 +338,66 @@ float3 CachePoint(uint3 q)
         (east*metres.x+north*metres.y)/max(g.shell.x,1.));
     return d*(g.shell.x+altitude);
 }
+// Cloud sunlight is an optical integral over the occupied shell intervals.
+// Six samples uniformly spaced along an entire grazing ray can miss the
+// cloud layer or cause black/white radial aliases at orbital distance.
+float SunDepthInterval(float3 p,float3 sun,float beginT,float endT,uint steps)
+{
+    if(endT<=beginT || steps==0u) return 0.;
+    const float dt=(endT-beginT)/float(steps);
+    float tau=0.;
+    [loop]
+    for(uint j=0u;j<steps;++j)
+    {
+        tau+=Density(p+sun*(beginT+(float(j)+0.5)*dt),false).x*dt;
+    }
+    return tau;
+}
 float SunDepthDirect(float3 p, uint requestedSteps)
 {
     const float3 sun=normalize(g.sunFar.xyz);
-    float a,b;
-    if (!SphereInterval(p,sun,g.shell.x+g.shell.z,a,b))
+    float outerNear,outerFar;
+    if(!SphereInterval(p,sun,g.shell.x+g.shell.z,outerNear,outerFar))
         return 0.;
-    // A light ray intercepted by the planet cannot reach the Sun.
-    float groundA,groundB;
-    if (SphereInterval(p,sun,g.shell.x,groundA,groundB))
+    const float endT=min(max(outerFar,0.),1000000.);
+    if(endT<=0.) return 0.;
+    float groundNear,groundFar;
+    if(SphereInterval(p,sun,g.shell.x,groundNear,groundFar))
     {
-        if (groundA>0.01 && groundA<b) return 24.;
-        if (groundA<=0.01 && groundB>0.01) return 24.;
+        if((groundNear>0.01 && groundNear<endT) ||
+           (groundNear<=0.01 && groundFar>0.01)) return 24.;
     }
-    const float distance = min(max(b,0.),1000000.);
-    if (distance<=0.) return 0.;
-    const uint samples=clamp(requestedSteps,2u,12u);
-    const float dt = distance/float(samples);
-    float tau=0.;
-    [loop]
-    for(uint j=0u;j<samples;++j)
+    // With a live storm, participating cloud density may extend down
+    // to the planet. Otherwise, the gap below the lowest authored
+    // cloud layer is not part of the sunlight integration domain.
+    const float innerRadius=g.shell.x+
+        (g.material.z>0.5?0.:max(g.shell.y,0.));
+    const uint budget=clamp(requestedSteps,2u,12u);
+    float innerNear,innerFar;
+    if(SphereInterval(p,sun,innerRadius,innerNear,innerFar))
     {
-        tau += Density(p+sun*(float(j)+0.5)*dt,false).x*dt;
+        if(innerNear<=0. && innerFar>0.)
+            return min(max(SunDepthInterval(p,sun,
+                min(innerFar,endT),endT,budget),0.),24.);
+        if(innerNear>0. && innerNear<endT)
+        {
+            const float farStart=min(innerFar,endT);
+            const float nearLen=innerNear;
+            const float farLen=max(0.,endT-farStart);
+            if(farLen<=0.)
+                return min(max(SunDepthInterval(
+                    p,sun,0.,innerNear,budget),0.),24.);
+            const uint nearSteps=clamp(
+                (uint)round(float(budget)*nearLen/
+                    max(nearLen+farLen,1.)),1u,budget-1u);
+            float tau=SunDepthInterval(
+                p,sun,0.,innerNear,nearSteps);
+            tau+=SunDepthInterval(
+                p,sun,farStart,endT,budget-nearSteps);
+            return min(max(tau,0.),24.);
+        }
     }
-    return min(max(tau,0.),24.);
+    return min(max(SunDepthInterval(p,sun,0.,endT,budget),0.),24.);
 }
 #ifndef B3_WRITE_CACHE
 bool CachedSunDepth(float3 p,out float opticalDepth)
@@ -393,9 +429,7 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
             for(uint dx=0u;dx<2u;++dx)
             {
                 const uint3 c=first+uint3(dx,dy,dz);
-)";
-
-constexpr const char* kMediumPart4 = R"(                const float4 v=asfloat(g_lightCache.Load4(CacheIndex(c)));
+                const float4 v=asfloat(g_lightCache.Load4(CacheIndex(c)));
                 if(v.y != g.cacheAnchor.w || !isfinite(v.x))
                     return false;
                 const float w=(dx==0u?1.-weight.x:weight.x)*
@@ -417,7 +451,9 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
 }
 [numthreads(8,8,1)]
 void ClearSunCache(uint3 id : SV_DispatchThreadID)
-{
+)";
+
+constexpr const char* kMediumPart4 = R"({
     if (id.x>=kCacheSide || id.y>=kCacheSide || id.z>=kCacheHeight) return;
     g_lightCache.Store4(CacheIndex(id), uint4(0u,0u,0u,0u));
 }
@@ -741,7 +777,8 @@ namespace
         f(radius),f(base),f(top),
         Bits(static_cast<f32>(field.FaceResolution())),
         Bits(static_cast<f32>(field.LayerCount())),
-        Bits(casts?1.0F:0.0F),0U,Bits(view.irradianceScale),
+        Bits(casts?1.0F:0.0F),Bits(hasStorm?1.0F:0.0F),
+        Bits(view.irradianceScale),
         f(cache && cache->anchored?cache->anchor.x:0.0),
         f(cache && cache->anchored?cache->anchor.y:0.0),
         f(cache && cache->anchored?cache->anchor.z:0.0),
