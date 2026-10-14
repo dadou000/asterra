@@ -200,6 +200,7 @@ private:
             if (!value || !value->IsObject())
                 throw std::runtime_error("Invalid engineering result");
             report_=*value;
+            selectedFinding_ = 0U;
         }
         catch(const std::exception& e){error_=e.what();}
     }
@@ -228,6 +229,7 @@ private:
             : "Track alignments, design speed, rail curves and cant diagnostics.");
 
         if (context.Button("Refresh infrastructure##proc-refresh")) Refresh();
+        context.MutedText("Inventory follows authored scene changes automatically.");
         if (context.Section("Create networks and segments##proc-create",false))
         {
             static_cast<void>(context.InputText("Network name##proc-new-network",newNetworkName_));
@@ -263,6 +265,9 @@ private:
             {
                 for (const auto& node:nodes_)
                 {
+                    const auto record = session_->PathNetwork().Service().FindNode(node.id);
+                    if (!record || (newNetworkId_ && record->network != newNetworkId_))
+                        continue;
                     const std::string id=node.id.ToString();
                     if (context.Selectable("Start: "+node.name+"##proc-start-"+id,
                         startNodeId_==node.id))
@@ -271,6 +276,9 @@ private:
                 context.Separator();
                 for (const auto& node:nodes_)
                 {
+                    const auto record = session_->PathNetwork().Service().FindNode(node.id);
+                    if (!record || (newNetworkId_ && record->network != newNetworkId_))
+                        continue;
                     const std::string id=node.id.ToString();
                     if (context.Selectable("End: "+node.name+"##proc-end-"+id,
                         endNodeId_==node.id))
