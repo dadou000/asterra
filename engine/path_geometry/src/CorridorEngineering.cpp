@@ -5,6 +5,15 @@
 
 namespace orbit::path_geometry
 {
+CorridorEngineeringRules EngineeringRulesForProfile(
+    const paths::PathProfile& profile,
+    CorridorEngineeringRules defaults)
+{
+    defaults.minimumRadiusMeters = profile.minimumRadiusMeters;
+    defaults.maximumGrade = profile.maximumGrade;
+    return defaults;
+}
+
 bool CorridorEngineeringReport::Valid() const noexcept
 {
     for (const auto& finding : findings)
