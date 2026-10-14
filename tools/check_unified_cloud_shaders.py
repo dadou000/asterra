@@ -46,7 +46,7 @@ def main() -> int:
         temporary = pathlib.Path(directory)
         for label, key, stage, entry in variants:
             shader = temporary / f"{label}.hlsl"
-            prefix = "#define B3_WRITE_CACHE 1\\n" if label == "sun-cache" else ""
+            prefix = "#define B3_WRITE_CACHE 1\n" if label == "sun-cache" else ""
             shader.write_text(prefix + blocks[key], encoding="utf-8")
             command = [
                 validator, "-D", "-V", "-S", stage,
