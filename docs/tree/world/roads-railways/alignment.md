@@ -42,3 +42,9 @@ Routing can use hierarchical terrain-aware costs: slope, curvature, soil/rock, h
 - Merge lanes and construct grade-separated crossing; topology reports connected/isolated correctly.
 - Route around water and a protected slope; compare cut/fill vs bridge/tunnel alternatives and deterministic rebuild.
 - Move a socket-mounted endpoint; recompute affected edges without breaking graph IDs.
+
+## Transactional edge splits, exact Bézier shape preservation
+
+The PathNetworkService now provides SplitEdge(edge, fraction, junctionName) for direct/Bézier edges whose endpoints are FramePoint anchors in the *same* reference frame. It uses De Casteljau subdivision to preserve exact cubic shape, keeps the original edge ID as the first segment, creates one new junction node and second edge, copies infrastructure catalog version, construction mode, design speed, easing flag and edge-level profile override, and groups all mutations under one undoable command transaction. The RPC path.edge_split and Build → Procedurals use that method. This is **not** a general frame-transforming, terrain-routed or attachment-remapping split. Any persistent attachment referring to station distances along the old edge must be explicitly migrated when those semantic attachment types are implemented.
+
+Planet-scale alignment sampling is now bounded with an explicit PathSourceRequest.maximumSamples. Oversized routed/Bezier edges return clear errors rather than overflowing segment counts or generating unbounded synchronous work. This is a temporary safety boundary; future spatially chunked arc-length evaluation must retain exact shared seam stations across independently cached chunks.

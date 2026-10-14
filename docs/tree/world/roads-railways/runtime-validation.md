@@ -148,3 +148,11 @@ This does NOT complete click-to-place terrain nodes, tunnel excavation, elevated
 ## Junction and turnout diagnostics
 
 The pure junction builder produces explicit-ID movement previews with no cross-mode transfer, plus a bounded road footprint visualization. A separate RailInterlocking prototype exercises one-owner turnout reservation and occupancy locks. The canonical editor Build → Procedurals panel and agents call path.junction_preview through the existing dispatcher; this is a read-only probe, not a runtime junction collider or authored switch controller. Do not equate lane candidate connections with a validated physical intersection. Tests: Orbit.TransportJunctions and Orbit.RailInterlocking.
+
+## Canonical split RPC and editor tool
+
+The UI's selected-segment Alignment section includes an optional undoable Split action, with a fraction and junction name. It dispatches path.edge_split through the same JSON-RPC domain host used by agent automation. Response fields: original_edge/first_edge (unchanged first ID), junction_node, second_edge, fraction. Only direct/Bezier segments with same-frame FramePoint anchors are accepted. Unit gate: Orbit.PathSplit validates 101 Bézier samples, copied metadata, direct split, transaction undo/redo, and invalid/mixed-frame/routed rejection.
+
+PathSourceRequest.maximumSamples defaults to 16384 (hard validator upper bound 131072). Route/Bezier sources exceeding the budget return nullopt with an actionable error; this is not seamless planet-scale spatial streaming. Unit gate: Orbit.PathSource must verify finite and excessive sampling cases.
+
+Release gates, regression evidence and other requirement gaps are tracked in spec-completeness.md. UI, RPC and CPU tests do not imply actual road collision, railway vehicle dynamics or live native integration until executed and recorded.

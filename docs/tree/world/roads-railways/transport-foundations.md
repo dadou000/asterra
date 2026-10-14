@@ -129,3 +129,7 @@ The railway connection preview now samples paired swept railhead vertices for th
 ## Geometry and signalling guard corrections
 
 Road footprint previews triangulate from the boundary of their convex hull rather than an assumed interior semantic-node location. This prevents invalid fan triangles for asymmetrical junctions. Rail presence is tracked at the approach level, not only through successfully generated rail movement samples; advisory road phases are unavailable whenever a rail approach is connected to the same semantic node, including unsupported rail geometry. This cannot be bypassed by missing track contact data.
+
+## Shape-preserving authored edge splitting
+
+PathNetworkService::SplitEdge persists an exact De Casteljau split for same-frame FramePoint cubic Bézier alignments and a linear split for direct edges. The first segment retains its stable authored ID and station origin; the new second edge inherits the explicit profile override and all infrastructure construction metadata. The operation is one CommandService transaction with undo/redo. Studio uses read/write RPC path.edge_split and Build → Procedurals exposes the operation under Alignment. The split is deliberately rejected on routed/mixed-frame/surface/socket anchored edges until there is a reversible transform and terrain-following station remap. PathSource.cpp includes bounded Bezier/routed sampling to avoid pathological global line allocations. Tests: Orbit.PathSplit and Orbit.PathSource.
