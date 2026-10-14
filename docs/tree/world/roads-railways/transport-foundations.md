@@ -63,3 +63,9 @@ Next: bind the profile catalog and Build panel; implement sectional physical rai
 ## Second increment: refined references
 
 CorridorDerived now regenerates lane positions, graph nodes/edges, navigation samples and debugging lines after adaptive corridor refinement. Primary lane references interpolate the actual swept pavement/formation vertices, so crossfall and banking affect the generated positions rather than just visual mesh vertices. Both collision and the derived references share the same station revision and count. The extended CorridorSweepTests asserts lane count, station parity, graph-node parity and crowned road lane elevations. This is still a CPU derivation test, not an NPC or wheel physics integration test.
+
+## Curvature correctness patch
+
+CorridorEngineering now computes horizontal plan-view curvature by projecting station tangents into the local terrain tangent plane, using horizontal span for the curvature denominator. A purely vertical crest or sag therefore no longer looks like a plan-view corner and does not generate false lateral-acceleration and cant/superelevation recommendations. Invalid vertical/collapsed spans report InvalidInput instead of dividing by zero. The CorridorEngineeringTests include a crest regression.
+
+Further precision work: discrete station-angle curvature is still a sampled approximation, not an analytically integrated clothoid or a complete rail design code; detailed vertical-radius checks and horizontal/vertical sight-distance constraints remain to implement.

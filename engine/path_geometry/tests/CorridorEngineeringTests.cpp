@@ -49,6 +49,13 @@ int main()
 
     auto curved = flat;
     curved[2].tangent = {0,0,1};
+    // Vertical pitch is not horizontal turning; no phantom bank/cant.
+    auto crest=flat;
+    crest[2].tangent = {std::sqrt(0.75), 0.5, 0.0};
+    const auto verticalCurve = AnalyzeCorridorEngineering(crest,rules);
+    CHECK(verticalCurve.Valid());
+    CHECK(verticalCurve.stations.back().curvaturePerMeter==0.0);
+    CHECK(verticalCurve.stations.back().recommendedBankRadians==0.0);
     const auto bend = AnalyzeCorridorEngineering(curved,rules);
     bool tight = false, lateral = false;
     for (const auto& f : bend.findings)

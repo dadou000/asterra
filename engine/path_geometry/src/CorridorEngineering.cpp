@@ -89,15 +89,31 @@ CorridorEngineeringReport AnalyzeCorridorEngineering(
             if (std::abs(value.grade) > rules.maximumGrade)
                 warn(CorridorIssue::ExcessiveGrade, s.stationMeters,
                      std::abs(value.grade), rules.maximumGrade, "Corridor exceeds the configured grade.");
-            const auto a = math::Normalize(prev.tangent);
-            const auto b = math::Normalize(s.tangent);
+            // Curvature used for road banking and railway cant is PLAN-view
+            // curvature. A crest/sag changes the 3D tangent but must not
+            // generate lateral acceleration or imaginary rail cant.
+            const auto project = [&](const math::Double3& tangent) {
+                return math::Normalize(tangent - up * math::Dot(tangent, up));
+            };
+            const auto a = project(prev.tangent);
+            const auto b = project(s.tangent);
+            const auto horizontalDelta = delta - up * math::Dot(delta, up);
+            const f64 horizontalSpan = math::Length(horizontalDelta);
+            if (math::LengthSquared(a) < 1.e-12 ||
+                math::LengthSquared(b) < 1.e-12 ||
+                horizontalSpan < 1.e-9)
+            {
+                warn(CorridorIssue::InvalidInput, s.stationMeters, 0.0, 0.0,
+                     "Cannot evaluate horizontal curvature at a vertical or collapsed span.");
+                return out;
+            }
             const f64 cosine = std::clamp(math::Dot(a,b), -1.0, 1.0);
             const f64 angle = std::acos(cosine);
             const f64 sign = math::Dot(math::Cross(a,b), up) < 0.0 ? -1.0 : 1.0;
-            value.curvaturePerMeter = sign * angle / distance;
+            value.curvaturePerMeter = sign * angle / horizontalSpan;
             if (angle > 1.e-9)
             {
-                value.radiusMeters = distance / angle;
+                value.radiusMeters = horizontalSpan / angle;
                 if (value.radiusMeters < rules.minimumRadiusMeters)
                     warn(CorridorIssue::TightRadius, s.stationMeters,
                          value.radiusMeters, rules.minimumRadiusMeters, "Curve is tighter than the configured radius.");
