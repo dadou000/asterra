@@ -1246,7 +1246,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         cloudFound->second.body == logicalTarget->target->body &&
         (info.layers.fullClipmap || !info.layers.macroGlobe) &&
         studioDirectLight.direct.has_value() &&
-        logicalTarget->mode != studio_session::ViewportMode::Debug)
+        logicalTarget->mode != studio_session::ViewportMode::Debug &&
+        (!info.layers.cloudBPreview || EnsureUnifiedCloudRenderer()))
     {
         if (const auto shadowAtmosphere =
                 atmospherePresentations_.find(info.id);
@@ -1255,7 +1256,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         {
             const u32 shadowWidth = std::max(1U, (width + 1U) / 2U);
             const u32 shadowHeight = std::max(1U, (height + 1U) / 2U);
-            auto& shadowTarget = cloudShadowTargets_[info.id];
+            auto& shadowTarget = info.layers.cloudBPreview
+                ? unifiedCloudShadowTargets_[info.id] : cloudShadowTargets_[info.id];
             if (shadowTarget == nullptr ||
                 shadowTarget->Width() != shadowWidth ||
                 shadowTarget->Height() != shadowHeight)
@@ -1268,7 +1270,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
             }
             cloudShadowTexture = shadowTarget.get();
             const auto shadowHandle = graph.ImportTexture(
-                prefix + ".CloudShadowTarget",
+                prefix + (info.layers.cloudBPreview ?
+                    ".UnifiedB.CloudShadowTarget" : ".CloudShadowTarget"),
                 *cloudShadowTexture,
                 rhi::ResourceState::ShaderResource);
 
@@ -1298,7 +1301,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                 .irradianceScale = studioDirectLight.irradianceScale};
 
             graph.AddPass(
-                prefix + ".CloudShadow",
+                prefix + (info.layers.cloudBPreview ?
+                    ".UnifiedB.ReceiverShadow" : ".CloudShadow"),
                 {
                     {
                         .texture = targets.depth,
@@ -1320,21 +1324,25 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
                  shadowLab,
                  shadowTexture = cloudShadowTexture,
                  shadowWidth,
-                 shadowHeight](
+                 shadowHeight,
+                 useUnifiedB = info.layers.cloudBPreview](
                     rhi::CommandList& commands,
                     const render_graph::Resources&)
                 {
-                    cloudRenderer_.DrawShadow(
-                        commands,
-                        *lightingDepth,
-                        *shadowGpu,
-                        *shadowTexture,
-                        shadowWidth,
-                        shadowHeight,
-                        shadowReferenceRadius,
-                        shadowLayer,
-                        shadowView,
-                        shadowLab);
+                    if (useUnifiedB)
+                    {
+                        unifiedCloudRenderer_->DrawReceiverShadow(
+                            commands, *lightingDepth, *shadowGpu,
+                            *shadowTexture, shadowReferenceRadius,
+                            shadowLayer, shadowView);
+                    }
+                    else
+                    {
+                        cloudRenderer_.DrawShadow(
+                            commands, *lightingDepth, *shadowGpu, *shadowTexture,
+                            shadowWidth, shadowHeight, shadowReferenceRadius,
+                            shadowLayer, shadowView, shadowLab);
+                    }
                 });
 
             cloudShadowUse = render_graph::TextureUse{
