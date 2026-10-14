@@ -1,5 +1,7 @@
 #include <orbit/studio_ui/DebugViewUi.hpp>
 #include <cmath>
+#include <format>
+#include <exception>
 
 namespace orbit::studio_ui
 {
@@ -82,6 +84,53 @@ void DebugViewUi::Draw(
     context.SameLine();
     open("Body Map / Debug View", "Terrain map##dbg-map");
     context.MutedText("Registered terrain tests appear below. Road grading, rendered displacement and collision end-to-end tests are not yet available.");
+
+    context.Heading("Road / Railway engineering");
+    context.MutedText("Inspect an authored path edge using the existing path.engineering RPC. Read-only.");
+    context.InputText("Edge UUID##dbg-road-edge", engineeringEdgeId_);
+    context.InputDouble("Design speed (m/s)##dbg-road-speed", engineeringSpeedMps_);
+    if (context.Button("Analyze edge##dbg-road-analyze"))
+    {
+        engineeringError_ = false;
+        try
+        {
+            if (!engineeringRpc_)
+                throw std::runtime_error("Path engineering RPC is unavailable.");
+            if (engineeringEdgeId_.empty() ||
+                !std::isfinite(engineeringSpeedMps_) || engineeringSpeedMps_ < 0.0)
+                throw std::invalid_argument("Enter an edge UUID and a finite, non-negative design speed.");
+            rpc::Value request(rpc::Value::Object{
+                {"jsonrpc", "2.0"},
+                {"id", static_cast<i64>(1)},
+                {"method", "path.engineering"},
+                {"params", rpc::Value(rpc::Value::Object{
+                    {"edge", engineeringEdgeId_},
+                    {"design_speed_mps", engineeringSpeedMps_}})}
+            });
+            const auto response = engineeringRpc_->Dispatch(rpc::Serialize(request));
+            if (!response)
+                throw std::runtime_error("No engineering RPC response.");
+            const auto parsed = rpc::ParseValue(*response);
+            if (const auto* error = parsed.Find("error"); error)
+                throw std::runtime_error(rpc::Serialize(*error));
+            const auto* result = parsed.Find("result");
+            if (!result)
+                throw std::runtime_error("Engineering response has no result.");
+            engineeringResult_ = rpc::Serialize(*result);
+        }
+        catch (const std::exception& error)
+        {
+            engineeringResult_ = error.what();
+            engineeringError_ = true;
+        }
+    }
+    if (!engineeringResult_.empty())
+    {
+        if (engineeringError_)
+            context.ErrorText(engineeringResult_);
+        else
+            context.MutedText(engineeringResult_);
+    }
 
     context.Heading("Registered experiments");
     for (const auto& test : tests_.Catalog())
