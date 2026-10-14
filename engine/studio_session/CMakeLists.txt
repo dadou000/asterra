@@ -1,6 +1,7 @@
 add_library(OrbitStudioSession STATIC
     src/BakedRiverPage.cpp
     src/StudioSession.cpp
+    src/StudioRoadJunctionPipeline.cpp
     src/CorridorConstructionRegistry.cpp
     src/SimulationClock.cpp
     src/StudioRuntimeBinding.cpp
