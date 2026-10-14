@@ -403,36 +403,38 @@ void StudioViewportRenderer::ComposeAtmospherePasses(StudioLightingPassContext& 
                     const auto bHandle = graph.ImportTexture(
                         prefix + ".UnifiedB.CloudMedium", *bTexture,
                         rhi::ResourceState::ShaderResource);
-                    // Independent B3 Sun optical-depth volume, once per viewport.
-                    // The cache update writes the same medium-target graph
-                    // dependency as A's own volume pass; its actual writes
-                    // go to a B-owned GPU buffer with UAV barriers.
-                    auto& bSun = unifiedCloudSunCaches_[info.id];
-                    if (!bSun)
+                    // Existing view Cloud Light Volume setting now also
+                    // controls B's independent Sun cache (same setting,
+                    // never the same GPU allocation or algorithms).
+                    celestial_clouds::unified::UnifiedCloudRenderer::SunCache*
+                        bSunCache = nullptr;
+                    if (info.layers.cloudLightVolume)
                     {
-                        bSun = unifiedCloudRenderer_->CreateSunCache(*device_);
-                    }
-                    auto* bSunCache = bSun.get();
-                    graph.AddPass(
-                        prefix + ".UnifiedB.SunCache",
-                        {
+                        auto& bSun = unifiedCloudSunCaches_[info.id];
+                        if (!bSun)
+                            bSun = unifiedCloudRenderer_->CreateSunCache(*device_);
+                        bSunCache = bSun.get();
+                        graph.AddPass(
+                            prefix + ".UnifiedB.SunCache",
                             {
-                                .texture = bHandle,
-                                .state = rhi::ResourceState::RenderTarget,
-                                .access = render_graph::Access::Write
-                            }
-                        },
-                        [this, bSunCache, cloudGpu,
-                         source = cloudFound->second.field.get(),
-                         cloudReferenceRadius, cloudView](
-                            rhi::CommandList& commands,
-                            const render_graph::Resources&)
-                        {
-                            unifiedCloudRenderer_->UpdateSunCache(
-                                commands, *bSunCache, *cloudGpu, *source,
-                                cloudReferenceRadius, cloudView,
-                                sharedStormCloudExport_);
-                        });
+                                {
+                                    .texture = bHandle,
+                                    .state = rhi::ResourceState::RenderTarget,
+                                    .access = render_graph::Access::Write
+                                }
+                            },
+                            [this, bSunCache, cloudGpu,
+                             source = cloudFound->second.field.get(),
+                             cloudReferenceRadius, cloudView](
+                                rhi::CommandList& commands,
+                                const render_graph::Resources&)
+                            {
+                                unifiedCloudRenderer_->UpdateSunCache(
+                                    commands, *bSunCache, *cloudGpu, *source,
+                                    cloudReferenceRadius, cloudView,
+                                    sharedStormCloudExport_);
+                            });
+                    }
                     graph.AddPass(
                         prefix + ".UnifiedB.March",
                         {
