@@ -5,7 +5,7 @@ kind = "subsystem"
 status = "planned"
 summary = "Canonical architectural contract for Orbit's unified, editable road/rail/path infrastructure: authored networks, alignment, terrain and structural construction, frame-aware dynamics, persistence, editor automation and planet-scale LOD."
 keywords = ["roads", "railways", "infrastructure", "corridors", "alignment", "terrain grading", "moving frames", "bridges", "tunnels"]
-related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation"]
+related = ["/world/paths", "/world/path-geometry", "/world/path-routing", "/editor/studio-ui/debug-center", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/roads-railways/runtime-validation", "/world/roads-railways/transport-foundations"]
 +++
 
 # Status and provenance
@@ -45,5 +45,12 @@ The renderer never authors its own road geometry. Network graph, route and colli
 - [Alignment, network and design rules](roads-railways/alignment.md)
 - [Construction, surface, infrastructure and representation](roads-railways/construction.md)
 - [Runtime, frame physics, editor UX, validation and staged delivery](roads-railways/runtime-validation.md)
+- [Implemented transport section and topology foundations](roads-railways/transport-foundations.md)
 
 No independent road/rail specification may silently supersede this root. New component documents should link back here and state scope.
+
+## Harmony implementation increment — shared road/rail sections and topology
+
+A new pure CPU layer in engine/path_geometry generates configurable road cross-sections and railway formation/railhead strips, with consistent cant-aware railhead contact references and bounded sleeper instance placement. A separate mode-aware network topology compiler processes stable node/edge IDs, produces directed arcs and connected components, validates broken links, and identifies intentional road/rail crossings without permitting road-to-rail navigation transfer. These functions do not mutate persisted path objects.
+
+These are foundations, not yet editor-visible placement, structural construction, actual rail-wheel dynamics, junction/switch mesh generation or headless integration with Studio RPC. Actual build and runtime smoke validation are pending. See the linked transport-foundations block.

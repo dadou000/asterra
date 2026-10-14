@@ -36,3 +36,9 @@ The complete road, railway and supported-construction design contract lives at *
 `CorridorEngineering.hpp/.cpp` now supplies a **pure, deterministic and non-mutating** analysis of derived `PathStation` sequences against caller-provided design limits. The result includes per-station grade, curvature/radius, lateral acceleration and recommended bank/cant, plus station-local findings for excessive grade, tight radius, excessive lateral acceleration, excessive bank and abrupt cant transition. Invalid/non-finite geometry or limits produce `InvalidInput` findings. The companion `SuggestCorridorBankProfile` generates a bounded advisory profile with forward/backward slope limiting; applying it remains an explicit authoring action.
 
 This is the **engineering foundation**, not yet a full rail standards solver (turnout envelope, cant deficiency and exact clothoids), geometry auto-fixer, traffic simulator or an integrated Studio editor panel. `ctest -R Orbit.CorridorEngineering` is the dedicated test target. Compiling and running the test still requires local/CI verification.
+
+## Road/rail derived construction and topology (Harmony)
+
+The pure TransportSections API now builds road crowns and shoulders, railway formation and railhead strips, cant-consistent rail contact reference points, and deterministic bounded sleeper placements. The pure TransportTopology API compiles explicit node/link IDs into directed mode-aware route arcs, connected components and intentional junction/crossing annotations. Both are derived data, not new authoring authorities. See /world/roads-railways/transport-foundations for API limitations and integration steps.
+
+Validation: ctest -R Orbit.TransportSections and ctest -R Orbit.TransportTopology. Native build execution is still pending.

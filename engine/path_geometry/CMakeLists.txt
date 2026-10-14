@@ -8,6 +8,8 @@ add_library(OrbitPathGeometry STATIC
     src/CorridorEngineering.cpp
     src/CorridorEarthworks.cpp
     src/CorridorDesignPreview.cpp
+    src/TransportSections.cpp
+    src/TransportTopology.cpp
 )
 
 add_library(
@@ -133,4 +135,18 @@ if(BUILD_TESTING)
     target_compile_features(OrbitCorridorDesignPreviewTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitCorridorDesignPreviewTests)
     add_test(NAME Orbit.CorridorDesignPreview COMMAND OrbitCorridorDesignPreviewTests)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitTransportSectionsTests tests/TransportSectionsTests.cpp)
+    target_link_libraries(OrbitTransportSectionsTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitTransportSectionsTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTransportSectionsTests)
+    add_test(NAME Orbit.TransportSections COMMAND OrbitTransportSectionsTests)
+
+    add_executable(OrbitTransportTopologyTests tests/TransportTopologyTests.cpp)
+    target_link_libraries(OrbitTransportTopologyTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitTransportTopologyTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitTransportTopologyTests)
+    add_test(NAME Orbit.TransportTopology COMMAND OrbitTransportTopologyTests)
 endif()

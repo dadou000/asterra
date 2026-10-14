@@ -1,0 +1,61 @@
++++
+path = "/world/roads-railways/transport-foundations"
+title = "Road and rail cross-section and network topology foundation"
+kind = "concept"
+status = "experimental"
+summary = "Road crowns and shoulders, configurable railway railhead strips and contact frames, bounded sleeper instancing, and explicit stable-ID junction/topology derivation."
+keywords = ["transport", "road", "railway", "cant", "gauge", "sleepers", "contact", "topology", "junction"]
+sources = [
+  "engine/path_geometry/include/orbit/path_geometry/TransportSections.hpp",
+  "engine/path_geometry/src/TransportSections.cpp",
+  "engine/path_geometry/include/orbit/path_geometry/TransportTopology.hpp",
+  "engine/path_geometry/src/TransportTopology.cpp",
+]
+symbols = ["MakeRoadSweep", "MakeRailSweep", "RailContactReferences", "CompileTransportTopology"]
+invariants = [
+  "Network authority remains in engine/paths; road/rail representations are disposable derived products.",
+  "Railhead contact reference coordinates match the swept railhead strip station frame, gauge and cant.",
+  "Rail and road routing never connect simply because their geometry intersects.",
+  "Sleeper instance budgets are bounded and generated from stable station distances.",
+]
+related = ["/world/roads-railways", "/world/roads-railways/alignment", "/world/roads-railways/construction", "/world/path-geometry"]
+verify = ["ctest -R Orbit.TransportSections", "ctest -R Orbit.TransportTopology", "python tools/orbit_docs_cli.py check"]
++++
+
+# Purpose and precise status
+
+Implement mode-specific construction recipes without building a second road/rail network. Both modes consume an authoritative network, resolved source stations and profile inputs. Road and railway products use the existing CorridorSweep renderer/collision derivation rather than disconnected visual and physics meshes.
+
+# Road cross section
+
+MakeRoadSweep emits a three-point crowned pavement with separate shoulder bands. Parameters are lane count, lane width, shoulder width, crown crossfall and shoulder crossfall; numeric limits reject impossible sections. A later version should add asymmetric lane groups, medians, islands, edge curbs, sidewalks, bike tracks, drains, material band labels, profile station keys, variable-width intersections and physical deformation layers.
+
+Crossfall is actual geometry. A lane-following vehicle must eventually consult the same bank and friction/contact product; painted textures alone are not a substitute for surface physics.
+
+# Railway section and operational contract
+
+MakeRailSweep emits track formation and paired top railhead contact strips for one or more tracks, with configurable gauge, centre spacing and head height. RailContactReferences gives the two head points and contact normal at each path station using the same station-local cant transformation. RailSleeperPlacements emits stable instance transforms at equal along-track increments with a hard maximum instance count.
+
+These are not fully modelled rail solids. The existing generic CorridorSweep expects strictly monotonic lateral cross-section coordinates; a real rail web, foot, head overhang, flangeway and frog need a separate true swept rail extrusion. Sleeper instances are not rendered or colliding until a consumer instantiates them. Contact reference points are not a conicity, flange or creep-force model.
+
+For correct railway operation, maintain a shared gauge, section geometry, cant, station transform and timestamp between renderer, collision contacts, bogie solver and train steering. Switches, turnouts, guard rails, crossovers, sleepers on tight curvature, block occupancy and interlocking must remain explicit engineering and operational features.
+
+# Explicit route topology
+
+CompileTransportTopology produces directed travel arcs and mode-separated undirected connectivity components from supplied stable IDs, plus validation findings and junction records. A one-way link has only its declared arc. An intentional shared-node road/rail conflict is marked as a level crossing but never permits a car to turn onto rails or a train to turn onto asphalt. Pure spatial overlap, including an elevated railway crossing a street, never creates a hidden junction.
+
+Turn lanes, rail point/blade connectivity, lane merges and controlled intersection conflict zones are separate descendants of this semantic graph, not inferred from triangle adjacency. No generated topology record becomes scene authority.
+
+# Integration, build and performance boundaries
+
+The new APIs are compiled into OrbitPathGeometry as a small native increment using the current automatic generation fallback. They do not add a file watcher or separate launcher. Add section recipes to the catalog/profile resolver; pass per-edge construction parameters through the existing PathNetworkService/RPC layer. Derive products on workers from immutable snapshots, fence publication against object/source revision, and preserve the previous valid product during a failed build.
+
+Long corridors should be sliced into bounded tiles, keep sleeper transforms as GPU instances and only instantiate contact solids near active vehicles. Nearby physical railway gauge cannot be approximated by distant render LOD. Do not synchronously generate sleepers for a planetary-length line; the current function explicitly rejects excessive instance counts until an incremental chunk consumer is in place.
+
+Before enabling driving/trains, fix a pre-existing mismatch: BuildCorridorDerived refines product.stations and visual/collision mesh, but lane/reference/navigation products remain derived at the older BuildPathDerived resolution. They must be regenerated using identical refined geometry and kept in a single revision-stamped product.
+
+# Tests and remaining proof
+
+TransportSectionsTests covers road sweep output, railhead gauge/cant geometry, sleeper spacing, bounded work, invalid profile and invalid station/cant combinations. TransportTopologyTests covers road/rail components, one-way arcs, explicit mixed crossings, ordering stability and rejected invalid links. They are isolated CPU checks; native build and execution, Studio Debug registration, GPU rendering and physics contact parity are still unverified.
+
+Next: bind the profile catalog and Build panel; implement sectional physical rail profiles, wheel-rail dynamics, turnout/junction generators, road marking/signal rules, earthwork and bridge/tunnel construction, and streaming contact/render cache ownership.
