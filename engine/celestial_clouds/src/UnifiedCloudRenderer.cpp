@@ -43,7 +43,7 @@ struct Config
     float4 shell;        // planet radius, cloud base and top, cubemap face size
     float4 material;     // layer count, receiver shadows, live storm, irradiance
     float4 cacheAnchor;  // body-fixed unit tangent anchor xyz, generation w
-    float4 cacheState;   // slice phase, cache active, reserved, stellar half-angle (rad)
+    float4 cacheState;   // slice phase, cache active, inverse target height, star angular radius
 };
 [[vk::push_constant]] Config g;
 [[vk::binding(0,0)]] ByteAddressBuffer g_weather;
@@ -55,8 +55,10 @@ struct Config
 #else
 [[vk::binding(2,0)]] ByteAddressBuffer g_lightCache;
 #endif
-[[vk::binding(3,0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
-[[vk::binding(3,0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
+// System B's independent CPU-baked tileable 32^3 RGBA cellular field.
+[[vk::binding(3,0)]] ByteAddressBuffer g_densityNoise;
+[[vk::binding(4,0)]] [[vk::combinedImageSampler]] Texture2D g_depth;
+[[vk::binding(4,0)]] [[vk::combinedImageSampler]] SamplerState g_depthSampler;
 
 float3 CameraRay(float2 uv)
 {
@@ -174,9 +176,7 @@ float Influence(float x, float y)
     const int offset = (int)g_storm[10];
     if (offset <= 0) return 1.;
     const int2 dims = max(int2(g_storm[17],g_storm[18]),int2(1,1));
-)";
-
-constexpr const char* kMediumPart2 = R"(    const float2 coord = float2(
+    const float2 coord = float2(
         x/max(g_storm[14],1.)+0.5*float(dims.x)-0.5,
         y/max(g_storm[15],1.)+0.5*float(dims.y)-0.5);
     const int2 a = clamp((int2)floor(coord),int2(0,0),dims-1);
@@ -190,7 +190,9 @@ constexpr const char* kMediumPart2 = R"(    const float2 coord = float2(
 }
 // Returns world-space inverse-metre storm extinction and spatial blend weight.
 // The parent/child sponge and influence mask must be smooth at boundaries.
-float2 StormMedium(float3 position, float radius)
+)";
+
+constexpr const char* kMediumPart2 = R"(float2 StormMedium(float3 position, float radius)
 {
     if (g_storm[0] < 0.5) return float2(0.,0.);
     const float3 direction = position / max(radius,1.);
@@ -237,77 +239,164 @@ float2 StormMedium(float3 position, float radius)
 // The sum of all participating materials. Convective procedural extinction
 // is replaced under a live storm sponge, while independent cirrus and fog
 // remain. Returns (total sigma_t, sigma_s, sum(sigma_s*g), unused).
-float4 Density(float3 position, bool receiver)
+// An independent, multi-scale 3D density representation for System B.
+// The baked volume is periodic; non-commensurate rotated coordinates at
+// different frequencies prevent grid-aligned repeats on planetary surfaces.
+float4 NoiseVoxelB(int3 cell)
 {
-    // The user can disable cloud shadows for every authored layer. That
-    // choice must affect simulated storm cloud shadows as well.
-    if (receiver && g.material.y < 0.5) return float4(0.,0.,0.,0.);
-    const float radius = length(position);
-    if (radius <= g.shell.x) return 0.;
-    const float altitude = radius - g.shell.x;
-    const float3 direction = position / radius;
+    const uint3 p=uint3(cell)&31u;
+    return asfloat(g_densityNoise.Load4(
+        ((p.z*32u+p.y)*32u+p.x)*16u));
+}
+float4 SampleNoiseB(float3 p)
+{
+    const float3 base=floor(p);
+    const int3 c=int3(base);
+    const float3 f=p-base;
+    const float3 t=f*f*(3.-2.*f);
+    const float4 n000=NoiseVoxelB(c);
+    const float4 n100=NoiseVoxelB(c+int3(1,0,0));
+    const float4 n010=NoiseVoxelB(c+int3(0,1,0));
+    const float4 n110=NoiseVoxelB(c+int3(1,1,0));
+    const float4 n001=NoiseVoxelB(c+int3(0,0,1));
+    const float4 n101=NoiseVoxelB(c+int3(1,0,1));
+    const float4 n011=NoiseVoxelB(c+int3(0,1,1));
+    const float4 n111=NoiseVoxelB(c+int3(1,1,1));
+    return lerp(
+        lerp(lerp(n000,n100,t.x),lerp(n010,n110,t.x),t.y),
+        lerp(lerp(n001,n101,t.x),lerp(n011,n111,t.x),t.y),
+        t.z);
+}
+float3 RotateNoiseB(float3 p)
+{
+    return float3(
+        0.734*p.x-0.427*p.y+0.528*p.z,
+        0.427*p.x+0.891*p.y+0.151*p.z,
+       -0.528*p.x+0.151*p.y+0.836*p.z);
+}
+
+float4 Density(float3 position, bool receiver,
+    float footprintMeters, bool visibleDetail)
+{
+    if(receiver && g.material.y<0.5) return float4(0.,0.,0.,0.);
+    const float radius=length(position);
+    if(radius<=g.shell.x) return 0.;
+    const float altitude=radius-g.shell.x;
+    const float3 dir=position/radius;
+
+    // Weather is authored on a ~50 km cubemap. Low-frequency directional
+    // warp removes bilinear grid outlines without touching the storm's
+    // physical coordinate system or introducing camera-dependent motion.
+    const float3 warp=float3(
+        sin(dir.y*47.+0.7)+0.35*sin(dir.z*109.+2.1),
+        sin(dir.z*53.+1.4)+0.35*sin(dir.x*117.+0.8),
+        sin(dir.x*43.+2.9)+0.35*sin(dir.y*113.+1.6));
     uint face;
     float2 cube;
-    CubeCoords(direction,face,cube);
-    const uint size = max(2u,(uint)g.shell.w);
-    const float2 coord = saturate(cube*0.5+0.5)*float(size-1u);
-    const uint layers = (uint)g.material.x;
-    float staticOther = 0., staticConv = 0.;
-    float otherScatter = 0., convScatter = 0.;
-    float otherPhase = 0., convPhase = 0.;
+    CubeCoords(normalize(dir+warp*0.0034),face,cube);
+    const uint size=max(2u,(uint)g.shell.w);
+    const float2 coord=saturate(cube*0.5+0.5)*float(size-1u);
+    const uint layers=(uint)g.material.x;
+    float other=0.,conv=0.;
+    float otherScatter=0.,convScatter=0.;
+    float otherPhase=0.,convPhase=0.;
+
+    const float footprint=max(1.,footprintMeters);
+    // Broad cellular features are 15-40 km, meso billows ~3-12 km,
+    // and fine 0.3-1 km detail fades below its projected pixel footprint.
+    const float3 rotated=RotateNoiseB(position);
+    const float coarse=SampleNoiseB(
+        rotated/4600. + float3(9.,17.,29.)).r;
+    const float mesoFade=smoothstep(1200.,11000.,footprint);
+    float meso=0.5;
+    if(visibleDetail && mesoFade<0.999)
+        meso=SampleNoiseB(
+            position/1750. + float3(21.,11.,37.)).g;
+    const float mesoContribution=(visibleDetail?
+        1.-mesoFade:0.);
+    const float baseValue=lerp(coarse,
+        lerp(coarse,meso,0.42),mesoContribution);
+
+    // Fine erosion only at resolvable projected footprints. Never make
+    // unresolvable octaves alias into the regular "pebble" pattern.
+    const float erosionFade=smoothstep(130.,1450.,footprint);
+    float erosion=0.5;
+    if(visibleDetail && erosionFade<0.999)
+        erosion=SampleNoiseB(
+            rotated/380. + float3(6.,47.,13.)).a;
+    const float detailWeight=visibleDetail?(1.-erosionFade):0.;
+
     [loop]
-    for (uint layer=0u; layer<layers; ++layer)
+    for(uint layer=0u;layer<layers;++layer)
     {
-        float4 shell, optics;
+        float4 shell,optics;
         LayerDescriptor(layer,shell,optics);
-        if (altitude <= shell.x || altitude >= shell.y) continue;
-        if (receiver && optics.w < 0.5) continue;
-        const float4 w = WeatherLayer(layer,face,coord,size);
-        float coverage = saturate((w.x-(0.52-shell.w*0.35-0.26))/0.52);
-        if (coverage <= 0.015 && w.y <= 0.015) continue;
-        const float h = saturate((altitude-shell.x)/max(shell.y-shell.x,1.));
-        const float type = saturate(w.w);
-        const float low = smoothstep(0.,0.07,h) * (1.-smoothstep(0.7,1.,h));
-        const float fair = smoothstep(0.,0.12,h) *
-            (1.-smoothstep(0.62+0.18*type,1.,h));
-        const float tower = smoothstep(0.,0.14,h) *
-            (1.-smoothstep(0.90,1.,h));
-        const float lowToCumulus = smoothstep(0.20,0.50,type);
-        const float cumulusToTower = smoothstep(0.58,0.92,type);
-        float profile = lerp(lerp(low,fair,lowToCumulus),tower,cumulusToTower);
-        const float topSheet = smoothstep(0.65,0.83,h) *
-            (1.-smoothstep(0.95,1.,h)) * saturate(w.y)*0.5;
-        profile += topSheet;
-        const float shape = pow(smoothstep(0.,1.,coverage),max(optics.x,0.1));
-        const float detail = 0.75 + 0.25 *
-            sin(position.x*0.0013 + 1.7*sin(position.y*0.00083) +
-                position.z*0.0011 + float(layer)*1.72);
-        const float extinction = max(0.,shell.z) /
-            max(shell.y-shell.x,1.) * 2.5 *
-            (shape*profile+topSheet*0.18)*detail;
-        // Convective clouds in this *layer* are displaced by the live
-        // simulated field; unrelated thin decks remain additive.
-        const float conv = smoothstep(0.54,0.82,type);
-        const float a = saturate(optics.y);
-        const float g = clamp(optics.z,-0.98,0.98);
-        staticOther += extinction*(1.-conv);
-        staticConv += extinction*conv;
-        otherScatter += extinction*(1.-conv)*a;
-        convScatter += extinction*conv*a;
-        otherPhase += extinction*(1.-conv)*a*g;
+        if(altitude<=shell.x || altitude>=shell.y) continue;
+        if(receiver && optics.w<0.5) continue;
+        const float4 w=WeatherLayer(layer,face,coord,size);
+        const float coverage=saturate(
+            (w.x-(0.52-shell.w*0.35-0.26))/0.52);
+        if(coverage<0.015 && w.y<0.015) continue;
+        const float type=saturate(w.w);
+        const float tower=smoothstep(0.52,0.94,type);
+        const float lowToFair=smoothstep(0.18,0.52,type);
+        const float cloudTop=lerp(0.20,0.49,lowToFair);
+        const float topHeight=lerp(cloudTop,0.94,tower)*
+            lerp(0.89,1.08,coarse);
+        const float h=(altitude-shell.x)/
+            max(shell.y-shell.x,1.);
+        const float hn=h/max(topHeight,0.10);
+        const float bottom=smoothstep(0.,0.075,hn);
+        const float top=1.-smoothstep(
+            lerp(0.70,0.80,tower),1.,hn);
+        // Tall updrafts narrow toward the crown; the anvil is another
 )";
 
-constexpr const char* kMediumPart3 = R"(        convPhase += extinction*conv*a*g;
+constexpr const char* kMediumPart3 = R"(        // medium component rather than an extension of the tower stem.
+        const float taper=tower*0.24*
+            pow(saturate(hn),1.4);
+        const float cloudThreshold=lerp(
+            0.73,0.32,saturate(coverage)) + taper;
+        const float edgeWidth=0.07 + 0.03*mesoFade;
+        const float shiftedBase=baseValue-
+            detailWeight*0.15*(1.-erosion);
+        const float shape=smoothstep(
+            cloudThreshold-edgeWidth,
+            cloudThreshold+edgeWidth,shiftedBase);
+        const float profile=bottom*top/
+            max(0.30,topHeight);
+        // Upper cirrus and detached convective anvil outflow use a
+        // thinner, broader optical density than the dense low layer.
+        const float cirrus=saturate(w.y)*
+            smoothstep(0.65,0.79,h)*
+            (1.-smoothstep(0.92,1.,h))*
+            smoothstep(0.35,0.75,baseValue);
+        const float sigma=max(0.,shell.z)/
+            max(shell.y-shell.x,1.)*
+            (shape*profile*2.6+cirrus*0.30);
+        const float cv=smoothstep(0.54,0.82,type);
+        const float scattering=sigma*saturate(optics.y);
+        const float phase=scattering*clamp(
+            optics.z,-0.98,0.98);
+        other+=sigma*(1.-cv);
+        conv+=sigma*cv;
+        otherScatter+=scattering*(1.-cv);
+        convScatter+=scattering*cv;
+        otherPhase+=phase*(1.-cv);
+        convPhase+=phase*cv;
     }
-    const float2 sim = StormMedium(position,radius);
-    const float storm = sim.x;
-    const float weight = sim.y;
-    const float sigma = staticOther+lerp(staticConv,storm,weight);
-    const float scattered = otherScatter +
-        lerp(convScatter,0.995*storm,weight);
-    const float phaseWeight = otherPhase +
-        lerp(convPhase,0.72*0.995*storm,weight);
-    return float4(max(sigma,0.),max(scattered,0.),phaseWeight,0.);
+    const float2 sim=StormMedium(position,radius);
+    const float storm=sim.x;
+    const float influence=sim.y;
+    // A simulated convective medium replaces the corresponding authored
+    // convection; independent fog and cirrus remain additive.
+    const float total=other+lerp(conv,storm,influence);
+    const float totalScatter=otherScatter+
+        lerp(convScatter,0.995*storm,influence);
+    const float phase=otherPhase+
+        lerp(convPhase,0.72*0.995*storm,influence);
+    return float4(max(total,0.),
+        max(totalScatter,0.),phase,0.);
 }
 
 // Local optical-depth volume. Each cell corresponds to a fixed point on the
@@ -350,7 +439,8 @@ float SunDepthInterval(float3 p,float3 sun,float beginT,float endT,uint steps)
     [loop]
     for(uint j=0u;j<steps;++j)
     {
-        tau+=Density(p+sun*(beginT+(float(j)+0.5)*dt),false).x*dt;
+        tau+=Density(p+sun*(beginT+(float(j)+0.5)*dt),
+            false,max(850.,dt*0.15),false).x*dt;
     }
     return tau;
 }
@@ -431,7 +521,9 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
             {
                 const uint3 c=first+uint3(dx,dy,dz);
                 const float4 v=asfloat(g_lightCache.Load4(CacheIndex(c)));
-                if(v.y != g.cacheAnchor.w || !isfinite(v.x))
+)";
+
+constexpr const char* kMediumPart4 = R"(                if(v.y != g.cacheAnchor.w || !isfinite(v.x))
                     return false;
                 const float w=(dx==0u?1.-weight.x:weight.x)*
                     (dy==0u?1.-weight.y:weight.y)*
@@ -452,9 +544,7 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
 }
 [numthreads(8,8,1)]
 void ClearSunCache(uint3 id : SV_DispatchThreadID)
-)";
-
-constexpr const char* kMediumPart4 = R"({
+{
     if (id.x>=kCacheSide || id.y>=kCacheSide || id.z>=kCacheHeight) return;
     g_lightCache.Store4(CacheIndex(id), uint4(0u,0u,0u,0u));
 }
@@ -503,7 +593,10 @@ float4 March(V input) : SV_Target0
     {
         float3 p = g.cameraAspect.xyz +
             direction * (first + (float(i)+0.5)*dt);
-        float4 mediumAtPoint = Density(p,false);
+        const float cameraDistance=first+(float(i)+0.5)*dt;
+        const float footprint=max(2.,cameraDistance*
+            2.*g.forwardFov.w*g.cacheState.z);
+        float4 mediumAtPoint = Density(p,false,footprint,true);
         float sigma = mediumAtPoint.x;
         if (sigma < 1.e-8) continue;
         // Solar elevation measured against the horizon of the spherical
@@ -592,7 +685,7 @@ float4 ReceiverShadow(V input) : SV_Target0
     for (uint s=0u; s<12u; ++s)
     {
         float3 p = surface + sun * (segmentStart+(float(s)+0.5)*delta);
-        tau += Density(p,true).x * delta;
+        tau += Density(p,true,max(600.,delta*0.15),false).x * delta;
     }
     float visibility = exp(-tau);
     return float4(visibility,visibility,visibility,1);
