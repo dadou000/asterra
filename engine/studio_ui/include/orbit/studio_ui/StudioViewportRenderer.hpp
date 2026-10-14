@@ -814,6 +814,7 @@ private:
     // Lazily compiled: a broken experimental B shader must never prevent A boot.
     std::unique_ptr<celestial_clouds::unified::UnifiedCloudRenderer> unifiedCloudRenderer_;
     std::string unifiedCloudInitError_;
+    u64 lastUnifiedCloudBudgetWarningBytes_{0U};
     [[nodiscard]] bool EnsureUnifiedCloudRenderer();
     StormDomainMailbox stormMailbox_;
     struct StormRuntime;
