@@ -17,6 +17,7 @@
 #include <orbit/universe/ReferenceSurface.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <stdexcept>
 #include <string>
@@ -1151,7 +1152,20 @@ void StudioPathNetworkHost::AttachRpc()
             orbit::rpc::Value::Array warnings;
             for (const auto& finding : report.findings)
             {
+                // Include the exact derived station coordinate so clients
+                // never need to reconstruct a location from the distance.
+                const auto& stations = found->second.stations;
+                const auto closest = std::min_element(stations.begin(), stations.end(),
+                    [&finding](const auto& lhs, const auto& rhs) {
+                        return std::abs(lhs.stationMeters - finding.stationMeters) <
+                               std::abs(rhs.stationMeters - finding.stationMeters);
+                    });
+                orbit::rpc::Value::Array position;
+                if (closest != stations.end())
+                    position = {closest->position.x, closest->position.y, closest->position.z};
                 warnings.emplace_back(orbit::rpc::Value::Object{
+                    {"position_frame", found->second.frame.ToString()},
+                    {"position_local_meters", std::move(position)},
                     {"kind", static_cast<orbit::i64>(finding.issue)},
                     {"station_meters", finding.stationMeters},
                     {"measured", finding.measured},
