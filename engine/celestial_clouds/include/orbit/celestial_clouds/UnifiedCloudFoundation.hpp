@@ -202,6 +202,18 @@ struct ResourceBudget
     u32 maximumUpdatesPerFrame{4096U};
     u32 maximumViewSteps{192U};
 
+    // B1 partitions the limit between its two RGBA16F render targets.
+    // Use division instead of multiplying dimensions to avoid u64 overflow.
+    [[nodiscard]] bool FitsPreviewTarget(
+        const u32 width, const u32 height, const u32 bytesPerPixel = 8U) const noexcept
+    {
+        return Valid() && width != 0U && height != 0U &&
+            bytesPerPixel != 0U &&
+            static_cast<u64>(width) <=
+                (maximumResidentBytes / 2U / bytesPerPixel) /
+                static_cast<u64>(height);
+    }
+
     [[nodiscard]] bool Valid() const noexcept
     {
         return maximumResidentBytes >= 1ULL * 1024ULL * 1024ULL &&
