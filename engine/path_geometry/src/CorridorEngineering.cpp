@@ -126,4 +126,45 @@ CorridorEngineeringReport AnalyzeCorridorEngineering(
     }
     return out;
 }
+std::vector<f64> SuggestCorridorBankProfile(
+    const CorridorEngineeringReport& report,
+    const CorridorEngineeringRules& rules)
+{
+    if (!report.Valid() || !std::isfinite(rules.maximumBankRadians) ||
+        rules.maximumBankRadians < 0.0 ||
+        !std::isfinite(rules.maximumBankGradientRadiansPerMeter) ||
+        rules.maximumBankGradientRadiansPerMeter < 0.0)
+        return {};
+    std::vector<f64> bank;
+    bank.reserve(report.stations.size());
+    for (const auto& s : report.stations)
+    {
+        if (!std::isfinite(s.stationMeters) ||
+            !std::isfinite(s.recommendedBankRadians) ||
+            (!bank.empty() && s.stationMeters <=
+                report.stations[bank.size()-1U].stationMeters))
+            return {};
+        bank.push_back(std::clamp(s.recommendedBankRadians,
+            -rules.maximumBankRadians, rules.maximumBankRadians));
+    }
+    // Bidirectional rate limiting reduces abrupt cant transitions without
+    // altering any stored geometry. This is an advisory approximation, not
+    // a validated rail transition-curve solver.
+    for (std::size_t i = 1; i < bank.size(); ++i)
+    {
+        const f64 limit = rules.maximumBankGradientRadiansPerMeter *
+            (report.stations[i].stationMeters - report.stations[i-1].stationMeters);
+        bank[i] = std::clamp(bank[i], bank[i-1]-limit, bank[i-1]+limit);
+    }
+    for (std::size_t i = bank.size(); i > 1U; --i)
+    {
+        const std::size_t previous = i-2U;
+        const f64 limit = rules.maximumBankGradientRadiansPerMeter *
+            (report.stations[previous+1U].stationMeters -
+             report.stations[previous].stationMeters);
+        bank[previous] = std::clamp(bank[previous],
+            bank[previous+1U]-limit, bank[previous+1U]+limit);
+    }
+    return bank;
+}
 } // namespace orbit::path_geometry
