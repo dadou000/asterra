@@ -1131,6 +1131,13 @@ int orbit::editor_app::StudioApplication::Run(
         orbit::editor_app::StudioProceduralsPanel proceduralsPanel(
             studioSession, rpcHost.Dispatcher());
         proceduralsPanel.Register(ui);
+        studioViewportPanels.SetOpenProceduralRoadsAction(
+            [&ui, &proceduralsPanel]
+            {
+                proceduralsPanel.OpenPathsAndRoads();
+                static_cast<void>(ui.FocusPanel(
+                    orbit::editor_app::StudioProceduralsPanel::kPanelId));
+            });
 
         struct ViewportOnlyCapture
         {
