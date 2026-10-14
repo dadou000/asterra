@@ -3,6 +3,7 @@
 #include <format>
 #include <exception>
 #include <stdexcept>
+#include <orbit/paths/PathNetwork.hpp>
 
 namespace orbit::studio_ui
 {
@@ -88,6 +89,38 @@ void DebugViewUi::Draw(
 
     context.Heading("Road / Railway engineering");
     context.MutedText("Inspect an authored path edge using the existing path.engineering RPC. Read-only.");
+    if (context.Button("Refresh path edges##dbg-road-refresh") && session_)
+    {
+        engineeringEdges_.clear();
+        if (session_->World().HasWorld())
+        {
+            const auto& objects = session_->World().Objects();
+            auto pending = objects.Roots();
+            std::size_t visited = 0U;
+            while (!pending.empty() && visited++ < 8192U &&
+                   engineeringEdges_.size() < 128U)
+            {
+                const auto object = pending.back();
+                pending.pop_back();
+                if (object.type == paths::kPathEdgeType)
+                    engineeringEdges_.push_back(object);
+                const auto children = objects.Children(object.id);
+                pending.insert(pending.end(), children.begin(), children.end());
+            }
+        }
+    }
+    context.MutedText(std::format("{} path edges discovered", engineeringEdges_.size()));
+    if (context.Section("Select authored edge##dbg-road-edges", false))
+    {
+        for (const auto& edge : engineeringEdges_)
+        {
+            if (context.Button(edge.name + "##dbg-edge-" + edge.id.ToString()))
+            {
+                engineeringEdgeId_ = edge.id.ToString();
+                engineeringResult_.clear();
+            }
+        }
+    }
     static_cast<void>(context.InputText("Edge UUID##dbg-road-edge", engineeringEdgeId_));
     static_cast<void>(context.InputDouble("Design speed (m/s)##dbg-road-speed", engineeringSpeedMps_));
     if (context.Button("Analyze edge##dbg-road-analyze"))
@@ -117,6 +150,7 @@ void DebugViewUi::Draw(
             const auto* result = parsed.Find("result");
             if (!result)
                 throw std::runtime_error("Engineering response has no result.");
+            engineeringData_ = *result;
             engineeringResult_ = rpc::Serialize(*result);
         }
         catch (const std::exception& error)
@@ -129,8 +163,41 @@ void DebugViewUi::Draw(
     {
         if (engineeringError_)
             context.ErrorText(engineeringResult_);
-        else
-            context.MutedText(engineeringResult_);
+        else if (engineeringData_.IsObject())
+        {
+            const auto* ready = engineeringData_.Find("ready");
+            if (ready && ready->IsBool() && !ready->AsBool())
+                context.MutedText("Path geometry is not ready. Try again after the route builds.");
+            else
+            {
+                if (const auto* count = engineeringData_.Find("station_count");
+                    count && count->IsInteger())
+                    context.KeyValue("Stations", std::to_string(count->AsInteger()));
+                if (const auto* signature = engineeringData_.Find("signature");
+                    signature && signature->IsInteger())
+                    context.KeyValue("Geometry signature", std::to_string(signature->AsInteger()));
+                if (const auto* warnings = engineeringData_.Find("warnings");
+                    warnings && warnings->IsArray())
+                {
+                    context.KeyValue("Engineering findings",
+                        std::to_string(warnings->AsArray().size()));
+                    for (const auto& finding : warnings->AsArray())
+                    {
+                        if (!finding.IsObject()) continue;
+                        const auto* message = finding.Find("message");
+                        const auto* station = finding.Find("station_meters");
+                        if (message && message->IsString())
+                            context.Text(std::format("At {:.1f} m: {}",
+                                station && station->IsNumber() ? station->AsNumber() : 0.0,
+                                message->AsString()));
+                    }
+                }
+                if (const auto* banks = engineeringData_.Find("suggested_bank_radians");
+                    banks && banks->IsArray())
+                    context.KeyValue("Cant/bank suggestions",
+                        std::to_string(banks->AsArray().size()));
+            }
+        }
     }
 
     context.Heading("Registered experiments");
