@@ -1247,7 +1247,8 @@ void StudioViewportRenderer::ComposeLightingPasses(StudioLightingPassContext& co
         (info.layers.fullClipmap || !info.layers.macroGlobe) &&
         studioDirectLight.direct.has_value() &&
         logicalTarget->mode != studio_session::ViewportMode::Debug &&
-        (!info.layers.cloudBPreview || EnsureUnifiedCloudRenderer()))
+        (!info.layers.cloudBPreview ||
+            (!info.layers.cloudLab.enabled && EnsureUnifiedCloudRenderer())))
     {
         if (const auto shadowAtmosphere =
                 atmospherePresentations_.find(info.id);
