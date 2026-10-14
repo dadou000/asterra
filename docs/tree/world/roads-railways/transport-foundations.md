@@ -69,3 +69,11 @@ CorridorDerived now regenerates lane positions, graph nodes/edges, navigation sa
 CorridorEngineering now computes horizontal plan-view curvature by projecting station tangents into the local terrain tangent plane, using horizontal span for the curvature denominator. A purely vertical crest or sag therefore no longer looks like a plan-view corner and does not generate false lateral-acceleration and cant/superelevation recommendations. Invalid vertical/collapsed spans report InvalidInput instead of dividing by zero. The CorridorEngineeringTests include a crest regression.
 
 Further precision work: discrete station-angle curvature is still a sampled approximation, not an analytically integrated clothoid or a complete rail design code; detailed vertical-radius checks and horizontal/vertical sight-distance constraints remain to implement.
+
+## Rail cant deficiency and mixed operating speeds
+
+RailCantDesign (RailCantDesign.hpp/.cpp) adds a railway-specific advisory solver. It converts curvature and speed to physically defined rail-height difference across gauge, and checks the same curve at a minimum (e.g. freight) speed and maximum (e.g. passenger) speed. Limits for maximum installed cant, fast-train cant deficiency, slow-train cant excess and cant runout gradient are independent and user-editable. It performs forward/backward runout limiting, returns recommended cant in metres and radians, and emits warnings where mixed-speed constraints or available runout cannot be satisfied. It does NOT silently reshape authored curves, and it is NOT certified to any particular national railway standard.
+
+The contact reference validator additionally requires normalized, mutually perpendicular, consistently handed station frames so contact points agree with the already-authored section geometry. Any malformed source basis is rejected rather than quietly constructing a different contact plane.
+
+Test targets: Orbit.RailCantDesign, Orbit.TransportSections, Orbit.TransportTopology, Orbit.CorridorSweep and Orbit.CorridorEngineering. Compile and runtime checks still depend on Windows Studio/CI.

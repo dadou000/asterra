@@ -25,7 +25,8 @@ void CheckRail(const RailSectionDesign& d)
     if (!d.trackCount || d.trackCount > 32 ||
         !Finite(d.gaugeMeters) || d.gaugeMeters <= 0 ||
         !Finite(d.trackSpacingMeters) ||
-        (d.trackCount > 1 && d.trackSpacingMeters <= d.gaugeMeters) ||
+        (d.trackCount > 1 && d.trackSpacingMeters <=
+            d.gaugeMeters + d.railheadWidthMeters) ||
         !Finite(d.railheadWidthMeters) || d.railheadWidthMeters <= 0 ||
         d.railheadWidthMeters >= d.gaugeMeters ||
         !Finite(d.railheadHeightMeters) || d.railheadHeightMeters < 0 ||
@@ -41,11 +42,19 @@ void CheckStations(const std::vector<PathStation>& stations,
     for (std::size_t i=0;i<stations.size();++i)
     {
         const auto& s=stations[i];
+        // Contact frames must match the basis used by BuildCorridorMesh,
+        // which deliberately does not renormalize authored station axes.
+        const bool orthonormal =
+            std::abs(math::LengthSquared(s.tangent)-1.0)<1.e-5 &&
+            std::abs(math::LengthSquared(s.up)-1.0)<1.e-5 &&
+            std::abs(math::LengthSquared(s.lateral)-1.0)<1.e-5 &&
+            std::abs(math::Dot(s.tangent,s.up))<1.e-5 &&
+            std::abs(math::Dot(s.tangent,s.lateral))<1.e-5 &&
+            std::abs(math::Dot(s.up,s.lateral))<1.e-5 &&
+            math::Dot(math::Cross(s.tangent,s.up),s.lateral)>0.9999;
         if (!Finite(s.stationMeters) || !Finite(s.position) ||
             !Finite(s.tangent) || !Finite(s.up) || !Finite(s.lateral) ||
-            math::LengthSquared(s.tangent)<0.5 ||
-            math::LengthSquared(s.up)<0.5 ||
-            math::LengthSquared(s.lateral)<0.5 ||
+            !orthonormal ||
             (i && s.stationMeters<=stations[i-1].stationMeters) ||
             (!cant.empty() && !Finite(cant[i])))
             throw std::invalid_argument("Invalid railway station or cant.");

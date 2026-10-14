@@ -46,3 +46,7 @@ Validation: ctest -R Orbit.TransportSections and ctest -R Orbit.TransportTopolog
 ### Refined corridor navigation parity
 
 CorridorDerived now regenerates lane/graph/navigation/debug references after geometric refinement, and road lane positions sample the swept primary surface including crown and bank instead of retaining stale coarse path references. Verify via Orbit.CorridorSweep; Studio runtime validation is still pending.
+
+### Railway cant as a height-difference constraint
+
+RailCantDesign computes advisory railway cant in metres and signed radians, including multiple operating speeds, deficiency/excess warnings, and a bounded runout gradient. The output is non-mutating. Verify via Orbit.RailCantDesign. Station frame validity now requires orthonormal handedness for physical railhead contact consistency.

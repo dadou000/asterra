@@ -48,6 +48,13 @@ int main()
     CHECK(rejected);
     rejected=false;
     try {
+        auto nonorthogonal=stations;
+        nonorthogonal[1].lateral={0,0,2};
+        static_cast<void>(RailContactReferences(nonorthogonal,railway));
+    } catch(const std::invalid_argument&) {rejected=true;}
+    CHECK(rejected);
+    rejected=false;
+    try {
         RailSectionDesign invalid;
         invalid.gaugeMeters=std::numeric_limits<double>::quiet_NaN();
         static_cast<void>(MakeRailSweep(invalid));

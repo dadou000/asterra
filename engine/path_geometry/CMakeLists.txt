@@ -10,6 +10,7 @@ add_library(OrbitPathGeometry STATIC
     src/CorridorDesignPreview.cpp
     src/TransportSections.cpp
     src/TransportTopology.cpp
+    src/RailCantDesign.cpp
 )
 
 add_library(
@@ -149,4 +150,12 @@ if(BUILD_TESTING)
     target_compile_features(OrbitTransportTopologyTests PRIVATE cxx_std_23)
     orbit_enable_warnings(OrbitTransportTopologyTests)
     add_test(NAME Orbit.TransportTopology COMMAND OrbitTransportTopologyTests)
+endif()
+
+if(BUILD_TESTING)
+    add_executable(OrbitRailCantDesignTests tests/RailCantDesignTests.cpp)
+    target_link_libraries(OrbitRailCantDesignTests PRIVATE Orbit::PathGeometry)
+    target_compile_features(OrbitRailCantDesignTests PRIVATE cxx_std_23)
+    orbit_enable_warnings(OrbitRailCantDesignTests)
+    add_test(NAME Orbit.RailCantDesign COMMAND OrbitRailCantDesignTests)
 endif()
