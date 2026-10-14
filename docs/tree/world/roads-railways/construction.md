@@ -46,3 +46,9 @@ Transitions use geometric error, screen-space footprint, hysteresis, cross-fade/
 ## Verification
 
 Compare authoritative CPU terrain/corridor sample vs GPU rendered physical page vs collision/contact at repeatable stations; enforce finite heights, revision consistency, no seams/cracks, stable support boundaries and water drainage. Exercise crossing pages, cube faces, negative elevations, rapid editing, undo/redo, streaming-in/out and device loss. Run captures at near/mid/orbit, with profiler traces to expose shader/upload/CPU spikes. Existing simple physical-page-sanity test is **not** a complete acceptance test.
+
+## Implemented preliminary earthworks estimator (Harmony 0.1.1)
+
+`CorridorEarthworks.hpp/.cpp` exposes `EstimateCorridorEarthworks`: a pure read-only volume preview driven by existing `PathStation` geometry and a supplied terrain-above-datum sampler. It integrates midpoint cross-section samples and trapezoidal station segments, subdividing long alignments within a caller-controlled spacing budget. Results provide section cut/fill areas, total cut/fill cubic metres and evaluated length. Missing/nonfinite terrain values, bad station ordering, degenerate lateral frames and excessive subdivisions are rejected. `Orbit.CorridorEarthworks` tests flat cut/fill, asymmetric lateral terrain, fine station subdivision and failure cases.
+
+**Limitations:** Preliminary quantities are not final engineering bills: no side slopes, compaction, bulking, volume balance by soil class, bridges, retaining walls, tunnel excavation, drainage or planet-geodetic projection. The caller must resolve frame/terrain height coordinates coherently before providing the sampler; this function does **not** alter terrain or automatically create infrastructure. It is a building block for the eventual live construction cost preview.
