@@ -9,6 +9,7 @@
 #include <orbit/editor_session/EditorWorldSession.hpp>
 #include <orbit/path_geometry/PathSource.hpp>
 #include <orbit/path_geometry/PathDerived.hpp>
+#include <orbit/path_geometry/RoadCatalog.hpp>
 #include <orbit/path_geometry/CorridorEngineering.hpp>
 #include <orbit/path_geometry/RailCantDesign.hpp>
 #include <orbit/path_geometry/TransportJunctions.hpp>
@@ -1172,8 +1173,9 @@ void StudioPathNetworkHost::AttachRpc()
             auto designProfile = resolved.profile;
             const bool isRail =
                 authored->infrastructureCatalogId == "ballasted-rail";
-            const bool isRoad =
-                authored->infrastructureCatalogId == "rural-road";
+            const auto* roadPreset=orbit::path_geometry::FindRoadCatalog(
+                authored->infrastructureCatalogId);
+            const bool isRoad=roadPreset!=nullptr;
             if (isRail || isRoad)
             {
                 designProfile.kind = isRail ?
@@ -1181,6 +1183,11 @@ void StudioPathNetworkHost::AttachRpc()
                     orbit::paths::PathProfileKind::Road;
                 designProfile.maximumGrade = isRail ? 0.035 : 0.10;
                 designProfile.minimumRadiusMeters = isRail ? 150.0 : 0.0;
+                if(roadPreset)
+                {
+                    designProfile.widthMeters=roadPreset->pavedWidthMeters;
+                    designProfile.lanes=roadPreset->laneCount;
+                }
             }
             orbit::path_geometry::CorridorEngineeringRules rules;
             if (const auto* speed = params.Find("design_speed_mps"))
@@ -1352,7 +1359,8 @@ void StudioPathNetworkHost::AttachRpc()
                 const auto edge=service.FindEdge(id);
                 if (!edge || (edge->startNode!=*node && edge->endNode!=*node))
                     continue;
-                const bool road=edge->infrastructureCatalogId=="rural-road";
+                const bool road=orbit::path_geometry::FindRoadCatalog(
+                    edge->infrastructureCatalogId)!=nullptr;
                 const bool rail=edge->infrastructureCatalogId=="ballasted-rail";
                 if (!road && !rail)continue;
                 if(studioSession_.PathProducts().IsDirty(id))
