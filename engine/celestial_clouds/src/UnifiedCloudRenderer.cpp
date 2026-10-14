@@ -198,10 +198,10 @@ float2 StormMedium(float3 position, float radius)
     if (dot(direction,centre) <= 0.) return float2(0.,0.);
     const float planetR = g_storm[13];
     const float x = planetR*dot(direction,float3(g_storm[4],g_storm[5],g_storm[6]));
+    const float y = planetR*dot(direction,float3(g_storm[7],g_storm[8],g_storm[9]));
 )";
 
-constexpr const char* kMediumPart2 = R"(    const float y = planetR*dot(direction,float3(g_storm[7],g_storm[8],g_storm[9]));
-    const float halfX = 0.5*g_storm[17]*g_storm[14];
+constexpr const char* kMediumPart2 = R"(    const float halfX = 0.5*g_storm[17]*g_storm[14];
     const float halfY = 0.5*g_storm[18]*g_storm[15];
     const float edge = min(halfX-abs(x),halfY-abs(y));
     if (edge <= 0.) return float2(0.,0.);
@@ -371,12 +371,12 @@ float4 Density(float3 position, bool receiver,
         const float hn=h/max(topHeight,0.10);
         const float bottom=smoothstep(0.,0.075,hn);
         const float top=1.-smoothstep(
-)";
-
-constexpr const char* kMediumPart3 = R"(            lerp(0.70,0.80,tower),1.,hn);
+            lerp(0.70,0.80,tower),1.,hn);
         // Tall updrafts narrow toward the crown; the anvil is another
         // medium component rather than an extension of the tower stem.
-        const float taper=tower*0.24*
+)";
+
+constexpr const char* kMediumPart3 = R"(        const float taper=tower*0.24*
             pow(saturate(hn),1.4);
         const float cloudThreshold=lerp(
             0.73,0.32,saturate(coverage)) + taper;
@@ -552,9 +552,7 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
                 optical+=v.x*w;
             }
         }
-)";
-
-constexpr const char* kMediumPart4 = R"(    }
+    }
     opticalDepth=clamp(optical,0.,24.);
     return true;
 }
@@ -564,7 +562,9 @@ bool CachedSunDepth(float3 p,out float opticalDepth)
 {
     opticalDepth=0.;
     return false;
-}
+)";
+
+constexpr const char* kMediumPart4 = R"(}
 [numthreads(8,8,1)]
 void ClearSunCache(uint3 id : SV_DispatchThreadID)
 {
@@ -594,7 +594,12 @@ float4 March(V input) : SV_Target0
     if (!SphereInterval(g.cameraAspect.xyz, direction, outer, first, last))
         return float4(0,0,0,1);
     float groundA, groundB;
-    if (SphereInterval(g.cameraAspect.xyz, direction, g.shell.x + g.shell.y, groundA, groundB))
+    // When the live storm export participates, its low-level inflow and
+    // precipitation regions may extend below the first procedural deck.
+    // Do not clip those cells away at the authored cloud base.
+    const float innerRadius=g.shell.x+
+        (g.material.z>0.5 ? 0. : max(0.,g.shell.y));
+    if (SphereInterval(g.cameraAspect.xyz, direction, innerRadius, groundA, groundB))
     {
         if (groundA > 0.) last = min(last, groundA);
         else if (groundB > 0.) first = max(first,groundB);
