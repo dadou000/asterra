@@ -334,7 +334,7 @@ float3 CachePoint(uint3 q)
         (east*metres.x+north*metres.y)/max(g.shell.x,1.));
     return d*(g.shell.x+altitude);
 }
-float SunDepthDirect(float3 p)
+float SunDepthDirect(float3 p, uint requestedSteps)
 {
     const float3 sun=normalize(g.sunFar.xyz);
     float a,b;
@@ -349,10 +349,11 @@ float SunDepthDirect(float3 p)
     }
     const float distance = min(max(b,0.),1000000.);
     if (distance<=0.) return 0.;
-    const float dt = distance/12.;
+    const uint samples=clamp(requestedSteps,2u,12u);
+    const float dt = distance/float(samples);
     float tau=0.;
     [loop]
-    for(uint j=0u;j<12u;++j)
+    for(uint j=0u;j<samples;++j)
     {
         tau += Density(p+sun*(float(j)+0.5)*dt,false).x*dt;
     }
@@ -423,7 +424,7 @@ void UpdateSunCache(uint3 id : SV_DispatchThreadID)
     if(z>=kCacheHeight) return;
     const uint3 cell=uint3(id.xy,z);
     const float3 p=CachePoint(cell);
-    const float tau=SunDepthDirect(p);
+    const float tau=SunDepthDirect(p,12u);
     g_lightCache.Store4(CacheIndex(cell),
         asuint(float4(tau,g.cacheAnchor.w,0.,0.)));
 }
@@ -470,7 +471,9 @@ float4 March(V input) : SV_Target0
         float albedo = saturate(mediumAtPoint.y/max(sigma,1.e-8));
         float tauSun=0.;
         if(!CachedSunDepth(p,tauSun))
-            tauSun=SunDepthDirect(p);
+            // Keep misses bounded, especially in far-field pixels where
+            // a local cache is intentionally not resident.
+            tauSun=SunDepthDirect(p,6u);
         float sunlight = max(0., g.material.w) * upSun * phase *
             albedo * exp(-tauSun);
         float ambient = (0.13 + 0.20 * upSun) * albedo;
@@ -623,7 +626,8 @@ namespace
     const GpuCloudFieldProduct& field,
     const celestial_atmosphere::AtmosphereRenderView& view,
     const u32 width, const u32 height,
-    const UnifiedCloudRenderer::SunCache* cache)
+    const UnifiedCloudRenderer::SunCache* cache,
+    const bool hasStorm)
 {
     f64 base = std::numeric_limits<f64>::max();
     f64 top = 0.0;
@@ -633,7 +637,7 @@ namespace
         top = std::max(top, layer.parameters.topAltitudeMeters);
     }
     // The active solver currently publishes 40 vertical cells of 500 m.
-    if (cache == nullptr || cache->lastStorm != nullptr)
+    if (hasStorm)
         top = std::max(top, 21000.0);
     const bool casts = std::any_of(source.layers.begin(),source.layers.end(),
         [](const auto& layer) { return layer.parameters.shadowParticipation; });
@@ -728,7 +732,7 @@ void UnifiedCloudRenderer::UpdateSunCache(
     cache.active=true;
     cache.phase=(cache.phase+1U)%16U;
     auto constants=PackedInputs(referenceRadiusMeters,source,field,view,
-        1U,1U,&cache);
+        1U,1U,&cache,stormExport != nullptr);
     commands.Transition(*cache.buffer,
         rhi::ResourceState::ShaderResource,
         rhi::ResourceState::UnorderedAccess);
@@ -770,7 +774,7 @@ void UnifiedCloudRenderer::DrawMedium(
         field.LayerCount()!=source.layers.size() ||
         field.FaceResolution()!=source.faceResolution) return;
     const auto constants=PackedInputs(bodyRadiusMeters,source,field,view,
-        target.Width(),target.Height(),sunCache);
+        target.Width(),target.Height(),sunCache,stormExport != nullptr);
     commands.SetRenderTarget(target);
     commands.SetViewport({.x=0.0F,.y=0.0F,
         .width=static_cast<f32>(target.Width()),
