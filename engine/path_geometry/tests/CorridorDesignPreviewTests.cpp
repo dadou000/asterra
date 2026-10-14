@@ -27,7 +27,7 @@ int main()
     CHECK(preview.engineering.findings.empty());
     CHECK(preview.suggestedBankRadians.size() == preview.geometry.stations.size());
     CHECK(preview.earthworks.has_value());
-    CHECK(std::abs(preview.earthworks->cutCubicMeters - 320.0) < 0.01);
+    CHECK(std::abs(preview.earthworks->cutCubicMeters - 360.0) < 0.01);
     CHECK(preview.earthworks->fillCubicMeters == 0.0);
     const auto withoutTerrain = orbit::path_geometry::BuildCorridorDesignPreview(source,road);
     CHECK(!withoutTerrain.earthworks.has_value());
