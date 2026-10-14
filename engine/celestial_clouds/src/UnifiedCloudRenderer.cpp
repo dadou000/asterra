@@ -1,4 +1,5 @@
 #include <orbit/celestial_clouds/UnifiedCloudRenderer.hpp>
+#include <orbit/celestial_clouds/UnifiedCloudNoise.hpp>
 
 #include <algorithm>
 #include <array>
@@ -679,9 +680,9 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
                 std::string("Unified Cloud B ") + name + " pipeline: " + e.what());
         }
     };
-    march_ = checkedPipeline("March", pixel, 32U, 3U, 1U, rhi::BlendMode::Opaque);
+    march_ = checkedPipeline("March", pixel, 32U, 4U, 1U, rhi::BlendMode::Opaque);
     receiverShadow_ = checkedPipeline("ReceiverShadow", shadowPixel,
-        32U, 3U, 1U, rhi::BlendMode::Opaque);
+        32U, 4U, 1U, rhi::BlendMode::Opaque);
     composite_ = checkedPipeline("Composite", compPixel,
         0U, 0U, 1U, rhi::BlendMode::Alpha);
     if (!march_ || !receiverShadow_ || !composite_)
@@ -704,6 +705,17 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
         throw std::runtime_error("Unified System B inactive Sun cache allocation failed");
     std::memset(emptySunCache_->Map(), 0, 16U);
     emptySunCache_->Unmap();
+    const auto independentNoise = BuildUnifiedCloudNoise();
+    densityNoise_ = device.CreateBuffer({
+        .sizeBytes = static_cast<u64>(independentNoise.size() * sizeof(f32)),
+        .usage = rhi::BufferUsage::Structured,
+        .memory = rhi::MemoryUsage::HostVisible,
+        .initialState = rhi::ResourceState::ShaderResource});
+    if (!densityNoise_)
+        throw std::runtime_error("Unified B 3D morphology noise buffer allocation failed");
+    std::memcpy(densityNoise_->Map(), independentNoise.data(),
+        independentNoise.size() * sizeof(f32));
+    densityNoise_->Unmap();
 
     const std::string computeSource =
         std::string("#define B3_WRITE_CACHE 1\n") + mediumSource;
@@ -716,7 +728,7 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
         .computeShader = {
             .data = compute.bytecode.data(), .size = compute.bytecode.size()},
         .pushConstantDwords = 32U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = 4U,
         .storageTextures = 0U,
         .sampledTextures = 0U
     });
@@ -732,7 +744,7 @@ UnifiedCloudRenderer::UnifiedCloudRenderer(rhi::Device& device, const shader::Co
             .data = clearShader.bytecode.data(),
             .size = clearShader.bytecode.size()},
         .pushConstantDwords = 32U,
-        .shaderResourceBuffers = 3U,
+        .shaderResourceBuffers = 4U,
         .storageTextures = 0U,
         .sampledTextures = 0U
     });
@@ -785,7 +797,8 @@ namespace
         Bits(cache ? static_cast<f32>(cache->generation) : 0.0F),
         Bits(cache ? static_cast<f32>(cache->phase) : 0.0F),
         Bits(cache && cache->active?1.0F:0.0F),
-        0U,Bits(view.sunAngularRadiusRadians)
+        Bits(1.0F/static_cast<f32>(std::max(height,1U))),
+        Bits(view.sunAngularRadiusRadians)
     };
 }
 } // namespace
@@ -881,6 +894,7 @@ void UnifiedCloudRenderer::UpdateSunCache(
         commands.SetComputeBuffer(1U,
             stormExport ? *stormExport : *emptyStorm_);
         commands.SetComputeBuffer(2U,*cache.buffer);
+        commands.SetComputeBuffer(3U,*densityNoise_);
         commands.Dispatch(4U,4U,16U);
         commands.UavBarrier(*cache.buffer);
         cache.initialized=true;
@@ -924,6 +938,7 @@ void UnifiedCloudRenderer::DrawMedium(
     commands.SetGraphicsBuffer(1,stormExport?*stormExport:*emptyStorm_);
     commands.SetGraphicsBuffer(2,
         sunCache && sunCache->active ? *sunCache->buffer : *emptySunCache_);
+    commands.SetGraphicsBuffer(3,*densityNoise_);
     commands.SetGraphicsTexture(0,depth);
     commands.Draw(6);
 }
